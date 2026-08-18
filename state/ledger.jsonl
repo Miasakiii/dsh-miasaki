@@ -1,0 +1,6 @@
+{"ts":"2026-08-16T13:28:00Z","task":"t-0001","agent":"analyst","model":"deepseek-v4-pro","input_tokens":0,"output_tokens":0,"cost":0.0,"metering":false,"note":"fork 手动扮演，无计量豁免"}
+{"ts":"2026-08-17T12:26:49Z","task":"t-0002","agent":"analyst","model":"deepseek-v4-pro","input_tokens":0,"output_tokens":0,"cost":0.0,"metering":false,"note":"M3.5 keyless mock 轮，无计量豁免"}
+{"ts":"2026-08-17T13:40:30Z","task":"t-0005","agent":"bl","model":"cli-default","input_tokens":0,"output_tokens":0,"cost":0.0,"metering":false,"note":"本机 CLI 派单（bl usage 资源查询，零模型调用）；曾 blocked 一次（console 会话过期）→ Operator 登录后重跑通过"}
+{"ts":"2026-08-17T13:58:30Z","task":"t-0006","agent":"claude","model":"claude-sonnet-4-6[1M]","input_tokens":55384,"output_tokens":4297,"cost":0.4140524,"metering":true,"note":"真实计量首账：json-cost-usd 通道（cache_read 608,768 计入成本大头）；permission_denials=交付物由派单器代写"}
+{"ts":"2026-08-17T14:45:00Z","task":"t-0007","agent":"opencode","model":"deepseek-v4-flash","input_tokens":0,"output_tokens":0,"cost":0.0,"metering":false,"note":"并发派单甲队：PONG-A，exit 0；metering unknown 无计量（待 --format json 校准）"}
+{"ts":"2026-08-17T14:45:30Z","task":"t-0008","agent":"pi","model":"deepseek-v4-flash","input_tokens":0,"output_tokens":0,"cost":0.0,"metering":false,"note":"并发派单乙队：PONG-B，exit 0；metering unknown 无计量（--mode json 待校准）"}

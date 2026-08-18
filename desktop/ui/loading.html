@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Miasaki</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(1200px 800px at 50% 38%, #1a1424 0%, #0c0b11 70%);
+    color: #e4def0; font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    user-select: none; overflow: hidden;
+  }
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .crest {
+    width: 96px; height: 96px; border-radius: 50%;
+    border: 2px solid #d9b36a; position: relative;
+    display: flex; align-items: center; justify-content: center;
+    font-family: Georgia, "Times New Roman", serif; font-size: 26px; color: #d9b36a;
+  }
+  .crest::before {
+    content: ""; position: absolute; inset: 8px; border-radius: 50%;
+    border: 1px dashed rgba(217, 179, 106, .5);
+    animation: spin 9s linear infinite;
+  }
+  .crest::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    width: 2px; height: 34px; margin-top: -34px; background: #c23a2e;
+    transform-origin: 50% 100%; transform: rotate(-42deg);
+    border-radius: 1px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .wordmark { font-size: 22px; font-weight: 600; letter-spacing: .45em; text-indent: .45em; }
+  .tag { font-size: 12px; color: #9a8fa8; letter-spacing: .2em; }
+  #status { font-size: 13px; color: #b8aec4; margin-top: 8px; }
+  #retry {
+    display: none; margin-top: 6px; padding: 7px 22px; font-size: 13px;
+    border: 1px solid #d9b36a; border-radius: 6px; background: transparent;
+    color: #d9b36a; cursor: pointer; letter-spacing: .1em;
+  }
+  #retry:hover { background: rgba(217, 179, 106, .12); }
+  .hint { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center;
+          font-size: 11px; color: #5d5369; }
+  .tb { position: fixed; left: 0; top: 0; right: 0; height: 36px; display: flex;
+        align-items: center; gap: 8px; padding: 0 8px 0 12px;
+        background: #14111c; border-bottom: 1px solid #2a2434; }
+  .tb-ico { width: 22px; height: 22px; border-radius: 50%; }
+  .tb-name { font-size: 12.5px; font-weight: 600; letter-spacing: .04em; color: #e4def0; }
+  .tb-fill { flex: 1; }
+  .tb-btn { width: 34px; height: 26px; display: flex; align-items: center;
+            justify-content: center; cursor: pointer; font-size: 12px;
+            border-radius: 6px; color: #e4def0; }
+  .tb-btn:hover { background: #2a2434; }
+</style>
+</head>
+<body>
+  <div class="tb" data-tauri-drag-region>
+    <img src="icons/app.png" class="tb-ico" alt="" />
+    <span class="tb-name">Miasaki · DSH</span>
+    <span class="tb-fill"></span>
+    <span class="tb-btn" onclick="window.__TAURI__&&window.__TAURI__.core.invoke('minimize_main')">&#8211;</span>
+    <span class="tb-btn" onclick="window.__TAURI__&&window.__TAURI__.core.invoke('exit_app')">&#10005;</span>
+  </div>
+  <div class="stage">
+    <div class="crest"><img src="icons/app.png" alt="Miasaki" style="width:100%;height:100%;border-radius:50%;object-fit:cover"></div>
+    <div class="wordmark">MIASAKI</div>
+    <div class="tag">专属 DSH 桌面端</div>
+    <div id="status">正在唤醒 DSH…</div>
+    <button id="retry" onclick="retry()">重试</button>
+  </div>
+  <div class="hint">初次启动将自动拉起 dsh web 服务（日志：%LOCALAPPDATA%\miasaki\server.log）</div>
+  <script>
+    window.__setStatus = function (t) {
+      var el = document.getElementById('status');
+      if (el) el.textContent = t;
+    };
+    window.__setRetry = function (show) {
+      var el = document.getElementById('retry');
+      if (el) el.style.display = show ? 'inline-block' : 'none';
+    };
+    window.retry = function () {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        window.__TAURI__.core.invoke('retry_start').catch(function () {});
+      }
+      var el = document.getElementById('retry');
+      if (el) el.style.display = 'none';
+    };
+  </script>
+</body>
+</html>

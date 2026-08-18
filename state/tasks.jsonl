@@ -1,0 +1,30 @@
+{"op":"create","task":{"id":"t-0001","title":"官方 dsh-subagent 四件套 vs 自研薄壳 — 选型对照分析","assignee":"analyst","status":"queued","created_at":"2026-08-16T13:15:00Z","updated_at":"2026-08-16T13:15:00Z","retries":0,"tokens":0,"cost":0.0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0001","assignee":"analyst","updated_at":"2026-08-16T13:15:10Z"}
+{"op":"update","task_id":"t-0001","status":"done","note":"worker 已交付（待验收）","updated_at":"2026-08-16T13:26:10Z"}
+{"op":"update","task_id":"t-0001","status":"done","accepted":true,"note":"Commander 验收通过 4/4；metering=false 豁免 usage","tokens":0,"cost":0.0,"updated_at":"2026-08-16T13:28:00Z"}
+{"op":"create","task":{"id":"t-0002","title":"M3.5 worker 自动化 keyless 验证","assignee":"analyst","status":"queued","created_at":"2026-08-16T14:45:00Z","updated_at":"2026-08-16T14:45:00Z","retries":0,"tokens":0,"cost":0.0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0002","assignee":"analyst","updated_at":"2026-08-16T14:45:10Z"}
+{"op":"update","task_id":"t-0002","status":"done","note":"worker 已交付（待验收）：keyless 轮 result/status/transcript/notes 齐备","updated_at":"2026-08-17T12:26:49Z"}
+{"op":"update","task_id":"t-0002","status":"done","accepted":true,"note":"Commander 验收：标准1-4通过（claimed 原子领取 / child session 日志 / result 六段结构 / 状态机文件齐备）；标准5（关→开→关）依据 events m35_panel_v5 闭环已跑通、但无逐条独立证据——排空退出复核移交 M3.5 真实模型轮验收；metering=false 豁免 usage","tokens":0,"cost":0.0,"steps":0,"takeovers":0,"updated_at":"2026-08-17T12:26:49Z"}
+{"op":"create","task":{"id":"t-0003","title":"worker 交付物自查脚本设计","assignee":"coder","status":"queued","created_at":"2026-08-17T10:30:00Z","updated_at":"2026-08-17T10:30:00Z","retries":0,"tokens":0,"cost":0.0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0003","assignee":"coder","updated_at":"2026-08-17T10:30:10Z"}
+{"op":"create","task":{"id":"t-0004","title":"collective-memory 精简索引","assignee":"analyst","status":"queued","created_at":"2026-08-17T10:30:00Z","updated_at":"2026-08-17T10:30:00Z","retries":0,"tokens":0,"cost":0.0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0004","assignee":"analyst","updated_at":"2026-08-17T10:30:10Z"}
+{"op":"create","task":{"id":"t-0005","title":"百炼账户免费额度与用量状态查询","assignee":"bl","status":"queued","created_at":"2026-08-17T13:10:00Z","updated_at":"2026-08-17T13:10:00Z","retries":0,"tokens":0,"cost":0.0,"steps":0,"takeovers":0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0005","assignee":"bl","updated_at":"2026-08-17T13:10:10Z"}
+{"op":"update","task_id":"t-0005","status":"running","updated_at":"2026-08-17T13:12:00Z"}
+{"op":"update","task_id":"t-0005","status":"blocked","note":"CLI 真实执行成功但 console 会话过期（exit 3）；待 Operator bl auth login --console --console-site domestic 后 reopen","updated_at":"2026-08-17T13:15:00Z"}
+{"op":"reopen","task_id":"t-0005","reason":"Operator 已重新登录 console，重跑用量查询","updated_at":"2026-08-17T13:30:00Z"}
+{"op":"update","task_id":"t-0005","status":"running","updated_at":"2026-08-17T13:30:10Z"}
+{"op":"update","task_id":"t-0005","status":"done","note":"派单器交付：bl usage free/stats 真实执行，stdout 完整捕获（logs/t-0005-stdout-3.log）","updated_at":"2026-08-17T13:40:00Z"}
+{"op":"update","task_id":"t-0005","status":"done","accepted":true,"note":"Commander 验收 3/3：CLI 真实执行且 stdout 捕获 ✓ / 额度+用量两项数据齐全 ✓ / 全程只读无副作用 ✓；资源查询零模型调用，tokens=0","tokens":0,"cost":0.0,"steps":1,"takeovers":1,"updated_at":"2026-08-17T13:40:30Z"}
+{"op":"create","task":{"id":"t-0006","title":"本机 agent CLI 阵容总结","assignee":"claude","status":"queued","created_at":"2026-08-17T13:50:00Z","updated_at":"2026-08-17T13:50:00Z","retries":0,"tokens":0,"cost":0.0,"steps":0,"takeovers":0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0006","assignee":"claude","updated_at":"2026-08-17T13:50:10Z"}
+{"op":"update","task_id":"t-0006","status":"done","note":"派单器交付：claude -p 真实执行 21 回合，stdout JSON 完整捕获；交付物由派单器代写（claude Write 权限被其自身拒绝）","updated_at":"2026-08-17T13:58:00Z"}
+{"op":"update","task_id":"t-0006","status":"done","accepted":true,"note":"Commander 验收 3/3：claude 真实执行且 stdout 捕获 ✓ / 8 CLI 全覆盖+建议表 ✓ / 只读约束 ✓（Write 被拒属预期）；成本实报 $0.414（sonnet-4-6 1M，cache-read 608,768）","tokens":59681,"cost":0.4140524,"steps":1,"takeovers":0,"updated_at":"2026-08-17T13:58:30Z"}
+{"op":"create","task":{"id":"t-0007","title":"并发派单验证-甲（opencode）","assignee":"opencode","status":"queued","created_at":"2026-08-17T14:40:00Z","updated_at":"2026-08-17T14:40:00Z","retries":0,"tokens":0,"cost":0.0,"steps":0,"takeovers":0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0007","assignee":"opencode","updated_at":"2026-08-17T14:40:10Z"}
+{"op":"create","task":{"id":"t-0008","title":"并发派单验证-乙（pi）","assignee":"pi","status":"queued","created_at":"2026-08-17T14:40:00Z","updated_at":"2026-08-17T14:40:00Z","retries":0,"tokens":0,"cost":0.0,"steps":0,"takeovers":0,"depends_on":[],"waiting_for":null}}
+{"op":"assign","task_id":"t-0008","assignee":"pi","updated_at":"2026-08-17T14:40:10Z"}
+{"op":"update","task_id":"t-0007","status":"done","accepted":true,"note":"Commander 验收 3/3：opencode exit 0 且输出含 PONG-A ✓ / 主动读取 manifest 回报配置 ✓ / 与 t-0008 并行互不干扰 ✓；metering unknown 无计量","tokens":0,"cost":0.0,"steps":1,"takeovers":0,"updated_at":"2026-08-17T14:45:00Z"}
+{"op":"update","task_id":"t-0008","status":"done","accepted":true,"note":"Commander 验收 3/3：pi exit 0 且输出含 PONG-B ✓（provider=deepseek/model=deepseek-v4-flash）/ 自报会话 id ✓ / 与 t-0007 并行互不干扰 ✓；metering unknown 无计量","tokens":0,"cost":0.0,"steps":1,"takeovers":0,"updated_at":"2026-08-17T14:45:30Z"}

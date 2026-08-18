@@ -1,0 +1,11 @@
+/* pure — 原版简约纯净
+ * 不覆盖任何 DSH 令牌；仅提供悬浮切换条的中性配色（跟随 DSH 自身明暗令牌）。 */
+html[data-miasaki-theme="pure"] {
+  --ms-panel: var(--dsw-alias-bg-overlay, #fff);
+  --ms-text: var(--dsw-alias-label-primary, #0f1115);
+  --ms-accent: var(--dsw-static-deepseek-450, #3964fe);
+  --ms-border: var(--dsw-alias-border-l2, rgba(0, 0, 0, .1));
+  --ms-hover: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06));
+  --ms-glyph: var(--dsw-alias-label-secondary, #61666b);
+  --ms-glow: rgba(57, 100, 254, .25);
+}

@@ -1,0 +1,168 @@
+/* ============================================================
+ * zafkiel — 刻刻帝「永夜钟阁」
+ * 原创设计：暗夜基底 · 右瞳绯红（交互）· 左瞳鎏金（装饰）
+ * ============================================================ */
+
+html[data-miasaki-theme="zafkiel"],
+html[data-miasaki-theme="zafkiel"] body {
+  color-scheme: dark;
+
+  /* —— 中性·蓝灰系（页面/面板/文字主色阶）—— */
+  --dsw-static-neutral-bluish-00: #faf7fc;
+  --dsw-static-neutral-bluish-50: #f1edf6;
+  --dsw-static-neutral-bluish-60: #ece8f2;
+  --dsw-static-neutral-bluish-75: #e2deea;
+  --dsw-static-neutral-bluish-100: #e4def0;
+  --dsw-static-neutral-bluish-150: #d6cfe4;
+  --dsw-static-neutral-bluish-200: #c2b8d4;
+  --dsw-static-neutral-bluish-300: #9a8fa8;
+  --dsw-static-neutral-bluish-400: #7c7089;
+  --dsw-static-neutral-bluish-500: #5f5568;
+  --dsw-static-neutral-bluish-600: #4b4254;
+  --dsw-static-neutral-bluish-700: #3a3243;
+  --dsw-static-neutral-bluish-750: #2f2836;
+  --dsw-static-neutral-bluish-800: #262030;
+  --dsw-static-neutral-bluish-850: #1e1a27;
+  --dsw-static-neutral-bluish-875: #171420;
+  --dsw-static-neutral-bluish-900: #121019;
+  --dsw-static-neutral-bluish-950: #0c0b11;
+  --dsw-static-neutral-bluish-1000: #080709;
+
+  /* —— 中性·灰阶（滚动条等）—— */
+  --dsw-static-neutral-00: #faf7fc;
+  --dsw-static-neutral-50: #f1edf6;
+  --dsw-static-neutral-100: #e4def0;
+  --dsw-static-neutral-150: #d6cfe4;
+  --dsw-static-neutral-200: #c2b8d4;
+  --dsw-static-neutral-250: #b1a6c5;
+  --dsw-static-neutral-300: #9a8fa8;
+  --dsw-static-neutral-400: #7c7089;
+  --dsw-static-neutral-500: #5f5568;
+  --dsw-static-neutral-550: #554b5e;
+  --dsw-static-neutral-600: #4b4254;
+  --dsw-static-neutral-700: #3a3243;
+  --dsw-static-neutral-800: #262030;
+  --dsw-static-neutral-850: #1e1a27;
+  --dsw-static-neutral-900: #121019;
+  --dsw-static-neutral-1000: #080709;
+
+  /* —— 品牌·钟刻绯红（按钮/链接/焦点/选中）—— */
+  --dsw-alias-brand-primary-new-colorprimary-new-color: var(--dsw-static-deepseek-450);
+  --dsw-static-deepseek-50: #f9edeb;
+  --dsw-static-deepseek-100: #f2dfdc;
+  --dsw-static-deepseek-200: #eacfca;
+  --dsw-static-deepseek-300: #dfb4ae;
+  --dsw-static-deepseek-400: #d44a3c;
+  --dsw-static-deepseek-450: #c23a2e;
+  --dsw-static-deepseek-500: #b3362c;
+  --dsw-static-deepseek-600: #9a2f26;
+  --dsw-static-deepseek-700-delete: #7c2b24;
+  --dsw-static-deepseek-800: #5a2b28;
+  --dsw-static-deepseek-900: #3a2122;
+
+  /* —— 语义·错误（绯红同源降饱和）—— */
+  --dsw-static-red-50: #f9ecea;
+  --dsw-static-red-100: #f1dad7;
+  --dsw-static-red-400: #e06a5c;
+  --dsw-static-red-500: #d04e41;
+  --dsw-static-red-600: #b73e33;
+  --dsw-static-red-900: #4a2320;
+
+  /* —— 语义·警告（鎏金同源）—— */
+  --dsw-static-amber-100: #efe3c4;
+  --dsw-static-amber-400: #d9b36a;
+  --dsw-static-amber-500: #c9a25a;
+  --dsw-static-amber-600: #a98944;
+  --dsw-static-amber-900: #4a3e22;
+
+  /* —— 语义·成功（低饱和苔绿）—— */
+  --dsw-static-green-100: #d9e5d8;
+  --dsw-static-green-400: #6fa77c;
+  --dsw-static-green-500: #55895f;
+  --dsw-static-green-900: #24382a;
+
+  /* —— 语义·信息（灰蓝，克制）—— */
+  --dsw-static-blue-50: #edf0f5;
+  --dsw-static-blue-50p: #e9edf3;
+  --dsw-static-blue-75: #e3e8ef;
+  --dsw-static-blue-100: #dce2eb;
+  --dsw-static-blue-300: #a9b4c8;
+  --dsw-static-blue-400: #7d96c9;
+  --dsw-static-blue-450: #6d86bc;
+  --dsw-static-blue-500: #61799f;
+  --dsw-static-blue-600: #4e6484;
+  --dsw-static-blue-800: #34425a;
+  --dsw-static-blue-900: #262e3e;
+  --dsw-static-blue-950: #1b2130;
+
+  /* —— DSH 杂项令牌 —— */
+  --dsh-scrollbar-thumb: #4a4157;
+  --dsh-scrollbar-thumb-hover: #6a5e7a;
+  --dsh-state-ongoing: #c23a2e;
+  --dsw-hovercard-bg: #1e1a27;
+  --dsw-linear-gradient-think: linear-gradient(180deg, #121019 20.19%, rgba(18, 16, 25, 0) 100%);
+  --dsw-linear-think-select: linear-gradient(180deg, #1e1a27 20.19%, rgba(30, 26, 39, 0) 100%);
+  --dsl-code-block-banner-background-color: #171420;
+
+  /* —— JSON 树语法色 —— */
+  --json-tree-hover: #2a2434;
+  --json-tree-icon: #9a8fa8;
+  --json-tree-keyword: #d44a3c;
+  --json-tree-number: #d9b36a;
+  --json-tree-property: #b8aec4;
+  --json-tree-punctuation: #6a6278;
+  --json-tree-string: #8fbf9c;
+
+  /* —— 代码高亮（shiki）—— */
+  --shiki-background: #121019;
+  --shiki-foreground: #e4def0;
+  --shiki-token-comment: #7c7089;
+  --shiki-token-constant: #d9a94f;
+  --shiki-token-function: #c2a3e8;
+  --shiki-token-keyword: #e06a5c;
+  --shiki-token-link: #7d96c9;
+  --shiki-token-parameter: #dfb4ae;
+  --shiki-token-punctuation: #9a8fa8;
+  --shiki-token-string: #7fbf8f;
+  --shiki-token-string-expression: #8fbf9c;
+
+  /* —— 切换条 —— */
+  --ms-panel: #1e1a27;
+  --ms-text: #e4def0;
+  --ms-accent: #d9b36a;
+  --ms-border: #3a3243;
+  --ms-hover: #2a2434;
+  --ms-glyph: #c23a2e;
+  --ms-glow: rgba(217, 179, 106, .35);
+}
+
+/* —— 装饰层 —— */
+html[data-miasaki-theme="zafkiel"] ::selection {
+  background: #c23a2e;
+  color: #faf7fc;
+}
+html[data-miasaki-theme="zafkiel"] input,
+html[data-miasaki-theme="zafkiel"] textarea,
+html[data-miasaki-theme="zafkiel"] [contenteditable] {
+  caret-color: #d9b36a;
+}
+html[data-miasaki-theme="zafkiel"] h1,
+html[data-miasaki-theme="zafkiel"] h2,
+html[data-miasaki-theme="zafkiel"] h3 {
+  font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, "Times New Roman", serif;
+  letter-spacing: .02em;
+}
+html[data-miasaki-theme="zafkiel"] #miasaki-watermark {
+  position: fixed;
+  right: -110px;
+  bottom: -110px;
+  width: 460px;
+  height: 460px;
+  opacity: .06;
+  pointer-events: none;
+  z-index: 0;
+}
+html[data-miasaki-theme="zafkiel"] #miasaki-watermark svg {
+  width: 100%;
+  height: 100%;
+}

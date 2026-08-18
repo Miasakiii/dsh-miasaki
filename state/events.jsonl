@@ -1,0 +1,22 @@
+{"ts":"2026-08-16T13:15:00Z","event":"m1_kickoff","note":"Operator 开启 analyst（control.json enabled=true），M1 手动闭环启动"}
+{"ts":"2026-08-16T13:28:00Z","event":"task_accepted","task":"t-0001","agent":"analyst","note":"Commander 验收通过 4/4；广播建议 4 条已策展入 collective-memory"}
+{"ts":"2026-08-16T13:45:00Z","event":"m2_panel_deployed","note":"fleet-1/pkg-1 面板插件激活（shell.overlay 悬浮面板：overview/tail/set-switch）"}
+{"ts":"2026-08-16T13:55:00Z","event":"m2_panel_v2","note":"fleet-1/pkg-2 更新：移除 emoji，配色改用主题 token（--dsw-alias-*），明暗主题自适应"}
+{"ts":"2026-08-16T14:05:00Z","event":"m2_panel_v4","note":"fleet-1/pkg-4：SVG 线性图标体系；三态悬浮窗（面板/气泡聚合/隐藏+角落启动钮）；桌宠聚合形态雏形；§8.3 已记录 v3 方向"}
+{"ts":"2026-08-16T14:30:00Z","event":"m3_setup","note":"m3-test profile 已装 dsh-subagent-dsh-sdk@0.0.1-rc.1（Operator 授权）；官方仓库克隆至 vendor/deepseek-harness；验证方案 tests/m3-acp/plan.md；首次 pnpm install 因网络慢（23 个大包超时）失败，914/923 已装，重试中（fetch-timeout 600s）"}
+{"ts":"2026-08-16T15:00:00Z","event":"m3_complete","note":"M3 成功路径：dsh-subagent-dsh-sdk 定为 M3.5 worker runtime（A 4/4、B 3/4+Windows 平台缺口、C 1/1）；官方测试工具链 Windows 反斜杠转义 bug 已本地热补丁；设计文档 v0.4 回写；评估报告 docs/m3-official-runtime-eval-2026-08-16.md"}
+{"ts":"2026-08-16T15:20:00Z","event":"upstream_feedback","note":"Windows 反斜杠转义 bug 已反馈官方（检索确认无人报过）：deepseek-harness Discussions #2477"}
+{"ts":"2026-08-16T15:30:00Z","event":"git_hooks_restored","note":"Operator 选择还原：删除 3 个 lefthook 转发钩子，pre-push.old 已还原为原 pre-push；全局 hooks 目录恢复原状"}
+{"ts":"2026-08-16T15:50:00Z","event":"m35_panel_v5","note":"fleet-1/pkg-5 激活：进程托管器（开关 ON 自动 spawn worker CLI，subprocess 树级托管）+ 对话框内容查看（worker 事件流落盘 → 面板 dialog 提取）+ pid 显示；M3.5 keyless 闭环已跑通（t-0002）"}
+{"ts":"2026-08-16T16:10:00Z","event":"session_end","note":"本日收尾：面板在用户页面不可见（slot 注册活跃但视觉未确认）记入 collective-memory 未决事项；待办：面板可见性排查/独立监控页、开关拨动验证、API key 注入决策"}
+{"ts":"2026-08-17T10:00:00Z","event":"process_restart_rebuild","note":"DSH 进程重启：动态插件 fleet-1 丢失已重建（新 fleet-1/pkg-1 = 双形态：settings.section 控制台页 + overlay 悬浮窗）；后台任务（mock 服务器/worker）随进程终止，mock 已重启；面板可见性排查继续"}
+{"ts":"2026-08-17T12:26:49Z","event":"task_accepted","task":"t-0002","agent":"analyst","note":"Commander 验收：标准1-4通过，标准5（开关off排空）复核移交 M3.5；M1 里程碑闭环（t-0001 完整闭环 + t-0002 台账收尾）"}
+{"ts":"2026-08-17T12:50:00Z","event":"pivot_scan_clis","note":"方向修正（Operator 指令）：放弃自研 worker CLI（等价子代理，无增量价值），改为扫描编排本机已安装的 agent CLI。扫描器 workers/discovery/scan-agents.ps1 上线：发现 8 个（bl/claude/gemini/opencode/dsh/pi/mimo/agent-browser），已生成 agents/<id>/manifest.json + registry.json；面板可见后自动列出这些 agent 的开关"}
+{"ts":"2026-08-17T13:15:00Z","event":"m35_first_dispatch","note":"M3.5 本机 CLI 派单首跑（t-0005 → bl）：设计文档 v0.11；bl 升级 1.16.0（Operator 确认）；派单闭环跑通（spawn/捕获/exit code 落账），任务 blocked=console 会话过期；Operator 已跑 bl auth login --console，重跑待确认"}
+{"ts":"2026-08-17T13:40:30Z","event":"task_accepted","task":"t-0005","agent":"bl","note":"M3.5 首跑闭环完成：bl usage free/stats 真实数据交付（额度+7日用量 96,226 tokens），验收 3/3；blocked→reopen→done 全链路首次真实走通"}
+{"ts":"2026-08-17T13:58:30Z","event":"task_accepted","task":"t-0006","agent":"claude","note":"派单器首用+第二 CLI：dispatch-task.ps1 上线；claude 21 回合产出 8-CLI 阵容分析；真实计量首账（$0.414，json-cost-usd）；permission_denials 验证交付物代写协议"}
+{"ts":"2026-08-17T14:10:00Z","event":"m35_dispatcher_v2","note":"派单器升级：预算预检（80%预警/熔断 exit4）+ usage 自动解析（json-cost-usd，实测与手填一致）+ CheckOnly/ParseOnly 验证模式；文档 v0.12；下一步规划：P0 面板可见性 / P1 CLI 校准批次（skills 补齐+gemini 修复+4 CLI 计量确认）/ P1 并发派单 / P2 成本报表与面板联动"}
+{"ts":"2026-08-17T14:30:00Z","event":"cli_calibration_batch","note":"校准批次完成（docs/cli-calibration-2026-08-17.md）：4/8 立即可用（claude/bl/opencode/pi），gemini 半可用（模型区域受限 403），mimo 语法待校准，agent-browser 命令型，dsh 缺 headless profile；8 档案 skills+preflight 已补齐"}
+{"ts":"2026-08-17T14:01:59Z","event":"m35_rc7_smoke","note":"rc.7 回归冒烟通过：A 4/4、B 3/4（唯一失败=已知 win32 终端检查缺口，非回归；热补丁仍有效）、C 1/1；rc7-test profile 216 包安装+rc.6 CLI 加载 exit 0；详见 docs/m35-rc7-regression-smoke-2026-08-17.md"}
+{"ts":"2026-08-17T14:45:30Z","event":"parallel_dispatch_ok","note":"并发派单验证通过：opencode(t-0007, PONG-A) + pi(t-0008, PONG-B) 并行执行互不干扰；两者均报告 provider=deepseek / model=deepseek-v4-flash；派单器双实例并行安全"}
+{"ts":"2026-08-17T15:00:00Z","event":"session_end","note":"文档 v0.13（校准批次+并发验证+rc.7 冒烟回写）；后续任务规划 docs/next-tasks-plan-2026-08-17.md（P0 面板可见性收尾 / P1 CLI 解锁三件+计量两件 / P2 报表与联动 / M4-M6）；下会话优先：面板硬刷新验证"}

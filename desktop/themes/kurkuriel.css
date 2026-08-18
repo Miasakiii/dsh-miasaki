@@ -1,0 +1,168 @@
+/* ============================================================
+ * kurkuriel — 狂狂帝「白夜逆钟」
+ * 原创设计：骨白基底 · 血绯（交互）· 枪铁（装饰）· 十二星座母题
+ * ============================================================ */
+
+html[data-miasaki-theme="kurkuriel"],
+html[data-miasaki-theme="kurkuriel"] body {
+  color-scheme: light;
+
+  /* —— 中性·蓝灰系（骨白纸面：00 最浅 → 1000 最深，遵循 DSH 亮色语义）—— */
+  --dsw-static-neutral-bluish-00: #f7f4f1;
+  --dsw-static-neutral-bluish-50: #fcfaf8;
+  --dsw-static-neutral-bluish-60: #f0ebe6;
+  --dsw-static-neutral-bluish-75: #e9e3dd;
+  --dsw-static-neutral-bluish-100: #e2dbd4;
+  --dsw-static-neutral-bluish-150: #d6cdc4;
+  --dsw-static-neutral-bluish-200: #c8bdb3;
+  --dsw-static-neutral-bluish-300: #a1958b;
+  --dsw-static-neutral-bluish-400: #8a7e74;
+  --dsw-static-neutral-bluish-500: #74685e;
+  --dsw-static-neutral-bluish-600: #5f554c;
+  --dsw-static-neutral-bluish-700: #4b433c;
+  --dsw-static-neutral-bluish-750: #3c362f;
+  --dsw-static-neutral-bluish-800: #2e2925;
+  --dsw-static-neutral-bluish-850: #241f1c;
+  --dsw-static-neutral-bluish-875: #1c1815;
+  --dsw-static-neutral-bluish-900: #151210;
+  --dsw-static-neutral-bluish-950: #0f0d0b;
+  --dsw-static-neutral-bluish-1000: #0a0807;
+
+  /* —— 中性·灰阶（滚动条）—— */
+  --dsw-static-neutral-00: #f7f4f1;
+  --dsw-static-neutral-50: #fcfaf8;
+  --dsw-static-neutral-100: #e2dbd4;
+  --dsw-static-neutral-150: #d6cdc4;
+  --dsw-static-neutral-200: #c8bdb3;
+  --dsw-static-neutral-250: #b9ada2;
+  --dsw-static-neutral-300: #a1958b;
+  --dsw-static-neutral-400: #8a7e74;
+  --dsw-static-neutral-500: #74685e;
+  --dsw-static-neutral-550: #695e55;
+  --dsw-static-neutral-600: #5f554c;
+  --dsw-static-neutral-700: #4b433c;
+  --dsw-static-neutral-800: #2e2925;
+  --dsw-static-neutral-850: #241f1c;
+  --dsw-static-neutral-900: #151210;
+  --dsw-static-neutral-1000: #0a0807;
+
+  /* —— 品牌·血绯 —— */
+  --dsw-alias-brand-primary-new-colorprimary-new-color: var(--dsw-static-deepseek-450);
+  --dsw-static-deepseek-50: #f7e9ea;
+  --dsw-static-deepseek-100: #f2dcdd;
+  --dsw-static-deepseek-200: #ecc8c9;
+  --dsw-static-deepseek-300: #dfa3a5;
+  --dsw-static-deepseek-400: #b52525;
+  --dsw-static-deepseek-450: #9e1b1b;
+  --dsw-static-deepseek-500: #8f1616;
+  --dsw-static-deepseek-600: #7a1212;
+  --dsw-static-deepseek-700-delete: #631010;
+  --dsw-static-deepseek-800: #4e2020;
+  --dsw-static-deepseek-900: #33191a;
+
+  /* —— 语义·错误（血绯同源）—— */
+  --dsw-static-red-50: #f7e9ea;
+  --dsw-static-red-100: #f0d6d7;
+  --dsw-static-red-400: #c93a3a;
+  --dsw-static-red-500: #a82424;
+  --dsw-static-red-600: #8a1c1c;
+  --dsw-static-red-900: #3f1a1a;
+
+  /* —— 语义·警告（沙金）—— */
+  --dsw-static-amber-100: #ede2c8;
+  --dsw-static-amber-400: #b89a5c;
+  --dsw-static-amber-500: #9c8149;
+  --dsw-static-amber-600: #7f693a;
+  --dsw-static-amber-900: #3a3220;
+
+  /* —— 语义·成功（苔绿）—— */
+  --dsw-static-green-100: #dce7d9;
+  --dsw-static-green-400: #5e8f6b;
+  --dsw-static-green-500: #46734f;
+  --dsw-static-green-900: #1f3326;
+
+  /* —— 语义·信息（枪铁蓝灰）—— */
+  --dsw-static-blue-50: #eceef2;
+  --dsw-static-blue-50p: #e8ebef;
+  --dsw-static-blue-75: #e2e6ec;
+  --dsw-static-blue-100: #dadee6;
+  --dsw-static-blue-300: #a6adbb;
+  --dsw-static-blue-400: #7a8294;
+  --dsw-static-blue-450: #6a7284;
+  --dsw-static-blue-500: #5e6572;
+  --dsw-static-blue-600: #4a505c;
+  --dsw-static-blue-800: #2e323b;
+  --dsw-static-blue-900: #20232a;
+  --dsw-static-blue-950: #16181d;
+
+  /* —— DSH 杂项令牌 —— */
+  --dsh-scrollbar-thumb: #c8bdb3;
+  --dsh-scrollbar-thumb-hover: #a1958b;
+  --dsh-state-ongoing: #9e1b1b;
+  --dsw-hovercard-bg: #ffffff;
+  --dsw-linear-gradient-think: linear-gradient(180deg, #f7f4f1 20.19%, rgba(247, 244, 241, 0) 100%);
+  --dsw-linear-think-select: linear-gradient(180deg, #ffffff 20.19%, rgba(255, 255, 255, 0) 100%);
+  --dsl-code-block-banner-background-color: #f0ebe6;
+
+  /* —— JSON 树语法色 —— */
+  --json-tree-hover: #e9e4df;
+  --json-tree-icon: #6a6159;
+  --json-tree-keyword: #9c8149;
+  --json-tree-number: #8f1616;
+  --json-tree-property: #5e6572;
+  --json-tree-punctuation: #877d74;
+  --json-tree-string: #46734f;
+
+  /* —— 代码高亮（shiki）—— */
+  --shiki-background: #ffffff;
+  --shiki-foreground: #241f22;
+  --shiki-token-comment: #877d74;
+  --shiki-token-constant: #7a1212;
+  --shiki-token-function: #5b4a9e;
+  --shiki-token-keyword: #a82424;
+  --shiki-token-link: #5e6572;
+  --shiki-token-parameter: #b52525;
+  --shiki-token-punctuation: #6a6159;
+  --shiki-token-string: #3e6b47;
+  --shiki-token-string-expression: #46734f;
+
+  /* —— 切换条 —— */
+  --ms-panel: #ffffff;
+  --ms-text: #241f22;
+  --ms-accent: #9e1b1b;
+  --ms-border: #c4bbb3;
+  --ms-hover: #e9e4df;
+  --ms-glyph: #8f1616;
+  --ms-glow: rgba(158, 27, 27, .3);
+}
+
+/* —— 装饰层 —— */
+html[data-miasaki-theme="kurkuriel"] ::selection {
+  background: #9e1b1b;
+  color: #f8f5f2;
+}
+html[data-miasaki-theme="kurkuriel"] input,
+html[data-miasaki-theme="kurkuriel"] textarea,
+html[data-miasaki-theme="kurkuriel"] [contenteditable] {
+  caret-color: #9e1b1b;
+}
+html[data-miasaki-theme="kurkuriel"] h1,
+html[data-miasaki-theme="kurkuriel"] h2,
+html[data-miasaki-theme="kurkuriel"] h3 {
+  font-family: "Arial Narrow", "Segoe UI", "Microsoft YaHei", sans-serif;
+  letter-spacing: .01em;
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-watermark {
+  position: fixed;
+  left: -90px;
+  top: -90px;
+  width: 420px;
+  height: 420px;
+  opacity: .07;
+  pointer-events: none;
+  z-index: 0;
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-watermark svg {
+  width: 100%;
+  height: 100%;
+}

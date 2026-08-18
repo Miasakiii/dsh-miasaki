@@ -1,0 +1,74 @@
+/* Miasaki 桌宠窗口 — 不透明圆角卡片（SetWindowRgn 裁形，稳定渲染与输入） */
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%;
+  background: #17131F;
+  overflow: hidden;
+  user-select: none; -webkit-user-select: none;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+#pet-root {
+  position: fixed; inset: 0;
+  background: linear-gradient(165deg, #241D30 0%, #17131F 55%, #1C1526 100%);
+  border-radius: 14px;
+  border: 1px solid rgba(217, 179, 106, .45);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .3);
+  overflow: hidden;
+}
+#stage {
+  position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%);
+  width: 192px; height: 208px; cursor: grab;
+}
+#stage:active { cursor: grabbing; }
+#stage::before {
+  content: ''; position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%);
+  width: 186px; height: 186px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(217, 179, 106, .2) 0%, rgba(217, 179, 106, 0) 70%);
+  pointer-events: none; z-index: 0;
+}
+#view { width: 192px; height: 208px; display: block; position: relative; z-index: 1; }
+
+/* 状态动作：待机呼吸 / 常规摇摆 / 深度聚焦 / 成长脉冲 / 点击跳跃 */
+#view.bob { animation: ms-bob 3.2s ease-in-out infinite; }
+#view.sway { animation: ms-sway 2.4s ease-in-out infinite; }
+#view.focus { animation: ms-focus 1.6s ease-in-out infinite; }
+#view.pulse { animation: ms-grow .4s ease; }
+#view.hop { animation: ms-hop .5s ease; }
+@keyframes ms-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
+@keyframes ms-sway { 0%,100%{transform:rotate(-1.6deg)} 50%{transform:rotate(1.6deg)} }
+@keyframes ms-focus { 0%,100%{transform:scale(1)} 50%{transform:scale(1.035)} }
+@keyframes ms-grow { 0%{transform:scale(.9)} 55%{transform:scale(1.08)} 100%{transform:scale(1)} }
+@keyframes ms-hop { 0%{transform:translateY(0)} 40%{transform:translateY(-14px)} 70%{transform:translateY(0)} 85%{transform:translateY(-5px)} 100%{transform:translateY(0)} }
+
+#bubble {
+  position: absolute; left: 50%; bottom: 222px; transform: translateX(-50%);
+  background: rgba(30,26,39,.95); color: #e4def0; padding: 8px 13px;
+  border-radius: 12px; font-size: 13px; line-height: 1.45;
+  white-space: nowrap; border: 1px solid rgba(217,179,106,.4);
+  box-shadow: 0 5px 14px rgba(0,0,0,.4); z-index: 10; display: none; max-width: 200px;
+}
+#bubble.show { display: block; }
+#bubble::after {
+  content:''; position:absolute; left:50%; bottom:-7px; margin-left:-7px;
+  border:7px solid transparent; border-top-color: rgba(30,26,39,.95);
+}
+#bubble.approval { border-color:#c23a2e; background:#241a1e; }
+#bubble.approval::after { border-top-color:#241a1e; }
+#bubble .pb-btns { display:flex; gap:8px; margin-top:7px; }
+#bubble .pb-btn { padding:4px 12px; border-radius:6px; cursor:pointer; font-size:12px;
+  border:1px solid rgba(255,255,255,.25); text-align:center; }
+#bubble .pb-btn.ok { background:#2f5d3a; color:#eaf6ec; }
+#bubble .pb-btn.no { background:#5d2a2f; color:#f8e9ea; }
+
+#menu {
+  position: absolute; left: 50%; bottom: 224px; transform: translateX(-50%);
+  background: rgba(24,20,32,.97); border: 1px solid rgba(255,255,255,.14);
+  border-radius: 12px; padding: 6px; font-size: 13px; color: #e4def0;
+  min-width: 170px; box-shadow: 0 10px 26px rgba(0,0,0,.5); z-index: 20; display: none;
+}
+#menu.show { display: block; }
+#menu .mi { padding: 7px 12px; border-radius: 7px; cursor: pointer;
+  display: flex; gap: 9px; align-items: center; }
+#menu .mi:hover { background: rgba(255,255,255,.1); }
+#menu .mi.active { box-shadow: inset 0 0 0 1.5px #d9b36a; }
+#menu .sep { height:1px; background: rgba(255,255,255,.14); margin:5px 8px; }
+.hidden { display: none !important; }

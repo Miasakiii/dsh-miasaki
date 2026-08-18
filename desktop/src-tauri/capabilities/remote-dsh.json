@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-dsh",
+  "description": "DSH 远程页面（主窗口）最小 IPC 权限：用于主题→桌宠模式联动",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:3080", "http://127.0.0.1:3080/*"]
+  },
+  "permissions": ["core:default"]
+}

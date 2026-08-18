@@ -1,0 +1,7 @@
+node_modules/
+.npm-cache/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/injected/
+dist/
+*.log

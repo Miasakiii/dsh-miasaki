@@ -1,0 +1,52 @@
+# ===== dsh-miasaki 根 .gitignore（初次提交定稿 2026-08-18）=====
+
+# ---- 依赖与包管理器缓存 ----
+node_modules/
+.npm-cache/
+.npm-cache-tmp/
+.pnpm-store/
+
+# ---- 官方仓库克隆与本地备份（含嵌套 .git，禁止入库）----
+vendor/
+_refs/
+
+# ---- 发布产物（dist\Miasaki.exe + dist\ui\ 由 desktop 构建链路产出）----
+dist/
+
+# ---- Rust 构建产物（src-tauri）----
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/injected/
+
+# ---- 外部工具数据（非本项目产物）----
+.freebuff/
+_bailian_test/
+_mimo_test/
+
+# ---- 外部素材参考（半成品/压缩包，不入库）----
+hatch-pet-kurumi-main/
+.ref-kurumi.tgz
+
+# ---- 临时脚本（读取本地凭据 ~/.dsh/.credentials.yaml）----
+_api_connectivity_check.mjs
+
+# ---- 诊断截图（desktop/scripts 下均为验证过程截图）----
+desktop/scripts/*.png
+
+# ---- fleet 文件总线 · 运行时产物（可再生的执行痕迹）----
+agents/*/status.json
+agents/*/transcript.md
+agents/*/usage.jsonl
+agents/*/logs/
+agents/*/sessions/
+agents/*/inbox/
+state/fleet-pulse.json
+
+# ---- 测试日志 ----
+tests/m3-acp/logs/
+
+# ---- 日志与系统杂项 ----
+*.log
+desktop/.edge-test-profile
+Thumbs.db
+Desktop.ini
