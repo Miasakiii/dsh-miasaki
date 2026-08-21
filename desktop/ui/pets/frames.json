@@ -42,37 +42,11 @@
     }
   },
   "inverse": {
-    "kind": "atlas",
-    "rows": {
-      "idle": [
-        "r0c0.png",
-        "r0c1.png",
-        "r0c2.png",
-        "r0c3.png",
-        "r0c4.png",
-        "r0c5.png"
-      ],
-      "wave": [
-        "r3c0.png",
-        "r3c1.png",
-        "r3c2.png",
-        "r3c3.png"
-      ],
-      "jump": [
-        "r4c0.png",
-        "r4c1.png",
-        "r4c2.png",
-        "r4c3.png",
-        "r4c4.png"
-      ],
-      "run": [
-        "r7c0.png",
-        "r7c1.png",
-        "r7c2.png",
-        "r7c3.png",
-        "r7c4.png",
-        "r7c5.png"
-      ]
+    "kind": "states",
+    "states": {
+      "idle": "states/idle.png",
+      "work": "states/work.png",
+      "deep": "states/deep.png"
     }
   }
 }

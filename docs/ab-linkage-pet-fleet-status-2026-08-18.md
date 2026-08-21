@@ -169,7 +169,7 @@ pub struct PetShared { pub mode: String, pub intensity: String, pub hide: bool }
 - **验收**：阶段 0 改 status → 桌宠 1~2s 内切到 busy 立绘 + 气泡。
 
 ### 阶段 2 · 告警视觉（0.5 天）
-- `warn`/`alert` 的暖黄/绯红辉光：在 `UpdateLayeredWindow` 前对像素叠加辉光（复用 inverse 重着色的像素处理经验，见 `recolor-inverse.mjs` 思路）。
+- `warn`/`alert` 的暖黄/绯红辉光：在 `UpdateLayeredWindow` 前对像素叠加辉光（复用 inverse 重着色的像素处理经验，见 `_refs/scripts-archive/recolor-inverse.mjs` 思路）。
 - `alert` 抖动：`MoveWindow` 小幅位移几帧后归位（注意 §踩坑：物理坐标、SWP_NOZORDER）。
 
 ### 阶段 3 · 深化（可选，随 B P2/M4 推进）
@@ -203,7 +203,7 @@ pub struct PetShared { pub mode: String, pub intensity: String, pub hide: bool }
 - fleet watchdog 直接照抄 `start_hash_watchdog` 的 tokio 轮询 + 去重骨架。
 - 气泡机制（`bubble: Option<(String, Instant)>` + 3s 过期）已存在，直接设置文本即可。
 - 三态立绘 `whale_states`（idle/work/deep）已存在，v1 不需新素材。
-- 辉光像素处理可参考 `recolor-inverse.mjs`（inverse 角色重着色）的像素级思路。
+- 辉光像素处理可参考 `_refs/scripts-archive/recolor-inverse.mjs`（inverse 角色重着色）的像素级思路。
 
 **规避（违反必炸，来自 HANDOVER §6 / collective-memory）**：
 1. **不走 WebView2 承载桌宠**：联动只改 Rust 原生窗口 + 文件读取，不碰 webview 透明。

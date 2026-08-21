@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fleet Monitor · Miasaki</title>
+<style>
+/* ============================================================
+ * Fleet Monitor — Miasaki 主题令牌系统
+ * 遵循 design/themes.md 令牌面：--dsw-static-* 全覆盖
+ * ============================================================ */
+:root {
+  /* 通用令牌（暗色基底，匹配刻刻帝） */
+  --fm-bg: #0c0b11;
+  --fm-surface: #1e1a27;
+  --fm-surface-hover: #2a2434;
+  --fm-border: #3a3243;
+  --fm-accent: #d9b36a;
+  --fm-accent-dim: rgba(217,179,106,.15);
+  --fm-text: #e4def0;
+  --fm-text-dim: rgba(228,222,240,.55);
+  --fm-text-muted: rgba(228,222,240,.35);
+  --fm-red: #c23a2e;
+  --fm-green: #4caf7d;
+  --fm-blue: #5b8def;
+  --fm-orange: #e89040;
+  --fm-radius: 12px;
+  --fm-radius-sm: 8px;
+  --fm-shadow: 0 4px 20px rgba(0,0,0,.4);
+  --fm-font: "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+  --fm-font-mono: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--fm-font);
+  background: var(--fm-bg);
+  color: var(--fm-text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ---------- 顶栏 ---------- */
+.header {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(12,11,17,.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--fm-border);
+  padding: 14px 24px;
+  display: flex; align-items: center; gap: 16px;
+  flex-wrap: wrap;
+}
+.header-brand {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 15px; font-weight: 700; letter-spacing: .03em;
+}
+.header-brand .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--fm-accent);
+  box-shadow: 0 0 8px rgba(217,179,106,.5);
+}
+.header-stats {
+  display: flex; gap: 20px; margin-left: auto;
+  font-size: 13px; color: var(--fm-text-dim);
+}
+.header-stats .stat { display: flex; align-items: center; gap: 6px; }
+.header-stats .stat-val {
+  font-weight: 700; color: var(--fm-text);
+  font-family: var(--fm-font-mono); font-size: 14px;
+}
+.header-stats .stat-label { opacity: .6; }
+.refresh-indicator {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--fm-green);
+  opacity: .6;
+  transition: opacity .2s;
+}
+.refresh-indicator.pulse { opacity: 1; animation: fm-pulse .4s ease; }
+@keyframes fm-pulse { 0%{transform:scale(1)} 50%{transform:scale(1.6)} 100%{transform:scale(1)} }
+
+/* ---------- 主体 ---------- */
+.main { padding: 20px 24px 40px; max-width: 1200px; margin: 0 auto; }
+
+.section-title {
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--fm-text-dim);
+  margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+}
+.section-title::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--fm-border), transparent);
+}
+
+/* ---------- Agent 卡片网格 ---------- */
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px;
+}
+
+.agent-card {
+  background: var(--fm-surface);
+  border: 1px solid var(--fm-border);
+  border-radius: var(--fm-radius);
+  padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 12px;
+  transition: border-color .2s, box-shadow .2s;
+  position: relative;
+  overflow: hidden;
+}
+.agent-card:hover {
+  border-color: rgba(217,179,106,.3);
+  box-shadow: 0 4px 24px rgba(0,0,0,.3);
+}
+.agent-card.disabled { opacity: .55; }
+.agent-card.running { border-left: 3px solid var(--fm-green); }
+.agent-card.blocked { border-left: 3px solid var(--fm-orange); }
+.agent-card.error   { border-left: 3px solid var(--fm-red); }
+
+/* 卡片顶行：开关 + 名称 + 状态灯 */
+.card-top {
+  display: flex; align-items: center; gap: 12px;
+}
+.card-switch {
+  position: relative; width: 40px; height: 22px; flex-shrink: 0;
+}
+.card-switch input { opacity: 0; width: 0; height: 0; }
+.card-switch .slider {
+  position: absolute; inset: 0; cursor: pointer;
+  background: #444; border-radius: 11px; transition: background .25s;
+}
+.card-switch .slider::before {
+  content: ''; position: absolute; left: 3px; top: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; transition: transform .25s;
+}
+.card-switch input:checked + .slider { background: var(--fm-accent); }
+.card-switch input:checked + .slider::before { transform: translateX(18px); }
+
+.card-info { flex: 1; min-width: 0; }
+.card-name {
+  font-size: 14px; font-weight: 700;
+  display: flex; align-items: center; gap: 8px;
+}
+.card-name .status-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.status-dot.idle    { background: var(--fm-green); box-shadow: 0 0 6px rgba(76,175,125,.5); }
+.status-dot.running { background: var(--fm-blue); box-shadow: 0 0 6px rgba(91,141,239,.5); animation: fm-blink 1.2s ease infinite; }
+.status-dot.blocked { background: var(--fm-orange); box-shadow: 0 0 6px rgba(232,144,64,.5); }
+.status-dot.error   { background: var(--fm-red); box-shadow: 0 0 6px rgba(194,58,46,.5); }
+.status-dot.stopped,
+.status-dot.unknown,
+.status-dot['no-status'] { background: #666; }
+@keyframes fm-blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.card-meta {
+  font-size: 11.5px; color: var(--fm-text-dim);
+  display: flex; gap: 12px; flex-wrap: wrap; margin-top: 2px;
+}
+.card-meta .meta-item { display: flex; align-items: center; gap: 4px; }
+.card-meta .meta-val { color: var(--fm-text); font-weight: 600; }
+
+/* 当前任务 */
+.card-task {
+  background: rgba(255,255,255,.03);
+  border-radius: var(--fm-radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.card-task .task-label { color: var(--fm-text-dim); margin-bottom: 4px; }
+.card-task .task-title { font-weight: 600; margin-bottom: 6px; }
+.card-task .task-progress {
+  height: 4px; background: rgba(255,255,255,.08); border-radius: 2px;
+  overflow: hidden;
+}
+.card-task .task-progress-fill {
+  height: 100%; background: var(--fm-accent); border-radius: 2px;
+  transition: width .3s ease;
+}
+.card-task .task-step {
+  font-size: 11px; color: var(--fm-text-dim); margin-top: 4px;
+  font-style: italic;
+}
+
+/* 成本行 */
+.card-cost {
+  display: flex; gap: 16px; font-size: 12px;
+  padding-top: 8px; border-top: 1px solid rgba(255,255,255,.06);
+}
+.card-cost .cost-item { display: flex; flex-direction: column; gap: 2px; }
+.card-cost .cost-label { font-size: 10.5px; color: var(--fm-text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.card-cost .cost-val {
+  font-family: var(--fm-font-mono); font-weight: 700; font-size: 13px;
+}
+.cost-val.high { color: var(--fm-red); }
+.cost-val.medium { color: var(--fm-orange); }
+
+/* 技能标签 */
+.card-skills {
+  display: flex; gap: 5px; flex-wrap: wrap;
+}
+.skill-tag {
+  font-size: 10.5px; padding: 2px 8px; border-radius: 10px;
+  background: var(--fm-accent-dim); color: var(--fm-accent);
+  font-weight: 500; letter-spacing: .02em;
+}
+
+/* 心跳 */
+.card-heartbeat {
+  font-size: 11px; color: var(--fm-text-muted);
+  display: flex; align-items: center; gap: 4px;
+}
+.heartbeat-fresh { color: var(--fm-green); }
+.heartbeat-stale { color: var(--fm-orange); }
+.heartbeat-dead  { color: var(--fm-red); }
+
+/* ---------- 空状态 ---------- */
+.empty-state {
+  text-align: center; padding: 60px 20px;
+  color: var(--fm-text-dim); font-size: 14px;
+}
+.empty-state .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: .4; }
+
+/* ---------- 错误/加载 ---------- */
+.loading {
+  text-align: center; padding: 40px;
+  color: var(--fm-text-dim); font-size: 13px;
+}
+.error-banner {
+  background: rgba(194,58,46,.15); border: 1px solid rgba(194,58,46,.3);
+  color: var(--fm-red); padding: 10px 16px; border-radius: var(--fm-radius-sm);
+  margin-bottom: 16px; font-size: 13px;
+  display: none;
+}
+.error-banner.show { display: flex; align-items: center; gap: 8px; }
+
+/* ---------- 底栏 ---------- */
+.footer {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: rgba(12,11,17,.88); backdrop-filter: blur(8px);
+  border-top: 1px solid var(--fm-border);
+  padding: 8px 24px; font-size: 11px; color: var(--fm-text-muted);
+  display: flex; align-items: center; justify-content: space-between;
+}
+
+/* ---------- Toggle all ---------- */
+.toolbar {
+  display: flex; gap: 8px; margin-bottom: 16px;
+}
+.toolbar-btn {
+  font-size: 12px; padding: 6px 14px; border-radius: var(--fm-radius-sm);
+  border: 1px solid var(--fm-border); background: var(--fm-surface);
+  color: var(--fm-text); cursor: pointer; font-family: var(--fm-font);
+  transition: background .15s, border-color .15s;
+}
+.toolbar-btn:hover {
+  background: var(--fm-surface-hover);
+  border-color: var(--fm-accent);
+}
+
+/* ---------- 历史成本报表 ---------- */
+.report-range-label {
+  margin-left: auto; font-size: 12px; color: var(--fm-text-dim);
+  font-family: var(--fm-font-mono);
+}
+.range-btn.active {
+  background: var(--fm-accent); color: #17141d;
+  border-color: var(--fm-accent); font-weight: 700;
+}
+.report-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px; margin-bottom: 16px;
+}
+.report-card {
+  background: var(--fm-surface);
+  border: 1px solid var(--fm-border);
+  border-radius: var(--fm-radius-sm);
+  padding: 12px 14px;
+}
+.report-card.cost-high { border-color: rgba(194,58,46,.4); }
+.report-card-val {
+  font-family: var(--fm-font-mono); font-weight: 700; font-size: 16px;
+  color: var(--fm-accent);
+}
+.report-card.cost-high .report-card-val { color: var(--fm-red); }
+.report-card-label {
+  font-size: 10.5px; color: var(--fm-text-muted);
+  text-transform: uppercase; letter-spacing: .04em; margin-top: 4px;
+}
+.report-charts {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 14px; margin-bottom: 16px;
+}
+.chart-box {
+  background: var(--fm-surface);
+  border: 1px solid var(--fm-border);
+  border-radius: var(--fm-radius);
+  padding: 14px 16px;
+}
+.chart-title {
+  font-size: 12px; font-weight: 600; color: var(--fm-text-dim);
+  margin-bottom: 8px; letter-spacing: .03em;
+}
+.chart-box svg { width: 100%; height: auto; display: block; }
+.report-table-wrap {
+  background: var(--fm-surface);
+  border: 1px solid var(--fm-border);
+  border-radius: var(--fm-radius);
+  overflow: hidden;
+}
+.report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.report-table th, .report-table td {
+  padding: 8px 12px; text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  white-space: nowrap;
+}
+.report-table th {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--fm-text-muted); background: rgba(255,255,255,.02);
+  font-weight: 600;
+}
+.report-table tr:last-child td { border-bottom: none; }
+.report-table td.num {
+  font-family: var(--fm-font-mono); color: var(--fm-text);
+}
+.report-table tr:hover td { background: rgba(255,255,255,.02); }
+.agent-chip {
+  display: inline-block; padding: 1px 8px; border-radius: 10px;
+  font-size: 10.5px; font-weight: 600;
+  background: rgba(255,255,255,.07);
+  color: var(--chip, var(--fm-accent));
+  margin-right: 6px;
+}
+@media (max-width: 900px) {
+  .report-charts { grid-template-columns: 1fr; }
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 600px) {
+  .header { padding: 10px 14px; }
+  .main { padding: 14px; }
+  .agents-grid { grid-template-columns: 1fr; }
+  .header-stats { gap: 12px; font-size: 12px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-brand">
+    <span class="dot"></span>
+    <span>Fleet Monitor</span>
+  </div>
+  <div class="header-stats" id="headerStats">
+    <div class="stat">
+      <span class="stat-val" id="statOnline">-</span>
+      <span class="stat-label">在线</span>
+    </div>
+    <div class="stat">
+      <span class="stat-val" id="statTasks">-</span>
+      <span class="stat-label">活跃任务</span>
+    </div>
+    <div class="stat">
+      <span class="stat-val" id="statCost">-</span>
+      <span class="stat-label">今日成本</span>
+    </div>
+    <div class="stat">
+      <span class="stat-val" id="statTotal">-</span>
+      <span class="stat-label">总 Agent</span>
+    </div>
+  </div>
+  <div class="refresh-indicator" id="refreshDot" title="自动刷新中"></div>
+</div>
+
+<div class="main">
+  <div class="error-banner" id="errorBanner">
+    <span>⚠</span>
+    <span id="errorText"></span>
+  </div>
+
+  <div class="section-title">Agent Fleet</div>
+
+  <div class="toolbar">
+    <button class="toolbar-btn" onclick="toggleAll(true)">全部开启</button>
+    <button class="toolbar-btn" onclick="toggleAll(false)">全部关闭</button>
+    <button class="toolbar-btn" onclick="refreshNow()">立即刷新</button>
+  </div>
+
+  <div id="agentList" class="agents-grid">
+    <div class="loading">正在加载 fleet 状态…</div>
+  </div>
+
+  <!-- ==================== 历史成本报表 ==================== -->
+  <div class="section-title" style="margin-top:36px">历史成本报表</div>
+
+  <div class="toolbar">
+    <button class="toolbar-btn range-btn" data-days="7">近7天</button>
+    <button class="toolbar-btn range-btn" data-days="14">近14天</button>
+    <button class="toolbar-btn range-btn active" data-days="30">近30天</button>
+    <button class="toolbar-btn" onclick="refreshReport()">刷新报表</button>
+    <span class="report-range-label" id="reportRange">-</span>
+  </div>
+
+  <div class="report-summary" id="reportSummary"></div>
+
+  <div class="report-charts">
+    <div class="chart-box">
+      <div class="chart-title">每日成本（按 Agent 堆叠）</div>
+      <svg id="dailyChart" viewBox="0 0 680 260"></svg>
+    </div>
+    <div class="chart-box">
+      <div class="chart-title">按 Agent 累计成本</div>
+      <svg id="agentChart" viewBox="0 0 420 320"></svg>
+    </div>
+  </div>
+
+  <div class="report-table-wrap">
+    <table class="report-table">
+      <thead>
+        <tr>
+          <th>日期</th><th>成本</th><th>Tokens</th><th>Cache</th><th>调用</th><th>主力 Agent</th>
+        </tr>
+      </thead>
+      <tbody id="reportTableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="footer">
+  <span>Miasaki Fleet Monitor · workspace: <span id="footerWs">-</span></span>
+  <span id="footerTs">-</span>
+</div>
+
+<script>
+/* ============================================================
+ * Fleet Monitor — 前端逻辑
+ * 轮询 /api/fleet，渲染 agent 卡片，处理开关切换
+ * ============================================================ */
+'use strict';
+
+// API 基地址：优先检测同源 server，否则回退到默认 39801
+const API_BASE = (function() {
+  // 如果页面由 fleet-monitor/server.js 提供（同源），直接用当前 origin
+  if (location.port === '39801') return location.origin;
+  // 否则连接默认 fleet-monitor server
+  return 'http://127.0.0.1:39801';
+})();
+const POLL_MS = 2000;
+let lastFleet = null;
+let pollTimer = null;
+let errorCount = 0;
+
+/* ---------- DOM helpers ---------- */
+function $(id) { return document.getElementById(id); }
+function el(tag, attrs, children) {
+  const e = document.createElement(tag);
+  if (attrs) Object.entries(attrs).forEach(([k, v]) => {
+    if (k === 'className') e.className = v;
+    else if (k === 'innerHTML') e.innerHTML = v;
+    else if (k === 'textContent') e.textContent = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  });
+  if (children) children.forEach(c => {
+    if (typeof c === 'string') e.appendChild(document.createTextNode(c));
+    else if (c) e.appendChild(c);
+  });
+  return e;
+}
+
+/* ---------- 数据获取 ---------- */
+async function fetchFleet() {
+  try {
+    const res = await fetch(API_BASE + '/api/fleet');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    errorCount = 0;
+    $('errorBanner').classList.remove('show');
+    return data;
+  } catch (e) {
+    errorCount++;
+    if (errorCount >= 2) {
+      $('errorBanner').classList.add('show');
+      $('errorText').textContent = `连接失败（${errorCount}次）: ${e.message}`;
+    }
+    return null;
+  }
+}
+
+/* ---------- 时间格式化 ---------- */
+function timeAgo(isoStr) {
+  if (!isoStr) return '未知';
+  const diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
+  if (diff < 0) return '未来';
+  if (diff < 5) return '刚刚';
+  if (diff < 60) return Math.floor(diff) + '秒前';
+  if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
+  if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
+  return Math.floor(diff / 86400) + '天前';
+}
+
+function heartbeatClass(isoStr) {
+  if (!isoStr) return 'heartbeat-dead';
+  const diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
+  if (diff < 60) return 'heartbeat-fresh';
+  if (diff < 300) return 'heartbeat-stale';
+  return 'heartbeat-dead';
+}
+
+/* ---------- 渲染 ---------- */
+function renderAgent(agent) {
+  const stateClass = agent.state === 'running' ? 'running'
+    : agent.state === 'blocked' ? 'blocked'
+    : agent.state === 'error' ? 'error'
+    : '';
+  const cardClass = 'agent-card' + (stateClass ? ' ' + stateClass : '') + (!agent.enabled ? ' disabled' : '');
+
+  // 状态灯 class
+  const dotClass = 'status-dot ' + (agent.state || 'unknown');
+
+  // 成本显示
+  const costStr = agent.cost_today > 0 ? '$' + agent.cost_today.toFixed(4) : '$0';
+  const costClass = agent.cost_today > 1 ? 'cost-val high' : agent.cost_today > 0.1 ? 'cost-val medium' : 'cost-val';
+  const tokensStr = agent.tokens_today > 0 ? formatTokens(agent.tokens_today) : '-';
+
+  // 当前任务
+  let taskHTML = '';
+  if (agent.current_task) {
+    const pct = Math.round((agent.progress || 0) * 100);
+    taskHTML = `
+      <div class="card-task">
+        <div class="task-label">当前任务</div>
+        <div class="task-title">${escHtml(agent.current_task.id)}: ${escHtml(agent.current_task.title || '')}</div>
+        <div class="task-progress"><div class="task-progress-fill" style="width:${pct}%"></div></div>
+        ${agent.step ? '<div class="task-step">' + escHtml(agent.step) + '</div>' : ''}
+      </div>`;
+  }
+
+  // 技能标签
+  const skillsHTML = (agent.skills || []).map(s =>
+    '<span class="skill-tag">' + escHtml(s) + '</span>'
+  ).join('');
+
+  // 心跳
+  const hbClass = heartbeatClass(agent.heartbeat_at);
+  const hbText = agent.heartbeat_at ? timeAgo(agent.heartbeat_at) : '无心跳';
+
+  const card = el('div', { className: cardClass }, []);
+
+  card.innerHTML = `
+    <div class="card-top">
+      <label class="card-switch">
+        <input type="checkbox" ${agent.enabled ? 'checked' : ''}
+          data-agent="${escAttr(agent.id)}" onchange="onToggle(this)">
+        <span class="slider"></span>
+      </label>
+      <div class="card-info">
+        <div class="card-name">
+          <span class="${dotClass}"></span>
+          <span>${escHtml(agent.name)}</span>
+          <span style="font-size:11px;color:var(--fm-text-dim);font-weight:400">${escHtml(agent.id)}</span>
+        </div>
+        <div class="card-meta">
+          <span class="meta-item">${escHtml(agent.runtime)}</span>
+          ${agent.cli_version ? '<span class="meta-item">v' + escHtml(agent.cli_version) + '</span>' : ''}
+          ${agent.model ? '<span class="meta-item">model: <span class="meta-val">' + escHtml(agent.model) + '</span></span>' : ''}
+          <span class="meta-item">state: <span class="meta-val">${escHtml(agent.state)}</span></span>
+        </div>
+      </div>
+    </div>
+    ${taskHTML}
+    <div class="card-cost">
+      <div class="cost-item">
+        <span class="cost-label">今日成本</span>
+        <span class="${costClass}">${costStr}</span>
+      </div>
+      <div class="cost-item">
+        <span class="cost-label">Tokens</span>
+        <span class="cost-val">${tokensStr}</span>
+      </div>
+      <div class="cost-item">
+        <span class="cost-label">今日任务</span>
+        <span class="cost-val">${agent.tasks_today || 0}</span>
+      </div>
+    </div>
+    ${skillsHTML ? '<div class="card-skills">' + skillsHTML + '</div>' : ''}
+    <div class="card-heartbeat">
+      <span class="${hbClass}">●</span>
+      <span>心跳: ${hbText}</span>
+      ${agent.metering ? '<span style="margin-left:auto">计量: ' + escHtml(agent.metering_source || '有') + '</span>' : '<span style="margin-left:auto;opacity:.4">无计量</span>'}
+    </div>
+  `;
+
+  return card;
+}
+
+function renderFleet(fleet) {
+  if (!fleet) return;
+
+  // 更新顶栏
+  $('statOnline').textContent = fleet.summary.online + '/' + fleet.summary.total;
+  $('statTasks').textContent = fleet.summary.tasks_active;
+  $('statCost').textContent = '$' + fleet.summary.cost_today.toFixed(4);
+  $('statTotal').textContent = fleet.summary.total;
+  $('footerWs').textContent = fleet.workspace.split(/[/\\]/).pop();
+  $('footerTs').textContent = '更新: ' + new Date(fleet.ts).toLocaleTimeString();
+
+  // 渲染 agent 卡片
+  const container = $('agentList');
+  if (!fleet.agents || fleet.agents.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="empty-icon">🔍</div>未发现 Agent<br>请运行 workers/discovery/scan-agents.ps1 扫描</div>';
+    return;
+  }
+
+  // 增量更新：如果 DOM 结构匹配就复用，否则全量重建
+  const existingCards = container.querySelectorAll('.agent-card');
+  if (existingCards.length === fleet.agents.length) {
+    // 增量更新（避免闪烁）
+    fleet.agents.forEach((agent, i) => {
+      const newCard = renderAgent(agent);
+      existingCards[i].replaceWith(newCard);
+    });
+  } else {
+    // 全量重建
+    container.innerHTML = '';
+    fleet.agents.forEach(agent => container.appendChild(renderAgent(agent)));
+  }
+
+  lastFleet = fleet;
+}
+
+/* ---------- 开关切换 ---------- */
+async function onToggle(checkbox) {
+  const agentId = checkbox.getAttribute('data-agent');
+  const enabled = checkbox.checked;
+  checkbox.disabled = true;
+  try {
+    const res = await fetch(API_BASE + '/api/toggle/' + encodeURIComponent(agentId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // 成功：立即刷新
+    await refreshNow();
+  } catch (e) {
+    // 回滚
+    checkbox.checked = !enabled;
+    $('errorBanner').classList.add('show');
+    $('errorText').textContent = `切换 ${agentId} 失败: ${e.message}`;
+  } finally {
+    checkbox.disabled = false;
+  }
+}
+
+async function toggleAll(enabled) {
+  if (!lastFleet || !lastFleet.agents) return;
+  const promises = lastFleet.agents
+    .filter(a => a.enabled !== enabled)
+    .map(a => fetch(API_BASE + '/api/toggle/' + encodeURIComponent(a.id), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }).catch(() => {}));
+  await Promise.all(promises);
+  await refreshNow();
+}
+
+/* ---------- 刷新 ---------- */
+async function refreshNow() {
+  const dot = $('refreshDot');
+  dot.classList.add('pulse');
+  setTimeout(() => dot.classList.remove('pulse'), 400);
+  const fleet = await fetchFleet();
+  if (fleet) renderFleet(fleet);
+}
+
+/* ---------- 工具 ---------- */
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) { return escHtml(s); }
+function formatTokens(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+
+/* ---------- 历史成本报表 ---------- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+let reportDays = 30;
+let lastReport = null;
+
+const AGENT_COLORS = [
+  '#d9b36a', '#5b8def', '#4caf7d', '#e89040', '#c23a2e',
+  '#9b6bdf', '#4db8c9', '#e07bd0', '#a3b05c', '#7f8fa6',
+];
+function agentColor(agent) {
+  let h = 0;
+  for (const ch of String(agent)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return AGENT_COLORS[h % AGENT_COLORS.length];
+}
+
+async function fetchReport() {
+  try {
+    const res = await fetch(`${API_BASE}/api/report?days=${reportDays}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+function formatCost(v) {
+  if (!v || v <= 0) return '$0';
+  if (v >= 100) return '$' + v.toFixed(0);
+  if (v >= 1) return '$' + v.toFixed(2);
+  if (v >= 0.01) return '$' + v.toFixed(3);
+  return '$' + v.toFixed(4);
+}
+
+function niceCeil(v) {
+  if (v <= 0) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  const m = v / pow;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * pow;
+}
+
+function svgEl(tag, attrs, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function svgText(x, y, text, anchor, fill, size) {
+  return svgEl('text', {
+    x, y, 'text-anchor': anchor || 'start',
+    fill: fill || '#e4def0', 'font-size': size || 11,
+    'font-family': 'Cascadia Code, Consolas, monospace',
+  }, text);
+}
+
+function renderReport(r) {
+  if (!r) {
+    $('reportSummary').innerHTML = '<div class="loading">报表加载失败</div>';
+    return;
+  }
+  lastReport = r;
+  const s = r.summary;
+  $('reportRange').textContent = `${r.range.start} ~ ${r.range.end} · ${r.days} 天`;
+
+  const cards = [
+    { label: '区间总成本', val: formatCost(s.total_cost), high: s.total_cost > 1 },
+    { label: '日均成本', val: formatCost(s.avg_daily_cost) },
+    { label: '总 Tokens', val: formatTokens(s.total_tokens) },
+    { label: 'Cache Tokens', val: formatTokens(s.total_cache_tokens) },
+    { label: '模型调用', val: String(s.total_calls) },
+    { label: '有数据天数', val: s.days_with_data + '/' + r.days },
+  ];
+  $('reportSummary').innerHTML = cards.map(c =>
+    `<div class="report-card${c.high ? ' cost-high' : ''}">` +
+    `<div class="report-card-val">${c.val}</div>` +
+    `<div class="report-card-label">${c.label}</div></div>`
+  ).join('');
+
+  renderDailyChart($('dailyChart'), r);
+  renderAgentChart($('agentChart'), r);
+  renderReportTable(r);
+}
+
+/* 每日成本堆叠柱状图 */
+function renderDailyChart(svg, r) {
+  const W = 680, H = 260;
+  const padL = 48, padR = 12, padT = 16, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const days = r.byDay || [];
+  const agents = (r.byAgent || []).map(a => a.agent);
+  if (days.length === 0 || days.every(d => d.calls === 0)) {
+    svg.appendChild(svgText(W / 2, H / 2, '暂无成本数据', 'middle', '#7a7286'));
+    return;
+  }
+
+  // 按天索引交叉明细，O(1) 查询
+  const byDateAgent = {};
+  for (const da of r.byDayAgent || []) {
+    (byDateAgent[da.date] || (byDateAgent[da.date] = {}))[da.agent] = da;
+  }
+
+  const maxTotal = Math.max(...days.map(d => d.cost), 0.01);
+  const yMax = niceCeil(maxTotal);
+
+  // 横向网格线 + Y 轴刻度
+  const steps = 4;
+  for (let i = 0; i <= steps; i++) {
+    const y = padT + plotH - (i / steps) * plotH;
+    svg.appendChild(svgEl('line', {
+      x1: padL, y1: y, x2: W - padR, y2: y,
+      stroke: 'rgba(228,222,240,.08)', 'stroke-width': 1,
+    }));
+    svg.appendChild(svgText(padL - 8, y + 3, '$' + (yMax * i / steps).toFixed(2), 'end', '#7a7286', 10));
+  }
+
+  const n = days.length;
+  const stepX = plotW / n;
+  const barW = Math.min(stepX * 0.66, 44);
+
+  days.forEach((d, i) => {
+    const x = padL + stepX * i + (stepX - barW) / 2;
+    const segs = agents
+      .map(ag => byDateAgent[d.date] && byDateAgent[d.date][ag])
+      .filter(da => da && da.cost > 0)
+      .sort((a, b) => b.cost - a.cost);
+
+    if (segs.length === 0) {
+      svg.appendChild(svgEl('rect', {
+        x, y: padT + plotH - 1, width: barW, height: 1,
+        fill: 'rgba(228,222,240,.15)',
+      }));
+    } else {
+      let yCursor = padT + plotH;
+      segs.forEach((seg, si) => {
+        const h = Math.max(seg.cost / yMax * plotH, seg.cost > 0 ? 2 : 0);
+        yCursor -= h;
+        const isTop = si === segs.length - 1;
+        const rect = svgEl('rect', {
+          x, y: yCursor, width: barW, height: h,
+          fill: agentColor(seg.agent),
+          rx: isTop ? 2 : 0,
+        });
+        svg.appendChild(rect);
+        svg.appendChild(svgEl('title', {},
+          `${seg.agent} · ${d.date}\n$${seg.cost.toFixed(4)} · ${formatTokens(seg.tokens)} tok · ${seg.calls} 次调用`));
+      });
+    }
+
+    // X 轴日期（过密时抽样）
+    if (n <= 10 || i % Math.ceil(n / 10) === 0) {
+      svg.appendChild(svgText(x + barW / 2, H - 8, d.date.slice(5), 'middle', '#7a7286', 10));
+    }
+  });
+}
+
+/* 按 Agent 累计成本横向条形图 */
+function renderAgentChart(svg, r) {
+  const W = 420;
+  const padL = 10, padR = 10, padT = 8, padB = 8;
+  const agents = (r.byAgent || []).filter(a => a.cost > 0);
+  const rowH = 26;
+  const H = Math.max(agents.length * rowH + padT + padB, 64);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  if (agents.length === 0) {
+    svg.appendChild(svgText(W / 2, H / 2, '暂无成本数据', 'middle', '#7a7286'));
+    return;
+  }
+
+  const maxCost = Math.max(...agents.map(a => a.cost), 0.01);
+  const barH = 14;
+  const labelW = 120;
+  const plotW = W - padL - padR - labelW;
+
+  agents.forEach((a, i) => {
+    const y = padT + i * rowH;
+    const c = agentColor(a.agent);
+    svg.appendChild(svgText(padL, y + barH / 2 + 3, a.name || a.agent, 'start', '#c9c2d6', 11));
+    const w = Math.max(a.cost / maxCost * plotW, a.cost > 0 ? 4 : 0);
+    const rect = svgEl('rect', {
+      x: padL + labelW, y, width: w, height: barH,
+      fill: c, rx: 3,
+    });
+    svg.appendChild(rect);
+    svg.appendChild(svgEl('title', {},
+      `${a.agent} · ${a.name}\n$${a.cost.toFixed(4)} · ${formatTokens(a.tokens)} tok · cache ${formatTokens(a.cache)} · ${a.calls} 次调用 · ${a.days} 天活跃`));
+    svg.appendChild(svgText(padL + labelW + w + 8, y + barH / 2 + 3, formatCost(a.cost), 'start', '#e4def0', 11));
+  });
+}
+
+/* 明细表格（新 → 旧） */
+function renderReportTable(r) {
+  const tbody = $('reportTableBody');
+  tbody.innerHTML = '';
+  const days = [...(r.byDay || [])].reverse();
+  if (days.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--fm-text-dim)">暂无数据</td></tr>';
+    return;
+  }
+  for (const d of days) {
+    const segs = (r.byDayAgent || [])
+      .filter(da => da.date === d.date && da.cost > 0)
+      .sort((a, b) => b.cost - a.cost);
+    const top = segs[0];
+    const tr = el('tr', {}, [
+      el('td', {}, [d.date]),
+      el('td', { className: 'num' }, [formatCost(d.cost)]),
+      el('td', { className: 'num' }, [formatTokens(d.tokens)]),
+      el('td', { className: 'num' }, [formatTokens(d.cache)]),
+      el('td', { className: 'num' }, [String(d.calls)]),
+      el('td', {}, top
+        ? [el('span', { className: 'agent-chip', style: '--chip:' + agentColor(top.agent) }, [top.agent]),
+           formatCost(top.cost)]
+        : ['—']),
+    ]);
+    tbody.appendChild(tr);
+  }
+}
+
+function setReportDays(days) {
+  reportDays = days;
+  document.querySelectorAll('.range-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.getAttribute('data-days'), 10) === days);
+  });
+  refreshReport();
+}
+
+async function refreshReport() {
+  renderReport(await fetchReport());
+}
+
+/* ---------- 启动 ---------- */
+refreshNow();
+pollTimer = setInterval(refreshNow, POLL_MS);
+
+// 报表：加载 + 范围切换 + 慢速轮询（成本数据变化不频繁）
+document.querySelectorAll('.range-btn').forEach(b => {
+  b.addEventListener('click', () => setReportDays(parseInt(b.getAttribute('data-days'), 10)));
+});
+refreshReport();
+setInterval(refreshReport, 60000);
+
+// 页面可见性：切到后台降低轮询频率
+document.addEventListener('visibilitychange', () => {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(refreshNow, document.hidden ? 8000 : POLL_MS);
+});
+</script>
+</body>
+</html>

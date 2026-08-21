@@ -2,16 +2,15 @@
 // 纯 FFI + #[repr(C)] 结构体（x64 布局自控），与 Tauri 同进程、Arc<Mutex> 同步。
 use std::{
     collections::HashMap,
-    os::raw::{c_int, c_void},
+    os::raw::c_void,
     sync::{Arc, Mutex},
 };
 use tauri::{AppHandle, Manager};
 
-const WIN_W: i32 = 220;
-const WIN_H: i32 = 300;
-const CELL_W: usize = 192;
-const CELL_H: usize = 208;
-const DOT_SIZE: i32 = 26;
+const WIN_W: i32 = 286;
+const WIN_H: i32 = 390;
+const CELL_H: usize = 270;
+const DOT_SIZE: i32 = 30;
 
 pub struct PetShared {
     pub mode: String,
@@ -120,6 +119,7 @@ extern "system" {
     fn GetCursorPos(p: *mut Point) -> i32;
     fn MoveWindow(h: isize, x: i32, y: i32, w: i32, ht: i32, repaint: i32) -> i32;
     fn GetWindowRect(h: isize, r: *mut Rect) -> i32;
+    fn GetSystemMetrics(idx: i32) -> i32;
     fn SetTimer(h: isize, id: usize, ms: u32, cb: usize) -> usize;
     fn PostQuitMessage(c: i32);
     fn CreatePopupMenu() -> isize;
@@ -138,8 +138,6 @@ extern "system" {
     fn DeleteObject(o: isize) -> i32;
     fn SelectObject(dc: isize, o: isize) -> isize;
     fn CreateDIBSection(h: isize, bmi: *const BmiHeader, usage: u32, bits: *mut *mut c_void, section: isize, offset: u32) -> isize;
-    fn CreateSolidBrush(c: u32) -> isize;
-    fn Ellipse(dc: isize, l: i32, t: i32, r: i32, b: i32) -> i32;
     fn SetBkMode(dc: isize, m: i32) -> i32;
     fn SetTextColor(dc: isize, c: u32) -> u32;
     fn CreateFontW(h: i32, w: i32, e: i32, o: i32, wt: i32, i: u32, u: u32, s: u32, cs: u32, op: u32, cq: u32, pa: u32, name: *const u16) -> isize;
@@ -177,6 +175,28 @@ const MK_LBUTTON: usize = 0x0001;
 const MENU_HIDE: usize = 101;
 const MENU_MIN: usize = 102;
 const MENU_EXIT: usize = 103;
+const SM_CXSCREEN: i32 = 0;
+const SM_CYSCREEN: i32 = 1;
+
+/* ---------------- 随机数（LCG，无外部依赖） ---------------- */
+
+fn rand_u32() -> u32 {
+    static S: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x9E37_79B9);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let x = S.fetch_add(0x9E37_79B9, std::sync::atomic::Ordering::SeqCst) ^ t;
+    x.wrapping_mul(0x85EB_CA6B).wrapping_add(0xC2B2_AE35)
+}
+
+fn rand_range(lo: u64, hi: u64) -> u64 {
+    lo + (rand_u32() as u64) % (hi - lo)
+}
+
+fn screen_size() -> (i32, i32) {
+    unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) }
+}
 
 /* ---------------- 帧图 ---------------- */
 
@@ -211,8 +231,8 @@ fn load_png(path: &std::path::Path) -> Option<Image> {
 #[derive(Default)]
 struct Frames {
     kurumi: HashMap<String, Vec<Image>>,
-    inverse: HashMap<String, Vec<Image>>,
     whale_states: HashMap<String, Image>,
+    inverse_states: HashMap<String, Image>,
 }
 
 fn load_frames(base: &std::path::Path) -> Frames {
@@ -220,31 +240,33 @@ fn load_frames(base: &std::path::Path) -> Frames {
     let pets_root = base.join("ui").join("pets");
     if let Ok(txt) = std::fs::read_to_string(pets_root.join("frames.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-            for mode in ["kurumi", "inverse"] {
-                if let Some(rows) = v.get(mode).and_then(|m| m.get("rows")).and_then(|r| r.as_object()) {
-                    for (row, files) in rows {
-                        let mut imgs = Vec::new();
-                        if let Some(arr) = files.as_array() {
-                            for name in arr {
-                                let p = pets_root.join(mode).join("frames").join(name.as_str().unwrap_or(""));
-                                if let Some(img) = load_png(&p) {
-                                    imgs.push(img);
-                                }
+            // 行帧图集(kurumi)
+            if let Some(rows) = v.get("kurumi").and_then(|m| m.get("rows")).and_then(|r| r.as_object()) {
+                for (row, files) in rows {
+                    let mut imgs = Vec::new();
+                    if let Some(arr) = files.as_array() {
+                        for name in arr {
+                            let p = pets_root.join("kurumi").join("frames").join(name.as_str().unwrap_or(""));
+                            if let Some(img) = load_png(&p) {
+                                imgs.push(img);
                             }
                         }
-                        if mode == "kurumi" {
-                            f.kurumi.insert(row.clone(), imgs);
-                        } else {
-                            f.inverse.insert(row.clone(), imgs);
-                        }
                     }
+                    f.kurumi.insert(row.clone(), imgs);
                 }
             }
-            if let Some(states) = v.get("whale").and_then(|m| m.get("states")).and_then(|s| s.as_object()) {
-                for (s, name) in states {
-                    let p = pets_root.join("whale").join(name.as_str().unwrap_or(""));
-                    if let Some(img) = load_png(&p) {
-                        f.whale_states.insert(s.clone(), img);
+            // 立绘三态(whale / inverse)
+            for mode in ["whale", "inverse"] {
+                if let Some(states) = v.get(mode).and_then(|m| m.get("states")).and_then(|s| s.as_object()) {
+                    for (s, name) in states {
+                        let p = pets_root.join(mode).join(name.as_str().unwrap_or(""));
+                        if let Some(img) = load_png(&p) {
+                            if mode == "whale" {
+                                f.whale_states.insert(s.clone(), img);
+                            } else {
+                                f.inverse_states.insert(s.clone(), img);
+                            }
+                        }
                     }
                 }
             }
@@ -254,6 +276,19 @@ fn load_frames(base: &std::path::Path) -> Frames {
 }
 
 /* ---------------- 窗口状态 ---------------- */
+
+struct Wander {
+    until: std::time::Instant,
+    dx: i32,
+}
+
+fn quote_pool(mode: &str) -> &'static [&'static str] {
+    match mode {
+        "kurumi" => &["ふふふ…", "啊啦，你来了呢", "时间，可是很宝贵的哦", "刻刻帝在看着你", "（轻笑）", "今晚的时间也归我哦"],
+        "inverse" => &["选好了吗？", "别让我等太久", "（冷笑）", "效率。现在。", "你的时间，归我支配", "（眯起赤瞳）"],
+        _ => &["咕噜咕噜…", "（吐泡泡）", "呜~ 我在听", "今天的代码也拜托了", "（摇尾巴）"],
+    }
+}
 
 struct PetWin {
     hwnd: isize,
@@ -270,6 +305,13 @@ struct PetWin {
     press_pt: (i32, i32),
     dragged: bool,
     pos: (i32, i32),
+    wander: Option<Wander>,
+    next_quote: std::time::Instant,
+    next_wander: std::time::Instant,
+    // 持久 GDI 表面:创建一次,终身复用(消除高频 CreateDIBSection,防 gdi32full 崩溃)
+    present_dc: isize,
+    present_dib: isize,
+    present_bits: *mut c_void,
 }
 
 fn default_pos() -> (i32, i32) {
@@ -300,19 +342,58 @@ fn save_pos(pos: (i32, i32)) {
 
 impl PetWin {
     fn compose(&mut self) {
-        for p in self.buf.iter_mut() {
-            *p = 0;
-        }
         static TICKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let tick = TICKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let now = std::time::Instant::now();
+        let mut dirty = false;
+
+        // —— 待机随机行为：定时气泡台词 + 定时散步（左右移动，贴边吸附） ——
+        if now >= self.next_quote && self.bubble.is_none() {
+            self.next_quote = now + std::time::Duration::from_millis(rand_range(18000, 42000));
+            let quote = {
+                let s = self.shared.lock().unwrap();
+                let pool = quote_pool(&s.mode);
+                pool[rand_u32() as usize % pool.len()].to_string()
+            };
+            self.bubble = Some((quote, now));
+            self.last_tick = now - std::time::Duration::from_secs(10); // 立即触发重绘
+            dirty = true;
+        }
+        if self.wander.is_none() && self.hop_until.is_none() && now >= self.next_wander {
+            let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
+            self.wander = Some(Wander {
+                until: now + std::time::Duration::from_millis(rand_range(1100, 2400)),
+                dx: dir,
+            });
+            self.next_wander = now + std::time::Duration::from_millis(rand_range(22000, 50000));
+            dirty = true;
+        }
+        if let Some(w) = &mut self.wander {
+            self.pos.0 += w.dx * 3;
+            let (sw, _) = screen_size();
+            if self.pos.0 <= 0 {
+                self.pos.0 = 0;
+                self.wander = None;
+            } else if self.pos.0 >= sw - WIN_W {
+                self.pos.0 = sw - WIN_W;
+                self.wander = None;
+            } else if now >= w.until {
+                self.wander = None;
+            }
+            dirty = true;
+        }
+
         if now.duration_since(self.last_tick).as_millis() >= self.anim_ms as u128 {
             self.last_tick = now;
+            // 清空画布只在帧更新时进行,避免 33ms 心跳把中间帧清成空白
+            for p in self.buf.iter_mut() {
+                *p = 0;
+            }
             let (mode, intensity) = {
                 let s = self.shared.lock().unwrap();
                 (s.mode.clone(), s.intensity.clone())
             };
-            if mode == "whale" {
+            if mode == "whale" || mode == "inverse" {
                 let key = if intensity == "deep" {
                     "deep"
                 } else if intensity == "work" {
@@ -321,7 +402,12 @@ impl PetWin {
                     "idle"
                 };
                 self.anim_ms = 1000;
-                let img_ptr = self.frames.whale_states.get(key).map(|i| i as *const Image);
+                let states = if mode == "whale" {
+                    &self.frames.whale_states
+                } else {
+                    &self.frames.inverse_states
+                };
+                let img_ptr = states.get(key).map(|i| i as *const Image);
                 if let Some(ptr) = img_ptr {
                     let bob = if intensity == "idle" {
                         let phase = (std::time::SystemTime::now()
@@ -343,6 +429,9 @@ impl PetWin {
                         self.hop_until = None;
                         "idle".to_string()
                     }
+                } else if self.wander.is_some() {
+                    // 散步：播放 run 行帧（双向移动共用）
+                    "run".to_string()
                 } else if intensity == "idle" {
                     "idle".to_string()
                 } else {
@@ -355,7 +444,7 @@ impl PetWin {
                 };
                 self.anim_ms = 1000 / fps;
                 let pick = {
-                    let map = if mode == "kurumi" { &self.frames.kurumi } else { &self.frames.inverse };
+                    let map = &self.frames.kurumi;
                     let list = map.get(&row).or_else(|| map.get("idle"));
                     match list {
                         Some(l) if !l.is_empty() => {
@@ -367,20 +456,26 @@ impl PetWin {
                     }
                 };
                 if let Some((idx, row_key)) = pick {
-                    let map = if mode == "kurumi" { &self.frames.kurumi } else { &self.frames.inverse };
-                    let ptr = map.get(&row_key).map(|l| l as *const Vec<Image>);
+                    let ptr = self.frames.kurumi.get(&row_key).map(|l| l as *const Vec<Image>);
                     if let Some(ptr) = ptr {
                         let list = unsafe { &*ptr };
                         self.blit_center_bottom(&list[idx % list.len()], 0.0);
                     }
                 }
             }
-        }
-        if let Some((text, _)) = self.bubble.clone() {
-            if now.duration_since(self.bubble.as_ref().unwrap().1).as_secs() > 3 {
-                self.bubble = None;
-            } else {
+            // 气泡与角色同帧绘制(帧更新清空 buf 后重画,避免每 tick 文本渲染)
+            if let Some((text, _)) = self.bubble.clone() {
                 self.draw_bubble(&text);
+            }
+            dirty = true;
+        }
+        // 气泡:超时检查每 tick;绘制只在帧更新后(避免每 33ms 走 GDI 文本渲染)
+        if let Some((text, t0)) = self.bubble.clone() {
+            if now.duration_since(t0).as_secs() > 3 {
+                self.bubble = None;
+                dirty = true;
+            } else {
+                // 若本 tick 未重绘(帧未更新),气泡已在上一帧的 buf 上,无需重复绘制
             }
         }
         if tick < 3 {
@@ -394,7 +489,10 @@ impl PetWin {
                 non_zero
             ));
         }
-        self.present();
+        // 脏标记:内容变化才 present,静止时 GDI 频率从 33ms 降到帧更新周期(≥125ms)
+        if dirty {
+            self.present();
+        }
     }
 
     fn blit_center_bottom(&mut self, img: &Image, bob: f32) {
@@ -429,15 +527,16 @@ impl PetWin {
     }
 
     fn draw_bubble(&mut self, text: &str) {
-        let bw = 170i32;
-        let bh = 36i32;
+        let bw = 210i32;
+        let bh = 48i32;
         let bx = (WIN_W - bw) / 2;
-        let by = WIN_H - CELL_H as i32 - 46;
+        let by = WIN_H - CELL_H as i32 - 56;
+        let r = 14;
         for y in 0..bh {
             for x in 0..bw {
-                let dx = if x < 12 { 12 - x } else if x >= bw - 12 { x - (bw - 12) + 1 } else { 0 };
-                let dy = if y < 12 { 12 - y } else if y >= bh - 12 { y - (bh - 12) + 1 } else { 0 };
-                if dx * dx + dy * dy > 144 {
+                let dx = if x < r { r - x } else if x >= bw - r { x - (bw - r) + 1 } else { 0 };
+                let dy = if y < r { r - y } else if y >= bh - r { y - (bh - r) + 1 } else { 0 };
+                if dx * dx + dy * dy > (r * r) as i32 {
                     continue;
                 }
                 let px = (bx + x) as usize;
@@ -447,16 +546,19 @@ impl PetWin {
                 }
             }
         }
-        self.draw_text(text, bx + 14, by + 7);
+        self.draw_text(text, bx + 16, by + 9);
     }
 
     fn draw_text(&mut self, text: &str, x0: i32, y0: i32) {
         unsafe {
-            let w = 200i32;
-            let h = 26i32;
+            let w = 240i32;
+            let h = 30i32;
             let dc = CreateCompatibleDC(0);
+            if dc == 0 {
+                return;
+            }
             let bmi = BmiHeader {
-                size: 44,
+                size: 40,
                 width: w,
                 height: -h,
                 planes: 1,
@@ -470,12 +572,23 @@ impl PetWin {
             };
             let mut bits: *mut c_void = std::ptr::null_mut();
             let dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, 0, 0);
-            SelectObject(dc, dib);
+            if dib == 0 || bits.is_null() {
+                DeleteDC(dc);
+                return;
+            }
+            let old_dib = SelectObject(dc, dib);
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, 0x00E4DEF0);
             let font_name: Vec<u16> = "Microsoft YaHei\0".encode_utf16().collect();
-            let font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, font_name.as_ptr());
-            SelectObject(dc, font);
+            let font = CreateFontW(-17, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, font_name.as_ptr());
+            if font == 0 {
+                // 铁律#4:字体创建失败仍须先恢复 DIB 再删除,否则选中对象 DeleteObject 失败 → 泄漏
+                SelectObject(dc, old_dib);
+                DeleteObject(dib);
+                DeleteDC(dc);
+                return;
+            }
+            let old_font = SelectObject(dc, font);
             let t: Vec<u16> = text.encode_utf16().collect();
             let mut rect = Rect { left: 0, top: 0, right: w, bottom: h };
             DrawTextW(dc, t.as_ptr(), t.len() as i32, &mut rect, DT_NOCLIP | DT_SINGLELINE | DT_VCENTER);
@@ -503,6 +616,9 @@ impl PetWin {
                     }
                 }
             }
+            // 恢复原对象后再删除(否则被选中的 GDI 对象删除失败 → 泄漏)
+            SelectObject(dc, old_font);
+            SelectObject(dc, old_dib);
             DeleteObject(font);
             DeleteObject(dib);
             DeleteDC(dc);
@@ -511,34 +627,19 @@ impl PetWin {
 
     fn present(&self) {
         unsafe {
-            let dc = CreateCompatibleDC(0);
-            let bmi = BmiHeader {
-                size: 44,
-                width: WIN_W,
-                height: -WIN_H,
-                planes: 1,
-                bit_count: 32,
-                compression: 0,
-                size_image: 0,
-                x_ppm: 0,
-                y_ppm: 0,
-                clr_used: 0,
-                clr_important: 0,
-            };
-            let mut bits: *mut c_void = std::ptr::null_mut();
-            let dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, 0, 0);
-            SelectObject(dc, dib);
-            std::ptr::copy_nonoverlapping(self.buf.as_ptr(), bits as *mut u32, self.buf.len());
+            // 持久 DC/DIB 复用:仅在创建窗口时初始化,否则低频 GDI 交互
+            if self.present_dc == 0 || self.present_dib == 0 || self.present_bits.is_null() {
+                return;
+            }
+            std::ptr::copy_nonoverlapping(self.buf.as_ptr(), self.present_bits as *mut u32, self.buf.len());
             let mut pt = Point { x: self.pos.0, y: self.pos.1 };
             let mut sz = Size { cx: WIN_W, cy: WIN_H };
             let mut src = Point { x: 0, y: 0 };
             let blend = BlendFn { blend_op: 1, blend_flags: 0, src_alpha: 255, alpha_format: 1 };
-            let ok = UpdateLayeredWindow(self.hwnd, 0, &mut pt, &mut sz, dc, &mut src, 0, &blend, ULW_ALPHA);
+            let ok = UpdateLayeredWindow(self.hwnd, 0, &mut pt, &mut sz, self.present_dc, &mut src, 0, &blend, ULW_ALPHA);
             if ok == 0 {
                 pet_log_line(&format!("[native-pet] ULW failed, GetLastError={}\n", GetLastError()));
             }
-            DeleteObject(dib);
-            DeleteDC(dc);
         }
     }
 
@@ -548,12 +649,8 @@ impl PetWin {
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
         let quote = {
             let s = self.shared.lock().unwrap();
-            let pool: &[&str] = match s.mode.as_str() {
-                "kurumi" => &["ふふふ…", "啊啦，你来了呢", "时间，可是很宝贵的哦", "刻刻帝在看着你"],
-                "inverse" => &["选好了吗？", "别让我等太久", "（冷笑）", "你的时间，归我支配"],
-                _ => &["咕噜咕噜…", "（吐泡泡）", "呜~ 我在听", "（摇尾巴）"],
-            };
-            pool[(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as usize) % pool.len()].to_string()
+            let pool = quote_pool(&s.mode);
+            pool[rand_u32() as usize % pool.len()].to_string()
         };
         self.bubble = Some((quote, std::time::Instant::now()));
     }
@@ -710,8 +807,11 @@ fn draw_dot(dot_hwnd: isize, pos: (i32, i32)) {
             }
         }
         let dc = CreateCompatibleDC(0);
+        if dc == 0 {
+            return;
+        }
         let bmi = BmiHeader {
-            size: 44,
+            size: 40,
             width: DOT_SIZE,
             height: -DOT_SIZE,
             planes: 1,
@@ -725,13 +825,18 @@ fn draw_dot(dot_hwnd: isize, pos: (i32, i32)) {
         };
         let mut bits: *mut c_void = std::ptr::null_mut();
         let dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, 0, 0);
-        SelectObject(dc, dib);
+        if dib == 0 || bits.is_null() {
+            DeleteDC(dc);
+            return;
+        }
+        let old = SelectObject(dc, dib);
         std::ptr::copy_nonoverlapping(buf.as_ptr(), bits as *mut u32, buf.len());
         let mut pt = Point { x: pos.0, y: pos.1 };
         let mut sz = Size { cx: DOT_SIZE, cy: DOT_SIZE };
         let mut src = Point { x: 0, y: 0 };
         let blend = BlendFn { blend_op: 1, blend_flags: 0, src_alpha: 255, alpha_format: 1 };
         UpdateLayeredWindow(dot_hwnd, 0, &mut pt, &mut sz, dc, &mut src, 0, &blend, ULW_ALPHA);
+        SelectObject(dc, old);
         DeleteObject(dib);
         DeleteDC(dc);
     }
@@ -768,6 +873,12 @@ fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) 
             press_pt: (0, 0),
             dragged: false,
             pos: (x, y),
+            wander: None,
+            next_quote: std::time::Instant::now() + std::time::Duration::from_secs(12),
+            next_wander: std::time::Instant::now() + std::time::Duration::from_secs(8),
+            present_dc: 0,
+            present_dib: 0,
+            present_bits: std::ptr::null_mut(),
         });
         let pet_ptr = &mut *pet as *mut PetWin;
         let inst = GetModuleHandleW(std::ptr::null());
@@ -810,6 +921,42 @@ fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) 
         pet.dot_hwnd = dot_hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, pet_ptr as isize);
         SetWindowLongPtrW(dot_hwnd, GWLP_USERDATA, pet_ptr as isize);
+        // 关键:WM_CREATE 期间 USERDATA 尚未设置,wnd_proc 的 SetTimer 不会执行;
+        // 在此(USERDATA 就位后)显式启动 33ms 动画定时器
+        SetTimer(hwnd, 1, 33, 0);
+
+        // 持久 GDI 表面(创建一次,终身复用;避免高频 CreateDIBSection 触发 gdi32full 崩溃)
+        {
+            let dc = CreateCompatibleDC(0);
+            let bmi = BmiHeader {
+                size: 40,
+                width: WIN_W,
+                height: -WIN_H,
+                planes: 1,
+                bit_count: 32,
+                compression: 0,
+                size_image: 0,
+                x_ppm: 0,
+                y_ppm: 0,
+                clr_used: 0,
+                clr_important: 0,
+            };
+            let mut bits: *mut c_void = std::ptr::null_mut();
+            let dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, 0, 0);
+            if dib != 0 && !bits.is_null() {
+                SelectObject(dc, dib);
+                pet.present_dc = dc;
+                pet.present_dib = dib;
+                pet.present_bits = bits;
+            } else {
+                // 铁律#4:dib 创建成功但 bits 空指针(理论不可达)时,先删 DIB 再删 DC,防句柄泄漏
+                if dib != 0 {
+                    DeleteObject(dib);
+                }
+                DeleteDC(dc);
+                pet_log_line("[native-pet] present surface init failed\n");
+            }
+        }
 
         {
             let mut r = Rect { left: 0, top: 0, right: 0, bottom: 0 };
@@ -863,12 +1010,14 @@ impl NativePet {
     }
 
     pub fn set_mode(&self, mode: &str) {
+        pet_log_line(&format!("[native-pet] set_mode {mode}\n"));
         if let Ok(mut s) = self.shared.lock() {
             s.mode = mode.to_string();
         }
     }
 
     pub fn set_intensity(&self, int: &str) {
+        pet_log_line(&format!("[native-pet] set_intensity {int}\n"));
         if let Ok(mut s) = self.shared.lock() {
             s.intensity = int.to_string();
         }

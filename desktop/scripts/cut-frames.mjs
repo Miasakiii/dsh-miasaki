@@ -11,7 +11,11 @@ const ROW_NAMES = ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wai
 // 渲染需要的行
 const NEEDED = ['idle', 'wave', 'jump', 'run']
 
-const manifest = { whale: { kind: 'states', states: {} }, kurumi: { kind: 'atlas', rows: {} }, inverse: { kind: 'atlas', rows: {} } }
+const manifest = {
+  whale: { kind: 'states', states: {} },
+  kurumi: { kind: 'atlas', rows: {} },
+  inverse: { kind: 'states', states: {} }
+}
 
 async function cutAtlas(mode) {
   const src = join(root, 'ui', 'pets', mode, 'spritesheet.png')
@@ -45,11 +49,15 @@ async function cutAtlas(mode) {
 }
 
 await cutAtlas('kurumi')
-await cutAtlas('inverse')
 
 for (const s of ['idle', 'work', 'deep']) {
   manifest.whale.states[s] = `states/${s}.png`
   console.log(`whale state ${s}: states/${s}.png`)
+}
+// inverse:立绘三态(由 inverse-states.mjs 生成于 states/)
+for (const s of ['idle', 'work', 'deep']) {
+  manifest.inverse.states[s] = `states/${s}.png`
+  console.log(`inverse state ${s}: states/${s}.png`)
 }
 
 writeFileSync(join(root, 'ui', 'pets', 'frames.json'), JSON.stringify(manifest, null, 2))

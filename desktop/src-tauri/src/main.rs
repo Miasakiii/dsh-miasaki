@@ -71,7 +71,8 @@ fn spawn_dsh() -> Result<PathBuf, String> {
     {
         use std::os::windows::process::CommandExt;
         let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/C", "dsh", "web"])
+        // --no-open：rc.8 起 `dsh web` 会自动打开默认浏览器，与 WebView2 导航重复 → 双窗口
+        cmd.args(["/C", "dsh", "web", "--no-open"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
             .stderr(std::process::Stdio::from(log))
@@ -133,7 +134,7 @@ fn start_launch_sequence(app: &AppHandle) {
     });
 }
 
-/* ---------------- hash 命令/状态通道（100ms 轮询） ---------------- */
+/* ---------------- hash 命令/状态通道（33ms 轮询，跟手拖窗） ---------------- */
 
 fn parse_fragment(
     fragment: &str,
@@ -142,12 +143,14 @@ fn parse_fragment(
     Option<String>,
     Option<String>,
     Option<(i32, i32)>,
+    bool,
     i64,
 ) {
     let mut theme = None;
     let mut int = None;
     let mut cmd = None;
     let mut move_xy = None;
+    let mut move_reset = false;
     let mut seq: i64 = -1;
     for part in fragment.split('&') {
         if let Some(v) = part.strip_prefix("miasaki-theme=") {
@@ -163,14 +166,16 @@ fn parse_fragment(
             seq = v.parse().unwrap_or(-1);
         }
         if let Some(v) = part.strip_prefix("move=") {
-            if let Some((a, b)) = v.split_once(',') {
+            if v == "reset" {
+                move_reset = true;
+            } else if let Some((a, b)) = v.split_once(',') {
                 if let (Ok(x), Ok(y)) = (a.parse::<i32>(), b.parse::<i32>()) {
                     move_xy = Some((x, y));
                 }
             }
         }
     }
-    (theme, int, cmd, move_xy, seq)
+    (theme, int, cmd, move_xy, move_reset, seq)
 }
 
 fn pet_mode_for(theme: &str) -> &'static str {
@@ -186,8 +191,10 @@ fn start_hash_watchdog(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut last_fragment = String::new();
         let mut last_seq: i64 = -1;
+        // 拖窗：累计增量差值应用(JS 发相对按下起点的累计值;Rust 应用与上次的差,不丢帧不重复)
+        let mut last_move: (i32, i32) = (0, 0);
         loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(33)).await;
             let Some(wv) = app.get_webview_window("main") else { continue };
             let Ok(url) = wv.url() else { continue };
             let Some(fragment) = url.fragment() else { continue };
@@ -195,7 +202,7 @@ fn start_hash_watchdog(app: &AppHandle) {
                 continue;
             }
             last_fragment = fragment.to_string();
-            let (theme, int, cmd, move_xy, seq) = parse_fragment(fragment);
+            let (theme, int, cmd, move_xy, move_reset, seq) = parse_fragment(fragment);
             let pet = app.state::<pet_native::NativePet>();
             if let Some(t) = theme {
                 let mode = pet_mode_for(&t);
@@ -204,9 +211,16 @@ fn start_hash_watchdog(app: &AppHandle) {
             if let Some(i) = int {
                 pet.set_intensity(&i);
             }
+            if move_reset {
+                last_move = (0, 0);
+            }
             if let Some((dx, dy)) = move_xy {
-                if let Ok(p) = wv.outer_position() {
-                    let _ = wv.set_position(tauri::PhysicalPosition::new(p.x + dx, p.y + dy));
+                let apply = (dx - last_move.0, dy - last_move.1);
+                last_move = (dx, dy);
+                if apply.0 != 0 || apply.1 != 0 {
+                    if let Ok(p) = wv.outer_position() {
+                        let _ = wv.set_position(tauri::PhysicalPosition::new(p.x + apply.0, p.y + apply.1));
+                    }
                 }
             }
             if let Some(c) = cmd {
@@ -347,6 +361,50 @@ fn exe_asset_path(dir: &str, file: &str) -> Option<PathBuf> {
     Some(base.join("ui").join(dir).join(file))
 }
 
+/* ---------------- 主窗口状态持久化（位置/大小） ---------------- */
+
+fn state_path() -> PathBuf {
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("com.miasaki.desktop").join("window.json")
+}
+
+fn load_window_state() -> Option<(i32, i32, i32, i32)> {
+    let txt = std::fs::read_to_string(state_path()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
+    let x = v.get("x")?.as_i64()? as i32;
+    let y = v.get("y")?.as_i64()? as i32;
+    let w = v.get("w")?.as_i64()? as i32;
+    let h = v.get("h")?.as_i64()? as i32;
+    if w < 800 || h < 500 {
+        return None;
+    }
+    Some((x, y, w, h))
+}
+
+fn save_window_state(w: &tauri::Window) {
+    let (Ok(pos), Ok(size)) = (w.outer_position(), w.inner_size()) else {
+        return;
+    };
+    let dir = state_path();
+    if let Some(parent) = dir.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let json = serde_json::json!({ "x": pos.x, "y": pos.y, "w": size.width, "h": size.height });
+    let _ = std::fs::write(dir, serde_json::to_string(&json).unwrap_or_default());
+}
+
+fn apply_window_state(w: &tauri::WebviewWindow) {
+    if let Some((x, y, wpx, hpx)) = load_window_state() {
+        // 防负坐标/崩溃:仅当位置在可视工作区附近才应用
+        if x > -5000 && y > -5000 {
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+            let _ = w.set_size(tauri::PhysicalSize::new(wpx, hpx));
+        }
+    }
+}
+
 /* ---------------- 入口 ---------------- */
 
 fn main() {
@@ -366,6 +424,7 @@ fn main() {
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
+                    save_window_state(window);
                     window.app_handle().exit(0);
                 }
             }
@@ -388,6 +447,44 @@ fn main() {
                 })
                 .build()
                 .expect("failed to build main window");
+
+            // 恢复上次的主窗口位置/大小(有记录则覆盖默认 center)
+            apply_window_state(&webview);
+
+            // 托盘菜单:显示/隐藏主窗口、退出
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::TrayIconBuilder;
+                let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏主窗口", true, None::<&str>)
+                    .expect("menu item");
+                let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>).expect("menu item");
+                let menu = Menu::with_items(app, &[&toggle, &quit]).expect("menu");
+                let icon = app
+                    .default_window_icon()
+                    .cloned()
+                    .expect("default window icon");
+                let _tray = TrayIconBuilder::with_id("main-tray")
+                    .icon(icon)
+                    .tooltip("Miasaki · DSH")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "toggle" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                if w.is_visible().unwrap_or(false) {
+                                    let _ = w.hide();
+                                } else {
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .build(app)
+                    .expect("tray build");
+            }
 
             // 原生分层窗口桌宠（与主窗同进程，零 IPC 同步）
             app.manage(pet_native::NativePet::spawn(app.handle().clone()));

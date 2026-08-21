@@ -26,6 +26,14 @@ _mimo_test/
 # ---- 外部素材参考（半成品/压缩包，不入库）----
 hatch-pet-kurumi-main/
 .ref-kurumi.tgz
+# 任何本地归档/压缩包一律不入库(防 git add . 误提交几百 MB 包)
+*.zip
+*.tgz
+
+# ---- IDE / 工具私有状态（不入库、不可再生）----
+.vs/
+.monkeycode/
+.learnings/
 
 # ---- 临时脚本（读取本地凭据 ~/.dsh/.credentials.yaml）----
 _api_connectivity_check.mjs

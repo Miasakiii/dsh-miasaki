@@ -8,4 +8,5 @@ html[data-miasaki-theme="pure"] {
   --ms-hover: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .06));
   --ms-glyph: var(--dsw-alias-label-secondary, #61666b);
   --ms-glow: rgba(57, 100, 254, .25);
+  --ms-danger: var(--dsw-static-red-500, #d04e41);
 }

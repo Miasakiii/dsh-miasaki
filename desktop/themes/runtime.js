@@ -55,7 +55,6 @@
           var headOk = document.head ? 1 : 0
           var attached = styleEl && styleEl.parentNode !== null ? 1 : 0
           var sw = document.getElementById('miasaki-switcher') ? 1 : 0
-          var pt = document.getElementById('miasaki-pet') ? 1 : 0
           var baseOk = baseEl && baseEl.parentNode !== null && baseEl.textContent.length > 100 ? 1 : 0
           var swEl = document.getElementById('miasaki-switcher')
           var swTop = swEl ? Math.round(swEl.getBoundingClientRect().top) : -999
@@ -71,31 +70,7 @@
             var cs = getComputedStyle(swEl)
             swCss = cs.position + '/' + cs.zIndex + '/' + cs.visibility + '/' + cs.display
           }
-          var canvas = document.querySelector('#miasaki-pet canvas')
-          var px = 'no'
-          var cov = 0
-          var petHidden = 0
-          if (pet.root) {
-            petHidden = pet.root.style.display === 'none' ? 1 : 0
-          }
-          if (canvas) {
-            try {
-              var dctx = canvas.getContext('2d')
-              var dd = dctx.getImageData(96, 104, 1, 1).data
-              px = dd[0] + ',' + dd[1] + ',' + dd[2] + ',' + dd[3]
-              var full = dctx.getImageData(0, 0, 192, 208).data
-              var hits = 0
-              var total = 0
-              for (var yy = 8; yy < 208; yy += 16) {
-                for (var xx = 8; xx < 192; xx += 16) {
-                  total++
-                  if (full[(yy * 192 + xx) * 4 + 3] > 24) hits++
-                }
-              }
-              cov = Math.round(hits * 100 / total)
-            } catch (e2) { px = 'taint' }
-          }
-          d = len + '.' + headOk + '.' + attached + '.' + sw + '.' + pt + '.' + ERR_COUNT + '.' + baseOk + '.' + swTop + '.' + vh + '.' + encodeURIComponent(eSw) + '.' + encodeURIComponent(swCss) + '.' + px + '.' + cov + '.' + petHidden
+          d = len + '.' + headOk + '.' + attached + '.' + sw + '.' + ERR_COUNT + '.' + baseOk + '.' + swTop + '.' + vh + '.' + encodeURIComponent(eSw) + '.' + encodeURIComponent(swCss)
         } catch (e) { /* ignore */ }
         history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + '&diag=' + d)
       }
@@ -161,7 +136,13 @@
       // 原版：明暗三档（浅/深/跟随系统）
       if (BRIGHT === 'dark') want = true
       else if (BRIGHT === 'light') want = false
-      else return // system：不干预 DSH 自身偏好
+      else {
+        // system：移除注入的明暗锁定,恢复 DSH 自身偏好(否则从 zafkiel 切回后残留暗色)
+        if (document.body.hasAttribute('data-ds-dark-theme')) {
+          document.body.removeAttribute('data-ds-dark-theme')
+        }
+        return
+      }
     }
     if (want === null) return
     document.body.toggleAttribute('data-ds-dark-theme', want)
@@ -196,12 +177,13 @@
     if (styleEl) styleEl.textContent = STYLES[t] || ''
     syncDark()
     try { localStorage.setItem(KEY, t) } catch (e) { /* ignore */ }
-    updateWatermark()
-    refreshSwitcher()
-    if (INPAGE_PET) petUpdateMode(t)
-    updateTitlebar()
+    // 核心同步优先:桌宠 hash 通道 / 切换条图标 / 标题栏 —— 装饰层失败不得阻断
     syncHash()
     notifyPet()
+    refreshSwitcher()
+    updateTitlebar()
+    try { updateWatermark() } catch (e) { /* 装饰失败由自愈巡检恢复 */ }
+    try { updateAurora() } catch (e) { /* 同上 */ }
   }
 
   /* ---------- 悬浮切换条（全部变量带回退色，样式层异常时仍可见可用） ---------- */
@@ -219,10 +201,10 @@
     'border:1px solid var(--ms-accent,#d9b36a);opacity:.5;animation:ms-ping 2.6s ease-out infinite;}' +
     '@keyframes ms-ping{0%{transform:scale(.8);opacity:.6}70%{transform:scale(1.15);opacity:0}100%{opacity:0}}' +
     '#miasaki-switcher .ms-btn:hover{transform:scale(1.08);}' +
-    '#miasaki-switcher .ms-panel{position:absolute;right:0;bottom:58px;display:none;' +
+    '#miasaki-switcher .ms-panel{position:absolute;right:0;bottom:62px;display:none;' +
     'flex-direction:column;gap:4px;padding:8px;border-radius:12px;min-width:176px;' +
     'background:var(--ms-panel,#1e1a27);border:1px solid var(--ms-accent,#d9b36a);color:var(--ms-text,#e4def0);' +
-    'box-shadow:0 12px 30px rgba(0,0,0,.5);}' +
+    'box-shadow:0 12px 30px rgba(0,0,0,.5);z-index:1;}' +
     '#miasaki-switcher.open .ms-panel{display:flex;}' +
     '#miasaki-switcher .ms-opt{display:flex;align-items:center;gap:10px;padding:7px 10px;' +
     'border-radius:8px;cursor:pointer;}' +
@@ -248,20 +230,32 @@
     'border:1px solid transparent;opacity:.55;}' +
     '#miasaki-switcher .ms-bright .mb:hover{background:var(--ms-hover,#2a2434);opacity:.9;}' +
     '#miasaki-switcher .ms-bright .mb.on{border-color:var(--ms-accent,#d9b36a);opacity:1;}' +
-    '#miasaki-titlebar{position:fixed;left:0;top:0;right:0;height:36px;z-index:100000;' +
-    'display:flex;align-items:center;gap:10px;padding:0 8px 0 12px;' +
+    '#miasaki-titlebar{position:fixed;left:0;top:0;right:0;height:32px;z-index:100000;' +
+    'display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;' +
     'background:var(--ms-panel,#1e1a27);border-bottom:1px solid var(--ms-border,#3a3243);' +
     'color:var(--ms-text,#e4def0);font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
     'user-select:none;-webkit-user-select:none;cursor:default;}' +
     '#miasaki-titlebar .tb-drag{flex:1;height:100%;cursor:move;-webkit-app-region:no-drag;}' +
-    '#miasaki-titlebar .tb-title{font-size:12.5px;font-weight:600;letter-spacing:.04em;' +
-    'display:flex;align-items:center;gap:8px;}' +
-    '#miasaki-titlebar .tb-title .tb-dot{width:8px;height:8px;border-radius:50%;background:var(--ms-accent,#d9b36a);}' +
-    '#miasaki-titlebar .tb-btn{width:34px;height:26px;display:flex;align-items:center;justify-content:center;' +
-    'cursor:pointer;font-size:12px;border-radius:6px;color:var(--ms-text,#e4def0);}' +
-    '#miasaki-titlebar .tb-btn:hover{background:var(--ms-hover,#2a2434);}' +
-    '#miasaki-titlebar .tb-btn.tb-close:hover{background:#c23a2e;color:#fff;}' +
-    'body #root{margin-top:36px;height:calc(100vh - 36px)!important;}'
+    '#miasaki-titlebar .tb-title{font-size:11.5px;font-weight:500;letter-spacing:.03em;' +
+    'display:flex;align-items:center;gap:6px;opacity:.85;}' +
+    '#miasaki-titlebar .tb-title .tb-dot{width:6px;height:6px;border-radius:50%;background:var(--ms-accent,#d9b36a);}' +
+    '#miasaki-titlebar .tb-btn{width:30px;height:22px;display:flex;align-items:center;justify-content:center;' +
+    'cursor:pointer;font-size:11px;border-radius:5px;color:var(--ms-text,#e4def0);opacity:.8;' +
+    'transition:background .15s ease,color .15s ease;}' +
+    '#miasaki-titlebar .tb-btn:hover{background:var(--ms-hover,#2a2434);color:var(--ms-accent,#d9b36a);opacity:1;}' +
+    '#miasaki-titlebar .tb-btn:active{transform:scale(.94);}' +
+    '#miasaki-titlebar .tb-btn.tb-close:hover{background:var(--ms-danger,#c23a2e);color:#fff;opacity:1;}' +
+    'html,body{height:100%;overflow:hidden;}' +
+    'body #root{margin-top:32px;height:calc(100% - 32px)!important;}' +
+    '#miasaki-switcher .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +
+    '#miasaki-switcher .ms-btn img{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;}' +
+    '#miasaki-aurora{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;' +
+    'transition:opacity .6s ease;}' +
+    '#miasaki-aurora .aur-blob{position:absolute;border-radius:50%;filter:blur(90px);' +
+    'opacity:0;transition:opacity 1.2s ease;}' +
+    '#miasaki-aurora .aur-a{width:52vw;height:52vw;left:-14vw;top:-18vw;}' +
+    '#miasaki-aurora .aur-b{width:44vw;height:44vw;right:-12vw;top:16vw;}' +
+    '#miasaki-aurora .aur-c{width:38vw;height:38vw;left:28vw;bottom:-16vw;}'
 
   var switcher = null
   var overlay = null
@@ -352,9 +346,24 @@
         switcher.classList.toggle('open')
       }
     })
-    switcher.addEventListener('mouseleave', function () {
-      switcher.classList.remove('open')
-    })
+    // hover 展开 + 延迟关闭:鼠标移出后 300ms 宽限,移回则取消(解决"一挪开就点不到")
+    var closeTimer = null
+    function openPanel() {
+      if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
+      switcher.classList.add('open')
+    }
+    function scheduleClose() {
+      if (closeTimer) clearTimeout(closeTimer)
+      closeTimer = setTimeout(function () {
+        switcher.classList.remove('open')
+        closeTimer = null
+      }, 300)
+    }
+    switcher.addEventListener('mouseenter', openPanel)
+    switcher.addEventListener('mouseleave', scheduleClose)
+    // 面板自身 hover 时保持展开(面板是 switcher 子元素,mouseleave 不触发,此兜底防误关)
+    var panel = switcher.querySelector('.ms-panel')
+    if (panel) panel.addEventListener('mouseenter', openPanel)
     document.body.appendChild(switcher)
     refreshSwitcher()
   }
@@ -423,60 +432,29 @@
     document.body.appendChild(wm)
   }
 
+  /* ---------- 背景光晕层（主题个性层：DSH 面板半透明后透出） ---------- */
+  function buildAurora() {
+    if (document.getElementById('miasaki-aurora') || !document.body || IS_LOCAL) return
+    var a = document.createElement('div')
+    a.id = 'miasaki-aurora'
+    a.innerHTML =
+      '<div class="aur-blob aur-a"></div><div class="aur-blob aur-b"></div>' +
+      '<div class="aur-blob aur-c"></div>'
+    document.body.appendChild(a)
+  }
+
+  function updateAurora() {
+    var a = document.getElementById('miasaki-aurora')
+    if (a && a.parentNode) a.parentNode.removeChild(a)
+    buildAurora()
+  }
+
   function updateWatermark() {
     var wm = document.getElementById('miasaki-watermark')
     if (wm && wm.parentNode) wm.parentNode.removeChild(wm)
     buildWatermark()
   }
 
-  /* ---------- 桌宠（Codex 式状态宠物，页面内嵌） ---------- */
-  var PET_CSS =
-    '#miasaki-pet{position:fixed;right:16px;bottom:74px;width:192px;height:208px;z-index:99980;' +
-    'cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;}' +
-    '#miasaki-pet:active{cursor:grabbing;}' +
-    '#miasaki-pet canvas{width:100%;height:100%;display:block;}' +
-    '#miasaki-pet canvas.bob{animation:ms-bob 3.2s ease-in-out infinite;}' +
-    '#miasaki-pet canvas.pulse{animation:ms-grow .4s ease;}' +
-    '@keyframes ms-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}' +
-    '@keyframes ms-grow{0%{transform:scale(.92)}55%{transform:scale(1.06)}100%{transform:scale(1)}}' +
-    '#miasaki-pet .pet-bubble{position:absolute;left:50%;bottom:100%;transform:translateX(-50%);' +
-    'margin-bottom:8px;background:rgba(30,26,39,.95);color:#e4def0;padding:8px 12px;border-radius:12px;' +
-    'font-size:13px;line-height:1.45;white-space:nowrap;border:1px solid rgba(217,179,106,.4);' +
-    'box-shadow:0 5px 14px rgba(0,0,0,.4);z-index:10;display:none;max-width:230px;}' +
-    '#miasaki-pet .pet-bubble.show{display:block;}' +
-    '#miasaki-pet .pet-bubble::after{content:"";position:absolute;left:50%;bottom:-7px;margin-left:-7px;' +
-    'border:7px solid transparent;border-top-color:rgba(30,26,39,.95);}' +
-    '#miasaki-pet .pet-bubble.approval{border-color:#c23a2e;background:#241a1e;}' +
-    '#miasaki-pet .pet-bubble.approval::after{border-top-color:#241a1e;}' +
-    '#miasaki-pet .pet-bubble .pb-btns{display:flex;gap:8px;margin-top:7px;}' +
-    '#miasaki-pet .pet-bubble .pb-btn{padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;' +
-    'border:1px solid rgba(255,255,255,.25);text-align:center;}' +
-    '#miasaki-pet .pet-bubble .pb-btn.ok{background:#2f5d3a;color:#eaf6ec;}' +
-    '#miasaki-pet .pet-bubble .pb-btn.no{background:#5d2a2f;color:#f8e9ea;}' +
-    '#miasaki-pet .pet-menu{position:absolute;left:50%;bottom:100%;transform:translateX(-50%);' +
-    'margin-bottom:8px;background:rgba(24,20,32,.97);border:1px solid rgba(255,255,255,.14);' +
-    'border-radius:12px;padding:6px;font-size:13px;color:#e4def0;min-width:178px;' +
-    'box-shadow:0 10px 26px rgba(0,0,0,.5);z-index:20;display:none;}' +
-    '#miasaki-pet .pet-menu.show{display:block;}' +
-    '#miasaki-pet .pet-menu .pm-i{padding:7px 12px;border-radius:7px;cursor:pointer;display:flex;gap:9px;align-items:center;}' +
-    '#miasaki-pet .pet-menu .pm-i:hover{background:rgba(255,255,255,.1);}' +
-    '#miasaki-pet .pet-menu .pm-i.active{box-shadow:inset 0 0 0 1.5px #d9b36a;}' +
-    '#miasaki-pet .pet-menu .pm-sep{height:1px;background:rgba(255,255,255,.14);margin:5px 8px;}' +
-    '#miasaki-pet-hidden{position:fixed;right:18px;bottom:18px;width:18px;height:18px;border-radius:50%;' +
-    'background:rgba(217,179,106,.9);box-shadow:0 2px 8px rgba(0,0,0,.4);z-index:99985;cursor:pointer;display:none;}' +
-    '#miasaki-switcher .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +
-    '#miasaki-switcher .ms-btn img{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;}' +
-    '#miasaki-pet .pet-menu .pm-ico{width:22px;height:22px;border-radius:50%;object-fit:cover;flex:none;}'
-
-  var PET_NAMES = { whale: 'DS 鲸鱼娘', kurumi: '狂三', inverse: '反转狂三' }
-  var PET_QUOTES = {
-    whale: ['咕噜咕噜…', '（吐泡泡）', '呜~ 我在听', '今天的代码也拜托了', '（摇尾巴）'],
-    kurumi: ['ふふふ…', '啊啦，你来了呢', '时间，可是很宝贵的哦', '刻刻帝在看着你', '（轻笑）'],
-    inverse: ['选好了吗？', '别让我等太久', '（冷笑）', '效率。现在。', '你的时间，归我支配']
-  }
-  var PET_ROWS = { idle: 0, runRight: 1, runLeft: 2, wave: 3, jump: 4, failed: 5, wait: 6, run: 7, review: 8 }
-  var PET_FPS = { idle: 8, runRight: 10, runLeft: 10, wave: 10, jump: 11, failed: 6, wait: 6, run: 9, review: 8 }
-  var PET_ASSET = 'http://127.0.0.1:39800/pets/'
   var ICON_BASE = 'http://127.0.0.1:39800/icons/'
 
   // 图标加载失败时退回文字字形
@@ -489,198 +467,8 @@
     } catch (e) { /* ignore */ }
   }
 
-  var pet = {
-    root: null, canvas: null, bubble: null, menu: null,
-    mode: 'whale', state: 'idle', atlasCache: {}, anim: null, timer: null,
-    x: null, y: null, hidden: false, dragging: null, moved: 0,
-    quoteTimer: null, lastClick: 0, approval: null, scanTimer: null
-  }
 
-  function petLoadAtlas(name) {
-    var url = PET_ASSET + name + '/spritesheet.png'
-    if (pet.atlasCache[url]) return Promise.resolve(pet.atlasCache[url])
-    return new Promise(function (resolve, reject) {
-      var img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload = function () {
-        try {
-          var w = img.naturalWidth
-          var h = img.naturalHeight
-          var cv = document.createElement('canvas')
-          cv.width = w
-          cv.height = h
-          var cx = cv.getContext('2d')
-          cx.drawImage(img, 0, 0)
-          var data = cx.getImageData(0, 0, w, h).data
-          var rows = Math.floor(h / 208)
-          var frames = {}
-          var step = 8
-          for (var r = 0; r < rows; r++) {
-            var cols = []
-            for (var c = 0; c < 8; c++) {
-              var hits = 0
-              for (var y = r * 208 + 4; y < (r + 1) * 208 - 4 && hits < 30; y += step) {
-                for (var x = c * 192 + 4; x < (c + 1) * 192 - 4; x += step) {
-                  if (data[(y * w + x) * 4 + 3] > 24) { hits++; break }
-                }
-              }
-              if (hits >= 8) cols.push(c)
-            }
-            frames[r] = cols
-          }
-          var entry = { canvas: cv, frames: frames }
-          pet.atlasCache[url] = entry
-          resolve(entry)
-        } catch (e) {
-          reject(e)
-        }
-      }
-      img.onerror = function () { reject(new Error('atlas ' + name + ' load failed')) }
-      img.src = url
-    })
-  }
 
-  function petDraw(row, col) {
-    var entry = pet.atlasCache[PET_ASSET + pet.mode + '/spritesheet.png']
-    if (!entry || !pet.canvas) return
-    var cx = pet.canvas.getContext('2d')
-    cx.clearRect(0, 0, 192, 208)
-    cx.drawImage(entry.canvas, col * 192, row * 208, 192, 208, 0, 0, 192, 208)
-  }
-
-  /* 鲸鱼娘（纯色主题）立绘三态：随思考强度成长（小→中→大） */
-  var PET_STATE_IMAGES = { idle: 'idle.png', work: 'work.png', deep: 'deep.png' }
-  var stateImgCache = {}
-  function petDrawState() {
-    var url = PET_ASSET + 'whale/states/' + (PET_STATE_IMAGES[pet.state] || PET_STATE_IMAGES.idle)
-    var cached = stateImgCache[url]
-    if (cached) {
-      petDrawStateNow(cached)
-      return
-    }
-    var img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = function () {
-      stateImgCache[url] = img
-      petDrawStateNow(img)
-    }
-    img.onerror = function () {
-      try { if (pet.bubble) petSay('立绘加载失败：' + url, 8000) } catch (e) { /* ignore */ }
-    }
-    img.src = url
-  }
-  function petDrawStateNow(img) {
-    if (!pet.canvas) return
-    var cx = pet.canvas.getContext('2d')
-    cx.clearRect(0, 0, 192, 208)
-    var h = 192
-    var w = img.width / img.height * h
-    cx.drawImage(img, (192 - w) / 2, 208 - h, w, h)
-    syncHash()
-  }
-
-  function petStop() {
-    if (pet.timer) { clearInterval(pet.timer); pet.timer = null }
-    pet.anim = null
-  }
-
-  function petPlay(state, opts) {
-    opts = opts || {}
-    var fps = opts.fps || PET_FPS[state] || 8
-    var loop = opts.loop !== undefined ? opts.loop : state === 'idle' || state === 'working' || state === 'wait'
-    var atlasUrl = PET_ASSET + pet.mode + '/spritesheet.png'
-    petLoadAtlas(pet.mode).then(function (entry) {
-      var rowName = state === 'working' ? 'run' : state
-      var cols = entry.frames[PET_ROWS[rowName]] || entry.frames[PET_ROWS.idle] || [0]
-      if (!cols.length) cols = [0]
-      petStop()
-      var i = 0
-      pet.anim = { row: PET_ROWS[rowName], cols: cols, fps: fps, loop: loop, atlas: atlasUrl }
-      function tick() {
-        if (pet.anim && pet.anim.atlas === atlasUrl) {
-          petDraw(pet.anim.row, pet.anim.cols[i])
-          i++
-          if (i >= pet.anim.cols.length) {
-            if (pet.anim.loop) { i = 0 } else {
-              petStop()
-              if (opts.onEnd) opts.onEnd()
-              return
-            }
-          }
-        }
-      }
-      pet.timer = setInterval(tick, 1000 / fps)
-      tick()
-    }).catch(function (e) {
-      // 图集加载失败：显形到气泡（诊断与用户可见）
-      pet.atlasErr = String(e).slice(0, 60)
-      try {
-        if (pet.bubble) petSay('素材加载失败：' + pet.atlasErr, 8000)
-      } catch (e2) { /* ignore */ }
-    })
-  }
-
-  function petSetState(state) {
-    if (state === pet.state) return
-    pet.state = state
-    if (pet.mode === 'whale') {
-      // 立绘三态：停止帧动画，切换立绘 + 成长脉冲
-      petStop()
-      petDrawState()
-      if (pet.canvas) {
-        pet.canvas.classList.remove('pulse')
-        void pet.canvas.offsetWidth
-        pet.canvas.classList.add('pulse')
-        pet.canvas.classList.toggle('bob', state === 'idle')
-      }
-      return
-    }
-    petPlay(state)
-  }
-
-  function petUpdateMode(theme) {
-    var m = PET_MODES[theme] || 'whale'
-    if (m === pet.mode && pet.root) return
-    pet.mode = m
-    pet.state = ''
-    if (m === 'whale') {
-      petStop()
-      petDrawState()
-      if (pet.canvas) pet.canvas.classList.toggle('bob', true)
-    } else {
-      petSetState('idle')
-    }
-  }
-
-  function petSay(text, ms, cls) {
-    if (!pet.bubble) return
-    pet.bubble.innerHTML = ''
-    pet.bubble.textContent = text
-    pet.bubble.className = 'pet-bubble show' + (cls ? ' ' + cls : '')
-    if (pet.quoteTimer) clearTimeout(pet.quoteTimer)
-    pet.quoteTimer = setTimeout(function () { pet.bubble.className = 'pet-bubble' }, ms || 3200)
-  }
-
-  function petRandomQuote() {
-    var q = PET_QUOTES[pet.mode]
-    if (q) petSay(q[Math.floor(Math.random() * q.length)])
-  }
-
-  function petHide() {
-    pet.hidden = true
-    if (pet.root) pet.root.style.display = 'none'
-    var dot = document.getElementById('miasaki-pet-hidden')
-    if (dot) dot.style.display = 'block'
-    try { localStorage.setItem('miasaki.pet.hidden', '1') } catch (e) {}
-  }
-
-  function petShow() {
-    pet.hidden = false
-    if (pet.root) pet.root.style.display = ''
-    var dot = document.getElementById('miasaki-pet-hidden')
-    if (dot) dot.style.display = 'none'
-    try { localStorage.removeItem('miasaki.pet.hidden') } catch (e) {}
-  }
 
   function petHashCmd(cmd) {
     try {
@@ -692,64 +480,6 @@
     } catch (e) {}
   }
 
-  var APPROVE_TEXT_RE = /允许|批准|同意|approve|allow|accept/i
-  var REJECT_TEXT_RE = /拒绝|驳回|deny|reject/i
-
-  function petScanApproval() {
-    if (!pet.root) return
-    var approveBtn = null
-    var rejectBtn = null
-    var nodes = document.querySelectorAll('button, [role="button"]')
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i]
-      if (el.offsetWidth === 0 && el.offsetHeight === 0) continue
-      var t = (el.textContent || '').trim()
-      if (!t || t.length > 24) continue
-      if (!approveBtn && APPROVE_TEXT_RE.test(t)) approveBtn = el
-      if (!rejectBtn && REJECT_TEXT_RE.test(t)) rejectBtn = el
-      if (approveBtn && rejectBtn) break
-    }
-    var found = !!(approveBtn || rejectBtn)
-    var prev = pet.approval
-    var sameTargets = prev && prev.approve === approveBtn && prev.reject === rejectBtn
-    if (found && !sameTargets) {
-      pet.approval = { approve: approveBtn, reject: rejectBtn }
-      petSetState('wait')
-      var b = pet.bubble
-      b.innerHTML = ''
-      b.className = 'pet-bubble show approval'
-      var label = document.createElement('div')
-      label.textContent = '有待审批事项'
-      var btns = document.createElement('div')
-      btns.className = 'pb-btns'
-      var ok = document.createElement('div')
-      ok.className = 'pb-btn ok'
-      ok.textContent = '允许'
-      var no = document.createElement('div')
-      no.className = 'pb-btn no'
-      no.textContent = '拒绝'
-      ok.addEventListener('click', function () {
-        if (approveBtn) approveBtn.click()
-        b.className = 'pet-bubble'
-        pet.approval = null
-        petSetState('idle')
-      })
-      no.addEventListener('click', function () {
-        if (rejectBtn) rejectBtn.click()
-        b.className = 'pet-bubble'
-        pet.approval = null
-        petSetState('idle')
-      })
-      btns.appendChild(ok)
-      btns.appendChild(no)
-      b.appendChild(label)
-      b.appendChild(btns)
-    } else if (!found && pet.approval) {
-      pet.approval = null
-      if (pet.bubble.classList.contains('approval')) pet.bubble.className = 'pet-bubble'
-      petSetState('idle')
-    }
-  }
 
   /* 思考强度：按 DOM 变异频率分三档（待机/常规/深度），经 hash 上报给桌宠窗口 */
   var CUR_INT = 'idle'
@@ -760,159 +490,15 @@
     mutCount = 0
     CUR_INT = tier
     syncHash()
-    if (!INPAGE_PET || !pet.root) return
-    if (pet.state === 'wait') return
-    if (pet.mode === 'whale') {
-      if (pet.state !== tier) petSetState(tier)
-    } else {
-      if (tier === 'idle') {
-        if (pet.state !== 'idle') petSetState('idle')
-      } else if (pet.state !== 'working') {
-        petSetState('working')
-      }
-    }
   }
   var tierTimer = setInterval(petEvalIntensity, PET_TIER_MS)
 
-  function petSetPos(x, y) {
-    pet.x = Math.max(0, Math.min(window.innerWidth - 192, x))
-    pet.y = Math.max(0, Math.min(window.innerHeight - 208, y))
-    pet.root.style.left = pet.x + 'px'
-    pet.root.style.top = pet.y + 'px'
-    pet.root.style.right = 'auto'
-    pet.root.style.bottom = 'auto'
-  }
-
-  function buildPet() {
-    if (pet.root || !document.body || IS_LOCAL) return
-    pet.root = document.createElement('div')
-    pet.root.id = 'miasaki-pet'
-    pet.canvas = document.createElement('canvas')
-    pet.canvas.width = 192
-    pet.canvas.height = 208
-    pet.bubble = document.createElement('div')
-    pet.bubble.className = 'pet-bubble'
-    pet.menu = document.createElement('div')
-    pet.menu.className = 'pet-menu'
-    var items = [
-      ['pure', '原版 · DS 鲸鱼娘', 'theme-pure.png'],
-      ['zafkiel', '刻刻帝 · 狂三', 'theme-zafkiel.png'],
-      ['kurkuriel', '狂狂帝 · 反转狂三', 'theme-inverse.png']
-    ]
-    var menuHtml = ''
-    for (var mi = 0; mi < items.length; mi++) {
-      menuHtml += '<div class="pm-i" data-theme="' + items[mi][0] + '">' +
-        '<img class="pm-ico" src="' + ICON_BASE + items[mi][2] + '" alt=""' +
-        ' onerror="this.style.display=\'none\'">' + items[mi][1] + '</div>'
-    }
-    menuHtml += '<div class="pm-sep"></div>' +
-      '<div class="pm-i" data-act="hidepet">\u{1F564} 隐藏桌宠</div>' +
-      '<div class="pm-i" data-act="minimize">\u{1F5D6} 最小化主窗口</div>' +
-      '<div class="pm-i" data-act="exit">\u274C 退出应用</div>'
-    pet.menu.innerHTML = menuHtml
-    pet.root.appendChild(pet.bubble)
-    pet.root.appendChild(pet.menu)
-    pet.root.appendChild(pet.canvas)
-    document.body.appendChild(pet.root)
-    var dot = document.createElement('div')
-    dot.id = 'miasaki-pet-hidden'
-    dot.title = '恢复桌宠'
-    document.body.appendChild(dot)
-
-    var saved = null
-    try { saved = localStorage.getItem('miasaki.pet.pos') } catch (e) {}
-    if (saved) {
-      var p = saved.split(',')
-      if (p.length === 2) { pet.x = +p[0]; pet.y = +p[1] }
-    }
-    if (pet.x === null || isNaN(pet.x)) {
-      pet.x = Math.max(8, window.innerWidth - 16 - 192)
-      pet.y = Math.max(8, window.innerHeight - 74 - 208)
-    }
-    petSetPos(pet.x, pet.y)
-
-    // 拖动（指针事件，页面内任意位置可拖）
-    pet.root.addEventListener('pointerdown', function (ev) {
-      if (ev.button !== 0) return
-      pet.dragging = { sx: ev.clientX, sy: ev.clientY, ox: pet.x, oy: pet.y }
-      pet.moved = 0
-      if (pet.root.setPointerCapture) pet.root.setPointerCapture(ev.pointerId)
-    })
-    pet.root.addEventListener('pointermove', function (ev) {
-      if (!pet.dragging) return
-      var dx = ev.clientX - pet.dragging.sx
-      var dy = ev.clientY - pet.dragging.sy
-      pet.moved = Math.max(pet.moved, Math.abs(dx) + Math.abs(dy))
-      petSetPos(pet.dragging.ox + dx, pet.dragging.oy + dy)
-    })
-    pet.root.addEventListener('pointerup', function () {
-      var wasDrag = pet.moved > 5
-      pet.dragging = null
-      try { localStorage.setItem('miasaki.pet.pos', pet.x + ',' + pet.y) } catch (e) {}
-      if (wasDrag) return
-      hidePetMenu()
-      var now = Date.now()
-      if (now - pet.lastClick < 350) {
-        // 双击：挥手
-        pet.lastClick = 0
-        petPlay('wave', { loop: false, onEnd: function () { petSetState('idle') } })
-        petRandomQuote()
-      } else {
-        pet.lastClick = now
-        petPlay('jump', { loop: false, onEnd: function () { petSetState('idle') } })
-        petRandomQuote()
-      }
-    })
-    pet.root.addEventListener('contextmenu', function (ev) {
-      ev.preventDefault()
-      hidePetBubble()
-      pet.menu.classList.toggle('show')
-    })
-    pet.menu.addEventListener('click', function (ev) {
-      var item = ev.target && ev.target.closest ? ev.target.closest('.pm-i') : null
-      if (!item) return
-      var theme = item.getAttribute('data-theme')
-      var act = item.getAttribute('data-act')
-      pet.menu.classList.remove('show')
-      if (theme && ORDER.indexOf(theme) >= 0) {
-        runOverlay(theme)
-      } else if (act === 'hidepet') {
-        petHide()
-      } else if (act === 'minimize') {
-        petHashCmd('hide')
-      } else if (act === 'exit') {
-        petHashCmd('exit')
-      }
-    })
-    document.addEventListener('click', function (ev) {
-      if (!pet.menu.contains(ev.target) && !pet.root.contains(ev.target)) hidePetMenu()
-    })
-    dot.addEventListener('click', petShow)
-
-    pet.mode = PET_MODES[current] || 'whale'
-    pet.state = ''
-    if (pet.mode === 'whale') {
-      petDrawState()
-      pet.canvas.classList.toggle('bob', true)
-    } else {
-      petSetState('idle')
-    }
-    try { if (localStorage.getItem('miasaki.pet.hidden') === '1') petHide() } catch (e) {}
-    pet.scanTimer = setInterval(petScanApproval, 2500)
-  }
-
-  function hidePetMenu() { if (pet.menu) pet.menu.classList.remove('show') }
-  function hidePetBubble() {
-    if (pet.bubble) pet.bubble.className = 'pet-bubble'
-    if (pet.quoteTimer) clearTimeout(pet.quoteTimer)
-  }
-
-  /* 工作状态侦测：页面活动 → working，静默 → idle（忽略桌宠自身 DOM） */
+  /* 工作状态侦测：页面活动 → working，静默 → idle（忽略注入层自身 DOM） */
   var actObs = new MutationObserver(function (muts) {
     for (var i = 0; i < muts.length; i++) {
       var t = muts[i].target
       if (t && t.closest && (
-        t.closest('#miasaki-pet') || t.closest('#miasaki-switcher') ||
+        t.closest('#miasaki-switcher') ||
         t.closest('#miasaki-watermark') || t.closest('#miasaki-overlay')
       )) continue
       mutCount++
@@ -921,7 +507,6 @@
   })
 
   /* ---------- 主题化标题栏（无边框窗口） ---------- */
-  var INPAGE_PET = false // 桌宠已迁至独立置顶窗
 
   function buildTitlebar() {
     if (document.getElementById('miasaki-titlebar') || !document.body || IS_LOCAL) return
@@ -934,33 +519,37 @@
       '<div class="tb-btn" data-act="max" title="最大化/还原">\u25A1</div>' +
       '<div class="tb-btn tb-close" data-act="close" title="关闭">\u2715</div>'
     document.body.appendChild(bar)
-    // 拖动：pointer 事件 → hash move=dx,dy（增量）→ Rust 移动窗口
+    // 拖动：pointer 事件 → hash move=累计物理增量（相对按下起点,×DPR）→ Rust 差值应用
     bar.querySelector('.tb-drag').addEventListener('pointerdown', function (ev) {
       if (ev.button !== 0) return
       var sx = ev.clientX
       var sy = ev.clientY
+      var dpr = window.devicePixelRatio || 1
       var moved = false
       function mv(e) {
-        var dx = Math.round(e.clientX - sx)
-        var dy = Math.round(e.clientY - sy)
+        var dx = Math.round((e.clientX - sx) * dpr)
+        var dy = Math.round((e.clientY - sy) * dpr)
         if (Math.abs(dx) + Math.abs(dy) > 2) moved = true
         if (moved) {
           try {
             history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + '&move=' + dx + ',' + dy)
           } catch (err) { /* ignore */ }
-          sx = e.clientX
-          sy = e.clientY
         }
       }
       function up() {
         window.removeEventListener('pointermove', mv)
         window.removeEventListener('pointerup', up)
+        window.removeEventListener('pointercancel', up)
         try {
-          history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT)
+          history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + '&move=reset')
+          setTimeout(function () {
+            try { history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT) } catch (e) {}
+          }, 160)
         } catch (err) { /* ignore */ }
       }
       window.addEventListener('pointermove', mv)
       window.addEventListener('pointerup', up)
+      window.addEventListener('pointercancel', up)
     })
     bar.addEventListener('click', function (ev) {
       var b = ev.target && ev.target.closest ? ev.target.closest('.tb-btn') : null
@@ -988,33 +577,33 @@
     startObserver()
     try { localStorage.setItem(KEY, current) } catch (e) { /* ignore */ }
     var base = ensureBase()
-    base.textContent = SWITCHER_CSS + PET_CSS
+    base.textContent = SWITCHER_CSS
     if (!IS_LOCAL) {
       buildTitlebar()
       buildSwitcher()
       buildWatermark()
-      if (INPAGE_PET) buildPet()
+      buildAurora()
       actObs.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
     }
     refreshSwitcher()
     syncHash()
     notifyPet()
-    // 自愈：切换条/标题栏/主题属性/样式层被页面重渲染清掉时自动重建
+    // 自愈：切换条/标题栏/主题属性/样式层被页面重渲染清掉时自动重建（1s 巡检，切换后无空窗）
     setInterval(function () {
       if (!document.getElementById('miasaki-titlebar') && !IS_LOCAL) buildTitlebar()
       if (!document.getElementById('miasaki-switcher')) buildSwitcher()
-      if (INPAGE_PET && !document.getElementById('miasaki-pet') && !IS_LOCAL) buildPet()
+      if (!document.getElementById('miasaki-aurora') && !IS_LOCAL) buildAurora()
       if (document.documentElement.getAttribute('data-miasaki-theme') !== current) setAttr(current)
       ensureStyle()
       ensureBase()
-      if (baseEl && baseEl.textContent !== (SWITCHER_CSS + PET_CSS)) {
-        baseEl.textContent = SWITCHER_CSS + PET_CSS
+      if (baseEl && baseEl.textContent !== SWITCHER_CSS) {
+        baseEl.textContent = SWITCHER_CSS
       }
       if (styleEl && styleEl.textContent !== (STYLES[current] || '')) {
         styleEl.textContent = STYLES[current] || ''
       }
       syncDark()
-    }, 5000)
+    }, 1000)
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', onReady)

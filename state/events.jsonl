@@ -20,3 +20,6 @@
 {"ts":"2026-08-17T14:01:59Z","event":"m35_rc7_smoke","note":"rc.7 回归冒烟通过：A 4/4、B 3/4（唯一失败=已知 win32 终端检查缺口，非回归；热补丁仍有效）、C 1/1；rc7-test profile 216 包安装+rc.6 CLI 加载 exit 0；详见 docs/m35-rc7-regression-smoke-2026-08-17.md"}
 {"ts":"2026-08-17T14:45:30Z","event":"parallel_dispatch_ok","note":"并发派单验证通过：opencode(t-0007, PONG-A) + pi(t-0008, PONG-B) 并行执行互不干扰；两者均报告 provider=deepseek / model=deepseek-v4-flash；派单器双实例并行安全"}
 {"ts":"2026-08-17T15:00:00Z","event":"session_end","note":"文档 v0.13（校准批次+并发验证+rc.7 冒烟回写）；后续任务规划 docs/next-tasks-plan-2026-08-17.md（P0 面板可见性收尾 / P1 CLI 解锁三件+计量两件 / P2 报表与联动 / M4-M6）；下会话优先：面板硬刷新验证"}
+{"ts":"2026-08-19T13:00:00Z","event":"upstream_review_0819","note":"复查官方仓库：master 仍 rc.7 合并点 99f6f02 无新提交；npm latest/next 均转正 0.1.0-rc.7；stars 165,147 / forks 17,544；fixture 转义 bug (#2477) 仍上游未修，本地热补丁继续有效"}
+{"ts":"2026-08-19T13:40:00Z","event":"dsh_upgrade_rc7","note":"主包 @deepseek-ai/dsh 0.1.0-rc.6 -> 0.1.0-rc.7（latest 转正后正常路径升级，changed 530 packages/5m）；GUI 存活、dsh --help 冒烟 exit 0；subagent 线与产品提供方包不动"}
+{"ts":"2026-08-19T21:40:00Z","event":"dsh_upgrade_cleanup","note":"GUI 重启后清除 npm 升级残留 staging 目录 .dsh-bXHMP6T1（koffi.node 锁已释放）；升级收尾完成"}

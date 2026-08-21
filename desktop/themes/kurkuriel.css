@@ -134,12 +134,33 @@ html[data-miasaki-theme="kurkuriel"] body {
   --ms-hover: #e9e4df;
   --ms-glyph: #8f1616;
   --ms-glow: rgba(158, 27, 27, .3);
+  --ms-danger: #9e1b1b;
 }
 
 /* —— 装饰层 —— */
 html[data-miasaki-theme="kurkuriel"] ::selection {
   background: #9e1b1b;
   color: #f8f5f2;
+}
+/* 面板半透明化：光晕层透出，白夜逆钟的冷寂氛围 */
+html[data-miasaki-theme="kurkuriel"] body {
+  --dsw-alias-bg-base: rgba(247, 244, 241, .88);
+  --dsw-alias-bg-layer-1: rgba(252, 250, 248, .9);
+  --dsw-alias-bg-layer-2: rgba(255, 255, 255, .94);
+  --dsw-alias-bg-module-platform: rgba(252, 250, 248, .9);
+  --dsw-alias-bg-overlay: rgba(255, 255, 255, .97);
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-a {
+  opacity: .5;
+  background: radial-gradient(circle, rgba(158, 27, 27, .32), transparent 68%);
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-b {
+  opacity: .38;
+  background: radial-gradient(circle, rgba(94, 101, 114, .3), transparent 70%);
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-c {
+  opacity: .28;
+  background: radial-gradient(circle, rgba(184, 154, 92, .35), transparent 70%);
 }
 html[data-miasaki-theme="kurkuriel"] input,
 html[data-miasaki-theme="kurkuriel"] textarea,
@@ -158,7 +179,7 @@ html[data-miasaki-theme="kurkuriel"] #miasaki-watermark {
   top: -90px;
   width: 420px;
   height: 420px;
-  opacity: .07;
+  opacity: .1;
   pointer-events: none;
   z-index: 0;
 }
