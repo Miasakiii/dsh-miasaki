@@ -31,7 +31,7 @@ for (const t of THEMES) {
 }
 
 // 令牌完备性校验
-const surfacePath = join(root, '..', 'design', 'token-surface.txt')
+const surfacePath = join(root, 'design', 'token-surface.txt')
 if (!existsSync(surfacePath)) {
   console.error('[build-init] 缺少 design/token-surface.txt，无法执行令牌完备性校验')
   process.exit(1)
