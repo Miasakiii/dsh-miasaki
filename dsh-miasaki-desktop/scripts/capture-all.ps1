@@ -40,7 +40,7 @@ $cb = [Win32All+EnumWindowsProc]{
 }
 [Win32All]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
 
-$outDir = 'C:\Users\Asakii\Desktop\dsh-miasaki\desktop\scripts\diag'
+$outDir = Join-Path $PSScriptRoot 'diag'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 foreach ($w in $found) {
   Write-Host ("HWND={0} title='{1}' class={2} rect=({3},{4}) {5}x{6} visible={7}" -f $w.Hwnd,$w.Title,$w.Class,$w.X,$w.Y,$w.W,$w.H,$w.Visible)

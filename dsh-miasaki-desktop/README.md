@@ -76,8 +76,8 @@ desktop/
 
 ## 设计规范
 
-- 总体设计与三主题规范：`../design/themes.md`
-- DSH 令牌面（构建校验依据）：`../design/token-surface.txt`
+- 总体设计与三主题规范：`design/themes.md`
+- DSH 令牌面（构建校验依据）：`design/token-surface.txt`
 
 ## 行为约定
 

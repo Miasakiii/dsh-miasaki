@@ -97,7 +97,7 @@ function aggregateFleet() {
 
   // 读每个 agent 目录
   const agentDirs = fs.readdirSync(AGENTS_DIR, { withFileTypes: true })
-    .filter(d => d.isDirectory())
+    .filter(d => d.isDirectory() && d.name !== 'archive')  // 排除 archive（历史标本，非活跃 fleet）
     .map(d => d.name);
 
   for (const id of agentDirs) {
@@ -226,7 +226,7 @@ function aggregateReport(days) {
   const byDayAgentMap = {};  // "date|agent" → 聚合
 
   const agentDirs = fs.readdirSync(AGENTS_DIR, { withFileTypes: true })
-    .filter(d => d.isDirectory())
+    .filter(d => d.isDirectory() && d.name !== 'archive')  // 排除 archive（历史标本，非活跃 fleet）
     .map(d => d.name);
 
   for (const id of agentDirs) {

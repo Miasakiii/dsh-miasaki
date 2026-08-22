@@ -3,7 +3,7 @@
 # 只创建不覆盖：已存在的 manifest 仅刷新 discovered 元数据，不动 Operator 编辑的字段。
 
 param(
-  [string]$Workspace = "C:\Users\Asakii\Desktop\dsh-miasaki"
+  [string]$Workspace = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent)  # 默认=fleet 根（脚本位于 workers/discovery/）
 )
 
 $ErrorActionPreference = 'SilentlyContinue'

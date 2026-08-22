@@ -7,7 +7,7 @@
 param(
   [string]$TaskId,
   [string]$Agent,
-  [string]$Workspace = "C:\Users\Asakii\Desktop\dsh-miasaki",
+  [string]$Workspace = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),  # 默认=fleet 根（脚本位于 workers/dispatch/）
   [switch]$CheckOnly,
   [switch]$ParseOnly
 )
