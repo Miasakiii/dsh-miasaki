@@ -18,7 +18,7 @@ Check 'pets 素材完整' (
   (Test-Path (Join-Path $dist 'ui\pets\frames.json')) -and
   (Test-Path (Join-Path $dist 'ui\pets\bubbles.png')) -and
   (Test-Path (Join-Path $dist 'ui\pets\kurumi\frames')) -and
-  (Test-Path (Join-Path $dist 'ui\pets\whale\states\idle.png')) -and
+  (Test-Path (Join-Path $dist 'ui\pets\whale\states\idle-00.png')) -and  # v2:idle 帧序列
   (Test-Path (Join-Path $dist 'ui\pets\inverse\states\idle.png'))
 )
 Check 'DSH 3080 端口' ((Test-NetConnection -ComputerName 127.0.0.1 -Port 3080 -WarningAction SilentlyContinue -InformationLevel Quiet))

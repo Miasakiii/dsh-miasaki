@@ -2,7 +2,14 @@
   "whale": {
     "kind": "states",
     "states": {
-      "idle": "states/idle.png",
+      "idle": [
+        "states/idle-00.png",
+        "states/idle-01.png",
+        "states/idle-02.png",
+        "states/idle-03.png",
+        "states/idle-04.png",
+        "states/idle-05.png"
+      ],
       "work": "states/work.png",
       "deep": "states/deep.png"
     }
@@ -18,6 +25,26 @@
         "r0c4.png",
         "r0c5.png"
       ],
+      "runRight": [
+        "r1c0.png",
+        "r1c1.png",
+        "r1c2.png",
+        "r1c3.png",
+        "r1c4.png",
+        "r1c5.png",
+        "r1c6.png",
+        "r1c7.png"
+      ],
+      "runLeft": [
+        "r2c0.png",
+        "r2c1.png",
+        "r2c2.png",
+        "r2c3.png",
+        "r2c4.png",
+        "r2c5.png",
+        "r2c6.png",
+        "r2c7.png"
+      ],
       "wave": [
         "r3c0.png",
         "r3c1.png",
@@ -31,6 +58,24 @@
         "r4c3.png",
         "r4c4.png"
       ],
+      "failed": [
+        "r5c0.png",
+        "r5c1.png",
+        "r5c2.png",
+        "r5c3.png",
+        "r5c4.png",
+        "r5c5.png",
+        "r5c6.png",
+        "r5c7.png"
+      ],
+      "wait": [
+        "r6c0.png",
+        "r6c1.png",
+        "r6c2.png",
+        "r6c3.png",
+        "r6c4.png",
+        "r6c5.png"
+      ],
       "run": [
         "r7c0.png",
         "r7c1.png",
@@ -38,6 +83,14 @@
         "r7c3.png",
         "r7c4.png",
         "r7c5.png"
+      ],
+      "review": [
+        "r8c0.png",
+        "r8c1.png",
+        "r8c2.png",
+        "r8c3.png",
+        "r8c4.png",
+        "r8c5.png"
       ]
     }
   },

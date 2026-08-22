@@ -33,9 +33,12 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 | `zafkiel` | 狂三（Q 版） | `ui/pets/kurumi/`（hatch-pet-kurumi，作者自产） |
 | `kurkuriel` | 反转狂三（Q 版） | 同狂三图集 + CSS 反转滤镜（白化/降饱和/血红辉光） |
 
-- 图集兼容 Codex 宠物 V1/V2 格式（8 列 192×208，自动探测每行非空帧）
+- 图集兼容 Codex 宠物 V1/V2 格式（8 列 192×208，自动探测每行非空帧）；kurumi 已切全 9 行语义帧
+  （idle/runRight/runLeft/wave/jump/failed/wait/run/review），whale idle 为帧序列（idle.gif 拆分 6 帧）
 - 交互：**拖动**移动 / **单击**跳跃+气泡（主窗口最小化/隐藏时单击为**唤起主窗口**）/ **双击**挥手
-  / **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
+  （主窗口最小化/隐藏时双击为**唤起主窗口**）/ **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
+- 自主动作（环境编排）：静止时低频随机小动作（挥手/检查/等待，偶发跳跃——表演 1.2~2.2s、休息 8~18s、
+  首次 5.5s 延迟；指针按下即打断）；思考强度上升时转「守候」姿态（wait 行慢放，不再原地跑步）
 - 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`
 - **人格会话联动**：主题切换时自动用对应桌宠的 Agent 预设开启新会话（DSH 官方 RPC
   `/api/session.create` 的 `agentPreset` 参数）。映射 `pure→whale`（鲸鱼娘）/

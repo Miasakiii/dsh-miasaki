@@ -17,6 +17,17 @@ const BUBBLE_W: i32 = 240;
 const BUBBLE_H: i32 = 56;
 const BUBBLE_COUNT: usize = 17;
 
+// —— v2 动作丰富化参数(2026-08-22,见 design/pet-v2-phase-a-execution.md) ——
+const WAVE_MS: u64 = 1300; // 双击挥手时长(wave 4 帧×8fps≈500ms,留余量)
+const HOP_HOLD_MS: u64 = 200; // 跳跃落地:末帧定格时长
+const AMBIENT_PLAY_MIN_MS: u64 = 1200; // ambient 表演下限
+const AMBIENT_PLAY_VAR_MS: u64 = 1000; // ambient 表演随机幅度(1.2~2.2s)
+const AMBIENT_REST_MIN_MS: u64 = 8000; // ambient 休息下限
+const AMBIENT_REST_VAR_MS: u64 = 10000; // ambient 休息随机幅度(8~18s)
+const AMBIENT_FIRST_DELAY_MS: u64 = 5500; // 首次表演延迟(4~7s 中点)
+const AMBIENT_JUMP_PCT: u32 = 15; // 偶发 jump 概率(%)
+const WANDER_PX_PER_FRAME: i32 = 9; // 滑步修正:每帧移动(90px/s ÷ 10fps)
+
 pub struct PetShared {
     pub mode: String,
     pub intensity: String,
@@ -233,8 +244,9 @@ fn load_png(path: &std::path::Path) -> Option<Image> {
 #[derive(Default)]
 struct Frames {
     kurumi: HashMap<String, Vec<Image>>,
-    whale_states: HashMap<String, Image>,
-    inverse_states: HashMap<String, Image>,
+    // v2:三态值统一为帧组(单帧=长度1);idle 可为帧序列(whale idle.gif 拆分)
+    whale_states: HashMap<String, Vec<Image>>,
+    inverse_states: HashMap<String, Vec<Image>>,
     bubbles: Vec<Image>,
 }
 
@@ -273,17 +285,30 @@ fn load_frames(base: &std::path::Path) -> Frames {
                     f.kurumi.insert(row.clone(), imgs);
                 }
             }
-            // 立绘三态(whale / inverse)
+            // 立绘三态(whale / inverse);v2:值可为帧组数组(idle 帧序列)或单帧字符串
             for mode in ["whale", "inverse"] {
                 if let Some(states) = v.get(mode).and_then(|m| m.get("states")).and_then(|s| s.as_object()) {
                     for (s, name) in states {
-                        let p = pets_root.join(mode).join(name.as_str().unwrap_or(""));
-                        if let Some(img) = load_png(&p) {
-                            if mode == "whale" {
-                                f.whale_states.insert(s.clone(), img);
-                            } else {
-                                f.inverse_states.insert(s.clone(), img);
+                        let names: Vec<String> = if let Some(arr) = name.as_array() {
+                            arr.iter().filter_map(|n| n.as_str().map(|x| x.to_string())).collect()
+                        } else {
+                            let n = name.as_str().unwrap_or("");
+                            if n.is_empty() { Vec::new() } else { vec![n.to_string()] }
+                        };
+                        let mut imgs = Vec::new();
+                        for n in &names {
+                            let p = pets_root.join(mode).join(n);
+                            if let Some(img) = load_png(&p) {
+                                imgs.push(img);
                             }
+                        }
+                        if imgs.is_empty() {
+                            continue;
+                        }
+                        if mode == "whale" {
+                            f.whale_states.insert(s.clone(), imgs);
+                        } else {
+                            f.inverse_states.insert(s.clone(), imgs);
                         }
                     }
                 }
@@ -298,6 +323,12 @@ fn load_frames(base: &std::path::Path) -> Frames {
 struct Wander {
     until: std::time::Instant,
     dx: i32,
+}
+
+// v2:环境编排拍(低频随机小动作,wave/review/wait + 偶发 jump)
+struct Ambient {
+    row: String,
+    until: std::time::Instant,
 }
 
 fn quote_pool(mode: &str) -> &'static [&'static str] {
@@ -322,6 +353,16 @@ fn pick_quote(mode: &str) -> usize {
     quote_base(mode) + rand_u32() as usize % pool.len()
 }
 
+/// v2 环境编排:选一个 ambient 动作行。池 wave/review/wait,jump 以 AMBIENT_JUMP_PCT 概率替换。
+/// 候选行若在 frames.json 缺失,由 kurumi 渲染分支的 fallback 链自动兜底(idle)。
+fn pick_ambient_row() -> String {
+    if rand_u32() % 100 < AMBIENT_JUMP_PCT {
+        return "jump".to_string();
+    }
+    const POOL: [&str; 3] = ["wave", "review", "wait"];
+    POOL[(rand_u32() as usize) % POOL.len()].to_string()
+}
+
 struct PetWin {
     hwnd: isize,
     dot_hwnd: isize,
@@ -333,6 +374,10 @@ struct PetWin {
     anim_ms: u64,
     last_tick: std::time::Instant,
     hop_until: Option<std::time::Instant>,
+    hop_hold_until: Option<std::time::Instant>, // 落地过渡:跳完末帧定格(v2)
+    wave_until: Option<std::time::Instant>, // 双击挥手(v2)
+    ambient: Option<Ambient>, // 环境编排(v2)
+    next_ambient: std::time::Instant,
     bubble: Option<(usize, std::time::Instant)>,
     press_pt: (i32, i32),
     dragged: bool,
@@ -379,7 +424,7 @@ impl PetWin {
         let now = std::time::Instant::now();
         let mut dirty = false;
 
-        // —— 待机随机行为：定时气泡台词 + 定时散步（左右移动，贴边吸附） ——
+        // —— 待机随机行为：定时气泡台词 + 定时散步（kurumi 专属,左右移动贴边吸附） ——
         if now >= self.next_quote && self.bubble.is_none() {
             self.next_quote = now + std::time::Duration::from_millis(rand_range(40000, 90000));
             let idx = {
@@ -390,32 +435,63 @@ impl PetWin {
             self.last_tick = now - std::time::Duration::from_secs(10); // 立即触发重绘
             dirty = true;
         }
-        if self.wander.is_none() && self.hop_until.is_none() && now >= self.next_wander {
-            let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
-            self.wander = Some(Wander {
-                until: now + std::time::Duration::from_millis(rand_range(1100, 2400)),
-                dx: dir,
-            });
-            self.next_wander = now + std::time::Duration::from_millis(rand_range(45000, 120000));
-            dirty = true;
-        }
-        if let Some(w) = &mut self.wander {
-            self.pos.0 += w.dx * 3;
-            let (sw, _) = screen_size();
-            if self.pos.0 <= 0 {
-                self.pos.0 = 0;
-                self.wander = None;
-            } else if self.pos.0 >= sw - WIN_W {
-                self.pos.0 = sw - WIN_W;
-                self.wander = None;
-            } else if now >= w.until {
-                self.wander = None;
+        if self.wander.is_none() && self.hop_until.is_none() && self.hop_hold_until.is_none()
+            && self.ambient.is_none() && now >= self.next_wander
+        {
+            let is_kurumi = {
+                let s = self.shared.lock().unwrap();
+                s.mode == "kurumi"
+            };
+            if is_kurumi {
+                let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
+                self.wander = Some(Wander {
+                    until: now + std::time::Duration::from_millis(rand_range(1100, 2400)),
+                    dx: dir,
+                });
+                dirty = true;
             }
-            dirty = true;
+            self.next_wander = now + std::time::Duration::from_millis(rand_range(45000, 120000));
+        }
+        // —— v2 环境编排：idle 基线低频随机小动作(手势打断见 wnd_proc) ——
+        if self.ambient.is_none() && self.hop_until.is_none() && self.hop_hold_until.is_none()
+            && self.wave_until.is_none() && self.wander.is_none() && now >= self.next_ambient
+        {
+            let idle_intensity = {
+                let s = self.shared.lock().unwrap();
+                s.intensity == "idle"
+            };
+            if idle_intensity && self.bubble.is_none() {
+                let row = pick_ambient_row();
+                self.ambient = Some(Ambient {
+                    row,
+                    until: now + std::time::Duration::from_millis(
+                        rand_range(AMBIENT_PLAY_MIN_MS, AMBIENT_PLAY_MIN_MS + AMBIENT_PLAY_VAR_MS),
+                    ),
+                });
+                self.frame_idx = 0;
+                dirty = true;
+            }
+            self.next_ambient = now + std::time::Duration::from_millis(
+                rand_range(AMBIENT_REST_MIN_MS, AMBIENT_REST_MIN_MS + AMBIENT_REST_VAR_MS),
+            );
         }
 
         if now.duration_since(self.last_tick).as_millis() >= self.anim_ms as u128 {
             self.last_tick = now;
+            // —— wander 滑步修正(v2):位移与 run 帧同步(每帧 9px),步频一致 ——
+            if let Some(w) = &mut self.wander {
+                self.pos.0 += w.dx * WANDER_PX_PER_FRAME;
+                let (sw, _) = screen_size();
+                if self.pos.0 <= 0 {
+                    self.pos.0 = 0;
+                    self.wander = None;
+                } else if self.pos.0 >= sw - WIN_W {
+                    self.pos.0 = sw - WIN_W;
+                    self.wander = None;
+                } else if now >= w.until {
+                    self.wander = None;
+                }
+            }
             // 清空画布只在帧更新时进行,避免 33ms 心跳把中间帧清成空白
             for p in self.buf.iter_mut() {
                 *p = 0;
@@ -432,15 +508,16 @@ impl PetWin {
                 } else {
                     "idle"
                 };
-                self.anim_ms = 1000;
                 let states = if mode == "whale" {
                     &self.frames.whale_states
                 } else {
                     &self.frames.inverse_states
                 };
                 // 三态立绘对应三个思考等级(小/中/大或不同姿态),强度来自 DSH 推理等级,切换稳定
-                let img_ptr = states.get(key).map(|i| i as *const Image);
-                if let Some(ptr) = img_ptr {
+                // frames 加载后不可变:裸指针解引用安全(同时规避 self 借用冲突)
+                let list_ptr = states.get(key).map(|l| l as *const Vec<Image>);
+                if let Some(ptr) = list_ptr {
+                    let list = unsafe { &*ptr };
                     let bob = if key == "idle" {
                         let phase = (std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -450,28 +527,68 @@ impl PetWin {
                     } else {
                         0.0
                     };
-                    // frames 加载后不可变：裸指针解引用安全
-                    self.blit_center_bottom(unsafe { &*ptr }, bob, 1.0);
+                    if list.len() > 1 {
+                        // v2:帧序列状态(idle.gif 拆帧),6fps 循环 + bob
+                        self.anim_ms = 1000 / 6;
+                        let idx = self.frame_idx % list.len();
+                        self.frame_idx += 1;
+                        self.blit_center_bottom(&list[idx], bob, 1.0);
+                    } else if let Some(img) = list.first() {
+                        // 单帧:静态 + bob(与历史行为一致)
+                        self.anim_ms = 1000;
+                        self.blit_center_bottom(img, bob, 1.0);
+                    }
                 }
             } else {
+                // v2 优先序:hop → hopHold(落地) → wander → ambient → wave → focus(wait) → idle
                 let row = if let Some(until) = self.hop_until {
                     if now < until {
                         "jump".to_string()
                     } else {
-                        self.hop_until = None;
+                        // 落地过渡:跳完末帧定格 HOP_HOLD_MS 再回 idle,消除硬切
+                        if self.hop_hold_until.is_none() {
+                            self.hop_hold_until =
+                                Some(now + std::time::Duration::from_millis(HOP_HOLD_MS));
+                        }
+                        "jump".to_string()
+                    }
+                } else if let Some(until) = self.hop_hold_until {
+                    if now < until {
+                        "jump".to_string()
+                    } else {
+                        self.hop_hold_until = None;
                         "idle".to_string()
                     }
                 } else if self.wander.is_some() {
                     // 散步：播放 run 行帧（双向移动共用）
                     "run".to_string()
+                } else if let Some(a) = &self.ambient {
+                    if now >= a.until {
+                        self.ambient = None;
+                        "idle".to_string()
+                    } else {
+                        a.row.clone()
+                    }
+                } else if let Some(until) = self.wave_until {
+                    if now < until {
+                        "wave".to_string()
+                    } else {
+                        self.wave_until = None;
+                        "idle".to_string()
+                    }
                 } else if intensity == "idle" {
                     "idle".to_string()
                 } else {
-                    "run".to_string()
+                    // 思考中=静默守候(同 idle 姿态;ambient 仅在 idle 强度触发,自动安静)。
+                    // wait 行留给审批等待(阶段 B,偶发且有语义)——曾用 wait 行表示思考,
+                    // 其帧组起伏较大 + 慢放 → 真机观感「一直跳动」(2026-08-22 用户反馈修正)。
+                    "idle".to_string()
                 };
                 let fps = match row.as_str() {
-                    "run" => 10,
+                    "run" | "runRight" | "runLeft" => 10,
                     "jump" => 11,
+                    "wave" => 8,
+                    "wait" | "review" | "failed" => 6,
                     _ => 8,
                 };
                 self.anim_ms = 1000 / fps;
@@ -480,8 +597,21 @@ impl PetWin {
                     let list = map.get(&row).or_else(|| map.get("idle"));
                     match list {
                         Some(l) if !l.is_empty() => {
-                            let idx = self.frame_idx % l.len();
-                            self.frame_idx += 1;
+                            // 落地定格窗口:锁定 jump 末帧,不推进
+                            let holding_jump = row == "jump"
+                                && self.hop_until.is_none()
+                                && match self.hop_hold_until {
+                                    Some(hu) => now < hu,
+                                    None => false,
+                                };
+                            let idx = if holding_jump {
+                                l.len() - 1
+                            } else {
+                                self.frame_idx % l.len()
+                            };
+                            if !holding_jump {
+                                self.frame_idx += 1;
+                            }
                             Some((idx, row.clone()))
                         }
                         _ => None,
@@ -491,7 +621,25 @@ impl PetWin {
                     let ptr = self.frames.kurumi.get(&row_key).map(|l| l as *const Vec<Image>);
                     if let Some(ptr) = ptr {
                         let list = unsafe { &*ptr };
-                        self.blit_center_bottom(&list[idx % list.len()], 0.0, 1.0);
+                        // v2 呼吸 bob:基线(idle/wait)且无行动状态时 ±2px 上下呼吸
+                        let calm = (row == "idle" || row == "wait")
+                            && self.hop_until.is_none()
+                            && self.hop_hold_until.is_none()
+                            && self.wave_until.is_none()
+                            && self.ambient.is_none()
+                            && self.wander.is_none();
+                        let bob = if calm {
+                            let phase = (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() % 3200) as f32
+                                / 1600.0
+                                * std::f32::consts::PI;
+                            phase.sin() * 2.0
+                        } else {
+                            0.0
+                        };
+                        self.blit_center_bottom(&list[idx % list.len()], bob, 1.0);
                     }
                 }
             }
@@ -615,6 +763,9 @@ impl PetWin {
 
     fn do_hop(&mut self) {
         self.hop_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(900));
+        self.hop_hold_until = None;
+        self.wave_until = None;
+        self.ambient = None; // 手势打断环境编排
         self.frame_idx = 0;
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
         let idx = {
@@ -622,6 +773,22 @@ impl PetWin {
             pick_quote(&s.mode)
         };
         self.bubble = Some((idx, std::time::Instant::now()));
+    }
+
+    /// v2 双击挥手:播 wave 行(约 500ms 内容,余量 1300ms 收尾),任何指针事件可打断
+    fn do_wave(&mut self) {
+        self.wave_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(WAVE_MS));
+        self.ambient = None;
+        self.frame_idx = 0;
+        self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    }
+
+    /// v2 决策1:主窗口最小化/隐藏时双击=唤起(do_wave 的替代路径)
+    fn main_needs_wake(&self) -> bool {
+        self.app
+            .get_webview_window("main")
+            .map(|w| !w.is_visible().unwrap_or(true) || w.is_minimized().unwrap_or(false))
+            .unwrap_or(false)
     }
 
     fn show_menu(&self, x: i32, y: i32) {
@@ -708,6 +875,9 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             GetCursorPos(&mut p);
             (*pet).press_pt = (p.x, p.y);
             (*pet).dragged = false;
+            // v2:指针按下即打断环境编排/挥手(拖拽与动作互斥)
+            (*pet).ambient = None;
+            (*pet).wave_until = None;
             0
         }
         WM_MOUSEMOVE => {
@@ -739,8 +909,12 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             0
         }
         WM_LBUTTONDBLCLK => {
-            (*pet).do_hop();
-            (*pet).focus_main();
+            // v2 决策1:主窗最小化/隐藏 → 唤起;否则 → 挥手(修复 wave 行从未触发的漂移)
+            if (*pet).main_needs_wake() {
+                (*pet).focus_main();
+            } else {
+                (*pet).do_wave();
+            }
             0
         }
         WM_RBUTTONDOWN => {
@@ -852,6 +1026,10 @@ fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) 
             anim_ms: 125,
             last_tick: std::time::Instant::now() - std::time::Duration::from_secs(10),
             hop_until: None,
+            hop_hold_until: None,
+            wave_until: None,
+            ambient: None,
+            next_ambient: std::time::Instant::now() + std::time::Duration::from_millis(AMBIENT_FIRST_DELAY_MS),
             bubble: None,
             press_pt: (0, 0),
             dragged: false,

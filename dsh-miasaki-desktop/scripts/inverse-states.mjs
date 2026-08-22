@@ -22,7 +22,7 @@ function near(pr, pg, pb, nr, ng, nb) {
   return Math.max(Math.abs(pr - nr), Math.abs(pg - ng), Math.abs(pb - nb)) < TOL
 }
 
-async function cutout(name) {
+async function cutout(name, outName) {
   const img = await sharp(join(RAW, `${name}.png`)).removeAlpha().raw().toBuffer({ resolveWithObject: true })
   const { data, info } = img
   const { width: w, height: h, channels: c } = info
@@ -110,15 +110,21 @@ async function cutout(name) {
     }
   }
 
-  // —— 缩放到高度 208(保持宽高比) ——
-  const targetH = 208
+  // —— 缩放到高度 540(渲染 270 高的 2 倍超采样) ——
+  // 曾输出 208 高:128×208 渲染放大到 270 时糊化,时钟眼(金表盘 12:05)失去辨识度,
+  // 用户反馈「不像」→ 高清源(1728×2368)应保留细节,缩小采样比放大糊化好。
+  // 曾输出 `${name}.png`(blue-*.png):与 frames.json 引用的 states/idle.png 错位,
+  // 桌宠实际渲染的是旧 128×208 产物(v1 遗留断层)——本次统一为 {idle,work,deep}.png。
+  const targetH = 540
   const targetW = Math.round(cw * targetH / ch)
   const png = await sharp(out, { raw: { width: cw, height: ch, channels: 4 } })
     .resize(targetW, targetH, { fit: 'fill' })
     .png()
-    .toFile(join(OUT, `${name}.png`))
+    .toFile(join(OUT, `${outName}.png`))
   console.log(`[inverse-states] ${name}: bbox ${cw}x${ch} -> ${png.width}x${png.height}`)
 }
 
-for (const n of ['blue-idle', 'blue-work', 'blue-deep']) await cutout(n)
+for (const [src, out] of [['blue-idle', 'idle'], ['blue-work', 'work'], ['blue-deep', 'deep']]) {
+  await cutout(src, out)
+}
 console.log('[inverse-states] done')
