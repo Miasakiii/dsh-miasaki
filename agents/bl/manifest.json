@@ -1,29 +1,29 @@
-{
-  "metering_source": "console-usage",
-  "preflight": "用量/额度/配额类命令需要有效 console 会话：bl auth login --console --console-site domestic；派单前先 bl auth status 检查",
-  "name": "Bailian CLI",
-  "updated_at": "2026-08-17T13:46:35Z",
-  "cli": {
-    "command": "bl",
-    "binPath": "",
-    "invoke": "bl text chat --message {prompt}",
-    "version": "bl 1.16.0"
-  },
-  "model_price": null,
-  "id": "bl",
-  "limits": {
-    "budget_per_day": 2.0,
-    "max_concurrent_tasks": 1,
-    "heartbeat_ms": 30000,
-    "timeout_ms": 900000,
-    "max_tokens_per_task": 50000
-  },
-  "runtime": "cli",
-  "model": "cli-default",
-  "persona_prompt": "你是本机 agent CLI「Bailian CLI」的档案。总指挥通过你的可执行文件派发任务。",
-  "metering": false,
-  "skills": [
-    "bailian-resources",
-    "bailian-chat"
-  ]
+﻿{
+    "metering_source":  "console-usage",
+    "preflight":  "用量/额度/配额类命令需要有效 console 会话：bl auth login --console --console-site domestic；派单前先 bl auth status 检查",
+    "name":  "Bailian CLI",
+    "updated_at":  "2026-08-22T13:27:26Z",
+    "cli":  {
+                "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\bl.ps1",
+                "command":  "bl",
+                "version":  "bl 1.16.0",
+                "invoke":  "bl text chat --message {prompt}"
+            },
+    "model_price":  null,
+    "id":  "bl",
+    "limits":  {
+                   "budget_per_day":  2.0,
+                   "max_concurrent_tasks":  1,
+                   "heartbeat_ms":  30000,
+                   "timeout_ms":  900000,
+                   "max_tokens_per_task":  50000
+               },
+    "runtime":  "cli",
+    "model":  "cli-default",
+    "persona_prompt":  "你是本机 agent CLI「Bailian CLI」的档案。总指挥通过你的可执行文件派发任务。",
+    "metering":  false,
+    "skills":  [
+                   "bailian-resources",
+                   "bailian-chat"
+               ]
 }

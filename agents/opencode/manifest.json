@@ -1,28 +1,28 @@
-{
-  "metering_source": "unknown",
-  "name": "opencode",
-  "updated_at": "2026-08-17T13:46:36Z",
-  "cli": {
-    "command": "opencode",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\opencode.ps1",
-    "invoke": "opencode run {prompt}",
-    "version": "1.18.18"
-  },
-  "model_price": null,
-  "id": "opencode",
-  "limits": {
-    "budget_per_day": 2.0,
-    "max_concurrent_tasks": 1,
-    "heartbeat_ms": 30000,
-    "timeout_ms": 900000,
-    "max_tokens_per_task": 50000
-  },
-  "runtime": "cli",
-  "model": "cli-default",
-  "persona_prompt": "你是本机 agent CLI「opencode」的档案。总指挥通过你的可执行文件派发任务。",
-  "metering": false,
-  "skills": [
-    "coding",
-    "cli-task-runner"
-  ]
+﻿{
+    "metering_source":  "unknown",
+    "name":  "opencode",
+    "updated_at":  "2026-08-22T13:27:31Z",
+    "cli":  {
+                "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\opencode.ps1",
+                "command":  "opencode",
+                "version":  "1.18.18",
+                "invoke":  "opencode run {prompt}"
+            },
+    "model_price":  null,
+    "id":  "opencode",
+    "limits":  {
+                   "budget_per_day":  2.0,
+                   "max_concurrent_tasks":  1,
+                   "heartbeat_ms":  30000,
+                   "timeout_ms":  900000,
+                   "max_tokens_per_task":  50000
+               },
+    "runtime":  "cli",
+    "model":  "cli-default",
+    "persona_prompt":  "你是本机 agent CLI「opencode」的档案。总指挥通过你的可执行文件派发任务。",
+    "metering":  false,
+    "skills":  [
+                   "coding",
+                   "cli-task-runner"
+               ]
 }

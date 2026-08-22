@@ -27,7 +27,7 @@
 | fleet 可用性 | **4/8 立即可用**：claude / bl / opencode / pi；gemini 半可用（403 区域限制）；mimo 语法待校准；dsh 缺 headless profile；agent-browser 命令型（非 prompt 型） |
 | 计量通道 | 仅 bl（console-usage）与 claude（json-cost-usd）真实计量过；其余 unknown（待校准） |
 | 已花成本 | 唯一实账 t-0006：claude `$0.4140524`（59681 tokens，sonnet-4-6[1M]，cache-read 60 万计大头） |
-| 相关外因 | 📌 DSH 主包 2026-08-20 已升 0.1.0-**rc.8**（**未走升级前回归冒烟，m36 待补**）；`agents/registry.json` 里 dsh 仍记 rc.6（过期，待重扫） |
+| 相关外因 | DSH 主包 2026-08-20 升 0.1.0-rc.8，本机随后再升至 **0.1.1-rc.1**（dist-tags 最新 rc.2）。**m36 回归冒烟已补**（2026-08-22，详见 `docs/m36-rc8-regression-smoke-2026-08-22.md`：profile 混装加载无回归、三主题 18/18）。`agents/registry.json` 已重扫，dsh 档案版本修为 0.1.1-rc.1（claude→2.1.238、gemini→0.55.1） |
 
 ## 2. 组件地图
 
@@ -101,10 +101,10 @@ pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0009 -Agent claude
 
 ## 6. 下一步（按优先级；来源 `docs/next-tasks-plan-2026-08-20.md` P1 + 设计文档 §13/§14）
 
-- [ ] **P1-2 m36 rc.8 回归冒烟**（参照 `docs/m35-rc7-regression-smoke-2026-08-17.md` 模板）——本线对 DSH 升级的防护网；rc.8 的直接升级绕过了冒烟纪律。
-- [ ] **P1-5 引用资料再梳理**：`_refs/rc8-src.zip` 已损坏、`_refs/deepseek-harness` 是 rc.7 解包；需源码时重下官方 rc.8 source。
+- [x] **P1-2 m36 rc.8(+) 回归冒烟**（2026-08-22 完成，见 `docs/m36-rc8-regression-smoke-2026-08-22.md`）——本机全局 CLI 已至 0.1.1-rc.1；profile 混装 `--dump-config` 双双 exit 0、rc7-test 插件树与 M3.5 基线 313 行字节一致、三主题 18/18。**仍待用户在 GUI 验证历史会话恢复（rc.8 SQLite 不兼容）。**
+- [ ] **P1-5 引用资料再梳理**：`_refs/rc8-src.zip` 已损坏、`_refs/deepseek-harness` 是 rc.7 解包；需源码时重下官方 0.1.1-rc.2 source。
 - [ ] **M2 监控面板 → DSH 动态 Cordis 插件**（现状是独立 node 服务；目标：Operator 开关控件 + 配置项落官方 plugin settings surface）。
-- [ ] **校准遗留**：gemini 换可用模型 / mimo invoke 语法 / dsh 建 headless profile / opencode+pi 计量（`--format json` 等）/ **重扫 registry**（dsh 版本过期）。
+- [ ] **校准遗留**：gemini 换可用模型 / mimo invoke 语法 / dsh 建 headless profile / opencode+pi 计量（`--format json` 等）。（**registry 已重扫**：dsh→0.1.1-rc.1、claude→2.1.238、gemini→0.55.1；详见 `tests/m3-acp/logs/m36/scan-output.log`）
 - [ ] **M4 fleet 适配闭环**：无匹配技能 → 暂存 +「开启建议」；关闭 agent 的 reassign 流程。
 - [ ] **M5 健壮性**：预算熔断（派单器已内置）、心跳告警、kill/重启包、reopen 流程演练。
 - [ ] **M6 混合项目**：claude 写码 → opencode 审查 → agent-browser 验证 → bl 查配额（DAG）；**同模型对照素材已就位**（opencode/pi 均 deepseek-v4-flash）；异构候选 = dsh-subagent-codex/claude-code 后台 Job 路径。

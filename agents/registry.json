@@ -1,74 +1,74 @@
-[
-  {
-    "id": "bl",
-    "version": "bl 1.16.0",
-    "metering": "console-usage",
-    "bin": "bl",
-    "binPath": "",
-    "name": "Bailian CLI",
-    "invoke": "bl text chat --message {prompt}"
-  },
-  {
-    "id": "claude",
-    "version": "2.1.233 (Claude Code)",
-    "metering": "json-cost-usd",
-    "bin": "claude",
-    "binPath": "C:\\Users\\Asakii\\.local\\bin\\claude.exe",
-    "name": "Claude Code",
-    "invoke": "claude -p {prompt} --output-format json"
-  },
-  {
-    "id": "gemini",
-    "version": "Fatal error: Failed to relaunch the CLI process.",
-    "metering": "unknown",
-    "bin": "gemini",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\gemini.ps1",
-    "name": "Gemini CLI",
-    "invoke": "gemini -p {prompt}"
-  },
-  {
-    "id": "opencode",
-    "version": "1.18.18",
-    "metering": "unknown",
-    "bin": "opencode",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\opencode.ps1",
-    "name": "opencode",
-    "invoke": "opencode run {prompt}"
-  },
-  {
-    "id": "dsh",
-    "version": "0.1.0-rc.6",
-    "metering": "session",
-    "bin": "dsh",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\dsh.ps1",
-    "name": "DSH CLI",
-    "invoke": "dsh --profile headless {prompt}"
-  },
-  {
-    "id": "pi",
-    "version": "0.84.1",
-    "metering": "unknown",
-    "bin": "pi",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\pi.ps1",
-    "name": "pi coding agent",
-    "invoke": "pi -p {prompt}"
-  },
-  {
-    "id": "mimo",
-    "version": "0.1.12",
-    "metering": "unknown",
-    "bin": "mimo",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\mimo.ps1",
-    "name": "MiMo CLI",
-    "invoke": "mimo {prompt}"
-  },
-  {
-    "id": "agent-browser",
-    "version": "agent-browser 0.34.0",
-    "metering": "unknown",
-    "bin": "agent-browser",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\agent-browser.ps1",
-    "name": "agent-browser",
-    "invoke": "agent-browser {prompt}"
-  }
+﻿[
+    {
+        "id":  "bl",
+        "name":  "Bailian CLI",
+        "invoke":  "bl text chat --message {prompt}",
+        "metering":  "console-usage",
+        "bin":  "bl",
+        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\bl.ps1",
+        "version":  "bl 1.16.0"
+    },
+    {
+        "id":  "claude",
+        "name":  "Claude Code",
+        "invoke":  "claude -p {prompt} --output-format json",
+        "metering":  "json-cost-usd",
+        "bin":  "claude",
+        "binPath":  "C:\\Users\\Asakii\\.local\\bin\\claude.exe",
+        "version":  "2.1.238 (Claude Code)"
+    },
+    {
+        "id":  "gemini",
+        "name":  "Gemini CLI",
+        "invoke":  "gemini -p {prompt}",
+        "metering":  "unknown",
+        "bin":  "gemini",
+        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\gemini.ps1",
+        "version":  "0.55.1"
+    },
+    {
+        "id":  "opencode",
+        "name":  "opencode",
+        "invoke":  "opencode run {prompt}",
+        "metering":  "unknown",
+        "bin":  "opencode",
+        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\opencode.ps1",
+        "version":  "1.18.18"
+    },
+    {
+        "id":  "dsh",
+        "name":  "DSH CLI",
+        "invoke":  "dsh --profile headless {prompt}",
+        "metering":  "session",
+        "bin":  "dsh",
+        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\dsh.ps1",
+        "version":  "0.1.1-rc.1"
+    },
+    {
+        "id":  "pi",
+        "name":  "pi coding agent",
+        "invoke":  "pi -p {prompt}",
+        "metering":  "unknown",
+        "bin":  "pi",
+        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\pi.ps1",
+        "version":  "0.84.1"
+    },
+    {
+        "id":  "mimo",
+        "name":  "MiMo CLI",
+        "invoke":  "mimo {prompt}",
+        "metering":  "unknown",
+        "bin":  "mimo",
+        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\mimo.ps1",
+        "version":  "0.1.12"
+    },
+    {
+        "id":  "agent-browser",
+        "name":  "agent-browser",
+        "invoke":  "agent-browser {prompt}",
+        "metering":  "unknown",
+        "bin":  "agent-browser",
+        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\agent-browser.ps1",
+        "version":  "agent-browser 0.34.0"
+    }
 ]

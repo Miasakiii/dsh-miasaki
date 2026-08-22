@@ -1,30 +1,30 @@
-{
-  "metering_source": "json-cost-usd",
-  "name": "Claude Code",
-  "updated_at": "2026-08-17T13:46:35Z",
-  "cli": {
-    "command": "claude",
-    "binPath": "C:\\Users\\Asakii\\.local\\bin\\claude.exe",
-    "invoke": "claude -p {prompt} --output-format json",
-    "version": "2.1.233 (Claude Code)"
-  },
-  "model_price": null,
-  "id": "claude",
-  "limits": {
-    "budget_per_day": 2.0,
-    "max_concurrent_tasks": 1,
-    "heartbeat_ms": 30000,
-    "timeout_ms": 900000,
-    "max_tokens_per_task": 50000
-  },
-  "runtime": "cli",
-  "model": "cli-default",
-  "persona_prompt": "你是本机 agent CLI「Claude Code」的档案。总指挥通过你的可执行文件派发任务。",
-  "metering": false,
-  "skills": [
-    "analysis",
-    "coding",
-    "multi-step-tools",
-    "json-output"
-  ]
+﻿{
+    "metering_source":  "json-cost-usd",
+    "name":  "Claude Code",
+    "updated_at":  "2026-08-22T13:27:26Z",
+    "cli":  {
+                "binPath":  "C:\\Users\\Asakii\\.local\\bin\\claude.exe",
+                "command":  "claude",
+                "version":  "2.1.238 (Claude Code)",
+                "invoke":  "claude -p {prompt} --output-format json"
+            },
+    "model_price":  null,
+    "id":  "claude",
+    "limits":  {
+                   "budget_per_day":  2.0,
+                   "max_concurrent_tasks":  1,
+                   "heartbeat_ms":  30000,
+                   "timeout_ms":  900000,
+                   "max_tokens_per_task":  50000
+               },
+    "runtime":  "cli",
+    "model":  "cli-default",
+    "persona_prompt":  "你是本机 agent CLI「Claude Code」的档案。总指挥通过你的可执行文件派发任务。",
+    "metering":  false,
+    "skills":  [
+                   "analysis",
+                   "coding",
+                   "multi-step-tools",
+                   "json-output"
+               ]
 }

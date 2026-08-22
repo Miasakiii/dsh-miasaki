@@ -133,13 +133,18 @@ try {
   state = JSON.parse(await evaluate(`JSON.stringify({
     attr: document.documentElement.getAttribute('data-miasaki-theme'),
     bodyDark: document.body.hasAttribute('data-ds-dark-theme'),
-    bg: getComputedStyle(document.body).getPropertyValue('--dsw-static-neutral-bluish-950').trim(),
+    bgDeep: getComputedStyle(document.body).getPropertyValue('--dsw-static-neutral-bluish-950').trim(),
+    bgLight: getComputedStyle(document.body).getPropertyValue('--dsw-static-neutral-bluish-50').trim(),
+    aliasBase: getComputedStyle(document.body).getPropertyValue('--dsw-alias-bg-base').trim(),
     brand: getComputedStyle(document.body).getPropertyValue('--dsw-static-deepseek-450').trim(),
     watermark: !!document.getElementById('miasaki-watermark')
   })`))
   check('kurkuriel: 切换生效', state.attr === 'kurkuriel')
   check('kurkuriel: 强制亮色（移除暗色属性）', state.bodyDark === false, String(state.bodyDark))
-  check('kurkuriel: 骨白基底令牌', state.bg === '#e9e5e1', state.bg)
+  // 骨白纸面遵循 DSH 亮色语义：亮端令牌 + alias 基底，而非重映射深端 950（旧断言 #e9e5e1 为初版设计残留，自首次提交即不可满足）
+  check('kurkuriel: 骨白基底令牌', state.bgLight === '#fcfaf8' && state.aliasBase.includes('247, 244, 241'),
+    state.bgLight + ' | ' + state.aliasBase)
+  check('kurkuriel: 深端令牌同步覆盖', state.bgDeep === '#0f0d0b', state.bgDeep)
   check('kurkuriel: 血绯品牌令牌', state.brand === '#9e1b1b', state.brand)
   check('kurkuriel: 破裂表盘水印已挂载', state.watermark === true)
 

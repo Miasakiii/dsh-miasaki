@@ -56,5 +56,6 @@ tests/m3-acp/logs/
 # ---- 日志与系统杂项 ----
 *.log
 desktop/.edge-test-profile
+.workbuddy/
 Thumbs.db
 Desktop.ini

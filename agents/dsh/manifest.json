@@ -1,28 +1,28 @@
-{
-  "metering_source": "session",
-  "name": "DSH CLI",
-  "updated_at": "2026-08-17T13:46:36Z",
-  "cli": {
-    "command": "dsh",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\dsh.ps1",
-    "invoke": "dsh --profile headless {prompt}",
-    "version": "0.1.0-rc.6"
-  },
-  "model_price": null,
-  "id": "dsh",
-  "limits": {
-    "budget_per_day": 2.0,
-    "max_concurrent_tasks": 1,
-    "heartbeat_ms": 30000,
-    "timeout_ms": 900000,
-    "max_tokens_per_task": 50000
-  },
-  "runtime": "cli",
-  "model": "cli-default",
-  "persona_prompt": "你是本机 agent CLI「DSH CLI」的档案。总指挥通过你的可执行文件派发任务。",
-  "metering": false,
-  "skills": [
-    "headless-orchestration",
-    "dsd-native"
-  ]
+﻿{
+    "metering_source":  "session",
+    "name":  "DSH CLI",
+    "updated_at":  "2026-08-22T13:27:32Z",
+    "cli":  {
+                "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\dsh.ps1",
+                "command":  "dsh",
+                "version":  "0.1.1-rc.1",
+                "invoke":  "dsh --profile headless {prompt}"
+            },
+    "model_price":  null,
+    "id":  "dsh",
+    "limits":  {
+                   "budget_per_day":  2.0,
+                   "max_concurrent_tasks":  1,
+                   "heartbeat_ms":  30000,
+                   "timeout_ms":  900000,
+                   "max_tokens_per_task":  50000
+               },
+    "runtime":  "cli",
+    "model":  "cli-default",
+    "persona_prompt":  "你是本机 agent CLI「DSH CLI」的档案。总指挥通过你的可执行文件派发任务。",
+    "metering":  false,
+    "skills":  [
+                   "headless-orchestration",
+                   "dsd-native"
+               ]
 }

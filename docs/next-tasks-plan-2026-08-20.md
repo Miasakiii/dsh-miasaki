@@ -21,10 +21,14 @@
 ## P1 — 关联待办（待确认后推进）
 
 1. **桌面启动器加 `--no-open`**（✅ 2026-08-21 已完成）：`desktop/src-tauri/src/main.rs:74` 的 `cmd.args(["/C", "dsh", "web"])` 已追加 `"--no-open"`（rc.8 本地启动会自动打开默认浏览器，与 Tauri WebView 导航重复，产生双窗口）。同次会话顺带清理 runtime.js 内页宠物死代码（-426 行，注入包 56KB→38KB）并删除 `ui/pet.html/css/js`，`dist\Miasaki.exe` 已重建（8/21）。
-2. **rc.8 回归冒烟（m36）**：参照 `docs/m35-rc7-regression-smoke-2026-08-17.md` 模板；重点验证 `.dsh/profiles/{m3-test,rc7-test}` 混装（`dsh-base@0.1.0-rc.7` + subagent 线 `0.0.1-rc.1`）在 rc.8 全局 CLI 下的 `--dump-config` 加载与 cordis 4.x 兼容。
-3. **主题回归**：重跑 `desktop/scripts/verify-themes.mjs`（rc.8 UI 布局改动，三套主题可能有视觉漂移）。
-4. **历史会话恢复验证**：rc.8 明示 SQLite 存储格式不兼容——抽查一个 rc.7 时期历史会话能否在 rc.8 GUI 正常恢复/分叉。
-5. **引用资料梳理**：`_refs/rc8-src.zip` 已损坏、`_refs/deepseek-harness` 仍是 rc.7 解包——需要源码参考时重新下载官方 rc.8 source 并更新。
+2. **rc.8 回归冒烟（m36）**（✅ 2026-08-22 已完成，详见 `docs/m36-rc8-regression-smoke-2026-08-22.md`）：本机全局 CLI 实测已升到 **0.1.1-rc.1**（dist-tags 最新 rc.2）。m3-test/rc7-test 混装 profile `--dump-config` 双双 exit 0，**rc7-test 插件树与 M3.5 基线 313 行字节一致**，无回归。cordis 4.0.1 由全局 CLI 自带，混装模型成立。
+3. **主题回归**（✅ 2026-08-22 已完成）：`verify-themes.mjs` 首次在真机完整跑通 **18/18**；附带修正 kurkuriel「骨白基底」一条自初版即不可满足的陈旧断言（实测值与主题声明一致，非回归）。
+4. **历史会话恢复验证**（⬜ 待用户在 GUI 验证）：rc.8 明示 SQLite 存储格式不兼容——需在桌面端 GUI 抽查一个 rc.7 时期历史会话能否正常恢复/分叉；无头环境无法验证。
+5. **引用资料梳理**（⬜ 按需推进）：`_refs/rc8-src.zip` 已损坏、`_refs/deepseek-harness` 仍是 rc.7 解包——需要源码参考时重新下载官方 0.1.1-rc.2 source 并更新。
+
+### 编排线追加（2026-08-22）
+
+- **registry 重扫**（✅ 已完成）：`workers/discovery/scan-agents.ps1` 刷新 8/8 档案 `cli` 字段；dsh 档案版本从过期 rc.6 修为 **0.1.1-rc.1**，claude 2.1.233→2.1.238，gemini 版本探测通（0.55.1，invoke 仍待校准）。日志 `tests/m3-acp/logs/m36/scan-output.log`。
 
 ## 风险与备忘
 

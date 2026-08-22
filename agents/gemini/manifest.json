@@ -1,27 +1,27 @@
-{
-  "metering_source": "unknown",
-  "name": "Gemini CLI",
-  "updated_at": "2026-08-17T13:46:36Z",
-  "cli": {
-    "command": "gemini",
-    "binPath": "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\gemini.ps1",
-    "invoke": "gemini -p {prompt}",
-    "version": "Fatal error: Failed to relaunch the CLI process."
-  },
-  "model_price": null,
-  "id": "gemini",
-  "limits": {
-    "budget_per_day": 2.0,
-    "max_concurrent_tasks": 1,
-    "heartbeat_ms": 30000,
-    "timeout_ms": 900000,
-    "max_tokens_per_task": 50000
-  },
-  "runtime": "cli",
-  "model": "cli-default",
-  "persona_prompt": "你是本机 agent CLI「Gemini CLI」的档案。总指挥通过你的可执行文件派发任务。",
-  "metering": false,
-  "skills": [
-    "google-chat"
-  ]
+﻿{
+    "metering_source":  "unknown",
+    "name":  "Gemini CLI",
+    "updated_at":  "2026-08-22T13:27:28Z",
+    "cli":  {
+                "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\gemini.ps1",
+                "command":  "gemini",
+                "version":  "0.55.1",
+                "invoke":  "gemini -p {prompt}"
+            },
+    "model_price":  null,
+    "id":  "gemini",
+    "limits":  {
+                   "budget_per_day":  2.0,
+                   "max_concurrent_tasks":  1,
+                   "heartbeat_ms":  30000,
+                   "timeout_ms":  900000,
+                   "max_tokens_per_task":  50000
+               },
+    "runtime":  "cli",
+    "model":  "cli-default",
+    "persona_prompt":  "你是本机 agent CLI「Gemini CLI」的档案。总指挥通过你的可执行文件派发任务。",
+    "metering":  false,
+    "skills":  [
+                   "google-chat"
+               ]
 }
