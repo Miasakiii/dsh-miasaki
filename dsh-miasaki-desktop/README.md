@@ -68,7 +68,7 @@ desktop/
 ├─ ui/loading.html           # 本地唤醒页（探活/拉起状态 + 重试）
 ├─ themes/                   # 主题源（原创设计）
 │  ├─ pure.css / zafkiel.css / kurkuriel.css
-│  └─ runtime.js             # 注入运行时：主题属性/明暗锁定/切换条/过渡/水印
+│  └─ runtime.js             # 注入运行时：主题属性/明暗锁定/切换条/过渡/水印/标题栏（几何同步+主题装饰）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/gen-bubbles.ps1   # 气泡台词位图精灵表（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/

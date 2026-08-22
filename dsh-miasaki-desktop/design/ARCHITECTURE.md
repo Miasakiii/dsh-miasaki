@@ -85,6 +85,9 @@ Remove dist\ui -Recurse; Copy desktop\ui → dist\ui
   `--dsh-state-ongoing` 已失效(主题内为死覆盖,无害);视觉漂移点在 alias 表达处。
 - **单实例**:tauri-plugin-single-instance(二次启动唤起已有窗口)。
 - 主窗口关闭 = 退出应用(DSH 服务保持运行);托盘菜单可隐藏主窗口。
+- **DSH DOM 契约(标题栏几何同步,验证于 0.1.1-rc.1)**:`syncTitlebarGeometry` 依赖
+  `#root` 内 AppFrame(`@deepseek-ai/dsh-client-ui-layout`)的内联网格,且首列=侧栏、末列=详情面板;
+  DSH 升级时须复核(网格结构/折叠语义变动会静默错位,探测失败仅回退 280px 默认,不报错)。
 
 ## 7. 文件地图(关键)
 

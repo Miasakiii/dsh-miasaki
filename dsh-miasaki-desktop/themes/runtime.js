@@ -299,6 +299,7 @@
     '@keyframes ms-sweep{0%{opacity:0}45%{opacity:.85}100%{opacity:0}}' +
     '@media (prefers-reduced-motion: reduce){' +
     '#miasaki-switcher .ms-btn::after{animation:none}' +
+    '#miasaki-titlebar .tb-brand{animation:none}' +
     '#miasaki-overlay.run{animation:ms-sweep .15s ease forwards;}}' +
     '#miasaki-switcher .ms-bright{display:none;align-items:center;gap:6px;padding:5px 10px 2px;' +
     'border-top:1px solid var(--ms-border,#3a3243);margin-top:4px;}' +
@@ -310,17 +311,31 @@
     '#miasaki-switcher .ms-bright .mb.on{border-color:var(--ms-accent,#d9b36a);opacity:1;}' +
     '#miasaki-titlebar{position:fixed;left:0;top:0;right:0;height:32px;z-index:100000;' +
     'display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;' +
-    'background:var(--ms-panel,#1e1a27);border-bottom:1px solid var(--ms-border,#3a3243);' +
-    'color:var(--ms-text,#e4def0);font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
+    'background-color:var(--dsw-alias-bg-base,var(--ms-panel,#1e1a27));' +
+    // 主题装饰底线：--ms-deco-line 由各主题定义；独立声明 + 逐层回退，装饰层失效不拖垮基底
+    'background-image:var(--ms-deco-line,none);background-repeat:no-repeat;' +
+    'background-position:0 100%;background-size:100% 1px;' +
+    'color:var(--dsw-alias-label-primary,var(--ms-text,#e4def0));font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
     'user-select:none;-webkit-user-select:none;cursor:default;}' +
+    '#miasaki-titlebar::before{content:"";position:absolute;left:0;top:0;bottom:0;' +
+    'width:var(--ms-sidebar-w,280px);background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base,#1e1a27));' +
+    'border-right:1px solid var(--dsw-alias-border-l1,transparent);box-sizing:border-box;pointer-events:none;}' +
+    '#miasaki-titlebar::after{content:"";position:absolute;top:0;bottom:0;left:var(--ms-details-left,auto);' +
+    'width:1px;background:var(--dsw-alias-border-l2,transparent);pointer-events:none;opacity:0;}' +
+    '#miasaki-titlebar[data-details-open]::after{opacity:1;}' +
+    '#miasaki-titlebar>*{position:relative;z-index:1;}' +
     '#miasaki-titlebar .tb-drag{flex:1;height:100%;cursor:move;}' +
     '#miasaki-titlebar .tb-title{font-size:11.5px;font-weight:500;letter-spacing:.03em;' +
-    'display:flex;align-items:center;gap:6px;opacity:.85;}' +
-    '#miasaki-titlebar .tb-title .tb-dot{width:6px;height:6px;border-radius:50%;background:var(--ms-accent,#d9b36a);}' +
-    '#miasaki-titlebar .tb-btn{width:30px;height:22px;display:flex;align-items:center;justify-content:center;' +
-    'cursor:pointer;font-size:11px;border-radius:5px;color:var(--ms-text,#e4def0);opacity:.8;' +
-    'transition:background .15s ease,color .15s ease;}' +
-    '#miasaki-titlebar .tb-btn:hover{background:var(--ms-hover,#2a2434);color:var(--ms-accent,#d9b36a);opacity:1;}' +
+    'display:flex;align-items:center;gap:7px;opacity:.85;}' +
+    '#miasaki-titlebar .tb-brand{width:20px;height:20px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
+    'box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));animation:ms-brand-breathe 3.2s ease-in-out infinite;}' +
+    '#miasaki-titlebar .tb-sub{font-size:10.5px;font-weight:400;opacity:.55;letter-spacing:.02em;}' +
+    '@keyframes ms-brand-breathe{0%,100%{opacity:.78}50%{opacity:1}}' +
+    '#miasaki-titlebar .tb-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;' +
+    'cursor:pointer;font-size:13px;border-radius:999px;color:var(--dsw-alias-label-secondary,var(--ms-text,#e4def0));' +
+    'opacity:.9;transition:background .15s ease,color .15s ease;}' +
+    '#miasaki-titlebar .tb-btn:hover{background:var(--dsw-alias-interactive-bg-hover,var(--ms-hover,#2a2434));' +
+    'color:var(--dsw-alias-label-primary,var(--ms-accent,#d9b36a));opacity:1;}' +
     '#miasaki-titlebar .tb-btn:active{transform:scale(.94);}' +
     '#miasaki-titlebar .tb-btn.tb-close:hover{background:var(--ms-danger,#c23a2e);color:#fff;opacity:1;}' +
     'html,body{height:100%;overflow:hidden;}' +
@@ -536,11 +551,12 @@
 
   var ICON_BASE = 'http://127.0.0.1:39800/icons/'
 
-  // 图标加载失败时退回文字字形
+  // 图标加载失败时退回文字字形（data-glyph 标记便于需要重建容器的地方清理残留）
   window.__msGlyphFallback = function (img, theme) {
     try {
       img.style.display = 'none'
       var g = document.createElement('span')
+      g.setAttribute('data-glyph', '1')
       g.textContent = META[theme] ? META[theme].glyph : '?'
       if (img.parentNode) img.parentNode.appendChild(g)
     } catch (e) { /* ignore */ }
@@ -602,11 +618,15 @@
     var bar = document.createElement('div')
     bar.id = 'miasaki-titlebar'
     bar.innerHTML =
-      '<div class="tb-title"><span class="tb-dot"></span>Miasaki · DSH · <span id="tb-theme"></span></div>' +
+      '<div class="tb-title"><img class="tb-brand" src="' + ICON_BASE + META[current].icon + '" alt="">' +
+      '<span id="tb-theme"></span><span class="tb-sub"></span></div>' +
       '<div class="tb-drag" data-tauri-drag-region title="拖动窗口"></div>' +
       '<div class="tb-btn" data-act="min" title="最小化">\u2013</div>' +
       '<div class="tb-btn" data-act="max" title="最大化/还原">\u25A1</div>' +
       '<div class="tb-btn tb-close" data-act="close" title="关闭">\u2715</div>'
+    // 徽记 icon 失败 → 字形兜底；onerror 用 JS 挂载，换主题后始终引用最新 current
+    var brand = bar.querySelector('.tb-brand')
+    if (brand) brand.onerror = function () { window.__msGlyphFallback && window.__msGlyphFallback(this, current) }
     document.body.appendChild(bar)
     // 拖动：交给 Tauri 内置 drag-region（data-tauri-drag-region → OS 级 start_dragging，
     // 系统消息循环接管，彻底跟手；双击标题栏 = 最大化/还原）。
@@ -621,11 +641,78 @@
       else if (act === 'close') petHashCmd('exit')
     })
     updateTitlebar()
+    syncTitlebarGeometry()
   }
 
   function updateTitlebar() {
     var el = document.getElementById('tb-theme')
     if (el) el.textContent = META[current].name
+    var sub = document.querySelector('#miasaki-titlebar .tb-sub')
+    if (sub) sub.textContent = META[current].sub
+    var brand = document.querySelector('#miasaki-titlebar .tb-brand')
+    if (brand) {
+      // 清上次加载失败的字形兜底残留（位于 .tb-title 内，data-glyph 标记），再换新主题图标
+      var holder = brand.parentNode
+      if (holder) {
+        var g = holder.querySelector('span[data-glyph="1"]')
+        if (g) holder.removeChild(g)
+      }
+      brand.style.display = ''
+      var next = ICON_BASE + META[current].icon
+      if (brand.src !== next) brand.src = next
+    }
+  }
+
+  // sync geometry
+  // 对照 DSH 主布局（@deepseek-ai/dsh-client-ui-layout AppFrame，验证于 0.1.1-rc.1）：
+  //   <div style="grid-template-columns: `${cols.sidebar}px minmax(0,1fr) ${cols.details}px`">
+  //     <div class="sidebarCol">…  <!-- bg:--dsw-specific-sidebar-fill / border-right:--dsw-alias-border-l1 -->
+  //     <div class="detailsCol">… <!-- border-left:--dsw-alias-border-l2；折叠时 cols.details=0 且去 border -->
+  // titlebar 的 ::before/::after 模拟侧栏与详情分隔线向上延伸，与 DSH 的分隔线须逐像素重合。
+  function syncTitlebarGeometry() {
+    var bar = document.getElementById('miasaki-titlebar')
+    if (!bar) return
+    try { /* 装饰层异常绝不外泄（曾因 removeAttribute 误调 style 对象导致 onReady 级联中断） */
+      var w = 280
+      var details = 0
+      var frameWidth = 0
+      var frame = null
+      var candidates = document.querySelectorAll('#root [style]')
+      for (var i = 0; i < candidates.length; i++) {
+        var st = candidates[i].style
+        if (st && st.gridTemplateColumns) { frame = candidates[i]; break }
+      }
+      if (frame) {
+        // 轨道声明值优先：grid item 默认 stretch，其 border-box 宽 == 轨道宽，
+        // 因此 parseFloat(track px) 与实测列宽一致且不含描述性偏差
+        var px = frame.style.gridTemplateColumns.match(/([0-9.]+)px/g)
+        if (px) {
+          var first = parseFloat(px[0])
+          if (first > 0) w = first
+          // 末列仅在存在第三轨道时视为详情面板（防未来两列结构把侧栏宽误判）
+          if (px.length >= 2) details = parseFloat(px[px.length - 1]) || 0
+        }
+        var rect = frame.getBoundingClientRect()
+        if (rect && rect.width > 0) frameWidth = rect.width
+        // 兜底：内联 px 解析失败（DSH 改用 fr/百分比赛道）时按首列实测宽度
+        if (!px || !(parseFloat(px[0]) > 0)) {
+          var col0 = frame.firstElementChild
+          if (col0 && col0.getBoundingClientRect) {
+            var rw = col0.getBoundingClientRect().width
+            if (rw > 0) w = rw
+          }
+        }
+      }
+      bar.style.setProperty('--ms-sidebar-w', w + 'px')
+      if (details > 0 && frameWidth > 0) {
+        // detailsCol 的 border-left(1px) 位于第三轨道起点（容器右缘 - 轨道宽），与此值重合
+        bar.style.setProperty('--ms-details-left', (frameWidth - details) + 'px')
+        bar.setAttribute('data-details-open', '1')
+      } else {
+        bar.removeAttribute('data-details-open')
+        bar.style.removeProperty('--ms-details-left')
+      }
+    } catch (e) { /* keep default；失败由 1s 巡检重试 */ }
   }
 
   /* ---------- 启动 ---------- */
@@ -640,16 +727,18 @@
     var base = ensureBase()
     base.textContent = SWITCHER_CSS
     if (!IS_LOCAL) {
-      buildTitlebar()
-      buildSwitcher()
-      buildWatermark()
-      buildAurora()
+      // 装饰层逐一隔离：单个构建异常不得中断后续构建与巡检启动（装饰层失败不阻断原则）
+      try { buildTitlebar() } catch (e) {}
+      try { buildSwitcher() } catch (e) {}
+      try { buildWatermark() } catch (e) {}
+      try { buildAurora() } catch (e) {}
     }
     refreshSwitcher()
     syncHash()
     notifyPet()
     // 自愈：切换条/标题栏/主题属性/样式层被页面重渲染清掉时自动重建（1s 巡检，切换后无空窗）
     setInterval(function () {
+      try { /* 巡检单次失败不影响下一轮 */
       if (!document.getElementById('miasaki-titlebar') && !IS_LOCAL) buildTitlebar()
       if (!document.getElementById('miasaki-switcher')) buildSwitcher()
       if (!document.getElementById('miasaki-aurora') && !IS_LOCAL) buildAurora()
@@ -663,6 +752,8 @@
         styleEl.textContent = STYLES[current] || ''
       }
       syncDark()
+      if (!IS_LOCAL) syncTitlebarGeometry()
+      } catch (e) { /* keep */ }
     }, 1000)
   }
   if (document.readyState === 'loading') {

@@ -10,3 +10,7 @@ html[data-miasaki-theme="pure"] {
   --ms-glow: rgba(57, 100, 254, .25);
   --ms-danger: var(--dsw-static-red-500, #d04e41);
 }
+/* —— 标题栏装饰：跟随 DSH 明暗 border 令牌的弱渐隐底线（无内线，保持原版极简） —— */
+html[data-miasaki-theme="pure"] #miasaki-titlebar {
+  --ms-deco-line: linear-gradient(90deg, var(--ms-border, rgba(0, 0, 0, .12)), transparent 68%);
+}

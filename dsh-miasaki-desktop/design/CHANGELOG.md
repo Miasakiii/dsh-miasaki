@@ -2,6 +2,35 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-08-23 · 标题栏 × DSW 布局融合 + 主题装饰
+
+- **标题栏与 DSH 页面融合**：背景/文字改走 DSH 本体令牌（`--dsw-alias-bg-base` / `--dsw-alias-label-*`），
+  按钮 28px 圆形 + 圆底 hover，对齐 DSW 原生 UI 手感；新增 `syncTitlebarGeometry()` 模拟
+  「侧栏色块向上延伸 + 详情面板分隔线向上延伸」，制造标题栏是页面一部分的错觉；loading.html 同步同款样式。
+- **逐条对照 DSH 本体源码验证**（0.1.1-rc.1 前端包）：`--dsw-specific-sidebar-fill` 为 DSH 官方令牌
+  （`dsh-client-ui-theme`，明暗双值 = sidebarCol 背景色），三主题经 `--dsw-static-*` 覆盖自动跟随；
+  几何探测目标 = `dsh-client-ui-layout` AppFrame 的内联网格
+  （`"${cols.sidebar}px minmax(0,1fr) ${cols.details}px"`），首列=侧栏/末列=详情/折叠=0px 全部吻合；
+  全 DSH 前端仅此一处内联 `gridTemplateColumns`，首个命中无歧义；
+  `::before/::after` 复用的 `--dsw-alias-border-l1/-l2` 与 DSH `sidebarCol`/`detailsCol` 的分隔线令牌同源。
+- **P1 修复（1px 对齐）**：`::before` 加 `box-sizing:border-box`——grid item 默认 stretch 下
+  border-box 宽 == 轨道宽，DSH 的 `sidebarCol` 分隔线画在轨道右缘**内侧 1px**，而原 `::before`
+  为 content-box 时 border 画在轨道右缘外侧 1px → 双线错位 2px；改 border-box 后逐像素重合。
+- **探测防御**：`--ms-details-left` 末列仅在网格声明 ≥2 列时取（防未来两列结构把侧栏宽误判为
+  详情宽）；轨道 px 声明值优先、实测列宽降级为兜底（二者在 stretch 语义下相等）。
+- **契约记档**：对 DSH 内部 DOM 的依赖（AppFrame 内联网格/首末列语义/折叠 0px）为隐性契约，
+  上升为 `design/ARCHITECTURE.md` 已知约束（DSH 升级时需复核）。
+- **标题栏装饰（用户需求「美化」）**：左端主题徽记（复用主题图标 20px 圆 + `--ms-glow` 主题光晕 +
+  3.2s 呼吸，`prefers-reduced-motion` 禁用）+ 主题副标（`Zafkiel · XII` 等）；底部 1px 主题渐变底线
+  （`--ms-deco-line` 独立声明 + 逐层回退，装饰失效不拖垮基底）：zafkiel 金→暗红檐线 + 金表圈内高光
+  （inset）、kurkuriel 右重血红渐变 + 上下血红内线、pure 跟随 `--ms-border` 弱线保持极简。
+  徽记清理链：加载失败字形兜底按 `data-glyph` 定位清除、onerror 用 JS 挂载（切主题后始终引用最新
+  `current`）。
+- 触摸点：`themes/runtime.js`（CSS + `syncTitlebarGeometry` + buildTitlebar/updateTitlebar）、
+  `ui/loading.html`、`themes/{pure,zafkiel,kurkuriel}.css`、`README.md`。
+- 验证：`build-init.mjs` 通过（令牌校验 + 53KB theme-init.js 产出，js 语法检查通过）；
+  几何同步与装饰待真机验收（三主题切换 + 拖拽详情分隔线 + 侧栏折叠 + 窗口 resize + 徽记呼吸/底线观感）。
+
 ## 2026-08-22 · 桌宠 v2 阶段 A：动作丰富化（针对「动作少、僵硬」整改）
 
 - 规划链路：学习 OpenDesign 宠物体系 → `design/pet-v2-roadmap.md`（总览+诊断+决策）→

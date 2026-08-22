@@ -187,3 +187,8 @@ html[data-miasaki-theme="zafkiel"] #miasaki-watermark svg {
   width: 100%;
   height: 100%;
 }
+/* —— 标题栏装饰：金色表圈内高光 + 金→暗红渐隐底线（钟楼檐线） —— */
+html[data-miasaki-theme="zafkiel"] #miasaki-titlebar {
+  --ms-deco-line: linear-gradient(90deg, rgba(217, 179, 106, .8), rgba(194, 58, 46, .34) 55%, rgba(194, 58, 46, 0) 85%);
+  box-shadow: inset 0 1px 0 rgba(217, 179, 106, .3), inset 0 -1px 0 rgba(194, 58, 46, .18);
+}
