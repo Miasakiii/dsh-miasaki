@@ -44,6 +44,84 @@
   } catch (e) { /* ignore */ }
   var PET_MODES = { pure: 'whale', zafkiel: 'kurumi', kurkuriel: 'inverse' }
 
+  /* ---------- 人格会话联动:主题 → Agent 预设(whale/kurumi/inverse) ----------
+   * 切换主题时用对应桌宠的 Agent 预设开一个新会话(官方 RPC:
+   * POST /api/session.create,payload.agentPreset)。每个主题只自动创建一次,
+   * 记录在 localStorage(miasaki.petSessions);同级部署无该预设或 RPC 不可用
+   * 时静默降级,绝不阻断主题切换。 */
+  var PERSONA_MAP = { pure: 'whale', zafkiel: 'kurumi', kurkuriel: 'inverse' }
+  var PERSONA_NAMES = { pure: '\u9CB8\u9C7C\u5A18', zafkiel: '\u72C2\u4E09', kurkuriel: '\u53CD\u8F6C\u72C2\u4E09' }
+  var PET_SESSION_KEY = 'miasaki.petSessions'
+  var personaToastTimer = null
+  function personaToast(msg) {
+    try {
+      if (!document.body) return
+      var el = document.getElementById('miasaki-persona-toast')
+      if (!el) {
+        el = document.createElement('div')
+        el.id = 'miasaki-persona-toast'
+        el.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:2147483646;' +
+          'background:rgba(20,18,26,.94);color:#e8e2d8;border:1px solid rgba(217,179,106,.55);border-radius:10px;' +
+          'padding:8px 14px;font:12.5px/1.5 "Segoe UI",system-ui,sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.35);' +
+          'max-width:76vw;text-align:center;pointer-events:none;opacity:0;transition:opacity .25s ease'
+        document.body.appendChild(el)
+      }
+      el.textContent = msg
+      el.style.opacity = '1'
+      if (personaToastTimer) clearTimeout(personaToastTimer)
+      personaToastTimer = setTimeout(function () { el.style.opacity = '0' }, 3600)
+    } catch (e) { /* 提示失败不影响功能 */ }
+  }
+  function loadPetSessions() {
+    try {
+      var m = JSON.parse(localStorage.getItem(PET_SESSION_KEY) || '{}')
+      return (m && typeof m === 'object') ? m : {}
+    } catch (e) { return {} }
+  }
+  function savePetSessions(m) {
+    try { localStorage.setItem(PET_SESSION_KEY, JSON.stringify(m)) } catch (e) { /* ignore */ }
+  }
+  function ensurePersonaSession(theme) {
+    if (IS_LOCAL) return
+    try {
+      var preset = PERSONA_MAP[theme]
+      if (!preset) return
+      var m = loadPetSessions()
+      if (m[theme]) {
+        personaToast('\u300C' + PERSONA_NAMES[theme] + '\u300D\u4EBA\u683C\u4F1A\u8BDD\u5DF2\u5EFA\u7ACB\uFF0C\u53EF\u5728\u4F1A\u8BDD\u5217\u8868\u4E2D\u9009\u62E9')
+        return
+      }
+      function rpcSend(method, payload) {
+        var rpcId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('m-' + Date.now() + '-' + Math.random().toString(36).slice(2))
+        return fetch('/api/' + method, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'client-request', rpcId: rpcId, method: method, payload: payload })
+        }).then(function (res) { return res.json() })
+      }
+      // 优先挂到当前工作区(workspace.list 第一个),避免新会话落到 Host 默认目录
+      rpcSend('workspace.list', {}).then(function (f) {
+        var wsOpt = {}
+        try {
+          var items = f && f.result && f.result.ok && f.result.value && f.result.value.items
+          if (items && items.length && items[0].workspaceId) wsOpt = { workspaceId: items[0].workspaceId }
+        } catch (e) { /* ignore */ }
+        return rpcSend('session.create', Object.assign({ agentPreset: preset }, wsOpt))
+      }).then(function (full) {
+        if (full && full.result && full.result.ok) {
+          m[theme] = full.result.value.sessionId
+          savePetSessions(m)
+          personaToast('\u5DF2\u521B\u5EFA\u300C' + PERSONA_NAMES[theme] + '\u300D\u4EBA\u683C\u4F1A\u8BDD\uFF0C\u53EF\u5728\u4F1A\u8BDD\u5217\u8868\u6253\u5F00')
+        } else {
+          var err = full && full.result && full.result.error ? (full.result.error.code || full.result.error.message) : 'unknown'
+          personaToast('\u4EBA\u683C\u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25:' + err)
+        }
+      }).catch(function (e) {
+        personaToast('\u4EBA\u683C\u4F1A\u8BDD\u521B\u5EFA\u5931\u8D25:' + ((e && e.message) ? e.message : '\u7F51\u7EDC\u9519\u8BEF'))
+      })
+    } catch (e) { /* 联动失败绝不阻断主题切换 */ }
+  }
+
   // 主题同步通道：URL hash（replaceState 不触发刷新；Rust 侧轮询解析 → 联动桌宠）
   // hash 内附带诊断位：stylesLen.headOK.attached，便于无 IPC 环境远程排障
   function syncHash() {
@@ -235,7 +313,7 @@
     'background:var(--ms-panel,#1e1a27);border-bottom:1px solid var(--ms-border,#3a3243);' +
     'color:var(--ms-text,#e4def0);font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
     'user-select:none;-webkit-user-select:none;cursor:default;}' +
-    '#miasaki-titlebar .tb-drag{flex:1;height:100%;cursor:move;-webkit-app-region:no-drag;}' +
+    '#miasaki-titlebar .tb-drag{flex:1;height:100%;cursor:move;}' +
     '#miasaki-titlebar .tb-title{font-size:11.5px;font-weight:500;letter-spacing:.03em;' +
     'display:flex;align-items:center;gap:6px;opacity:.85;}' +
     '#miasaki-titlebar .tb-title .tb-dot{width:6px;height:6px;border-radius:50%;background:var(--ms-accent,#d9b36a);}' +
@@ -286,7 +364,7 @@
 
   function runOverlay(target) {
     var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    if (reduced || !document.body) { apply(target); return }
+    if (reduced || !document.body) { apply(target); ensurePersonaSession(target); return }
     if (!overlay) {
       overlay = document.createElement('div')
       overlay.id = 'miasaki-overlay'
@@ -302,6 +380,7 @@
     overlay.classList.add('run')
     setTimeout(function () {
       apply(target)
+      ensurePersonaSession(target)
       overlay.classList.remove('run')
     }, reduced ? 150 : 400)
   }
@@ -481,30 +560,40 @@
   }
 
 
-  /* 思考强度：按 DOM 变异频率分三档（待机/常规/深度），经 hash 上报给桌宠窗口 */
+  /* 思考强度：跟随 DSH 模型选择器的推理等级（用户手动选择 → 稳定不抖动）
+   * 显示形如 "deepseek-v4-flash-vision-exp · Max"。映射：off→idle、low/light/medium→work、high/max→deep */
   var CUR_INT = 'idle'
-  var mutCount = 0
   var PET_TIER_MS = 2500
+  var EFFORT_RE = /(max|high|medium|light|low|off|standard|\u6807\u51c6|\u9ad8|\u4e2d|\u4f4e|\u5173\u95ed)/i
+  function scanEffort() {
+    if (!document.body) return null
+    var nodes = document.querySelectorAll('button, [role="button"], span')
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i]
+      if (el.closest && el.closest('#miasaki-switcher')) continue
+      var t = (el.textContent || '').trim()
+      if (!t || t.length > 48) continue
+      var m = t.match(/[^\u00b7\u00b7]*[\u00b7\u00b7]\s*([^\u00b7\u00b7]{1,12})$/i)
+      var label = m ? m[1] : null
+      if (!label || !EFFORT_RE.test(label)) continue
+      var l = label.toLowerCase()
+      if (l.indexOf('max') >= 0) return 'deep'
+      if (l.indexOf('high') >= 0 || l.indexOf('\u9ad8') >= 0) return 'work'
+      if (l.indexOf('medium') >= 0 || l.indexOf('light') >= 0 || l.indexOf('low') >= 0 ||
+          l.indexOf('\u4e2d') >= 0 || l.indexOf('\u4f4e') >= 0 || l.indexOf('\u6807\u51c6') >= 0) return 'work'
+      if (l.indexOf('off') >= 0 || l.indexOf('\u5173\u95ed') >= 0) return 'idle'
+    }
+    return null
+  }
   function petEvalIntensity() {
-    var tier = mutCount <= 1 ? 'idle' : (mutCount <= 9 ? 'work' : 'deep')
-    mutCount = 0
-    CUR_INT = tier
+    var tier = scanEffort()
+    // 未找到保持当前档(页面结构变化时稳定);找到则按用户选择的推理等级固定
+    if (tier !== null && tier !== CUR_INT) {
+      CUR_INT = tier
+    }
     syncHash()
   }
   var tierTimer = setInterval(petEvalIntensity, PET_TIER_MS)
-
-  /* 工作状态侦测：页面活动 → working，静默 → idle（忽略注入层自身 DOM） */
-  var actObs = new MutationObserver(function (muts) {
-    for (var i = 0; i < muts.length; i++) {
-      var t = muts[i].target
-      if (t && t.closest && (
-        t.closest('#miasaki-switcher') ||
-        t.closest('#miasaki-watermark') || t.closest('#miasaki-overlay')
-      )) continue
-      mutCount++
-      return
-    }
-  })
 
   /* ---------- 主题化标题栏（无边框窗口） ---------- */
 
@@ -514,43 +603,15 @@
     bar.id = 'miasaki-titlebar'
     bar.innerHTML =
       '<div class="tb-title"><span class="tb-dot"></span>Miasaki · DSH · <span id="tb-theme"></span></div>' +
-      '<div class="tb-drag" title="拖动窗口"></div>' +
+      '<div class="tb-drag" data-tauri-drag-region title="拖动窗口"></div>' +
       '<div class="tb-btn" data-act="min" title="最小化">\u2013</div>' +
       '<div class="tb-btn" data-act="max" title="最大化/还原">\u25A1</div>' +
       '<div class="tb-btn tb-close" data-act="close" title="关闭">\u2715</div>'
     document.body.appendChild(bar)
-    // 拖动：pointer 事件 → hash move=累计物理增量（相对按下起点,×DPR）→ Rust 差值应用
-    bar.querySelector('.tb-drag').addEventListener('pointerdown', function (ev) {
-      if (ev.button !== 0) return
-      var sx = ev.clientX
-      var sy = ev.clientY
-      var dpr = window.devicePixelRatio || 1
-      var moved = false
-      function mv(e) {
-        var dx = Math.round((e.clientX - sx) * dpr)
-        var dy = Math.round((e.clientY - sy) * dpr)
-        if (Math.abs(dx) + Math.abs(dy) > 2) moved = true
-        if (moved) {
-          try {
-            history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + '&move=' + dx + ',' + dy)
-          } catch (err) { /* ignore */ }
-        }
-      }
-      function up() {
-        window.removeEventListener('pointermove', mv)
-        window.removeEventListener('pointerup', up)
-        window.removeEventListener('pointercancel', up)
-        try {
-          history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + '&move=reset')
-          setTimeout(function () {
-            try { history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT) } catch (e) {}
-          }, 160)
-        } catch (err) { /* ignore */ }
-      }
-      window.addEventListener('pointermove', mv)
-      window.addEventListener('pointerup', up)
-      window.addEventListener('pointercancel', up)
-    })
+    // 拖动：交给 Tauri 内置 drag-region（data-tauri-drag-region → OS 级 start_dragging，
+    // 系统消息循环接管，彻底跟手；双击标题栏 = 最大化/还原）。
+    // 此前用 URL hash 每帧轮询 + set_position 差值应用:33ms 采样滞后、DPI 换算误差、
+    // pointer 事件流竞态 → 拖动不跟手/跳变,已弃用。
     bar.addEventListener('click', function (ev) {
       var b = ev.target && ev.target.closest ? ev.target.closest('.tb-btn') : null
       if (!b) return
@@ -583,7 +644,6 @@
       buildSwitcher()
       buildWatermark()
       buildAurora()
-      actObs.observe(document.documentElement, { childList: true, subtree: true, characterData: true })
     }
     refreshSwitcher()
     syncHash()

@@ -16,6 +16,7 @@ Check '交付物存在' (Test-Path $exe)
 Check 'ui 打包完整' (Test-Path (Join-Path $dist 'ui\loading.html'))
 Check 'pets 素材完整' (
   (Test-Path (Join-Path $dist 'ui\pets\frames.json')) -and
+  (Test-Path (Join-Path $dist 'ui\pets\bubbles.png')) -and
   (Test-Path (Join-Path $dist 'ui\pets\kurumi\frames')) -and
   (Test-Path (Join-Path $dist 'ui\pets\whale\states\idle.png')) -and
   (Test-Path (Join-Path $dist 'ui\pets\inverse\states\idle.png'))

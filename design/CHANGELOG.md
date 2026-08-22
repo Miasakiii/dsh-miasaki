@@ -2,6 +2,19 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-08-22 · v0.1.4(第七轮)
+
+- **桌宠 Agent 预设(三个)**:standard 底座复制 + 中文 persona。
+  人设按桌宠贴合成角色(鲸鱼娘/狂三/反转狂三),调用偏好区分:鲸鱼娘先本地后网页、
+  狂三复杂任务先规划后动手、反转狂三默认直接动手改动面大才计划;
+  每条 persona 带硬性「入戏边界」——工具调用、错误报告、审批/凭证一律标准语气(中档扮演)。
+  三个预设经 `standingKeyFor` 挂载校验通过;RPC 通道经真实创建验证。
+- **主题→人格会话联动**:切换主题自动用对应桌宠的 Agent 预设开启新会话
+  (官方 RPC `session.create` 的 `agentPreset`;优先挂当前 workspace)。
+  每主题仅自动创建一次(localStorage 去重),RPC 失败静默降级不阻断切换。
+- **三桌宠灵魂文件(pet.json)补全**:whale/kurumi/inverse 三份中文人设
+  (inverse 新增 manifest + spritesheet.png/webp 图集,由 `scripts/make-inverse-sheet.mjs` 生成)。
+
 ## 2026-08-21 · v0.1.3(第六轮)
 
 - **闪退根治(关键)**:GDI 高频创建改为**持久 DC/DIB 表面**(创建一次终身复用);

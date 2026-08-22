@@ -15,3 +15,14 @@
   build-init / verify-themes / smoke-test / capture-all）；一次性产物归档 `_refs/scripts-archive/`。
 - **大二进制入库前必查** `git check-ignore`：`*.zip` / `*.tgz` 已在根 `.gitignore` 通配。
 - 验证方式：`git status --short` 里不应出现任何 `_.*test` / 缓存 / DB / 压缩包路径。
+
+## 项目纪律（本项目落地约定）
+
+- **桌宠预设维护材料唯一住处**：`desktop/preset-sources/`（`*.persona.txt` + `*.preset.yml` +
+  `apply-presets.ps1` 同居；改人设源文件后重跑脚本同步 `%USERPROFILE%\.dsh\.agent-presets\`）。
+- **临时/探针产物即时清理**：会话中为验证而写的探针插件（cordis）、一次性输出文件，任务结束即删；
+  确有留存价值的进 `_refs/scripts-archive/`，不留在根或构建链目录。
+- **收尾自检清单**（每个会话结束前）：
+  1. `git status --short` 每一条 M/?? 都能点名（属于哪个功能、为何未提交）；无来历不明的文件。
+  2. 代码/行为变更同步更新 `desktop/README.md` 与 `design/CHANGELOG.md`（设计决策进 `design/`）。
+  3. 最终回复点名本次变更文件（可点击路径），并给出需用户执行的下一步（构建/验证）。

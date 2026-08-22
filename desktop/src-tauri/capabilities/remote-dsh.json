@@ -1,10 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "remote-dsh",
-  "description": "DSH 远程页面（主窗口）最小 IPC 权限：用于主题→桌宠模式联动",
+  "description": "DSH 远程页面（主窗口）最小 IPC 权限：主题→桌宠模式联动 + 标题栏原生拖动",
   "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:3080", "http://127.0.0.1:3080/*"]
   },
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
 }

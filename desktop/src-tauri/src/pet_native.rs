@@ -11,6 +11,11 @@ const WIN_W: i32 = 286;
 const WIN_H: i32 = 390;
 const CELL_H: usize = 270;
 const DOT_SIZE: i32 = 30;
+// 预渲染气泡帧:生成于 scripts/gen-bubbles.ps1(系统字体在构建期出图,
+// 运行时只做像素叠加 —— 规避 Win11 多线程 GDI 字体堆损坏导致 CreateFontW 崩溃)
+const BUBBLE_W: i32 = 240;
+const BUBBLE_H: i32 = 56;
+const BUBBLE_COUNT: usize = 17;
 
 pub struct PetShared {
     pub mode: String,
@@ -128,7 +133,6 @@ extern "system" {
     fn DestroyMenu(menu: isize) -> i32;
     fn SetForegroundWindow(h: isize) -> i32;
     fn GetModuleHandleW(n: *const u16) -> isize;
-    fn DrawTextW(dc: isize, s: *const u16, n: i32, r: *mut Rect, f: u32) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -138,9 +142,6 @@ extern "system" {
     fn DeleteObject(o: isize) -> i32;
     fn SelectObject(dc: isize, o: isize) -> isize;
     fn CreateDIBSection(h: isize, bmi: *const BmiHeader, usage: u32, bits: *mut *mut c_void, section: isize, offset: u32) -> isize;
-    fn SetBkMode(dc: isize, m: i32) -> i32;
-    fn SetTextColor(dc: isize, c: u32) -> u32;
-    fn CreateFontW(h: i32, w: i32, e: i32, o: i32, wt: i32, i: u32, u: u32, s: u32, cs: u32, op: u32, cq: u32, pa: u32, name: *const u16) -> isize;
 }
 
 const WS_POPUP: u32 = 0x8000_0000;
@@ -154,12 +155,6 @@ const SW_SHOW: i32 = 5;
 const SW_HIDE: i32 = 0;
 const ULW_ALPHA: u32 = 0x02;
 const DIB_RGB_COLORS: u32 = 0;
-const TRANSPARENT: i32 = 1;
-const FW_NORMAL: i32 = 400;
-const DEFAULT_CHARSET: u32 = 0x86;
-const DT_NOCLIP: u32 = 0x0100;
-const DT_SINGLELINE: u32 = 0x0020;
-const DT_VCENTER: u32 = 0x0004;
 const MF_STRING: u32 = 0;
 const TPM_RETURNCMD: u32 = 0x0100;
 const TPM_RIGHTBUTTON: u32 = 0x0002;
@@ -175,6 +170,7 @@ const MK_LBUTTON: usize = 0x0001;
 const MENU_HIDE: usize = 101;
 const MENU_MIN: usize = 102;
 const MENU_EXIT: usize = 103;
+const MENU_SHOW: usize = 104;
 const SM_CXSCREEN: i32 = 0;
 const SM_CYSCREEN: i32 = 1;
 
@@ -206,6 +202,12 @@ struct Image {
     bgra: Vec<u32>, // 预乘 alpha，0xAARRGGBB
 }
 
+impl Clone for Image {
+    fn clone(&self) -> Self {
+        Image { w: self.w, h: self.h, bgra: self.bgra.clone() }
+    }
+}
+
 fn load_png(path: &std::path::Path) -> Option<Image> {
     let file = std::fs::File::open(path).ok()?;
     let decoder = png::Decoder::new(file);
@@ -233,11 +235,27 @@ struct Frames {
     kurumi: HashMap<String, Vec<Image>>,
     whale_states: HashMap<String, Image>,
     inverse_states: HashMap<String, Image>,
+    bubbles: Vec<Image>,
 }
 
 fn load_frames(base: &std::path::Path) -> Frames {
     let mut f = Frames::default();
     let pets_root = base.join("ui").join("pets");
+    // 预渲染气泡精灵表(帧序 = quote_pool 顺序;构建期经 gen-bubbles.ps1 生成)
+    if let Some(sheet) = load_png(&pets_root.join("bubbles.png")) {
+        let stride = BUBBLE_W as usize;
+        let rows = BUBBLE_H as usize;
+        if sheet.w >= stride * BUBBLE_COUNT && sheet.h >= rows {
+            for i in 0..BUBBLE_COUNT {
+                let mut frame = Image { w: stride, h: rows, bgra: Vec::with_capacity(stride * rows) };
+                for y in 0..rows {
+                    let src = y * sheet.w + i * stride;
+                    frame.bgra.extend_from_slice(&sheet.bgra[src..src + stride]);
+                }
+                f.bubbles.push(frame);
+            }
+        }
+    }
     if let Ok(txt) = std::fs::read_to_string(pets_root.join("frames.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
             // 行帧图集(kurumi)
@@ -290,6 +308,20 @@ fn quote_pool(mode: &str) -> &'static [&'static str] {
     }
 }
 
+/// 台词在气泡精灵表(bubbles.png)中的起始帧号,数组顺序必须与 gen-bubbles.ps1 一致。
+fn quote_base(mode: &str) -> usize {
+    match mode {
+        "kurumi" => 5,
+        "inverse" => 11,
+        _ => 0,
+    }
+}
+
+fn pick_quote(mode: &str) -> usize {
+    let pool = quote_pool(mode);
+    quote_base(mode) + rand_u32() as usize % pool.len()
+}
+
 struct PetWin {
     hwnd: isize,
     dot_hwnd: isize,
@@ -301,7 +333,7 @@ struct PetWin {
     anim_ms: u64,
     last_tick: std::time::Instant,
     hop_until: Option<std::time::Instant>,
-    bubble: Option<(String, std::time::Instant)>,
+    bubble: Option<(usize, std::time::Instant)>,
     press_pt: (i32, i32),
     dragged: bool,
     pos: (i32, i32),
@@ -349,13 +381,12 @@ impl PetWin {
 
         // —— 待机随机行为：定时气泡台词 + 定时散步（左右移动，贴边吸附） ——
         if now >= self.next_quote && self.bubble.is_none() {
-            self.next_quote = now + std::time::Duration::from_millis(rand_range(18000, 42000));
-            let quote = {
+            self.next_quote = now + std::time::Duration::from_millis(rand_range(40000, 90000));
+            let idx = {
                 let s = self.shared.lock().unwrap();
-                let pool = quote_pool(&s.mode);
-                pool[rand_u32() as usize % pool.len()].to_string()
+                pick_quote(&s.mode)
             };
-            self.bubble = Some((quote, now));
+            self.bubble = Some((idx, now));
             self.last_tick = now - std::time::Duration::from_secs(10); // 立即触发重绘
             dirty = true;
         }
@@ -365,7 +396,7 @@ impl PetWin {
                 until: now + std::time::Duration::from_millis(rand_range(1100, 2400)),
                 dx: dir,
             });
-            self.next_wander = now + std::time::Duration::from_millis(rand_range(22000, 50000));
+            self.next_wander = now + std::time::Duration::from_millis(rand_range(45000, 120000));
             dirty = true;
         }
         if let Some(w) = &mut self.wander {
@@ -407,9 +438,10 @@ impl PetWin {
                 } else {
                     &self.frames.inverse_states
                 };
+                // 三态立绘对应三个思考等级(小/中/大或不同姿态),强度来自 DSH 推理等级,切换稳定
                 let img_ptr = states.get(key).map(|i| i as *const Image);
                 if let Some(ptr) = img_ptr {
-                    let bob = if intensity == "idle" {
+                    let bob = if key == "idle" {
                         let phase = (std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
@@ -419,7 +451,7 @@ impl PetWin {
                         0.0
                     };
                     // frames 加载后不可变：裸指针解引用安全
-                    self.blit_center_bottom(unsafe { &*ptr }, bob);
+                    self.blit_center_bottom(unsafe { &*ptr }, bob, 1.0);
                 }
             } else {
                 let row = if let Some(until) = self.hop_until {
@@ -459,18 +491,18 @@ impl PetWin {
                     let ptr = self.frames.kurumi.get(&row_key).map(|l| l as *const Vec<Image>);
                     if let Some(ptr) = ptr {
                         let list = unsafe { &*ptr };
-                        self.blit_center_bottom(&list[idx % list.len()], 0.0);
+                        self.blit_center_bottom(&list[idx % list.len()], 0.0, 1.0);
                     }
                 }
             }
             // 气泡与角色同帧绘制(帧更新清空 buf 后重画,避免每 tick 文本渲染)
-            if let Some((text, _)) = self.bubble.clone() {
-                self.draw_bubble(&text);
+            if let Some((idx, _)) = self.bubble.clone() {
+                self.blit_bubble(idx);
             }
             dirty = true;
         }
-        // 气泡:超时检查每 tick;绘制只在帧更新后(避免每 33ms 走 GDI 文本渲染)
-        if let Some((text, t0)) = self.bubble.clone() {
+        // 气泡:超时检查每 tick;绘制只在帧更新后(避免每 33ms 图像合成)
+        if let Some((_, t0)) = self.bubble.clone() {
             if now.duration_since(t0).as_secs() > 3 {
                 self.bubble = None;
                 dirty = true;
@@ -495,8 +527,8 @@ impl PetWin {
         }
     }
 
-    fn blit_center_bottom(&mut self, img: &Image, bob: f32) {
-        let h = CELL_H as i32;
+    fn blit_center_bottom(&mut self, img: &Image, bob: f32, scale: f32) {
+        let h = (CELL_H as f32 * scale) as i32;
         let w = (img.w as f32 / img.h as f32 * h as f32) as i32;
         let x0 = (WIN_W - w) / 2;
         let y0 = WIN_H - h - 2 + bob as i32;
@@ -526,102 +558,40 @@ impl PetWin {
         }
     }
 
-    fn draw_bubble(&mut self, text: &str) {
-        let bw = 210i32;
-        let bh = 48i32;
-        let bx = (WIN_W - bw) / 2;
-        let by = WIN_H - CELL_H as i32 - 56;
-        let r = 14;
-        for y in 0..bh {
-            for x in 0..bw {
-                let dx = if x < r { r - x } else if x >= bw - r { x - (bw - r) + 1 } else { 0 };
-                let dy = if y < r { r - y } else if y >= bh - r { y - (bh - r) + 1 } else { 0 };
-                if dx * dx + dy * dy > (r * r) as i32 {
+    /// 纯像素叠加一张预渲染帧(无缩放)。
+    fn blit_img(&mut self, img: &Image, x0: i32, y0: i32) {
+        for y in 0..img.h as i32 {
+            for x in 0..img.w as i32 {
+                let px = img.bgra[(y as usize) * img.w + x as usize];
+                let a = (px >> 24) & 0xFF;
+                if a == 0 {
                     continue;
                 }
-                let px = (bx + x) as usize;
-                let py = (by + y) as usize;
-                if px < WIN_W as usize && py < WIN_H as usize {
-                    self.buf[py * WIN_W as usize + px] = (215 << 24) | (0x26 << 16) | (0x20 << 8) | 0x2C;
+                let dx = x0 + x;
+                let dy = y0 + y;
+                if dx < 0 || dy < 0 || dx >= WIN_W || dy >= WIN_H {
+                    continue;
                 }
+                let dst = &mut self.buf[(dy * WIN_W + dx) as usize];
+                let da = (*dst >> 24) & 0xFF;
+                let inv = 255 - a;
+                let r = (((px >> 16) & 0xFF) + (((*dst >> 16) & 0xFF) * inv / 255)) & 0xFF;
+                let g = (((px >> 8) & 0xFF) + (((*dst >> 8) & 0xFF) * inv / 255)) & 0xFF;
+                let b = ((px & 0xFF) + ((*dst & 0xFF) * inv / 255)) & 0xFF;
+                let oa = (a + da * inv / 255) & 0xFF;
+                *dst = (oa << 24) | (r << 16) | (g << 8) | b;
             }
         }
-        self.draw_text(text, bx + 16, by + 9);
     }
 
-    fn draw_text(&mut self, text: &str, x0: i32, y0: i32) {
-        unsafe {
-            let w = 240i32;
-            let h = 30i32;
-            let dc = CreateCompatibleDC(0);
-            if dc == 0 {
-                return;
-            }
-            let bmi = BmiHeader {
-                size: 40,
-                width: w,
-                height: -h,
-                planes: 1,
-                bit_count: 32,
-                compression: 0,
-                size_image: 0,
-                x_ppm: 0,
-                y_ppm: 0,
-                clr_used: 0,
-                clr_important: 0,
-            };
-            let mut bits: *mut c_void = std::ptr::null_mut();
-            let dib = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, 0, 0);
-            if dib == 0 || bits.is_null() {
-                DeleteDC(dc);
-                return;
-            }
-            let old_dib = SelectObject(dc, dib);
-            SetBkMode(dc, TRANSPARENT);
-            SetTextColor(dc, 0x00E4DEF0);
-            let font_name: Vec<u16> = "Microsoft YaHei\0".encode_utf16().collect();
-            let font = CreateFontW(-17, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, font_name.as_ptr());
-            if font == 0 {
-                // 铁律#4:字体创建失败仍须先恢复 DIB 再删除,否则选中对象 DeleteObject 失败 → 泄漏
-                SelectObject(dc, old_dib);
-                DeleteObject(dib);
-                DeleteDC(dc);
-                return;
-            }
-            let old_font = SelectObject(dc, font);
-            let t: Vec<u16> = text.encode_utf16().collect();
-            let mut rect = Rect { left: 0, top: 0, right: w, bottom: h };
-            DrawTextW(dc, t.as_ptr(), t.len() as i32, &mut rect, DT_NOCLIP | DT_SINGLELINE | DT_VCENTER);
-            let px = bits as *const u32;
-            for y in 0..h {
-                for x in 0..w {
-                    let c = *px.offset((y * w + x) as isize);
-                    let a = (c >> 24) & 0xFF;
-                    if a == 0 {
-                        continue;
-                    }
-                    let dx = x0 + x;
-                    let dy = y0 + y;
-                    if dx >= 0 && dy >= 0 && dx < WIN_W && dy < WIN_H {
-                        let dst = self.buf[(dy * WIN_W + dx) as usize];
-                        let dr = (dst >> 16) & 0xFF;
-                        let dg = (dst >> 8) & 0xFF;
-                        let db = dst & 0xFF;
-                        let dsta = (dst >> 24) & 0xFF;
-                        let r = (((c >> 16) & 0xFF) * a / 255) + dr * (255 - a) / 255;
-                        let g = (((c >> 8) & 0xFF) * a / 255) + dg * (255 - a) / 255;
-                        let b = ((c & 0xFF) * a / 255) + db * (255 - a) / 255;
-                        let oa = a + dsta * (255 - a) / 255;
-                        self.buf[(dy * WIN_W + dx) as usize] = (oa << 24) | (r << 16) | (g << 8) | b;
-                    }
-                }
-            }
-            // 恢复原对象后再删除(否则被选中的 GDI 对象删除失败 → 泄漏)
-            SelectObject(dc, old_font);
-            SelectObject(dc, old_dib);
-            DeleteObject(font);
-            DeleteObject(dib);
-            DeleteDC(dc);
+    /// 绘制预渲染气泡帧(帧序 = quote 池序;不再调用任何 GDI 字体 API)。
+    fn blit_bubble(&mut self, idx: usize) {
+        let frame = self.frames.bubbles.get(idx).cloned();
+        if let Some(img) = frame {
+            // 帧气泡矩形位于帧内 (15,4),blit 后与旧像素布局一致:文本中心 = 原 (54,73)
+            let x0 = (WIN_W - BUBBLE_W) / 2;
+            let y0 = WIN_H - CELL_H as i32 - 56 - 4;
+            self.blit_img(&img, x0, y0);
         }
     }
 
@@ -647,28 +617,30 @@ impl PetWin {
         self.hop_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(900));
         self.frame_idx = 0;
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
-        let quote = {
+        let idx = {
             let s = self.shared.lock().unwrap();
-            let pool = quote_pool(&s.mode);
-            pool[rand_u32() as usize % pool.len()].to_string()
+            pick_quote(&s.mode)
         };
-        self.bubble = Some((quote, std::time::Instant::now()));
+        self.bubble = Some((idx, std::time::Instant::now()));
     }
 
     fn show_menu(&self, x: i32, y: i32) {
         unsafe {
             let enc = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
             let m = CreatePopupMenu();
-            let s1 = enc("隐藏桌宠");
-            let s2 = enc("最小化主窗口");
-            let s3 = enc("退出应用");
-            AppendMenuW(m, MF_STRING, MENU_HIDE, s1.as_ptr());
-            AppendMenuW(m, MF_STRING, MENU_MIN, s2.as_ptr());
-            AppendMenuW(m, MF_STRING, MENU_EXIT, s3.as_ptr());
+            let s1 = enc("显示主窗口");
+            let s2 = enc("隐藏桌宠");
+            let s3 = enc("最小化主窗口");
+            let s4 = enc("退出应用");
+            AppendMenuW(m, MF_STRING, MENU_SHOW, s1.as_ptr());
+            AppendMenuW(m, MF_STRING, MENU_HIDE, s2.as_ptr());
+            AppendMenuW(m, MF_STRING, MENU_MIN, s3.as_ptr());
+            AppendMenuW(m, MF_STRING, MENU_EXIT, s4.as_ptr());
             SetForegroundWindow(self.hwnd);
             let cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, self.hwnd, 0);
             DestroyMenu(m);
             match cmd as usize {
+                MENU_SHOW => self.focus_main(),
                 MENU_HIDE => self.hide_self(),
                 MENU_MIN => {
                     if let Some(w) = self.app.get_webview_window("main") {
@@ -698,6 +670,15 @@ impl PetWin {
         }
         if let Ok(mut s) = self.shared.lock() {
             s.hide = false;
+        }
+    }
+
+    // 点击桌宠 → 唤起/聚焦主窗口(最小化先还原:SW_SHOW 不会解除最小化,必须 unminimize)
+    fn focus_main(&self) {
+        if let Some(w) = self.app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
         }
     }
 }
@@ -751,6 +732,7 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
         WM_LBUTTONUP => {
             if !(*pet).dragged {
                 (*pet).do_hop();
+                (*pet).focus_main(); // 点击桌宠 → 唤起/聚焦主窗口
             } else {
                 save_pos((*pet).pos);
             }
@@ -758,6 +740,7 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
         }
         WM_LBUTTONDBLCLK => {
             (*pet).do_hop();
+            (*pet).focus_main();
             0
         }
         WM_RBUTTONDOWN => {

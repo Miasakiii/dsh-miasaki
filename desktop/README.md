@@ -34,9 +34,29 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 | `kurkuriel` | 反转狂三（Q 版） | 同狂三图集 + CSS 反转滤镜（白化/降饱和/血红辉光） |
 
 - 图集兼容 Codex 宠物 V1/V2 格式（8 列 192×208，自动探测每行非空帧）
-- 交互：**拖动**移动 / **单击**跳跃+气泡 / **双击**挥手 / **右键**菜单（手动切换角色、隐藏）
+- 交互：**拖动**移动 / **单击**跳跃+气泡（主窗口最小化/隐藏时单击为**唤起主窗口**）/ **双击**挥手
+  / **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
 - 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`
+- **人格会话联动**：主题切换时自动用对应桌宠的 Agent 预设开启新会话（DSH 官方 RPC
+  `/api/session.create` 的 `agentPreset` 参数）。映射 `pure→whale`（鲸鱼娘）/
+  `zafkiel→kurumi`（狂三）/`kurkuriel→inverse`（反转狂三）；每个主题仅自动创建一次，
+  结果记于 localStorage（`miasaki.petSessions`），切换回来时只提示「已建立」；
+  新会话优先挂到当前 workspace；RPC 不可用或预设缺失时静默降级，不影响主题切换。
+  三个预设定义在 `%USERPROFILE%\.dsh\.agent-presets\{whale,kurumi,inverse}\`
+  （standard 底座 + 桌宠中文人设，persona 含「入戏边界」：工具/错误/审批一律标准语气）。
+  维护材料在 `preset-sources/`（`*.persona.txt` / `*.preset.yml` / `apply-presets.ps1`，
+  改人设后重跑脚本再生成 `%USERPROFILE%\.dsh\.agent-presets\` 下对应文件）。
 - 悬浮主题条切换时，主窗口通过 `set_pet_mode` 命令联动宠物角色
+- **主窗口拖动**：标题栏走 Tauri 原生 `data-tauri-drag-region`（OS 级 start_dragging，系统消息
+  循环接管，完全跟手；双击标题栏 = 最大化/还原）。早期版本用 URL hash 轮询 + set_position
+  差值应用（33ms 滞后、DPI 换算误差、事件流竞态 → 不跟手/跳变），已废弃。
+  注意：远程页面（http://127.0.0.1:3080）的子 capability `remote-dsh.json` 必须授予
+  `core:window:allow-start-dragging`，否则拖动手势会被插件 ACL 拒绝且无任何提示。
+- 气泡台词为**构建期预渲染**的位图帧（`ui/pets/bubbles.png`，17 帧），运行时零 GDI 字体调用：
+  Windows 11 的 GDI 字体在多线程（WebView2 + 桌宠线程）并发使用时存在已知堆损坏，`CreateFontW`
+  会确定性崩溃（gdi32full!CreateFontW+0xA3 / 0xC0000005）。**修改台词池（`src/pet_native.rs`
+  的 `quote_pool`）后必须重新生成**：`powershell -File scripts/gen-bubbles.ps1`（无 PowerShell 5
+  时用 `pwsh`）
 
 ## 目录
 
@@ -47,6 +67,7 @@ desktop/
 │  ├─ pure.css / zafkiel.css / kurkuriel.css
 │  └─ runtime.js             # 注入运行时：主题属性/明暗锁定/切换条/过渡/水印
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
+├─ scripts/gen-bubbles.ps1   # 气泡台词位图精灵表（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
    ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航
    ├─ injected/theme-init.js # 构建产物（include_str! 注入，勿手改）
