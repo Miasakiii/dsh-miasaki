@@ -348,7 +348,26 @@
     'opacity:0;transition:opacity 1.2s ease;}' +
     '#miasaki-aurora .aur-a{width:52vw;height:52vw;left:-14vw;top:-18vw;}' +
     '#miasaki-aurora .aur-b{width:44vw;height:44vw;right:-12vw;top:16vw;}' +
-    '#miasaki-aurora .aur-c{width:38vw;height:38vw;left:28vw;bottom:-16vw;}'
+    '#miasaki-aurora .aur-c{width:38vw;height:38vw;left:28vw;bottom:-16vw;}' +
+    '#miasaki-close-mask{position:fixed;inset:0;z-index:100001;background:rgba(6,5,10,.55);' +
+    'opacity:0;pointer-events:none;transition:opacity .2s ease;}' +
+    '#miasaki-close-mask.on{opacity:1;pointer-events:auto;}' +
+    '#miasaki-close-dialog{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);' +
+    'z-index:100002;display:none;min-width:320px;max-width:430px;border-radius:12px;' +
+    'padding:18px 20px 16px;background:var(--ms-panel,#1e1a27);border:1px solid var(--ms-accent,#d9b36a);' +
+    'color:var(--ms-text,#e4def0);font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
+    'box-shadow:0 18px 44px rgba(0,0,0,.55);}' +
+    '#miasaki-close-dialog.on{display:block;}' +
+    '#miasaki-close-dialog .mc-title{font-size:14.5px;font-weight:600;margin-bottom:6px;}' +
+    '#miasaki-close-dialog .mc-body{font-size:12.5px;line-height:1.65;opacity:.82;}' +
+    '#miasaki-close-dialog .mc-btns{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}' +
+    '#miasaki-close-dialog .mc-btn{padding:6px 16px;font-size:12.5px;border-radius:6px;cursor:pointer;' +
+    'border:1px solid var(--ms-border,#3a3243);background:transparent;color:var(--ms-text,#e4def0);' +
+    'font-family:inherit;letter-spacing:.04em;}' +
+    '#miasaki-close-dialog .mc-btn:hover{background:var(--ms-hover,#2a2434);}' +
+    '#miasaki-close-dialog .mc-btn.mc-ok{background:var(--ms-danger,#c23a2e);' +
+    'border-color:var(--ms-danger,#c23a2e);color:#fff;}' +
+    '#miasaki-close-dialog .mc-btn.mc-ok:hover{filter:brightness(1.08);}'
 
   var switcher = null
   var overlay = null
@@ -665,7 +684,7 @@
       var act = b.getAttribute('data-act')
       if (act === 'min') petHashCmd('min')
       else if (act === 'max') petHashCmd('max')
-      else if (act === 'close') petHashCmd('exit')
+      else if (act === 'close') petHashCmd('close')
     })
     updateTitlebar()
     syncTitlebarGeometry()
@@ -688,6 +707,51 @@
       var next = ICON_BASE + META[current].icon
       if (brand.src !== next) brand.src = next
     }
+  }
+
+  /* ---------- 关闭确认弹窗（所有关闭入口收敛于此；确认后经 hash 通道通知 Rust 收尾） ---------- */
+  var closeMask = null
+  var closeDlg = null
+  function buildCloseDialog() {
+    if (!document.body || document.getElementById('miasaki-close-dialog')) return
+    // 页面重渲染把旧 DOM 清掉时，闭包引用随之重置（重新构建）
+    closeMask = document.createElement('div')
+    closeMask.id = 'miasaki-close-mask'
+    closeDlg = document.createElement('div')
+    closeDlg.id = 'miasaki-close-dialog'
+    closeDlg.innerHTML =
+      '<div class="mc-title">关闭 Miasaki？</div>' +
+      '<div class="mc-body">关闭应用将退出由桌面端启动的 DSH 服务，下次打开桌面端时会自动重新拉起。确定要关闭应用吗？</div>' +
+      '<div class="mc-btns">' +
+      '<button class="mc-btn mc-cancel">取消</button>' +
+      '<button class="mc-btn mc-ok">关闭应用</button></div>'
+    function hide() {
+      if (closeMask) closeMask.classList.remove('on')
+      if (closeDlg) closeDlg.classList.remove('on')
+    }
+    closeMask.addEventListener('click', hide)
+    closeDlg.addEventListener('click', function (ev) { ev.stopPropagation() })
+    closeDlg.querySelector('.mc-cancel').addEventListener('click', hide)
+    closeDlg.querySelector('.mc-ok').addEventListener('click', function () {
+      hide()
+      // 本地唤醒页优先 invoke 命令（IPC 不受 URL 协议形态影响），失败回退 hash 通道；
+      // 远程 DSH 页走 hash 通道（watchdog 统一解析）
+      function shutdownViaHash() { petHashCmd('shutdown') }
+      if (IS_LOCAL && window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+        window.__TAURI__.core.invoke('shutdown').catch(shutdownViaHash)
+      } else {
+        shutdownViaHash()
+      }
+    })
+    document.body.appendChild(closeMask)
+    document.body.appendChild(closeDlg)
+  }
+  window.__miasakiOpenCloseDialog = function () {
+    try {
+      buildCloseDialog()
+      if (closeMask) closeMask.classList.add('on')
+      if (closeDlg) closeDlg.classList.add('on')
+    } catch (e) { /* 弹窗失败不阻断关闭请求 */ }
   }
 
   // sync geometry
@@ -753,6 +817,8 @@
     try { localStorage.setItem(KEY, current) } catch (e) { /* ignore */ }
     var base = ensureBase()
     base.textContent = SWITCHER_CSS
+    // 关闭确认弹窗无条件构建（本地唤醒页同样需要：Alt+F4 走系统关闭路径 + 弹窗确认）
+    try { buildCloseDialog() } catch (e) {}
     if (!IS_LOCAL) {
       // 装饰层逐一隔离：单个构建异常不得中断后续构建与巡检启动（装饰层失败不阻断原则）
       try { buildTitlebar() } catch (e) {}
@@ -768,6 +834,7 @@
       try { /* 巡检单次失败不影响下一轮 */
       if (!document.getElementById('miasaki-titlebar') && !IS_LOCAL) buildTitlebar()
       if (!document.getElementById('miasaki-switcher')) buildSwitcher()
+      if (!document.getElementById('miasaki-close-dialog')) buildCloseDialog()
       if (!document.getElementById('miasaki-aurora') && !IS_LOCAL) buildAurora()
       if (document.documentElement.getAttribute('data-miasaki-theme') !== current) setAttr(current)
       ensureStyle()
