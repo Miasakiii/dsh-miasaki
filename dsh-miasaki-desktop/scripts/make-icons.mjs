@@ -95,7 +95,7 @@ function ringSvg(size, color, opts = {}) {
   console.log('theme-inverse.png (badge) done')
 }
 
-// ============ 2) 软件图标（1024 徽章，源 = src-tauri/icon-new.png 艺术设计图） ============
+// ============ 2) 软件图标（1024 徽章，源 = src-tauri/icon-new.png 用户提供的 DeepSeek 娘艺术图） ============
 
 {
   const art = join(root, 'src-tauri', 'icon-new.png')
