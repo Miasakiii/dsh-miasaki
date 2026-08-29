@@ -2,6 +2,69 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-08-29 · 修复:右上角关闭按钮无反应（cmd 名不匹配 + 关闭弹窗模块丢失）
+
+依据:用户「桌面端右上角关闭没反应」。
+
+- **根因(双断点)**:
+  1. `themes/runtime.js` 标题栏关闭按钮发送 `cmd=exit`,而 Rust 侧
+     `start_hash_watchdog` 的 match 只有 `"close" => request_close` 分支,
+     `exit` 落入 `_ => {}` → 无任何反应;
+  2. 前端关闭确认弹窗模块(`buildCloseDialog` + `window.__miasakiOpenCloseDialog`)
+     在 11:33→14:04 的重构中整体丢失——Rust `request_close` 经
+     `eval("window.__miasakiOpenCloseDialog && ...()")` 唤起弹窗,函数不存在 → 弹窗不出。
+     现状为"点 X 完全静默"。
+- **修复**(`themes/runtime.js`):
+  - 标题栏按钮 `petHashCmd('exit')` → `petHashCmd('close')`(与 Rust match 对齐);
+  - 从 debug EXE(11:33 构建版)提取并恢复完整弹窗实现:弹窗 CSS
+    (`#miasaki-close-mask`/`#miasaki-close-dialog` 主题自绘)、
+    `buildCloseDialog()`(取消/确认按钮、mask 点击关闭)、
+    `window.__miasakiOpenCloseDialog` 导出(本地页确认走 invoke `shutdown`,
+    失败回退 hash 通道;远程页走 hash `cmd=shutdown`);
+  - onReady 无条件构建弹窗(本地唤醒页 Alt+F4 同样可用),1s 巡检补
+     `#miasaki-close-dialog` 重建。
+- 触摸点:`themes/runtime.js`(→ `npm run gen-init` 后 `src-tauri/injected/theme-init.js`,
+  → 重编 EXE 并同步 `dist/Miasaki.exe`)。
+- 验证点:重启桌面端后点右上角 X → 弹出「关闭 Miasaki?」弹窗(随主题配色)→
+  取消仍在运行 / 确认后 DSH 停止 + 应用退出;Alt+F4 与托盘退出同路径。
+
+## 2026-08-29 · 修复:反转狂三主题图标裁切失真（立绘换版后固定窗口失效）
+
+依据:用户「dist 下 exe 打开的反转狂三图标有问题」。
+
+- **根因**:`scripts/make-icons.mjs` 的 inverse 图标按旧立绘尺寸假设取
+  「中上部 92×92」固定窗口;8-23 反转狂三立绘换成 332×540 的 Q 版全身构图后
+  窗口失效,图标只裁到脸的中上一条(缺头顶/下巴/肩部),13:16 生成起即失真。
+- **修复**(`scripts/make-icons.mjs`):自适应头部定位两代迭代——
+  初版按全图亮区(lum>90)bbox 定位,但被衣服高光拉满整幅
+  (side clamp 成全宽、top=97 → 头顶整段被切,用户复报);
+  最终版改为**仅在立绘顶部 35% 高度内统计 alpha bbox 与最大行宽**——
+  方形窗口以该 bbox 居中、顶边取内容起始(留 1% 余量)、宽含发梢
+  (本次实测:窗口 left=56 top=1 side=228 → 头顶/双眼/下巴/肩部完整入徽章);
+  检测失败时显式抛错(不产出静默坏图)。
+- 触摸点:`scripts/make-icons.mjs` → `ui/icons/theme-inverse.png`(已同步
+  `dist/ui/icons/theme-inverse.png`;图标经素材服务读磁盘/内嵌,无需重编桌面端)。
+- 验证点:重启桌面端后切换狂狂帝,右下角按钮与面板图标显示完整头部徽章;
+  pure/zafkiel 图标不受影响(其源图尺寸未变)。
+
+## 2026-08-29 · 素材内嵌:图标与桌宠帧编译期打进 EXE（无需再外置 ui/）
+
+依据:用户「这些图标素材必须外置吗」。
+
+- **改造**:素材读取从「仅磁盘 ui/(EXE 旁)」改为**磁盘优先 + 内嵌兜底**——
+  - `build.rs`:构建时扫描 `ui/` 生成 `src/assets.rs`(build.rs 产物,gitignore),
+    以 `include_bytes!` 内嵌运行时素材全套:icons(pure/zafkiel/inverse/app)、
+    `pets/frames.json`、`pets/bubbles.png`、kurumi 63 帧、whale/inverse 立绘 11 帧
+    (共 76 项,EXE 增加约 6MB);
+  - `main.rs` 素材服务(39800)与 `pet_native.rs` 的桌宠帧加载统一走
+    `assets::read()`:先读 EXE 旁 `ui/`,无则回退内嵌;
+  - dist/NSIS 安装布局(EXE + ui/)不受影响(磁盘仍在;单文件拷贝 EXE
+    图标/桌宠素材完整,不再强制外置)。
+- 触摸点:`src-tauri/build.rs`、`src-tauri/src/main.rs`、`src-tauri/src/pet_native.rs`、
+  `.gitignore`(ignore `src-tauri/src/assets.rs`);产物 `dist/Miasaki.exe` 已更新。
+- 验证点:单拷 `dist/Miasaki.exe` 到任意空目录启动——主题按钮图标、标题栏徽记、
+  桌宠三形态帧与气泡全部正常(此前图标/桌宠素材 404 全部缺失)。
+
 ## 2026-08-29 · 修复:主题切换条巡检重建死锁（按钮消失后无法自愈）
 
 依据:用户「桌面端右下角主题切换按钮到底怎么回事」。排查确认用户当日实际运行的是
