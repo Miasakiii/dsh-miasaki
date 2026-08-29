@@ -1,0 +1,13 @@
+# dsh-pet-panel
+#
+# DSH web profile bundle: 桌宠设置面板（client 面板 + 空壳 host）。
+# - client 面板挂在 设置 → 桌宠（settings.section，id: pet-panel）
+# - host 侧无职责：面板命令经主窗口 URL hash 通道
+#   （#...&cmd=pet-show|pet-hide|pet-reset|pet-state&seq=...）由 Miasaki 桌面端
+#   （Tauri + 原生 Win32 桌宠）轮询执行；状态经 Rust eval
+#   `miasaki-pet-state` CustomEvent 回推。
+# - 非桌面端（普通浏览器 / 无 Miasaki 注入）场景：面板检测
+#   window.__MIASAKI_BOOTED__，缺失时提示命令不会生效。
+- insert:
+    - id: dsh-pet-panel
+      name: 'dsh-pet-panel'

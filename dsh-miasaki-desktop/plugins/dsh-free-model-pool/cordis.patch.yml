@@ -1,0 +1,15 @@
+# dsh-free-model-pool
+#
+# DSH web profile bundle: 免费模型池插件（host 插件 + client 面板）。
+# - client 面板挂在 设置 → 免费模型池（settings.section，id: free-model-pool）
+# - client 经同源 JSON 路由 /freepool-api/* 与 host 通信（面板在浏览器中运行，
+#   直接 fetch 本机 webServer；host 侧为不可伪造的普通异步处理器）
+# - host 侧能力：
+#   /freepool-api/detect   —— 拉取 OpenRouter /v1/models，按 :free 后缀 + 定价全零筛免费模型
+#   /freepool-api/status   —— 读取当前 llm-pi-ai openrouter 配置与三预设的子代理模型
+#   /freepool-api/apply    —— 把检测结果写入 settings.yaml (settings.update，深合并保留其他 provider)
+#   /freepool-api/subagent —— 更新 ~/.dsh/.agent-presets/<kurumi|whale|inverse>/agent.cordis.yml
+#                             中 tool-subagent / tool-subagent-fork 的 agentOptions
+- insert:
+    - id: free-model-pool
+      name: 'dsh-free-model-pool'
