@@ -32,6 +32,8 @@ pub struct PetShared {
     pub mode: String,
     pub intensity: String,
     pub hide: bool,
+    /// 面板「位置重置」请求：窗口线程 compose 消费后清 false。
+    pub pending_reset: bool,
 }
 
 pub struct NativePet {
@@ -75,6 +77,15 @@ struct Rect {
     top: i32,
     right: i32,
     bottom: i32,
+}
+
+/// MONITORINFO（GetMonitorInfoW 输出；rcWork = 工作区，含任务栏偏移）。
+#[repr(C)]
+struct MonitorInfo {
+    cb_size: u32,
+    rc_monitor: Rect,
+    rc_work: Rect,
+    dw_flags: u32,
 }
 
 #[repr(C)]
@@ -138,6 +149,13 @@ extern "system" {
     fn GetSystemMetrics(idx: i32) -> i32;
     fn SetTimer(h: isize, id: usize, ms: u32, cb: usize) -> usize;
     fn PostQuitMessage(c: i32);
+    fn EnumDisplayMonitors(
+        hdc: isize,
+        clip: *const Rect,
+        cb: unsafe extern "system" fn(isize, isize, *mut Rect, isize) -> i32,
+        data: isize,
+    ) -> i32;
+    fn GetMonitorInfoW(mon: isize, info: *mut MonitorInfo) -> i32;
     fn CreatePopupMenu() -> isize;
     fn AppendMenuW(menu: isize, flags: u32, id: usize, item: *const u16) -> i32;
     fn TrackPopupMenu(menu: isize, flags: u32, x: i32, y: i32, rsv: i32, h: isize, rect: usize) -> i32;
@@ -382,6 +400,8 @@ struct PetWin {
     press_pt: (i32, i32),
     dragged: bool,
     pos: (i32, i32),
+    /// 主窗口当前实际显示状态（与 shared.hide 同步；show/hide 切换由 compose 单线程执行）。
+    shown: bool,
     wander: Option<Wander>,
     next_quote: std::time::Instant,
     next_wander: std::time::Instant,
@@ -391,30 +411,120 @@ struct PetWin {
     present_bits: *mut c_void,
 }
 
-fn default_pos() -> (i32, i32) {
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let p = std::path::Path::new(&appdata).join("com.miasaki.desktop").join("pet.json");
-        if let Ok(txt) = std::fs::read_to_string(p) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-                let x = v.get("x").and_then(|x| x.as_i64()).unwrap_or(1200) as i32;
-                let y = v.get("y").and_then(|y| y.as_i64()).unwrap_or(500) as i32;
-                if x > -10000 && y > -10000 {
-                    return (x, y);
-                }
-            }
+/* ---------------- pet.json v1：(位置 + 隐藏状态) —— 原子写 + 版本化 ---------------- */
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PetState {
+    version: u32,
+    x: i32,
+    y: i32,
+    hide: bool,
+}
+
+fn pet_state_path() -> std::path::PathBuf {
+    let base = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("com.miasaki.desktop").join("pet.json")
+}
+
+/// 读取 pet.json；损坏/版本不符 → None（调用方回默认，不猜、不静默零值）。
+fn load_pet_state() -> Option<PetState> {
+    let txt = std::fs::read_to_string(pet_state_path()).ok()?;
+    let s: PetState = serde_json::from_str(&txt).ok()?;
+    if s.version != 1 {
+        return None;
+    }
+    Some(s)
+}
+
+fn save_pet_state(s: &PetState) {
+    let p = pet_state_path();
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // 原子写：temp + rename，任何时刻不存在半写文件（与 bootstrap.json 同一铁律）
+    let tmp = p.with_extension("tmp");
+    if let Ok(text) = serde_json::to_string(s) {
+        if std::fs::write(&tmp, text).is_ok() {
+            let _ = std::fs::rename(&tmp, &p);
         }
     }
+}
+
+fn default_pos() -> (i32, i32) {
     (1200, 500)
 }
 
-fn save_pos(pos: (i32, i32)) {
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let dir = std::path::Path::new(&appdata).join("com.miasaki.desktop");
-        let _ = std::fs::create_dir_all(&dir);
-        if let Ok(json) = serde_json::to_string(&serde_json::json!({ "x": pos.0, "y": pos.1 })) {
-            let _ = std::fs::write(dir.join("pet.json"), json);
+/// 枚举全部显示器的「工作区」（work rect，含任务栏偏移）。
+fn monitor_workspaces() -> Vec<Rect> {
+    let mut out: Vec<Rect> = Vec::new();
+    unsafe extern "system" fn cb(
+        mon: isize,
+        _hdc: isize,
+        _rect: *mut Rect,
+        data: isize,
+    ) -> i32 {
+        if data != 0 {
+            let v = &mut *(data as *mut Vec<Rect>);
+            let mut info = MonitorInfo {
+                cb_size: std::mem::size_of::<MonitorInfo>() as u32,
+                rc_monitor: Rect { left: 0, top: 0, right: 0, bottom: 0 },
+                rc_work: Rect { left: 0, top: 0, right: 0, bottom: 0 },
+                dw_flags: 0,
+            };
+            if unsafe { GetMonitorInfoW(mon, &mut info) } != 0 {
+                v.push(info.rc_work);
+            }
+        }
+        1 // 继续枚举
+    }
+    unsafe {
+        EnumDisplayMonitors(0, std::ptr::null(), cb, &mut out as *mut Vec<Rect> as isize);
+    }
+    out
+}
+
+/// 位置可见性：窗口中心点落在任一显示器工作区内即认为可见
+/// （半出屏保留，屏外（拔掉副屏/分辨率变化遗留坐标）→ 不可见）。
+fn pos_visible(pos: (i32, i32)) -> bool {
+    let cx = pos.0 + WIN_W / 2;
+    let cy = pos.1 + WIN_H / 2;
+    let ws = monitor_workspaces();
+    if ws.is_empty() {
+        // 枚举失败兜底：主屏尺寸（单屏环境）
+        let (sw, sh) = screen_size();
+        return cx >= 0 && cy >= 0 && cx < sw && cy < sh;
+    }
+    ws.iter()
+        .any(|r| cx >= r.left && cx < r.right && cy >= r.top && cy < r.bottom)
+}
+
+/// 初始状态（位置 + 是否隐藏）：
+/// - pet.json 完好且位置可见 → 直接恢复（含隐藏状态）
+/// - 位置不可见（屏外遗留坐标，用户误拖/显示器布局变化）→ 回默认位置，保留隐藏设置
+/// - 损坏/版本不符 → 全部默认并重建
+fn initial_pet_state() -> (i32, i32, bool) {
+    match load_pet_state() {
+        Some(s) if pos_visible((s.x, s.y)) => (s.x, s.y, s.hide),
+        Some(s) => {
+            pet_log_line(&format!(
+                "[native-pet] pet.json pos ({},{}) not on any visible workarea -> default pos\n",
+                s.x, s.y
+            ));
+            let (dx, dy) = default_pos();
+            (dx, dy, s.hide)
+        }
+        None => {
+            let (dx, dy) = default_pos();
+            (dx, dy, false)
         }
     }
+}
+
+fn save_pet_pos(pos: (i32, i32), hide: bool) {
+    save_pet_state(&PetState { version: 1, x: pos.0, y: pos.1, hide });
 }
 
 impl PetWin {
@@ -423,6 +533,51 @@ impl PetWin {
         let tick = TICKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let now = std::time::Instant::now();
         let mut dirty = false;
+
+        // —— 外部命令消费（设置面板 hash 通道 → shared 标志；UI 仅在窗口线程执行）——
+        {
+            let (want_hide, do_reset) = {
+                let mut s = self.shared.lock().unwrap();
+                let h = s.hide;
+                let r = s.pending_reset;
+                s.pending_reset = false;
+                (h, r)
+            };
+            if do_reset {
+                let p = default_pos();
+                self.pos = p;
+                unsafe {
+                    MoveWindow(self.hwnd, p.0, p.1, WIN_W, WIN_H, 1);
+                    draw_dot(self.dot_hwnd, p);
+                }
+                pet_log_line(&format!("[native-pet] position reset -> {},{}\n", p.0, p.1));
+                save_pet_pos(p, want_hide);
+                self.last_tick = now - std::time::Duration::from_secs(10); // 强制重绘
+                dirty = true;
+            }
+            // 目标隐藏状态(want_hide)与当前显示状态(self.shown)语义相反但布尔可比：
+            // want_hide=false(显示) 且 shown=true(已显示) → 语义一致，无需切换；
+            // want_hide==self.shown(布尔相等) 正是"语义相反需切换"的情形：
+            //   (false,false)=想显示但已隐藏 → 显示；(true,true)=想隐藏但已显示 → 隐藏。
+            if want_hide == self.shown {
+                unsafe {
+                    if want_hide {
+                        ShowWindow(self.hwnd, SW_HIDE);
+                        ShowWindow(self.dot_hwnd, SW_SHOW);
+                    } else {
+                        ShowWindow(self.dot_hwnd, SW_HIDE);
+                        ShowWindow(self.hwnd, SW_SHOW);
+                    }
+                }
+                self.shown = !want_hide;
+                pet_log_line(&format!(
+                    "[native-pet] {} (hide persisted)\n",
+                    if want_hide { "hidden" } else { "shown" }
+                ));
+                save_pet_pos(self.pos, want_hide);
+                dirty = true;
+            }
+        }
 
         // —— 待机随机行为：定时气泡台词 + 定时散步（kurumi 专属,左右移动贴边吸附） ——
         if now >= self.next_quote && self.bubble.is_none() {
@@ -814,27 +969,21 @@ impl PetWin {
                         let _ = w.minimize();
                     }
                 }
-                MENU_EXIT => self.app.exit(0),
+                MENU_EXIT => crate::request_close(&self.app),
                 _ => {}
             }
         }
     }
 
+    /// 隐藏请求：只写 shared 标志，UI 切换与落盘由 compose（窗口线程）统一执行，
+    /// 避免多线程直接操作 user32 句柄。
     fn hide_self(&self) {
-        unsafe {
-            ShowWindow(self.hwnd, SW_HIDE);
-            ShowWindow(self.dot_hwnd, SW_SHOW);
-        }
         if let Ok(mut s) = self.shared.lock() {
             s.hide = true;
         }
     }
 
     fn show_self(&self) {
-        unsafe {
-            ShowWindow(self.dot_hwnd, SW_HIDE);
-            ShowWindow(self.hwnd, SW_SHOW);
-        }
         if let Ok(mut s) = self.shared.lock() {
             s.hide = false;
         }
@@ -904,7 +1053,8 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                 (*pet).do_hop();
                 (*pet).focus_main(); // 点击桌宠 → 唤起/聚焦主窗口
             } else {
-                save_pos((*pet).pos);
+                let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
+                save_pet_pos((*pet).pos, hide);
             }
             0
         }
@@ -1014,7 +1164,7 @@ fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) 
     unsafe {
         // 显式按监视器 DPI 感知，保证窗口物理尺寸正确
         SetProcessDpiAwarenessContext(-4);
-        let (x, y) = default_pos();
+        let (x, y, restore_hide) = initial_pet_state();
         let mut pet = Box::new(PetWin {
             hwnd: 0,
             dot_hwnd: 0,
@@ -1034,6 +1184,7 @@ fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) 
             press_pt: (0, 0),
             dragged: false,
             pos: (x, y),
+            shown: !restore_hide,
             wander: None,
             next_quote: std::time::Instant::now() + std::time::Duration::from_secs(12),
             next_wander: std::time::Instant::now() + std::time::Duration::from_secs(8),
@@ -1128,7 +1279,13 @@ fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) 
         draw_dot(dot_hwnd, (x, y));
         pet.compose();
         pet_log_line("[native-pet] first compose done\n");
-        ShowWindow(hwnd, SW_SHOW);
+        // 启动恢复隐藏状态：主窗隐藏、圆点可见；否则仅显示主窗（圆点留隐藏，等待首次显示切换）
+        if restore_hide {
+            ShowWindow(dot_hwnd, SW_SHOW);
+            pet_log_line("[native-pet] restored hidden state (dot shown)\n");
+        } else {
+            ShowWindow(hwnd, SW_SHOW);
+        }
         std::mem::forget(pet);
 
         let mut msg = Msg {
@@ -1149,10 +1306,12 @@ fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) 
 
 impl NativePet {
     pub fn spawn(app: AppHandle) -> Self {
+        let restore_hide = load_pet_state().map(|s| s.hide).unwrap_or(false);
         let shared = Arc::new(Mutex::new(PetShared {
             mode: "whale".to_string(),
             intensity: "idle".to_string(),
-            hide: false,
+            hide: restore_hide,
+            pending_reset: false,
         }));
         let base = std::env::current_exe()
             .ok()
@@ -1182,5 +1341,24 @@ impl NativePet {
         if let Ok(mut s) = self.shared.lock() {
             s.intensity = int.to_string();
         }
+    }
+
+    /// 面板/设置命令：显示或隐藏桌宠（compose 窗口线程消费并落盘）。
+    pub fn set_hide(&self, hide: bool) {
+        if let Ok(mut s) = self.shared.lock() {
+            s.hide = hide;
+        }
+    }
+
+    /// 面板/设置命令：位置重置回默认点（compose 窗口线程消费）。
+    pub fn request_reset(&self) {
+        if let Ok(mut s) = self.shared.lock() {
+            s.pending_reset = true;
+        }
+    }
+
+    /// 当前是否隐藏（面板状态同步）。
+    pub fn is_hidden(&self) -> bool {
+        self.shared.lock().map(|s| s.hide).unwrap_or(false)
     }
 }

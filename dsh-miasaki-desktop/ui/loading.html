@@ -4,74 +4,149 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Miasaki</title>
+<!--
+  启动画面（本地唤醒页）：
+  · 标题栏不再内嵌，由注入的 runtime.js 统一构建 #miasaki-titlebar（与 DSH 页同款，画面一致）。
+  · 本页按 html[data-miasaki-theme] 随主题换肤（runtime.js 在文档创建时即设置该属性）：
+    pure（中性暗）/ zafkiel（暗夜鎏金）/ kurkuriel（骨白血绯）三套色板 + 主题纹章。
+  · 当前主题由 Rust 启动时经 __MIA_THEME__ 注入（持久化于 DSH 页主题选择，见 main.rs prefs）。
+-->
 <style>
-  :root { color-scheme: dark; }
+  /* —— 主题变量：默认 = zafkiel（刻刻帝 · 永夜钟阁，保持原观感）—— */
+  :root {
+    color-scheme: dark;
+    --mia-bg-hi: #1a1424; --mia-bg-lo: #0c0b11;
+    --mia-fg: #e4def0; --mia-muted: #9a8fa8; --mia-hint: #5d5369;
+    --mia-accent: #d9b36a; --mia-accent-soft: rgba(217, 179, 106, .12);
+    --mia-crest-inner: rgba(217, 179, 106, .5);
+    --mia-danger: #c23a2e;
+    --mia-border: rgba(217, 179, 106, .55);
+  }
+  html[data-miasaki-theme="kurkuriel"] {
+    color-scheme: light;
+    --mia-bg-hi: #f7f4f1; --mia-bg-lo: #e9e3dd;
+    --mia-fg: #241f22; --mia-muted: #6a6159; --mia-hint: #8a7e74;
+    --mia-accent: #9e1b1b; --mia-accent-soft: rgba(158, 27, 27, .08);
+    --mia-crest-inner: rgba(94, 101, 114, .5);
+    --mia-danger: #8f1616;
+    --mia-border: rgba(158, 27, 27, .55);
+  }
+  /* 亮色主题的注入层变量提前定义（body 级就近生效），防止注入前标题栏闪暗色 */
+  html[data-miasaki-theme="kurkuriel"] body {
+    --ms-panel: #ffffff; --ms-text: #241f22; --ms-accent: #9e1b1b;
+    --ms-border: #c4bbb3; --ms-hover: #e9e4df; --ms-danger: #9e1b1b;
+  }
+  html[data-miasaki-theme="pure"] body {
+    color-scheme: dark;
+    --mia-bg-hi: #202127; --mia-bg-lo: #0f1115;
+    --mia-fg: #e6e9ee; --mia-muted: #9aa1ac; --mia-hint: #5b6068;
+    --mia-accent: #3964fe; --mia-accent-soft: rgba(76, 112, 244, .13);
+    --mia-crest-inner: rgba(140, 150, 165, .5);
+    --mia-danger: #d04e41;
+    --mia-border: rgba(140, 150, 165, .5);
+    /* 本地页无 DSH 令牌；body 级覆盖后置于注入样式之前也按就近生效（标题栏/关闭弹窗中性暗色） */
+    --ms-panel: #1a1b20; --ms-text: #e6e9ee; --ms-accent: #3964fe;
+    --ms-border: #3a3f46; --ms-hover: #26282e; --ms-danger: #d04e41;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    background: radial-gradient(1200px 800px at 50% 38%, #1a1424 0%, #0c0b11 70%);
-    color: #e4def0; font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: radial-gradient(1200px 800px at 50% 38%, var(--mia-bg-hi) 0%, var(--mia-bg-lo) 70%);
+    color: var(--mia-fg); font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     user-select: none; overflow: hidden;
+    transition: background .35s ease, color .35s ease;
   }
   .stage { display: flex; flex-direction: column; align-items: center; gap: 14px; }
-  .crest {
-    width: 96px; height: 96px; border-radius: 50%;
-    border: 2px solid #d9b36a; position: relative;
-    display: flex; align-items: center; justify-content: center;
-    font-family: Georgia, "Times New Roman", serif; font-size: 26px; color: #d9b36a;
-  }
-  .crest::before {
-    content: ""; position: absolute; inset: 8px; border-radius: 50%;
-    border: 1px dashed rgba(217, 179, 106, .5);
-    animation: spin 9s linear infinite;
-  }
-  .crest::after {
-    content: ""; position: absolute; left: 50%; top: 50%;
-    width: 2px; height: 34px; margin-top: -34px; background: #c23a2e;
-    transform-origin: 50% 100%; transform: rotate(-42deg);
-    border-radius: 1px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  .crest { width: 96px; height: 96px; }
+  .crest svg { width: 100%; height: 100%; display: none; }
+  .crest svg.cr-zafkiel { display: block; }
+  html[data-miasaki-theme="kurkuriel"] .crest svg.cr-zafkiel { display: none; }
+  html[data-miasaki-theme="kurkuriel"] .crest svg.cr-kurkuriel { display: block; }
+  html[data-miasaki-theme="pure"] .crest svg.cr-zafkiel,
+  html[data-miasaki-theme="pure"] .crest svg.cr-kurkuriel { display: none; }
+  html[data-miasaki-theme="pure"] .crest svg.cr-pure { display: block; }
   .wordmark { font-size: 22px; font-weight: 600; letter-spacing: .45em; text-indent: .45em; }
-  .tag { font-size: 12px; color: #9a8fa8; letter-spacing: .2em; }
-  #status { font-size: 13px; color: #b8aec4; margin-top: 8px; }
+  .tag { font-size: 12px; color: var(--mia-muted); letter-spacing: .2em; }
+  #status { font-size: 13px; color: var(--mia-muted); margin-top: 8px; max-width: 680px; text-align: center; }
   #retry {
     display: none; margin-top: 6px; padding: 7px 22px; font-size: 13px;
-    border: 1px solid #d9b36a; border-radius: 6px; background: transparent;
-    color: #d9b36a; cursor: pointer; letter-spacing: .1em;
+    border: 1px solid var(--mia-accent); border-radius: 6px; background: transparent;
+    color: var(--mia-accent); cursor: pointer; letter-spacing: .1em;
   }
-  #retry:hover { background: rgba(217, 179, 106, .12); }
+  #retry:hover { background: var(--mia-accent-soft); }
+  #diag {
+    display: none; flex-direction: column; align-items: center; gap: 8px;
+    margin-top: 8px; max-width: 720px;
+  }
+  #diag-note {
+    font-size: 12px; color: var(--mia-danger); max-width: 100%; text-align: center;
+    word-break: break-all; white-space: pre-wrap;
+  }
+  .diag-btns { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .diag-btns button {
+    padding: 6px 14px; font-size: 12px; letter-spacing: .05em;
+    border: 1px solid var(--mia-border); border-radius: 6px;
+    background: transparent; color: var(--mia-accent); cursor: pointer;
+  }
+  .diag-btns button:hover { background: var(--mia-accent-soft); }
   .hint { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center;
-          font-size: 11px; color: #5d5369; }
-  .tb { position: fixed; left: 0; top: 0; right: 0; height: 32px; display: flex;
-        align-items: center; gap: 8px; padding: 0 6px 0 12px;
-        background: transparent; border-bottom: none; }
-  .tb-ico { width: 22px; height: 22px; border-radius: 50%; }
-  .tb-name { font-size: 12.5px; font-weight: 600; letter-spacing: .04em; color: #e4def0; }
-  .tb-fill { flex: 1; }
-  .tb-btn { width: 28px; height: 28px; display: flex; align-items: center;
-            justify-content: center; cursor: pointer; font-size: 13px;
-            border-radius: 999px; color: #e4def0; }
-  .tb-btn:hover { background: rgba(255, 255, 255, .08); }
+          font-size: 11px; color: var(--mia-hint); }
 </style>
 </head>
 <body>
-  <div class="tb" data-tauri-drag-region>
-    <img src="icons/app.png" class="tb-ico" alt="" />
-    <span class="tb-name">Miasaki · DSH</span>
-    <span class="tb-fill"></span>
-    <span class="tb-btn" onclick="window.__TAURI__&&window.__TAURI__.core.invoke('minimize_main')">&#8211;</span>
-    <span class="tb-btn" onclick="window.__TAURI__&&window.__TAURI__.core.invoke('exit_app')">&#10005;</span>
-  </div>
   <div class="stage">
-    <div class="crest"><img src="icons/app.png" alt="Miasaki" style="width:100%;height:100%;border-radius:50%;object-fit:cover"></div>
+    <div class="crest">
+      <!-- 刻刻帝 · 永夜钟阁（默认） -->
+      <svg class="cr-zafkiel" viewBox="0 0 96 96" aria-hidden="true">
+        <circle cx="48" cy="48" r="44" fill="none" stroke="#d9b36a" stroke-width="2"/>
+        <circle cx="48" cy="48" r="36" fill="none" stroke="rgba(217,179,106,.5)" stroke-width="1" stroke-dasharray="3 3"/>
+        <g stroke="#d9b36a" stroke-width="1.4">
+          <path d="M48 6v7"/><path d="M48 83v7"/><path d="M6 48h7"/><path d="M83 48h7"/>
+          <path d="M18 18l5 5"/><path d="M78 18l-5 5"/><path d="M18 78l5-5"/><path d="M78 78l-5-5"/>
+        </g>
+        <path d="M48 48 L48 18" stroke="#c23a2e" stroke-width="2.6" stroke-linecap="round" transform="rotate(-42 48 48)"/>
+        <circle cx="48" cy="48" r="2.4" fill="#d9b36a"/>
+      </svg>
+      <!-- 狂狂帝 · 白夜逆钟 -->
+      <svg class="cr-kurkuriel" viewBox="0 0 96 96" aria-hidden="true">
+        <path d="M14 48 A34 34 0 0 1 55 18" fill="none" stroke="#5e6572" stroke-width="2.6"/>
+        <path d="M61 17 A34 34 0 0 1 82 53" fill="none" stroke="#5e6572" stroke-width="2.6" stroke-dasharray="8 5"/>
+        <path d="M82 60 A34 34 0 0 1 48 82" fill="none" stroke="#5e6572" stroke-width="2.6"/>
+        <path d="M44 82 A34 34 0 0 1 14 55" fill="none" stroke="#5e6572" stroke-width="2.6" stroke-dasharray="3 7"/>
+        <path d="M42 36 L50 28 L44 40 L52 38 L46 50" fill="none" stroke="#9e1b1b" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M48 48 L48 26" stroke="#9e1b1b" stroke-width="2.6" stroke-linecap="round" transform="rotate(168 48 48)"/>
+        <circle cx="48" cy="48" r="2.4" fill="#9e1b1b"/>
+      </svg>
+      <!-- 原版 · 简约纯净 -->
+      <svg class="cr-pure" viewBox="0 0 96 96" aria-hidden="true">
+        <circle cx="48" cy="48" r="42" fill="none" stroke="#9aa1ac" stroke-width="2"/>
+        <circle cx="48" cy="48" r="34" fill="none" stroke="rgba(140,150,165,.45)" stroke-width="1" stroke-dasharray="2.5 4"/>
+        <path d="M48 48 L48 20" stroke="#3964fe" stroke-width="2.4" stroke-linecap="round"/>
+        <circle cx="48" cy="48" r="2.2" fill="#9aa1ac"/>
+      </svg>
+    </div>
     <div class="wordmark">MIASAKI</div>
     <div class="tag">专属 DSH 桌面端</div>
     <div id="status">正在唤醒 DSH…</div>
     <button id="retry" onclick="retry()">重试</button>
+    <div id="diag">
+      <div id="diag-note"></div>
+      <div class="diag-btns">
+        <button onclick="diag('dsh_check')">检查 dsh</button>
+        <button onclick="diag('open_terminal')">打开终端</button>
+        <button onclick="diag('open_logs_dir')">打开日志目录</button>
+        <button onclick="diag('export_diagnostics')">导出诊断</button>
+      </div>
+    </div>
   </div>
   <div class="hint">初次启动将自动拉起 dsh web 服务（日志：%LOCALAPPDATA%\miasaki\server.log）</div>
   <script>
+    function invoke(cmd) {
+      if (window.__TAURI__ && window.__TAURI__.core) {
+        return window.__TAURI__.core.invoke(cmd);
+      }
+      return Promise.reject(new Error('Tauri IPC 不可用'));
+    }
     window.__setStatus = function (t) {
       var el = document.getElementById('status');
       if (el) el.textContent = t;
@@ -79,14 +154,36 @@
     window.__setRetry = function (show) {
       var el = document.getElementById('retry');
       if (el) el.style.display = show ? 'inline-block' : 'none';
+      var diag = document.getElementById('diag');
+      if (diag) diag.style.display = show ? 'flex' : 'none';
     };
     window.retry = function () {
-      if (window.__TAURI__ && window.__TAURI__.core) {
-        window.__TAURI__.core.invoke('retry_start').catch(function () {});
-      }
       var el = document.getElementById('retry');
       if (el) el.style.display = 'none';
+      window.__setRetry(false);
+      invoke('retry_start').catch(function () {});
     };
+    window.diag = function (action) {
+      var note = document.getElementById('diag-note');
+      if (note) note.textContent = '正在执行…';
+      invoke(action).then(function (r) {
+        if (note) note.textContent = (typeof r === 'string' && r) ? r : '完成';
+      }).catch(function (e) {
+        if (note) note.textContent = '操作失败：' + (e && (e.message || e) || String(e));
+      });
+    };
+    // 初始化：读取上次启动状态，仅异常时提前提示（不阻塞本次启动）
+    invoke('bootstrap_state').then(function (s) {
+      var note = document.getElementById('diag-note');
+      var diag = document.getElementById('diag');
+      if (!note || !diag || !s || !s.lastAttempt) return;
+      var p = s.lastAttempt;
+      if (p.phase === 'spawn' || p.phase === 'waiting') {
+        note.textContent = '上次启动未正常完成（' + (p.at || '?') + '）'
+          + (p.detail ? '：' + p.detail : '');
+        diag.style.display = 'flex';
+      }
+    }).catch(function () {});
   </script>
 </body>
 </html>
