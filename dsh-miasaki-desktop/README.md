@@ -21,7 +21,8 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 | `zafkiel` | 刻刻帝 · 永夜钟阁 | 暗夜基底 · 绯红交互 · 鎏金装饰 · 表盘水印 · 金色光标 |
 | `kurkuriel` | 狂狂帝 · 白夜逆钟 | 骨白基底 · 血绯交互 · 枪铁装饰 · 破裂表盘 · 星座母题 |
 
-切换：右下角悬浮按钮 → 悬停展开三主题；选择持久化于 localStorage，重启保持。
+切换：右下角悬浮按钮 → 悬停展开三主题；每个主题悬浮显示各自的介绍文案（不再全部是当前主题的提示），
+选择持久化于 localStorage，重启保持。
 
 ## Q 版桌宠（Codex 风格）
 
@@ -39,7 +40,13 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
   （主窗口最小化/隐藏时双击为**唤起主窗口**）/ **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
 - 自主动作（环境编排）：静止时低频随机小动作（挥手/检查/等待，偶发跳跃——表演 1.2~2.2s、休息 8~18s、
   首次 5.5s 延迟；指针按下即打断）；思考强度上升时转「守候」姿态（wait 行慢放，不再原地跑步）
-- 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`
+- 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`（v1：位置 + 隐藏状态，原子写；
+  位置不在任何可见显示器工作区时自动回默认 (1200,500)，修复拔掉副屏/分辨率变化后的「桌宠丢了」）
+- **设置入口**：DSH「设置 → 桌宠」面板（`plugins/dsh-pet-panel/`）提供：
+  显示/隐藏开关、位置重置（屏幕外找回）、状态回显（面板挂载时经
+  `cmd=pet-state` 请求，桌面端 eval `miasaki-pet-state` 事件回推）。
+  命令走主窗口 URL hash 通道（`cmd=pet-show/pet-hide/pet-reset`），与主题联动同链路；
+  非桌面端（普通浏览器打开 DSH）面板显示降级提示。
 - **人格会话联动**：主题切换时自动用对应桌宠的 Agent 预设开启新会话（DSH 官方 RPC
   `/api/session.create` 的 `agentPreset` 参数）。映射 `pure→whale`（鲸鱼娘）/
   `zafkiel→kurumi`（狂三）/`kurkuriel→inverse`（反转狂三）；每个主题仅自动创建一次，
@@ -55,6 +62,11 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
   差值应用（33ms 滞后、DPI 换算误差、事件流竞态 → 不跟手/跳变），已废弃。
   注意：远程页面（http://127.0.0.1:3080）的子 capability `remote-dsh.json` 必须授予
   `core:window:allow-start-dragging`，否则拖动手势会被插件 ACL 拒绝且无任何提示。
+- **窗口控制按钮**：标题栏右侧最小化/最大化/关闭为统一内联 SVG 图标（`currentColor`
+  描边、Windows 11 Fluent 线形风格，粗细一致可随主题变色），最大化后按钮自动切换为
+  「还原」双框图标——状态由 Tauri `onResized` + `isMaximized` 事件驱动，
+  双击标题栏 / Win+↑ 等系统路径同样同步；非 Tauri 环境（浏览器调试预览）点击时
+  本地翻转兜底。
 - 气泡台词为**构建期预渲染**的位图帧（`ui/pets/bubbles.png`，17 帧），运行时零 GDI 字体调用：
   Windows 11 的 GDI 字体在多线程（WebView2 + 桌宠线程）并发使用时存在已知堆损坏，`CreateFontW`
   会确定性崩溃（gdi32full!CreateFontW+0xA3 / 0xC0000005）。**修改台词池（`src/pet_native.rs`
@@ -65,10 +77,12 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 
 ```
 desktop/
-├─ ui/loading.html           # 本地唤醒页（探活/拉起状态 + 重试）
+├─ ui/loading.html           # 本地唤醒页（探活/拉起状态 + 重试 + 随主题换肤/统一标题栏）
 ├─ themes/                   # 主题源（原创设计）
 │  ├─ pure.css / zafkiel.css / kurkuriel.css
 │  └─ runtime.js             # 注入运行时：主题属性/明暗锁定/切换条/过渡/水印/标题栏（几何同步+主题装饰）
+├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
+├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/gen-bubbles.ps1   # 气泡台词位图精灵表（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
@@ -77,14 +91,77 @@ desktop/
    └─ capabilities/          # 最小权限（core:default）
 ```
 
+## DSH 插件：免费模型池（`plugins/dsh-free-model-pool/`）
+
+检出免费模型并给出能力画像与适用性决策，Web 面板挂在 DSH「设置 → 免费模型池」：
+
+- **多平台扫描**：扫描 `llm-pi-ai.providers` 中**带 baseURL 的全部 OpenAI 兼容平台**（OpenRouter、
+  自建网关、微信 chatapi 等），一个面板统一管理；新增平台只需在设置 → 模型页配置，
+  面板自动出现，零插件改动。
+- **免费判定（分层）**：`:free` 后缀 → 定价字段全零 → 名称含「免费/free」；三者任一命中即收录，
+  每个模型标注命中依据与警告（预览模型随时下线、缺 tool_choice 需实测等）。
+- **能力画像**：从端点自述（`supported_parameters` / `architecture.modality` / `reasoning` /
+  上下文 / 输出上限）判定 工具调用、tool_choice、推理、编码、视觉、结构化输出、超长上下文、
+  子代理可用性（门槛 = tools + tool_choice），产出「子代理可用 / 仅问答、批处理、需实测」三档 verdict。
+- **决策摘要**：面板顶部给出 最佳子代理 / 编码类 / 超长上下文 / 多模态 四个快捷决策，
+  子代理后端切换按钮直接使用最佳推荐。
+- **写入配置**：`ctx.settings.update('llm-pi-ai', …)` 深合并写入目标平台 `models`
+  （保留其他 provider 与字段），DSH 设置系统校验 schema；`/freepool-api/subagent` 重写三预设
+  `tool-subagent` / `tool-subagent-fork` 的 `agentOptions`（provider 必须是已登记路由键）。
+
+安装（host 重启后生效）：`plugins/dsh-free-model-pool` 为 `file:` 依赖，被
+`%USERPROFILE%\.dsh\profiles\web\package.json` 的 `dsh.profile.bundles` 引用；修改源码后需在
+profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm file: store 缓存会滞后，
+务必核对文件哈希）。client bundle 为手写 `window.__ModuleLoader__.load` 格式（本机无 tsdown），
+勿用 JSX；面板经同源 `/freepool-api/*` JSON 路由与 host 通信（client bundle 无 `host.call`）。
+
+## DSH 插件：桌宠设置面板（`plugins/dsh-pet-panel/`）
+
+桌宠的配置入口，挂在 DSH「设置 → 桌宠」（`settings.section`，order 26）：
+
+- **显示 / 隐藏开关**：桌面端原生分层窗口的显隐控制，状态持久化（pet.json `hide`），
+  重启保持；隐藏后右下角圆点可点击恢复。
+- **位置重置**：一键回到默认位置 (1200, 500) —— 桌宠被拖丢到屏幕外 / 拔掉副屏后找回。
+- **状态回显**：面板挂载时发 `cmd=pet-state`，桌面端 eval `miasaki-pet-state`
+  CustomEvent 回推当前 `hidden`，与显示/隐藏联动保持同步。
+- **通信（零 host 职责）**：面板命令经主窗口 URL hash 通道
+  （`#…&cmd=pet-show|pet-hide|pet-reset|pet-state&seq=…`，`history.replaceState`
+  不触发刷新），由桌面端 hash watchdog 33ms 轮询执行；host 侧 `lib/index.js` 为空壳。
+- **降级**：非桌面端（普通浏览器打开 DSH，无 `window.__MIASAKI_BOOTED__`）面板提示
+  命令不会生效，不阻断设置页。
+
+安装：同免费模型池 —— profile `package.json` 的 `dependencies` + `dsh.profile.bundles`
+加 `dsh-pet-panel`（file: 依赖），profile 目录 `pnpm install` 后核对
+`node_modules/dsh-pet-panel/lib/*` 与源码哈希一致；host 重启后生效。
+
 ## 设计规范
 
 - 总体设计与三主题规范：`design/themes.md`
 - DSH 令牌面（构建校验依据）：`design/token-surface.txt`
+- 启动可靠性（失败恢复页/健康标记）：`design/bootstrap-reliability.md`
 
 ## 行为约定
 
-- 关闭窗口 = 退出应用；**DSH 服务保持运行**（再次双击秒开）。
+- 关闭窗口 → 弹窗确认（标题栏 X / Alt+F4 / 托盘「退出」/ 桌宠「退出应用」统一入口，弹窗为三主题自绘）；
+  选择「关闭应用」会**同步停止由桌面端拉起的 DSH 服务**（下次双击自动重新拉起）；「取消」仅收起弹窗。
+  用户**手动启动**、或端口已就绪时接入的 DSH 服务不会被停止（非本应用 spawn 的后端不触碰）。
+  重复触发关闭请求仅重新显示确认弹窗；仅 Alt+F4 连击（前端无响应）时兜底强制退出、后端保持运行。
+- **启动画面与 DSH 页画面统一**：loading 页与 DSH 页共用同一主题标题栏（本地页不出现主题切换条/水印），
+  配色与纹章随上次选择主题（pure/zafkiel/kurkuriel）；主题偏好由 DSH 页同步持久化
+  `%APPDATA%\com.miasaki.desktop\prefs.json`，下次启动注入启动画面。
 - DSH 启动日志：`%LOCALAPPDATA%\miasaki\server.log`。
 - 主题为「明暗锁定」：刻刻帝强制暗色、狂狂帝强制亮色、原版跟随 DSH 自身设置。
 - 二次启动由单实例锁接管，只唤起已有窗口。
+
+## 启动故障恢复
+
+启动失败（dsh 未安装 / 端口被占用 / DSH 拉起异常）时，加载页会显示恢复动作组：
+
+- **检查 dsh** — `where dsh` + `dsh --version` 探测结果；
+- **打开终端** — 独立 cmd 窗口（可手动运行 `dsh web --no-open` / `netstat` 排查）；
+- **打开日志目录** — `%LOCALAPPDATA%\miasaki\`（server.log / pet.log / bootstrap.json）；
+- **导出诊断** — 聚合日志尾部与状态文件到 `%APPDATA%\com.miasaki.desktop\diagnostics-<ts>.txt`。
+
+每次启动的进度落盘于 `%LOCALAPPDATA%\miasaki\bootstrap.json`（启动尝试阶段/失败原因/上次成功时间），
+下次启动若上次失败会提前提示。设计：`design/bootstrap-reliability.md`（借鉴
+deepseek-harness-desktop 启动恢复 + 健康标记 + 可靠性矩阵思路）。

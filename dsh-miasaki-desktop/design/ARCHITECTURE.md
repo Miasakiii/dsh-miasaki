@@ -30,6 +30,8 @@ Miasaki.exe (Tauri 2, 单进程)
 | 桌宠帧数据 = 启动时一次性加载,裸指针共享 | compose 高频,避免每次拷贝;帧数据不可变,指针安全 |
 | present = 持久 DC/DIB 表面 + 脏标记 | 高频 CreateDIBSection/gdi32full 崩溃(见下 §4);脏标记把静止态 GDI 频率从 33ms 降到 ≥125ms |
 | 拖窗 = 累计增量(×DPR)+ Rust 差值应用 | 增量式在 33ms 轮询下丢帧;DPI 200% 下物理/CSS 混用会半速 |
+| 启动健康标记 = bootstrap.json(v1),temp+rename 原子写 | 启动阶段落盘(bootstrap/spawn/waiting/up),失败可诊断;损坏删除重建默认(不猜不静默)。设计见 bootstrap-reliability.md |
+| 重试 = BOOTSTRAP_GEN 代际计数(+1 后旧序列自行退出) | spawn 失败后旧循环不再 spawn,原「重试」按钮形同虚设;换代后新序列完整重跑 |
 
 ## 3. 数据流
 

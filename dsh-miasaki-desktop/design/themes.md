@@ -21,7 +21,7 @@ Miasaki Desktop（EXE，双击即开）
  ├─ 启动器（Rust）：单实例锁 → 探活 127.0.0.1:3080
  │    ├─ 未运行 → 后台拉起 `dsh web`（无窗口、日志落盘）→ 轮询端口就绪
  │    └─ 就绪 → 窗口从本地 loading 页导航到 http://127.0.0.1:3080
- ├─ 窗口：1280×800（最小 960×600），标题「Miasaki · DSH」，关闭即退出（DSH 服务保持运行）
+ ├─ 窗口：1280×800（最小 960×600），标题「Miasaki · DSH」，关闭→弹窗确认→退出（确认时同步停止桌面端拉起的 DSH 服务）
  └─ 主题引擎：初始化脚本注入远程页面（无 IPC、无 CSP 障碍）
       ├─ 声明 `html[data-miasaki-theme]` + 控制 `body[data-ds-dark-theme]`
       ├─ 覆盖 DSH 令牌层（--dsw-static-* 色阶 + 少量 --dsh-* 杂项）
@@ -47,6 +47,8 @@ html[data-miasaki-theme="zafkiel"] body { /* 令牌重定义 */ }
 - 注入时序：document 创建即挂属性（防闪烁）→ `DOMContentLoaded` 时按主题**锁定** `body[data-ds-dark-theme]`（zafkiel 强制开 / kurkuriel 强制关 / pure 不干预）→ MutationObserver 持续再断言（用户在 DSH 设置里改明暗也不破坏主题）。
 - 切换主题 = 改 `html[data-miasaki-theme]` 属性 + 交换样式块内容；持久化到该源的 localStorage。
 - 调试钩子：URL 参数 `?miasaki-theme=zafkiel|kurkuriel|pure` 可强制当次主题（便于分享与验证）；Rust 侧 `MIASAKI_REMOTE` 环境变量可覆盖导航目标地址。
+- 启动画面主题：启动时 Rust 读取 `%APPDATA%\com.miasaki.desktop\prefs.json`（DSH 页主题经 hash 通道同步落盘），
+  以 `window.__MIA_THEME__` 注入 initial script（优先级高于 URL 参数/localStorage），使 loading 页与 DSH 页画面一致。
 - 构建期由 `scripts/build-init.mjs` 把 `themes/*.css` 内联进运行时脚本，产出 `src-tauri/injected/theme-init.js`，Rust 以 `include_str!` 注入——**发布包零网络请求**。
 - 构建脚本同时做**令牌完备性校验**：从 `design/token-surface.txt` 提取的全部 `--dsw-static-*` 引用必须被每个非 pure 主题覆盖，缺失即构建失败。
 
@@ -152,9 +154,12 @@ html[data-miasaki-theme="zafkiel"] body { /* 令牌重定义 */ }
 
 - 单实例：二次启动唤起已有窗口（`tauri-plugin-single-instance`）。
 - 探活：每 400ms 尝试 TCP 连接 `127.0.0.1:3080`，上限 30s。
-- 拉起：`cmd /C dsh web`，`CREATE_NO_WINDOW`，日志追加到 `%LOCALAPPDATA%\miasaki\server.log`；进程不被应用退出带走（服务常驻）。
+- 拉起：`cmd /C dsh web`，`CREATE_NO_WINDOW`，日志追加到 `%LOCALAPPDATA%\miasaki\server.log`；
+  记录子进程 PID，用户确认关闭应用时 `taskkill /T /F` 停止（**仅限本应用拉起的后端**；
+  端口已就绪时接入的后端不触碰），下次启动自动重新拉起。
 - 失败路径：loading 页显示「未能唤醒 DSH —— dsh 命令不可用或服务启动失败」+ 重试按钮（重试=重新探活+拉起）。
-- loading 页为本地静态页（tauri://localhost），深色中性、显示 Miasaki 纹章与唤醒状态文案；就绪后导航远程页。
+- loading 页为本地静态页，**随主题换肤**（色板与纹章按 pure/zafkiel/kurkuriel 三套，`__MIA_THEME__` 注入），
+  标题栏与 DSH 页共用 runtime.js 的 `#miasaki-titlebar`（画面统一）；就绪后导航远程页。
 - 应用标识：`com.miasaki.desktop`，产品名 `Miasaki`，窗口标题 `Miasaki · DSH`。
 - **发布形态**：`cargo build --release` 直接产出便携 EXE（`src-tauri/target/release/miasaki.exe`，WebView2 已内置于系统）；NSIS 安装包需 tauri CLI 联网下载打包器，暂不作为默认形态。
 
@@ -187,5 +192,6 @@ desktop/
 2. 悬浮条可切换三主题，重启应用后记忆保持。
 3. zafkiel / kurkuriel 下 DSH 全界面（对话、工具卡、侧栏、弹窗、代码块）无原蓝色残留。
 4. pure 下 DSH 外观与直接访问 127.0.0.1:3080 完全一致。
-5. 关闭窗口，DSH 服务仍在运行（再次双击秒开）。
+5. 关闭窗口 → 弹窗确认（弹窗配色随三主题）；「关闭应用」后桌面端与（由它拉起的）DSH 服务一同退出，
+   再次双击自动重新拉起；「取消」保持运行。
 6. 令牌完备性校验通过（build 脚本强制）。

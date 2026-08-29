@@ -2,6 +2,255 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-08-29 · 修复:主题切换条巡检重建死锁（按钮消失后无法自愈）
+
+依据:用户「桌面端右下角主题切换按钮到底怎么回事」。排查确认用户当日实际运行的是
+11:33 构建的 debug EXE,其内嵌脚本仍是「title 内嵌」坏版(HTML 字符串拼接 `title="…"`
+属性,在真实 Chromium 中使 `switcher.innerHTML = html` 抛
+`TypeError: html is not a function`,被 onReady 的 try/catch 吞掉后切换条整体消失,
+该坏版已由 14:04 修复产物 + 14:05 release EXE 取代,但用户尚未验证新 EXE)。
+
+- **根因(本次修复)**:`buildSwitcher()` 开头 `if (switcher || !document.body) return`。
+  switcher 元素一旦被页面重渲染移除(或构建中途抛错、元素未挂载),`switcher` 变量
+  仍非空 → 1s 巡检发现 DOM 无 `#miasaki-switcher` 调 `buildSwitcher()` 时直接 return,
+  **永远无法重建**,按钮永久消失直到页面刷新。
+- **修复**(`themes/runtime.js`):判断标准从「变量非空」改为「真实挂载」——
+  `if (switcher && switcher.parentNode) return`。元素被移除后 parentNode=null,
+  巡检下一轮即可重建;构建中途抛错时(新元素未挂载)同样可重试,不再死锁。
+- 触摸点:`themes/runtime.js`(→ `npm run gen-init` 后 `src-tauri/injected/theme-init.js`)。
+- 验证点:`gen-init` 令牌校验通过;需重新构建 EXE(`npx tauri build --bundles nsis` 或
+  `cargo build --release`)后验证:DSH 页右下角按钮出现;若页面重渲染移除按钮元素,
+  1s 巡检应自动重建(此前为永久消失)。
+
+## 2026-08-29 · 标题栏窗口控制按钮图标优化（SVG 化 + 最大化状态同步）
+
+依据:用户「优化一下桌面端右上角最小化最大化关闭图标」。
+
+- **根因(旧实现)**:三个按钮用 Unicode 字符(– / □ / ✕)当图标——en-dash 偏细偏短、
+  `□` 实心方块块面感过强、`✕` 笔画粗细不可控,三者字形基线不一致、风格不统一;
+  且最大化按钮无状态区分,窗口最大化后仍显示「最大化」方框。
+- **修复**(`themes/runtime.js`):
+  - 新增 `TB_ICONS` 常量:四枚内联 SVG(16×16 视口,`currentColor` 描边、圆头端帽,
+    Windows 11 Fluent 线形)——最小化=水平短线、最大化=矩形+加粗顶边、
+    还原=双框错位(右上后框+左下前框)、关闭=X 交叉线;按钮 hover 变色自动跟随主题。
+  - **最大化↔还原状态同步**:`wireMaxState()` 经 `window.__TAURI__.window.getCurrentWindow()`
+    的 `onResized`(120ms 防抖)+ `isMaximized()` 驱动图标切换——双击标题栏、
+    Win+↑ 等系统路径改变窗口状态同样同步,而非仅凭自己的点击;监听仅注册一次,
+    标题栏被页面重渲染重建(1s 巡检)后 `syncMaxBtn()` 立即补查真实状态,图标不丢失。
+  - 非 Tauri 环境(普通浏览器调试预览)点击最大化按钮时本地翻转图标兜底。
+- 触摸点:`themes/runtime.js`(→ `npm run gen-init` 后 `src-tauri/injected/theme-init.js`)。
+- 验证点:`node scripts/build-init.mjs` 令牌校验通过;sharp 渲染四态图标(常规/hover/
+  close-hover)目检线条粗细一致、还原图标错位形态正确;构建 EXE 后窗口最大化时
+  按钮显示「还原」图标,还原后回「最大化」。
+
+## 2026-08-29 · 软件图标更换:DeepSeek 娘(用户提供图)
+
+依据:用户「用这个做软件图标」+ 附 DeepSeek 娘立绘(960x960,底部黑底
+「DeepSeek」文字条),选择「裁掉文字条,聚焦人物」方案。
+
+- **源图处理**(一次性,`_refs/prepare-icon.mjs`):黑条从 y~808 起 → 裁
+  `(left:154, top:0, 806x806)` 方形主体(内容中心 570 / 方形中心 557,构图
+  基本居中;比耶手势右缘 941 完整保留),lanczos3 放大 1024x1024 写入
+  `src-tauri/icon-new.png`(旧「时钟蔷薇」艺术图仍在 git 历史,可回退)。
+- **全链路重生成**:`node scripts/make-icons.mjs`(icon-new.png →
+  `app-icon-source.png` + `ui/icons/app.png` 128 加载页图标)→
+  `npx tauri icon src-tauri/app-icon-source.png` 重生成全套
+  (`icon.ico`/`icon.icns`/32-256 png/StoreLogo/Square*/ios/android)。
+- **安装包图标**:`tauri.conf.json` 新增 `bundle.windows.nsis.installerIcon`/
+  `uninstallerIcon`(均指向 `icons/icon.ico`)——原先 NSIS 安装包默认用
+  NSIS 自带图标,首轮构建验证时发现后补齐。
+- 触摸点:`src-tauri/icon-new.png`、`src-tauri/app-icon-source.png`、
+  `src-tauri/icons/*`(全套)、`src-tauri/tauri.conf.json`、`ui/icons/app.png`。
+- 构建说明:本机 MSI 打包(light.exe)因 Windows Installer 服务访问受限失败,
+  改用 `npx tauri build --bundles nsis` 产出安装包(已验证)。
+- 验证点:重新 `npm run tauri build` 后,EXE/安装包/加载页标题栏图标均为
+  DeepSeek 娘;小尺寸(32px)下人物聚焦、无文字黑带残留。
+
+## 2026-08-29 · 桌面端:修复右下角主题切换条悬浮介绍全部相同
+
+依据:用户「右下角选择主题模式鼠标悬浮介绍都是鲸鱼娘主题的介绍」。
+
+- **根因**:`themes/runtime.js` 的 `buildSwitcher()` 为每个主题选项 `.ms-opt` 渲染
+  名称/副标题,但未设置各自 `title` 属性;而 `refreshSwitcher()` 给整个
+  `#miasaki-switcher` 设置 `title = TIPS[current]`(当前主题提示)。浏览器 hover
+  无 `title` 的子元素时向上取最近祖先前缀 → 三个主题选项悬浮提示全部显示
+  **当前主题**(如 pure/鲸鱼娘)的一句文案,看起来"都是鲸鱼娘主题的介绍"。
+  **注意**:曾尝试在 HTML 字符串内嵌 `title` 属性,但在完整内联主题 STYLES
+  环境下会使 `switcher.innerHTML = html` 抛 `TypeError: html is not a function`
+  (真实 Chromium 复现;构建失败被 try/catch 吞掉,1s 巡检因 `switcher` 变量
+  已占位无法重建 → 切换条整体消失)。最终实现改在 DOM 构建后 `setAttribute` 设置。
+- **修复**:
+  - 每个 `.ms-opt` 在 `switcher.innerHTML` 赋值后经 `setAttribute('title', …)`
+    设置独立提示(缺失回退 `META[t].name · META[t].sub`),
+    hover 选项时原生悬浮提示显示该主题自己的介绍;
+  - 面板底部 `.ms-tip` 增加 hover 联动:`mouseenter` 显示对应主题提示、
+    `mouseleave` 恢复当前主题提示(`TIPS[current]`);
+  - 切换条整体 `title`(按钮/空白区)仍为当前主题提示,行为不变。
+- 触摸点:`themes/runtime.js`(→ `npm run gen-init` 后 `src-tauri/injected/theme-init.js`)。
+- 验证点:真实 Chromium(Edge 151 headless)加载构建产物,`#miasaki-switcher`
+  构建成功且三选项 `title` 分别为「原版 DSH · 简约纯净」/
+  「ふふふ,今晚的时间也属于我呢」/「选好了吗?我讨厌犹豫的人」,
+  不再全部是当前主题的介绍;桌面端 EXE 构建部署后同效。
+
+## 2026-08-29 · 修复:桌宠显隐切换条件反转（边缘杂色跳动 + 日志刷屏）
+
+依据:用户现场「桌宠边缘有杂色跳动」。
+
+- **根因**:显示/隐藏切换比较条件写反 —— `want_hide != self.shown` 应为
+  `want_hide == self.shown`。初始态(want_hide=false 想显示 / shown=true 已显示)
+  语义一致但布尔不等 → 进入分支,每 33ms tick 重复执行 ShowWindow +
+  UpdateLayeredWindow(dirty 置位) + pet.json 原子写 → 分层窗口高频重提交,
+  合成器边缘出现杂色抖动;pet.log 同步刷屏(每秒 ~30 行「shown (hide persisted)」)。
+  切换后的 `self.shown = !want_hide` 幂等(不再变化),故日志只有 show 无 hide,
+  无用户操作也持续触发。
+- **修复**:条件改为 `want_hide == self.shown`(目标隐藏态==实际显示态才需切换,
+  含 (true,true)=想藏但已显、(false,false)=想显但已藏 两种)。
+  JS 状态机模拟验证:修复前 10/10 tick 触发,修复后稳定 0 触发;隐藏操作只切 1 次且结果正确。
+- 触摸点:`src-tauri/src/pet_native.rs`(compose 命令消费块)。
+
+## 2026-08-29 · 桌面端:桌宠位置屏外修复 + 设置面板(设置 → 桌宠)
+
+依据:用户「桌宠没启动,而且应该在设置里有桌宠设置选项」。
+
+- **「桌宠没启动」根因定位**:桌宠窗口实际随应用正常创建(pet.log
+  `window created at 2902,930`),但位置保存在 `pet.json` → 屏幕 2560×1440 下
+  (2902,930) 完全位于屏幕外(显示器布局变化/历史遗留坐标),用户看不到。
+- **位置可见性校验**(`pet_native.rs`):新增 `EnumDisplayMonitors` +
+  `GetMonitorInfoW` FFI 枚举全部显示器工作区;`initial_pet_state()` 要求位置
+  中心点落在任一工作区,否则回默认 (1200,500) 并保留隐藏设置,pet.log 记录回退。
+- **pet.json 版本化 v1**:`{version:1, x, y, hide}` + 原子写(temp+rename);
+  损坏/版本不符 → 全部默认重建(不静默零值,兑现 bootstrap-reliability.md §4.1
+  遗留项);`hide` 持久化,重启保持隐藏状态,恢复时圆点可见、可点击显示。
+- **显隐/重置命令统一到窗口线程**:右键菜单「隐藏桌宠」与面板命令只写
+  `PetShared` 标志,UI 切换 + pet.json 落盘由 compose(窗口线程)消费执行,
+  避免多线程 user32 调用;`PetWin` 增加 `shown` 镜像字段。
+- **hash 通道扩展**(`main.rs`):`cmd=pet-show/pet-hide/pet-reset/pet-state`;
+  新增 `push_pet_state()` 经 eval 下发 `miasaki-pet-state` CustomEvent(状态回显)。
+- **新增 DSH bundle `plugins/dsh-pet-panel/`(桌面端设置面板)**:
+  settings.section「桌宠」(order 26,client bundle 手写 `__ModuleLoader__` 格式):
+  显示/隐藏开关、位置重置、状态回显;非桌面端(无 `window.__MIASAKI_BOOTED__`)
+  降级提示。host 侧空壳(职责全在 hash 通道);安装入
+  `%USERPROFILE%\.dsh\profiles\web\package.json`(dependencies + bundles)。
+- 触摸点:`src-tauri/src/pet_native.rs`、`src-tauri/src/main.rs`、
+  `plugins/dsh-pet-panel/`(新增)、`%USERPROFILE%\.dsh\profiles\web\package.json`、
+  `README.md`、`design/TODO.md`。
+- 验证点:重启桌面端后桌宠出现在默认位置(而非屏外空窗);设置 → 桌宠
+  (host 重启后生效):开关隐藏/显示(重启保持)、位置重置回到 (1200,500)、
+  右键菜单显隐与面板状态一致;桌宠拖到屏外后重启自动回默认。
+
+## 2026-08-29 · 桌面端:关闭确认弹窗 + 启动画面主题统一
+
+依据:用户「桌面端启动画面需要优化,画面不统一」「关闭桌面端应弹窗提醒是否关闭应用,选择关闭应用
+应该同步关闭后端」。
+
+- **关闭确认弹窗(主题自绘,所有关闭入口收敛)**:标题栏 X / 系统关闭(Alt+F4)/ 托盘「退出」/
+  桌宠右键「退出应用」统一走 `request_close` → 唤起主窗口并显示确认弹窗(`runtime.js` 注入
+  `#miasaki-close-dialog`,色板随三主题 `--ms-*` 变量)。「关闭应用」→ hash `cmd=shutdown`
+  → `shutdown_app`:**停止由桌面端拉起的 DSH 后端**(按 spawn 时记录的 PID `taskkill /T /F`
+  杀进程树)再退出;「取消」仅收起弹窗。非本应用拉起的后端(用户手动 `dsh web` / 端口已在运行
+  时接入)不触碰。兜底:仅 Alt+F4 连击(5s 内二次系统关闭,前端无响应)强制退出(不杀后端,服务保持)。
+- **启动画面统一**:
+  - `loading.html` 移除自带标题栏(`.tb`),统一由 `runtime.js` 构建 `#miasaki-titlebar`
+    (本地唤醒页与 DSH 页同款画面);本地页不再构建切换条/水印/光晕,保持启动画面简洁。
+  - 修复 `IS_LOCAL` 判定:Windows 上 Tauri 2 协议为 `http://tauri.localhost`,
+    原 `location.protocol === 'tauri:'` 恒 false → 本地页出现重复标题栏 + 切换条
+    (这正是「画面不统一」);现以 protocol + hostname + pathname 三重判定,并修正巡检
+    在本地页重建切换条的问题。
+  - 启动画面随主题换肤:主题偏好由 DSH 页 hash 通道同步 Rust 落盘
+    `%APPDATA%\com.miasaki.desktop\prefs.json`(原子写),启动时经 `__MIA_THEME__` 注入
+    initial script;`loading.html` 按 `html[data-miasaki-theme]` 渲染三套色板 + 主题纹章
+    (刻刻帝钟面 / 狂狂帝破裂表盘 / 原版简约环)。
+- **命令收敛**:移除 `exit_app` / `minimize_main`(标题栏按钮改走 hash `cmd=close` / `min`);
+  hash `cmd=exit`(直接退出)移除,防绕过确认。
+- **素材服务提前**:`start_asset_server` 移至 setup 开头(启动页标题栏图标同源加载,防 404 竞态)。
+- 触摸点:`themes/runtime.js`、`ui/loading.html`、`src-tauri/src/main.rs`、
+  `src-tauri/src/pet_native.rs`、`src-tauri/injected/theme-init.js`(构建产物)、
+  `README.md`、`design/themes.md`。
+- 验证点:标题栏 X → 弹窗(随三主题配色)→ 取消仍在运行 / 确认后 DSH 停止 + 应用退出;
+  DSH 页切换主题后重启桌面端,启动画面同主题;托盘、桌宠退出弹窗同路径;本地页无切换条。
+
+## 2026-08-24 · 启动可靠性(Bootstrap Reliability)第 1 部分
+
+依据:`design/bootstrap-reliability.md`(设计定稿,借鉴 deepseek-harness-desktop 的
+启动恢复/健康标记/可靠性矩阵思路)。
+
+- **bootstrap.json 健康标记(v1)**:`%LOCALAPPDATA%\miasaki\bootstrap.json`,记录每次启动的
+  `lastAttempt{at,phase,detail,dshAvailable}` 与 `lastOk`;阶段流水
+  bootstrap → spawn(失败,语义化错误) → waiting(3s 低频心跳) → up(3080 页面加载成功);
+  90s 未就绪仅提示一次(端口占用排查指引)。损坏/版本不符 → 删除重建默认(不猜不静默)。
+- **失败恢复页(loading.html)**:失败时显示恢复动作组——检查 dsh / 打开终端 / 打开日志目录 /
+  导出诊断;页面初始化读取上次启动状态,上次失败(spawn/waiting)会提前提示且不阻塞本次启动;
+  上次成功显示「已进入」时间。恢复动作仅本地页可 invoke(远程 3080 页受 remote-dsh.json 限制,不暴露)。
+- **dsh 安装检测**:spawn 前 `where dsh` 探测 → 未安装时提示安装指引(而非笼统的"启动失败")。
+- **重试换代修复(既有 bug)**:原「重试」按钮在 spawn 失败后实际无效(LAUNCHING 已置位且旧循环
+  不再 spawn);引入 `BOOTSTRAP_GEN` 代际计数,retry 时换代,旧序列检测到代际变化退出,
+  新序列完整重跑(bootstrap/spawn/探活)。
+- **导出诊断**:聚合 server.log/pet.log 尾部(各 ≤512KB)+ bootstrap.json + window.json + pet.json
+  + OS 信息 → `%APPDATA%\com.miasaki.desktop\diagnostics-<ts>.txt`(只读副本,不触碰原日志)。
+- **原子写铁律落地**:bootstrap.json 与 window.json 均改为 temp+rename(原 window.json 直接
+  `fs::write`,崩溃/断电可半写)。
+- 触摸点:`src-tauri/src/main.rs`、`ui/loading.html`、`design/bootstrap-reliability.md`(新增)、
+  `design/TODO.md`、`README.md`。
+- 验证:`cargo check --offline` 通过;`gen-init` 令牌校验通过;loading.html 内嵌 JS 语法检查通过。
+  真机待验:三条失败用例 + 正常启动回归(见设计文档 §6 验收标准)。
+
+## 2026-08-22 · DSH 插件:免费模型池(Free Model Pool) v0.2 — 多平台扫描 + 能力画像
+
+依据:用户要求「以后可能不仅 OpenRouter,其他平台也会有」+「边界明确:这些模型能干什么、
+适合干什么,都要快速分析决策怎么使用」。
+
+- **多平台化**:扫描对象从写死 OpenRouter 改为 `llm-pi-ai.providers` 中**所有带 baseURL 的
+  OpenAI 兼容平台路由**;detect/apply/subagent 全部带 `platform` 参数,新平台配置后自动出现,
+  零插件改动。status 返回平台列表(displayName/endpoint/apiKeyEnv/configuredCount)。
+- **免费判定分层**:`:free` 后缀 → pricing 全零 → 名称含 免费/free;三层任一命中即收录,
+  避免单规则漏检(真实 OpenRouter 列表:17 个 `:free` + 零定价预览 2 + `openrouter/free`
+  特殊路由 1 = 21)。实测无误报付费模型。
+- **能力画像 `analyzeModel`**:从端点自述提取 工具调用/tool_choice/推理/编码/视觉/结构化输出/
+  超长上下文/预览标记,产出三档 verdict:
+  `首选(复杂|编码|多模态)子代理` / `可用:通用子代理` / `仅问答、批处理(无工具调用)` /
+  `需实测验证(有 tools 无 tool_choice)`;warnings 标出 缺 tool_choice/预览模型/输出上限低/上下文小。
+  子代理门槛 = tools + tool_choice(DSH agent loop 依赖工具循环)。
+- **决策摘要 summary**:bestAgent(评分排序首位)/codingAgent/longContextAgent/visionAgent
+  (仅子代理可用者计)/agentCount/qaOnly;面板顶部直接呈现,子代理切换默认推荐最佳。
+- 判定原则:画像从端点自述而非 benchmark ELO,无自述者标「元数据缺失」而非猜测。
+- **持久化机制修正**:pnpm `file:` 依赖按包版本缓存 store 副本,改源码后 `pnpm install`
+  不会刷新(实测 DIFF);需 `--force` 或直接复制 `lib/*` 到 node_modules 并核对哈希;
+  本版随功能升 0.2.0 并同步部署副本。
+- 验证:离线冒烟(fake hub:三免费标记、付费不误报、canAgent/code/vision/tools-only 四类画像、
+  排序与摘要语义)全 PASS;真实 OpenRouter 审计 21 模型 verdict/warnings 全部一致,无误报。
+- 触摸点:`plugins/dsh-free-model-pool/lib/index.js`(analyzeModel + 多平台路由)、
+  `lib/client.js`(平台选择器 + 画像行 + 摘要块)、`lib/index.d.ts`/`lib/types/detect.d.ts`、
+  `package.json`(0.2.0)、`README.md`。
+
+## 2026-08-22 · DSH 插件:免费模型池(Free Model Pool)
+
+依据:用户在 DSH web 会话「配置聚合平台API检测免费模型」需求——从聚合平台(OpenRouter)
+检测免费模型并用于子代理,首轮手工落地(settings.yaml 注册 openrouter 路由 + 预设
+agentOptions),本轮把该能力固化为可重复使用的 DSH web profile bundle。
+
+- **`plugins/dsh-free-model-pool/`(新增)**:host 插件 + 手写 client bundle 的 DSH bundle 包。
+  - 面板:DSH「设置 → 免费模型池」(settings.section, order 25),
+    检测结果列表(含 ctx/maxTokens)、写入全部/单个模型、一键切换子代理后端。
+  - host 路由(webServer 注册,client 浏览器同源 fetch):
+    `GET /freepool-api/status`(读 llm-pi-ai openrouter 配置)、
+    `GET /freepool-api/detect`(拉 OpenRouter /v1/models,`:free` 后缀 + pricing 全零判定)、
+    `POST /freepool-api/apply`(settings.update 深合并,保留其他 provider/字段,写入 openrouter.models)、
+    `POST /freepool-api/subagent`(重写三预设 tool-subagent/tool-subagent-fork 的 agentOptions)。
+  - 通信选型:client bundle 无动态 runner 的 `host.call`,故 host 侧走 `webServer.register`
+    同源 JSON 路由(与官方 client-connection 的浏览器 fetch 一致);
+    host 为普通 ESM(Node 全局 fetch 可用),不受动态插件 fetch 陷阱约束。
+  - client bundle 为手写 `window.__ModuleLoader__.load({id, factory})` 格式(本机无 tsdown),
+    遵循官方产物同构:`inject` 数组 + `apply` + `module.exports`;
+    面板纯 `React.createElement`,无 JSX/import。
+- **安装**:`%USERPROFILE%\.dsh\profiles\web\package.json` 以 `file:` 依赖引入并加入
+  `dsh.profile.bundles`;pnpm install 后需重启 host 生效;改源码后重跑 pnpm install 同步。
+- **验证**:离线冒烟(status/detect/apply/subagent 四路由,真 http 服务 + 假 settings/
+  假预设目录副本)全 PASS;detect 命中 17 个 `:free` 模型;apply 保留 xiaomi 等其他 provider;
+  subagent 正确更新 kurumi/whale/inverse 三预设。真机验证点:重启后面板渲染、写入后模型选择器出现、
+  子代理实际切换模型。
+- 触摸点:`plugins/dsh-free-model-pool/*`(新增)、
+  `%USERPROFILE%\.dsh\profiles\web\package.json`(bundle 注册)、`README.md`。
+
 ## 2026-08-23 · 标题栏 × DSW 布局融合 + 主题装饰
 
 - **标题栏与 DSH 页面融合**：背景/文字改走 DSH 本体令牌（`--dsw-alias-bg-base` / `--dsw-alias-label-*`），

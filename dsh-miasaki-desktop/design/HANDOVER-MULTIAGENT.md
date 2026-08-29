@@ -44,7 +44,7 @@
 | `shared/` | 本线共享只读区 | — | 入库存档 |
 | `desktop/` + `design/{HANDOVER,ARCHITECTURE,CHANGELOG,TODO,themes,token-surface}.md` | **桌面端线** | — | 见 HANDOVER.md |
 | `.freebuff/` `.monkeycode/` `.learnings/` | 外部工具私有数据（Freebuff 桌面代理 / monkeycode 截图工具 / DSH learnings） | 外部工具 | **已 ignore**，不属于本项目 |
-| `_refs/`（deepseek-harness 克隆、rc8-src.zip、smoke-patch-backup 等） | 官方源码快照与归档（重扫描参考素材） | — | 已 ignore |
+| `_refs/`（deepseek-harness 源快照、hatch-pet-kurumi-main、inv-*.png 等） | 官方源码快照与归档（重扫描参考素材；rc8-src.zip/od.zip 等损坏包已于 2026-08-29 清理） | — | 已 ignore |
 | `vendor/deepseek-harness` | 官方仓库实验 clone | — | 已 ignore |
 
 ### 2.2 角色（一句话版，细节见设计文档 §0/§1）
@@ -102,7 +102,7 @@ pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0009 -Agent claude
 ## 6. 下一步（按优先级；来源 `docs/next-tasks-plan-2026-08-20.md` P1 + 设计文档 §13/§14）
 
 - [x] **P1-2 m36 rc.8(+) 回归冒烟**（2026-08-22 完成，见 `docs/m36-rc8-regression-smoke-2026-08-22.md`）——本机全局 CLI 已至 0.1.1-rc.1；profile 混装 `--dump-config` 双双 exit 0、rc7-test 插件树与 M3.5 基线 313 行字节一致、三主题 18/18。**仍待用户在 GUI 验证历史会话恢复（rc.8 SQLite 不兼容）。**
-- [ ] **P1-5 引用资料再梳理**：`_refs/rc8-src.zip` 已损坏、`_refs/deepseek-harness` 是 rc.7 解包；需源码时重下官方 0.1.1-rc.2 source。
+- [ ] **P1-5 引用资料再梳理**：`_refs/rc8-src.zip` 已损坏且于 2026-08-29 清理、`_refs/deepseek-harness` 是 rc.7 解包；需源码时重下官方 0.1.1-rc.2 source。
 - [ ] **M2 监控面板 → DSH 动态 Cordis 插件**（现状是独立 node 服务；目标：Operator 开关控件 + 配置项落官方 plugin settings surface）。
 - [ ] **校准遗留**：gemini 换可用模型 / mimo invoke 语法 / dsh 建 headless profile / opencode+pi 计量（`--format json` 等）。（**registry 已重扫**：dsh→0.1.1-rc.1、claude→2.1.238、gemini→0.55.1；详见 `tests/m3-acp/logs/m36/scan-output.log`）
 - [ ] **M4 fleet 适配闭环**：无匹配技能 → 暂存 +「开启建议」；关闭 agent 的 reassign 流程。

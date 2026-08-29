@@ -66,3 +66,6 @@ dsh-miasaki-desktop/.edge-test-profile
 .workbuddy/
 Thumbs.db
 Desktop.ini
+
+# ---- 诊断临时目录（edge headless 验证 profile，重启后可删）----
+_probe/
