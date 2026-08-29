@@ -401,7 +401,11 @@
   }
 
   function buildSwitcher() {
-    if (switcher || !document.body) return
+    if (!document.body) return
+    // 仅当切换条真实挂载在文档中时才视为已构建：若元素被页面重渲染移除，
+    // switcher 变量仍指向旧节点（parentNode=null），此前按变量非空判断会导致
+    // 1s 巡检永远无法重建（按钮永久消失）；构建中途抛错时同理可重试。
+    if (switcher && switcher.parentNode) return
     switcher = document.createElement('div')
     switcher.id = 'miasaki-switcher'
     var html = '<div class="ms-btn" title=""></div><div class="ms-panel">'
@@ -420,6 +424,29 @@
       '<span class="mb" data-b="system" title="跟随系统">\u{1F5A5}</span></div>'
     html += '<div class="ms-tip"></div></div>'
     switcher.innerHTML = html
+    var opts = switcher.querySelectorAll('.ms-opt')
+    for (var ki = 0; ki < opts.length; ki++) {
+      var oo = opts[ki]
+      var tt = oo.getAttribute('data-theme')
+      oo.setAttribute('title', TIPS[tt] || (META[tt].name + ' · ' + META[tt].sub))
+    }
+    (function bindTipHover() {
+      try {
+        var tip = switcher.querySelector('.ms-tip')
+        var opts2 = switcher.querySelectorAll('.ms-opt')
+        for (var k2 = 0; k2 < opts2.length; k2++) {
+          (function (optEl) {
+            var tt2 = optEl.getAttribute('data-theme')
+            optEl.addEventListener('mouseenter', function () {
+              if (tip && TIPS[tt2]) tip.textContent = TIPS[tt2]
+            })
+            optEl.addEventListener('mouseleave', function () {
+              if (tip) tip.textContent = TIPS[current]
+            })
+          })(opts2[k2])
+        }
+      } catch (e) {}
+    })()
     switcher.addEventListener('click', function (ev) {
       var opt = ev.target && ev.target.closest ? ev.target.closest('.ms-opt') : null
       if (opt) {
