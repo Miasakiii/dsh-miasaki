@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod assets;
 mod pet_native;
 
 use std::{
@@ -737,7 +738,7 @@ fn start_asset_server() {
                     && !file.contains("..")
                     && !file.contains('\\');
                 let body = if valid {
-                    exe_asset_path(dir, &file).and_then(|p| std::fs::read(p).ok())
+                    assets::read(&format!("{dir}/{file}"))
                 } else {
                     None
                 };
@@ -767,12 +768,6 @@ fn start_asset_server() {
             });
         }
     });
-}
-
-fn exe_asset_path(dir: &str, file: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let base = exe.parent()?.to_path_buf();
-    Some(base.join("ui").join(dir).join(file))
 }
 
 /* ---------------- 主窗口状态持久化（位置/大小） ---------------- */

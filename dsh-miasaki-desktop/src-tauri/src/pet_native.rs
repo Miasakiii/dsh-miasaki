@@ -237,9 +237,8 @@ impl Clone for Image {
     }
 }
 
-fn load_png(path: &std::path::Path) -> Option<Image> {
-    let file = std::fs::File::open(path).ok()?;
-    let decoder = png::Decoder::new(file);
+fn load_png(bytes: &[u8]) -> Option<Image> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().ok()?;
     let mut buf = vec![0u8; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buf).ok()?;
@@ -268,65 +267,74 @@ struct Frames {
     bubbles: Vec<Image>,
 }
 
-fn load_frames(base: &std::path::Path) -> Frames {
+fn load_frames() -> Frames {
+    // 素材经 crate::assets 读取：磁盘 ui/（EXE 旁）优先，编译期内嵌兜底 ——
+    // 单文件拷贝 EXE 也能完整显示桌宠（图标/气泡/帧图集），不再强制 ui/ 外置。
     let mut f = Frames::default();
-    let pets_root = base.join("ui").join("pets");
     // 预渲染气泡精灵表(帧序 = quote_pool 顺序;构建期经 gen-bubbles.ps1 生成)
-    if let Some(sheet) = load_png(&pets_root.join("bubbles.png")) {
-        let stride = BUBBLE_W as usize;
-        let rows = BUBBLE_H as usize;
-        if sheet.w >= stride * BUBBLE_COUNT && sheet.h >= rows {
-            for i in 0..BUBBLE_COUNT {
-                let mut frame = Image { w: stride, h: rows, bgra: Vec::with_capacity(stride * rows) };
-                for y in 0..rows {
-                    let src = y * sheet.w + i * stride;
-                    frame.bgra.extend_from_slice(&sheet.bgra[src..src + stride]);
+    if let Some(bytes) = crate::assets::read("pets/bubbles.png") {
+        if let Some(sheet) = load_png(&bytes) {
+            let stride = BUBBLE_W as usize;
+            let rows = BUBBLE_H as usize;
+            if sheet.w >= stride * BUBBLE_COUNT && sheet.h >= rows {
+                for i in 0..BUBBLE_COUNT {
+                    let mut frame = Image { w: stride, h: rows, bgra: Vec::with_capacity(stride * rows) };
+                    for y in 0..rows {
+                        let src = y * sheet.w + i * stride;
+                        frame.bgra.extend_from_slice(&sheet.bgra[src..src + stride]);
+                    }
+                    f.bubbles.push(frame);
                 }
-                f.bubbles.push(frame);
             }
         }
     }
-    if let Ok(txt) = std::fs::read_to_string(pets_root.join("frames.json")) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-            // 行帧图集(kurumi)
-            if let Some(rows) = v.get("kurumi").and_then(|m| m.get("rows")).and_then(|r| r.as_object()) {
-                for (row, files) in rows {
-                    let mut imgs = Vec::new();
-                    if let Some(arr) = files.as_array() {
-                        for name in arr {
-                            let p = pets_root.join("kurumi").join("frames").join(name.as_str().unwrap_or(""));
-                            if let Some(img) = load_png(&p) {
-                                imgs.push(img);
-                            }
-                        }
-                    }
-                    f.kurumi.insert(row.clone(), imgs);
-                }
-            }
-            // 立绘三态(whale / inverse);v2:值可为帧组数组(idle 帧序列)或单帧字符串
-            for mode in ["whale", "inverse"] {
-                if let Some(states) = v.get(mode).and_then(|m| m.get("states")).and_then(|s| s.as_object()) {
-                    for (s, name) in states {
-                        let names: Vec<String> = if let Some(arr) = name.as_array() {
-                            arr.iter().filter_map(|n| n.as_str().map(|x| x.to_string())).collect()
-                        } else {
-                            let n = name.as_str().unwrap_or("");
-                            if n.is_empty() { Vec::new() } else { vec![n.to_string()] }
-                        };
+    if let Some(bytes) = crate::assets::read("pets/frames.json") {
+        if let Ok(txt) = String::from_utf8(bytes) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                // 行帧图集(kurumi)
+                if let Some(rows) = v.get("kurumi").and_then(|m| m.get("rows")).and_then(|r| r.as_object()) {
+                    for (row, files) in rows {
                         let mut imgs = Vec::new();
-                        for n in &names {
-                            let p = pets_root.join(mode).join(n);
-                            if let Some(img) = load_png(&p) {
-                                imgs.push(img);
+                        if let Some(arr) = files.as_array() {
+                            for name in arr {
+                                let rel = format!("pets/kurumi/frames/{}", name.as_str().unwrap_or(""));
+                                if let Some(b) = crate::assets::read(&rel) {
+                                    if let Some(img) = load_png(&b) {
+                                        imgs.push(img);
+                                    }
+                                }
                             }
                         }
-                        if imgs.is_empty() {
-                            continue;
-                        }
-                        if mode == "whale" {
-                            f.whale_states.insert(s.clone(), imgs);
-                        } else {
-                            f.inverse_states.insert(s.clone(), imgs);
+                        f.kurumi.insert(row.clone(), imgs);
+                    }
+                }
+                // 立绘三态(whale / inverse);v2:值可为帧组数组(idle 帧序列)或单帧字符串
+                for mode in ["whale", "inverse"] {
+                    if let Some(states) = v.get(mode).and_then(|m| m.get("states")).and_then(|s| s.as_object()) {
+                        for (s, name) in states {
+                            let names: Vec<String> = if let Some(arr) = name.as_array() {
+                                arr.iter().filter_map(|n| n.as_str().map(|x| x.to_string())).collect()
+                            } else {
+                                let n = name.as_str().unwrap_or("");
+                                if n.is_empty() { Vec::new() } else { vec![n.to_string()] }
+                            };
+                            let mut imgs = Vec::new();
+                            for n in &names {
+                                let rel = format!("pets/{mode}/{n}");
+                                if let Some(b) = crate::assets::read(&rel) {
+                                    if let Some(img) = load_png(&b) {
+                                        imgs.push(img);
+                                    }
+                                }
+                            }
+                            if imgs.is_empty() {
+                                continue;
+                            }
+                            if mode == "whale" {
+                                f.whale_states.insert(s.clone(), imgs);
+                            } else {
+                                f.inverse_states.insert(s.clone(), imgs);
+                            }
                         }
                     }
                 }
@@ -1313,11 +1321,7 @@ impl NativePet {
             hide: restore_hide,
             pending_reset: false,
         }));
-        let base = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            .unwrap_or_default();
-        let frames = load_frames(&base);
+        let frames = load_frames();
         let s2 = shared.clone();
         let app2 = app.clone();
         let thread = std::thread::spawn(move || {
