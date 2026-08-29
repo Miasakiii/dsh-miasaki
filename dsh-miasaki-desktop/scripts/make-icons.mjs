@@ -78,15 +78,39 @@ function ringSvg(size, color, opts = {}) {
   console.log('theme-zafkiel.png (badge) done')
 }
 
-// inverse：反转狂三新立绘（states/idle.png 立绘头部） + 破碎血红环
+// inverse：反转狂三新立绘（states/idle.png 头部） + 破碎血红环
 {
   const invImg = join(root, 'ui', 'pets', 'inverse', 'states', 'idle.png')
   const meta = await sharp(invImg).metadata()
-  // 立绘 152x208：取中上部 92x92 头部区域（头居中偏上）
-  const hw = Math.min(92, meta.width)
-  const left = Math.max(0, Math.floor((meta.width - hw) / 2))
-  const top = Math.max(0, Math.floor(meta.height * 0.06))
-  const head = await sharp(invImg).extract({ left, top, width: hw, height: hw })
+  // 自适应头部定位（Q 版全身立绘 332x540）：头部总占顶部，身体从 ~45% 高度起明显变宽。
+  // 此前两版均失败——固定窗口按旧尺寸取中部（只拍到脸的中上一条）；
+  // 全图亮区 bbox 被衣服高光拉满整幅（side clamp 成全宽、top=97 → 头顶整段被切）。
+  // 本版：仅在顶部 35% 高度内统计 alpha bbox 与最大行宽，方形居中于该 bbox，
+  // 顶边取内容起始处（留 1% 余量），宽度含住发梢。
+  const { data, info } = await sharp(invImg).raw().toBuffer({ resolveWithObject: true })
+  const scanH = Math.max(1, Math.round(info.height * 0.35))
+  let minX = info.width, maxX = -1, startY = info.height, maxW = 0
+  for (let y = 0; y < scanH; y++) {
+    let yMin = info.width, yMax = -1
+    for (let x = 0; x < info.width; x++) {
+      if (data[(y * info.width + x) * 4 + 3] < 32) continue
+      if (x < yMin) yMin = x
+      if (x > yMax) yMax = x
+    }
+    if (yMax < 0) continue
+    if (y < startY) startY = y
+    if (yMin < minX) minX = yMin
+    if (yMax > maxX) maxX = yMax
+    maxW = Math.max(maxW, yMax - yMin + 1)
+  }
+  if (maxX < 0) throw new Error('inverse 立绘无内容，无法定位头部')
+  let side = Math.round(maxW * 1.06)
+  const cx = (minX + maxX) / 2
+  const top = Math.min(Math.max(Math.round(startY * 0.6), 0), info.height - 1)
+  side = Math.min(side, info.width, info.height - top)
+  const left = Math.min(Math.max(Math.round(cx - side / 2), 0), info.width - side)
+  console.log(`[inverse] head window: left=${left} top=${top} side=${side} (bbox ${minX}..${maxX}, startY=${startY}, maxW=${maxW})`)
+  const head = await sharp(invImg).extract({ left, top, width: side, height: side })
     .resize(96, 96, { kernel: 'lanczos3' })
     .composite([{ input: circleMaskSvg(96), blend: 'dest-in' }]).png().toBuffer()
   await sharp(head)
