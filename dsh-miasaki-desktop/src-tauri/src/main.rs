@@ -425,6 +425,8 @@ fn parse_fragment(
     Option<String>,
     Option<String>,
     Option<String>,
+    Option<String>,
+    Option<bool>,
     Option<(i32, i32)>,
     bool,
     i64,
@@ -432,6 +434,8 @@ fn parse_fragment(
     let mut theme = None;
     let mut int = None;
     let mut cmd = None;
+    let mut act = None;
+    let mut wait = None;
     let mut move_xy = None;
     let mut move_reset = false;
     let mut seq: i64 = -1;
@@ -444,6 +448,12 @@ fn parse_fragment(
         }
         if let Some(v) = part.strip_prefix("cmd=") {
             cmd = Some(v.to_string());
+        }
+        if let Some(v) = part.strip_prefix("act=") {
+            act = Some(v.to_string());
+        }
+        if let Some(v) = part.strip_prefix("wait=") {
+            wait = Some(v == "1");
         }
         if let Some(v) = part.strip_prefix("seq=") {
             seq = v.parse().unwrap_or(-1);
@@ -458,7 +468,7 @@ fn parse_fragment(
             }
         }
     }
-    (theme, int, cmd, move_xy, move_reset, seq)
+    (theme, int, cmd, act, wait, move_xy, move_reset, seq)
 }
 
 fn pet_mode_for(theme: &str) -> &'static str {
@@ -480,11 +490,35 @@ fn push_pet_state(app: &AppHandle) {
     eval_status(app, &js);
 }
 
+/// 推送主窗口最大化状态到页面：远程页无 IPC 权限（capability 只授 start-dragging），
+/// 经 eval 派发 CustomEvent（与 push_pet_state 同构）。runtime.js 监听 `miasaki-max-state`
+/// 切换标题栏「最大化/还原」图标；页面经 hash cmd=want-max 主动请求重推。
+fn push_max_state(app: &AppHandle) {
+    if let Some(wv) = app.get_webview_window("main") {
+        let maximized = wv.is_maximized().unwrap_or(false);
+        let js = format!(
+            "window.dispatchEvent && window.dispatchEvent(new CustomEvent('miasaki-max-state',{{detail:{{max:{maximized}}}}}))"
+        );
+        let _ = wv.eval(js);
+    }
+}
+
+/// 上次最大化状态推送时间（毫秒）：Resized 拖动时高频触发，150ms 防抖。
+static LAST_MAX_PUSH: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn chrono_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn start_hash_watchdog(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut last_fragment = String::new();
         let mut last_seq: i64 = -1;
+        let mut last_diag = String::new();
         // 拖窗：累计增量差值应用(JS 发相对按下起点的累计值;Rust 应用与上次的差,不丢帧不重复)
         let mut last_move: (i32, i32) = (0, 0);
         loop {
@@ -496,7 +530,16 @@ fn start_hash_watchdog(app: &AppHandle) {
                 continue;
             }
             last_fragment = fragment.to_string();
-            let (theme, int, cmd, move_xy, move_reset, seq) = parse_fragment(fragment);
+            let (theme, int, cmd, act, wait, move_xy, move_reset, seq) = parse_fragment(fragment);
+            // 诊断位落盘：hash diag（含侧栏宽/收起判定）变化时写一行日志，
+            // 导出诊断可见 → 标题栏/侧栏问题可远程定位（1.5s 同步一次，变化才写，不刷屏）
+            if let Some(p) = fragment.split("&diag=").nth(1) {
+                let diag = p.split('&').next().unwrap_or(p);
+                if diag != last_diag {
+                    last_diag = diag.to_string();
+                    app_log_line(&format!("[{}] hash-diag {diag}\n", chrono_now()));
+                }
+            }
             let pet = app.state::<pet_native::NativePet>();
             if let Some(t) = theme {
                 let mode = pet_mode_for(&t);
@@ -512,6 +555,13 @@ fn start_hash_watchdog(app: &AppHandle) {
             }
             if let Some(i) = int {
                 pet.set_intensity(&i);
+            }
+            // v2026-08-30:总指挥活动状态/审批等待
+            if let Some(a) = act {
+                pet.set_activity(&a);
+            }
+            if let Some(w) = wait {
+                pet.set_waiting_approval(w);
             }
             if move_reset {
                 last_move = (0, 0);
@@ -564,6 +614,10 @@ fn start_hash_watchdog(app: &AppHandle) {
                         }
                         "pet-state" => {
                             push_pet_state(&app);
+                        }
+                        // 页面请求最大化状态重推（标题栏被重渲染重建/推送丢失兜底）
+                        "want-max" => {
+                            push_max_state(&app);
                         }
                         _ => {}
                     }
@@ -840,11 +894,24 @@ fn main() {
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    save_window_state(window);
-                    // 拦截关闭：前端弹窗确认；确认后走 hash cmd=shutdown（停后端 + 退出）
-                    api.prevent_close();
-                    request_close_system(window.app_handle());
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        save_window_state(window);
+                        // 拦截关闭：前端弹窗确认；确认后走 hash cmd=shutdown（停后端 + 退出）
+                        api.prevent_close();
+                        request_close_system(window.app_handle());
+                    }
+                    // 最大化/还原状态推送：窗口尺寸变化（含双击标题栏/Win+↑ 等系统路径），
+                    // 150ms 防抖（拖动调整大小时 Resized 高频触发）
+                    tauri::WindowEvent::Resized(_) => {
+                        let now = chrono_now_ms();
+                        let last = LAST_MAX_PUSH.load(std::sync::atomic::Ordering::Relaxed);
+                        if now - last >= 150 {
+                            LAST_MAX_PUSH.store(now, std::sync::atomic::Ordering::Relaxed);
+                            push_max_state(window.app_handle());
+                        }
+                    }
+                    _ => {}
                 }
             }
         })
@@ -856,6 +923,12 @@ fn main() {
             let theme = load_prefs().theme;
             let theme_json = serde_json::to_string(&theme).unwrap_or_else(|_| "\"pure\"".into());
             let init = format!("window.__MIA_THEME__={theme_json};\n{INIT_SCRIPT}");
+            // 窗口底色随主题：页面加载期（loading → DSH 渲染完成前）的底色，
+            // 避免深色注入层(标题栏/色块)悬在默认白底上形成"左上角黑块"或白闪。
+            let bg = match theme.as_str() {
+                "kurkuriel" => tauri::utils::config::Color(247, 244, 241, 255),
+                _ => tauri::utils::config::Color(12, 11, 17, 255),
+            };
             let webview = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("loading.html".into()))
                 .title("Miasaki · DSH")
                 .inner_size(1280.0, 800.0)
@@ -863,6 +936,7 @@ fn main() {
                 .center()
                 .decorations(false)
                 .visible(false)
+                .background_color(bg)
                 .initialization_script(&init)
                 .on_page_load(|webview, payload| {
                     let _ = webview.show();
@@ -870,6 +944,13 @@ fn main() {
                     if url.starts_with("http://127.0.0.1:3080") {
                         record_bootstrap_up();
                         let _ = webview.eval(INIT_SCRIPT);
+                        // 延迟推一次最大化状态：eval INIT_SCRIPT 后页面监听已就绪（重启后
+                        // 恢复上次窗口尺寸时的初始图标同样正确）
+                        let app2 = webview.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(600)).await;
+                            push_max_state(&app2);
+                        });
                     }
                 })
                 .build()

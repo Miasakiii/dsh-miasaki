@@ -41,7 +41,8 @@ async function cutAtlas(mode) {
       }
       if (hits <= 8) continue
       const file = `r${r}c${c}.png`
-      await sharp(buf).toFile(join(outDir, file))
+      const cleaned = await despeckle(buf)
+      await sharp(cleaned).toFile(join(outDir, file))
       cols.push(file)
     }
     frames[rowName] = cols
@@ -64,6 +65,42 @@ async function stripGreenEdge(buf) {
     .toBuffer()
 }
 
+// 边缘去噪:杀散点 + 杀半透明光晕
+// 1. a<24 → 0(对齐 cutAtlas 非空探测阈值)
+// 2. 0<a<96 且 8 邻域无 a>=128 的不透明邻居 → 0(杀光晕浮雾,保留主体边)
+// 3. a>=96 但 8 邻域中 a>=128 的不透明邻居 <2 → 0(杀孤立散点,保留主体内部)
+async function despeckle(buf) {
+  const { data, info } = await sharp(buf).raw().toBuffer({ resolveWithObject: true })
+  const { width: w, height: h, channels: c } = info
+  if (c !== 4) {
+    return sharp(data, { raw: { width: w, height: h, channels: c } }).png().toBuffer()
+  }
+  const at = (x, y) => data[(y * w + x) * 4 + 3]
+  const out = Buffer.from(data)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const a = at(x, y)
+      if (a < 24) { out[(y * w + x) * 4 + 3] = 0; continue }
+      // 实心像素保留(主体内部,无需清理)
+      if (a >= 128) continue
+      let strong = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          if (at(nx, ny) >= 128) strong++
+        }
+      }
+      if (strong === 0) {
+        // 邻域无任何强前景 → 浮雾/孤立散点
+        out[(y * w + x) * 4 + 3] = 0
+      }
+    }
+  }
+  return sharp(out, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer()
+}
+
 // whale:拆 idle.gif 帧序列(192×208×6 垂直帧条),work/deep 保持立绘单帧
 async function cutWhaleIdleFrames() {
   const src = join(root, 'ui', 'pets', 'whale', 'idle.gif')
@@ -84,7 +121,8 @@ async function cutWhaleIdleFrames() {
       .extract({ left: 0, top: p * frameH, width: CELL_W, height: frameH })
       .png()
       .toBuffer()
-    await writeFile(join(outDir, f), await stripGreenEdge(buf))
+    const cleaned = await despeckle(await stripGreenEdge(buf))
+    await writeFile(join(outDir, f), cleaned)
     files.push(`states/${f}`)
   }
   console.log(`whale idle frames: ${files.length} x ${CELL_W}x${frameH} (from ${meta.width}x${totalH})`)

@@ -15,7 +15,11 @@ const DOT_SIZE: i32 = 30;
 // 运行时只做像素叠加 —— 规避 Win11 多线程 GDI 字体堆损坏导致 CreateFontW 崩溃)
 const BUBBLE_W: i32 = 240;
 const BUBBLE_H: i32 = 56;
-const BUBBLE_COUNT: usize = 17;
+// v2026-08-30:17 台词 + 3 状态帧(忙碌中…/等待审批/需要你的批准)
+const BUBBLE_COUNT: usize = 20;
+const BUBBLE_BUSY: usize = 17;
+const BUBBLE_WAITING: usize = 18;
+const BUBBLE_NEED_APPROVE: usize = 19;
 
 // —— v2 动作丰富化参数(2026-08-22,见 design/pet-v2-phase-a-execution.md) ——
 const WAVE_MS: u64 = 1300; // 双击挥手时长(wave 4 帧×8fps≈500ms,留余量)
@@ -34,6 +38,10 @@ pub struct PetShared {
     pub hide: bool,
     /// 面板「位置重置」请求：窗口线程 compose 消费后清 false。
     pub pending_reset: bool,
+    /// 总指挥活动状态(v2026-08-30):"busy" = 生成中,"idle" = 等待
+    pub activity: String,
+    /// 总指挥等待 Operator 审批工具调用(优先级最高)
+    pub waiting_approval: bool,
 }
 
 pub struct NativePet {
@@ -253,7 +261,16 @@ fn load_png(bytes: &[u8]) -> Option<Image> {
         let g = buf[i * 4 + 1] as u32;
         let b = buf[i * 4 + 2] as u32;
         let a = buf[i * 4 + 3] as u32;
-        bgra[i] = (a << 24) | ((r * a / 255) << 16) | ((g * a / 255) << 8) | (b * a / 255);
+        // 运行时兜底:a<8 视为全透(防 desync 素材被拉满)
+        if a < 8 {
+            bgra[i] = 0;
+            continue;
+        }
+        // 预乘四舍五入(消除 ≤1 级整数截断偏暗)
+        bgra[i] = (a << 24)
+            | (((r * a + 127) / 255) << 16)
+            | (((g * a + 127) / 255) << 8)
+            | ((b * a + 127) / 255);
     }
     Some(Image { w, h, bgra })
 }
@@ -601,11 +618,12 @@ impl PetWin {
         if self.wander.is_none() && self.hop_until.is_none() && self.hop_hold_until.is_none()
             && self.ambient.is_none() && now >= self.next_wander
         {
-            let is_kurumi = {
+            // v2026-08-30:waiting 期间禁止散步(强制桌宠站定在审批气泡旁)
+            let (is_kurumi, is_waiting) = {
                 let s = self.shared.lock().unwrap();
-                s.mode == "kurumi"
+                (s.mode == "kurumi", s.waiting_approval)
             };
-            if is_kurumi {
+            if is_kurumi && !is_waiting {
                 let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
                 self.wander = Some(Wander {
                     until: now + std::time::Duration::from_millis(rand_range(1100, 2400)),
@@ -659,14 +677,34 @@ impl PetWin {
             for p in self.buf.iter_mut() {
                 *p = 0;
             }
-            let (mode, intensity) = {
+            let (mode, intensity, activity, waiting) = {
                 let s = self.shared.lock().unwrap();
-                (s.mode.clone(), s.intensity.clone())
+                (s.mode.clone(), s.intensity.clone(), s.activity.clone(), s.waiting_approval)
             };
+            // —— v2026-08-30:状态映射优先级 waiting > busy > DOM intensity ——
+            // waiting 强制 work 立绘/kurumi wait 行 + 常驻审批气泡
+            // busy 等效 work(已切 work/intensity)
+            // idle 退回 intensity(原逻辑)
+            let eff_intensity = if waiting {
+                "work"
+            } else if activity == "busy" {
+                if intensity == "idle" { "work" } else { intensity.as_str() }
+            } else {
+                intensity.as_str()
+            };
+            // waiting 状态:常驻审批气泡(若当前气泡不是状态气泡则替换)
+            if waiting {
+                if !matches!(self.bubble, Some((idx, _)) if idx == BUBBLE_WAITING || idx == BUBBLE_NEED_APPROVE) {
+                    self.bubble = Some((BUBBLE_WAITING, std::time::Instant::now()));
+                }
+            } else if matches!(self.bubble, Some((idx, _)) if idx == BUBBLE_WAITING || idx == BUBBLE_NEED_APPROVE) {
+                // waiting 解除:清除常驻气泡
+                self.bubble = None;
+            }
             if mode == "whale" || mode == "inverse" {
-                let key = if intensity == "deep" {
+                let key = if eff_intensity == "deep" {
                     "deep"
-                } else if intensity == "work" {
+                } else if eff_intensity == "work" {
                     "work"
                 } else {
                     "idle"
@@ -704,6 +742,7 @@ impl PetWin {
                 }
             } else {
                 // v2 优先序:hop → hopHold(落地) → wander → ambient → wave → focus(wait) → idle
+                // v2026-08-30:waiting 强制选 wait 行(并锁定 wait_hold_until 防止 ambient 打断)
                 let row = if let Some(until) = self.hop_until {
                     if now < until {
                         "jump".to_string()
@@ -720,15 +759,15 @@ impl PetWin {
                         "jump".to_string()
                     } else {
                         self.hop_hold_until = None;
-                        "idle".to_string()
+                        if waiting { "wait".to_string() } else { "idle".to_string() }
                     }
                 } else if self.wander.is_some() {
-                    // 散步：播放 run 行帧（双向移动共用）
-                    "run".to_string()
+                    // 散步:播放 run 行帧(双向移动共用);waiting 期间不允许散步
+                    if waiting { "wait".to_string() } else { "run".to_string() }
                 } else if let Some(a) = &self.ambient {
                     if now >= a.until {
                         self.ambient = None;
-                        "idle".to_string()
+                        if waiting { "wait".to_string() } else { "idle".to_string() }
                     } else {
                         a.row.clone()
                     }
@@ -737,13 +776,16 @@ impl PetWin {
                         "wave".to_string()
                     } else {
                         self.wave_until = None;
-                        "idle".to_string()
+                        if waiting { "wait".to_string() } else { "idle".to_string() }
                     }
-                } else if intensity == "idle" {
+                } else if waiting {
+                    // 等待审批:播 wait 行(偶发语义,起伏大但语义对)
+                    "wait".to_string()
+                } else if eff_intensity == "idle" {
                     "idle".to_string()
                 } else {
-                    // 思考中=静默守候(同 idle 姿态;ambient 仅在 idle 强度触发,自动安静)。
-                    // wait 行留给审批等待(阶段 B,偶发且有语义)——曾用 wait 行表示思考,
+                    // 思考中/busy=静默守候(同 idle 姿态;ambient 仅在 idle 强度触发,自动安静)。
+                    // wait 行留给审批等待(waiting 分支)——曾用 wait 行表示思考,
                     // 其帧组起伏较大 + 慢放 → 真机观感「一直跳动」(2026-08-22 用户反馈修正)。
                     "idle".to_string()
                 };
@@ -813,8 +855,10 @@ impl PetWin {
             dirty = true;
         }
         // 气泡:超时检查每 tick;绘制只在帧更新后(避免每 33ms 图像合成)
-        if let Some((_, t0)) = self.bubble.clone() {
-            if now.duration_since(t0).as_secs() > 3 {
+        // v2026-08-30:状态帧(BUBBLE_BUSY/WAITING/NEED_APPROVE)不参与 3s 过期,常驻
+        if let Some((idx, t0)) = self.bubble.clone() {
+            let is_status = idx == BUBBLE_BUSY || idx == BUBBLE_WAITING || idx == BUBBLE_NEED_APPROVE;
+            if !is_status && now.duration_since(t0).as_secs() > 3 {
                 self.bubble = None;
                 dirty = true;
             } else {
@@ -843,15 +887,54 @@ impl PetWin {
         let w = (img.w as f32 / img.h as f32 * h as f32) as i32;
         let x0 = (WIN_W - w) / 2;
         let y0 = WIN_H - h - 2 + bob as i32;
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let src_w = img.w as i32;
+        let src_h = img.h as i32;
+        // 源坐标中心对齐:(目标像素中心 → 源空间),避免偏一像素的非对称采样
+        // sx = (x + 0.5) * src.w / w - 0.5
         for y in 0..h {
-            let sy = y as usize * img.h / h as usize;
+            let syf = (y as f32 + 0.5) * (src_h as f32) / (h as f32) - 0.5;
+            let sy0 = syf.floor() as i32;
+            let fy = (syf - sy0 as f32).clamp(0.0, 1.0);
+            let sy1 = sy0 + 1;
             for x in 0..w {
-                let sx = x as usize * img.w / w as usize;
-                let px = img.bgra[sy * img.w + sx];
-                let a = (px >> 24) & 0xFF;
+                let sxf = (x as f32 + 0.5) * (src_w as f32) / (w as f32) - 0.5;
+                let sx0 = sxf.floor() as i32;
+                let fx = (sxf - sx0 as f32).clamp(0.0, 1.0);
+                let sx1 = sx0 + 1;
+                // 边界 clamp:边缘像素只取存在的邻居
+                let cx0 = sx0.clamp(0, src_w - 1);
+                let cy0 = sy0.clamp(0, src_h - 1);
+                let cx1 = sx1.clamp(0, src_w - 1);
+                let cy1 = sy1.clamp(0, src_h - 1);
+                let p00 = img.bgra[(cy0 as usize) * img.w + (cx0 as usize)];
+                let p10 = img.bgra[(cy0 as usize) * img.w + (cx1 as usize)];
+                let p01 = img.bgra[(cy1 as usize) * img.w + (cx0 as usize)];
+                let p11 = img.bgra[(cy1 as usize) * img.w + (cx1 as usize)];
+                // 预乘空间线性插值(预乘值直接插值,数学上等价于 over 合成)
+                let ifx = 1.0 - fx;
+                let ify = 1.0 - fy;
+                let w00 = ifx * ify;
+                let w10 = fx * ify;
+                let w01 = ifx * fy;
+                let w11 = fx * fy;
+                // 通道独立插值
+                let blend = |shift: u32| -> u32 {
+                    let v = (((p00 >> shift) & 0xFF) as f32 * w00
+                        + ((p10 >> shift) & 0xFF) as f32 * w10
+                        + ((p01 >> shift) & 0xFF) as f32 * w01
+                        + ((p11 >> shift) & 0xFF) as f32 * w11) as u32;
+                    v.min(255)
+                };
+                let a = blend(24);
                 if a == 0 {
                     continue;
                 }
+                let r = blend(16);
+                let g = blend(8);
+                let b = blend(0);
                 let dx = x0 + x;
                 let dy = y0 + y;
                 if dx < 0 || dy < 0 || dx >= WIN_W || dy >= WIN_H {
@@ -860,11 +943,11 @@ impl PetWin {
                 let dst = &mut self.buf[(dy * WIN_W + dx) as usize];
                 let da = (*dst >> 24) & 0xFF;
                 let inv = 255 - a;
-                let r = (((px >> 16) & 0xFF) + (((*dst >> 16) & 0xFF) * inv / 255)) & 0xFF;
-                let g = (((px >> 8) & 0xFF) + (((*dst >> 8) & 0xFF) * inv / 255)) & 0xFF;
-                let b = ((px & 0xFF) + ((*dst & 0xFF) * inv / 255)) & 0xFF;
-                let oa = (a + da * inv / 255) & 0xFF;
-                *dst = (oa << 24) | (r << 16) | (g << 8) | b;
+                let rr = ((r + (((*dst >> 16) & 0xFF) * inv / 255)) as u32).min(255);
+                let gg = ((g + (((*dst >> 8) & 0xFF) * inv / 255)) as u32).min(255);
+                let bb = ((b + ((*dst & 0xFF) * inv / 255)) as u32).min(255);
+                let oa = (a + da * inv / 255).min(255);
+                *dst = (oa << 24) | (rr << 16) | (gg << 8) | bb;
             }
         }
     }
@@ -1058,8 +1141,14 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
         }
         WM_LBUTTONUP => {
             if !(*pet).dragged {
-                (*pet).do_hop();
-                (*pet).focus_main(); // 点击桌宠 → 唤起/聚焦主窗口
+                // v2026-08-30:waiting 中点击桌宠 = 唤起主窗口去批准(跳过 hop,免破坏等待观感)
+                let waiting = (*pet).shared.lock().map(|s| s.waiting_approval).unwrap_or(false);
+                if waiting {
+                    (*pet).focus_main();
+                } else {
+                    (*pet).do_hop();
+                    (*pet).focus_main(); // 点击桌宠 → 唤起/聚焦主窗口
+                }
             } else {
                 let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
                 save_pet_pos((*pet).pos, hide);
@@ -1320,6 +1409,8 @@ impl NativePet {
             intensity: "idle".to_string(),
             hide: restore_hide,
             pending_reset: false,
+            activity: "idle".to_string(),
+            waiting_approval: false,
         }));
         let frames = load_frames();
         let s2 = shared.clone();
@@ -1344,6 +1435,28 @@ impl NativePet {
         pet_log_line(&format!("[native-pet] set_intensity {int}\n"));
         if let Ok(mut s) = self.shared.lock() {
             s.intensity = int.to_string();
+        }
+    }
+
+    /// v2026-08-30:总指挥活动状态(busy/idle)由 runtime.js 扫描 DSH 页面 DOM 上报
+    pub fn set_activity(&self, act: &str) {
+        if let Ok(mut s) = self.shared.lock() {
+            // 仅接受 idle/busy;其它忽略(防 hash 篡改)
+            let norm = if act == "busy" { "busy" } else { "idle" };
+            if s.activity != norm {
+                pet_log_line(&format!("[native-pet] set_activity {norm}\n"));
+                s.activity = norm.to_string();
+            }
+        }
+    }
+
+    /// v2026-08-30:总指挥等待 Operator 审批(true=常驻气泡+强制 wait 姿态)
+    pub fn set_waiting_approval(&self, waiting: bool) {
+        if let Ok(mut s) = self.shared.lock() {
+            if s.waiting_approval != waiting {
+                pet_log_line(&format!("[native-pet] set_waiting_approval {waiting}\n"));
+                s.waiting_approval = waiting;
+            }
         }
     }
 

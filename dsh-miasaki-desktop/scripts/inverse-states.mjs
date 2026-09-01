@@ -1,8 +1,30 @@
-// inverse-states.mjs — 反转狂三立绘处理:flood-fill 背景消除(边缘连通)→ 裁剪 → 缩放高度 208 → states/
+// inverse-states.mjs — 反转狂三立绘处理:flood-fill 背景消除(边缘连通)→ 裁剪 → despeckle → 缩放高度 540 → states/
 // 用法:node scripts/inverse-states.mjs  (在 desktop 目录)
 import sharp from 'sharp'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+
+// despeckle:杀散点 + 杀光晕浮雾(同 cut-frames.mjs:孤点/光晕,保留主体边)
+async function despeckle(out, w, h) {
+  const at = (x, y) => out[(y * w + x) * 4 + 3]
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const a = at(x, y)
+      if (a < 24) { out[(y * w + x) * 4 + 3] = 0; continue }
+      if (a >= 128) continue
+      let strong = 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const nx = x + dx, ny = y + dy
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+          if (at(nx, ny) >= 128) strong++
+        }
+      }
+      if (strong === 0) out[(y * w + x) * 4 + 3] = 0
+    }
+  }
+}
 
 const root = join(process.cwd(), 'ui', 'pets', 'inverse')
 const RAW = join(root, 'raw')
@@ -76,17 +98,34 @@ async function cutout(name, outName) {
   maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad)
   const cw = maxX - minX + 1, ch = maxY - minY + 1
 
-  // —— 输出 RGBA(背景透明,前景膨胀 2px 覆盖光晕 + 边缘降蓝) ——
+  // —— 输出 RGBA(背景透明,前景膨胀 1px 取邻近前景均值覆盖光晕 + 降蓝) ——
   const out = Buffer.alloc(cw * ch * 4)
-  // 前景掩码 + 膨胀(2px)
+  // 前景掩码 + 1px 膨胀
   const fg = new Uint8Array(cw * ch)
   const at = (x, y) => {
     const sx = x + minX, sy = y + minY
     return bg[sy * w + sx] ? 0 : 1
   }
+  // 1px 邻域前景均值色(用于环带像素覆色,避免残留底色噪边)
+  const ringColor = (x, y) => {
+    let rs = 0, gs = 0, bs = 0, n = 0
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue
+        const nx = x + dx, ny = y + dy
+        if (nx < 0 || ny < 0 || nx >= cw || ny >= ch) continue
+        if (at(nx, ny) !== 1) continue
+        const ssi = ((ny + minY) * w + (nx + minX)) * c
+        rs += data[ssi]; gs += data[ssi + 1]; bs += data[ssi + 2]; n++
+      }
+    }
+    if (n === 0) return null
+    return [Math.round(rs / n), Math.round(gs / n), Math.round(bs / n)]
+  }
   const nearFg = (x, y) => {
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue
         const nx = x + dx, ny = y + dy
         if (nx >= 0 && ny >= 0 && nx < cw && ny < ch && at(nx, ny)) return true
       }
@@ -100,15 +139,22 @@ async function cutout(name, outName) {
       const o = (y * cw + x) * 4
       const isFg = at(x, y) === 1
       let a = isFg ? 255 : 0
-      // 膨胀环:邻近前景的背景像素 → 半透明 150(覆盖光晕,柔和过渡)
-      if (!isFg && nearFg(x, y)) a = 150
+      let ro = data[si], go = data[si + 1], bo = data[si + 2]
+      // 膨胀环(1px):邻近前景的背景像素 → 半透明 150,颜色取邻近前景均值(消除残留底色)
+      if (!isFg && nearFg(x, y)) {
+        a = 150
+        const rc = ringColor(x, y)
+        if (rc) { ro = rc[0]; go = rc[1]; bo = rc[2] }
+      }
       // 降蓝:蓝占优像素压回中性(去蓝边)
-      const mx = Math.max(data[si], data[si + 1])
-      let bOut = data[si + 2]
-      if (a < 255 && bOut - mx > 12) bOut = mx + 8
-      out[o] = data[si]; out[o + 1] = data[si + 1]; out[o + 2] = bOut; out[o + 3] = a
+      const mx = Math.max(ro, go)
+      if (a < 255 && bo - mx > 12) bo = mx + 8
+      out[o] = ro; out[o + 1] = go; out[o + 2] = bo; out[o + 3] = a
     }
   }
+
+  // despeckle:杀散点 + 杀光晕(对环带+主体的统一去噪)
+  await despeckle(out, cw, ch)
 
   // —— 缩放到高度 540(渲染 270 高的 2 倍超采样) ——
   // 曾输出 208 高:128×208 渲染放大到 270 时糊化,时钟眼(金表盘 12:05)失去辨识度,

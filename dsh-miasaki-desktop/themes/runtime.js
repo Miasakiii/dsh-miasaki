@@ -123,7 +123,7 @@
   }
 
   // 主题同步通道：URL hash（replaceState 不触发刷新；Rust 侧轮询解析 → 联动桌宠）
-  // hash 内附带诊断位：stylesLen.headOK.attached，便于无 IPC 环境远程排障
+  // hash 内附带诊断位：stylesLen.headOK.attached.….sidebarW.collapsed，便于无 IPC 环境远程排障
   function syncHash() {
     try {
       if (history.replaceState) {
@@ -148,9 +148,12 @@
             var cs = getComputedStyle(swEl)
             swCss = cs.position + '/' + cs.zIndex + '/' + cs.visibility + '/' + cs.display
           }
-          d = len + '.' + headOk + '.' + attached + '.' + sw + '.' + ERR_COUNT + '.' + baseOk + '.' + swTop + '.' + vh + '.' + encodeURIComponent(eSw) + '.' + encodeURIComponent(swCss)
+          d = len + '.' + headOk + '.' + attached + '.' + sw + '.' + ERR_COUNT + '.' + baseOk + '.' + swTop + '.' + vh + '.' + encodeURIComponent(eSw) + '.' + encodeURIComponent(swCss) +
+            '.' + CUR_SIDEBAR_W + '.' + CUR_COLLAPSED
         } catch (e) { /* ignore */ }
-        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + '&diag=' + d)
+        var actPart = '&act=' + CUR_ACT
+        var waitPart = CUR_WAIT ? '&wait=1' : '&wait=0'
+        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + '&diag=' + d)
       }
     } catch (e) { /* ignore */ }
   }
@@ -165,7 +168,10 @@
     } catch (e) { /* 非 Tauri 环境（普通浏览器）忽略 */ }
   }
 
-  var IS_LOCAL = location.protocol === 'tauri:'
+  // 本地唤醒页判定：Windows 上 Tauri 2 本地页协议为 http://tauri.localhost，
+  // 单协议判定(location.protocol === 'tauri:')恒 false → 本地页出现切换条/水印/
+  // 光晕等"画面不统一"回归(2026-08-29 修过,后于重构中丢失)。protocol + hostname 双重判定。
+  var IS_LOCAL = location.protocol === 'tauri:' || /^tauri\.localhost$/i.test(location.hostname || '')
 
   var current = 'pure'
   try {
@@ -300,6 +306,7 @@
     '@media (prefers-reduced-motion: reduce){' +
     '#miasaki-switcher .ms-btn::after{animation:none}' +
     '#miasaki-titlebar .tb-brand{animation:none}' +
+    '#miasaki-titlebar #tb-theme,#miasaki-titlebar .tb-sub{transition:none}' +
     '#miasaki-overlay.run{animation:ms-sweep .15s ease forwards;}}' +
     '#miasaki-switcher .ms-bright{display:none;align-items:center;gap:6px;padding:5px 10px 2px;' +
     'border-top:1px solid var(--ms-border,#3a3243);margin-top:4px;}' +
@@ -318,18 +325,33 @@
     'color:var(--dsw-alias-label-primary,var(--ms-text,#e4def0));font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
     'user-select:none;-webkit-user-select:none;cursor:default;}' +
     '#miasaki-titlebar::before{content:"";position:absolute;left:0;top:0;bottom:0;' +
-    'width:var(--ms-sidebar-w,280px);background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base,#1e1a27));' +
+    // 回退色为 transparent：DSH 令牌(--dsw-specific-sidebar-fill)未就绪(页面加载早期)时
+    // 不显示色块——此前回退深色 #1e1a27 会在加载期形成"左上角闪烁黑块"，令牌就绪后才
+    // 变主题色；DSH 渲染完成后令牌生效，色块与侧栏同时出现，视觉衔接。
+    'width:var(--ms-sidebar-w,280px);background:var(--dsw-specific-sidebar-fill,transparent);' +
     'border-right:1px solid var(--dsw-alias-border-l1,transparent);box-sizing:border-box;pointer-events:none;}' +
     '#miasaki-titlebar::after{content:"";position:absolute;top:0;bottom:0;left:var(--ms-details-left,auto);' +
     'width:1px;background:var(--dsw-alias-border-l2,transparent);pointer-events:none;opacity:0;}' +
     '#miasaki-titlebar[data-details-open]::after{opacity:1;}' +
+    // 本地唤醒页：无 DSH 侧栏/详情布局，隐藏模拟分隔线色块，标题栏保持纯净
+    '#miasaki-titlebar[data-local]::before,#miasaki-titlebar[data-local]::after{display:none;}' +
     '#miasaki-titlebar>*{position:relative;z-index:1;}' +
     '#miasaki-titlebar .tb-drag{flex:1;height:100%;cursor:move;}' +
     '#miasaki-titlebar .tb-title{font-size:11.5px;font-weight:500;letter-spacing:.03em;' +
-    'display:flex;align-items:center;gap:7px;opacity:.85;}' +
+    'display:flex;align-items:center;opacity:.85;}' +
     '#miasaki-titlebar .tb-brand{width:20px;height:20px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
-    'box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));animation:ms-brand-breathe 3.2s ease-in-out infinite;}' +
-    '#miasaki-titlebar .tb-sub{font-size:10.5px;font-weight:400;opacity:.55;letter-spacing:.02em;}' +
+    'margin-right:7px;box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));animation:ms-brand-breathe 3.2s ease-in-out infinite;}' +
+    // 主题文字：margin 承担原 gap 间距；收起时 max-width/margin/opacity 过渡淡出
+    // （display:none 无过渡，侧栏收起动画期间文字瞬间消失 → 切换不连贯）
+    '#miasaki-titlebar #tb-theme{margin-right:7px;max-width:240px;overflow:hidden;white-space:nowrap;' +
+    'transition:opacity .18s ease,max-width .18s ease,margin-right .18s ease;}' +
+    '#miasaki-titlebar .tb-sub{font-size:10.5px;font-weight:400;opacity:.55;letter-spacing:.02em;' +
+    'max-width:240px;overflow:hidden;white-space:nowrap;' +
+    'transition:opacity .18s ease,max-width .18s ease,margin-right .18s ease;}' +
+    // 侧栏收起态：主题文字淡出(仅留图标)；::before 宽随 --ms-sidebar-w 逐帧跟随 DSH 收起动画
+    '#miasaki-titlebar[data-sidebar-collapsed] #tb-theme,' +
+    '#miasaki-titlebar[data-sidebar-collapsed] .tb-sub{opacity:0;max-width:0;margin-right:0;pointer-events:none;}' +
+    '#miasaki-titlebar[data-sidebar-collapsed]::before{border-right-color:transparent;}' +
     '@keyframes ms-brand-breathe{0%,100%{opacity:.78}50%{opacity:1}}' +
     '#miasaki-titlebar .tb-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;' +
     'cursor:pointer;font-size:13px;border-radius:999px;color:var(--dsw-alias-label-secondary,var(--ms-text,#e4def0));' +
@@ -337,6 +359,9 @@
     '#miasaki-titlebar .tb-btn:hover{background:var(--dsw-alias-interactive-bg-hover,var(--ms-hover,#2a2434));' +
     'color:var(--dsw-alias-label-primary,var(--ms-accent,#d9b36a));opacity:1;}' +
     '#miasaki-titlebar .tb-btn:active{transform:scale(.94);}' +
+    // 按钮图标统一 SVG 线形：同一视口/描边/端帽，消除字符字形(–/□/✕)粗细基线不一
+    '#miasaki-titlebar .tb-btn svg{width:10px;height:10px;display:block;fill:none;' +
+    'stroke:currentColor;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;}' +
     '#miasaki-titlebar .tb-btn.tb-close:hover{background:var(--ms-danger,#c23a2e);color:#fff;opacity:1;}' +
     'html,body{height:100%;overflow:hidden;}' +
     'body #root{margin-top:32px;height:calc(100% - 32px)!important;}' +
@@ -420,7 +445,7 @@
   }
 
   function buildSwitcher() {
-    if (!document.body) return
+    if (!document.body || IS_LOCAL) return
     // 仅当切换条真实挂载在文档中时才视为已构建：若元素被页面重渲染移除，
     // switcher 变量仍指向旧节点（parentNode=null），此前按变量非空判断会导致
     // 1s 巡检永远无法重建（按钮永久消失）；构建中途抛错时同理可重试。
@@ -625,8 +650,24 @@
   /* 思考强度：跟随 DSH 模型选择器的推理等级（用户手动选择 → 稳定不抖动）
    * 显示形如 "deepseek-v4-flash-vision-exp · Max"。映射：off→idle、low/light/medium→work、high/max→deep */
   var CUR_INT = 'idle'
-  var PET_TIER_MS = 2500
+  var CUR_ACT = 'idle'   // busy / idle —— 总指挥会话"生成中"活动状态
+  var CUR_WAIT = false   // true —— 等待 Operator 审批工具调用
+  var PET_TIER_MS = 1500
+  var PET_ACT_CONFIRM_N = 2 // 防抖:act 翻转需连续 N 次扫描一致
+  var PET_WAIT_CONFIRM_N_OFF = 2 // 审批消失需 N 次确认;出现立即上报
+  var _actPending = null   // 候选新值
+  var _actPendingN = 0
+  var _waitPending = false
+  var _waitPendingN = 0
   var EFFORT_RE = /(max|high|medium|light|low|off|standard|\u6807\u51c6|\u9ad8|\u4e2d|\u4f4e|\u5173\u95ed)/i
+  // 生成中文本(DSH 页面"停止生成"按钮,严格完全匹配避免误报)
+  var ACT_BTN_TEXT = ['\u505C\u6B62\u751F\u6210', 'Stop', 'Stop generating', '\u505C\u6B62'] // 停止生成 / Stop / 停止
+  // 审批按钮文本对(允许/拒绝 / Approve/Deny / 同意/拒绝)
+  var APPROVE_TEXT = ['\u5141\u8BB8', 'Approve', 'Allow', '\u540C\u610F', '\u6279\u51C6'] // 允许/Approve/Allow/同意/批准
+  var DENY_TEXT = ['\u62D2\u7EDD', 'Deny', 'Reject', '\u4E0D\u5141\u8BB8', '\u53D6\u6D88'] // 拒绝/Deny/Reject/不许可/取消
+  // 审批容器候选(限定到对话框/审批组件内,避免误报普通按钮)
+  var APPROVE_CONTAINER_SEL = '[role="dialog"],[role="alertdialog"],[class*="modal" i],[class*="approve" i],[class*="confirm" i],[class*="permission" i]'
+
   function scanEffort() {
     if (!document.body) return null
     var nodes = document.querySelectorAll('button, [role="button"], span')
@@ -647,29 +688,167 @@
     }
     return null
   }
+
+  // 严格按钮文本匹配(完全等于,空白 trim,长度 < 16 防误命中大段文本)
+  function isBtnTextMatch(t, candidates) {
+    if (!t) return false
+    var s = t.replace(/\s+/g, ' ').trim()
+    if (!s || s.length > 16) return false
+    for (var i = 0; i < candidates.length; i++) if (s === candidates[i]) return true
+    return false
+  }
+
+  // 检测"生成中":页面上存在"停止生成"类按钮(限 #miasaki-switcher / 主题注入组件外)
+  function scanActivity() {
+    if (!document.body) return 'idle'
+    var btns = document.querySelectorAll('button, [role="button"]')
+    for (var i = 0; i < btns.length; i++) {
+      var el = btns[i]
+      if (el.closest && (el.closest('#miasaki-switcher') || el.closest('#miasaki-titlebar'))) continue
+      if (!el.offsetParent && getComputedStyle(el).visibility !== 'visible') continue
+      if (isBtnTextMatch(el.textContent, ACT_BTN_TEXT)) return 'busy'
+    }
+    return 'idle'
+  }
+
+  // 检测"等待审批":在 dialog/modal/approve 容器内同时存在允许类+拒绝类按钮
+  function scanApproval() {
+    if (!document.body) return false
+    var containers = document.querySelectorAll(APPROVE_CONTAINER_SEL)
+    for (var i = 0; i < containers.length; i++) {
+      var c = containers[i]
+      if (c.closest && c.closest('#miasaki-switcher')) continue
+      if (!c.offsetParent) continue
+      var btns = c.querySelectorAll('button, [role="button"]')
+      var hasApprove = false, hasDeny = false
+      for (var j = 0; j < btns.length; j++) {
+        var t = (btns[j].textContent || '').replace(/\s+/g, ' ').trim()
+        if (!hasApprove && isBtnTextMatch(t, APPROVE_TEXT)) hasApprove = true
+        if (!hasDeny && isBtnTextMatch(t, DENY_TEXT)) hasDeny = true
+        if (hasApprove && hasDeny) return true
+      }
+    }
+    return false
+  }
+
   function petEvalIntensity() {
     var tier = scanEffort()
-    // 未找到保持当前档(页面结构变化时稳定);找到则按用户选择的推理等级固定
     if (tier !== null && tier !== CUR_INT) {
       CUR_INT = tier
+    }
+    // act 防抖(2 次连续一致才生效,防流式指示闪烁)
+    var act = scanActivity()
+    if (act === _actPending) {
+      _actPendingN++
+    } else {
+      _actPending = act
+      _actPendingN = 1
+    }
+    if (_actPendingN >= PET_ACT_CONFIRM_N && _actPending !== CUR_ACT) {
+      CUR_ACT = _actPending
+    }
+    // wait:出现立即上报;消失 2 次确认
+    var wait = scanApproval()
+    if (wait) {
+      CUR_WAIT = true
+      _waitPending = false
+      _waitPendingN = 0
+    } else {
+      if (_waitPending) _waitPendingN++
+      else { _waitPending = true; _waitPendingN = 1 }
+      if (_waitPendingN >= PET_WAIT_CONFIRM_N_OFF) {
+        CUR_WAIT = false
+        _waitPending = false
+      }
     }
     syncHash()
   }
   var tierTimer = setInterval(petEvalIntensity, PET_TIER_MS)
 
+  /* 临时探针:Operator 在 console 跑 __miasakiProbe() 校准选择器
+   * 会在桌宠气泡位输出"busy/wait 候选元素"列表,便于把 ACT_BTN_TEXT / APPROVE_TEXT /
+   * DENY_TEXT / APPROVE_CONTAINER_SEL 调成当前 DSH 版本实际命中的文本与容器类名。 */
+  window.__miasakiProbe = function () {
+    var out = []
+    var btns = document.querySelectorAll('button, [role="button"]')
+    for (var i = 0; i < btns.length; i++) {
+      var el = btns[i]
+      if (el.closest && el.closest('#miasaki-switcher')) continue
+      var t = (el.textContent || '').replace(/\s+/g, ' ').trim()
+      if (!t || t.length > 24) continue
+      var inDlg = el.closest('[role="dialog"],[role="alertdialog"],[class*="modal" i]') ? 'in-dialog' : 'free'
+      out.push({ kind: 'btn', text: t.slice(0, 20), ctx: inDlg, hidden: !el.offsetParent })
+    }
+    console.log('[miasaki probe] act=', scanActivity(), 'wait=', scanApproval())
+    console.table(out.slice(0, 60))
+    return out
+  }
+
   /* ---------- 主题化标题栏（无边框窗口） ---------- */
 
+  // 窗口控制按钮图标：四枚统一 10×10 视口 SVG（stroke=currentColor、圆头端帽、Fluent 线形），
+  // 取代 Unicode 字符（–/□/✕）：字符字形粗细/基线/视觉重量不一，SVG 统一描边后三按钮一致
+  var TB_ICONS = {
+    min: '<svg viewBox="0 0 10 10" aria-hidden="true"><line x1="1.5" y1="5" x2="8.5" y2="5"/></svg>',
+    max: '<svg viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" rx="1"/></svg>',
+    restore: '<svg viewBox="0 0 10 10" aria-hidden="true">' +
+      '<rect x="1.5" y="3.5" width="5" height="5" rx="1"/>' +
+      '<path d="M3.5 3.5 V2.5 A1 1 0 0 1 4.5 1.5 H7.5 A1 1 0 0 1 8.5 2.5 V5.5 A1 1 0 0 1 7.5 6.5 H6.5"/></svg>',
+    close: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 1.5 L8.5 8.5 M8.5 1.5 L1.5 8.5"/></svg>'
+  }
+
+  // 最大化状态：true=最大化 false=还原 null=未知。远程页无 IPC 权限（capability 只授
+  // start-dragging），改由 Rust 侧 eval 派发 CustomEvent `miasaki-max-state`（与桌宠状态
+  // 推送同构）；null 时经 hash cmd=want-max 请求 Rust 重推，非 Tauri 环境点击本地翻转兜底。
+  var MAX_STATE = null
+  var _lastMaxReqAt = 0
+
+  function syncMaxBtn() {
+    var bar = document.getElementById('miasaki-titlebar')
+    if (!bar) return
+    var btn = bar.querySelector('.tb-btn[data-act="max"]')
+    if (!btn) return
+    var wantMax = MAX_STATE === true
+    if (btn.getAttribute('data-max-state') !== String(wantMax)) {
+      btn.innerHTML = wantMax ? TB_ICONS.restore : TB_ICONS.max
+      btn.setAttribute('data-max-state', String(wantMax))
+      btn.setAttribute('title', wantMax ? '\u8FD8\u539F' : '\u6700\u5927\u5316')
+    }
+  }
+
+  function wireMaxState() {
+    try {
+      window.addEventListener('miasaki-max-state', function (e) {
+        try {
+          var d = e && e.detail
+          MAX_STATE = !!(d && d.max)
+          syncMaxBtn()
+        } catch (e2) { /* ignore */ }
+      })
+    } catch (e) { /* ignore */ }
+  }
+
+  function requestMaxState() {
+    var now = Date.now()
+    if (now - _lastMaxReqAt < 10000) return
+    _lastMaxReqAt = now
+    try { petHashCmd('want-max') } catch (e) { /* ignore */ }
+  }
+
   function buildTitlebar() {
-    if (document.getElementById('miasaki-titlebar') || !document.body || IS_LOCAL) return
+    // 本地唤醒页同样需要标题栏（无边框窗口：拖动区 + 窗口按钮），不再因 IS_LOCAL 跳过
+    if (document.getElementById('miasaki-titlebar') || !document.body) return
     var bar = document.createElement('div')
     bar.id = 'miasaki-titlebar'
+    // 本地页标记：无 DSH 布局可融合，隐藏模拟侧栏/详情分隔线（::before/::after 色块）
+    if (IS_LOCAL) bar.setAttribute('data-local', '1')
     bar.innerHTML =
       '<div class="tb-title"><img class="tb-brand" src="' + ICON_BASE + META[current].icon + '" alt="">' +
       '<span id="tb-theme"></span><span class="tb-sub"></span></div>' +
       '<div class="tb-drag" data-tauri-drag-region title="拖动窗口"></div>' +
-      '<div class="tb-btn" data-act="min" title="最小化">\u2013</div>' +
-      '<div class="tb-btn" data-act="max" title="最大化/还原">\u25A1</div>' +
-      '<div class="tb-btn tb-close" data-act="close" title="关闭">\u2715</div>'
+      '<div class="tb-btn" data-act="min" title="\u6700\u5C0F\u5316">' + TB_ICONS.min + '</div>' +
+      '<div class="tb-btn" data-act="max" title="\u6700\u5927\u5316/\u8FD8\u539F">' + TB_ICONS.max + '</div>' +
+      '<div class="tb-btn tb-close" data-act="close" title="\u5173\u95ED">' + TB_ICONS.close + '</div>'
     // 徽记 icon 失败 → 字形兜底；onerror 用 JS 挂载，换主题后始终引用最新 current
     var brand = bar.querySelector('.tb-brand')
     if (brand) brand.onerror = function () { window.__msGlyphFallback && window.__msGlyphFallback(this, current) }
@@ -683,10 +862,17 @@
       if (!b) return
       var act = b.getAttribute('data-act')
       if (act === 'min') petHashCmd('min')
-      else if (act === 'max') petHashCmd('max')
+      else if (act === 'max') {
+        petHashCmd('max')
+        // 非 Tauri 环境(普通浏览器预览)兜底：从未收到 Rust 推送时本地翻转图标
+        if (MAX_STATE === null) { MAX_STATE = true; syncMaxBtn() }
+        else if (IS_LOCAL) { MAX_STATE = !MAX_STATE; syncMaxBtn() }
+      }
       else if (act === 'close') petHashCmd('close')
     })
     updateTitlebar()
+    syncMaxBtn()
+    if (MAX_STATE === null) requestMaxState()
     syncTitlebarGeometry()
   }
 
@@ -706,6 +892,8 @@
       brand.style.display = ''
       var next = ICON_BASE + META[current].icon
       if (brand.src !== next) brand.src = next
+      // 悬浮提示当前主题（侧栏收起、文字隐藏后悬停图标即可知主题）
+      brand.title = META[current].name + ' · ' + META[current].sub
     }
   }
 
@@ -760,41 +948,90 @@
   //     <div class="sidebarCol">…  <!-- bg:--dsw-specific-sidebar-fill / border-right:--dsw-alias-border-l1 -->
   //     <div class="detailsCol">… <!-- border-left:--dsw-alias-border-l2；折叠时 cols.details=0 且去 border -->
   // titlebar 的 ::before/::after 模拟侧栏与详情分隔线向上延伸，与 DSH 的分隔线须逐像素重合。
+  // 侧栏几何诊断位：最近一次解析/实测宽与收起判定（syncHash 写入 hash diag，Rust 落日志）
+  var CUR_SIDEBAR_W = -1
+  var CUR_COLLAPSED = 0
+  // DSH 布局容器缓存：页面重渲染后 isConnected=false 时重新扫描
+  var _frameCache = null
+  // ResizeObserver 帧级同步：侧栏收起/展开是 CSS 动画（轨道宽逐帧变化），1s 巡检跟不上
+  // 节奏 → 观察侧栏列元素尺寸，动画期间每帧驱动标题栏几何，与 DSH 动画同步；巡检仅兜底。
+  var _sbObserver = null
+  function watchSidebarEl(el) {
+    if (typeof ResizeObserver === 'undefined') return
+    try {
+      if (!_sbObserver) {
+        _sbObserver = new ResizeObserver(function () { syncTitlebarGeometry() })
+      }
+      if (_sbObserver.__el !== el) {
+        if (_sbObserver.__el) {
+          try { _sbObserver.unobserve(_sbObserver.__el) } catch (e) { /* ignore */ }
+        }
+        _sbObserver.observe(el)
+        _sbObserver.__el = el
+      }
+    } catch (e) { /* RO 失败回退 1s 巡检 */ }
+  }
+
   function syncTitlebarGeometry() {
     var bar = document.getElementById('miasaki-titlebar')
     if (!bar) return
     try { /* 装饰层异常绝不外泄（曾因 removeAttribute 误调 style 对象导致 onReady 级联中断） */
-      var w = 280
+      var declW = -1
       var details = 0
       var frameWidth = 0
-      var frame = null
-      var candidates = document.querySelectorAll('#root [style]')
-      for (var i = 0; i < candidates.length; i++) {
-        var st = candidates[i].style
-        if (st && st.gridTemplateColumns) { frame = candidates[i]; break }
+      // 信号 A：grid 容器轨道声明（首列=侧栏，含 0px；末列≥2 轨道时视为详情面板宽）
+      // 优先缓存（RO 动画期间每帧调用，避免反复全量扫描）
+      var frame = (_frameCache && _frameCache.isConnected) ? _frameCache : null
+      if (!frame) {
+        var candidates = document.querySelectorAll('#root [style]')
+        for (var i = 0; i < candidates.length; i++) {
+          var st = candidates[i].style
+          if (st && st.gridTemplateColumns) { frame = candidates[i]; break }
+        }
+        _frameCache = frame
       }
       if (frame) {
-        // 轨道声明值优先：grid item 默认 stretch，其 border-box 宽 == 轨道宽，
-        // 因此 parseFloat(track px) 与实测列宽一致且不含描述性偏差
         var px = frame.style.gridTemplateColumns.match(/([0-9.]+)px/g)
-        if (px) {
-          var first = parseFloat(px[0])
-          if (first > 0) w = first
-          // 末列仅在存在第三轨道时视为详情面板（防未来两列结构把侧栏宽误判）
+        if (px && px.length) {
+          declW = parseFloat(px[0])
           if (px.length >= 2) details = parseFloat(px[px.length - 1]) || 0
         }
         var rect = frame.getBoundingClientRect()
         if (rect && rect.width > 0) frameWidth = rect.width
-        // 兜底：内联 px 解析失败（DSH 改用 fr/百分比赛道）时按首列实测宽度
-        if (!px || !(parseFloat(px[0]) > 0)) {
-          var col0 = frame.firstElementChild
-          if (col0 && col0.getBoundingClientRect) {
-            var rw = col0.getBoundingClientRect().width
-            if (rw > 0) w = rw
-          }
-        }
       }
-      bar.style.setProperty('--ms-sidebar-w', w + 'px')
+      // 信号 B：首列元素实测宽（含 0；比轨道声明更贴近视觉宽度，grid item 默认 stretch）
+      var firstW = -1
+      if (frame && frame.firstElementChild && frame.firstElementChild.getBoundingClientRect) {
+        firstW = frame.firstElementChild.getBoundingClientRect().width
+        watchSidebarEl(frame.firstElementChild)
+      }
+      // 信号 C：sidebar 类元素可见性/宽度（防 DSH 改用 CSS modules 哈希类名后 B 失效）
+      var sbW = -1
+      var sbEl = document.querySelector('#root [class*="sidebar" i]')
+      if (sbEl && sbEl.getBoundingClientRect) {
+        sbW = sbEl.offsetParent === null ? 0 : sbEl.getBoundingClientRect().width
+      }
+      // 采用宽度：首列实测(B) > 轨道声明(A) > sidebar 元素(C) > 默认 280
+      var useW = 280
+      if (firstW >= 0) useW = firstW
+      else if (declW >= 0) useW = declW
+      else if (sbW >= 0) useW = sbW
+      bar.style.setProperty('--ms-sidebar-w', useW + 'px')
+      // 收起判定（方向驱动 + 稳态兜底）：RO 逐帧采样下，收窄方向第一帧即置收起（文字随
+      // DSH 收起动画同步淡出）、展开方向立即恢复（文字随展开动画同步淡入）→ 切换连贯；
+      // 无方向变化（稳态/首帧）按隐藏、归零、窄于 100px 兜底。
+      var prevW = CUR_SIDEBAR_W
+      var shrinking = prevW >= 0 && useW < prevW - 1
+      var growing = prevW >= 0 && useW > prevW + 1
+      var collapsed
+      if (shrinking) collapsed = true
+      else if (growing) collapsed = false
+      else collapsed = sbW === 0 || useW === 0 || useW < 100
+      if (collapsed) bar.setAttribute('data-sidebar-collapsed', '1')
+      else bar.removeAttribute('data-sidebar-collapsed')
+      // 诊断位（hash diag 尾追加，Rust 变化时落日志 → 导出诊断可远程定位）
+      CUR_SIDEBAR_W = useW
+      CUR_COLLAPSED = collapsed ? 1 : 0
       if (details > 0 && frameWidth > 0) {
         // detailsCol 的 border-left(1px) 位于第三轨道起点（容器右缘 - 轨道宽），与此值重合
         bar.style.setProperty('--ms-details-left', (frameWidth - details) + 'px')
@@ -819,9 +1056,12 @@
     base.textContent = SWITCHER_CSS
     // 关闭确认弹窗无条件构建（本地唤醒页同样需要：Alt+F4 走系统关闭路径 + 弹窗确认）
     try { buildCloseDialog() } catch (e) {}
+    // 标题栏本地/远程页均构建（本地页同样需要拖动区与窗口按钮）
+    try { buildTitlebar() } catch (e) {}
+    // 最大化状态同步本地/远程页均需要（Rust eval 派发的 CustomEvent 两页同源）
+    try { wireMaxState() } catch (e) {}
     if (!IS_LOCAL) {
       // 装饰层逐一隔离：单个构建异常不得中断后续构建与巡检启动（装饰层失败不阻断原则）
-      try { buildTitlebar() } catch (e) {}
       try { buildSwitcher() } catch (e) {}
       try { buildWatermark() } catch (e) {}
       try { buildAurora() } catch (e) {}
@@ -832,8 +1072,8 @@
     // 自愈：切换条/标题栏/主题属性/样式层被页面重渲染清掉时自动重建（1s 巡检，切换后无空窗）
     setInterval(function () {
       try { /* 巡检单次失败不影响下一轮 */
-      if (!document.getElementById('miasaki-titlebar') && !IS_LOCAL) buildTitlebar()
-      if (!document.getElementById('miasaki-switcher')) buildSwitcher()
+      if (!document.getElementById('miasaki-titlebar')) buildTitlebar()
+      if (!document.getElementById('miasaki-switcher') && !IS_LOCAL) buildSwitcher()
       if (!document.getElementById('miasaki-close-dialog')) buildCloseDialog()
       if (!document.getElementById('miasaki-aurora') && !IS_LOCAL) buildAurora()
       if (document.documentElement.getAttribute('data-miasaki-theme') !== current) setAttr(current)
@@ -847,6 +1087,8 @@
       }
       syncDark()
       if (!IS_LOCAL) syncTitlebarGeometry()
+      // 最大化状态未知（推送丢失/标题栏重建）→ 10s 间隔经 hash 请求 Rust 重推（本地页同通道）
+      if (MAX_STATE === null && document.getElementById('miasaki-titlebar')) requestMaxState()
       } catch (e) { /* keep */ }
     }, 1000)
   }
