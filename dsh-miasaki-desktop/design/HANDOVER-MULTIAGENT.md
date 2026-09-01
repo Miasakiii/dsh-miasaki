@@ -39,7 +39,7 @@
 | `agents/registry.json` | 本线 | Discovery 只刷新发现元数据 | 入库存档 |
 | `state/`（tasks.jsonl / ledger.jsonl / events.jsonl） | 本线 | Commander（唯一写者） | 入库存档（`fleet-pulse.json` 已 ignore） |
 | `tasks/<id>/`（brief.md / context.md / result/） | 本线 | Commander 写 brief，worker 交付 result | 入库存档 |
-| `workers/`（discovery / dispatch / worker-cli） | 本线脚本 | — | 入库存档 |
+| `workers/`（discovery / dispatch） | 本线脚本（worker-cli 自研薄壳已退役，归档 `_refs/scripts-archive/`） | — | 入库存档 |
 | `fleet-monitor/`（server.js + panel.html） | 本线面板 | — | 入库存档（git 未 add ⚠️ 待提交） |
 | `shared/` | 本线共享只读区 | — | 入库存档 |
 | `desktop/` + `design/{HANDOVER,ARCHITECTURE,CHANGELOG,TODO,themes,token-surface}.md` | **桌面端线** | — | 见 HANDOVER.md |
@@ -91,20 +91,21 @@ pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0009 -Agent claude
 | id | 版本 | invoke | metering | 备注（校准结论，`docs/cli-calibration-2026-08-17.md`） |
 |---|---|---|---|---|
 | bl | 1.16.0 | `bl text chat --message {p}` | console-usage | ✅ 可用；t-0005 真实闭环；需 console session |
-| claude | 2.1.233 | `claude -p {p} --output-format json` | json-cost-usd | ✅ 可用；t-0006 首账；headless 下 Write 权限自动拒绝 → 交付物由派单器代写 |
+| claude | 2.1.238 | `claude -p {p} --output-format json` | json-cost-usd | ✅ 可用；t-0006 首账；headless 下 Write 权限自动拒绝 → 交付物由派单器代写 |
 | opencode | 1.18.18 | `opencode run {p}` | unknown | ✅ 可用；t-0007 并发通过；默认模型 deepseek-v4-flash |
 | pi | 0.84.1 | `pi -p {p}` | unknown | ✅ 可用；t-0008 并发通过；写 `~/.pi` 需 full-access |
 | gemini | 启动失败 | `gemini -p {p}` | unknown | ⚠️ 半可用：默认模型区域受限 403，需先换模型；spawn 需 full-access |
 | mimo | 0.1.12 | `mimo {p}` | unknown | ⚠️ invoke 语法待校准（位置参数被当目录）；需 `mimo --help` 后更新模板 |
-| dsh | (registry 记 rc.6) | `dsh --profile headless {p}` | session | ⚠️ 本机尚无 headless profile；另 registry 版本过期，待重扫 |
+| dsh | 0.1.1-rc.1 | `dsh --profile headless {p}` | session | ⚠️ 本机尚无 headless profile（registry 已重扫） |
 | agent-browser | 0.34.0 | `agent-browser {p}` | unknown | ⚠️ 命令型 CLI，非 prompt 型；任务需映射到具体命令（`skills get core` 起步） |
 
-## 6. 下一步（按优先级；来源 `docs/next-tasks-plan-2026-08-20.md` P1 + 设计文档 §13/§14）
+## 6. 下一步（按优先级；来源设计文档 §13/§14 + 历史计划稿，后者已归档 `_refs/plans-archive/`）
 
 - [x] **P1-2 m36 rc.8(+) 回归冒烟**（2026-08-22 完成，见 `docs/m36-rc8-regression-smoke-2026-08-22.md`）——本机全局 CLI 已至 0.1.1-rc.1；profile 混装 `--dump-config` 双双 exit 0、rc7-test 插件树与 M3.5 基线 313 行字节一致、三主题 18/18。**仍待用户在 GUI 验证历史会话恢复（rc.8 SQLite 不兼容）。**
 - [ ] **P1-5 引用资料再梳理**：`_refs/rc8-src.zip` 已损坏且于 2026-08-29 清理、`_refs/deepseek-harness` 是 rc.7 解包；需源码时重下官方 0.1.1-rc.2 source。
 - [ ] **M2 监控面板 → DSH 动态 Cordis 插件**（现状是独立 node 服务；目标：Operator 开关控件 + 配置项落官方 plugin settings surface）。
-- [ ] **校准遗留**：gemini 换可用模型 / mimo invoke 语法 / dsh 建 headless profile / opencode+pi 计量（`--format json` 等）。（**registry 已重扫**：dsh→0.1.1-rc.1、claude→2.1.238、gemini→0.55.1；详见 `tests/m3-acp/logs/m36/scan-output.log`）
+- [ ] **校准遗留**：gemini 换可用模型 / mimo invoke 语法 / dsh 建 headless profile / opencode+pi 计量（`--format json` 等）。（registry 已重扫：dsh→0.1.1-rc.1、claude→2.1.238、gemini→0.55.1）
+- [ ] **派单器补强**：交付回执（结构化 JSON：task/exit/输出路径/usage，供 Commander 一键验收）+ 预算熔断真实触发演练（人为调低 budget → 确认拒绝 + 面板提示）。
 - [ ] **M4 fleet 适配闭环**：无匹配技能 → 暂存 +「开启建议」；关闭 agent 的 reassign 流程。
 - [ ] **M5 健壮性**：预算熔断（派单器已内置）、心跳告警、kill/重启包、reopen 流程演练。
 - [ ] **M6 混合项目**：claude 写码 → opencode 审查 → agent-browser 验证 → bl 查配额（DAG）；**同模型对照素材已就位**（opencode/pi 均 deepseek-v4-flash）；异构候选 = dsh-subagent-codex/claude-code 后台 Job 路径。
@@ -134,7 +135,6 @@ pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0009 -Agent claude
 | `docs/cli-calibration-2026-08-17.md` | 8 CLI 校准报告（4/8 可用） |
 | `docs/m3-official-runtime-eval-2026-08-16.md` | 官方 dsh-subagent-dsh-sdk 评估（含废弃结论） |
 | `docs/m35-rc7-regression-smoke-2026-08-17.md` | rc.7 回归冒烟模板（m36 参照） |
-| `docs/next-tasks-plan-2026-08-20.md` | 当前待办备忘稿（P1 列表，即 §6 来源） |
-| `docs/ab-linkage-pet-fleet-status-2026-08-18.md` | 桌宠与 fleet 状态联动（两线交叉点） |
-| `docs/dsh-official-repo-review-2026-08-16.md` / `-rc7.md` | 官方仓库调研（已升级进度，多数结论已过时） |
+| `../dsh-miasaki-shared-docs/cross/ab-linkage-pet-fleet-status-2026-08-18.md` | 桌宠与 fleet 状态联动（两线交叉点） |
+| `../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-08-16.md` / `-2026-08-17-rc7.md` | 官方仓库调研（多数结论已过时，保留原始证据） |
 | `docs/ref-*.md`（4 篇） | 外部参考（腾讯/Datawhale/社区）归档 |
