@@ -1,0 +1,13 @@
+# dsh-token-monitor
+#
+# DSH web profile bundle: 会话视图「用量」Tab（token 用量监控）。
+# - client half：注册 conversation.view（id: token-monitor, order: 15 ——
+#   对话(0)/轨迹(10) 之后），3 秒轮询本插件的 HTTP 路由拉取数据。
+# - host half：监听 llm/stream（按 sessionId|provider|model 累计真实 usage
+#   实报值）与 tools/result（按会话×工具名计数），并注册
+#   GET /dsh-token-monitor/summary?sessionId=… 路由返回
+#   官方持久聚合（sessionProjections: tokenUsage/contextPressure/
+#   contextBreakdown/sessionStats + tokenMeter.measure）+ 实时明细。
+- insert:
+    - id: dsh-token-monitor
+      name: 'dsh-token-monitor'
