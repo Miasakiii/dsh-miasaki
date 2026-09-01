@@ -27,6 +27,15 @@ function circleMaskSvg(size) {
   )
 }
 
+// 圆角矩形蒙版（软件图标倒角；ratio 为半径占边长比例，0.24 ≈ Windows 11 风格更圆润，可调）
+function roundedRectMaskSvg(size, ratio = 0.24) {
+  const r = Math.round(size * ratio)
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">` +
+    `<rect width="${size}" height="${size}" rx="${r}" ry="${r}" fill="white"/></svg>`
+  )
+}
+
 // 消除源图杂质（鲜蓝"外部链接"小图标）已通过 fix-avatar.mjs 烙入主副本，此处无需补丁
 // （保留 patchArtifact 仅供源图更换时参考；fix-avatar.mjs 已归档 _refs/scripts-archive/）
 
@@ -123,13 +132,15 @@ function ringSvg(size, color, opts = {}) {
 
 {
   const art = join(root, 'src-tauri', 'icon-new.png')
-  // 1024 应用图标源
-  await sharp(art).resize(1024, 1024, { kernel: 'lanczos3' }).png()
+  // 1024 应用图标源（圆角蒙版 dest-in，四角透明）
+  await sharp(art).resize(1024, 1024, { kernel: 'lanczos3' })
+    .composite([{ input: roundedRectMaskSvg(1024), blend: 'dest-in' }]).png()
     .toFile(join(root, 'src-tauri', 'app-icon-source.png'))
-  console.log('app-icon-source.png (art 1024) done')
+  console.log('app-icon-source.png (art 1024, rounded) done')
 
-  // 加载页小图标（128）
-  await sharp(art).resize(128, 128, { kernel: 'lanczos3' }).png()
+  // 加载页小图标（128，同圆角）
+  await sharp(art).resize(128, 128, { kernel: 'lanczos3' })
+    .composite([{ input: roundedRectMaskSvg(128), blend: 'dest-in' }]).png()
     .toFile(join(root, 'ui', 'icons', 'app.png'))
-  console.log('app.png (art 128) done')
+  console.log('app.png (art 128, rounded) done')
 }
