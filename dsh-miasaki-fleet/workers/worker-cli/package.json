@@ -1,7 +1,0 @@
-{
-  "name": "dsh-worker-cli",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "description": "M3.5 worker CLI: 官方 dsh-sdk-client 驱动子运行时 + §4 文件总线协议循环。依赖不从 registry 安装（发布的 sdk-client 的 peer 未全部公开），改由 vendor 仓库 tsx + tsconfig paths 解析源码运行：在 vendor/deepseek-harness 下执行 node --import tsx <workspace>/workers/worker-cli/worker.mjs <agentId>"
-}
