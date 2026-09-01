@@ -3,6 +3,8 @@
 # 验证模式：-CheckOnly（只跑预算预检）/-ParseOnly（只跑 usage 解析，打印将要写入的 usage.jsonl 行）
 # 退出码：0 成功；2 拒绝派单（开关未开/无模板）；3 CLI 执行失败；4 预算熔断拒绝
 # 协议：status.json 由派单器代理写；stdout 存 logs/<task>-stdout.log；usage.jsonl 按 metering_source 解析；transcript.md 追加；tasks.jsonl 由 Commander 另写。
+# 记忆隔离：spawn worker 进程时注入 OPENVIKING_RECALL_PEER_SCOPE=actor（§12.2 OpenViking 记忆层），进程结束后恢复原值。
+# 运行环境：PowerShell 7+（脚本使用 ?? 运算符）；本机 PS7 路径 %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe（可能不在 PATH，where pwsh 找不到）。
 
 param(
   [string]$TaskId,
@@ -155,6 +157,11 @@ $outFile = Join-Path $logDir "$TaskId-stdout.log"
 "" | Set-Content $outFile
 
 $exitCode = 0
+# OpenViking 记忆隔离（§12.2，2026-08-24）：worker 会话按 cwd 派生 actor peer 作用域（actor =
+# 仅检索本 workspace 记忆），防止多项目/多 worker 并存时记忆串味；同一 workspace 内各任务共享
+# 经验记忆（跨任务复用收益）。无 OpenViking 集成的 CLI 不读此变量，注入无害。
+$ovScopeBackup = $env:OPENVIKING_RECALL_PEER_SCOPE
+$env:OPENVIKING_RECALL_PEER_SCOPE = 'actor'
 Push-Location $Workspace
 try {
   foreach ($cmd in $cmdLines) {
@@ -175,6 +182,8 @@ try {
   }
 } finally {
   Pop-Location
+  if ($null -eq $ovScopeBackup) { Remove-Item Env:OPENVIKING_RECALL_PEER_SCOPE -ErrorAction SilentlyContinue }
+  else { $env:OPENVIKING_RECALL_PEER_SCOPE = $ovScopeBackup }
 }
 "`nEXIT:$exitCode" | Tee-Object -FilePath $outFile -Append
 
