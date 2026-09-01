@@ -22,6 +22,7 @@ dsh-miasaki-desktop/src-tauri/src/assets.rs
 
 # ---- 外部工具数据（非本项目产物，工具可能重建，保留 ignore）----
 .freebuff/
+.commandcode/
 _bailian_test/
 _mimo_test/
 
@@ -68,6 +69,3 @@ dsh-miasaki-desktop/.edge-test-profile
 .workbuddy/
 Thumbs.db
 Desktop.ini
-
-# ---- 诊断临时目录（edge headless 验证 profile，重启后可删）----
-_probe/
