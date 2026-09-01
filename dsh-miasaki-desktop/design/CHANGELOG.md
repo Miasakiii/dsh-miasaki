@@ -2,6 +2,212 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-01 · 修复:启动页左上角闪烁黑块
+
+依据:用户反馈「启动页左上角闪烁黑块」。
+
+- **根因**:标题栏 `::before` 模拟侧栏色块的回退色为深色 `#1e1a27`
+  (`background:var(--dsw-specific-sidebar-fill,var(--dsw-alias-bg-base,#1e1a27))`)。
+  `--dsw-specific-sidebar-fill` 是 DSH 页面自身的令牌,DSH 样式加载完成前无值 →
+  色块按回退色渲染成 280px×32px 深色块,悬在左上角;DSH 渲染完成后令牌生效变
+  主题色 → 视觉上"闪烁黑块"(亮色主题尤其明显)。
+- **修复**:
+  - `themes/runtime.js`:`::before` 回退色改 `transparent`——DSH 令牌未就绪时
+    不显示色块,DSH 渲染完成后色块与侧栏同时出现,无缝衔接;
+  - `src-tauri/src/main.rs`:主窗口 `background_color` 随主题设置(kurkuriel 浅色
+    #f7f4f1 / 其余深色 #0c0b11),页面加载期(loading → DSH 渲染完成前)底色不再
+    是默认白底,消除深色注入层悬在白色页面上的反差闪烁。
+- 触摸点:`themes/runtime.js`、`src-tauri/src/main.rs`、
+  `src-tauri/injected/theme-init.js`(build-init 重新生成)。
+- 验证点:重启桌面端(深/浅主题各试一次)——启动到 DSH 渲染完成的整个过程,
+  左上角不再出现深色块闪烁,页面加载期无白底反差。
+
+## 2026-09-01 · 修复:启动界面画面不统一（IS_LOCAL 判定回归）
+
+依据:用户反馈「启动界面又出了小问题」。
+
+- **根因**:`IS_LOCAL` 判定回归——2026-08-29 曾修复(Windows 上 Tauri 2 本地页
+  协议为 `http://tauri.localhost`,单协议判定 `location.protocol === 'tauri:'`
+  恒 false → 本地页出现重复标题栏 + 切换条,即当时的「画面不统一」),后于重构
+  中丢失。回归后果:启动页被当作远程页,右下角主题切换条、主题水印、光晕、
+  标题栏左侧 280px 模拟侧栏色块全部出现在启动画面。
+- **修复**(`themes/runtime.js`):
+  - `IS_LOCAL` 恢复 protocol + hostname 双重判定(`tauri:` / `tauri.localhost`);
+  - `buildTitlebar` 不再因 IS_LOCAL 跳过(本地页同样需要拖动区与窗口按钮),
+    本地页构建时打 `data-local` 标记,CSS 隐藏模拟侧栏/详情分隔线
+    (`::before/::after`),标题栏保持纯净;
+  - `buildSwitcher` 加 IS_LOCAL 拦截,巡检同步加条件(本地页无切换条);
+  - 水印/光晕原有 IS_LOCAL 拦截恢复生效;`wireMaxState`/`requestMaxState`
+    移出 `!IS_LOCAL` 块(本地页窗口按钮状态同样需要同步)。
+- 触摸点:`themes/runtime.js`、`src-tauri/injected/theme-init.js`(build-init 重新生成)。
+- 验证点:重启桌面端——启动画面仅标题栏(左侧无侧栏色块/分隔线)+ 居中纹章,
+  无右下角切换条、无水印/光晕;标题栏三按钮同 SVG 线形、最大/还原同步;
+  进入 DSH 页后装饰层完整(切换条/水印/光晕/侧栏色块)不受影响。
+
+## 2026-09-01 · 修复:侧栏收起/展开时标题栏切换不连贯（帧级同步 + 过渡动画）
+
+依据:用户反馈「左上角切换不连贯、视觉不统一」。根因:DSH 侧栏收起/展开是 CSS
+动画,而标题栏几何此前靠 1s 巡检 + `display:none` 瞬间切换——动画播完文字才
+突然消失/出现,节奏滞后且生硬。
+
+- **ResizeObserver 帧级同步**:`syncTitlebarGeometry` 找到布局容器后,对首列元素
+  (sidebarCol)挂 ResizeObserver——收起/展开动画期间轨道宽逐帧变化,RO 每帧驱动
+  标题栏几何(`--ms-sidebar-w`/`--ms-details-left`/文字状态),与 DSH 动画完全
+  同步;容器缓存(`_frameCache`,isConnected 失效重扫)避免动画期间每帧全量
+  querySelector;1s 巡检降级为兜底(重建/重绑定/RO 不可用环境)。
+- **文字过渡动画**:`#tb-theme`/`.tb-sub` 的收起态由 `display:none` 改为
+  `opacity/max-width/margin` 过渡淡出(0.18s),原 `.tb-title` 的 flex gap 改为
+  子元素 margin 承担(收起态 margin 归零,无残留空隙);prefers-reduced-motion
+  下禁用过渡。
+- **收起判定方向驱动**:RO 逐帧采样下,收窄方向第一帧即置 `data-sidebar-collapsed`
+  (文字随收起动画同步淡出)、展开方向立即恢复(文字随展开动画同步淡入);无方向
+  变化时按隐藏/归零/窄于 100px 稳态兜底。
+- 触摸点:`themes/runtime.js`、`src-tauri/injected/theme-init.js`(build-init 重新生成)。
+- 验证点:真机验证——收起侧栏时标题栏文字与侧栏动画同步淡出、展开同步淡入,
+  色块分隔线逐帧贴合,无滞后跳变。
+
+## 2026-09-01 · 修复:窗口按钮统一 SVG 化 + 最大化状态同步 + 侧栏收起判定加固
+
+依据:用户反馈「左上角问题依旧」(排查为只重启旧 EXE——注入脚本编译期嵌入二进制,
+未重建即不生效);另三个窗口按钮(–/□/✕ 字符)大小不一、视觉不统一。
+
+- **按钮 SVG 化落地**:`TB_ICONS` 四枚 10×10 视口内联 SVG(stroke-width 1、
+  currentColor、圆头端帽、Fluent 线形)——最小化=横线、最大化=圆角方框、还原=错位
+  双框、关闭=对角叉;CSS 统一 `.tb-btn svg` 描边样式,三按钮视觉重量一致。
+  2026-08-29 记录的「SVG 化」从未真正落地(远程页无 IPC 权限,wireMaxState 架构
+  上走不通),本次按新通道重做。
+- **最大化↔还原同步(新通道)**:远程页 capability 只授 start-dragging → 不走
+  `__TAURI__` IPC,改 Rust eval 派发 CustomEvent `miasaki-max-state`(与桌宠状态
+  推送同构):main.rs 新增 `push_max_state` + on_window_event Resized 150ms 防抖 +
+  页面 load 后延迟推 + hash cmd=want-max 请求重推;runtime.js 监听事件切换图标,
+  标题栏被重渲染重建/推送丢失时 10s 间隔请求兜底;非 Tauri 浏览器预览点击本地翻转。
+- **侧栏收起判定加固(多信号)**:信号 A grid 轨道声明 / B 首列实测宽 / C
+  `[class*="sidebar"]` 元素可见性,宽度采用 B>A>C(实测优先,含 0);收起判定 =
+  C 隐藏或零宽 / 实测或轨道归零 / 窄于 100px(DSH 展开态侧栏 ≥100,固定阈值
+  优于相对基线——用户拖窄侧栏不误判)。比单一轨道解析抗 DSH 布局演进。
+- **可观测闭环**:hash diag 尾追加 `sidebarW.collapsed`,Rust watchdog diag 变化
+  时落一行 `hash-diag` 日志 → 托盘「导出诊断」可见,同类问题可远程定位不再靠猜。
+- 触摸点:`themes/runtime.js`、`src-tauri/src/main.rs`、
+  `src-tauri/injected/theme-init.js`(build-init 重新生成)。
+- 验证点:cargo check/build --release 通过;真机验证——三按钮同尺寸同粗细;最大化
+  (点击/Win+↑/双击标题栏)后按钮变「还原」;收起侧栏左上角只留图标且色块对齐。
+
+## 2026-09-01 · 修复:侧栏收起后标题栏主题文字与窗口栏不协调
+
+依据:用户反馈 DSH 左侧边栏收起后,自绘标题栏左上角的主题名/副标题文字仍
+横跨在窗口栏上,与收窄的侧栏区错位、观感不协调。
+
+- **收起态藏字**:`syncTitlebarGeometry` 解析到侧栏轨道宽为 0 或窄于 120px
+  (展开态默认 280px)时,给标题栏打 `data-sidebar-collapsed`,CSS 隐藏
+  `#tb-theme`/`.tb-sub`,仅留 20px 主题图标;`::before` 模拟侧栏分隔线同步
+  透明,与收起后的页面布局对齐。
+- **几何残留修复**:轨道声明值解析去掉 `>0` 过滤(0px 直接应用)——此前侧栏
+  收起为 0px 时 `--ms-sidebar-w` 残留旧宽 280px,标题栏侧栏色块与页面错位;
+  首列实测兜底同样直接采用含 0 值。
+- **图标悬浮提示**:标题栏徽记加 `title`(主题名 · 副标题),收起态文字隐藏后
+  悬停图标即可知当前主题。
+- 触摸点:`themes/runtime.js`、`src-tauri/injected/theme-init.js`(build-init 重新生成)。
+- 验证点:桌面端重启后收起/展开左侧边栏——收起态左上角仅主题图标(悬浮见提示),
+  展开态文字恢复;标题栏侧栏色块与页面侧栏始终对齐。
+
+## 2026-08-30 · 新增:DSH 会话视图「用量」Tab(dsh-token-monitor 部署级插件)
+
+依据:用户要求 DSH Web GUI 在「对话/轨迹」旁新增 token 监控入口(工具/模型/用量)。
+
+- **动态插件探针 → 部署级插件落地**:先以动态 Cordis 插件(probe pkg-1..5,正式器
+  pkg-6/7 UI)探明:① `llm/stream` options 含 sessionId/provider/model,chunk
+  `{type,usage}` 实报 `inputTokens/outputTokens/cacheReadTokens/reasoningTokens`;
+  ② `tools/result` exec.name/agent.id;③ 官方 `sessionProjections` 已有
+  `tokenUsage/contextPressure/contextBreakdown/sessionStats` + `tokenMeter.measure`
+  总口径(全历史、跨重启)。因 **dynamic list 槽条目 priority 由宿主强制分配且
+  恒低于内置**(`allocatePriority: --nextPriority`,非 chain 槽不可覆盖),动态
+  `conversation.view` Tab 恒排最左、无法经 order 置于轨迹右侧 → 定稿为
+  **profile bundle 部署级插件**(与 ui-trajectory 同层,bundle 插件 priority 正常,
+  order 15 生效于轨迹右侧)。
+- **产物**:`plugins/dsh-token-monitor/` —— package.json(dsh.bundle.patch +
+  dsh.client web)、cordis.patch.yml(insert)、host `lib/index.js`(llm/stream
+  waterfall 透传包装 + tools/result + webServer 精确路由
+  `GET /dsh-token-monitor/summary?sessionId=…` 返回官方聚合+实时明细)、
+  client `lib/client.js`(手写 `window.__ModuleLoader__.load` bundle,主题令牌
+  化 UI,3 秒轮询)。
+- **接线**:`%USERPROFILE%\.dsh\profiles\web\package.json` dependencies+bundles 加
+  `dsh-token-monitor`(file:),profile 目录 `pnpm install` 完成;**需 host 重启(重建
+  web bundle 图)后生效**。
+- **清理**:动态插件 `tokmn-1`(pkg-1..7)已 `cordis_stop`(定义保留以备回滚);与
+  部署版同 id `token-monitor` 的重复注册冲突已消除。
+- 触摸点:`plugins/dsh-token-monitor/`(新增)、
+  `%USERPROFILE%\.dsh\profiles\web\package.json`、README.md(目录树+插件章节)。
+
+## 2026-08-30 · 优化:桌宠边缘噪点修复 + 总指挥工作动态 + 权限申请提示
+
+依据:用户「桌宠边缘有噪点,也不显示工作状态或提示权限申请」。
+
+- **噪点根因**(已核实源码,见 `dsh-miasaki-shared-docs/cross/ab-linkage-pet-fleet-status-2026-08-18.md` 现状盘点):
+  1. 运行时 `pet_native.rs` 对像素**零过滤**(`a>0` 即上屏,`load_png` 整数预乘截断 ≤1 级偏暗);
+  2. 素材端清理粗糙:`cut-frames.mjs` kurumi 切格完全不清理、whale `stripGreenEdge`
+     只杀绿色主导像素(非绿色半透明光晕满 alpha 残留);
+  3. `inverse-states.mjs` 人造 2px alpha=150 环带且颜色是残留底色(噪点本体);
+  4. 叠加 `blit_center_bottom` 非整数最近邻缩放(208→270 ×1.298)把单点杂色撕成锯齿簇,
+     inverse 540→270 隔行丢弃破坏抗锯齿。
+- **修复**:
+  - 素材端治本(`scripts/cut-frames.mjs` + `scripts/inverse-states.mjs`):新增共用
+    `despeckle(buf)` —— `a<24` 阈值 + `0<a<128` 像素 8 邻域无强前景(a≥128)→ 0
+    (杀散点本体+半透明光晕浮雾);kurumi/whale 接入 despeckle(whale 串在
+    `stripGreenEdge` 之后);inverse 环带 2px→1px、颜色取邻近前景均值替代残留底色,
+    despeckle 兜底。重跑 `node scripts/cut-frames.mjs` + `node scripts/inverse-states.mjs`。
+  - 运行时保险(`src-tauri/src/pet_native.rs`):`load_png` 加 `a<8 → 0` 兜底,
+    预乘改四舍五入 `(c*a+127)/255` 消除 ≤1 级偏暗;`blit_center_bottom`
+    最近邻→**预乘空间双线性采样**(中心对齐源坐标,4 邻域按权重混合预乘值,数学上
+    正确且 ULW 兼容),对 kurumi/whale ×1.298 放大起平滑、对 inverse 540→270
+    等效 2×2 均值下采样保住边缘抗锯齿。
+  - **总指挥工作动态 + 权限申请提示**:
+    - 范围:桌宠**只反映 DeepSeek 总指挥(主会话)** 的工作动态,agent 员工状态
+      后续归 `dsh-miasaki-fleet/fleet-monitor/` 工作面板。
+    - `themes/runtime.js`:新增 `scanActivity()`(查找"停止生成"按钮 → 'busy')和
+      `scanApproval()`(在 dialog/modal/approve 容器内同时存在"允许"+"拒绝"类
+      按钮 → true);act 防抖 2 次连续确认、wait 出现立即上报/消失 2 次确认;
+      `syncHash` 拼 `&act=Z&wait=0|1` 字段;**临时探针** `window.__miasakiProbe()`
+      输出当前候选按钮文本便于 Operator 校准选择器。
+    - `scripts/gen-bubbles.ps1`:台词池尾部追加 3 帧状态文案("忙碌中…"/"等待审批"/
+      "需要你的批准"),`bubbles.png` 17→20 帧。
+    - `src-tauri/src/pet_native.rs`:`PetShared` 增 `activity`/`waiting_approval` 字段;
+      `NativePet` 增 `set_activity()`/`set_waiting_approval()`;`compose` 映射优先级
+      **waiting > busy > intensity** —— waiting 强制 kurumi `wait` 行 / whale·inverse
+      `work` 立绘 + **常驻"等待审批"气泡**(状态帧跳过 3s 过期),禁止 ambient/wander;
+      waiting 中单击桌宠 = 唤起主窗口(跳过 hop,免破坏等待观感)。
+    - `src-tauri/main.rs`:`parse_fragment` 增 `act=`/`wait=` 解析;
+      `start_hash_watchdog` 分发到 `set_activity`/`set_waiting_approval`。
+- **构建验证**:`cargo build --release --offline` 27.52s 通过,启动 Miasaki 8s
+  验证进程存活 + 桌宠窗口创建 + 帧加载(`whale_states=3, kurumi_rows=6`),
+  hash 通道 `set_mode whale` + `set_intensity idle` 正常;runtime.js 解析+执行验证通过。
+- **待真会话校准**(用户/Operator 跑时):console 执行 `__miasakiProbe()` 看
+  `act=`/`wait=` 候选按钮文本是否匹配,按需微调 `ACT_BTN_TEXT` / `APPROVE_TEXT` /
+  `DENY_TEXT` / `APPROVE_CONTAINER_SEL` 常量(集中在 runtime.js 顶部)。
+- 触摸点:`scripts/cut-frames.mjs`、`scripts/inverse-states.mjs`、
+  `scripts/gen-bubbles.ps1`、`ui/pets/**`(重生成产物)、`themes/runtime.js`、
+  `src-tauri/src/pet_native.rs`、`src-tauri/src/main.rs`。
+- 后续阶段:桌宠内一键审批(Rust→JS eval 点页面"允许"按钮,通道现成;依赖
+  当前校准的选择器) + 员工状态监控(fleet-monitor 工作面板增强),本期仅留接口。
+
+## 2026-08-30 · 修饰:软件图标倒角改圆润（直角 → 圆角矩形）
+
+依据:用户「把软件图标倒角改圆润点」。
+
+- **根因**:`scripts/make-icons.mjs` 的应用图标段(icon-new.png → app-icon-source.png /
+  app.png)只有 resize,无任何圆角处理——全套图标(icon.png 512 实测四角 alpha 全 255)
+  为纯直角方形,Windows 任务栏/桌面呈现生硬。
+- **修复**(`scripts/make-icons.mjs`):新增 `roundedRectMaskSvg(size, ratio)` 圆角矩形
+  蒙版(默认半径 24% 边长,≈ Windows 11 风格更圆润,可调),应用图标两处输出
+  (1024 `app-icon-source.png`、128 `ui/icons/app.png`)均经 `dest-in` 蒙版合成,
+  四角透明;主题徽章(pure/zafkiel/inverse)本就是圆形裁切,不受影响。
+- **全链路重生成**:`node scripts/make-icons.mjs` → `npx tauri icon
+  src-tauri/app-icon-source.png` 重生成全套(`icon.ico`/`icon.icns`/32-256 png/
+  StoreLogo/Square*/ios/android)。
+- 触摸点:`scripts/make-icons.mjs`、`src-tauri/app-icon-source.png`、
+  `src-tauri/icons/*`(全套)、`ui/icons/app.png`。
+- 验证点:四角 alpha 校验通过(icon.png/128/32/app.png center=255、corners=0);
+  重新 `npm run tauri build` 后 EXE/安装包/加载页图标均为圆角。
+
 ## 2026-08-29 · 修复:右上角关闭按钮无反应（cmd 名不匹配 + 关闭弹窗模块丢失）
 
 依据:用户「桌面端右上角关闭没反应」。

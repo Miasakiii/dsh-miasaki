@@ -40,6 +40,14 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
   （主窗口最小化/隐藏时双击为**唤起主窗口**）/ **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
 - 自主动作（环境编排）：静止时低频随机小动作（挥手/检查/等待，偶发跳跃——表演 1.2~2.2s、休息 8~18s、
   首次 5.5s 延迟；指针按下即打断）；思考强度上升时转「守候」姿态（wait 行慢放，不再原地跑步）
+- **工作动态 + 权限申请提示**（v2026-08-30）：桌宠反映**总指挥（主会话）** 的活动状态——
+  注入层 `themes/runtime.js` 周期扫描 DSH 页面 DOM（"停止生成"按钮 → busy；
+  dialog/modal 内同时存在"允许"+"拒绝"类按钮 → 等待审批），经 URL hash `act=` / `wait=`
+  字段回传，Rust `compose` 按 **waiting > busy > intensity** 优先级映射立绘/姿态：
+  waiting 强制 kurumi `wait` 行 / whale·inverse `work` 立绘 + **常驻"等待审批"气泡**；
+  waiting 中**单击桌宠 = 唤起主窗口**（跳过 hop 动画）。选择器集中在 `runtime.js` 顶部
+  常量区，校准方式：console 跑 `__miasakiProbe()` 看候选按钮文本。agent 员工状态
+  后续归 `dsh-miasaki-fleet/fleet-monitor/` 工作面板，不进桌宠。
 - 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`（v1：位置 + 隐藏状态，原子写；
   位置不在任何可见显示器工作区时自动回默认 (1200,500)，修复拔掉副屏/分辨率变化后的「桌宠丢了」）
 - **设置入口**：DSH「设置 → 桌宠」面板（`plugins/dsh-pet-panel/`）提供：
@@ -62,12 +70,20 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
   差值应用（33ms 滞后、DPI 换算误差、事件流竞态 → 不跟手/跳变），已废弃。
   注意：远程页面（http://127.0.0.1:3080）的子 capability `remote-dsh.json` 必须授予
   `core:window:allow-start-dragging`，否则拖动手势会被插件 ACL 拒绝且无任何提示。
-- **窗口控制按钮**：标题栏右侧最小化/最大化/关闭为统一内联 SVG 图标（`currentColor`
-  描边、Windows 11 Fluent 线形风格，粗细一致可随主题变色），最大化后按钮自动切换为
-  「还原」双框图标——状态由 Tauri `onResized` + `isMaximized` 事件驱动，
-  双击标题栏 / Win+↑ 等系统路径同样同步；非 Tauri 环境（浏览器调试预览）点击时
-  本地翻转兜底。
-- 气泡台词为**构建期预渲染**的位图帧（`ui/pets/bubbles.png`，17 帧），运行时零 GDI 字体调用：
+- **窗口控制按钮**：标题栏右侧最小化/最大化/关闭为统一内联 SVG 线图标（10×10 视口、
+  `stroke-width 1`、`currentColor` 描边、圆头端帽 Fluent 风格，三按钮视觉重量一致），
+  最大化后按钮自动切换为「还原」错位双框图标——远程页无 IPC 权限，状态由 Rust 侧
+  `on_window_event`（Resized，150ms 防抖）经 eval 派发 `miasaki-max-state` CustomEvent
+  驱动，页面加载后延迟补推、页面经 hash `cmd=want-max` 可请求重推；双击标题栏 /
+  Win+↑ 等系统路径同样同步；非 Tauri 环境（浏览器调试预览）点击时本地翻转兜底。
+- **侧栏收起联动**：DSH 左侧边栏收起后，标题栏左上角仅保留主题图标（主题名/
+  副标题文字隐藏，悬停图标可见主题提示），模拟侧栏色块与分隔线同步收窄对齐；
+  展开侧栏后自动恢复。判定为多信号（grid 轨道声明 / 首列实测宽 / sidebar 元素
+  可见性），宽度实测优先；几何由 **ResizeObserver 帧级同步**（观察侧栏列元素，
+  与 DSH 收起/展开动画逐帧同步），文字淡出淡入过渡（0.18s），1s 巡检仅兜底；
+  解析宽与判定结果写入 hash `diag` 位，Rust 侧变化时落日志（托盘「导出诊断」可见）。
+- 气泡台词为**构建期预渲染**的位图帧（`ui/pets/bubbles.png`，20 帧：17 台词 + 3 状态帧
+  「忙碌中…/等待审批/需要你的批准」），运行时零 GDI 字体调用：
   Windows 11 的 GDI 字体在多线程（WebView2 + 桌宠线程）并发使用时存在已知堆损坏，`CreateFontW`
   会确定性崩溃（gdi32full!CreateFontW+0xA3 / 0xC0000005）。**修改台词池（`src/pet_native.rs`
   的 `quote_pool`）后必须重新生成**：`powershell -File scripts/gen-bubbles.ps1`（无 PowerShell 5
@@ -83,7 +99,9 @@ desktop/
 │  └─ runtime.js             # 注入运行时：主题属性/明暗锁定/切换条/过渡/水印/标题栏（几何同步+主题装饰）
 ├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
+├─ plugins/dsh-token-monitor/    # DSH web profile bundle：会话视图「用量」Tab（token 监控）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
+├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡台词位图精灵表（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
    ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航

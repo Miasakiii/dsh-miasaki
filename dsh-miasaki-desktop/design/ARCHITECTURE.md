@@ -32,6 +32,8 @@ Miasaki.exe (Tauri 2, 单进程)
 | 拖窗 = 累计增量(×DPR)+ Rust 差值应用 | 增量式在 33ms 轮询下丢帧;DPI 200% 下物理/CSS 混用会半速 |
 | 启动健康标记 = bootstrap.json(v1),temp+rename 原子写 | 启动阶段落盘(bootstrap/spawn/waiting/up),失败可诊断;损坏删除重建默认(不猜不静默)。设计见 bootstrap-reliability.md |
 | 重试 = BOOTSTRAP_GEN 代际计数(+1 后旧序列自行退出) | spawn 失败后旧循环不再 spawn,原「重试」按钮形同虚设;换代后新序列完整重跑 |
+| 桌宠缩放 = 预乘空间双线性采样(2026-08-30) | 非整数最近邻(208→270 ×1.298)把单点杂色撕成锯齿簇,540→270 隔行丢像素破坏抗锯齿;双线性在预乘空间下数学正确且 ULW 兼容 |
+| 桌宠状态源 = DOM 扫描 + 优先级映射(2026-08-30) | 总指挥活动/审批状态只能从 DSH 主页面 DOM 取(无 IPC,无 fleet 文件总线);等待审批在 kurumi 复用既有 `wait` 行(偶发语义对)+ 常驻气泡 |
 
 ## 3. 数据流
 
@@ -53,23 +55,52 @@ tb-drag pointerdown → 记录起点;pointermove → move=累计物理增量(×d
 ### 3.3 思考强度
 页面 DOM 变异计数(MutationObserver,忽略注入层自身)每 2.5s 分级 idle/work/deep → hash `int=` → set_intensity。
 
+### 3.4 桌宠状态源(2026-08-30)
+```
+DSH 主页面 DOM(总指挥会话)
+  │  runtime.js 每 1.5s 扫描:
+  │    scanActivity()   → "停止生成"按钮? → act=busy
+  │    scanApproval()   → dialog/modal 内"允许"+"拒绝"成对? → wait=1
+  │    scanEffort()     → 模型选择器推理等级 → int=idle/work/deep
+  │  act 翻转需 2 次连续确认(防抖);wait 出现即时上报/消失 2 次确认
+  ▼  URL hash 扩展:#miasaki-theme=X&int=Y&act=Z&wait=0|1
+main.rs parse_fragment + start_hash_watchdog
+  ▼  pet.set_intensity / set_activity / set_waiting_approval
+pet_native.rs compose 优先级映射:
+  waiting=true  → kurumi `wait` 行 / whale·inverse `work` 立绘
+                  + 常驻"等待审批"气泡(状态帧跳 3s 过期)
+                  + 禁 ambient/wander + 单击桌宠=唤起主窗
+  activity=busy → eff_intensity=work(whale·inverse work 立绘;kurumi 静默守候)
+  idle          → 回退到 intensity(DOM 推理等级)
+```
+**校准**:`__miasakiProbe()`(window 全局)dump 当前候选按钮文本,Operator 按 DSH
+实际版本调整 `runtime.js` 顶部的 `ACT_BTN_TEXT`/`APPROVE_TEXT`/`DENY_TEXT`/
+`APPROVE_CONTAINER_SEL` 常量。agent 员工状态归 `dsh-miasaki-fleet/fleet-monitor/`
+工作面板,不在桌宠内展示。
+
 ## 4. GDI 绘制流水线(血泪区)
 
 **铁律(违反必崩)**:
 1. `SelectObject(dc, obj)` 返回旧对象;**恢复旧对象后才允许 `DeleteObject(obj)`**。
    被 DC 选中的对象删除失败 → 33ms 高频下句柄泄漏 → gdi32full 0xc0000005(偏移稳定 0x2ae13)。
 2. 避免高频 `CreateDIBSection`:已用持久表面(DIB 32bpp 预乘 alpha,top-down)。
-3. 每像素手工预乘(`bgra = (a<<24)|(r*a/255)<<16|…`);GDI 绘制不写 alpha。
+3. 每像素手工预乘(`bgra = (a<<24)|((r*a+127)/255)<<16|…` 2026-08-30 改四舍五入消 ≤1 级偏暗);
+   GDI 绘制不写 alpha;`load_png` 加 `a<8 → 0` 兜底(防 desync 素材被拉满)。
 4. 所有 GDI 调用前检查句柄(0/null 提前返回)。
+5. 桌宠缩放走**预乘空间双线性采样**(`blit_center_bottom`,2026-08-30):源坐标中心对齐
+   `(x+0.5)*src.w/w-0.5`,四邻域按权重混合预乘值,边界 clamp。ULW 的
+   `AC_SRC_ALPHA` 需要预乘值,直接在预乘空间插值数学正确;最近邻会因非整数缩放比
+   (×1.298)产生锯齿簇,等倍缩放(×0.5)会隔行丢像素破坏抗锯齿。
 
 ## 5. 构建链路(顺序固定)
 
 ```powershell
 # desktop 目录
-node scripts/cut-frames.mjs    # 图集切帧(仅 kurumi;inverse 由 inverse-states 生成)
-node scripts/inverse-states.mjs # 反转狂三立绘处理(需 raw/blue-*.png 源)
-node scripts/make-icons.mjs    # 主题徽章 + 应用图标(源 src-tauri/icon-new.png)
+node scripts/cut-frames.mjs    # 图集切帧(kurumi 切 9 行 + whale 拆 idle.gif;内置 despeckle 杀散点/光晕)
+node scripts/inverse-states.mjs # 反转狂三立绘处理(1px 净色环带 + despeckle;需 raw/blue-*.png 源)
+node scripts/make-icons.mjs    # 主题徽章 + 应用图标(源 src-tauri/icon-new.png,圆角 24% 边长)
 node scripts/gen-init          # 注入包 + 令牌完备性校验
+powershell -File scripts/gen-bubbles.ps1 # 桌宠气泡精灵表(20 帧:17 台词 + 3 状态帧;改 quote_pool 后必跑)
 npx tauri icon src-tauri/app-icon-source.png   # 换图标时执行
 # src-tauri 目录
 cargo build --release --offline
@@ -89,7 +120,16 @@ Remove dist\ui -Recurse; Copy desktop\ui → dist\ui
 - 主窗口关闭 = 退出应用(DSH 服务保持运行);托盘菜单可隐藏主窗口。
 - **DSH DOM 契约(标题栏几何同步,验证于 0.1.1-rc.1)**:`syncTitlebarGeometry` 依赖
   `#root` 内 AppFrame(`@deepseek-ai/dsh-client-ui-layout`)的内联网格,且首列=侧栏、末列=详情面板;
+  侧栏折叠时首轨道归零:声明值与首列实测兜底均**直接采用含 0 值**(此前 `>0` 过滤会让
+  `--ms-sidebar-w` 残留旧宽)。收起判定为**多信号**:A 轨道声明 / B 首列实测宽 /
+  C `[class*="sidebar" i]` 元素可见性,宽度采用 B>A>C;收起 = C 隐藏或零宽 / 实测或
+  轨道归零 / 窄于 100px。解析宽与判定写入 hash `diag` 尾两位,Rust watchdog 变化时
+  落 `hash-diag` 日志(导出诊断可远程定位)。
   DSH 升级时须复核(网格结构/折叠语义变动会静默错位,探测失败仅回退 280px 默认,不报错)。
+- **Rust→页面单向通道(eval + CustomEvent)**:远程页 capability 只授 start-dragging,
+  无 IPC 权限;Rust 侧经 `wv.eval` 派发 CustomEvent 下发状态(`miasaki-pet-state` /
+  `miasaki-max-state`),页面经 hash `cmd=*` 请求重推(want-max / pet-state)。新增
+  窗口状态推送需遵循此模式,勿走 `__TAURI__` IPC。
 
 ## 7. 文件地图(关键)
 
