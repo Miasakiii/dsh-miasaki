@@ -1,7 +1,7 @@
 # 多 Agent CLI 协作模式 — 设计文档
 
-- 版本：v0.13
-- 日期：2026-08-17
+- 版本：v0.14
+- 日期：2026-08-24
 - 状态：Draft
 - 作者：总指挥（Miasaki 会话）
 
@@ -19,6 +19,7 @@
 > - v0.7 依据 Datawhale《国产之光！GLM 5.3 + DeepSeek Harness 实测来了》（2026-08-15，归档于 `docs/ref-datawhale-glm53-dsh-review-2026-08-15.md`）补充：§6.3 模型特性画像（GLM-5.3 工程完备 vs GPT-5.6-Sol 视觉表现、视觉反馈回路风险）；§6.4 生产级验收必查项；§12 ZCode 异构候选。
 > - v0.8 依据 GitHub 社区仓库 [xiaobright/dsh-anchored-standard](https://github.com/xiaobright/dsh-anchored-standard)（2885★ 两阶段锚定预设，2026-08-16 分析）补充：§6.3「工具面是第一杠杆」证据；§7.5 三层工具目录 v2 方向；§7.6 轨迹扰动证据与技能按需加载；§12 社区参考实现与插件工程纪律；§13/§14 M6 参考与复测开放问题。
 > - v0.9 依据 Datawhale《最新！DeepSeek Harness 桌面版和 CLI 来了！》（2026-08-16，归档于 `docs/ref-datawhale-dsh-desktop-cli-2026-08-16.md`）补充：§8.3 TUI / 桌宠形态社区先例（dsh-TUI 1.8k★、DSH Desktop 11.1k★）；§12 入口形态与 Headless 一次性任务入口；§11.2 凭证卫生；§7.6 工作区范围。
+> - v0.14 依据腾讯技术工程《DeepSeek Harness 规模化踩坑实录：耗时、成本、失败到底该怎么查》（2026-08-24，归档于 `../dsh-miasaki-shared-docs/dsh-platform/ref-tencent-agent-obs-2026-08-24.md`）补充：DSH 可观测生态情报——腾讯云官方插件 `tencentcloud-agentobs-sdk-dsh`（支持 DSH >=0.1.0-rc.6 <0.2.0）以状态树+延迟发射把 DSH 事件流还原为五层调用树（entry/agent/step/chat/tool，OpenTelemetry GenAI 语义约定；一次 turn 一条 trace、`gen_ai.session.id` 横向关联、重试不合并 `dsh.llm.attempt`、中断补发带错误码 Span）；结论：与 fleet 现有任务级文件总线观测互补而非替代（插件仅覆盖 dsh 单 CLI、需云凭证、captureContent 默认上送会话内容），五层 schema 作为未来 dsh worker step 级观测参考；dsh 缺 headless profile 仍为非活动 worker，暂不接入。
 
 ---
 
@@ -647,6 +648,61 @@ loop:
 | 2 | 模型实际看见了什么，能不能从日志完整重建 | append-only session event log + 请求前 invariant 校验（重建不一致直接 fail） | usage.jsonl + transcript.md + brief/context 必须可重建 worker 每次请求的上下文 |
 | 3 | 换掉文件系统 / 沙箱 / 模型提供方，多少工具必须跟着改 | Capability Seam：fs / sandbox / provider 为可替换服务，上层工具不动 | 协议与 runtime 解耦（§12）：runtime 替换时 §4 协议、工具白名单语义不变 |
 
+### 12.2 记忆层选型（OpenViking，2026-08-24 试点通过）
+
+> 结论：worker 与总指挥的**跨会话长记忆**采用 [OpenViking](https://github.com/volcengine/OpenViking)
+>（开源 AI Agent 上下文数据库，火山引擎，AGPL-3.0，v0.4.16）。评估与安装细节归档于
+> `../dsh-miasaki-shared-docs/dsh-platform/ref-openviking-dsh-2026-08-24.md`（含 v0.4.16 DSH 官方插件
+> Release 说明、端到端验证记录）。
+
+**本机已装实例（2026-08-24，全链路验证通过）**：
+
+| 角色 | harness | 安装方式 | 会话/记忆隔离 |
+|---|---|---|---|
+| 总指挥（本会话） | dsh（web profile） | `dsh plugin --profile web add @openviking/dsh-memory-plugin`（Cordis 原生插件） | 会话映射 `dsh-<session-id>`；每个 subagent 独立 session |
+| worker | claude 2.1.241 | `claude plugin marketplace add` + `plugin install openviking-memory@openviking`（v0.4.4，enabled） | cwd 派生 actor peer（`OPENVIKING_WORKSPACE_PEER`） |
+| worker | pi 0.84.3 | 官方扩展复制至 `~/.pi/agent/extensions/openviking` + `pi install` | 同上；**默认 takeover 接管本地压缩**（fail-open） |
+
+**服务端（本地 dev 模式）**：`~/.openviking/ov.conf`；embedding 本地
+`bge-small-zh-v1.5-f16`（CPU，512 维，零 API 成本）＋ VLM `deepseek-chat`（复用
+`DEEPSEEK_API_KEY`，OpenAI 兼容端点）；`http://127.0.0.1:1933` 无认证（auth_mode=dev）；
+`ovcli.conf` 仅需 `{"url": "http://127.0.0.1:1933"}`。启动命令 `openviking-server`
+（试点期间由会话代跑；正式使用建议手动启动或加计划任务预热）。
+
+**与 §1 协议原则的关系**：
+
+- **与任务总线正交**：§1.1 文件即总线（tasks/ledger/events.jsonl 等）保持不变；OpenViking
+  只承担**跨会话语义记忆**（偏好/经验/知识），互不替代。
+- **自动 recall 是注入式**：worker 每次 prompt 前检索注入（claude 15s 预算内、dsd 15s 阻塞
+  pre-step），会改变模型可见上下文——**既是收益也是扰动**，验收时须注意"recall 内容进入
+  工作记忆"（对应 §7.6 上下文隔离的补充约束）。
+- **peer 隔离**：默认 `OPENVIKING_RECALL_PEER_SCOPE=all`（跨 workspace 共享）；多项目/多
+  worker 并存时必须显式 `=actor` 或设 `OPENVIKING_PEER_ID` 防记忆串味——**已落地（2026-08-24）：
+  `dispatch-task.ps1` spawn worker 时默认注入 `OPENVIKING_RECALL_PEER_SCOPE=actor`
+  （保存→设置→finally 恢复，子进程继承已验证）；同 workspace 内各任务仍共享经验记忆**。
+- **崩溃安全**：写失败入 pending queue，下次会话启动回放；server 不可达时集成 fail-open
+  （claude 静默降级、pi takeover fail-open、DSH 插件不阻塞 pre-step 主流程）。
+
+**边界与风险**：
+
+- AGPL-3.0：本地工具形态无传染问题；嵌入自有成品对外分发前需评估。
+- server 网络依赖：worker 离网/内网时集成自动降级（无 recall/capture），任务本身不受阻。
+- pi 的 takeover **默认接管本地上下文压缩**——派单 pi 时若与原校准行为有出入，先
+  `takeover.enabled=false` 对照。
+- 成本：embedding 本地免费；VLM（deepseek）用于记忆提取/摘要/意图分析，产生少量 API 调用
+  （试点实测：单次 add-memory → 后台提取 1 次调用）。
+- **版本线**：DSH 插件 peer `>=0.1.0-rc.6 <0.2.0`（本机 0.1.1-rc.1 在范围内）；DSH 升至
+  0.2.0 线前须复核插件适配（官方见过 prerelease tag 漂移导致 ERESOLVE）。
+
+**fleet 应用方式（建议）**：
+
+1. 总指挥长期记忆已生效；任务外的经验沉淀（验收教训、决策理由）可显式
+   `mcp__openviking__remember`，不必只靠自动提取。
+2. worker 派单时新会话自动带记忆 → 跨任务经验复用（官方 tau2-bench 证据：经验记忆提升任务
+   成功率 +7~12pp）；M6 的 collective-memory 策展建议可直接查询 `viking://~/memories` 而非自建。
+3. 兜底：无官方集成的 worker CLI（bl/gemini/mimo/agent-browser）记忆仍由总指挥代理
+   （总指挥记住并随任务书转述），或按 §7.0 任务书携带。
+
 ---
 
 ## 13. 实施路线图
@@ -675,4 +731,4 @@ loop:
 
 ---
 
-*本文档变更记录：v0.1 初稿 2026-08-16；v0.2 引入 Operator 角色与开关协议 2026-08-16；v0.3 按官方仓库调研重写 runtime 选型 2026-08-16；v0.3 附录：M1 实测修正（§5 交付/验收终态区分）2026-08-16；v0.3 附录2：§8.3 增补桌宠聚合形态方向 2026-08-16；v0.4 M3 实测回写（dsh-sdk 定为 M3.5 runtime，自研薄壳退役）2026-08-16；v0.5 按腾讯技术工程《DSH 实测》补充计量字段/工具面收窄/上下文隔离/治理指标/自检三问 2026-08-16；v0.6 按 Datawhale 插件教程补充视觉扩展/第三方插件治理清单/插件开发实操坑 2026-08-16；v0.7 按 Datawhale GLM-5.3 实测补充模型特性画像/生产级验收必查项/ZCode 候选 2026-08-16；v0.8 按 xiaobright/dsh-anchored-standard 分析补充工具面杠杆证据/三层目录 v2 方向/轨迹扰动与技能按需加载/社区参考实现 2026-08-16；v0.9 按 Datawhale 桌面版/CLI 教程补充 TUI 与桌宠社区先例/入口形态与 Headless/凭证卫生/工作区范围 2026-08-16；v0.10 按官方仓库复查增补（2026-08-17 rc.7）修订 §12/§13：rc.7 三条新能力（产品后台 Job / ACP 图片桥接 / 插件设置面板）、opt-in 安装模型、M3.5 回归冒烟、M6 异构候选 2026-08-17；v0.10 附录：M1 里程碑收尾（t-0002 验收裁决）2026-08-17；v0.11 方向修正：编排本机 agent CLI（扫描发现 → 开关 → 派单），废弃自研 worker 路线 2026-08-17；v0.12 派单器落地：预算预检 + usage 自动解析 + t-0005/t-0006 双闭环 2026-08-17；v0.12 附录：rc.7 回归冒烟完成（dsh 原生参考线 A/B/C 无回归 + rc7-test profile 混装加载通过，报告 docs/m35-rc7-regression-smoke-2026-08-17.md）2026-08-17；v0.13 校准批次（4/8 可用）+ 并发派单验证（opencode+pi）+ t-0001~t-0008 八任务闭环 2026-08-17。*
+*本文档变更记录：v0.1 初稿 2026-08-16；v0.2 引入 Operator 角色与开关协议 2026-08-16；v0.3 按官方仓库调研重写 runtime 选型 2026-08-16；v0.3 附录：M1 实测修正（§5 交付/验收终态区分）2026-08-16；v0.3 附录2：§8.3 增补桌宠聚合形态方向 2026-08-16；v0.4 M3 实测回写（dsh-sdk 定为 M3.5 runtime，自研薄壳退役）2026-08-16；v0.5 按腾讯技术工程《DSH 实测》补充计量字段/工具面收窄/上下文隔离/治理指标/自检三问 2026-08-16；v0.6 按 Datawhale 插件教程补充视觉扩展/第三方插件治理清单/插件开发实操坑 2026-08-16；v0.7 按 Datawhale GLM-5.3 实测补充模型特性画像/生产级验收必查项/ZCode 候选 2026-08-16；v0.8 按 xiaobright/dsh-anchored-standard 分析补充工具面杠杆证据/三层目录 v2 方向/轨迹扰动与技能按需加载/社区参考实现 2026-08-16；v0.9 按 Datawhale 桌面版/CLI 教程补充 TUI 与桌宠社区先例/入口形态与 Headless/凭证卫生/工作区范围 2026-08-16；v0.10 按官方仓库复查增补（2026-08-17 rc.7）修订 §12/§13：rc.7 三条新能力（产品后台 Job / ACP 图片桥接 / 插件设置面板）、opt-in 安装模型、M3.5 回归冒烟、M6 异构候选 2026-08-17；v0.10 附录：M1 里程碑收尾（t-0002 验收裁决）2026-08-17；v0.11 方向修正：编排本机 agent CLI（扫描发现 → 开关 → 派单），废弃自研 worker 路线 2026-08-17；v0.12 派单器落地：预算预检 + usage 自动解析 + t-0005/t-0006 双闭环 2026-08-17；v0.12 附录：rc.7 回归冒烟完成（dsh 原生参考线 A/B/C 无回归 + rc7-test profile 混装加载通过，报告 docs/m35-rc7-regression-smoke-2026-08-17.md）2026-08-17；v0.13 校准批次（4/8 可用）+ 并发派单验证（opencode+pi）+ t-0001~t-0008 八任务闭环 2026-08-17；v0.15 按 OpenViking 试点结论（归档 `../dsh-miasaki-shared-docs/dsh-platform/ref-openviking-dsh-2026-08-24.md`）新增 §12.2 记忆层选型：总指挥 DSH 已挂 openviking-memory 插件、worker 侧 claude/pi 已装官方记忆集成、本地 server（bge + deepseek VLM）全链路验证通过；记忆层与文件总线正交、按 workspace peer 隔离 2026-08-24。*
