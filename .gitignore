@@ -23,6 +23,7 @@ dsh-miasaki-desktop/src-tauri/src/assets.rs
 # ---- 外部工具数据（非本项目产物，工具可能重建，保留 ignore）----
 .freebuff/
 .commandcode/
+.zcode/
 _bailian_test/
 _mimo_test/
 
