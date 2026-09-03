@@ -99,7 +99,7 @@ desktop/
 │  └─ runtime.js             # 注入运行时：主题属性/明暗锁定/切换条/过渡/水印/标题栏（几何同步+主题装饰）
 ├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
-├─ plugins/dsh-token-monitor/    # DSH web profile bundle：会话视图「用量」Tab（token 监控）
+├─ plugins/dsh-token-monitor/    # DSH web profile bundle：会话视图「用量」Tab（上下文剩余 hero + 今日限额/趋势账本 + 模型明细）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡台词位图精灵表（预渲染，规避 GDI 字体崩溃）

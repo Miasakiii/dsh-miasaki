@@ -2,6 +2,36 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-03 · 优化:「用量」Tab 参照 ZCode 用量面板重构(UI + 数据面)
+
+依据:用户「优化本项目'用量'页面,参考 zcode 的用量页面设计面板」。
+
+- **设计语言对齐(ZCode 用量面板)**:由"已用视角"翻转为**剩余视角优先**——
+  1. 上下文剩余 hero(大字号剩余% + 全宽分段条**分母 = contextWindow**(原实现
+     以已用和为分母,看不到未使用段)+ 未使用图例;已用超窗时以已用和为分母、
+     剩余归零);2. 阈值 45/75/95% 三档变色(success→brand→warn→error,ZCode 分档
+     惯例);3. "更新于 HH:MM:SS" as-of 时间戳替代静态刷新文案。
+- **数据面新增跨会话账本**(DSH 走 API Key 无配额接口,ZCode 的限额视角只能
+  本地建账):host 半在 `llm/stream` 累计处双写——`ledgerDays`(内存聚合权威,
+  仅最近 8 天)+ `pending`(增量);5s 节流追加写 `usage-log.jsonl`,`process.on('exit')`
+  同步 flush 兜底;启动载入最近 8 天(文件 >4MB 只解析尾部、丢弃不完整首行)。
+  账本与实时明细**同口径**(同为 chunk.usage 增量累计,不引入新偏差)。
+- **限额配置**:`config.json`(`{dailyTokenLimit: number|null}`),新路由
+  `GET|POST /dsh-token-monitor/config`(`{ok, error}` 包装对齐 dsh-free-model-pool);
+  summary 路由向后兼容扩展 `ledger{today,trend,since}` + `config` 字段。
+  数据目录优先宿主插件数据服务,否则 `~/.dsh/plugins-data/dsh-token-monitor/`。
+- **UI 重构**(client 半,`tokmn-*` 令牌化):上下文剩余 hero → 今日用量卡
+  (账本累计大数字 + 限额进度条/就地设置(K/M 单位) + 近 7 天纯 CSS 柱图,今日柱
+  品牌色)→ 统计卡组 → 性能小卡(TTFT/解码耗时/解码速度 tok·s⁻¹/模型与工具耗时,
+  由原独立小卡降级合并)→ 按模型明细/工具徽章(结构保留)→ 三通道口径脚注。
+  舍弃成本估算(定价表易过时,用户确认不做)。
+- 触摸点:`plugins/dsh-token-monitor/lib/index.js`、`lib/client.js`、
+  `package.json`(v0.2.0)、`README.md`(插件+desktop 目录树注释)。
+- 验证点:profile 目录重跑 `pnpm install`(file: 依赖不自动跟随源码)并重启
+  host 后——hero 阈值色分档;发起对话 3s 内今日累计增长;设置/清除限额生效;
+  `usage-log.jsonl` 行合法;**重启 host 后今日累计仍在**;趋势图 7 柱含今日;
+  三主题 × 明暗无样式破损。
+
 ## 2026-09-01 · 修复:启动页左上角闪烁黑块
 
 依据:用户反馈「启动页左上角闪烁黑块」。

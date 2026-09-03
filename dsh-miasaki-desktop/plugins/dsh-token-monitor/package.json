@@ -1,8 +1,8 @@
 {
   "name": "dsh-token-monitor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Token 用量监控：会话视图「用量」Tab —— 官方持久聚合（tokenUsage/contextPressure/sessionStats）+ llm/stream 实时按模型明细。",
+  "description": "Token 用量监控：会话视图「用量」Tab —— 官方持久聚合 + llm/stream 实时按模型明细 + 跨会话账本（今日累计 / 自定义日限额 / 近 7 天趋势）。",
   "license": "MIT",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
