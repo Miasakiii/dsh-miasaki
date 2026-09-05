@@ -6,14 +6,15 @@
 
 ## 仓库结构（monorepo，2026-08-22 重组）
 
-本仓 `dsh-miasaki/` 单一 git 仓承载两条互不耦合的线 + 共享参考，各居其位：
+本仓 `dsh-miasaki/` 单一 git 仓承载三条互不耦合的线 + 共享参考，各居其位：
 
 - `dsh-miasaki-desktop/` — 桌面端线（Tauri 2 薄壳 + Win32 桌宠 + 三主题；`design/` 在其内）
 - `dsh-miasaki-fleet/` — 多 Agent CLI 编排线（agents/state/tasks/workers/fleet-monitor/shared/tests）
+- `dsh-miasaki-canvas/` — DSH web 画布插件线（fork dsh-synapse v0.4.1 改名 `@miasaki/dsh-canvas`，会话布 MVP M1–M4 已收官；`design/` 在其内）
 - `dsh-miasaki-shared-docs/` — 跨线共享参考（`cross/` 跨线设计、`dsh-platform/` DSH 平台调研）
 - 根级 `_refs/ vendor/ dist/ .vs/ .workbuddy/ .learnings/ .monkeycode/ .freebuff/` 均已 ignore，外部/归档/构建产物，不属于任何一线。
 
-两条线代码零耦合，仅共享 `dsh-miasaki-shared-docs/`。仓库内被 git 追踪的文件可写 `../dsh-miasaki-shared-docs/…` 形式的相对引用（同仓内，clone 后不断）。
+三条线代码零耦合，仅共享 `dsh-miasaki-shared-docs/`。仓库内被 git 追踪的文件可写 `../dsh-miasaki-shared-docs/…` 形式的相对引用（同仓内，clone 后不断）。
 
 ## 工作区卫生（2026-08-21 起生效）
 
@@ -35,5 +36,6 @@
   确有留存价值的进 `_refs/scripts-archive/`，不留在根或构建链目录。
 - **收尾自检清单**（每个会话结束前）：
   1. `git status --short` 每一条 M/?? 都能点名（属于哪个功能、为何未提交）；无来历不明的文件。
-  2. 代码/行为变更同步更新 `dsh-miasaki-desktop/README.md` 与 `dsh-miasaki-desktop/design/CHANGELOG.md`（设计决策进 `dsh-miasaki-desktop/design/`）。
+  2. 代码/行为变更同步更新对应线的 README 与变更记录：desktop/canvas 更新各自
+     `README.md` 与 `design/CHANGELOG.md`；fleet 更新 `README.md` 与 `docs/` 设计文档变更记录（设计决策进各线 `design/`）。
   3. 最终回复点名本次变更文件（可点击路径），并给出需用户执行的下一步（构建/验证）。
