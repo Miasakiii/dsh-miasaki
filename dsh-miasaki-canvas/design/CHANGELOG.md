@@ -2,6 +2,41 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-06（三）
+
+- **切换按钮改为官方插槽注册（叠压问题彻底关闭）**：上一版 DOM 注入 `.headerActions`
+  仍被用户报告「变成一个了但还是遮盖重叠」——注入位置/重渲染时序不可控。改为
+  `ctx.slots.inject("conversation.session.header.actions", …register, ViewSwitch)`
+  （React 组件，`order:25`，紧随「后台任务」(order 20) 之后）——与 DSH 头部动作同一
+  flex 行由 DSH 自己渲染，**结构上不可能叠压**，随头部重渲染自动重挂（删除 1.5s
+  看门狗/浮空回退）；幂等守卫 `window.__DSH_CANVAS_BOOTED__` 保留（防 HMR 重复
+  apply 出现双按钮，回收时复位）；视图状态经 `switchViewStore`（React state ↔
+  open/close 单向同步）。`inject` 增加 `slots`；无需 react/jsx（用 createElement）。
+- 触摸点：`client.js`（link 开发模式，刷新页面即生效）。
+
+## 2026-09-06（二）
+
+- **切换按钮：头部行内化 + 主题令牌化（修复「不适配/遮住/叠压」）**：桌面端标题栏
+  v3 后用户报告三件事——①「对话/会话布」切换按钮在暗色主题下仍是白色药丸（不适配）；
+  ②切换按钮仍与「后台任务」胶囊叠压；③历史问题：按钮 `position:fixed; top:12px;
+  left:50%` 悬浮顶部，曾被桌面端旧顶带整体盖住（即「被遮住的切换按钮」本体）。
+  - **主题令牌化**（`client.js` 样式）：硬编码 `#fff/#d1d5db/#6b7280/#111827` 全部
+    改为 DSH 令牌 + 回退——`--dsw-alias-bg-overlay`（胶囊底色）、`--dsw-alias-border-l2`、
+    `--dsw-alias-label-secondary/primary`、`--dsw-alias-interactive-bg-hover`、激活胶囊
+    `--dsw-static-deepseek-450`（主题品牌色：原版蓝 / 刻刻帝绯红 / 狂狂帝血绯）+
+    `--dsw-static-neutral-bluish-00`；
+  - **行内化**：切换按钮优先注入 DSH 会话头 `.headerActions`（`#root header
+    [role="tablist"]` 所在 header 内，`[class*="headerActions" i]`），与「后台任务」
+    等头部动作并排（flex + gap），**结构上不可能叠压**；会话头不可用（欢迎页/设置页）
+    回退旧右上悬浮（`--float` 修饰类）；1.5s 看门狗在 DSH 重渲染摘掉按钮后自动重挂；
+    插件卸载清理看门狗与 DOM。
+- 触摸点：`dsh-miasaki-canvas/client.js`（link 开发模式，profile 直接生效）。
+- 验证：`node --check` 通过；目检——三主题下胶囊随主题色、与后台任务胶囊并排无遮挡。
+
+## 2026-09-06（一）
+
+- **切换按钮与 DSH 顶部会话 header 重叠修复（用户报告）**：DSH 原生对话顶部的「对话/会话布」切换按钮原本 `position:fixed; left:50%` 悬浮在视口正上角，在窄窗口（约 400px 宽）下与同一水平带的会话 header 内容（预设名「创造模式」、子代理计数下拉「3」等）贴边乃至叠住，视觉上挤成一团。修复：锚点改为 `left: calc(50% + 30px)`（仍用 `translateX(-50%)` 保持真居中），整体右移 30px，给左侧 header 内容让出间距；宽窗下 30px 偏移相对不可感知，仍然居中布置。改动仅 `client.js` 一处 CSS。
+
 ## 2026-09-05（八）
 
 - **侧边栏滚动跳顶修复（用户报告排查）**：前端是整页 `app.innerHTML` 全量重建式渲染，详情/卡片回答的滚动位置均有保存恢复，唯独侧边栏 `.thread-tree` 没有；而重建触发源很多（每秒投影轮询、DSH 侧 `canvas:current-session` 推送、流式回复结束等），滚动到侧边栏中部后 1 秒内任一触发到来即被拽回顶部。修复：`render()` 开头保存 `.thread-tree` scrollTop、重建后同步恢复（与卡片回答同模式）。另削减一个无谓重建源：`canvas:current-session` 在会话未切换且 title/cwd 未变时跳过 render（DSH 侧每次 sessions-list 订阅 tick 都会重发该消息）。

@@ -1,7 +1,8 @@
 window.__ModuleLoader__.load({
   id: '@miasaki/dsh-canvas',
-  factory: () => {
+  factory: (require) => {
     const module = { exports: {} }
+    const react = require('react')
     const currentSession = ctx => {
       const snapshot = ctx.sessions.list.getSnapshot()
       const id = snapshot.current
@@ -26,8 +27,12 @@ window.__ModuleLoader__.load({
       ]
     }
 
-    module.exports.inject = ['sessions', 'workspaces']
+    module.exports.inject = ['sessions', 'workspaces', 'slots']
     module.exports.apply = ctx => {
+      // 幂等守卫：DSH HMR/页面重挂可能重复 apply，旧实例的 DOM/监听还没被回收
+      // 时会叠加出两个「对话/会话布」按钮——同一页面只允许一份画布桥。
+      if (window.__DSH_CANVAS_BOOTED__) return
+      window.__DSH_CANVAS_BOOTED__ = true
       const prompt = async (sessionId, text) => {
         const scope = ctx.sessions.scope(sessionId)
         const session = scope === undefined ? undefined : ctx.sessions.sessionOf(scope)
@@ -36,30 +41,54 @@ window.__ModuleLoader__.load({
         if (!result.ok) throw new Error(result.error?.message ?? 'DSH 未接受这条消息')
       }
       const style = document.createElement('style')
-      style.textContent = '.dsh-canvas-switch{position:fixed;z-index:80;top:12px;left:50%;display:flex;gap:2px;transform:translateX(-50%);border:1px solid #d1d5db;border-radius:999px;background:rgba(255,255,255,.96);padding:3px;backdrop-filter:blur(10px)}.dsh-canvas-switch button{height:28px;border:0;border-radius:999px;background:transparent;padding:0 11px;color:#6b7280;font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}.dsh-canvas-switch button:hover{background:#f3f4f6;color:#111827}.dsh-canvas-switch button.active{background:#111827;color:#fff}.dsh-canvas-switch button:focus-visible{outline:2px solid #111827;outline-offset:2px}.dsh-canvas-overlay{position:fixed;z-index:100;inset:0;background:#f5f7fa}.dsh-canvas-overlay.is-opening{visibility:hidden}.dsh-canvas-overlay[hidden]{display:none}.dsh-canvas-overlay iframe{display:block;width:100%;height:100%;border:0}'
+      // 切换按钮走 DSH 会话头 actions 插槽（官方槽渲染、与「后台任务」同一 flex 行，
+      // 结构上不可能叠压），配色全部用 DSH 主题令牌（激活胶囊随主题品牌色：
+      // 原版蓝 / 刻刻帝绯红 / 狂狂帝血绯）。
+      style.textContent = '.dsh-canvas-switch{display:flex;gap:2px;margin-left:2px;padding:3px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.92));backdrop-filter:blur(10px)}.dsh-canvas-switch button{height:28px;border:0;border-radius:999px;background:transparent;padding:0 11px;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}.dsh-canvas-switch button:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}.dsh-canvas-switch button.active{background:var(--dsw-static-deepseek-450,#111827);color:var(--dsw-static-neutral-bluish-00,#fff)}.dsh-canvas-switch button:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}.dsh-canvas-overlay{position:fixed;z-index:100;inset:0;background:#f5f7fa}.dsh-canvas-overlay.is-opening{visibility:hidden}.dsh-canvas-overlay[hidden]{display:none}.dsh-canvas-overlay iframe{display:block;width:100%;height:100%;border:0}'
       document.head.append(style)
       const host = document.createElement('div')
       host.className = 'dsh-canvas-host'
-      host.innerHTML = '<div class="dsh-canvas-switch" role="group" aria-label="视图切换"><button type="button" data-view="dialog" class="active" aria-pressed="true">对话</button><button type="button" data-view="map" aria-pressed="false">会话布</button></div><section class="dsh-canvas-overlay" hidden><iframe title="会话布" src="/canvas/"></iframe></section>'
+      host.innerHTML = '<section class="dsh-canvas-overlay" hidden><iframe title="会话布" src="/canvas/"></iframe></section>'
       document.body.append(host)
-      const dialogButton = host.querySelector('[data-view="dialog"]')
-      const mapButton = host.querySelector('[data-view="map"]')
+      // 视图切换按钮：注册到官方会话头 actions 插槽（React 组件，DSH 渲染）
+      const switchViewStore = { view: 'dialog', onChange: null }
+      const setSwitchView = view => {
+        switchViewStore.view = view
+        if (switchViewStore.onChange) switchViewStore.onChange(view)
+      }
+      function ViewSwitch() {
+        const [view, setView] = react.useState(switchViewStore.view)
+        react.useEffect(() => {
+          switchViewStore.onChange = setView
+          return () => { if (switchViewStore.onChange === setView) switchViewStore.onChange = null }
+        }, [])
+        const showingMap = view === 'map'
+        const switchTo = next => () => {
+          setSwitchView(next)
+          if (next === 'map') open()
+          else close()
+        }
+        return react.createElement('div', { className: 'dsh-canvas-switch', role: 'group', 'aria-label': '视图切换' },
+          react.createElement('button', { type: 'button', className: showingMap ? '' : 'active', 'aria-pressed': String(!showingMap), onClick: switchTo('dialog') }, '对话'),
+          react.createElement('button', { type: 'button', className: showingMap ? 'active' : '', 'aria-pressed': String(showingMap), onClick: switchTo('map') }, '会话布'))
+      }
+      // 注册到官方会话头 actions 插槽（与「后台任务」同 slot 并排渲染，DSH 布局驱动，
+      // 主题令牌自动适配；退出插件生命周期时由 slots 机制统一回收）
+      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+        name: 'conversation.session.header.actions',
+        id: 'canvas-view-switch',
+        order: 25,
+      }, ViewSwitch))
       const overlay = host.querySelector('.dsh-canvas-overlay')
       const frame = host.querySelector('iframe')
 
-      const setView = view => {
-        const showingMap = view === 'map'
-        dialogButton.classList.toggle('active', !showingMap)
-        dialogButton.setAttribute('aria-pressed', String(!showingMap))
-        mapButton.classList.toggle('active', showingMap)
-        mapButton.setAttribute('aria-pressed', String(showingMap))
-      }
+      // close/open 收敛到 switchViewStore：React 按钮状态与面板行为单向同步
       const close = () => {
         window.clearTimeout(mapOpenFallback)
         mapOpening = false
         overlay.classList.remove('is-opening')
         overlay.hidden = true
-        setView('dialog')
+        setSwitchView('dialog')
       }
       const send = (type, payload) => { frame.contentWindow?.postMessage({ source: 'dsh-canvas', type, ...payload }, location.origin) }
       let syncQueued = false
@@ -120,7 +149,7 @@ window.__ModuleLoader__.load({
       const open = () => {
         window.clearTimeout(mapOpenFallback)
         mapOpening = true
-        setView('map')
+        setSwitchView('map')
         // Keep the iframe laid out while hidden so its canvas can receive a
         // real scroll offset. display:none would clamp scrollTop back to zero.
         overlay.hidden = false
@@ -217,14 +246,12 @@ window.__ModuleLoader__.load({
       }
       const unsubscribeSessions = ctx.sessions.list.subscribe(syncCurrentSession)
       const unsubscribeWorkspaces = ctx.workspaces.list.subscribe(syncCurrentSession)
-      dialogButton.addEventListener('click', close)
-      mapButton.addEventListener('click', open)
       frame.addEventListener('load', onFrameLoad)
       window.addEventListener('message', onMessage)
       window.addEventListener('keydown', onKeyDown)
       ctx.effect(() => () => {
-        dialogButton.removeEventListener('click', close)
-        mapButton.removeEventListener('click', open)
+        // 复位幂等守卫：允许后续（HMR 完整回收后/插件重装）重新挂载一份
+        window.__DSH_CANVAS_BOOTED__ = false
         frame.removeEventListener('load', onFrameLoad)
         window.removeEventListener('message', onMessage)
         window.removeEventListener('keydown', onKeyDown)
