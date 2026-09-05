@@ -15,6 +15,8 @@
     try { buildTitlebar() } catch (e) {}
     // 最大化状态同步本地/远程页均需要（Rust eval 派发的 CustomEvent 两页同源）
     try { wireMaxState() } catch (e) {}
+    // 空白拖动判定（document 级捕获，页面零占位后由它接管拖窗）
+    try { wireDragZone() } catch (e) {}
     if (!IS_LOCAL) {
       // 装饰层逐一隔离：单个构建异常不得中断后续构建与巡检启动（装饰层失败不阻断原则）
       try { buildSwitcher() } catch (e) {}
@@ -41,7 +43,6 @@
         styleEl.textContent = STYLES[current] || ''
       }
       syncDark()
-      if (!IS_LOCAL) syncTitlebarGeometry()
       // 最大化状态未知（推送丢失/标题栏重建）→ 10s 间隔经 hash 请求 Rust 重推（本地页同通道）
       if (MAX_STATE === null && document.getElementById('miasaki-titlebar')) requestMaxState()
       } catch (e) { /* keep */ }

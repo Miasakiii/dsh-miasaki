@@ -142,9 +142,11 @@ html[data-miasaki-theme="zafkiel"] ::selection {
   background: #c23a2e;
   color: #faf7fc;
 }
-/* 面板半透明化：光晕层（#miasaki-aurora）自底透出，营造钟阁夜氛 */
+/* 面板半透明化：Mica 材质 + 光晕层（#miasaki-aurora）自底透出，营造钟阁夜氛；
+ * alpha 与 Mica 强联合：Win11 上窗口底透明，面板透出同一张 Mica 材质（与标题栏共享） */
 html[data-miasaki-theme="zafkiel"] body {
-  --dsw-alias-bg-base: rgba(12, 11, 17, .86);
+  --dsw-alias-bg-base: rgba(12, 11, 17, .8);
+  --dsw-specific-sidebar-fill: rgba(18, 16, 25, .8);
   --dsw-alias-bg-layer-1: rgba(30, 26, 39, .9);
   --dsw-alias-bg-layer-2: rgba(38, 32, 48, .92);
   --dsw-alias-bg-module-platform: rgba(30, 26, 39, .9);
@@ -186,9 +188,4 @@ html[data-miasaki-theme="zafkiel"] #miasaki-watermark {
 html[data-miasaki-theme="zafkiel"] #miasaki-watermark svg {
   width: 100%;
   height: 100%;
-}
-/* —— 标题栏装饰：金色表圈内高光 + 金→暗红渐隐底线（钟楼檐线） —— */
-html[data-miasaki-theme="zafkiel"] #miasaki-titlebar {
-  --ms-deco-line: linear-gradient(90deg, rgba(217, 179, 106, .8), rgba(194, 58, 46, .34) 55%, rgba(194, 58, 46, 0) 85%);
-  box-shadow: inset 0 1px 0 rgba(217, 179, 106, .3), inset 0 -1px 0 rgba(194, 58, 46, .18);
 }

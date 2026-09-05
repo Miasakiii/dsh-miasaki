@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 
 		/** Required services: the slot registry is the only hard dependency. */
-		const inject = ["slots"];
+		const inject = ["slots", "remote.session", "workspaces"];
 
 		//#region hash 命令通道
 		/**
@@ -108,9 +108,79 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * 人格会话联动（2026-09-06 由桌面端注入运行时迁入本插件）：
+		 * 桌面端注入层切换主题时派发 'miasaki-persona-request' CustomEvent
+		 * （detail.theme），本插件用官方客户端 ctx.remote.session.create 建立
+		 * 对应桌宠 Agent 预设的新会话——不走 fetch('/api/*')（0.1.2-rc.1 起
+		 * HTTP RPC 路由已移除，改 WebSocket mux），版本自适应；每主题仅创建
+		 * 一次（localStorage 'miasaki.petSessions' 去重，与旧键兼容）。
+		 */
+		const PERSONA_MAP = { pure: "whale", zafkiel: "kurumi", kurkuriel: "inverse" };
+		const PERSONA_NAMES = { pure: "鲸鱼娘", zafkiel: "狂三", kurkuriel: "反转狂三" };
+		const PERSONA_KEY = "miasaki.petSessions";
+		const personaStore = { get: () => { try { const m = JSON.parse(localStorage.getItem(PERSONA_KEY) || "{}"); return m && typeof m === "object" ? m : {} } catch (e) { return {} } }, set: (m) => { try { localStorage.setItem(PERSONA_KEY, JSON.stringify(m)) } catch (e) { /* ignore */ } } };
+		let personaToastTimer = null;
+		function personaToast(msg) {
+			try {
+				let el = document.getElementById("miasaki-persona-toast");
+				if (el === null) {
+					el = document.createElement("div");
+					el.id = "miasaki-persona-toast";
+					el.style.cssText = "position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:2147483646;" +
+						"background:var(--dsw-alias-bg-overlay,#1e1a27);color:var(--dsw-alias-label-primary,#e8e2d8);" +
+						"border:1px solid var(--dsw-alias-border-l2,rgba(217,179,106,.55));border-radius:10px;" +
+						"padding:8px 14px;font:12.5px/1.5 'Segoe UI',system-ui,sans-serif;" +
+						"box-shadow:0 4px 18px rgba(0,0,0,.35);max-width:76vw;text-align:center;pointer-events:none;opacity:0;transition:opacity .25s ease";
+					document.body.appendChild(el);
+				}
+				el.textContent = msg;
+				el.style.opacity = "1";
+				if (personaToastTimer) clearTimeout(personaToastTimer);
+				personaToastTimer = setTimeout(() => { el.style.opacity = "0" }, 3600);
+			} catch (e) { /* ignore */ }
+		}
+		function ensurePersonaSession(ctx, theme) {
+			const preset = PERSONA_MAP[theme];
+			if (preset === undefined) return;
+			const m = personaStore.get();
+			if (m[theme]) {
+				personaToast("「" + PERSONA_NAMES[theme] + "」人格会话已建立，可在会话列表中选择");
+				return;
+			}
+			// 优先挂到当前工作区（workspaces.list 第一个），避免新会话落到 Host 默认目录
+			let workspaceId;
+			try {
+				const snapshot = ctx.workspaces.list.getSnapshot();
+				const items = snapshot?.items ?? [];
+				workspaceId = items.length > 0 ? items[0].workspaceId : undefined;
+			} catch (e) { /* 让 create 用默认 cwd */ }
+			ctx.remote.session.create({ agentPreset: preset, ...(workspaceId === undefined ? {} : { workspaceId }) })
+				.then((result) => {
+					if (result.ok) {
+						m[theme] = result.value.sessionId;
+						personaStore.set(m);
+						personaToast("已创建「" + PERSONA_NAMES[theme] + "」人格会话，可在会话列表打开");
+					} else {
+						const err = result.error ?? {};
+						personaToast("人格会话创建失败:" + (err.message ?? err.code ?? "unknown"));
+					}
+				})
+				.catch((e) => {
+					personaToast("人格会话创建失败:" + ((e && e.message) ? e.message : "网络错误"));
+				});
+		}
+
+		/**
 		 * Client plugin body: register the settings section.
 		 */
 		function apply(ctx) {
+			ctx.effect(() => {
+				const onPersona = (e) => {
+					try { ensurePersonaSession(ctx, e?.detail?.theme) } catch (e2) { /* 联动失败不阻断 */ }
+				};
+				window.addEventListener("miasaki-persona-request", onPersona);
+				return () => window.removeEventListener("miasaki-persona-request", onPersona);
+			}, "dsh-pet-panel: persona-session wiring");
 			ctx.slots.inject("settings.section", () => ctx.slots.register({
 				name: "settings.section",
 				id: "pet-panel",

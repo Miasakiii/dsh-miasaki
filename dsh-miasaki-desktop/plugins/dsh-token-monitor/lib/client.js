@@ -10,22 +10,30 @@ window.__ModuleLoader__.load({
 		const inject = ["slots"];
 
 		const CSS = `
+			/* host 浅色模式下 --dsw-alias-border-l1 仅 4% 黑、--dsw-alias-bg-layer-2 与
+			   layer-1 同为纯白：卡片边框/趋势图网格/热力空格/进度轨道会整体隐形。
+			   故以 label-secondary 为基在插件内自派生三档中性色，深浅主题自适应。 */
+			.tokmn-pane {
+				--tokmn-border: color-mix(in srgb, var(--dsw-alias-label-secondary) 34%, transparent);
+				--tokmn-hairline: color-mix(in srgb, var(--dsw-alias-label-secondary) 20%, transparent);
+				--tokmn-cell-empty: color-mix(in srgb, var(--dsw-alias-label-secondary) 15%, transparent);
+			}
 			.tokmn-pane { padding: 6px 20px 28px; }
 			.tokmn-head { display: flex; align-items: baseline; justify-content: space-between; margin: 2px 0 14px; }
 			.tokmn-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
-			.tokmn-card { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; padding: 12px 16px; }
+			.tokmn-card { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 8px; padding: 12px 16px; }
 			.tokmn-card-title { font-size: 12px; color: var(--dsw-alias-label-secondary); margin: 0 0 10px; font-weight: 600; letter-spacing: 0.02em; }
 			.tokmn-stat-value { font-size: 24px; font-weight: 700; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; line-height: 1.15; }
 			.tokmn-stat-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 4px; word-break: break-all; }
 			/* 总览五卡（ZCode 用量面板头部统计行） */
 			.tokmn-stats5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
 			@media (max-width: 860px) { .tokmn-stats5 { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); } }
-			.tokmn-stat5 { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px; padding: 14px 8px 12px; text-align: center; min-width: 0; }
+			.tokmn-stat5 { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 10px; padding: 14px 8px 12px; text-align: center; min-width: 0; }
 			.tokmn-stat5-v { font-size: 21px; font-weight: 700; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 			.tokmn-stat5-l { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 6px; }
 			/* 分段切换（每日/每周/累计 · 近7日/近30日） */
 			.tokmn-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
-			.tokmn-seg { display: inline-flex; background: var(--dsw-alias-bg-layer-2); border-radius: 999px; padding: 2px; gap: 2px; }
+			.tokmn-seg { display: inline-flex; background: var(--tokmn-cell-empty); border-radius: 999px; padding: 2px; gap: 2px; }
 			.tokmn-seg-btn { border: none; background: transparent; color: var(--dsw-alias-label-secondary); font-size: 12px; padding: 4px 14px; border-radius: 999px; cursor: pointer; }
 			.tokmn-seg-btn:hover { color: var(--dsw-alias-label-primary); }
 			.tokmn-seg-on { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18); }
@@ -34,13 +42,13 @@ window.__ModuleLoader__.load({
 			.tokmn-heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 11px); grid-auto-columns: 11px; gap: 3px; width: max-content; }
 			.tokmn-heat-weekly { grid-template-rows: 95px; }
 			.tokmn-heat-weekly .tokmn-heat-cell { border-radius: 4px; }
-			.tokmn-heat-cell { width: 11px; height: 100%; border-radius: 3px; background: var(--dsw-alias-bg-layer-2); }
+			.tokmn-heat-cell { width: 11px; height: 100%; border-radius: 3px; background: var(--tokmn-cell-empty); }
 			.tokmn-heat-cell:hover { outline: 1px solid var(--dsw-alias-label-secondary); }
 			.tokmn-heat-months { position: relative; height: 15px; margin-top: 6px; }
 			.tokmn-heat-month { position: absolute; top: 0; font-size: 10px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 			.tokmn-heat-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; gap: 12px; flex-wrap: wrap; }
 			/* 悬浮提示（热力图 / 趋势图共用） */
-			.tokmn-tip { position: absolute; z-index: 20; pointer-events: none; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; padding: 7px 11px; font-size: 11px; color: var(--dsw-alias-label-primary); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+			.tokmn-tip { position: absolute; z-index: 20; pointer-events: none; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 8px; padding: 7px 11px; font-size: 11px; color: var(--dsw-alias-label-primary); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
 			.tokmn-tip-sub { color: var(--dsw-alias-label-secondary); margin-top: 2px; }
 			/* 趋势图 */
 			.tokmn-chart-wrap { position: relative; }
@@ -50,18 +58,18 @@ window.__ModuleLoader__.load({
 			/* 环形图 + 模型列表 */
 			.tokmn-donut { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: center; }
 			@media (max-width: 720px) { .tokmn-donut { grid-template-columns: 1fr; } }
-			.tokmn-model-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+			.tokmn-model-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--tokmn-hairline); }
 			.tokmn-model-row:last-child { border-bottom: none; }
 			.tokmn-code { font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace; font-size: 12px; }
 			.tokmn-pct { margin-left: auto; font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
 			/* hero：上下文剩余（ZCode context bar 语言） */
-			.tokmn-hero { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px; padding: 16px 20px 14px; margin-bottom: 16px; }
+			.tokmn-hero { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 12px; padding: 16px 20px 14px; margin-bottom: 16px; }
 			.tokmn-hero-wait { font-size: 13px; color: var(--dsw-alias-label-secondary); padding: 10px 0 6px; }
 			.tokmn-hero-top { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 14px; }
 			.tokmn-hero-big { font-size: 40px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 			.tokmn-hero-label { font-size: 12px; color: var(--dsw-alias-label-secondary); margin-top: 8px; }
 			.tokmn-hero-side { margin-left: auto; text-align: right; font-size: 12px; color: var(--dsw-alias-label-secondary); line-height: 1.9; }
-			.tokmn-bar { height: 8px; border-radius: 4px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; display: flex; flex: 1; }
+			.tokmn-bar { height: 8px; border-radius: 4px; background: var(--tokmn-cell-empty); overflow: hidden; display: flex; flex: 1; }
 			.tokmn-bar-lg { height: 12px; border-radius: 6px; }
 			.tokmn-bar-seg { height: 100%; }
 			/* 今日累计 + 限额 */
@@ -71,24 +79,24 @@ window.__ModuleLoader__.load({
 			.tokmn-limit { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 			.tokmn-limit-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 			.tokmn-limit-pct { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
-			.tokmn-limitbar { height: 10px; border-radius: 5px; background: var(--dsw-alias-bg-layer-2); overflow: hidden; }
+			.tokmn-limitbar { height: 10px; border-radius: 5px; background: var(--tokmn-cell-empty); overflow: hidden; }
 			.tokmn-limitbar-fill { height: 100%; border-radius: 5px; }
 			.tokmn-limit-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-			.tokmn-btn { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+			.tokmn-btn { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); border: 1px solid var(--tokmn-border); border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
 			.tokmn-btn:hover:not(:disabled) { border-color: var(--dsw-alias-brand-primary); }
 			.tokmn-btn:disabled { opacity: 0.5; cursor: default; }
 			.tokmn-btn-sm { padding: 2px 9px; font-size: 11px; }
-			.tokmn-input { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+			.tokmn-input { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); border: 1px solid var(--tokmn-border); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
 			.tokmn-input:focus { outline: none; border-color: var(--dsw-alias-brand-primary); }
 			/* 行列表 / 图例 / chip / 性能 */
-			.tokmn-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--dsw-alias-border-l1); }
+			.tokmn-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--tokmn-hairline); }
 			.tokmn-row:last-child { border-bottom: none; }
 			.tokmn-name { flex: 1.4; min-width: 0; font-size: 13px; color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 			.tokmn-meta { font-size: 11px; color: var(--dsw-alias-label-secondary); }
 			.tokmn-num { font-size: 13px; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
 			.tokmn-legend { display: inline-flex; align-items: center; gap: 6px; margin-right: 16px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 			.tokmn-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
-			.tokmn-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--dsw-alias-border-l1); border-radius: 999px; padding: 5px 14px; font-size: 12px; color: var(--dsw-alias-label-primary); margin: 0 8px 8px 0; }
+			.tokmn-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--dsw-alias-bg-layer-2); border: 1px solid var(--tokmn-border); border-radius: 999px; padding: 5px 14px; font-size: 12px; color: var(--dsw-alias-label-primary); margin: 0 8px 8px 0; }
 			.tokmn-sec { margin-bottom: 18px; }
 			.tokmn-sec-title { font-size: 13px; font-weight: 700; color: var(--dsw-alias-label-primary); margin: 0 0 10px; }
 			.tokmn-perf { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
@@ -265,8 +273,8 @@ window.__ModuleLoader__.load({
 
 		/** 热力格颜色：0 档底色，1–4 档品牌色按分位提亮。 */
 		function heatStyle(v, max, future) {
-			if (future) return { background: "var(--dsw-alias-bg-layer-2)", opacity: 0.4 };
-			if (!(v > 0) || !(max > 0)) return { background: "var(--dsw-alias-bg-layer-2)" };
+			if (future) return { background: "var(--tokmn-cell-empty)", opacity: 0.4 };
+			if (!(v > 0) || !(max > 0)) return { background: "var(--tokmn-cell-empty)" };
 			const r = v / max;
 			const op = r < 0.08 ? 0.3 : r < 0.25 ? 0.5 : r < 0.55 ? 0.72 : 1;
 			return { background: "var(--dsw-alias-brand-primary)", opacity: op };
@@ -689,7 +697,7 @@ window.__ModuleLoader__.load({
 							react.createElement("span", { className: "tokmn-legend", key: "_free" },
 								react.createElement("span", {
 									className: "tokmn-dot",
-									style: { background: "var(--dsw-alias-bg-layer-2)", boxShadow: "inset 0 0 0 1px var(--dsw-alias-border-l1)" }
+									style: { background: "var(--tokmn-cell-empty)", boxShadow: "inset 0 0 0 1px var(--tokmn-border)" }
 								}),
 								"未使用 " + fmt(ctxFreeV))
 						])));
@@ -766,7 +774,7 @@ window.__ModuleLoader__.load({
 											return react.createElement("g", { key: "g" + gi },
 												react.createElement("line", {
 													x1: PAD_L, y1: y, x2: PAD_L + plotW, y2: y,
-													stroke: "var(--dsw-alias-border-l1)",
+													stroke: f === 0 ? "var(--tokmn-border)" : "var(--tokmn-hairline)",
 													strokeWidth: 1,
 													strokeDasharray: f === 0 ? undefined : "3 4"
 												}),
@@ -822,7 +830,7 @@ window.__ModuleLoader__.load({
 							? react.createElement("div", { className: "tokmn-empty" }, "暂无数据。")
 							: react.createElement("div", { className: "tokmn-donut" },
 								react.createElement("svg", { width: D_SIZE, height: D_SIZE },
-									react.createElement("circle", { cx: D_CX, cy: D_CY, r: D_R, fill: "none", stroke: "var(--dsw-alias-bg-layer-2)", strokeWidth: D_SW }),
+									react.createElement("circle", { cx: D_CX, cy: D_CY, r: D_R, fill: "none", stroke: "var(--tokmn-cell-empty)", strokeWidth: D_SW }),
 									donutSegs.map((s, i) => react.createElement("circle", {
 										key: i, cx: D_CX, cy: D_CY, r: D_R, fill: "none",
 										stroke: s.color, strokeWidth: D_SW,

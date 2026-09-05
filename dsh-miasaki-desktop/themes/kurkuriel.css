@@ -142,12 +142,14 @@ html[data-miasaki-theme="kurkuriel"] ::selection {
   background: #9e1b1b;
   color: #f8f5f2;
 }
-/* 面板半透明化：光晕层透出，白夜逆钟的冷寂氛围 */
+/* 面板半透明化：Mica 材质 + 光晕层透出，白夜逆钟的冷寂氛围；
+ * 亮主题 alpha 高于暗主题：系统暗色下 Mica 偏暗，抬 alpha 防骨白纸面偏灰 */
 html[data-miasaki-theme="kurkuriel"] body {
-  --dsw-alias-bg-base: rgba(247, 244, 241, .88);
-  --dsw-alias-bg-layer-1: rgba(252, 250, 248, .9);
-  --dsw-alias-bg-layer-2: rgba(255, 255, 255, .94);
-  --dsw-alias-bg-module-platform: rgba(252, 250, 248, .9);
+  --dsw-alias-bg-base: rgba(247, 244, 241, .93);
+  --dsw-specific-sidebar-fill: rgba(252, 250, 248, .93);
+  --dsw-alias-bg-layer-1: rgba(252, 250, 248, .94);
+  --dsw-alias-bg-layer-2: rgba(255, 255, 255, .96);
+  --dsw-alias-bg-module-platform: rgba(252, 250, 248, .94);
   --dsw-alias-bg-overlay: rgba(255, 255, 255, .97);
 }
 html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-a {
@@ -186,9 +188,4 @@ html[data-miasaki-theme="kurkuriel"] #miasaki-watermark {
 html[data-miasaki-theme="kurkuriel"] #miasaki-watermark svg {
   width: 100%;
   height: 100%;
-}
-/* —— 标题栏装饰：顶部/底部血红内线 + 右重左轻的血色渐隐底线（白夜逆钟檐缘） —— */
-html[data-miasaki-theme="kurkuriel"] #miasaki-titlebar {
-  --ms-deco-line: linear-gradient(270deg, rgba(158, 27, 27, .65), rgba(158, 27, 27, .28) 55%, rgba(158, 27, 27, 0) 88%);
-  box-shadow: inset 0 1px 0 rgba(158, 27, 27, .45), inset 0 -1px 0 rgba(158, 27, 27, .22);
 }

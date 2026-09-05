@@ -2,6 +2,196 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-06 · 人格会话联动改道（修复「人格会话创建失败:not found」）
+
+依据:用户报告切换主题时 toast「人格会话创建失败:Unexpected token 'o', "not found"
+is not valid JSON」。实测复现:`POST /api/session.create` → HTTP 404 `not found`。
+
+- **根因**:注入层 `01-persona.js` 自研 RPC(`fetch('/api/'+method)` + client-request
+  信封)在 dsh 0.1.2-rc.1 已失效——该版本 RPC 走 WebSocket mux(`/api/remote.mux`,
+  见 `dsh-api-gateway` `registerUpgrade`),HTTP `/api/*` 路由不存在 → 404;
+  官方客户端经生成的 `ctx.remote.session.*` 代理调用(实测
+  `dsh-client-ui-model-selection`: `ctx.remote.session.modelCatalog()`)。
+- **修复(职责迁移,版本自适应)**:注入层不再自行 RPC——`01-persona.js` 改为派发
+  `miasaki-persona-request` CustomEvent(detail.theme);`plugins/dsh-pet-panel/lib/client.js`
+  (桌面插件,官方客户端上下文)监听事件,经 `ctx.remote.session.create({agentPreset,
+  workspaceId?})` 创建,保留 localStorage(`miasaki.petSessions`)去重与主题化 toast
+  (DSH 令牌配色);`inject` 增加 `remote.session`/`workspaces`。
+- 触摸点:`themes/src/01-persona.js`、`plugins/dsh-pet-panel/{lib/client.js}`(已同步
+  profile `node_modules`,哈希核对一致)、`README.md`、`injected/theme-init.js`(重生成
+  64KB,令牌校验 + node --check 通过)。
+- 验证:release 构建通过;验证点——切换主题后 toast 不再报错,「已创建『狂三』人格
+  会话」;若插件升级缺失则静默降级(无 toast、无创建),不阻断主题切换。
+
+## 2026-09-05 深夜 · 标题栏 v3:零占位叠加 + 窗控胶囊(修复「顶部切换按钮位置/被遮」)
+
+依据:用户连续三轮反馈「窗口栏把对话会话布局切换按钮遮住了」「最主要的问题是按钮的
+位置而不是整个窗口的风格」——v1 色带/v2.1 卡片式都对页面有 32px 布局侵入,把 DSH
+会话头整行(标题行 + `role=tablist` 页签「对话/轨迹/用量」)压到顶带下方,按钮位置与
+web 端不一致。本轮先做**布局取证**再动手(用户要求「先定位再改」):
+
+- **取证结论**(读 `@deepseek-ai/dsh-client-ui-conversation` 包源码):会话头 =
+  `<header>`(ConversationSessionHeader,`.header{padding:12px 28px 0 20px}`)→
+  `titleRow`(`titleCluster`(flex:1:面包屑 + `conversation.session.header.actions`
+  槽(后台任务等)) + `headerUtilities`(`conversation.session.header.utilities` 槽,
+  Session 日志等))→ `tabs`(`role="tablist"`:对话/轨迹/用量)。全部为文档流定位;
+  web 端 tabs 位于 y≈46,桌面端被 32px 下推后到 y≈78——位置被顶带挤掉。
+- **v3 设计(用户批准)**:
+  1. **零占位叠加**:删除 32px 顶带/卡片/#root 下推与 transform——页面回到 y=0,
+     所有顶部控件与 web 端同位置(视觉与交互零侵入);
+  2. **窗控胶囊**:右上角悬浮胶囊(主题徽章 + 最小化/最大化/关闭,半透明 +
+     `backdrop-filter` 毛玻璃,悬停变实色),胶囊外 `pointer-events:none`,不挡页面;
+  3. **顶行让位**:`#root header:has([role="tablist"]){padding-right:132px}`——
+     会话头右侧(headerUtilities)为胶囊预留宽度(实测胶囊 ≈114px + 余量),
+     Session 日志等左移,不再与悬浮胶囊叠压(与 VSCode 等自绘标题栏应用同款让位;
+     初版 104px 不足,真机叠压后加宽至 132px;选择器锚定 `role=tablist`,
+     DSH 升级时随 verify-themes 复核);
+  4. **空白拖动**:document 级捕获 mousedown(y<36 且事件路径无交互元素——复用
+     tauri 内置 drag-region 判定口径:可点击标签/contenteditable/tabindex/交互 role)
+     → `plugin:window|start_dragging`;双击 → `internal_toggle_maximize`。
+     页面按钮/页签/输入框照常点击,空白处拖窗;
+  5. 主题标识移入胶囊(顶部左侧不再放任何东西,不碰侧栏 logo);右下角悬浮切换条保留。
+- **清理**:删除各主题 `--ms-titlebar-bg`(+ fallback/@supports)与
+  `#miasaki-titlebar` 顶缘高光规则;`prefers-reduced-motion` 去掉 tb-theme 引用;
+  `06-titlebar.js` 重写为胶囊 + wireDragZone;`08-ready.js` 接线 wireDragZone。
+- 触摸点:`themes/src/{03,06,08}`、`themes/{pure,zafkiel,kurkuriel}.css`、
+  `src-tauri/injected/theme-init.js`(重生成 67KB,令牌校验 + node --check 通过)。
+- 验证:release 构建(`tauri build --no-bundle`)通过;目检点——重启后「对话/轨迹/用量」
+  页签回到 web 端位置、右上角胶囊不遮任何页面按钮、顶部空白可拖窗/双击最大化、
+  三主题配色正确。
+
+## 2026-09-05 深夜 · 用量页网格/区块边界可见性修复（token-monitor v0.3.3）
+
+依据:用户截图反馈「用量界面的网格状不明显,各个区块的边界线不清晰」。取证 host
+主题令牌:浅色模式下 `--dsw-alias-border-l1` 仅 `#0000000a`(4% 黑)、
+`--dsw-alias-bg-layer-2` 与 layer-1 同为 `neutral-bluish-00`(纯白)——凡以这两个
+令牌做「结构线/空格底」的地方在浅色主题下全部隐形:
+
+- **区块边界**:卡片/总览五卡/hero/悬浮提示/按钮/输入框/chip 的 1px 边框(4% 黑
+  肉眼不可见)→ 换插件内自派生 `--tokmn-border`(label-secondary 34% color-mix);
+  模型列表/行分隔线 → `--tokmn-hairline`(20%,弱于区块边框一档)。
+- **热力图网格**:空格与未来格底色原为 layer-2(白上白,整片空白仅右端有数据格
+  可见)→ `--tokmn-cell-empty`(15%,GitHub 热力图空格观感),CSS 类与 `heatStyle`
+  内联双处同步。
+- **同类隐形顺手修**:趋势图横向网格线(零基线用 border 档、其余虚线用 hairline
+  档)、环形图底环、上下文/限额进度条轨道、分段切换轨道、「未使用」图例 dot 的
+  inset 描边,均从 layer-2/border-l1 换到对应派生档。
+- 派生令牌挂在 `.tokmn-pane` 作用域,基于 `label-secondary` color-mix,深色主题
+  (zafkiel/kurkuriel)下同样自适应可见;`color-mix` 需 Chromium 111+,WebView2 满足。
+- 触摸点:`plugins/dsh-token-monitor/{lib/client.js, package.json}`。
+- 验证:`node --check` 通过;目检点——浅色主题下五卡/各区块有清晰边线,Token 活动
+  空格呈浅灰网格,趋势图有横向网格线与零基线,深色主题回归不变。
+- 2026-09-06 实机目检通过(profile 重装 + host 重启后,playwright 无头 Edge 取证):
+  浅色下五卡/卡片/hero/按钮/chip 边线清晰(`--tokmn-border` 34% 档像素级可见),Token
+  活动空格呈浅灰网格(`--tokmn-cell-empty` 15%,371 格全着底),趋势图零基线 34% 实线
+  + 25M/50M/75M 20% 虚线网格线可见,环形图底环/进度条轨道/分段切换轨道同步自适;
+  深色下同档派生自 label-secondary 亮色、观感与改动前一致。附带实测:`var()`
+  写入 SVG 呈现属性经 Chromium 152 正确解析(computed stroke 返回实际颜色)。
+
+## 2026-09-05 深夜 · 标题栏 v2.1:内嵌卡片式(修复「顶带遮住页面顶部控件」)
+
+依据:用户反馈「窗口栏把对话会话布局切换按钮遮住了」「窗口栏顶栏会遮住按钮」——
+v2 的固定 32px 顶带 + `margin-top:32px` 推挤方案下,DSH 页面顶部控件(会话头部行/
+切换类按钮,部分为脱离文档流的 fixed/sticky 定位)会被顶带压住或紧贴带底边被裁切;
+同一页面在 web 端(无顶带)顶部控件位于页面自然顶部。v2.1 改为参考图中 MiniMax 的
+「chrome 面 + 内容卡片」结构,从根上消除交叠:
+
+- **chrome 面**:`body` 底色 = `--ms-titlebar-bg`(与顶带同色,见 v2)——顶带与四周
+  留边是同一张表面,带与页面无第二层覆盖关系,页面永远在带的下方。
+- **内容卡片**:`body #root{margin:38px 8px 10px;border-radius:12px;overflow:hidden;
+  background-color:var(--dsw-alias-bg-base);box-shadow;transform:translateZ(0)}`:
+  DSH 整体作为圆角白色卡片浮在 chrome 面上(侧栏/详情面板一并入卡),页面顶部控件
+  在卡片内保持 web 端的自然位置与间距。
+- **fixed/sticky 隔离**:`transform:translateZ(0)` 使 `#root` 成为其内部
+  fixed/绝对定位后代的包含块——页面内任何脱离文档流的控件(含用户反馈的切换按钮)
+  都会被定位到卡片内,结构上不可能出现在顶带下方;popover/菜单在卡片内照常工作
+  (edges 处轻微裁切,可接受)。
+- **顶带**:仍为 chrome 表面的一部分(左侧主题标识 + 右侧窗控),但不再与页面内容
+  有任何上下层交叠——即使 DSH 升级引入新的 fixed 顶部元素,也无法越过卡片边界。
+- 触摸点:`themes/src/03-switcher.js`(SWITCHER_CSS 的 body/#root/带规则)、
+  `src-tauri/injected/theme-init.js`(重生成,68KB,令牌校验 + node --check 通过)。
+- 验证:release 构建(`tauri build --no-bundle`)通过;目检点——三主题下顶部为
+  灰 chrome 色带 + 圆角白色内容卡片,「对话/轨迹/用量」页签与头部控件在卡片内
+  完整可见可点,web 端与桌面端顶部布局一致;窗控/拖动/关闭确认行为不变。
+
+## 2026-09-05 晚 · 标题栏 v2:应用化「色带」(对齐 MiniMax Design 参考)
+
+依据:用户给出 MiniMax Design 截图,要求「窗口栏能自然融合到主页面,像第二张图一样
+差不多的效果,现在我们的桌面端还不行」。对照参考图像素取证:顶部菜单区采样 `#EFEFF2`、
+页面底 `#FAFAFA` —— 参考实现是**全宽约 32px 的统一色带**(与页面同色系、略深一线),
+菜单在带内左侧、窗控在带内右侧,带与页面零分界。v1 做法(色带 = DSH 基底令牌,与页面
+零色差 + `::before/::after` 侧栏色块/详情分隔线模拟)在纯色/侧栏收起态下带完全隐形,
+窗控像浮在页面上的裸图标,观感未达参考。v2 按参考重做:
+
+- **标题带 = 应用 chrome 表面**(`themes/src/03-switcher.js` SWITCHER_CSS):
+  `--ms-titlebar-bg` 由各主题定义,三主题均用 `color-mix` 以页面基底混少量分色
+  (pure:`label-secondary`;kurkuriel:枪铁 `#6a6159`;zafkiel:蓝灰 `#d6cfe4`)→
+  亮色主题略深一线、暗色主题略亮一线(≈12~16% 分量);`@supports` 守卫 + 各主题
+  显式 fallback 色,保证 color-mix 不可用的环境回退到近似旧观感而非透明。
+  移除 `::before`(侧栏色块)/`::after`(详情分隔线)与 `data-details-open`/`data-local`
+  规则——不再依赖 DSH DOM 网格几何(见 ARCHITECTURE 契约废弃)。
+- **主题文字常显**:左侧品牌徽 + 主题名/副标题即「应用级内容」(对齐 MiniMax 菜单位),
+  不再随侧栏收起淡出;收起态规则与 `data-sidebar-collapsed` 删除。
+- **窗控升级**:SVG 10px→12px,按钮 28px 命中区、hover 圆角 999px→8px(Win11/Fluent
+  手感,原圆形贴角偏「浮空」);关闭 hover 红色保持;拖动/双击最大化/最大化图标同步
+  行为不变。
+- **清理与结构性变更**:
+  - `themes/src/06-titlebar.js`:删除 `data-local` 标记与 `syncTitlebarGeometry()` 调用;
+  - `themes/src/07-dialog-geom.js`:删除几何同步块(ResizeObserver、多信号收起判定、
+    诊断写 diag 尾两位),文件名改 `07-dialog.js`(职责=关闭确认弹窗);
+  - `themes/src/02-core.js`:hash `diag` 尾两位固定 `.0.0`,注释同步;
+  - `themes/src/08-ready.js`:巡检去掉 `syncTitlebarGeometry()` 调用;
+  - `themes/src/MANIFEST.json`:order 更新(07-dialog.js),note 标注 slices 行段为
+    legacy 切分参考(运行时与 legacy runtime.js 已非逐字节一致);
+  - `themes/{pure,zafkiel,kurkuriel}.css`:新增 `--ms-titlebar-bg`(+ fallback);
+  - 重生成 `src-tauri/injected/theme-init.js`(68KB):`npm run gen-init` 令牌校验通过、
+    `node --check` 语法通过、grep 无残留旧符号。
+- 触摸点:`themes/src/{02,03,06,07-dialog.js,08}`、`themes/{pure,zafkiel,kurkuriel}.css`、
+  `themes/src/MANIFEST.json`、`design/ARCHITECTURE.md`、`README.md`。
+- 验证:沙箱内无页面渲染手段(无头 Edge 被命名管道限制,同 verify-themes TODO)→
+  release 构建经 `tauri build --no-bundle`(产物 `target/release/miasaki.exe`);
+  视觉验证点:重启桌面端后三主题顶部均为与页面同色系的 32px 色带,左侧主题标识常显、
+  右侧窗控 8px 圆角 hover;拖动/双击最大化/窗控按钮/关闭确认弹窗/最大化图标同步
+  与 v1 行为一致。
+
+## 2026-09-05 · 标题栏与主界面融为一体（Win11 Mica + 圆角 + 零分界）
+
+依据:用户「怎么把桌面端窗口栏和主界面融为一体做到一块」。
+
+- **架构确认**（只读盘点，无改动）:窗口已 `decorations(false)` 无边框;自绘 32px
+  `#miasaki-titlebar`（`themes/src/06-titlebar.js`）与 DSH 主界面的融合此前靠令牌对齐
+  （背景 `--dsw-alias-bg-base`、`::before` 侧栏色块 `--dsw-specific-sidebar-fill`、
+  `::after` 详情分隔线 `--ms-details-left` + ResizeObserver 帧级几何同步,
+  `themes/src/07-dialog-geom.js`）。剩余缺口:直角窗口、标题栏独立色带/装饰底线分界、
+  无材质纵深。
+- **窗口层**（`src-tauri/src/main.rs` + `Cargo.toml`）:
+  1. `.shadow(true)`:Win11 无边框窗口恢复 DWM 圆角 + 阴影 + 1px 描边（tauri 官方文档确认
+     `set_shadow` 行为——注明:对接验证过本地 tauri 2.11.5 源码,shadow 语义与 2.9.5
+     文档一致）;
+  2. `.background_color(0,0,0,0)`:WebView2 默认背景透明（loading.html 自带实色渐变,
+     无加载期白闪）;
+  3. 新增 `apply_mica()`:直调 DWM `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE=38,
+     DWMSBT_MAINWINDOW=2)`（windows-sys 0.59 已确认常量;hwnd 经 tauri `hwnd()` 字段
+     访问,零新增依赖）。**不用 tauri `set_effects` 的原因**:其内部把 window-vibrancy
+     错误吞掉（`let _ =`）,无法探测 Win10 回退;DWM 直调按 HRESULT 判定——失败时
+     `set_background_color` 回退主题实色底,避免页面半透明处露出 tao 默认白底。
+- **主题层**（`themes/{zafkiel,kurkuriel,pure}.css`,经 `build-init.mjs` 重生成
+  `src-tauri/injected/theme-init.js`）:
+  - zafkiel:`--dsw-alias-bg-base` .86→.8,新增 `--dsw-specific-sidebar-fill:
+    rgba(18,16,25,.8)`(此前侧栏实色,不透 Mica);
+  - kurkuriel:bg-base .88→.93(亮主题防系统暗色 Mica 偏灰),新增 sidebar-fill
+    rgba(252,250,248,.93);
+  - 三主题删除 `--ms-deco-line`(标题栏装饰底线)→ 标题栏与主界面零分界;
+    zafkiel/kurkuriel 的 `box-shadow` 底部内线去掉,仅留窗口顶缘 1px 高光;
+  - pure 保持原版实色(不覆盖 DSH 令牌的设计原则),Mica 仅 zafkiel/kurkuriel 透出。
+- **验证**:`cargo check` 通过;`npm run gen-init` 令牌校验通过(73KB);`npm run verify`
+  需 CDP 运行时(target 未启动,留给 `tauri dev` 后执行)。
+- 触摸点:`src-tauri/src/main.rs`（shadow/Mica/透明底）、`src-tauri/Cargo.toml`
+  （Win32_Graphics_Dwm feature）、`themes/*.css` + `src-tauri/injected/theme-init.js`。
+- 验证点:用户 `npm run tauri dev` 后——Win11 窗口有圆角/阴影;zafkiel 下标题栏与
+  主界面无分界线,窗口边缘透出系统 Mica 材质(主题色盖在其上);切换 kurkuriel 观感
+  一致(略实);pure 保持原版。Win10 用户:无圆角/Mica,回退实色底,功能不受影响。
+
 ## 2026-09-05 · 修复:「桌面端黑屏」——dsh web 鉴权 cookie 失效自动恢复
 
 依据:用户「桌面端打不开了」，排查确认主窗口黑屏（进程/桌宠/素材服务均正常）。

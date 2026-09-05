@@ -7,7 +7,7 @@
     "04-deco.js",
     "05-sensors.js",
     "06-titlebar.js",
-    "07-dialog-geom.js",
+    "07-dialog.js",
     "08-ready.js"
   ],
   "slices": {
@@ -39,7 +39,7 @@
       787,
       899
     ],
-    "07-dialog-geom.js": [
+    "07-dialog.js": [
       900,
       1045
     ],
@@ -48,5 +48,5 @@
       1100
     ]
   },
-  "note": "source of truth; concatenated in order == legacy themes/runtime.js (split D1)"
+  "note": "order = 拼接顺序（source of truth）；slices 行段为 legacy themes/runtime.js 的切分参考，runtime 自 2026-09-05 标题栏改版后与 legacy 已非逐字节一致，行段仅供考古"
 }

@@ -1,5 +1,6 @@
   // 主题同步通道：URL hash（replaceState 不触发刷新；Rust 侧轮询解析 → 联动桌宠）
-  // hash 内附带诊断位：stylesLen.headOK.attached.….sidebarW.collapsed，便于无 IPC 环境远程排障
+  // hash 内附带诊断位：stylesLen.headOK.attached.switcher.errCount.baseOK.switcherTop.vh.topEl.switcherCss，
+  // 便于无 IPC 环境远程排障（2026-09-05 侧栏几何同步移除后 diag 尾两位固定为 0.0）
   function syncHash() {
     try {
       if (history.replaceState) {
@@ -25,7 +26,7 @@
             swCss = cs.position + '/' + cs.zIndex + '/' + cs.visibility + '/' + cs.display
           }
           d = len + '.' + headOk + '.' + attached + '.' + sw + '.' + ERR_COUNT + '.' + baseOk + '.' + swTop + '.' + vh + '.' + encodeURIComponent(eSw) + '.' + encodeURIComponent(swCss) +
-            '.' + CUR_SIDEBAR_W + '.' + CUR_COLLAPSED
+            '.0.0'
         } catch (e) { /* ignore */ }
         var actPart = '&act=' + CUR_ACT
         var waitPart = CUR_WAIT ? '&wait=1' : '&wait=0'

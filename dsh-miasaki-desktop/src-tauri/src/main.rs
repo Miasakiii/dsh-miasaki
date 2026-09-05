@@ -803,6 +803,48 @@ fn export_diagnostics() -> Result<String, String> {
     Ok(dest.display().to_string())
 }
 
+/* ---------------- Win11 Mica 材质（标题栏 × 主界面一体化的底座） ---------------- */
+
+/// 直调 DWM 设置 SYSTEMBACKDROP = MAINWINDOW（Mica，跟随系统明暗）。
+/// 不用 tauri 的 set_effects：其内部吞掉 window-vibrancy 错误无法探测 Win10 ，
+/// 而此处需按 DWM 返回值决定 WebView2 透明底是否可用（失败回退实色主题底）。
+#[cfg(target_os = "windows")]
+fn apply_mica(wv: &tauri::WebviewWindow, fallback_bg: tauri::utils::config::Color) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW,
+    };
+    let ok = wv
+        .hwnd()
+        .map(|hwnd| {
+            let attr: u32 = DWMSBT_MAINWINDOW as u32;
+            unsafe {
+                DwmSetWindowAttribute(
+                    hwnd.0,
+                    DWMWA_SYSTEMBACKDROP_TYPE as u32,
+                    &attr as *const u32 as *const core::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                )
+            }
+        })
+        .map(|hr| hr == 0)
+        .unwrap_or(false);
+    if ok {
+        app_log_line(&format!(
+            "[{}] mica backdrop applied (window transparent)\n",
+            chrono_now()
+        ));
+    } else {
+        app_log_line(&format!(
+            "[{}] mica unavailable → fallback opaque background\n",
+            chrono_now()
+        ));
+        let _ = wv.set_background_color(Some(fallback_bg));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_mica(_wv: &tauri::WebviewWindow, _fallback_bg: tauri::utils::config::Color) {}
+
 /* ---------------- 素材服务 ---------------- */
 
 fn start_asset_server() {
@@ -980,8 +1022,8 @@ fn main() {
             let theme = load_prefs().theme;
             let theme_json = serde_json::to_string(&theme).unwrap_or_else(|_| "\"pure\"".into());
             let init = format!("window.__MIA_THEME__={theme_json};\n{INIT_SCRIPT}");
-            // 窗口底色随主题：页面加载期（loading → DSH 渲染完成前）的底色，
-            // 避免深色注入层(标题栏/色块)悬在默认白底上形成"左上角黑块"或白闪。
+            // 主题兜底底色：仅当 Mica 不可用（Win10）时回退（页面半透明处显示实色），
+            // 避免透出 tao 默认白底。Win11 Mica 生效时窗口底透明。
             let bg = match theme.as_str() {
                 "kurkuriel" => tauri::utils::config::Color(247, 244, 241, 255),
                 _ => tauri::utils::config::Color(12, 11, 17, 255),
@@ -992,8 +1034,14 @@ fn main() {
                 .min_inner_size(960.0, 600.0)
                 .center()
                 .decorations(false)
+                // Win11：无边框窗口恢复 DWM 圆角 + 阴影 + 1px 描边（tauri 文档确认 shadow(true) 行为）
+                .shadow(true)
                 .visible(false)
-                .background_color(bg)
+                // 窗口底透明（主题底色移交给页面自身/Mica）：loading.html 自带实色渐变
+                // 背景无加载期白闪；DSH 页面板令牌已半透明化（themes/*.css），与自绘标题栏
+                // 共享同一张 Mica 材质 → 标题栏与主界面融为一体。
+                // Mica 不可用（Win10 等）时 apply_mica 回退实色主题底。
+                .background_color(tauri::utils::config::Color(0, 0, 0, 0))
                 .initialization_script(&init)
                 .on_page_load(|webview, payload| {
                     let _ = webview.show();
@@ -1012,6 +1060,10 @@ fn main() {
                 })
                 .build()
                 .expect("failed to build main window");
+
+            // Win11 Mica 材质：成功 → 主题半透明面板与标题栏共享同一材质（融为一体）；
+            // 失败（Win10/禁用）→ 回退实色主题底（页面半透明处不露出默认白底）。
+            apply_mica(&webview, bg);
 
             // 恢复上次的主窗口位置/大小(有记录则覆盖默认 center)
             apply_window_state(&webview);

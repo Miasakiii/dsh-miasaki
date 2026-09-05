@@ -1,6 +1,6 @@
 {
   "name": "dsh-token-monitor",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "description": "Token 用量监控：会话视图「用量」Tab —— 官方持久聚合 + llm/stream 实时按模型明细 + 跨会话账本（总览统计 / 年热力图 / 每日趋势 / 模型用量占比 / 今日限额）。",
   "license": "MIT",

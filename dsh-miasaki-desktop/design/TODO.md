@@ -11,13 +11,17 @@
 - [x] **GDI 异常兜底** — ULW 连续失败计数（首失败+每 300 次日志，10 连败销毁表面）
   + 表面无效每 ~30 compose 重试重建（2026-09-04，`pet_native/window.rs`；
   pet.log 可见 `ULW failed`/`surface rebuilt`，harness `cargo check` 通过，
-  Windows 机终验 `tauri build`）
+  Windows 机终验 `tauri build`；**2026-09-05 本机终验通过**：release 构建 30.7s
+  零错误产出 `miasaki.exe`，smoke-test 非沙箱 8/8 全过）
 
 ## P1 · 用户已验证清单(本轮)
 
 - [x] **鉴权 cookie 注入(黑屏修复)** — dsh web 重启后旧 cookie 失效黑屏，运行时
   自动重签+重载（2026-09-05，`themes/src/00-boot.js`，见 CHANGELOG；secret 硬编码
-  改进项见 P3）
+  改进项见 P3；**2026-09-05 静态全链路验证通过**：硬编码 secret 与
+  `.credentials.yaml` 当前值一致，cookie 名/`v1.body.sig` 格式/payload 字段/
+  authority 与官方 `dsh-client-connection` 逐项一致，401 场景可复现；已随
+  release 构建部署至 `dist/Miasaki.exe`，端到端目检待用户双击快捷方式）
 - [ ] **鉴权 secret 动态化** — 注入脚本硬编码 secret 改为 Rust 侧读
   `~/.dsh/.credentials.yaml` 的 `client-connection/browser-session` 记录实时签名，
   避免 secret 轮换后需改源码重编译（2026-09-05 黑屏修复的遗留项）

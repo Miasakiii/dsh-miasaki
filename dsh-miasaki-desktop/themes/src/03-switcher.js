@@ -34,7 +34,6 @@
     '@media (prefers-reduced-motion: reduce){' +
     '#miasaki-switcher .ms-btn::after{animation:none}' +
     '#miasaki-titlebar .tb-brand{animation:none}' +
-    '#miasaki-titlebar #tb-theme,#miasaki-titlebar .tb-sub{transition:none}' +
     '#miasaki-overlay.run{animation:ms-sweep .15s ease forwards;}}' +
     '#miasaki-switcher .ms-bright{display:none;align-items:center;gap:6px;padding:5px 10px 2px;' +
     'border-top:1px solid var(--ms-border,#3a3243);margin-top:4px;}' +
@@ -44,55 +43,40 @@
     'border:1px solid transparent;opacity:.55;}' +
     '#miasaki-switcher .ms-bright .mb:hover{background:var(--ms-hover,#2a2434);opacity:.9;}' +
     '#miasaki-switcher .ms-bright .mb.on{border-color:var(--ms-accent,#d9b36a);opacity:1;}' +
-    '#miasaki-titlebar{position:fixed;left:0;top:0;right:0;height:32px;z-index:100000;' +
-    'display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;' +
-    'background-color:var(--dsw-alias-bg-base,var(--ms-panel,#1e1a27));' +
-    // 主题装饰底线：--ms-deco-line 由各主题定义；独立声明 + 逐层回退，装饰层失效不拖垮基底
-    'background-image:var(--ms-deco-line,none);background-repeat:no-repeat;' +
-    'background-position:0 100%;background-size:100% 1px;' +
+    // 标题栏 = 零占位叠加层(V3):对 DSH 页面零布局侵入——不设色带、不推挤页面(y=0 起,
+    // 页面顶部控件与 web 端同位置)。窗控收进右上角悬浮胶囊(半透明+毛玻璃,悬停实色),
+    // 胶囊/标题栏容器 pointer-events:none,仅胶囊内子元素接收事件;拖动由 06-titlebar.js
+    // 的 document 级命中判定接管(空白拖动,可点击元素一律放行)。
+    '#miasaki-titlebar{position:fixed;left:0;top:0;right:0;height:0;z-index:100000;' +
+    'pointer-events:none;background:transparent;' +
     'color:var(--dsw-alias-label-primary,var(--ms-text,#e4def0));font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
     'user-select:none;-webkit-user-select:none;cursor:default;}' +
-    '#miasaki-titlebar::before{content:"";position:absolute;left:0;top:0;bottom:0;' +
-    // 回退色为 transparent：DSH 令牌(--dsw-specific-sidebar-fill)未就绪(页面加载早期)时
-    // 不显示色块——此前回退深色 #1e1a27 会在加载期形成"左上角闪烁黑块"，令牌就绪后才
-    // 变主题色；DSH 渲染完成后令牌生效，色块与侧栏同时出现，视觉衔接。
-    'width:var(--ms-sidebar-w,280px);background:var(--dsw-specific-sidebar-fill,transparent);' +
-    'border-right:1px solid var(--dsw-alias-border-l1,transparent);box-sizing:border-box;pointer-events:none;}' +
-    '#miasaki-titlebar::after{content:"";position:absolute;top:0;bottom:0;left:var(--ms-details-left,auto);' +
-    'width:1px;background:var(--dsw-alias-border-l2,transparent);pointer-events:none;opacity:0;}' +
-    '#miasaki-titlebar[data-details-open]::after{opacity:1;}' +
-    // 本地唤醒页：无 DSH 侧栏/详情布局，隐藏模拟分隔线色块，标题栏保持纯净
-    '#miasaki-titlebar[data-local]::before,#miasaki-titlebar[data-local]::after{display:none;}' +
-    '#miasaki-titlebar>*{position:relative;z-index:1;}' +
-    '#miasaki-titlebar .tb-drag{flex:1;height:100%;cursor:move;}' +
-    '#miasaki-titlebar .tb-title{font-size:11.5px;font-weight:500;letter-spacing:.03em;' +
-    'display:flex;align-items:center;opacity:.85;}' +
-    '#miasaki-titlebar .tb-brand{width:20px;height:20px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
-    'margin-right:7px;box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));animation:ms-brand-breathe 3.2s ease-in-out infinite;}' +
-    // 主题文字：margin 承担原 gap 间距；收起时 max-width/margin/opacity 过渡淡出
-    // （display:none 无过渡，侧栏收起动画期间文字瞬间消失 → 切换不连贯）
-    '#miasaki-titlebar #tb-theme{margin-right:7px;max-width:240px;overflow:hidden;white-space:nowrap;' +
-    'transition:opacity .18s ease,max-width .18s ease,margin-right .18s ease;}' +
-    '#miasaki-titlebar .tb-sub{font-size:10.5px;font-weight:400;opacity:.55;letter-spacing:.02em;' +
-    'max-width:240px;overflow:hidden;white-space:nowrap;' +
-    'transition:opacity .18s ease,max-width .18s ease,margin-right .18s ease;}' +
-    // 侧栏收起态：主题文字淡出(仅留图标)；::before 宽随 --ms-sidebar-w 逐帧跟随 DSH 收起动画
-    '#miasaki-titlebar[data-sidebar-collapsed] #tb-theme,' +
-    '#miasaki-titlebar[data-sidebar-collapsed] .tb-sub{opacity:0;max-width:0;margin-right:0;pointer-events:none;}' +
-    '#miasaki-titlebar[data-sidebar-collapsed]::before{border-right-color:transparent;}' +
+    '#miasaki-titlebar>*{pointer-events:auto;}' +
+    '#miasaki-titlebar .tb-capsule{position:fixed;top:5px;right:8px;display:flex;align-items:center;gap:2px;' +
+    'padding:3px;border-radius:999px;' +
+    'background:color-mix(in srgb, var(--ms-panel,#1e1a27) 74%, transparent);' +
+    'border:1px solid var(--ms-border,#3a3243);' +
+    'box-shadow:0 2px 10px rgba(0,0,0,.16);' +
+    'backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);' +
+    'transition:background .18s ease;}' +
+    '#miasaki-titlebar .tb-capsule:hover{background:var(--ms-panel,#1e1a27);}' +
+    '#miasaki-titlebar .tb-brand{width:18px;height:18px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
+    'margin:0 3px;box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));}' +
     '@keyframes ms-brand-breathe{0%,100%{opacity:.78}50%{opacity:1}}' +
-    '#miasaki-titlebar .tb-btn{width:28px;height:28px;display:flex;align-items:center;justify-content:center;' +
-    'cursor:pointer;font-size:13px;border-radius:999px;color:var(--dsw-alias-label-secondary,var(--ms-text,#e4def0));' +
-    'opacity:.9;transition:background .15s ease,color .15s ease;}' +
+    '#miasaki-titlebar .tb-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;' +
+    'cursor:pointer;font-size:13px;border-radius:7px;color:var(--dsw-alias-label-secondary,var(--ms-text,#e4def0));' +
+    'opacity:.92;transition:background .15s ease,color .15s ease;}' +
     '#miasaki-titlebar .tb-btn:hover{background:var(--dsw-alias-interactive-bg-hover,var(--ms-hover,#2a2434));' +
     'color:var(--dsw-alias-label-primary,var(--ms-accent,#d9b36a));opacity:1;}' +
     '#miasaki-titlebar .tb-btn:active{transform:scale(.94);}' +
     // 按钮图标统一 SVG 线形：同一视口/描边/端帽，消除字符字形(–/□/✕)粗细基线不一
-    '#miasaki-titlebar .tb-btn svg{width:10px;height:10px;display:block;fill:none;' +
+    '#miasaki-titlebar .tb-btn svg{width:11px;height:11px;display:block;fill:none;' +
     'stroke:currentColor;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;}' +
     '#miasaki-titlebar .tb-btn.tb-close:hover{background:var(--ms-danger,#c23a2e);color:#fff;opacity:1;}' +
+    // 顶行让位:会话页头部(含 tabs 行)右侧预留胶囊宽度(实测胶囊 ≈114px + 回车余量),
+    // Session 日志/工具按钮左移,不再与悬浮胶囊叠压(与 VSCode 等自绘标题栏同款让位)。
+    '#root header:has([role="tablist"]){padding-right:132px;}' +
     'html,body{height:100%;overflow:hidden;}' +
-    'body #root{margin-top:32px;height:calc(100% - 32px)!important;}' +
     '#miasaki-switcher .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +
     '#miasaki-switcher .ms-btn img{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;}' +
     '#miasaki-aurora{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;' +

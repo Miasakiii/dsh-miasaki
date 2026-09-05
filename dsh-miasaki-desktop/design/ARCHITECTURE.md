@@ -118,14 +118,18 @@ Remove dist\ui -Recurse; Copy desktop\ui → dist\ui
   `--dsh-state-ongoing` 已失效(主题内为死覆盖,无害);视觉漂移点在 alias 表达处。
 - **单实例**:tauri-plugin-single-instance(二次启动唤起已有窗口)。
 - 主窗口关闭 = 退出应用(DSH 服务保持运行);托盘菜单可隐藏主窗口。
-- **DSH DOM 契约(标题栏几何同步,验证于 0.1.1-rc.1)**:`syncTitlebarGeometry` 依赖
-  `#root` 内 AppFrame(`@deepseek-ai/dsh-client-ui-layout`)的内联网格,且首列=侧栏、末列=详情面板;
-  侧栏折叠时首轨道归零:声明值与首列实测兜底均**直接采用含 0 值**(此前 `>0` 过滤会让
-  `--ms-sidebar-w` 残留旧宽)。收起判定为**多信号**:A 轨道声明 / B 首列实测宽 /
-  C `[class*="sidebar" i]` 元素可见性,宽度采用 B>A>C;收起 = C 隐藏或零宽 / 实测或
-  轨道归零 / 窄于 100px。解析宽与判定写入 hash `diag` 尾两位,Rust watchdog 变化时
-  落 `hash-diag` 日志(导出诊断可远程定位)。
-  DSH 升级时须复核(网格结构/折叠语义变动会静默错位,探测失败仅回退 280px 默认,不报错)。
+- **标题栏**(v3 2026-09-05):**零占位叠加**——窗口自绘壳对 DSH 页面零布局侵入
+  (无顶带/无下推/无卡片,页面 y=0 起渲染,顶部控件与 web 端同位置);窗控 = 右上角
+  悬浮胶囊(pointer-events:none 容器,仅胶囊子元素接收事件);拖动 = document 级
+  mousedown 捕获 + 顶部 36px 命中判定(复用 tauri drag-region 判定口径:路径上有
+  可点击标签/contenteditable/tabindex/交互 role 即放行点击,否则
+  `plugin:window|start_dragging`/双击 `internal_toggle_maximize`);唯一页面级调整 =
+  `#root header:has([role="tablist"]){padding-right:132px}` 给胶囊让位(初版 104px
+  真机叠压后加宽;选择器锚定 `role=tablist`,DSH 升级时随 verify-themes 复核)。
+  底座为 Win11 Mica(`apply_mica` DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE` + 透明窗口底,
+  面板令牌半透明后透出,与胶囊共享同一材质),Mica 不可用(Win10)回退主题实色底
+  (见 CHANGELOG 2026-09-05 条目)。侧栏色块模拟/几何同步已随 v2 移除(历史见
+  CHANGELOG 2026-08-29 / 2026-09-05 各条)。
 - **Rust→页面单向通道(eval + CustomEvent)**:远程页 capability 只授 start-dragging,
   无 IPC 权限;Rust 侧经 `wv.eval` 派发 CustomEvent 下发状态(`miasaki-pet-state` /
   `miasaki-max-state`),页面经 hash `cmd=*` 请求重推(want-max / pet-state)。新增

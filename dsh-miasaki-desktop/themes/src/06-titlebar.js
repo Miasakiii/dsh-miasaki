@@ -1,4 +1,4 @@
-  /* ---------- 主题化标题栏（无边框窗口） ---------- */
+  /* ---------- 主题化窗控胶囊 + 空白拖动（无边框窗口 · V3 零占位叠加） ---------- */
 
   // 窗口控制按钮图标：四枚统一 10×10 视口 SVG（stroke=currentColor、圆头端帽、Fluent 线形），
   // 取代 Unicode 字符（–/□/✕）：字符字形粗细/基线/视觉重量不一，SVG 统一描边后三按钮一致
@@ -49,28 +49,66 @@
     try { petHashCmd('want-max') } catch (e) { /* ignore */ }
   }
 
+  /* ---------- 空白拖动（V3）：页面零占位后没有自绘拖动条 ----------
+   * document 级捕获 mousedown：落在窗口顶部 36px 且事件路径上无「可交互元素」
+   * （复用 tauri 内置 drag-region 的判定口径：可点击标签 / contenteditable /
+   * tabindex / 交互 role）→ 调 tauri 原生 start_dragging；双击 → internal_toggle_maximize。
+   * 页面按钮/页签/输入框照常点击，空白处可拖窗，与 Windows 标题栏体感一致。 */
+  var DRAG_H = 36
+  var DRAG_CLICKABLE_TAGS = { A: 1, BUTTON: 1, INPUT: 1, SELECT: 1, TEXTAREA: 1, LABEL: 1, SUMMARY: 1 }
+  var DRAG_INTERACTIVE_ROLES = { button: 1, link: 1, menuitem: 1, tab: 1, checkbox: 1, radio: 1, switch: 1, option: 1 }
+
+  function dragIsClickable(el) {
+    if (!el || el.nodeType !== 1) return false
+    return !!DRAG_CLICKABLE_TAGS[el.tagName] ||
+      (el.hasAttribute && el.hasAttribute('contenteditable') && el.getAttribute('contenteditable') !== 'false') ||
+      (el.hasAttribute && el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') ||
+      (el.getAttribute && !!DRAG_INTERACTIVE_ROLES[el.getAttribute('role')])
+  }
+
+  function wireDragZone() {
+    try {
+      if (document.__miasakiDragWired) return
+      document.__miasakiDragWired = true
+      document.addEventListener('mousedown', function (e) {
+        try {
+          if (e.button !== 0) return
+          if (e.detail !== 1 && e.detail !== 2) return
+          if (e.clientY > DRAG_H) return
+          // 事件路径自底向上：胶囊自身/内部(窗控、徽章)不拖；首个可交互元素即放行点击
+          var node = e.target
+          while (node && node.nodeType === 1) {
+            if (node.id === 'miasaki-titlebar') return
+            if (dragIsClickable(node)) return
+            node = node.parentNode
+          }
+          // 顶部空白 → 原生拖动 / 双击最大化（与 tauri data-tauri-drag-region 同一 IPC）
+          e.preventDefault()
+          var cmd = e.detail === 2 ? 'internal_toggle_maximize' : 'start_dragging'
+          try {
+            if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('plugin:window|' + cmd)
+          } catch (e2) { /* 非 Tauri 环境忽略 */ }
+        } catch (e3) { /* 拖拽失败不影响页面 */ }
+      }, true)
+    } catch (e) { /* ignore */ }
+  }
+
   function buildTitlebar() {
-    // 本地唤醒页同样需要标题栏（无边框窗口：拖动区 + 窗口按钮），不再因 IS_LOCAL 跳过
+    // 本地唤醒页同样需要窗控胶囊（无边框窗口）；页面零占位，胶囊浮于内容之上
     if (document.getElementById('miasaki-titlebar') || !document.body) return
     var bar = document.createElement('div')
     bar.id = 'miasaki-titlebar'
-    // 本地页标记：无 DSH 布局可融合，隐藏模拟侧栏/详情分隔线（::before/::after 色块）
-    if (IS_LOCAL) bar.setAttribute('data-local', '1')
     bar.innerHTML =
-      '<div class="tb-title"><img class="tb-brand" src="' + ICON_BASE + META[current].icon + '" alt="">' +
-      '<span id="tb-theme"></span><span class="tb-sub"></span></div>' +
-      '<div class="tb-drag" data-tauri-drag-region title="拖动窗口"></div>' +
+      '<div class="tb-capsule">' +
+      '<img class="tb-brand" src="' + ICON_BASE + META[current].icon + '" alt="" title="">' +
       '<div class="tb-btn" data-act="min" title="\u6700\u5C0F\u5316">' + TB_ICONS.min + '</div>' +
       '<div class="tb-btn" data-act="max" title="\u6700\u5927\u5316/\u8FD8\u539F">' + TB_ICONS.max + '</div>' +
-      '<div class="tb-btn tb-close" data-act="close" title="\u5173\u95ED">' + TB_ICONS.close + '</div>'
+      '<div class="tb-btn tb-close" data-act="close" title="\u5173\u95ED">' + TB_ICONS.close + '</div>' +
+      '</div>'
     // 徽记 icon 失败 → 字形兜底；onerror 用 JS 挂载，换主题后始终引用最新 current
     var brand = bar.querySelector('.tb-brand')
     if (brand) brand.onerror = function () { window.__msGlyphFallback && window.__msGlyphFallback(this, current) }
     document.body.appendChild(bar)
-    // 拖动：交给 Tauri 内置 drag-region（data-tauri-drag-region → OS 级 start_dragging，
-    // 系统消息循环接管，彻底跟手；双击标题栏 = 最大化/还原）。
-    // 此前用 URL hash 每帧轮询 + set_position 差值应用:33ms 采样滞后、DPI 换算误差、
-    // pointer 事件流竞态 → 拖动不跟手/跳变,已弃用。
     bar.addEventListener('click', function (ev) {
       var b = ev.target && ev.target.closest ? ev.target.closest('.tb-btn') : null
       if (!b) return
@@ -87,17 +125,12 @@
     updateTitlebar()
     syncMaxBtn()
     if (MAX_STATE === null) requestMaxState()
-    syncTitlebarGeometry()
   }
 
   function updateTitlebar() {
-    var el = document.getElementById('tb-theme')
-    if (el) el.textContent = META[current].name
-    var sub = document.querySelector('#miasaki-titlebar .tb-sub')
-    if (sub) sub.textContent = META[current].sub
     var brand = document.querySelector('#miasaki-titlebar .tb-brand')
     if (brand) {
-      // 清上次加载失败的字形兜底残留（位于 .tb-title 内，data-glyph 标记），再换新主题图标
+      // 清上次加载失败的字形兜底残留（位于胶囊内，data-glyph 标记），再换新主题图标
       var holder = brand.parentNode
       if (holder) {
         var g = holder.querySelector('span[data-glyph="1"]')
@@ -106,8 +139,7 @@
       brand.style.display = ''
       var next = ICON_BASE + META[current].icon
       if (brand.src !== next) brand.src = next
-      // 悬浮提示当前主题（侧栏收起、文字隐藏后悬停图标即可知主题）
+      // 悬浮提示当前主题（顶部无文字，悬停徽章可知主题）
       brand.title = META[current].name + ' · ' + META[current].sub
     }
   }
-

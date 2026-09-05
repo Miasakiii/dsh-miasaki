@@ -62,33 +62,40 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
   `cmd=pet-state` 请求，桌面端 eval `miasaki-pet-state` 事件回推）。
   命令走主窗口 URL hash 通道（`cmd=pet-show/pet-hide/pet-reset`），与主题联动同链路；
   非桌面端（普通浏览器打开 DSH）面板显示降级提示。
-- **人格会话联动**：主题切换时自动用对应桌宠的 Agent 预设开启新会话（DSH 官方 RPC
-  `/api/session.create` 的 `agentPreset` 参数）。映射 `pure→whale`（鲸鱼娘）/
-  `zafkiel→kurumi`（狂三）/`kurkuriel→inverse`（反转狂三）；每个主题仅自动创建一次，
-  结果记于 localStorage（`miasaki.petSessions`），切换回来时只提示「已建立」；
-  新会话优先挂到当前 workspace；RPC 不可用或预设缺失时静默降级，不影响主题切换。
+- **人格会话联动**：主题切换时自动用对应桌宠的 Agent 预设开启新会话。注入层切换
+  主题时派发 `miasaki-persona-request` CustomEvent，由 `dsh-pet-panel` 插件客户端
+  经官方 `ctx.remote.session.create`（0.1.2-rc.1 的 WebSocket mux 通道，2026-09-06
+  从注入层 fetch 迁移）创建：映射 `pure→whale`（鲸鱼娘）/`zafkiel→kurumi`（狂三）/
+  `kurkuriel→inverse`（反转狂三）；每个主题仅自动创建一次，结果记于 localStorage
+  （`miasaki.petSessions`），切换回来时只提示「已建立」；新会话优先挂到当前
+  workspace；RPC 不可用或预设缺失时静默降级，不影响主题切换。
   三个预设定义在 `%USERPROFILE%\.dsh\.agent-presets\{whale,kurumi,inverse}\`
   （standard 底座 + 桌宠中文人设，persona 含「入戏边界」：工具/错误/审批一律标准语气）。
   维护材料在 `preset-sources/`（`*.persona.txt` / `*.preset.yml` / `apply-presets.ps1`，
   改人设后重跑脚本再生成 `%USERPROFILE%\.dsh\.agent-presets\` 下对应文件）。
 - 悬浮主题条切换时，主窗口通过 `set_pet_mode` 命令联动宠物角色
-- **主窗口拖动**：标题栏走 Tauri 原生 `data-tauri-drag-region`（OS 级 start_dragging，系统消息
-  循环接管，完全跟手；双击标题栏 = 最大化/还原）。早期版本用 URL hash 轮询 + set_position
-  差值应用（33ms 滞后、DPI 换算误差、事件流竞态 → 不跟手/跳变），已废弃。
-  注意：远程页面（http://127.0.0.1:3080）的子 capability `remote-dsh.json` 必须授予
-  `core:window:allow-start-dragging`，否则拖动手势会被插件 ACL 拒绝且无任何提示。
-- **窗口控制按钮**：标题栏右侧最小化/最大化/关闭为统一内联 SVG 线图标（10×10 视口、
+- **主窗口拖动（V3 空白拖动）**：窗口零占位叠加后没有自绘拖动条——注入运行时在
+  document 级捕获 mousedown：落在顶部 36px 内且事件路径上无「可交互元素」（复用
+  Tauri 内置 drag-region 判定口径：可点击标签/contenteditable/tabindex/交互 role）
+  时调 Tauri 原生 `start_dragging`（OS 级，完全跟手），双击 = 最大化/还原；
+  页面按钮/页签/输入框照常点击不受影响。远程页面（http://127.0.0.1:3080）的子
+  capability `remote-dsh.json` 必须授予 `core:window:allow-start-dragging`（已授），
+  否则拖动手势会被插件 ACL 拒绝且无任何提示。
+- **窗口控制按钮**：右上角悬浮胶囊内最小化/最大化/关闭为统一内联 SVG 线图标（10×10 视口、
   `stroke-width 1`、`currentColor` 描边、圆头端帽 Fluent 风格，三按钮视觉重量一致），
   最大化后按钮自动切换为「还原」错位双框图标——远程页无 IPC 权限，状态由 Rust 侧
   `on_window_event`（Resized，150ms 防抖）经 eval 派发 `miasaki-max-state` CustomEvent
-  驱动，页面加载后延迟补推、页面经 hash `cmd=want-max` 可请求重推；双击标题栏 /
+  驱动，页面加载后延迟补推、页面经 hash `cmd=want-max` 可请求重推；双击顶部空白 /
   Win+↑ 等系统路径同样同步；非 Tauri 环境（浏览器调试预览）点击时本地翻转兜底。
-- **侧栏收起联动**：DSH 左侧边栏收起后，标题栏左上角仅保留主题图标（主题名/
-  副标题文字隐藏，悬停图标可见主题提示），模拟侧栏色块与分隔线同步收窄对齐；
-  展开侧栏后自动恢复。判定为多信号（grid 轨道声明 / 首列实测宽 / sidebar 元素
-  可见性），宽度实测优先；几何由 **ResizeObserver 帧级同步**（观察侧栏列元素，
-  与 DSH 收起/展开动画逐帧同步），文字淡出淡入过渡（0.18s），1s 巡检仅兜底；
-  解析宽与判定结果写入 hash `diag` 位，Rust 侧变化时落日志（托盘「导出诊断」可见）。
+- **标题栏 × 主界面一体化（v3 · 零占位叠加）**：系统标题栏移除（`decorations(false)`）
+  后，桌面壳对 DSH 页面**零布局侵入**——无 32px 顶带、无下推、无卡片，页面从 y=0
+  起渲染，顶部控件（会话头「对话/轨迹/用量」页签、Session 日志等）位置与 web 端
+  完全一致；窗控收进右上角**悬浮胶囊**（主题徽章 + 三键，半透明 + 毛玻璃，悬停
+  实色，胶囊外 pointer-events:none）；唯一页面级调整 = `#root header:has([role="tablist"])`
+  右侧 padding 132px 给胶囊让位（初版 104px 真机叠压后加宽；DSH 升级时随
+  verify-themes 复核选择器）。底座仍为
+  **Win11 Mica**（DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE`，窗口底透明），`.shadow(true)`
+  恢复圆角/阴影/描边；Mica 不可用（Win10）时回退主题实色底，pure 保持原版实色。
 - 气泡台词为**构建期预渲染**的位图帧（`ui/pets/bubbles.png`，20 帧：17 台词 + 3 状态帧
   「忙碌中…/等待审批/需要你的批准」），运行时零 GDI 字体调用：
   Windows 11 的 GDI 字体在多线程（WebView2 + 桌宠线程）并发使用时存在已知堆损坏，`CreateFontW`
