@@ -66,7 +66,8 @@ dsh-miasaki-fleet/tests/m3-acp/logs/
 
 # ---- 日志与系统杂项 ----
 *.log
-dsh-miasaki-desktop/.edge-test-profile
+# Edge/WebView2 测试 profile（--user-data-dir 残留，任意层级均忽略）
+.edge-test-profile
 .workbuddy/
 Thumbs.db
 Desktop.ini
