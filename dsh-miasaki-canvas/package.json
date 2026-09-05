@@ -36,9 +36,6 @@
     },
     "client": {
       "platform": "web",
-      "inject": [
-        "@deepseek-ai/dsh-client-runtime"
-      ],
       "immediately": false
     }
   }

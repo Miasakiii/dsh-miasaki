@@ -70,6 +70,52 @@ const formatTime = value => new Date(value).toLocaleString('zh-CN', { month: 'nu
 const currentThread = () => state.workspace?.threads.find(thread => thread.id === state.activeId) ?? state.workspace?.threads[0] ?? null
 const threadListTitle = thread => thread.dshSessionTitle ?? thread.title ?? questionFor(thread)
 
+// Sidebar thread list: root lines ordered by recent activity, each branch
+// nested under its parent so the canvas lineage stays readable off-canvas.
+// Orphaned branches (parent already archived) surface as roots.
+function threadTreeRows(threads) {
+  const byId = new Map(threads.map(thread => [thread.id, thread]))
+  const children = new Map()
+  const roots = []
+  for (const thread of threads) {
+    const parent = thread.parentId !== null ? byId.get(thread.parentId) : undefined
+    if (parent === undefined) roots.push(thread)
+    else {
+      const list = children.get(parent.id)
+      if (list === undefined) children.set(parent.id, [thread])
+      else list.push(thread)
+    }
+  }
+  const byActivity = (a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? ''))
+  roots.sort(byActivity)
+  for (const list of children.values()) list.sort(byActivity)
+  const rows = []
+  const visit = (thread, depth) => {
+    rows.push({ thread, depth })
+    for (const child of children.get(thread.id) ?? []) visit(child, depth + 1)
+  }
+  for (const root of roots) visit(root, 0)
+  return rows
+}
+
+function threadTreeHtml(threads) {
+  const rows = threadTreeRows(threads)
+  if (rows.length === 0) return '<p class="tree-empty">暂未同步会话</p>'
+  return rows.map(({ thread, depth }) => {
+    const live = thread.dshSessionId !== null && state.liveReplies.get(thread.dshSessionId)?.running === true
+    const isMerge = thread.mergeState != null
+    const isBranch = thread.parentId !== null
+    const absorbed = (thread.absorbedBy?.length ?? 0) > 0
+    const badge = live ? '<i class="tree-live">回复中</i>' : isMerge ? '<i class="tree-merge" title="合并节点">◆</i>' : isBranch ? '<i>分支</i>' : ''
+    const classes = ['tree-row']
+    if (thread.id === state.activeId) classes.push('active')
+    if (depth > 0) classes.push('is-branch')
+    if (live) classes.push('is-live')
+    if (absorbed) classes.push('is-absorbed')
+    return `<button class="${classes.join(' ')}" data-action="select-thread" data-thread="${thread.id}" style="--thread-color:${escapeHtml(thread.color ?? '#3478f6')};--tree-depth:${depth}" title="${escapeHtml(threadListTitle(thread))}"><span class="tree-dot" aria-hidden="true"></span><span>${escapeHtml(threadListTitle(thread))}</span>${badge}</button>`
+  }).join('')
+}
+
 function rememberBranchAnchor(sessionId, cardId) {
   state.branchAnchors.set(sessionId, cardId)
   try { localStorage.setItem('dsh-canvas:branch-anchors', JSON.stringify([...state.branchAnchors])) } catch { /* Private browsing may disable local storage. */ }
@@ -862,6 +908,7 @@ function conversationCards(threads) {
         error,
         processCount,
         merge,
+        topicColor: thread.color ?? '#3478f6',
       })
     }
     const liveReply = state.liveReplies.get(thread.dshSessionId)
@@ -889,6 +936,7 @@ function conversationCards(threads) {
       error: null,
       processCount: 0,
       merge,
+      topicColor: thread.color ?? '#3478f6',
       })
     }
     turns.at(-1).canContinue = true
@@ -1078,7 +1126,7 @@ function conversationCard(card, graph) {
   const retrySendButton = state.retryMergeSend?.threadId === card.dshThreadId && card.turnIndex === 0
     ? '<button class="merge-retry" data-action="retry-merge-send" title="合并已建立，但首条合并请求没有发送成功">重发合并请求</button>'
     : ''
-  return `<article class="thread-card ${selected}${multiSelected}${isMergeNode ? ' is-merge-node' : ''}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#3478f6">
+  return `<article class="thread-card ${selected}${multiSelected}${isMergeNode ? ' is-merge-node' : ''}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:${escapeHtml(card.topicColor ?? '#3478f6')}">
     <button class="node-handle" data-drag-card="${card.id}" aria-label="拖动 ${escapeHtml(card.question)}" title="拖动卡片"></button>
     ${continueButton}${foldButton}${branchButton}${mergeButton}
     <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}${absorbedBadge}</div>
@@ -1476,6 +1524,10 @@ function mergeAncestors(byId, directSources) {
 }
 
 function render() {
+  // Background renders (1s projection polling, live-reply completion, DSH
+  // session pushes) rebuild the whole app innerHTML; without this the sidebar
+  // thread list snaps back to the top mid-scroll.
+  const sidebarScrollTop = document.querySelector('.thread-tree')?.scrollTop ?? 0
   // Remember the departing thread's scroll position per thread id, so
   // switching sessions restores each conversation's own place instead of
   // smearing one session's position onto another.
@@ -1510,7 +1562,7 @@ function render() {
   const canvasControls = state.mode === 'canvas' && (threads.length > 0 || state.draft?.kind === 'new') ? `<div class="canvas-controls"><button data-action="layout" title="整理节点" aria-label="整理节点"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>整理</button><button data-action="focus-active" title="定位到当前会话" aria-label="定位到当前会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v2.6M8 11.9v2.6M1.5 8h2.6M11.9 8h2.6"/></svg>定位</button><button data-action="toggle-minimap" class="${minimapEnabled() ? 'active' : ''}" title="缩略图开关" aria-label="缩略图开关" aria-pressed="${minimapEnabled() ? 'true' : 'false'}"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="m5 10 2.5-3 2 2.2L11.5 7" stroke-linecap="round"/></svg>缩略图</button><button data-action="zoom-out" aria-label="缩小" title="缩小"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button><span>${Math.round(state.zoom * 100)}%</span><button data-action="zoom-in" aria-label="放大" title="放大"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button></div>` : ''
   const detailAvailable = currentThread() !== null
   const canvasTabs = `<nav class="canvas-tabs" aria-label="会话布视图"><button class="${state.mode === 'canvas' ? 'active' : ''}" data-action="show-canvas">布</button><button class="${state.mode === 'thread' ? 'active' : ''}" data-action="show-thread" data-thread="${state.activeId ?? ''}" ${detailAvailable ? '' : 'disabled'}>详情</button></nav>`
-  app.innerHTML = `<main class="canvas-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="Canvas"><svg class="brand-mark" aria-hidden="true" viewBox="0 0 32 32" fill="none"><path d="M9 10.5 16 7l7 3.5M9 10.5v8L16 22m0-15v15m7-11.5v8L16 22"/><circle cx="9" cy="10" r="2.5"/><circle cx="23" cy="10" r="2.5"/><circle cx="16" cy="23" r="2.5"/></svg><strong>Canvas</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threads.map(thread => `<button class="tree-row ${thread.id === state.activeId ? 'active' : ''}" data-action="select-thread" data-thread="${thread.id}" style="--thread-color:#374151"><span class="tree-dot"></span><span>${escapeHtml(threadListTitle(thread))}</span>${thread.parentId === null ? '' : '<i>分支</i>'}</button>`).join('') || '<p class="tree-empty">暂未同步会话</p>'}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话布</button></div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}${mergePanelCard()}</section></main>`
+  app.innerHTML = `<main class="canvas-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="Canvas"><svg class="brand-mark" aria-hidden="true" viewBox="0 0 32 32" fill="none"><path d="M9 10.5 16 7l7 3.5M9 10.5v8L16 22m0-15v15m7-11.5v8L16 22"/><circle cx="9" cy="10" r="2.5"/><circle cx="23" cy="10" r="2.5"/><circle cx="16" cy="23" r="2.5"/></svg><strong>Canvas</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threadTreeHtml(threads)}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话布</button></div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}${mergePanelCard()}</section></main>`
   installDragging()
   cacheCardConnectors()
   // The initial camera from renderCanvas is inset (viewport not laid out yet);
@@ -1522,6 +1574,10 @@ function render() {
   for (const [cardId, scrollTop] of cardScrollTops) {
     const answer = app.querySelector(`.thread-card[data-card-id="${CSS.escape(cardId)}"] .thread-answer`)
     if (answer instanceof HTMLElement) answer.scrollTop = scrollTop
+  }
+  if (sidebarScrollTop > 0) {
+    const tree = app.querySelector('.thread-tree')
+    if (tree instanceof HTMLElement) tree.scrollTop = sidebarScrollTop
   }
   if (detailScrollTop !== null) window.requestAnimationFrame(() => {
     const nextDetail = document.querySelector('.detail-scroll')
@@ -2198,7 +2254,14 @@ window.addEventListener('message', event => {
     else if (canReplaceView()) render()
   }
   if (data.type === 'canvas:current-session') {
-    const previousId = state.currentDsh?.id
+    const previous = state.currentDsh
+    const previousId = previous?.id
+    // The DSH side re-sends this on every sessions-list subscription tick;
+    // when neither the session nor its title/cwd changed there is nothing new
+    // to paint, and skipping the render keeps sidebar scroll/camera stable.
+    const unchanged = previousId === data.session?.id
+      && previous?.title === data.session?.title
+      && previous?.cwd === data.session?.cwd
     state.currentDsh = data.session
     const preserveCanvasCamera = previousId !== data.session?.id && state.mapCardSessionSwitches.delete(data.session?.id)
     const thread = currentDshThread()
@@ -2223,7 +2286,7 @@ window.addEventListener('message', event => {
         }
       }).catch(setError)
     }
-    else if (canReplaceView()) render()
+    else if (!unchanged && canReplaceView()) render()
   }
   if (data.type === 'canvas:live-reply' && typeof data.sessionId === 'string') {
     const thread = state.workspace?.threads.find(item => item.dshSessionId === data.sessionId)
