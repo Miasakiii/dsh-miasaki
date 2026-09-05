@@ -11,6 +11,9 @@ const MAX_NOTE_LENGTH = 4_000
 // Projected message text cap: longer replies truncate with a marker pointing
 // at the detail view instead of silently cutting mid-sentence.
 const MAX_PROJECTION_LENGTH = 8_000
+// Summary injection form: quote only the head of each quoted answer. Loses
+// detail on purpose — that is the form's trade (cheaper context, lossy).
+const PROJECTION_SUMMARY_LENGTH = 1_200
 const PROJECTION_TRUNCATED_SUFFIX = '\n——…（详情查看全文）'
 const TOPIC_COLORS = ['#0f766e', '#2563eb', '#be123c', '#7c3aed', '#b45309']
 const LOCK_STALE_MS = 60_000
@@ -157,6 +160,10 @@ export class WorkspaceStore {
       if (input?.userIntent !== undefined) {
         thread.mergeFrom.userIntent = typeof input.userIntent === 'string' && input.userIntent.trim() !== '' ? input.userIntent.trim().slice(0, MAX_NOTE_LENGTH) : null
       }
+      if (input?.injectedForm !== undefined && input.injectedForm !== thread.mergeFrom.injectedForm) {
+        if (input.injectedForm !== 'full' && input.injectedForm !== 'summary' && input.injectedForm !== 'manual') throw new InputError('injectedForm 只支持 full / summary / manual')
+        thread.mergeFrom.injectedForm = input.injectedForm
+      }
       if (input?.position !== undefined) thread.position = positionOf(input.position)
       if (input?.title !== undefined) thread.title = requiredText(input.title, MAX_TITLE_LENGTH, 'title')
       thread.updatedAt = new Date().toISOString()
@@ -189,7 +196,7 @@ export class WorkspaceStore {
       // null → the browser forks without atSeq (cut at the live tail).
       atSeq: Number.isSafeInteger(forkAnchor) ? forkAnchor : null,
       injectedForm: mergeFrom.injectedForm,
-      messageText: mergeRequestText(forkThread, otherThread, forkExchange, otherExchange, mergeFrom.userIntent),
+      messageText: mergeRequestText(forkThread, otherThread, forkExchange, otherExchange, mergeFrom.userIntent, mergeFrom.injectedForm),
     }
   }
 
@@ -856,6 +863,13 @@ function truncateProjection(text) {
   return `${normalized.slice(0, MAX_PROJECTION_LENGTH)}${PROJECTION_TRUNCATED_SUFFIX}`
 }
 
+/** Summary-form quote: a deliberately lossy head-only excerpt. */
+function truncateSummary(text) {
+  const normalized = text.trim()
+  if (normalized.length <= PROJECTION_SUMMARY_LENGTH) return normalized
+  return `${normalized.slice(0, PROJECTION_SUMMARY_LENGTH)}…`
+}
+
 /**
  * The exchange a merge quotes from one source line: the anchored question and
  * its final answer, taken from the projected messages (already capped by the
@@ -889,17 +903,21 @@ function mergeFromOf(input, threads) {
     forkSource,
     anchorSeqA: Number.isSafeInteger(input?.anchorSeqA) && input.anchorSeqA >= 0 ? input.anchorSeqA : null,
     anchorSeqB: Number.isSafeInteger(input?.anchorSeqB) && input.anchorSeqB >= 0 ? input.anchorSeqB : null,
-    injectedForm: input?.injectedForm === 'manual' ? 'manual' : 'full',
+    injectedForm: input?.injectedForm === 'summary' || input?.injectedForm === 'manual' ? input.injectedForm : 'full',
     userIntent: typeof input?.userIntent === 'string' && input.userIntent.trim() !== '' ? input.userIntent.trim().slice(0, MAX_NOTE_LENGTH) : null,
   }
 }
 
 /** The structured first user message a merge injects into its forked session. */
-function mergeRequestText(forkThread, otherThread, forkExchange, otherExchange, userIntent) {
+function mergeRequestText(forkThread, otherThread, forkExchange, otherExchange, userIntent, injectedForm) {
+  // summary form deliberately quotes only the head of each answer: cheaper
+  // context, lossy — the trade the user opted into when drafting the request.
+  const summaryForm = injectedForm === 'summary'
+  const quote = text => summaryForm ? truncateSummary(text) : truncateProjection(text)
   const line = (label, role, thread, exchange) => [
     `### 来源线 ${label}（${role}）：${thread.title}`,
-    `- 问题：${truncateProjection(exchange.question) || '（无提问记录）'}`,
-    `- 结论：${exchange.answer === null ? '（无回答记录）' : truncateProjection(exchange.answer)}`,
+    `- 问题：${quote(exchange.question) || '（无提问记录）'}`,
+    `- 结论：${exchange.answer === null ? '（无回答记录）' : `${quote(exchange.answer)}${summaryForm ? '…（摘要形式，细节见原会话）' : ''}`}`,
   ].join('\n')
   return [
     '[合并请求]',

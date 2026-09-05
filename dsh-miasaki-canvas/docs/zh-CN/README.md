@@ -1,5 +1,13 @@
 # dsh-synapse 中文指南
 
+> **⚠️ 本文档为上游 [dsh-synapse](https://github.com/liangmianya/dsh-synapse) v0.4.1 原文，供参考。**
+> 本仓产物是其二开版 **`@miasaki/dsh-canvas`**（会话布），差异如下：
+>
+> - 包名与安装：`dsh plugin --profile web add link:C:\…\dsh-miasaki-canvas`（本地 link 开发模式）；入口名「会话地图」已改「**会话布**」，路由 `/canvas/`，数据目录 `$DSH_HOME/miasaki-canvas/`。
+> - **新增「合并」能力**：画布上线尾卡的 ◇ 按钮（或 Ctrl 多选后「合并这两条线」、或把一张卡拖到另一条线的卡上）发起合并 → 草稿卡预览（fork 源线 / 注入形式：全文引用或摘要提炼 / 合并指令）→ 「执行合并」fork 出真实 DSH 会话并注入另一条线的内容，原两条线保留并带「已被吸收 ◇」标记。
+> - 兼容 DSH 0.1.2-rc.1 的 Session API（`snapshotEvents` / `isSeeded`+`inheritedEventCount`）。
+> - 下文安装/卸载章节中的 `dsh-synapse` 命令不适用于本插件，其余使用说明（画布交互、边界）基本一致。
+
 `dsh-synapse` 是 DeepSeek Harness（DSH）的 Web 插件。它在 DSH 原生对话界面上增加会话地图，把同一工作区中的会话、追问和分支组织成可浏览、可拖拽和可缩放的画布。
 
 插件不替代 DSH 的模型、工具、会话、权限或 Web 服务；所有对话操作仍由 DSH 完成。

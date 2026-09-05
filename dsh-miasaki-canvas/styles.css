@@ -530,3 +530,9 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 [data-theme="dark"] .thread-card .absorbed-badge:hover { color: #c4b5fd; background: #2e1065; }
 [data-theme="dark"] .detail-lineage button { background: #251c3d; border-color: #3b2a63; color: #c4b5fd; }
 [data-theme="dark"] .detail-lineage .detail-lineage-expand { border-style: dashed; color: #a78bfa; }
+
+/* --- M4: merge-send retry badge, summary form --- */
+.thread-meta .merge-retry { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border: 0; border-radius: 9px; background: #fff7ed; padding: 0 7px; color: #c2410c; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.thread-meta .merge-retry:hover { background: #ffedd5; }
+.thread-meta .merge-retry::before { content: none; }
+[data-theme="dark"] .thread-meta .merge-retry { background: #431407; color: #fdba74; }

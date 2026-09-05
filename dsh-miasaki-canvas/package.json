@@ -1,6 +1,6 @@
 {
   "name": "@miasaki/dsh-canvas",
-  "version": "0.4.1-miasaki.1",
+  "version": "0.5.0-miasaki.1",
   "description": "A visual, non-linear conversation workspace plugin for DeepSeek Harness, forked from dsh-synapse (session merge lands on top of it in later milestones).",
   "type": "module",
   "main": "index.js",

@@ -204,3 +204,24 @@ test('removing a merge node clears absorbedBy back-references', async () => {
   assert.deepEqual(graph.threads.find(thread => thread.id === threadA.id).absorbedBy, [])
   assert.deepEqual(graph.threads.find(thread => thread.id === threadB.id).absorbedBy, [])
 })
+
+test('summary injection form quotes a lossy head instead of the full answer', async () => {
+  const { store, workspaceId, threadA, threadB } = await storeWithTwoLines()
+  await store.projectEvents(
+    { id: threadB.dshSessionId, title: '线 B', cwd, header: { meta: { cwd } }, events: [] },
+    [
+      { type: 'user/message', seq: 7, time: 3, data: { content: [{ type: 'text', text: 'B 线的问题' }] } },
+      { type: 'assistant/message', seq: 8, time: 4, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '细'.repeat(2_000) } ] } } },
+    ],
+  )
+  const draft = await store.createMergeDraft(workspaceId, { sources: [threadA.id, threadB.id], forkSource: threadA.id, injectedForm: 'summary' })
+  const prepare = await store.prepareMergeMessage(draft.id)
+  assert.ok(!prepare.messageText.includes('细'.repeat(1_300)), 'summary form must not quote the full answer')
+  assert.match(prepare.messageText, /（摘要形式，细节见原会话）/)
+
+  const edited = await store.updateMergeDraft(draft.id, { injectedForm: 'full' })
+  assert.equal(edited.mergeFrom.injectedForm, 'full')
+  const full = await store.prepareMergeMessage(draft.id)
+  assert.ok(full.messageText.includes('细'.repeat(1_900)))
+  assert.ok(!full.messageText.includes('摘要形式'))
+})

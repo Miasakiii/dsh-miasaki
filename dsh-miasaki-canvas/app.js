@@ -57,7 +57,7 @@ const state = {
   summaries: [], workspace: null, activeId: null, selectedCardId: null, mode: 'canvas', zoom: 1, currentDsh: null, sidebarCollapsed: false,
   dshWorkspaces: [], selectedDshWorkspaceId: null,
   historyBySession: new Map(), historyRequests: new Map(), pendingReplies: new Map(), pendingRpc: new Map(), liveReplies: new Map(),
-  draft: null, error: '', workspaceLoad: 0, mergePanel: null, mergeBusyId: null, mergeGesture: null, expandLineage: false, selectedCardIds: new Set(), branchAnchors: new Map(savedBranchAnchors), cardPositions: new Map(savedCardPositions), collapsedCardIds: new Set(savedCollapsedCards), quickPhrases: savedQuickPhrases, quickPhraseEditorOpen: false,
+  draft: null, error: '', workspaceLoad: 0, mergePanel: null, mergeBusyId: null, mergeGesture: null, expandLineage: false, selectedCardIds: new Set(), retryMergeSend: null, branchAnchors: new Map(savedBranchAnchors), cardPositions: new Map(savedCardPositions), collapsedCardIds: new Set(savedCollapsedCards), quickPhrases: savedQuickPhrases, quickPhraseEditorOpen: false,
   dragging: false, canvasGesture: false, canvasRefreshAfter: 0, canvasViewInitialized: false, canvasCamera: { x: 0, y: 0 }, mapCardSessionSwitches: new Set(),
   expandedMessageIds: new Set(),
   canvasCards: undefined, canvasCardsById: undefined, canvasGraph: undefined, mountedCardIds: new Set(), canvasNeedsCenter: false,
@@ -352,6 +352,7 @@ function openMerge(thread, anchorId = undefined, anchorSeq = undefined, presetTa
     anchorId,
     anchorSeq: Number.isInteger(anchorSeq) && anchorSeq > 0 ? anchorSeq : latestMessage(thread, 'assistant')?.sourceSeq ?? null,
     targetThreadId: preset?.id ?? candidates[0].id,
+    injectedForm: 'full',
     sending: false,
   }
   render()
@@ -387,7 +388,7 @@ function mergePanelCard() {
   if (source === undefined) return ''
   const candidates = mergePanelCandidates()
   const disabled = panel.sending ? 'disabled' : ''
-  return `<div class="merge-panel"><section class="merge-panel-body" role="dialog" aria-label="发起合并"><header class="merge-panel-head"><strong>发起合并</strong><button type="button" data-action="cancel-merge-panel" aria-label="关闭" title="关闭" ${disabled}>×</button></header><p class="merge-panel-source">源线（fork 自）：<strong>${escapeHtml(source.title)}</strong></p><label class="merge-panel-row"><span>合并对象</span><select data-action="select-merge-target" ${disabled}>${candidates.map(item => `<option value="${item.id}" ${item.id === panel.targetThreadId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></label><label class="merge-panel-row"><span>合并指令（可空）</span><textarea data-merge-intent maxlength="4000" placeholder="例如：综合两条线的方案，输出统一结论…" ${disabled}></textarea></label><p class="merge-panel-note">执行时从源线 fork 新会话，把两条线的问题与结论写入首条合并请求，由 DSH 生成合并产物；原两条线保留。</p><div class="merge-panel-actions"><button type="button" data-action="cancel-merge-panel" ${disabled}>取消</button><button class="primary" type="button" data-action="submit-merge-panel" ${disabled}>创建合并请求</button></div></section></div>`
+  return `<div class="merge-panel"><section class="merge-panel-body" role="dialog" aria-label="发起合并"><header class="merge-panel-head"><strong>发起合并</strong><button type="button" data-action="cancel-merge-panel" aria-label="关闭" title="关闭" ${disabled}>×</button></header><p class="merge-panel-source">源线（fork 自）：<strong>${escapeHtml(source.title)}</strong></p><label class="merge-panel-row"><span>合并对象</span><select data-action="select-merge-target" ${disabled}>${candidates.map(item => `<option value="${item.id}" ${item.id === panel.targetThreadId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></label><label class="merge-panel-row"><span>注入形式</span><select data-action="select-merge-form" ${disabled}><option value="full" ${panel.injectedForm === 'full' ? 'selected' : ''}>全文引用（精确，上下文开销大）</option><option value="summary" ${panel.injectedForm === 'summary' ? 'selected' : ''}>摘要提炼（省上下文，有信息损失）</option></select></label><label class="merge-panel-row"><span>合并指令（可空）</span><textarea data-merge-intent maxlength="4000" placeholder="例如：综合两条线的方案，输出统一结论…" ${disabled}></textarea></label><p class="merge-panel-note">执行时从源线 fork 新会话，把两条线的问题与结论写入首条合并请求，由 DSH 生成合并产物；原两条线保留。</p><div class="merge-panel-actions"><button type="button" data-action="cancel-merge-panel" ${disabled}>取消</button><button class="primary" type="button" data-action="submit-merge-panel" ${disabled}>创建合并请求</button></div></section></div>`
 }
 
 async function submitMergePanel() {
@@ -402,6 +403,8 @@ async function submitMergePanel() {
   if (workspaceId === null || workspaceId === undefined) return setError('当前画布没有可写入的工作空间')
   const textarea = document.querySelector('[data-merge-intent]')
   const intent = textarea instanceof HTMLTextAreaElement ? textarea.value.trim().slice(0, 4000) : ''
+  const formSelect = document.querySelector('[data-action="select-merge-form"]')
+  const injectedForm = formSelect instanceof HTMLSelectElement && formSelect.value === 'summary' ? 'summary' : 'full'
   const anchorSeqB = latestMessage(target, 'assistant')?.sourceSeq ?? latestMessage(target, 'user')?.sourceSeq ?? null
   panel.sending = true
   state.error = ''
@@ -414,6 +417,7 @@ async function submitMergePanel() {
         forkSource: source.id,
         anchorSeqA: panel.anchorSeq,
         anchorSeqB,
+        injectedForm,
         userIntent: intent === '' ? undefined : intent,
       }),
     })
@@ -438,13 +442,16 @@ async function executeMerge(thread) {
   state.mergeBusyId = thread.id
   state.error = ''
   render()
+  let committed = false
   try {
     const prepare = await api(`/canvas/api/threads/${thread.id}/merge/prepare`, { method: 'POST' })
     const session = await dshRpc('canvas:fork-session', { sessionId: prepare.forkSessionId, atSeq: Number.isInteger(prepare.atSeq) ? prepare.atSeq : undefined })
     const result = await api(`/canvas/api/threads/${thread.id}/merge/commit`, { method: 'POST', body: JSON.stringify({ dshSessionId: session.id, dshSessionTitle: session.title }) })
+    committed = true
     const index = state.workspace.threads.findIndex(item => item.id === thread.id)
     if (index >= 0) state.workspace.threads[index] = result.thread
     state.activeId = result.thread.id
+    state.retryMergeSend = null
     state.pendingReplies.set(result.thread.dshSessionId, { text: prepare.messageText, at: Date.now() })
     render()
     await dshRpc('canvas:send-message', { sessionId: result.thread.dshSessionId, text: prepare.messageText })
@@ -452,6 +459,12 @@ async function executeMerge(thread) {
     await refreshProjection()
   } catch (error) {
     setError(error)
+    // 合并关系已建立但首条消息没发出去：草稿无法重来（已 committed），
+    // 在合并卡上保留「重发合并请求」直到发送成功。
+    if (committed && state.retryMergeSend === null) {
+      const retry = state.workspace.threads.find(item => item.id === thread.id)
+      if (retry?.dshSessionId !== null && retry !== undefined) state.retryMergeSend = { threadId: thread.id }
+    }
   } finally {
     state.mergeBusyId = null
     render()
@@ -1062,11 +1075,14 @@ function conversationCard(card, graph) {
   // later merge already folded its content. Click jumps to the merge node.
   const absorbedBy = card.canContinue === true ? card.merge?.absorbedBy ?? [] : []
   const absorbedBadge = absorbedBy.length === 0 ? '' : `<button class="absorbed-badge" data-action="reveal-merge" data-thread="${escapeHtml(absorbedBy[0])}" title="这条线的内容已被后续合并吸收，点击查看合并节点">已被吸收 ◇</button>`
+  const retrySendButton = state.retryMergeSend?.threadId === card.dshThreadId && card.turnIndex === 0
+    ? '<button class="merge-retry" data-action="retry-merge-send" title="合并已建立，但首条合并请求没有发送成功">重发合并请求</button>'
+    : ''
   return `<article class="thread-card ${selected}${multiSelected}${isMergeNode ? ' is-merge-node' : ''}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#3478f6">
     <button class="node-handle" data-drag-card="${card.id}" aria-label="拖动 ${escapeHtml(card.question)}" title="拖动卡片"></button>
     ${continueButton}${foldButton}${branchButton}${mergeButton}
     <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}${absorbedBadge}</div>
-    <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}</div>
+    <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}${retrySendButton}</div>
     <div class="thread-answer">${card.answer === null ? (card.error === null ? '<p class="thread-answer-empty">等待助手回复</p>' : '') : card.answer.pending && card.answer.text === '' ? '<p class="thread-answer-pending">正在回复</p>' : `${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="thread-answer-pending">正在回复</p>' : ''}`}${card.error === null ? '' : `<p class="thread-answer-error" title="${escapeHtml(card.error.text)}">本轮失败：${escapeHtml(card.error.text)}</p>`}</div>
     <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="open-dsh" data-thread="${card.dshThreadId}" data-seq="${Number.isInteger(card.sourceSeq) ? card.sourceSeq : ''}" title="在 DSH 中打开" aria-label="在 DSH 中打开"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v6.5A1.5 1.5 0 0 0 4.5 13H11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M9.5 3.5h3v3M12.4 3.6 7.5 8.5"/></svg>DSH</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
   </article>`
@@ -1086,7 +1102,7 @@ function mergeDraftCard(card) {
     <div class="merge-plan">
       <p class="merge-plan-line"><span class="merge-plan-label">fork 源线</span>${forkSource === undefined ? '（来源已不在画布）' : escapeHtml(forkSource.title)}</p>
       <p class="merge-plan-line"><span class="merge-plan-label">注入来源</span>${injected.map(line => escapeHtml(line.title)).join('、') || '—'}</p>
-      <p class="merge-plan-line"><span class="merge-plan-label">注入形式</span>${from.injectedForm === 'manual' ? '手选' : '全文引用'}</p>
+      <p class="merge-plan-line"><span class="merge-plan-label">注入形式</span>${from.injectedForm === 'manual' ? '手选' : from.injectedForm === 'summary' ? '摘要提炼' : '全文引用'}</p>
       ${from.userIntent ? `<p class="merge-plan-line"><span class="merge-plan-label">合并指令</span>${escapeHtml(from.userIntent)}</p>` : ''}
     </div>
     <footer><button class="merge-execute" data-action="execute-merge" data-thread="${card.dshThreadId}" ${busy} title="fork 源线并注入合并请求">${state.mergeBusyId === card.dshThreadId ? '执行中…' : '执行合并'}</button><button data-action="cancel-merge-draft" data-thread="${card.dshThreadId}" ${busy}>取消</button></footer>
@@ -1989,6 +2005,25 @@ app.addEventListener('click', async event => {
     if (button.dataset.action === 'cancel-merge-panel') closeMergePanel()
     if (button.dataset.action === 'execute-merge' && thread !== undefined) await executeMerge(thread)
     if (button.dataset.action === 'cancel-merge-draft' && thread !== undefined) await cancelMergeDraft(thread)
+    if (button.dataset.action === 'retry-merge-send' && thread !== undefined) {
+      const retry = state.retryMergeSend
+      if (retry === null || retry.threadId !== thread.id || thread.dshSessionId === null) return
+      const pending = state.pendingReplies.get(thread.dshSessionId)
+      if (pending === undefined) { state.retryMergeSend = null; render(); return setError('没有待重发的合并请求，可直接追问') }
+      state.retryMergeSend = null
+      state.error = ''
+      render()
+      try {
+        await dshRpc('canvas:send-message', { sessionId: thread.dshSessionId, text: pending.text })
+        void loadThreadHistory(thread)
+        await refreshProjection()
+      } catch (error) {
+        state.retryMergeSend = retry
+        setError(error)
+        render()
+      }
+      return
+    }
     if (button.dataset.action === 'cancel-draft') { state.draft = null; state.quickPhraseEditorOpen = false; render() }
     if (button.dataset.action === 'toggle-message' && button.dataset.message !== undefined) { state.expandedMessageIds.has(button.dataset.message) ? state.expandedMessageIds.delete(button.dataset.message) : state.expandedMessageIds.add(button.dataset.message); renderPreservingDetailScroll() }
     if (button.dataset.action === 'open-dsh' && thread?.dshSessionId !== null) post('canvas:open-session', { sessionId: thread.dshSessionId, seq: Number.isInteger(Number(button.dataset.seq)) ? Number(button.dataset.seq) : undefined })
@@ -2014,6 +2049,11 @@ app.addEventListener('change', event => {
   const mergeTarget = event.target instanceof Element ? event.target.closest('[data-action="select-merge-target"]') : null
   if (mergeTarget instanceof HTMLSelectElement && state.mergePanel !== null) {
     state.mergePanel.targetThreadId = mergeTarget.value
+    return
+  }
+  const mergeForm = event.target instanceof Element ? event.target.closest('[data-action="select-merge-form"]') : null
+  if (mergeForm instanceof HTMLSelectElement && state.mergePanel !== null) {
+    state.mergePanel.injectedForm = mergeForm.value === 'summary' ? 'summary' : 'full'
     return
   }
   const select = event.target.closest('[data-action="select-workspace"]')
