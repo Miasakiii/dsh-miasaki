@@ -445,3 +445,53 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 [data-theme="dark"] button.primary { border-color: #3478f6; background: #3478f6; color: #fff; }
 [data-theme="dark"] button.primary:hover { border-color: #2563eb; background: #2563eb; color: #fff; }
 @media (max-width: 760px) { [data-theme="dark"] .card-inspector { border-top-color: #2a2d33; border-left: 0; } }
+
+/* --- M2 merge: diamond nodes, request drafts, merge panel --- */
+.graph-merge-button { position: absolute; right: -12px; top: calc(50% + 60px); z-index: 4; display: grid; width: 24px; height: 24px; min-height: 24px; place-items: center; border-color: #9ca3af; border-radius: 50%; background: #fff; padding: 0; color: #7c3aed; }
+.graph-merge-button svg { width: 12px; height: 12px; fill: currentColor; }
+.graph-merge-button:hover { border-color: #7c3aed; background: #f5f3ff; }
+.graph-merge-button:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; }
+.connectors .merge-connector { stroke: #8b5cf6; }
+.connectors .merge-connector-draft { stroke: #8b5cf6; stroke-dasharray: 5 4; }
+.thread-card.is-merge-node { border-color: #a78bfa; box-shadow: 0 3px 11px rgba(124,58,237,.14); }
+.thread-card.is-merge-node .topic-dot { background: #7c3aed; }
+.thread-card .merge-badge { display: inline-flex; align-items: center; margin-left: auto; border-radius: 9px; background: #f5f3ff; padding: 0 6px; color: #7c3aed; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.thread-card.merge-draft-card { border: 1px dashed #a78bfa; background: #fdfcff; }
+.thread-card.merge-draft-card .merge-diamond { width: 11px; height: 11px; flex: none; background: #7c3aed; transform: rotate(45deg); border-radius: 2px; }
+.merge-plan { margin: 10px 14px; overflow-y: auto; border: 1px solid #ede9fe; border-radius: 6px; background: #faf8ff; padding: 8px 10px; font-size: 11px; line-height: 1.6; color: #4c1d95; }
+.merge-plan-line { margin: 0 0 4px; }
+.merge-plan-line:last-child { margin-bottom: 0; }
+.merge-plan-label { display: inline-block; margin-right: 6px; color: #7c3aed; font-weight: 650; }
+.thread-card.merge-draft-card footer { display: flex; gap: 8px; padding: 0 14px 12px; }
+.thread-card.merge-draft-card footer button { flex: 1; min-height: 28px; border-color: #a78bfa; border-radius: 6px; background: #fff; color: #6d28d9; font-size: 12px; font-weight: 650; }
+.thread-card.merge-draft-card footer .merge-execute { border-color: #7c3aed; background: #7c3aed; color: #fff; }
+.thread-card.merge-draft-card footer button:hover { border-color: #6d28d9; }
+.thread-card.merge-draft-card footer button:disabled { opacity: .55; }
+.merge-panel { position: absolute; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(15,23,42,.32); }
+.merge-panel-body { display: grid; width: min(420px, calc(100vw - 48px)); gap: 10px; border: 1px solid #ddd6fe; border-radius: 10px; background: #fff; padding: 16px; box-shadow: 0 18px 48px rgba(49,26,110,.28); }
+.merge-panel-head { display: flex; align-items: center; justify-content: space-between; color: #1e1b4b; font-size: 14px; }
+.merge-panel-head button { width: 24px; min-height: 24px; border-radius: 6px; background: transparent; color: #6b7280; font-size: 15px; }
+.merge-panel-head button:hover { background: #f3f4f6; color: #111827; }
+.merge-panel-source { margin: 0; color: #526174; font-size: 12px; }
+.merge-panel-row { display: grid; gap: 4px; color: #374151; font-size: 12px; font-weight: 650; }
+.merge-panel-row select, .merge-panel-row textarea { border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 8px; color: #111827; font: inherit; font-weight: 400; }
+.merge-panel-row textarea { min-height: 64px; resize: vertical; }
+.merge-panel-note { margin: 0; color: #94a3b8; font-size: 11px; line-height: 1.5; }
+.merge-panel-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.merge-panel-actions button { min-height: 30px; border-color: #d1d5db; border-radius: 6px; background: #fff; padding: 0 12px; color: #374151; font-size: 12px; font-weight: 650; }
+.merge-panel-actions .primary { border-color: #7c3aed; background: #7c3aed; color: #fff; }
+.merge-panel-actions .primary:hover { border-color: #6d28d9; background: #6d28d9; }
+.merge-panel-actions button:disabled { opacity: .55; }
+[data-theme="dark"] .connectors .merge-connector { stroke: #a78bfa; }
+[data-theme="dark"] .connectors .merge-connector-draft { stroke: #a78bfa; }
+[data-theme="dark"] .thread-card.is-merge-node { border-color: #6d28d9; }
+[data-theme="dark"] .thread-card .merge-badge { background: #2e1065; color: #c4b5fd; }
+[data-theme="dark"] .thread-card.merge-draft-card { border-color: #6d28d9; background: #221a33; }
+[data-theme="dark"] .merge-plan { border-color: #3b2a63; background: #251c3d; color: #ddd6fe; }
+[data-theme="dark"] .merge-plan-label { color: #c4b5fd; }
+[data-theme="dark"] .graph-merge-button { background: #1b1c1f; }
+[data-theme="dark"] .graph-merge-button:hover { background: #2e1065; }
+[data-theme="dark"] .merge-panel-body { border-color: #3b2a63; background: #1b1c1f; }
+[data-theme="dark"] .merge-panel-row select, [data-theme="dark"] .merge-panel-row textarea { border-color: #3a3f47; background: #121316; color: #e5e7eb; }
+[data-theme="dark"] .merge-panel-actions button { background: #1b1c1f; border-color: #3a3f47; color: #d1d5db; }
+[data-theme="dark"] .merge-panel-actions .primary { background: #7c3aed; border-color: #7c3aed; color: #fff; }

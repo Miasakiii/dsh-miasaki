@@ -17,7 +17,7 @@ test('persists a workspace, a DSH-linked thread, and a message', async () => {
   assert.equal(saved.title, '调研 DSH 插件')
   assert.equal(saved.threads[0].dshSessionId, 'session-1')
   assert.equal(saved.threads[0].messages[0].text, '确定使用已有 Web Server')
-  assert.match(await readFile(dataFile, 'utf8'), /"version": ?4/)
+  assert.match(await readFile(dataFile, 'utf8'), /"version": ?5/)
 })
 
 test('projects committed DSH events once, folds tool process into the assistant card, and keeps fork lineage', async () => {
@@ -72,7 +72,7 @@ test('projects a batch of session events in a single write', async () => {
   assert.equal(thread.messages[0].text, '批量问题')
   assert.equal(thread.messages[1].process.length, 1)
   assert.equal(thread.messages[1].process[0].result, 'ok')
-  assert.match(await readFile(join(directory, 'state.json'), 'utf8'), /"version": ?4/)
+  assert.match(await readFile(join(directory, 'state.json'), 'utf8'), /"version": ?5/)
 })
 
 test('retains a tool failure and exposes a failed turn without assistant text', async () => {
@@ -132,7 +132,7 @@ test('migrates v3 tool cards into the assistant process records', async () => {
   assert.equal(thread.messages[1].process[0].result, 'file content')
   assert.equal(thread.messages[1].process[1].name, 'bash')
   assert.equal(thread.messages[1].process[1].result, null)
-  assert.match(await readFile(dataFile, 'utf8'), /"version": ?4/)
+  assert.match(await readFile(dataFile, 'utf8'), /"version": ?5/)
 })
 
 test('does not persist the DSH runtime context as a user conversation turn', async () => {
@@ -237,11 +237,11 @@ test('archived canvas nodes stay hidden during a later DSH session sync', async 
   assert.equal((await store.list()).length, 0)
 })
 
-test('does not rewrite an up-to-date v4 file on load', async () => {
+test('does not rewrite an up-to-date v5 file on load', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-idempotent-'))
   const dataFile = join(directory, 'state.json')
   const state = {
-    version: 4,
+    version: 5,
     hiddenSessionIds: [],
     workspaces: [{
       id: 'w-1', kind: 'dsh', cwd: 'C:\\work\\x', title: 'x',
@@ -251,6 +251,7 @@ test('does not rewrite an up-to-date v4 file on load', async () => {
         color: '#0f766e', position: { x: 86, y: 82 }, sourceSeedLength: null,
         createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
         messages: [{ id: 'm-1', kind: 'assistant', text: 'hi', sourceSeq: 1, at: '2026-01-01T00:00:00.000Z', process: [] }],
+        mergeFrom: null, mergeState: null, absorbedBy: [],
       }],
     }],
   }

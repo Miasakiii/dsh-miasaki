@@ -110,6 +110,122 @@ export class WorkspaceStore {
     })
   }
 
+  /**
+   * Create a merge request draft node. The draft carries the two source
+   * threads and the injection plan; it binds to a real DSH session only at
+   * commitMerge time, after the browser forked the forkSource line.
+   */
+  async createMergeDraft(workspaceId, input) {
+    return this.mutate(() => {
+      const workspace = this.workspace(workspaceId)
+      const mergeFrom = mergeFromOf(input, workspace.threads)
+      const [sourceA, sourceB] = mergeFrom.sources.map(id => workspace.threads.find(item => item.id === id))
+      const now = new Date().toISOString()
+      const thread = {
+        id: randomUUID(),
+        title: input?.title !== undefined ? requiredText(input.title, MAX_TITLE_LENGTH, 'title') : `合并：${sourceA.title} × ${sourceB.title}`.slice(0, MAX_TITLE_LENGTH),
+        parentId: null,
+        sourceParentSessionId: null,
+        sourceSeedLength: null,
+        dshSessionId: null,
+        dshSessionTitle: null,
+        color: TOPIC_COLORS.includes(input?.color) ? input.color : TOPIC_COLORS[workspace.threads.length % TOPIC_COLORS.length],
+        position: positionOf(input?.position ?? { x: Math.round((sourceA.position.x + sourceB.position.x) / 2), y: Math.max(sourceA.position.y, sourceB.position.y) + 340 }),
+        createdAt: now,
+        updatedAt: now,
+        messages: [],
+        pendingProcess: [],
+        mergeFrom,
+        mergeState: 'draft',
+        absorbedBy: [],
+      }
+      workspace.threads.push(thread)
+      workspace.updatedAt = now
+      return structuredClone(thread)
+    })
+  }
+
+  /** Edit a merge draft before execution: fork source, intent, position. */
+  async updateMergeDraft(threadId, input) {
+    return this.mutate(() => {
+      const { workspace, thread } = this.locateThread(threadId)
+      if (thread.mergeState !== 'draft' || thread.mergeFrom === null) throw new InputError('只有合并请求草稿可以编辑')
+      if (input?.forkSource !== undefined && input.forkSource !== thread.mergeFrom.forkSource) {
+        if (!thread.mergeFrom.sources.includes(input.forkSource)) throw new InputError('fork 源必须是合并来源之一')
+        thread.mergeFrom.forkSource = input.forkSource
+      }
+      if (input?.userIntent !== undefined) {
+        thread.mergeFrom.userIntent = typeof input.userIntent === 'string' && input.userIntent.trim() !== '' ? input.userIntent.trim().slice(0, MAX_NOTE_LENGTH) : null
+      }
+      if (input?.position !== undefined) thread.position = positionOf(input.position)
+      if (input?.title !== undefined) thread.title = requiredText(input.title, MAX_TITLE_LENGTH, 'title')
+      thread.updatedAt = new Date().toISOString()
+      workspace.updatedAt = thread.updatedAt
+      return structuredClone(thread)
+    })
+  }
+
+  /**
+   * Build the injected first user message for a merge draft: both anchor
+   * exchanges (question + final answer, from the projected messages) plus the
+   * user intent. Read-only — the browser forks and then commits.
+   */
+  async prepareMergeMessage(threadId) {
+    await this.ready
+    const { workspace, thread } = this.locateThread(threadId)
+    if (thread.mergeState !== 'draft' || thread.mergeFrom === null) throw new InputError('只有合并请求草稿可以准备执行')
+    const mergeFrom = thread.mergeFrom
+    const [aId, bId] = mergeFrom.sources
+    const forkThread = workspace.threads.find(item => item.id === mergeFrom.forkSource)
+    const otherThread = workspace.threads.find(item => item.id === (mergeFrom.forkSource === aId ? bId : aId))
+    if (forkThread === undefined || forkThread.dshSessionId === null) throw new InputError('fork 源线不存在或没有关联的 DSH 会话')
+    if (otherThread === undefined || otherThread.dshSessionId === null) throw new InputError('注入来源线不存在或没有关联的 DSH 会话')
+    const forkAnchor = mergeFrom.forkSource === aId ? mergeFrom.anchorSeqA : mergeFrom.anchorSeqB
+    const otherAnchor = mergeFrom.forkSource === aId ? mergeFrom.anchorSeqB : mergeFrom.anchorSeqA
+    const forkExchange = anchoredExchange(forkThread, forkAnchor)
+    const otherExchange = anchoredExchange(otherThread, otherAnchor)
+    return {
+      forkSessionId: forkThread.dshSessionId,
+      // null → the browser forks without atSeq (cut at the live tail).
+      atSeq: Number.isSafeInteger(forkAnchor) ? forkAnchor : null,
+      injectedForm: mergeFrom.injectedForm,
+      messageText: mergeRequestText(forkThread, otherThread, forkExchange, otherExchange, mergeFrom.userIntent),
+    }
+  }
+
+  /**
+   * Bind a merge draft to the forked DSH session. The fork's session/created
+   * projection may arrive before this call and open an orphan node for the
+   * new session id — fold its projected messages in and drop it, mirroring
+   * the branch() idempotent-merge so both race winners resolve to one node.
+   */
+  async commitMerge(threadId, input) {
+    return this.mutate(() => {
+      const { workspace, thread } = this.locateThread(threadId)
+      if (thread.mergeState !== 'draft' || thread.mergeFrom === null) throw new InputError('只有合并请求草稿可以执行')
+      const sessionId = typeof input?.dshSessionId === 'string' ? input.dshSessionId : ''
+      if (sessionId === '') throw new InputError('dshSessionId 必须提供')
+      const clash = workspace.threads.find(item => item.dshSessionId === sessionId && item.id !== thread.id)
+      if (clash !== undefined) {
+        thread.messages.push(...clash.messages)
+        thread.sourceSeedLength ??= clash.sourceSeedLength
+        thread.parentId ??= clash.parentId
+        workspace.threads = workspace.threads.filter(item => item.id !== clash.id)
+      }
+      thread.dshSessionId = sessionId
+      if (typeof input?.dshSessionTitle === 'string') thread.dshSessionTitle = input.dshSessionTitle.slice(0, MAX_TITLE_LENGTH)
+      thread.parentId ??= thread.mergeFrom.forkSource
+      thread.mergeState = 'committed'
+      thread.updatedAt = new Date().toISOString()
+      workspace.updatedAt = thread.updatedAt
+      for (const sourceId of thread.mergeFrom.sources) {
+        const source = workspace.threads.find(item => item.id === sourceId)
+        if (source !== undefined && Array.isArray(source.absorbedBy) && !source.absorbedBy.includes(thread.id)) source.absorbedBy.push(thread.id)
+      }
+      return structuredClone(thread)
+    })
+  }
+
   /** Keep only the canvas graph in Canvas; DSH remains the source of session truth. */
   async syncSessions(sessions, removedSessionIds = []) {
     return this.mutate(() => {
@@ -177,6 +293,12 @@ export class WorkspaceStore {
         if (removal.has(item.id) && item.dshSessionId !== null && !this.state.hiddenSessionIds.includes(item.dshSessionId)) this.state.hiddenSessionIds.push(item.dshSessionId)
       }
       workspace.threads = workspace.threads.filter(item => !removal.has(item.id))
+      // absorbedBy back-references never outlive the nodes they point at.
+      for (const item of workspace.threads) {
+        if (Array.isArray(item.absorbedBy) && item.absorbedBy.some(id => removal.has(id))) {
+          item.absorbedBy = item.absorbedBy.filter(id => !removal.has(id))
+        }
+      }
       workspace.updatedAt = new Date().toISOString()
       if (workspace.threads.length === 0) this.state.workspaces = this.state.workspaces.filter(item => item.id !== workspace.id)
       return { removed: removal.size }
@@ -200,7 +322,10 @@ export class WorkspaceStore {
       if (this.state.hiddenSessionIds.includes(session.id)) return null
       const workspace = this.dshWorkspace(sessionCwd(session), workspaceTitle)
       const thread = this.dshThread(workspace, session)
-      for (const event of session.events) {
+      // DSH 0.1.2 removed the eager `session.events` array in favor of the
+      // on-demand `snapshotEvents(fromSeq)` reader; 0.1.1 still exposes both.
+      const events = typeof session.snapshotEvents === 'function' ? session.snapshotEvents(replayFrom) : session.events
+      for (const event of events ?? []) {
         if (event.seq >= replayFrom) this.projectEventInto(workspace, thread, event)
       }
       return structuredClone(thread)
@@ -239,7 +364,7 @@ export class WorkspaceStore {
       if (migrated) await this.save()
     } catch (error) {
       if (error?.code !== 'ENOENT') throw new Error(`canvas: cannot read ${this.dataFile}: ${error.message}`)
-      this.state = { version: 4, hiddenSessionIds: [], workspaces: [] }
+      this.state = { version: 5, hiddenSessionIds: [], workspaces: [] }
       await this.save()
     }
   }
@@ -382,7 +507,9 @@ export class WorkspaceStore {
       }
       // `seedLength` is DSH's durable fork cut. Keep it even after the
       // session has been restored, when its in-process `firstLiveSeq` moves.
-      const seedLength = session.header?.seedLength
+      // DSH 0.1.2 hosts expose the cut as `isSeeded` + `inheritedEventCount`
+      // (the header integer only survives on the wire layer); 0.1.1 has it.
+      const seedLength = session.header?.seedLength ?? (session.header?.isSeeded === true ? session.inheritedEventCount : undefined)
       if (Number.isSafeInteger(seedLength) && seedLength >= 0) thread.sourceSeedLength = seedLength
       return thread
     }
@@ -395,7 +522,10 @@ export class WorkspaceStore {
       title: typeof session.title === 'string' && session.title.trim() !== '' ? session.title.slice(0, MAX_TITLE_LENGTH) : (parent === undefined ? 'DSH 会话' : `${parent.title} 分支`),
       parentId: parent?.id ?? null,
       sourceParentSessionId: parentSessionId,
-      sourceSeedLength: Number.isSafeInteger(session.header?.seedLength) && session.header.seedLength >= 0 ? session.header.seedLength : null,
+      sourceSeedLength: (() => {
+        const seedLength = session.header?.seedLength ?? (session.header?.isSeeded === true ? session.inheritedEventCount : undefined)
+        return Number.isSafeInteger(seedLength) && seedLength >= 0 ? seedLength : null
+      })(),
       dshSessionId: session.id,
       dshSessionTitle: typeof session.title === 'string' ? session.title.slice(0, MAX_TITLE_LENGTH) : null,
       color: TOPIC_COLORS[workspace.threads.length % TOPIC_COLORS.length],
@@ -407,6 +537,9 @@ export class WorkspaceStore {
       updatedAt: now,
       messages: [],
       pendingProcess: [],
+      mergeFrom: null,
+      mergeState: null,
+      absorbedBy: [],
     }
     workspace.threads.push(thread)
     // A child may arrive before its parent during startup replay. Repair that
@@ -511,6 +644,9 @@ export class WorkspaceStore {
       updatedAt: now,
       messages: [],
       pendingProcess: [],
+      mergeFrom: null,
+      mergeState: null,
+      absorbedBy: [],
     }
   }
 
@@ -525,20 +661,30 @@ class NotFoundError extends Error {}
 function normalizeState(value) {
   let migrated = false
   let state
-  if ((value?.version === 2 || value?.version === 3 || value?.version === 4) && Array.isArray(value.workspaces)) {
+  if ((value?.version === 2 || value?.version === 3 || value?.version === 4 || value?.version === 5) && Array.isArray(value.workspaces)) {
     const hiddenSessionIds = Array.isArray(value.hiddenSessionIds) ? value.hiddenSessionIds.filter(item => typeof item === 'string') : []
     migrated = value.version < 3 || !Array.isArray(value.hiddenSessionIds)
     const workspaces = value.workspaces.map(workspace => ({
       ...workspace,
       threads: Array.isArray(workspace.threads) ? workspace.threads.map(thread => {
+        // v5 merge fields: absent on v4-and-older files, backfilled on load.
+        let normalized = thread
+        if (!Array.isArray(thread.absorbedBy)) {
+          normalized = { ...normalized, absorbedBy: [] }
+          migrated = true
+        }
+        if (thread.mergeFrom === undefined) {
+          normalized = { ...normalized, mergeFrom: null, mergeState: null }
+          migrated = true
+        }
         if (Array.isArray(thread.messages)) {
           const messages = thread.messages.filter(message => !isRuntimeContextMessage(message))
           if (messages.length !== thread.messages.length) migrated = true
-          return { ...thread, messages }
+          return { ...normalized, messages }
         }
         migrated = true
         const notes = Array.isArray(thread.notes) ? thread.notes : []
-        const { notes: _notes, ...rest } = thread
+        const { notes: _notes, ...rest } = normalized
         return { ...rest, messages: notes, pendingProcess: [] }
       }) : [],
     }))
@@ -566,11 +712,11 @@ function normalizeState(value) {
     }
     migrated = true
   } else {
-    throw new Error('expected Canvas data version 1, 2, 3, or 4')
+    throw new Error('expected Canvas data version 1, 2, 3, 4, or 5')
   }
-  if (state.version !== 4) {
-    if (foldLegacyToolCards(state.workspaces)) migrated = true
-    state.version = 4
+  if (state.version !== 5) {
+    if (state.version < 4 && foldLegacyToolCards(state.workspaces)) migrated = true
+    state.version = 5
     migrated = true
   }
   return { state, migrated }
@@ -678,8 +824,71 @@ function errorText(value) {
 function noteProjection(kind, text) {
   const normalized = text.trim()
   if (normalized === '') return null
-  if (normalized.length <= MAX_PROJECTION_LENGTH) return { kind, text: normalized }
-  return { kind, text: `${normalized.slice(0, MAX_PROJECTION_LENGTH)}${PROJECTION_TRUNCATED_SUFFIX}` }
+  return { kind, text: truncateProjection(normalized) }
+}
+
+/** Cap quoted text at the projection limit with the detail-view marker. */
+function truncateProjection(text) {
+  const normalized = text.trim()
+  if (normalized.length <= MAX_PROJECTION_LENGTH) return normalized
+  return `${normalized.slice(0, MAX_PROJECTION_LENGTH)}${PROJECTION_TRUNCATED_SUFFIX}`
+}
+
+/**
+ * The exchange a merge quotes from one source line: the anchored question and
+ * its final answer, taken from the projected messages (already capped by the
+ * projection limit). A missing anchor falls back to the line's latest turn.
+ */
+function anchoredExchange(thread, anchorSeq) {
+  const messages = Array.isArray(thread.messages) ? thread.messages : []
+  const anchorIndex = Number.isSafeInteger(anchorSeq)
+    ? messages.findIndex(message => message.kind === 'user' && message.sourceSeq === anchorSeq)
+    : -1
+  const question = (anchorIndex >= 0 ? messages[anchorIndex] : [...messages].reverse().find(message => message.kind === 'user'))?.text ?? ''
+  const answer = (anchorIndex >= 0 ? [...messages.slice(anchorIndex + 1)].reverse() : [...messages].reverse())
+    .find(message => message.kind === 'assistant')?.text ?? null
+  return { question, answer }
+}
+
+/** Validate and normalize a merge request body into the persisted mergeFrom shape. */
+function mergeFromOf(input, threads) {
+  const sources = input?.sources
+  if (!Array.isArray(sources) || sources.length !== 2 || new Set(sources).size !== 2 || sources.some(id => typeof id !== 'string')) {
+    throw new InputError('merge.sources 必须是两个不同的节点 id')
+  }
+  const resolved = sources.map(id => threads.find(item => item.id === id))
+  if (resolved.some(thread => thread === undefined)) throw new InputError('合并来源不存在')
+  if (resolved.some(thread => thread.dshSessionId === null)) throw new InputError('合并来源必须关联 DSH 会话')
+  if (resolved.some(thread => thread.mergeState === 'draft')) throw new InputError('合并请求草稿不能作为合并来源')
+  const forkSource = input?.forkSource
+  if (forkSource !== sources[0] && forkSource !== sources[1]) throw new InputError('forkSource 必须是合并来源之一')
+  return {
+    sources: [...sources],
+    forkSource,
+    anchorSeqA: Number.isSafeInteger(input?.anchorSeqA) && input.anchorSeqA >= 0 ? input.anchorSeqA : null,
+    anchorSeqB: Number.isSafeInteger(input?.anchorSeqB) && input.anchorSeqB >= 0 ? input.anchorSeqB : null,
+    injectedForm: input?.injectedForm === 'manual' ? 'manual' : 'full',
+    userIntent: typeof input?.userIntent === 'string' && input.userIntent.trim() !== '' ? input.userIntent.trim().slice(0, MAX_NOTE_LENGTH) : null,
+  }
+}
+
+/** The structured first user message a merge injects into its forked session. */
+function mergeRequestText(forkThread, otherThread, forkExchange, otherExchange, userIntent) {
+  const line = (label, role, thread, exchange) => [
+    `### 来源线 ${label}（${role}）：${thread.title}`,
+    `- 问题：${truncateProjection(exchange.question) || '（无提问记录）'}`,
+    `- 结论：${exchange.answer === null ? '（无回答记录）' : truncateProjection(exchange.answer)}`,
+  ].join('\n')
+  return [
+    '[合并请求]',
+    '这是一个会话合并任务：你在 fork 源线上继承了它的对话历史，同时收到另一条独立探索线的结论引用。请综合两条线，产出一份合并产物：指出一致结论、分歧点与未决问题；不得虚构引用之外的内容。',
+    '',
+    line('A', '本会话的 fork 源，其历史已在你的上下文中', forkThread, forkExchange),
+    '',
+    line('B', '仅以下引用，不在你的上下文中', otherThread, otherExchange),
+    '',
+    `用户合并指令：${userIntent === null ? '（无，请自行综合）' : userIntent}`,
+  ].join('\n')
 }
 
 function isRuntimeContextText(text) {
@@ -782,6 +991,9 @@ export function apply(ctx, config) {
   if (autoProjection) {
     ctx.on('session/created', replaySession)
     ctx.on('session/event', enqueueProjection)
+    // Startup replay: 0.1.1 lists restored sessions synchronously; 0.1.2
+    // restores lazily, so this can be empty there — live events and the
+    // persisted store cover those sessions instead.
     for (const session of ctx.sessions.list()) replaySession(session)
   }
   // The DSH /api browser-trust fence does not cover /canvas routes, so this
@@ -806,6 +1018,14 @@ export function apply(ctx, config) {
       }
       const branch = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/branch$/i.exec(path)
       if (branch !== null && req.method === 'POST') return sendJson(res, 201, { thread: await store.branch(branch[1], await readJson(req)) })
+      const mergeDraft = /^\/canvas\/api\/workspaces\/([0-9a-f-]+)\/merge$/i.exec(path)
+      if (mergeDraft !== null && req.method === 'POST') return sendJson(res, 201, { thread: await store.createMergeDraft(mergeDraft[1], await readJson(req)) })
+      const mergeEdit = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/merge$/i.exec(path)
+      if (mergeEdit !== null && req.method === 'PATCH') return sendJson(res, 200, { thread: await store.updateMergeDraft(mergeEdit[1], await readJson(req)) })
+      const mergePrepare = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/merge\/prepare$/i.exec(path)
+      if (mergePrepare !== null && req.method === 'POST') return sendJson(res, 200, await store.prepareMergeMessage(mergePrepare[1]))
+      const mergeCommit = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/merge\/commit$/i.exec(path)
+      if (mergeCommit !== null && req.method === 'POST') return sendJson(res, 200, { thread: await store.commitMerge(mergeCommit[1], await readJson(req)) })
       if (path === '/canvas/api/sessions/sync' && req.method === 'POST') { const body = await readJson(req); return sendJson(res, 200, { workspaces: await store.syncSessions(body.sessions, body.removedSessionIds) }) }
       const messages = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/messages$/i.exec(path)
       if (messages !== null && req.method === 'POST') return sendJson(res, 201, { thread: await store.addMessage(messages[1], (await readJson(req)).text) })

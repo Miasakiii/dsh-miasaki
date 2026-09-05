@@ -10,7 +10,7 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 
 ## 状态
 
-**M1 基线完成**（2026-09-05）：fork 上游 v0.4.1 → 改名换标识 → link 安装跑通原功能，§7.3 四个 SPIKE 全部有结论。合并能力（M2）未开始。
+**M2 合并内核完成**（2026-09-05）：v5 元数据 + merge RPC + 合并请求卡 + 执行流，已在 DSH 0.1.2-rc.1 上实机验收（两条真实会话线合并产出真实 DSH 会话、画布菱形卡 + 双入边）。已适配 0.1.2 的 Session API 变更（`snapshotEvents` / `isSeeded`+`inheritedEventCount`）；已知限制：0.1.2 下历史会话存量投影不回填（详见 CHANGELOG）。下一步 M3：多选/框选、拖拽并置手势、DAG 渲染打磨。
 
 ## 本机开发与安装
 

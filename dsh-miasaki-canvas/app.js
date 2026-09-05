@@ -57,7 +57,7 @@ const state = {
   summaries: [], workspace: null, activeId: null, selectedCardId: null, mode: 'canvas', zoom: 1, currentDsh: null, sidebarCollapsed: false,
   dshWorkspaces: [], selectedDshWorkspaceId: null,
   historyBySession: new Map(), historyRequests: new Map(), pendingReplies: new Map(), pendingRpc: new Map(), liveReplies: new Map(),
-  draft: null, error: '', workspaceLoad: 0, branchAnchors: new Map(savedBranchAnchors), cardPositions: new Map(savedCardPositions), collapsedCardIds: new Set(savedCollapsedCards), quickPhrases: savedQuickPhrases, quickPhraseEditorOpen: false,
+  draft: null, error: '', workspaceLoad: 0, mergePanel: null, mergeBusyId: null, branchAnchors: new Map(savedBranchAnchors), cardPositions: new Map(savedCardPositions), collapsedCardIds: new Set(savedCollapsedCards), quickPhrases: savedQuickPhrases, quickPhraseEditorOpen: false,
   dragging: false, canvasGesture: false, canvasRefreshAfter: 0, canvasViewInitialized: false, canvasCamera: { x: 0, y: 0 }, mapCardSessionSwitches: new Set(),
   expandedMessageIds: new Set(),
   canvasCards: undefined, canvasCardsById: undefined, canvasGraph: undefined, mountedCardIds: new Set(), canvasNeedsCenter: false,
@@ -183,10 +183,16 @@ function workspaceChoices() {
 }
 
 async function threadsForDshWorkspace(workspace) {
-  if (workspace.sessionIds.length === 0) return []
+  if (workspace.sessionIds.length === 0) return { threads: [], storeWorkspaceId: null }
   const requested = new Set(workspace.sessionIds)
   const projections = await Promise.all(state.summaries.map(summary => api(`/canvas/api/workspaces/${summary.id}`)))
-  return projections.flatMap(projection => projection.workspace.threads.filter(thread => requested.has(thread.dshSessionId)))
+  const owningIds = new Set(projections.filter(projection => projection.workspace.threads.some(thread => requested.has(thread.dshSessionId))).map(projection => projection.workspace.id))
+  return {
+    // Merge-request drafts have no DSH session yet; keep them so the reload
+    // driven by the live sessions/workspaces subscriptions does not wipe them.
+    threads: projections.flatMap(projection => projection.workspace.threads.filter(thread => thread.dshSessionId === null ? thread.mergeState === 'draft' : requested.has(thread.dshSessionId))),
+    storeWorkspaceId: [...owningIds][0] ?? null,
+  }
 }
 
 async function openDshWorkspace(id, { renderAfter = true, preserveCanvasCamera = false } = {}) {
@@ -194,11 +200,11 @@ async function openDshWorkspace(id, { renderAfter = true, preserveCanvasCamera =
   if (workspace === undefined) return false
   const load = ++state.workspaceLoad
   state.selectedDshWorkspaceId = id
-  const threads = await threadsForDshWorkspace(workspace)
+  const { threads, storeWorkspaceId } = await threadsForDshWorkspace(workspace)
   if (load !== state.workspaceLoad) return true
   const nextWorkspaceId = `dsh:${workspace.id}`
   if (state.workspace?.id !== nextWorkspaceId && !preserveCanvasCamera) resetCanvasCamera()
-  state.workspace = { id: nextWorkspaceId, title: workspace.title, cwd: workspace.path, threads }
+  state.workspace = { id: nextWorkspaceId, title: workspace.title, cwd: workspace.path, threads, storeWorkspaceId }
   const currentThread = currentDshThread(state.workspace.threads)
   state.activeId = currentThread?.id ?? (state.workspace.threads.some(thread => thread.id === state.activeId) ? state.activeId : state.workspace.threads[0]?.id ?? null)
   if (currentThread !== undefined) revealConversationThread(conversationCards(state.workspace.threads), currentThread.id)
@@ -325,6 +331,117 @@ function openBranch(parent, atSeq = undefined, anchorId = undefined) {
   state.draft = { kind: 'branch', parentId: parent.id, atSeq, anchorId, text: '', sending: false }
   render()
   window.setTimeout(() => document.querySelector('[data-draft] textarea')?.focus(), 0)
+}
+
+function openMerge(thread, anchorId = undefined, anchorSeq = undefined) {
+  if (thread.dshSessionId === null) return setError('该节点没有关联的 DSH 会话')
+  if (thread.mergeState === 'draft') return setError('这条合并请求草稿已在画布上，等它执行或取消')
+  if (thread.mergeState === 'committed') return setError('这条线已被合并；请从合并产物或另一条线重新发起')
+  const candidates = (state.workspace?.threads ?? []).filter(item => item.id !== thread.id && item.dshSessionId !== null && item.mergeState == null)
+  if (candidates.length === 0) return setError('当前画布没有可合并的另一条会话线')
+  state.mergePanel = {
+    sourceThreadId: thread.id,
+    anchorId,
+    anchorSeq: Number.isInteger(anchorSeq) && anchorSeq > 0 ? anchorSeq : latestMessage(thread, 'assistant')?.sourceSeq ?? null,
+    targetThreadId: candidates[0].id,
+    sending: false,
+  }
+  render()
+}
+
+function closeMergePanel() { state.mergePanel = null; render() }
+
+function mergePanelCandidates() {
+  const panel = state.mergePanel
+  if (panel === null) return []
+  return (state.workspace?.threads ?? []).filter(item => item.id !== panel.sourceThreadId && item.dshSessionId !== null && item.mergeState == null)
+}
+
+function mergePanelCard() {
+  const panel = state.mergePanel
+  if (panel === null) return ''
+  const source = threadsById().get(panel.sourceThreadId)
+  if (source === undefined) return ''
+  const candidates = mergePanelCandidates()
+  const disabled = panel.sending ? 'disabled' : ''
+  return `<div class="merge-panel"><section class="merge-panel-body" role="dialog" aria-label="发起合并"><header class="merge-panel-head"><strong>发起合并</strong><button type="button" data-action="cancel-merge-panel" aria-label="关闭" title="关闭" ${disabled}>×</button></header><p class="merge-panel-source">源线（fork 自）：<strong>${escapeHtml(source.title)}</strong></p><label class="merge-panel-row"><span>合并对象</span><select data-action="select-merge-target" ${disabled}>${candidates.map(item => `<option value="${item.id}" ${item.id === panel.targetThreadId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></label><label class="merge-panel-row"><span>合并指令（可空）</span><textarea data-merge-intent maxlength="4000" placeholder="例如：综合两条线的方案，输出统一结论…" ${disabled}></textarea></label><p class="merge-panel-note">执行时从源线 fork 新会话，把两条线的问题与结论写入首条合并请求，由 DSH 生成合并产物；原两条线保留。</p><div class="merge-panel-actions"><button type="button" data-action="cancel-merge-panel" ${disabled}>取消</button><button class="primary" type="button" data-action="submit-merge-panel" ${disabled}>创建合并请求</button></div></section></div>`
+}
+
+async function submitMergePanel() {
+  const panel = state.mergePanel
+  if (panel === null || panel.sending) return
+  const source = threadsById().get(panel.sourceThreadId)
+  const target = threadsById().get(panel.targetThreadId)
+  if (source === undefined || target === undefined) return setError('合并来源已不在当前画布')
+  // Canvas store workspace id (dsh mode resolves it from the projection load;
+  // manual workspaces already use their store uuid as state.workspace.id).
+  const workspaceId = state.workspace?.storeWorkspaceId ?? (String(state.workspace?.id ?? '').startsWith('dsh:') ? null : state.workspace?.id)
+  if (workspaceId === null || workspaceId === undefined) return setError('当前画布没有可写入的工作空间')
+  const textarea = document.querySelector('[data-merge-intent]')
+  const intent = textarea instanceof HTMLTextAreaElement ? textarea.value.trim().slice(0, 4000) : ''
+  const anchorSeqB = latestMessage(target, 'assistant')?.sourceSeq ?? latestMessage(target, 'user')?.sourceSeq ?? null
+  panel.sending = true
+  state.error = ''
+  render()
+  try {
+    const result = await api(`/canvas/api/workspaces/${encodeURIComponent(workspaceId)}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({
+        sources: [source.id, target.id],
+        forkSource: source.id,
+        anchorSeqA: panel.anchorSeq,
+        anchorSeqB,
+        userIntent: intent === '' ? undefined : intent,
+      }),
+    })
+    state.mergePanel = null
+    if (state.workspace !== null && !state.workspace.threads.some(item => item.id === result.thread.id)) state.workspace.threads.push(result.thread)
+    state.activeId = result.thread.id
+    state.selectedCardId = `${result.thread.id}:turn:empty`
+    revealConversationThread(conversationCards(state.workspace.threads), result.thread.id)
+    render()
+  } catch (error) {
+    if (state.mergePanel !== null) state.mergePanel.sending = false
+    setError(error)
+    render()
+  }
+}
+
+async function executeMerge(thread) {
+  if (state.mergeBusyId !== null) return
+  if (state.workspace === null) return
+  const target = state.workspace.threads.find(item => item.id === thread.id)
+  if (target === undefined || target.mergeState !== 'draft') return
+  state.mergeBusyId = thread.id
+  state.error = ''
+  render()
+  try {
+    const prepare = await api(`/canvas/api/threads/${thread.id}/merge/prepare`, { method: 'POST' })
+    const session = await dshRpc('canvas:fork-session', { sessionId: prepare.forkSessionId, atSeq: Number.isInteger(prepare.atSeq) ? prepare.atSeq : undefined })
+    const result = await api(`/canvas/api/threads/${thread.id}/merge/commit`, { method: 'POST', body: JSON.stringify({ dshSessionId: session.id, dshSessionTitle: session.title }) })
+    const index = state.workspace.threads.findIndex(item => item.id === thread.id)
+    if (index >= 0) state.workspace.threads[index] = result.thread
+    state.activeId = result.thread.id
+    state.pendingReplies.set(result.thread.dshSessionId, { text: prepare.messageText, at: Date.now() })
+    render()
+    await dshRpc('canvas:send-message', { sessionId: result.thread.dshSessionId, text: prepare.messageText })
+    void loadThreadHistory(result.thread)
+    await refreshProjection()
+  } catch (error) {
+    setError(error)
+  } finally {
+    state.mergeBusyId = null
+    render()
+  }
+}
+
+async function cancelMergeDraft(thread) {
+  await api(`/canvas/api/threads/${thread.id}`, { method: 'DELETE' })
+  if (state.workspace !== null) {
+    state.workspace.threads = state.workspace.threads.filter(item => item.id !== thread.id)
+    if (state.activeId === thread.id) state.activeId = state.workspace.threads[0]?.id ?? null
+  }
+  render()
 }
 
 async function sendMessage(thread, text) {
@@ -662,6 +779,7 @@ function conversationCards(threads) {
   const cards = []
   const cardsByThread = new Map()
   for (const thread of threads) {
+    const merge = thread.mergeState === null || thread.mergeState === undefined ? null : { state: thread.mergeState, from: thread.mergeFrom, absorbedBy: Array.isArray(thread.absorbedBy) ? thread.absorbedBy : [] }
     const messages = messagesFor(thread)
     const turns = []
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
@@ -703,6 +821,7 @@ function conversationCards(threads) {
         answer,
         error,
         processCount,
+        merge,
       })
     }
     const liveReply = state.liveReplies.get(thread.dshSessionId)
@@ -729,6 +848,7 @@ function conversationCards(threads) {
       answer: null,
       error: null,
       processCount: 0,
+      merge,
       })
     }
     turns.at(-1).canContinue = true
@@ -870,6 +990,23 @@ function canvasConnectors(cards) {
     const active = card.dshThreadId === state.activeId && parent.dshThreadId === state.activeId ? ' active-connector' : ''
     return `<path class="${active.trim()}" data-from="${escapeHtml(parent.id)}" data-to="${escapeHtml(card.id)}" d="${connectorPath(parent.position, card.position)}"></path>`
   })
+  // Merge lineage: a second parent edge from each non-fork source line's tail
+  // card to the merge node's first card (the fork edge rides the parentId chain).
+  const tailsByThread = new Map()
+  for (const card of cards) {
+    const tail = tailsByThread.get(card.dshThreadId)
+    if (tail === undefined || card.turnIndex > tail.turnIndex) tailsByThread.set(card.dshThreadId, card)
+  }
+  for (const card of cards) {
+    if (card.merge === null || card.merge === undefined || card.turnIndex > 0) continue
+    for (const sourceId of card.merge.from?.sources ?? []) {
+      if (sourceId === card.merge.from?.forkSource) continue
+      const tail = tailsByThread.get(sourceId)
+      if (tail === undefined || tail.id === card.id) continue
+      const edgeClass = card.merge.state === 'draft' ? 'merge-connector merge-connector-draft' : 'merge-connector'
+      links.push(`<path class="${edgeClass}" data-from="${escapeHtml(tail.id)}" data-to="${escapeHtml(card.id)}" d="${connectorPath(tail.position, card.position)}"></path>`)
+    }
+  }
   const placement = draftPlacement(cards)
   if (placement !== null) {
     links.push(`<path class="draft-connector" data-from="${escapeHtml(placement.parent.id)}" data-to="draft" d="${connectorPath(placement.parent.position, placement.position)}"></path>`)
@@ -880,6 +1017,8 @@ function canvasConnectors(cards) {
 function conversationCard(card, graph) {
   const selected = card.id === state.selectedCardId ? 'selected' : ''
   const source = card.parentId === null ? 'DSH 会话' : card.turnIndex === 0 ? 'DSH 分支' : '追问'
+  if (card.merge?.state === 'draft') return mergeDraftCard(card)
+  const isMergeNode = card.merge?.state === 'committed'
   const continueButton = card.canContinue === true
     ? `<button class="graph-continue-button" data-action="open-continue" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" aria-label="添加追问" title="添加追问"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg></button>`
     : ''
@@ -887,14 +1026,38 @@ function conversationCard(card, graph) {
   const collapsed = state.collapsedCardIds.has(card.id)
   const foldLabel = collapsed ? '展开后续对话' : '折叠后续对话'
   const foldButton = childCount === 0 || card.canContinue === true ? '' : `<button class="graph-fold-button${collapsed ? ' collapsed' : ''}" data-action="toggle-card-children" data-card="${escapeHtml(card.id)}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${foldLabel}" title="${foldLabel}"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 8h9"/>${collapsed ? '<path d="M8 3.5v9"/>' : ''}</svg></button>`
-  const branchButton = childCount === 0 || card.canContinue === true || !Number.isInteger(card.answer?.sourceSeq) ? '' : `<button class="graph-branch-button" data-action="open-branch" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" data-seq="${card.answer.sourceSeq}" aria-label="在新对话中分支" title="在新对话中分支"><svg aria-hidden="true" viewBox="0 0 16 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M13.0762 1.37207C14.0846 1.37228 14.9021 2.19077 14.9023 3.19922C14.9022 4.20772 14.0847 5.02518 13.0762 5.02539C12.2967 5.02539 11.6325 4.53691 11.3701 3.84961H4.35547C4.79397 4.26458 5.15861 4.7644 5.41699 5.33496L7.10645 9.06738C7.88526 10.7875 9.55104 11.9228 11.4189 12.0371C11.7085 11.4109 12.3411 10.9756 13.0762 10.9756C14.0843 10.9759 14.9023 11.7936 14.9023 12.8018C14.9023 13.81 14.0843 14.6277 13.0762 14.6279C12.2534 14.6279 11.5574 14.0832 11.3291 13.335C8.9868 13.1879 6.89981 11.7612 5.92285 9.60352L4.23242 5.87109C3.67503 4.64033 2.44878 3.84961 1.09766 3.84961V2.54883C1.10665 2.54883 1.11601 2.54975 1.125 2.5498L11.3701 2.54883C11.6326 1.86151 12.2969 1.37207 13.0762 1.37207ZM13.0762 12.2764C12.7858 12.2764 12.5508 12.5114 12.5508 12.8018C12.5508 13.0921 12.7858 13.3281 13.0762 13.3281C13.3664 13.3279 13.6025 13.092 13.6025 12.8018C13.6025 12.5115 13.3664 12.2766 13.0762 12.2764ZM13.0762 2.67285C12.7855 2.67285 12.55 2.90861 12.5498 3.19922C12.5499 3.48987 12.7855 3.72559 13.0762 3.72559C13.3667 3.72538 13.6024 3.48975 13.6025 3.19922C13.6023 2.90874 13.3666 2.67306 13.0762 2.67285Z" fill="currentColor"/></svg></button>`
-  return `<article class="thread-card ${selected}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#3478f6">
+  const branchButton = childCount === 0 || card.canContinue === true || !Number.isInteger(card.answer?.sourceSeq) ? '' : `<button class="graph-branch-button" data-action="open-branch" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" data-seq="${card.answer.sourceSeq}" aria-label="在新对话中分支" title="在新对话中分支"><svg aria-hidden="true" viewBox="0 0 16 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M13.0762 1.37207C14.0846 1.37228 14.9021 2.19077 14.9023 3.19922C14.9022 4.20772 14.0847 5.02518 13.0762 5.02539C12.2967 5.02539 11.6325 4.53691 11.3701 3.84961H4.35547C4.79397 4.26458 5.15861 4.7644 5.41699 5.33496L7.10645 9.06738C7.88526 10.7875 9.55104 11.9228 11.4189 12.0371C11.7085 11.4109 12.3411 10.9756 13.0762 10.9756C14.0843 10.9759 14.9023 11.7936 14.9023 12.8018C14.9023 13.81 14.0843 14.6277 13.0762 14.6279C12.2534 14.6279 11.5574 14.0832 11.3291 13.335C8.9868 13.1879 6.89981 11.7612 5.92285 9.60352L4.23242 5.87109C3.67503 4.64033 2.44878 3.84961 1.09766 3.84961V2.54883C1.10665 2.54883 1.11601 2.54975 1.125 2.5498L11.3701 2.54883C11.6326 1.86151 12.2969 1.37207 13.0762 1.37207ZM13.0762 12.2764C12.7858 12.2764 12.5508 12.5114 12.5508 12.8018C12.5508 13.0921 12.7858 13.3281 13.0762 13.3281C13.3664 13.3279 13.6025 13.092 13.6025 12.8018C13.3664 12.5115 13.3664 12.2766 13.0762 12.2764ZM13.0762 2.67285C12.7855 12.2764 12.55 2.90861 12.5498 3.19922C12.5499 3.48987 12.7855 3.72559 13.0762 3.72559C13.3667 3.72538 13.6024 3.48975 13.6025 3.19922C13.6023 2.90874 13.3666 2.67306 13.0762 2.67285Z" fill="currentColor"/></svg></button>`
+  const mergeButton = card.canContinue === true && card.merge === null
+    ? `<button class="graph-merge-button" data-action="open-merge" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" data-seq="${Number.isInteger(card.answer?.sourceSeq) ? card.answer.sourceSeq : ''}" aria-label="发起合并" title="与另一条会话线合并"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2 14 8 8 14 2 8Z"/></svg></button>`
+    : ''
+  return `<article class="thread-card ${selected}${isMergeNode ? ' is-merge-node' : ''}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#3478f6">
     <button class="node-handle" data-drag-card="${card.id}" aria-label="拖动 ${escapeHtml(card.question)}" title="拖动卡片"></button>
-    ${continueButton}${foldButton}${branchButton}
-    <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button></div>
+    ${continueButton}${foldButton}${branchButton}${mergeButton}
+    <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}</div>
     <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}</div>
     <div class="thread-answer">${card.answer === null ? (card.error === null ? '<p class="thread-answer-empty">等待助手回复</p>' : '') : card.answer.pending && card.answer.text === '' ? '<p class="thread-answer-pending">正在回复</p>' : `${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="thread-answer-pending">正在回复</p>' : ''}`}${card.error === null ? '' : `<p class="thread-answer-error" title="${escapeHtml(card.error.text)}">本轮失败：${escapeHtml(card.error.text)}</p>`}</div>
     <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="open-dsh" data-thread="${card.dshThreadId}" data-seq="${Number.isInteger(card.sourceSeq) ? card.sourceSeq : ''}" title="在 DSH 中打开" aria-label="在 DSH 中打开"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v6.5A1.5 1.5 0 0 0 4.5 13H11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M9.5 3.5h3v3M12.4 3.6 7.5 8.5"/></svg>DSH</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
+  </article>`
+}
+
+/** The diamond merge-request draft: plan summary plus execute/cancel. */
+function mergeDraftCard(card) {
+  const threads = threadsById()
+  const from = card.merge.from ?? {}
+  const lines = (from.sources ?? []).map(id => threads.get(id)).filter(Boolean)
+  const forkSource = threads.get(from.forkSource)
+  const injected = lines.filter(line => line.id !== from.forkSource)
+  const busy = state.mergeBusyId === card.dshThreadId ? 'disabled' : ''
+  return `<article class="thread-card draft-card merge-draft-card" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#7c3aed">
+    <div class="thread-card-head"><span class="merge-diamond" aria-hidden="true"></span><strong>合并请求（草稿）</strong></div>
+    <div class="thread-meta"><span>${escapeHtml(card.question)}</span></div>
+    <div class="merge-plan">
+      <p class="merge-plan-line"><span class="merge-plan-label">fork 源线</span>${forkSource === undefined ? '（来源已不在画布）' : escapeHtml(forkSource.title)}</p>
+      <p class="merge-plan-line"><span class="merge-plan-label">注入来源</span>${injected.map(line => escapeHtml(line.title)).join('、') || '—'}</p>
+      <p class="merge-plan-line"><span class="merge-plan-label">注入形式</span>${from.injectedForm === 'manual' ? '手选' : '全文引用'}</p>
+      ${from.userIntent ? `<p class="merge-plan-line"><span class="merge-plan-label">合并指令</span>${escapeHtml(from.userIntent)}</p>` : ''}
+    </div>
+    <footer><button class="merge-execute" data-action="execute-merge" data-thread="${card.dshThreadId}" ${busy} title="fork 源线并注入合并请求">${state.mergeBusyId === card.dshThreadId ? '执行中…' : '执行合并'}</button><button data-action="cancel-merge-draft" data-thread="${card.dshThreadId}" ${busy}>取消</button></footer>
   </article>`
 }
 
@@ -1201,7 +1364,7 @@ function render() {
   const canvasControls = state.mode === 'canvas' && (threads.length > 0 || state.draft?.kind === 'new') ? `<div class="canvas-controls"><button data-action="layout" title="整理节点" aria-label="整理节点"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>整理</button><button data-action="focus-active" title="定位到当前会话" aria-label="定位到当前会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v2.6M8 11.9v2.6M1.5 8h2.6M11.9 8h2.6"/></svg>定位</button><button data-action="zoom-out" aria-label="缩小" title="缩小"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button><span>${Math.round(state.zoom * 100)}%</span><button data-action="zoom-in" aria-label="放大" title="放大"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button></div>` : ''
   const detailAvailable = currentThread() !== null
   const canvasTabs = `<nav class="canvas-tabs" aria-label="会话地图视图"><button class="${state.mode === 'canvas' ? 'active' : ''}" data-action="show-canvas">地图</button><button class="${state.mode === 'thread' ? 'active' : ''}" data-action="show-thread" data-thread="${state.activeId ?? ''}" ${detailAvailable ? '' : 'disabled'}>详情</button></nav>`
-  app.innerHTML = `<main class="canvas-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="Canvas"><svg class="brand-mark" aria-hidden="true" viewBox="0 0 32 32" fill="none"><path d="M9 10.5 16 7l7 3.5M9 10.5v8L16 22m0-15v15m7-11.5v8L16 22"/><circle cx="9" cy="10" r="2.5"/><circle cx="23" cy="10" r="2.5"/><circle cx="16" cy="23" r="2.5"/></svg><strong>Canvas</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threads.map(thread => `<button class="tree-row ${thread.id === state.activeId ? 'active' : ''}" data-action="select-thread" data-thread="${thread.id}" style="--thread-color:#374151"><span class="tree-dot"></span><span>${escapeHtml(threadListTitle(thread))}</span>${thread.parentId === null ? '' : '<i>分支</i>'}</button>`).join('') || '<p class="tree-empty">暂未同步会话</p>'}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话地图</button></div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}</section></main>`
+  app.innerHTML = `<main class="canvas-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="Canvas"><svg class="brand-mark" aria-hidden="true" viewBox="0 0 32 32" fill="none"><path d="M9 10.5 16 7l7 3.5M9 10.5v8L16 22m0-15v15m7-11.5v8L16 22"/><circle cx="9" cy="10" r="2.5"/><circle cx="23" cy="10" r="2.5"/><circle cx="16" cy="23" r="2.5"/></svg><strong>Canvas</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threads.map(thread => `<button class="tree-row ${thread.id === state.activeId ? 'active' : ''}" data-action="select-thread" data-thread="${thread.id}" style="--thread-color:#374151"><span class="tree-dot"></span><span>${escapeHtml(threadListTitle(thread))}</span>${thread.parentId === null ? '' : '<i>分支</i>'}</button>`).join('') || '<p class="tree-empty">暂未同步会话</p>'}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话地图</button></div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}${mergePanelCard()}</section></main>`
   installDragging()
   cacheCardConnectors()
   // The initial camera from renderCanvas is inset (viewport not laid out yet);
@@ -1626,6 +1789,11 @@ app.addEventListener('click', async event => {
       const fallbackSeq = latestMessage(thread, 'assistant')?.sourceSeq
       openBranch(thread, Number.isInteger(requestedSeq) ? requestedSeq : fallbackSeq, button.dataset.card)
     }
+    if (button.dataset.action === 'open-merge' && thread !== undefined) openMerge(thread, button.dataset.card, Number(button.dataset.seq))
+    if (button.dataset.action === 'submit-merge-panel') await submitMergePanel()
+    if (button.dataset.action === 'cancel-merge-panel') closeMergePanel()
+    if (button.dataset.action === 'execute-merge' && thread !== undefined) await executeMerge(thread)
+    if (button.dataset.action === 'cancel-merge-draft' && thread !== undefined) await cancelMergeDraft(thread)
     if (button.dataset.action === 'cancel-draft') { state.draft = null; state.quickPhraseEditorOpen = false; render() }
     if (button.dataset.action === 'toggle-message' && button.dataset.message !== undefined) { state.expandedMessageIds.has(button.dataset.message) ? state.expandedMessageIds.delete(button.dataset.message) : state.expandedMessageIds.add(button.dataset.message); renderPreservingDetailScroll() }
     if (button.dataset.action === 'open-dsh' && thread?.dshSessionId !== null) post('canvas:open-session', { sessionId: thread.dshSessionId, seq: Number.isInteger(Number(button.dataset.seq)) ? Number(button.dataset.seq) : undefined })
@@ -1646,6 +1814,11 @@ app.addEventListener('change', event => {
   const quickPhrase = event.target instanceof Element ? event.target.closest('[data-quick-phrase-index]') : null
   if (quickPhrase instanceof HTMLInputElement) {
     updateQuickPhrase(Number(quickPhrase.dataset.quickPhraseIndex), quickPhrase.value)
+    return
+  }
+  const mergeTarget = event.target instanceof Element ? event.target.closest('[data-action="select-merge-target"]') : null
+  if (mergeTarget instanceof HTMLSelectElement && state.mergePanel !== null) {
+    state.mergePanel.targetThreadId = mergeTarget.value
     return
   }
   const select = event.target.closest('[data-action="select-workspace"]')
