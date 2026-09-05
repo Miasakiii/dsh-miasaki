@@ -52,7 +52,28 @@ for (const t of ['zafkiel', 'kurkuriel']) {
   }
 }
 
-const runtime = readFileSync(join(root, 'themes', 'runtime.js'), 'utf8')
+const RUNTIME_SRC_DIR = join(root, 'themes', 'src')
+const RUNTIME_MANIFEST = join(RUNTIME_SRC_DIR, 'MANIFEST.json')
+let runtime = ''
+// D1: themes/src/ 按 MANIFEST 顺序拼接为运行时（source of truth）；
+// 缺失时回退到 legacy themes/runtime.js（保持旧链路可用）。
+if (existsSync(RUNTIME_MANIFEST) && existsSync(join(RUNTIME_SRC_DIR, '00-boot.js'))) {
+  const manifest = JSON.parse(readFileSync(RUNTIME_MANIFEST, 'utf8'))
+  const parts = []
+  for (const f of manifest.order) {
+    const p = join(RUNTIME_SRC_DIR, f)
+    if (!existsSync(p)) {
+      console.error(`[build-init] 缺少运行时分片: ${p}`)
+      process.exit(1)
+    }
+    parts.push(readFileSync(p, 'utf8'))
+  }
+  runtime = parts.join('')
+  console.log(`[build-init] runtime from themes/src/ (${manifest.order.length} 片)`)
+} else {
+  runtime = readFileSync(join(root, 'themes', 'runtime.js'), 'utf8')
+  console.log('[build-init] runtime from legacy themes/runtime.js（回退）')
+}
 const bundle =
   `/* 由 scripts/build-init.mjs 生成，勿手改 */\n` +
   `window.__MIASAKI_STYLES__=${JSON.stringify(styles)};\n${runtime}`

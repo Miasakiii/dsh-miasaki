@@ -8,9 +8,21 @@
 - [x] **启动链路异常兜底** — bootstrap.json 健康标记 + 失败恢复页(2026-08-24,见
   `design/bootstrap-reliability.md`);GDI 侧兜底(§异常兜底)仍待做
 - [ ] **长时间稳定性观察** — 用户连续运行 ≥1h 无崩溃(第六轮修复验证)
-- [ ] **GDI 异常兜底** — GDI/定时器失败写 pet.log 统计 + 触发后自动重建(当前仅部分)
+- [x] **GDI 异常兜底** — ULW 连续失败计数（首失败+每 300 次日志，10 连败销毁表面）
+  + 表面无效每 ~30 compose 重试重建（2026-09-04，`pet_native/window.rs`；
+  pet.log 可见 `ULW failed`/`surface rebuilt`，harness `cargo check` 通过，
+  Windows 机终验 `tauri build`）
 
 ## P1 · 用户已验证清单(本轮)
+
+- [x] **鉴权 cookie 注入(黑屏修复)** — dsh web 重启后旧 cookie 失效黑屏，运行时
+  自动重签+重载（2026-09-05，`themes/src/00-boot.js`，见 CHANGELOG；secret 硬编码
+  改进项见 P3）
+- [ ] **鉴权 secret 动态化** — 注入脚本硬编码 secret 改为 Rust 侧读
+  `~/.dsh/.credentials.yaml` 的 `client-connection/browser-session` 记录实时签名，
+  避免 secret 轮换后需改源码重编译（2026-09-05 黑屏修复的遗留项）
+- [ ] **401 恢复指引分支** — loading 页识别 401（`dsh web authentication
+  required`）给出「重新打开 dsh web 打印的 URL」指引，与 cookie 注入互补
 
 - [x] 主窗口位置/大小持久化(window.json)
 - [x] 托盘菜单(显示/隐藏主窗口、退出)
@@ -19,8 +31,9 @@
 - [x] **启动失败恢复页** — dsh 未安装/端口占用/重试换代;失败页动作:检查 dsh/打开终端/
   打开日志目录/导出诊断(2026-08-24,设计见 `design/bootstrap-reliability.md`)
 - [x] **bootstrap.json 与 window.json 原子写**(temp+rename)
-- [ ] **启动失败用例自动化** — dsh 未安装 / 端口被占用 / 单实例冲突三条用例接入
-  smoke-test.ps1(手动用例清单见设计文档 §6)
+- [x] **启动失败用例自动化** — dsh 未安装 / 端口被占用 / 单实例冲突三用例以
+  WARN 预检接入 smoke-test.ps1 §0b（2026-09-04，跨平台 .NET 探针，环境相关不计 fail；
+  手动用例清单见设计文档 §6 仍有效）
 - [x] **pet.json 版本化** — `version: 1` + 损坏回默认(设计已定,见 bootstrap-reliability.md §4.1;
   2026-08-29 落地:含位置可见性校验(EnumDisplayMonitors 工作区)+ hide 持久化)
 - [ ] **安装包 + 卸载** — NSIS/MSI 需要联网下载 bundler(沙箱内不可行 → 用户机执行
@@ -45,6 +58,8 @@
 - [ ] 正式 IPC(如 tauri 自定义协议 / postMessage)替代 hash 通道(收益有限,hash 已验证可靠)
 - [ ] verify-themes.mjs 沙箱运行方案(无头 Edge 被命名管道限制;可换 WebView2 实例化)
 - [ ] 测试自动化(单元:parse_fragment 纯函数;集成:smoke-test 扩展)
+  - 注 2026-09-04：Rust `Frames::kurumi_row` 单测（harness `cargo test` 通过）、
+    dispatch 解析器四路 pwsh 实测通过；parse_fragment 单测仍待
 - [ ] 升级策略(DSH rc.x 升级后跑 verify-themes + 令牌面 diff,build-init 已内建令牌校验)
 
 ## 历史教训(勿重犯)

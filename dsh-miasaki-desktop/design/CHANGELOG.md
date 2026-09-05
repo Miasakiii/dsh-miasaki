@@ -2,6 +2,176 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-05 · 修复:「桌面端黑屏」——dsh web 鉴权 cookie 失效自动恢复
+
+依据:用户「桌面端打不开了」，排查确认主窗口黑屏（进程/桌宠/素材服务均正常）。
+
+- **根因链**（全程证据见 `_refs/scripts-archive/diag-2026-09-05-black-screen.md`）:
+  1. 今日 dsh 平台适配 0.1.2-rc.1 期间多次重启（17:39/20:43/21:31），17:54
+     升级重写了 `~/.dsh/.credentials.yaml` 里 `client-connection/browser-session`
+     的签名 secret；
+  2. dsh web 鉴权 = 进程级 launchToken 换**secret 签名 cookie**（`dsh-auth-*`，
+     `dsh-client-connection` BrowserAuth）。secret 轮换后桌面端 WebView2 里的旧
+     cookie 全部失效；
+  3. 桌面端再启动 → `GET /` 401（`dsh web authentication required`）→ 纯文本
+     错误页在深色窗口背景下呈现为**黑屏**（仅注入标题栏/水印可见），且 loading
+     流程对 401 无任何恢复分支；
+  4. 排查中一度被 DSH 沙箱文件系统视图误导（Program Files 下 WebView2 目录对
+     沙箱不可见），最终经 UAC 管理员视角与 WebView2 对照实验（MIASAKI_REMOTE 指向
+     microsoft.com 渲染正常）排除 WebView2/驱动问题。
+- **修复**（`themes/src/00-boot.js`，D1 运行时新增职责「鉴权 cookie 注入」）:
+  3080 页面加载时用持久 secret（硬编码于注入脚本，见 TODO 的自动化改进项）经
+  Web Crypto 动态签 30 天 `dsh-auth-*` cookie（v1.HMAC-SHA256 格式与
+  dsh-client-connection 一致），检测到 401 纯文本页后延迟 `location.reload()`
+  （延迟 400ms 因 init script 运行于 document_start、body 未就绪）。
+- **验证**:debug 版经 UAC 启动实测——注入前窗口区域亮像素 4.4%（黑屏），注入后
+  58.1%（DSH 界面正常）；窗口内容经 MiMo 视觉模型确认恢复会话视图。
+- **触摸点**:`themes/src/00-boot.js`（运行时新增分片逻辑，经 build-init 重生成
+  `src-tauri/injected/theme-init.js`）；`src-tauri` 需 `cargo build --release` 并
+  用 `target/release/miasaki.exe` 替换 `dist/Miasaki.exe`（用户快捷方式目标）。
+- **验证点**:双击 `Miasaki-dsh` 快捷方式 → 主窗口显示 DSH 会话页（无黑屏）；
+  `pet.log` 出现 `asset-server listening` + `hash-diag`。
+
+## 2026-09-05 · 修复:用量 Tab 映射对话页列宽调节（token-monitor v0.3.2）
+
+依据:用户「用量界面会映射对话页面的对话框大小调节」。
+
+- **根因**（查 DSH `dsh-client-ui-conversation` bundle 确认）:会话页两侧列宽拖拽
+  手柄（`[data-width-handle]`，调对话页内容列 + 输入框宽度，持久化
+  `localStorage dsh.conversation.contentWidth`，实测用户已拖到 760）与底部输入框
+  都挂在 `ConversationRoot` / 滚动容器层——**视图区之外**，三个 Tab 共享；输入框
+  卡片 `max-width` 派生自 `--dsh-chat-content-width`（= 拖拽偏好经
+  `resolveContentWidth` 夹紧）。于是对话页拖宽 → 用量页输入框跟着变（映射），
+  用量页两侧的隐形 `col-resize` 条误拖也会改写对话页列宽。
+- **修复**（纯 client 半 CSS，v0.3.2）:用量 Tab 激活期间
+  `[data-phase]:has(.tokmn-pane) [data-width-handle] { display:none }` 隐藏两侧
+  手柄；`[data-conversation-scroll]:has(.tokmn-pane)` 重声明
+  `--dsh-chat-content-width` / `--dsh-composer-card-max-width` 回 DSH 默认档
+  `clamp(680px, 64% 列宽, 920px)`（表达式须与 ConversationRoot 回退值一致），
+  输入框不再跟随拖拽偏好。style 随用量视图挂载/卸载，切走即整体恢复。
+- **验证**:DevTools 实测注入——注入前 `contentW: 640px / composerMax:
+  calc(640px+32px) / handles: 2`，注入后 `handles: ["none","none"] / cardW: 680`
+  （默认档），选择器与变量链路全部生效；临时注入即删，未留残留。
+- 触摸点:`plugins/dsh-token-monitor/{lib/client.js, package.json, README.md}`。
+- 验证点:`node --check` 通过;Windows 机需 profile 目录重跑 `pnpm install`（或
+  等价拷贝）+ 重启 host 后目检:用量 Tab 两侧拖拽条消失、输入框宽度不随对话页调节。
+
+## 2026-09-05 · 官方 dsh 0.1.2-rc.1 适配（三插件 + canvas 盘点）
+
+依据：官方 dsh 升至 0.1.2-rc.1（npm latest，本机 host 已更新），用户要求评估插件适配面。
+
+- **逐项 API 对照结论（全部兼容，无需改代码）**：profile bundles / `dsh.bundle.patch`
+  （insert 格式）、`dsh.client.platform: "web"` + `exports["./client"]`、
+  `window.__ModuleLoader__.load`、`settings.get(ns)/update(ns, patch)`（新增可选
+  `expectedRevision`）、`webServer.register({kind, path, handler})`、`sessions.get`、
+  `sessionProjections.snapshot`（tokenUsage/contextPressure/contextBreakdown/sessionStats
+  字段名逐一对上）、`tokenMeter.measure`、`llm/stream`（usage 字段）、`tools/result`、
+  `~/.dsh/.agent-presets/*/agent.cordis.yml` 的 `agentOptions` 三行结构。
+- **实测**：`/dsh-token-monitor/heatmap` 与 `/canvas/` 在 0.1.2 host 上 200 正常；
+  `/freepool-api/status` 曾返回空平台列表，根因是 `llm-pi-ai` settings 节整体
+  校验失败（0.1.2 `assertServiceable` 拒绝 catalog 不认识的模型 id 且路由未声明
+  `api`/`baseURL`，opencode 平台首当其冲）→ llm-pi-ai 注册 fiber failed →
+  `settings.get('llm-pi-ai')` 无记录。`settings.yaml` 中 opencode 已补
+  `api: openai-completions` + `baseURL`，官方 schema 校验全绿；**host 重启后
+  llm-pi-ai 重新挂载、免费模型池平台列表恢复**（watcher 不复活 failed fiber）。
+- **变更**：三个插件 `peerDependencies` 对齐 `@deepseek-ai/cordis ^4.0.2`、
+  `dsh-settings/dsh-host-webserver ^0.1.2-rc.1`；`@miasaki/dsh-canvas` 删除
+  `dsh.client.inject: ["@deepseek-ai/dsh-client-runtime"]`（0.1.2 已无此包，幽灵依赖）。
+- **诊断脚本**（用后即删，未归档）：`_refs/scripts-archive/diagnose-llm-pi-ai-schema.mjs`、
+  `repro-llm-pi-ai-mount.mjs`、`migrate-settings-llm-pi-ai.mjs` —— 用官方
+  `llm-pi-ai` Config/apply 复现校验报错（opencode 模型缺 api/baseURL）。
+- 验证点：profile 目录重跑 `pnpm install` + **重启 host** 后，GUI「设置 → 免费模型池」
+  平台列表恢复 6 平台；「用量」Tab 与桌宠面板目检正常。
+
+## 2026-09-05 · 修复:账本重启翻倍污染 + 账本重置（token-monitor v0.3.1）
+
+依据:用户「用量显示有问题，数据失真」。
+
+- **根因（唯一）**:`loadLedger()` 复用 `addToLedger()`，把磁盘载入的历史存量
+  也塞进 `pending` 落盘队列，5s flush 后原样追加回 `usage-log.jsonl` ——
+  **每重启一次 host，账本精确翻倍**（`addToLedger` 增 `toPending` 参数，
+  载入路径传 `false` 只进内存聚合）。文件证据:全部 session 行呈精确 ×2ᵏ
+  几何序列（如 55944→111888→223776→447552），与用户当天反复重启 host 的
+  节奏吻合;旧会话行达千亿级即多次重启的指数重放。
+- **排除项（查 dsh 源码确认，不改）**:`llm/stream` waterfall 下 DeepSeek 适配器
+  的 `usage` chunk 在 `[DONE]` 哨兵处仅 yield 一次（每请求全量口径，`pendingUsage`
+  覆盖式暂存），流式逐 chunk 累加语义无误;`TokenUsage` 各字段互斥
+  （inputTokens=未缓存输入，billed input=三段之和），账本四段累加无双计。
+- **配套**：新增 `POST /dsh-token-monitor/reset` 清空账本（内存 + 文件，
+  限额保留）;UI「今日用量」卡标题行加「重置账本」按钮（confirm 确认，
+  成功后立即刷 summary + heatmap）;热力图轮询 load 挂 ref 供重置后即时刷新。
+- **数据修复**：被污染的 `usage-log.jsonl` 已删除（真实值不可恢复，
+  config.json 不存在无损失）;重启 host 后从零重计。
+- 触摸点:`plugins/dsh-token-monitor/{lib/index.js, lib/client.js,
+  cordis.patch.yml, package.json, README.md}`;验证脚本同步扩展并归档
+  `_refs/scripts-archive/test-token-monitor-v030.mjs`。
+- 验证点:`node --check` 通过;mock 测试 33 项全过（新增「载入不回写：重启后
+  文件行数稳定」与 reset 全链路「归零→保留限额→文件删除→从零重计」）;
+  Windows 机需 profile 目录重跑 `pnpm install` + 重启 host 后目检数字回归合理。
+
+## 2026-09-05 · 「用量」Tab 补全可视化（总览五卡 / 年热力图 / 每日趋势 / 模型用量占比，token-monitor v0.3.0）
+
+依据：用户「热力图、趋势图、用量图什么的也都要有」（继续对照 ZCode 用量面板三截图）。
+
+- **总览五卡**（ZCode 头部统计行同构）：累计 Token 数 / 峰值 Token 数（单日）/
+  最长聊天时长 / 当前连续天数 / 最长连续天数；大数中文单位（7亿 / 3.3亿）。
+- **Token 活动年热力图**（GitHub 风格，周一对齐 ~52 周、月标签在底部）：每日 /
+  每周 / 累计三态切换（周/累计为客户端从每日数据推导的整周高格），品牌色分档
+  深浅，悬浮富提示（日期 + tokens + 轮消息）。
+- **时间范围（近 7 日 / 近 30 日，趋势与占比共用）**：每日 Token 趋势图为按模型
+  多序列平滑曲线（Catmull-Rom→贝塞尔手写 SVG，图例点选显隐、悬浮十字 + 当日各
+  模型明细，配色按 30 天总量排名分配、切范围颜色稳定）；模型用量环形图（中心
+  范围总量 + 右侧模型列表 tokens/百分比）。全部纯 SVG/CSS，无新依赖。
+- **账本扩展（host 数据面）**：保留窗 8 天 → 380 天（撑热力图年视图）、尾部解析
+  4MB → 8MB；条目增 `calls`（当日实报次数 ≈ 轮消息）与 `type:'span'` 会话活跃
+  跨度快照（min/max 合并、推进 ≥60s 才落盘 → 支撑「最长聊天时长」）；`/summary`
+  增 `stats`（累计/峰值/跨度/连续天数），`trend` 扩为 30 天且每日带按模型明细
+  （趋势图与环形图共用）；新路由 `GET /dsh-token-monitor/heatmap` 稀疏每日账单
+  （client 60s 轮询，不拖累 3s 主轮询）。
+- 原「近 7 天迷你柱图」移除（被大趋势图取代）；今日用量卡保留并加轮消息分项；
+  上下文剩余 hero 与既有明细区顺延至可视化区块之后。
+- 触摸点：`plugins/dsh-token-monitor/{lib/index.js, lib/client.js, package.json,
+  README.md}`、`README.md`；一次性验证脚本归档
+  `_refs/scripts-archive/test-token-monitor-v030.mjs`。
+- 验证点：`node --check` 两文件通过；mock 测试 25 项全过（host 账本聚合 / 统计 /
+  三路由 / 5s 节流落盘跨重启持久化 + client shim 空数据与造数两遍渲染）；Windows
+  机需 profile 目录重跑 `pnpm install` + 重启 host 后目检三块新可视化。
+
+## 2026-09-04 · 双线优化 P0–P2（运行时拆分 / 桌宠模块化 / Fleet 指示器）
+
+依据：双线并进 + 中度重构 + 桌宠恢复 Fleet 指示器。
+
+- **D1 注入运行时拆分**：`themes/runtime.js` 1100 行按序切 9 片
+  `themes/src/{00-boot,01-persona,02-core,03-switcher,04-deco,05-sensors,06-titlebar,07-dialog-geom,08-ready}.js`
+ （拼接与 legacy 逐字节一致）+ `src/README.md` 分片说明；
+  `scripts/build-init.mjs` 按 `src/MANIFEST.json` 拼接，缺 src 时回退 legacy；
+  `npm run gen-init` 与令牌校验已验证通过，产物语法 `node --check` 通过。
+- **D2 桌宠模块化 + fallback**：`src-tauri/src/pet_native.rs` 转 facade，
+  实现入 `src-tauri/src/pet_native/{config,ffi,image,model,persist,window}.rs`
+ （`#[path]` 子模块，`main.rs` 零改动）；stub harness `cargo check` 零错误；
+  新增 `Frames::kurumi_row` 回退链（请求行→idle→wave→jump→run→首个可用，
+  修复旧代码回退后用请求行名重查致空白）+ whale/inverse 缺行回退 idle；
+  单测 `fallback_chain` 通过。Windows 机仍需 `npm run tauri build` 终验（链接）。
+- **D3 GDI 兜底 + smoke 三用例**：`present()` 改 `&mut`，ULW 连续失败计数
+  （首失败 + 每 300 次日志，10 连败销毁表面）+ 表面无效每 ~30 compose 重试重建
+  （`create/destroy_present_surface`，创建期复用同一函数）；`scripts/smoke-test.ps1`
+  新增 §0b 三用例 WARN 预检（dsh 未安装/3080 被非 DSH 占用/单实例冲突，跨平台探针）。
+- **D4 令牌漂移报告**：`scripts/diff-tokens.mjs`（`npm run tokens:diff`），
+  缺失复述 + static 死覆盖告警（alias 融合引用单列忽略）；现况零缺失零死覆盖。
+- **X2 Fleet 指示器**：`PetShared` 增 `fleet_running/fleet_alert` + `set_fleet`；
+  `main.rs` 脉冲看门狗（环境变量 `MIASAKI_FLEET_PULSE`，2s 轮询 pulse v2，
+  未设静默关闭）；compose 优先级 fleet 告警 > waiting > fleet 运行中 > busy > intensity
+ （告警=failed 行 + NEED_APPROVE 常驻气泡，运行中=work 立绘 + BUSY 常驻气泡，
+  kurumi 不原地跑步；指示期间禁散步）。联动契约见
+  `dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`。
+- 触摸点：`themes/src/`、`scripts/build-init.mjs`、`scripts/diff-tokens.mjs`、
+  `scripts/smoke-test.ps1`、`src-tauri/src/pet_native.rs`、`src-tauri/src/pet_native/`、
+  `src-tauri/src/main.rs`、`package.json`、`README.md`。
+- 验证点：`npm run gen-init` + `node --check` 注入产物；harness `cargo check`
+  零错误 + `cargo test fallback_chain` 通过；`npm run tokens:diff` 无漂移；
+  fleet `node workers/validate-bus.mjs --strict` 通过；Windows 机补
+  `npm run tauri build` + smoke 全绿 + 设变量后跑 pulse 看桌宠切换。
+
 ## 2026-09-03 · 优化:「用量」Tab 参照 ZCode 用量面板重构(UI + 数据面)
 
 依据:用户「优化本项目'用量'页面,参考 zcode 的用量页面设计面板」。

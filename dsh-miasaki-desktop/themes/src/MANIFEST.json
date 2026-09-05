@@ -1,0 +1,52 @@
+{
+  "order": [
+    "00-boot.js",
+    "01-persona.js",
+    "02-core.js",
+    "03-switcher.js",
+    "04-deco.js",
+    "05-sensors.js",
+    "06-titlebar.js",
+    "07-dialog-geom.js",
+    "08-ready.js"
+  ],
+  "slices": {
+    "00-boot.js": [
+      1,
+      46
+    ],
+    "01-persona.js": [
+      47,
+      124
+    ],
+    "02-core.js": [
+      125,
+      272
+    ],
+    "03-switcher.js": [
+      273,
+      534
+    ],
+    "04-deco.js": [
+      535,
+      637
+    ],
+    "05-sensors.js": [
+      638,
+      786
+    ],
+    "06-titlebar.js": [
+      787,
+      899
+    ],
+    "07-dialog-geom.js": [
+      900,
+      1045
+    ],
+    "08-ready.js": [
+      1046,
+      1100
+    ]
+  },
+  "note": "source of truth; concatenated in order == legacy themes/runtime.js (split D1)"
+}

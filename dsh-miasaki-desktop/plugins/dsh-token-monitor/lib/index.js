@@ -10,15 +10,21 @@
  *   reasoningTokens），tools/result 按 (sessionId, 工具名) 计数 ——
  *   自本进程启动起。
  * - 跨会话账本：与实时明细同口径的增量按日累计并落盘
- *   `usage-log.jsonl`（5s 节流 flush + 进程退出兜底），支撑「今日累计 /
- *   自定义日限额 / 近 7 天趋势」；限额配置存 `config.json`，跨 host
- *   重启持久。数据目录：优先宿主提供的插件数据目录服务，否则
+ *   `usage-log.jsonl`（5s 节流 flush + 进程退出兜底），支撑热力图 /
+ *   近 30 天趋势 / 模型用量占比 / 总览统计。账本另记每日调用次数
+ *   （calls ≈ 轮消息）与每会话活跃跨度（first/last，用于「最长聊天
+ *   时长」，以 `type:'span'` 快照行落盘、min/max 合并）。保留窗口
+ *   LEDGER_DAYS 天，超窗条目在 flush 时剪除。限额配置存 `config.json`，
+ *   跨 host 重启持久。数据目录：优先宿主提供的插件数据目录服务，否则
  *   `~/.dsh/plugins-data/dsh-token-monitor/`。
  *
  * 对外暴露（webServer 精确路由，`{ok, error}` 包装对齐 dsh-free-model-pool）：
- * - GET  /dsh-token-monitor/summary?sessionId=…  lossless JSON 摘要（官方 + 实时 + 账本 + 限额）
+ * - GET  /dsh-token-monitor/summary?sessionId=…  官方 + 实时 + 账本（今日 /
+ *        近 30 天趋势含按模型明细 / 总览统计 stats）+ 限额
+ * - GET  /dsh-token-monitor/heatmap              稀疏每日账单（热力图数据源）
  * - GET  /dsh-token-monitor/config               限额配置
  * - POST /dsh-token-monitor/config               body `{dailyTokenLimit: number|null}`
+ * - POST /dsh-token-monitor/reset                清空账本（配置保留，不可恢复）
  *
  * @module dsh-token-monitor
  */
@@ -29,6 +35,13 @@ import path from 'node:path';
 
 export const name = 'dsh-token-monitor';
 export const inject = ['webServer'];
+
+/** 账本保留窗口（天）：覆盖热力图一年视图 + 余量。 */
+const LEDGER_DAYS = 380;
+/** 启动载入的文件尾部上限；~150B/行约可容一年。 */
+const TAIL_BYTES = 8 * 1024 * 1024;
+/** 会话跨度快照最小推进间隔：活跃会话每分钟至多落一行。 */
+const SPAN_FLUSH_MS = 60 * 1000;
 
 /** 本地时区日期键（YYYY-MM-DD，用户视角的"今日"）。 */
 function localDate(t) {
@@ -41,6 +54,13 @@ function dateOffset(days) {
 	const d = new Date();
 	d.setDate(d.getDate() + days);
 	return localDate(d);
+}
+
+/** 日期键差（b - a，单位天），按 UTC 日历日求差规避夏令时。 */
+function diffDays(a, b) {
+	const pa = a.split('-').map(Number);
+	const pb = b.split('-').map(Number);
+	return Math.round((Date.UTC(pb[0], pb[1] - 1, pb[2]) - Date.UTC(pa[0], pa[1] - 1, pa[2])) / 86400000);
 }
 
 /** 插件数据目录：优先宿主服务，否则 ~/.dsh/plugins-data/<name>/。 */
@@ -71,70 +91,130 @@ export function apply(ctx) {
 	const ledgerFile = path.join(dataDir, 'usage-log.jsonl');
 	const configFile = path.join(dataDir, 'config.json');
 
-	/** date -> Map("sessionId|provider|model" -> 分项累计)；仅保留最近 8 天。 */
+	/** date -> Map("sessionId|provider|model" -> 分项累计)；仅保留 LEDGER_DAYS 天。 */
 	const ledgerDays = new Map();
 	/** "date|sessionId|provider|model" -> 自上次 flush 以来的增量（待落盘）。 */
 	const pending = new Map();
+	/** date -> Map(sessionId -> {first, last})：会话活跃跨度（最长聊天时长）。 */
+	const spans = new Map();
+	/** "date|sessionId" -> 已落盘快照的 last（控制写盘频率）。 */
+	const spanWritten = new Map();
+	/** 自上次 flush 以来有跨度更新的 "date|sessionId"。 */
+	const spanDirty = new Set();
 	/** 账本内存窗口内最早有数据的日期。 */
 	let ledgerSince = null;
 	let ledgerError = null;
 	let config = { version: 1, dailyTokenLimit: null };
 
-	/** 双写：ledgerDays（聚合权威）+ pending（落盘增量）。 */
-	function addToLedger(date, sessionId, provider, model, dIn, dOut, dCache, dReason) {
+	/**
+	 * 双写：ledgerDays（聚合权威）+ pending（落盘增量）。dCalls 为调用次数增量。
+	 * `toPending=false` 时不进落盘队列——启动载入磁盘存量必须走此路径，
+	 * 否则存量会被当成新增量在 5s 后 flush 回写，每次重启账本翻倍。
+	 */
+	function addToLedger(date, sessionId, provider, model, dIn, dOut, dCache, dReason, dCalls, toPending) {
 		try {
 			const key = sessionId + '|' + provider + '|' + model;
 			let day = ledgerDays.get(date);
 			if (!day) { day = new Map(); ledgerDays.set(date, day); }
 			let e = day.get(key);
 			if (!e) {
-				e = { sessionId, provider, model, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0 };
+				e = { sessionId, provider, model, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, calls: 0 };
 				day.set(key, e);
 			}
 			e.inputTokens += dIn; e.outputTokens += dOut;
 			e.cacheReadTokens += dCache; e.reasoningTokens += dReason;
+			e.calls += dCalls || 0;
+			if (toPending === false) return;
 			const pk = date + '|' + key;
 			let p = pending.get(pk);
 			if (!p) {
-				p = { date, sessionId, provider, model, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0 };
+				p = { date, sessionId, provider, model, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, calls: 0 };
 				pending.set(pk, p);
 			}
 			p.inputTokens += dIn; p.outputTokens += dOut;
 			p.cacheReadTokens += dCache; p.reasoningTokens += dReason;
+			p.calls += dCalls || 0;
 		} catch (e) { ledgerError = String(e && e.message || e); }
 	}
 
-	/** 追加写 pending 增量；写成功才清空（失败保留下次重试）。 */
-	function flushLedger() {
-		if (pending.size === 0) return;
+	/** 记录会话活跃跨度（min first / max last 合并，快照幂等）。 */
+	function touchSpan(date, sessionId, ts) {
+		if (!sessionId || sessionId === '?') return;
+		try {
+			let day = spans.get(date);
+			if (!day) { day = new Map(); spans.set(date, day); }
+			let s = day.get(sessionId);
+			if (!s) {
+				s = { first: ts, last: ts };
+				day.set(sessionId, s);
+			} else {
+				if (ts < s.first) s.first = ts;
+				if (ts > s.last) s.last = ts;
+			}
+			spanDirty.add(date + '|' + sessionId);
+		} catch (e) { /* 隔离 */ }
+	}
+
+	/** 追加写 pending 增量与 span 快照；写成功才清空（失败保留下次重试）。 */
+	function flushLedger(force) {
 		const lines = [];
-		for (const p of pending.values()) {
-			lines.push(JSON.stringify({
-				date: p.date, ts: now(), sessionId: p.sessionId,
-				provider: p.provider, model: p.model,
-				inputTokens: p.inputTokens, outputTokens: p.outputTokens,
-				cacheReadTokens: p.cacheReadTokens, reasoningTokens: p.reasoningTokens
-			}));
+		const spanMarks = [];
+		if (pending.size > 0) {
+			for (const p of pending.values()) {
+				lines.push(JSON.stringify({
+					date: p.date, ts: now(), sessionId: p.sessionId,
+					provider: p.provider, model: p.model,
+					inputTokens: p.inputTokens, outputTokens: p.outputTokens,
+					cacheReadTokens: p.cacheReadTokens, reasoningTokens: p.reasoningTokens,
+					calls: p.calls
+				}));
+			}
 		}
+		for (const key of spanDirty) {
+			const i = key.indexOf('|');
+			const date = key.slice(0, i);
+			const sessionId = key.slice(i + 1);
+			const day = spans.get(date);
+			const s = day && day.get(sessionId);
+			if (!s) { spanMarks.push([key, null]); continue; }
+			const written = spanWritten.get(key);
+			// 快照按 last 推进 ≥1 分钟才落盘；进程退出（force）不限。
+			if (force || written === undefined || s.last - written >= SPAN_FLUSH_MS) {
+				lines.push(JSON.stringify({ type: 'span', date, ts: now(), sessionId, first: s.first, last: s.last }));
+				spanMarks.push([key, s.last]);
+			}
+		}
+		if (lines.length === 0) return;
 		try {
 			fs.appendFileSync(ledgerFile, lines.join('\n') + '\n', 'utf8');
 			pending.clear();
+			for (const [key, last] of spanMarks) {
+				spanDirty.delete(key);
+				if (last !== null) spanWritten.set(key, last);
+			}
 			ledgerError = null;
 		} catch (e) { ledgerError = String(e && e.message || e); }
 	}
 
-	/** 启动时载入最近 8 天；文件超过 4MB 时只解析尾部（丢弃不完整首行）。 */
+	/** 剪除超窗日期（flush 时调用，成本低）。 */
+	function pruneOld() {
+		const cutoff = dateOffset(-(LEDGER_DAYS - 1));
+		for (const d of ledgerDays.keys()) if (d < cutoff) ledgerDays.delete(d);
+		for (const d of spans.keys()) if (d < cutoff) spans.delete(d);
+		for (const k of spanWritten.keys()) if (k.slice(0, k.indexOf('|')) < cutoff) spanWritten.delete(k);
+	}
+
+	/** 启动时载入最近 LEDGER_DAYS 天；文件超 TAIL_BYTES 只解析尾部（丢弃不完整首行）。 */
 	function loadLedger() {
 		let buf;
 		try {
 			const st = fs.statSync(ledgerFile);
 			if (st.size === 0) return;
-			const TAIL = 4 * 1024 * 1024;
-			if (st.size > TAIL) {
+			if (st.size > TAIL_BYTES) {
 				const fd = fs.openSync(ledgerFile, 'r');
 				try {
-					buf = Buffer.alloc(TAIL);
-					fs.readSync(fd, buf, 0, TAIL, st.size - TAIL);
+					buf = Buffer.alloc(TAIL_BYTES);
+					fs.readSync(fd, buf, 0, TAIL_BYTES, st.size - TAIL_BYTES);
 					const nl = buf.indexOf(10);
 					buf = buf.slice(nl >= 0 ? nl + 1 : 0);
 				} finally { fs.closeSync(fd); }
@@ -142,19 +222,29 @@ export function apply(ctx) {
 				buf = fs.readFileSync(ledgerFile);
 			}
 		} catch (e) { return; }
-		const cutoff = dateOffset(-7);
+		const cutoff = dateOffset(-(LEDGER_DAYS - 1));
 		for (const line of buf.toString('utf8').split('\n')) {
 			const s = line.trim();
 			if (!s) continue;
 			let j;
 			try { j = JSON.parse(s); } catch (e) { continue; }
 			if (!j || typeof j.date !== 'string' || j.date < cutoff) continue;
+			if (j.type === 'span') {
+				if (typeof j.sessionId === 'string' && typeof j.first === 'number' && typeof j.last === 'number') {
+					touchSpan(j.date, j.sessionId, j.first);
+					touchSpan(j.date, j.sessionId, j.last);
+					spanWritten.set(j.date + '|' + j.sessionId, j.last);
+					if (!ledgerSince || j.date < ledgerSince) ledgerSince = j.date;
+				}
+				continue;
+			}
 			const n = (v) => (typeof v === 'number' && isFinite(v) && v > 0) ? v : 0;
+			// 载入存量只进内存聚合（toPending=false），绝不回写磁盘。
 			addToLedger(j.date,
 				typeof j.sessionId === 'string' ? j.sessionId : '?',
 				typeof j.provider === 'string' ? j.provider : '?',
 				typeof j.model === 'string' ? j.model : '?',
-				n(j.inputTokens), n(j.outputTokens), n(j.cacheReadTokens), n(j.reasoningTokens));
+				n(j.inputTokens), n(j.outputTokens), n(j.cacheReadTokens), n(j.reasoningTokens), n(j.calls), false);
 			if (!ledgerSince || j.date < ledgerSince) ledgerSince = j.date;
 		}
 	}
@@ -180,7 +270,7 @@ export function apply(ctx) {
 	function aggregateDay(date) {
 		const out = {
 			date, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
-			reasoningTokens: 0, total: 0, byModel: []
+			reasoningTokens: 0, total: 0, calls: 0, byModel: []
 		};
 		const day = ledgerDays.get(date);
 		if (!day) return out;
@@ -188,6 +278,7 @@ export function apply(ctx) {
 		for (const e of day.values()) {
 			out.inputTokens += e.inputTokens; out.outputTokens += e.outputTokens;
 			out.cacheReadTokens += e.cacheReadTokens; out.reasoningTokens += e.reasoningTokens;
+			out.calls += e.calls || 0;
 			const mk = e.provider + '|' + e.model;
 			let m = byModel.get(mk);
 			if (!m) {
@@ -203,7 +294,7 @@ export function apply(ctx) {
 		return out;
 	}
 
-	/** 近 N 天每日聚合（含今日），空日补 0。 */
+	/** 近 days 天每日聚合（含今日），空日补 0；每日带按模型明细（趋势图 / 环形图共用）。 */
 	function ledgerTrend(days) {
 		const out = [];
 		for (let i = days - 1; i >= 0; i--) {
@@ -213,9 +304,73 @@ export function apply(ctx) {
 				date: d,
 				inputTokens: a.inputTokens, outputTokens: a.outputTokens,
 				cacheReadTokens: a.cacheReadTokens, reasoningTokens: a.reasoningTokens,
-				total: a.total
+				total: a.total, calls: a.calls,
+				models: a.byModel.map((m) => ({ provider: m.provider, model: m.model, total: m.total }))
 			});
 		}
+		return out;
+	}
+
+	/** 总览统计：累计 / 单日峰值 / 最长聊天时长 / 连续天数（全部来自账本）。 */
+	function computeStats() {
+		let totalTokens = 0;
+		let peak = 0, peakDate = null;
+		const active = [];
+		for (const [date, day] of ledgerDays) {
+			let t = 0;
+			for (const e of day.values()) t += e.inputTokens + e.outputTokens + e.cacheReadTokens + e.reasoningTokens;
+			if (t > 0) {
+				totalTokens += t;
+				active.push(date);
+				if (t > peak) { peak = t; peakDate = date; }
+			}
+		}
+		let longestMs = 0;
+		for (const day of spans.values()) {
+			for (const s of day.values()) {
+				const d = s.last - s.first;
+				if (d > longestMs) longestMs = d;
+			}
+		}
+		const activeSet = new Set(active);
+		const cursor = new Date();
+		cursor.setHours(0, 0, 0, 0);
+		if (!activeSet.has(localDate(cursor))) cursor.setDate(cursor.getDate() - 1);
+		let currentStreak = 0;
+		while (activeSet.has(localDate(cursor))) {
+			currentStreak++;
+			cursor.setDate(cursor.getDate() - 1);
+		}
+		let longestStreak = 0, run = 0, prev = null;
+		for (const d of active.sort()) {
+			run = (prev !== null && diffDays(prev, d) === 1) ? run + 1 : 1;
+			if (run > longestStreak) longestStreak = run;
+			prev = d;
+		}
+		return {
+			totalTokens,
+			peakDayTokens: peak,
+			peakDayDate: peakDate,
+			longestSessionMs: longestMs,
+			currentStreakDays: currentStreak,
+			longestStreakDays: longestStreak,
+			activeDays: active.length,
+			since: ledgerSince || localDate()
+		};
+	}
+
+	/** 稀疏每日账单（热力图数据源）：仅含有活动的日子，零日由客户端按日历补齐。 */
+	function heatmapDays() {
+		const out = [];
+		for (const [date, day] of ledgerDays) {
+			let total = 0, calls = 0;
+			for (const e of day.values()) {
+				total += e.inputTokens + e.outputTokens + e.cacheReadTokens + e.reasoningTokens;
+				calls += e.calls || 0;
+			}
+			if (total > 0 || calls > 0) out.push({ date, total, calls });
+		}
+		out.sort((a, b) => (a.date < b.date ? -1 : 1));
 		return out;
 	}
 
@@ -276,8 +431,10 @@ export function apply(ctx) {
 			entry.reasoningTokens += dReason;
 			entry.total = entry.inputTokens + entry.outputTokens + entry.cacheReadTokens + entry.reasoningTokens;
 			entry.lastAt = now();
-			// 账本与实时明细同口径（同为 chunk.usage 增量累计）。
-			addToLedger(localDate(), sessionId, provider, model, dIn, dOut, dCache, dReason);
+			// 账本与实时明细同口径（同为 chunk.usage 增量累计）；每次实报记 1 次调用（≈ 轮消息）。
+			const date = localDate();
+			addToLedger(date, sessionId, provider, model, dIn, dOut, dCache, dReason, 1);
+			touchSpan(date, sessionId, now());
 		});
 	});
 
@@ -292,6 +449,8 @@ export function apply(ctx) {
 			if (!entry) entry = live.tools[key] = { name: String(name), count: 0, lastAt: now() };
 			entry.count++;
 			entry.lastAt = now();
+			// 工具活动同样视为会话活跃（参与聊天时长跨度）。
+			touchSpan(localDate(), sessionId, now());
 		} catch (e) { /* 隔离 */ }
 	});
 
@@ -362,15 +521,23 @@ export function apply(ctx) {
 			sessionId: sessionId || null,
 			official: await officialSummary(sessionId),
 			live: { calls, tools, sampledAt: now() },
+			stats: computeStats(),
 			ledger: {
 				today: aggregateDay(localDate()),
-				trend: ledgerTrend(7),
+				trend: ledgerTrend(30),
 				since: ledgerSince || localDate(),
 				error: ledgerError
 			},
 			config: { dailyTokenLimit: config.dailyTokenLimit },
-			note: '模型明细与工具统计自插件（进程）启动起实时采集；官方聚合与估算覆盖整个会话日志；今日用量与近 7 天趋势来自跨会话账本，自插件首次部署起累计、跨 host 重启持久。'
+			note: '模型明细与工具统计自插件（进程）启动起实时采集；官方聚合与估算覆盖整个会话日志；总览统计、热力图、近 30 天趋势与模型用量占比来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久；限额为本地自定义配置（DSH 无配额接口）。'
 		};
+	}
+
+	function sendJSON(res, code, obj) {
+		res.statusCode = code;
+		res.setHeader('Content-Type', 'application/json; charset=utf-8');
+		res.setHeader('Cache-Control', 'no-store');
+		res.end(JSON.stringify(obj));
 	}
 
 	function handler(req, res) {
@@ -379,19 +546,20 @@ export function apply(ctx) {
 			const url = new URL(req.url || '/', 'http://localhost');
 			sessionId = url.searchParams.get('sessionId') || undefined;
 		} catch (e) {
-			res.statusCode = 400;
-			res.end(JSON.stringify({ error: 'bad url' }));
+			sendJSON(res, 400, { error: 'bad url' });
 			return;
 		}
-		buildSummary(sessionId).then((data) => {
-			res.setHeader('Content-Type', 'application/json; charset=utf-8');
-			res.setHeader('Cache-Control', 'no-store');
-			res.end(JSON.stringify(data));
-		}).catch((e) => {
-			res.statusCode = 500;
-			res.setHeader('Content-Type', 'application/json; charset=utf-8');
-			res.end(JSON.stringify({ error: String(e && e.message || e) }));
+		buildSummary(sessionId).then((data) => sendJSON(res, 200, data)).catch((e) => {
+			sendJSON(res, 500, { error: String(e && e.message || e) });
 		});
+	}
+
+	function heatmapHandler(req, res) {
+		try {
+			sendJSON(res, 200, { ok: true, days: heatmapDays(), since: ledgerSince || localDate() });
+		} catch (e) {
+			sendJSON(res, 500, { ok: false, error: String(e && e.message || e) });
+		}
 	}
 
 	function readBody(req) {
@@ -407,12 +575,7 @@ export function apply(ctx) {
 	}
 
 	async function configHandler(req, res) {
-		const send = (code, obj) => {
-			res.statusCode = code;
-			res.setHeader('Content-Type', 'application/json; charset=utf-8');
-			res.setHeader('Cache-Control', 'no-store');
-			res.end(JSON.stringify(obj));
-		};
+		const send = (code, obj) => sendJSON(res, code, obj);
 		try {
 			if (req.method === 'GET') {
 				send(200, { ok: true, config });
@@ -440,6 +603,27 @@ export function apply(ctx) {
 		}
 	}
 
+	/** 清空跨会话账本（内存聚合 + 落盘文件 + 跨度），限额配置保留。 */
+	function resetHandler(req, res) {
+		if (req.method !== 'POST') {
+			sendJSON(res, 405, { ok: false, error: 'method not allowed' });
+			return;
+		}
+		try {
+			ledgerDays.clear();
+			pending.clear();
+			spans.clear();
+			spanWritten.clear();
+			spanDirty.clear();
+			ledgerSince = null;
+			ledgerError = null;
+			try { fs.rmSync(ledgerFile, { force: true }); } catch (e) { /* 删除失败时内存已清，下次 flush 只写新增量 */ }
+			sendJSON(res, 200, { ok: true, stats: computeStats(), note: '账本已清空，从现在起重新累计' });
+		} catch (e) {
+			sendJSON(res, 500, { ok: false, error: String(e && e.message || e) });
+		}
+	}
+
 	ctx.webServer.register({
 		kind: 'exact',
 		path: '/dsh-token-monitor/summary',
@@ -447,16 +631,27 @@ export function apply(ctx) {
 	});
 	ctx.webServer.register({
 		kind: 'exact',
+		path: '/dsh-token-monitor/heatmap',
+		handler: heatmapHandler
+	});
+	ctx.webServer.register({
+		kind: 'exact',
 		path: '/dsh-token-monitor/config',
 		handler: configHandler
 	});
+	ctx.webServer.register({
+		kind: 'exact',
+		path: '/dsh-token-monitor/reset',
+		handler: resetHandler
+	});
 
-	// 账本初始化：建目录 → 载入近 8 天 → 载入限额配置 → 5s 节流落盘。
+	// 账本初始化：建目录 → 载入近 LEDGER_DAYS 天 → 载入限额配置 → 5s 节流落盘。
 	try { fs.mkdirSync(dataDir, { recursive: true }); } catch (e) { ledgerError = String(e && e.message || e); }
 	loadLedger();
 	loadConfig();
-	const flushTimer = setInterval(flushLedger, 5000);
+	pruneOld();
+	const flushTimer = setInterval(() => { flushLedger(); pruneOld(); }, 5000);
 	if (typeof flushTimer.unref === 'function') flushTimer.unref();
-	// 信号默认终止也会经过 'exit'，此处只做同步 flush，不干预宿主退出逻辑。
-	process.on('exit', flushLedger);
+	// 信号默认终止也会经过 'exit'，此处只做同步 flush（span 快照强制落盘），不干预宿主退出逻辑。
+	process.on('exit', () => flushLedger(true));
 }

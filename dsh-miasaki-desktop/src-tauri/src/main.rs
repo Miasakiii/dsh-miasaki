@@ -368,6 +368,7 @@ fn start_launch_sequence(app: &AppHandle) {
                     let _ = wv.navigate(url);
                 }
                 start_hash_watchdog(&app);
+                start_pulse_watchdog(&app);
                 return;
             }
             if !spawn_attempted {
@@ -511,6 +512,62 @@ fn chrono_now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// X2:fleet 脉冲文件路径（A×B 路径 B：Rust 直读聚合文件）。
+/// 由环境变量 MIASAKI_FLEET_PULSE 指定，未设 → 联动关闭（两线零耦合，可选接入）。
+fn pulse_path() -> Option<PathBuf> {
+    std::env::var_os("MIASAKI_FLEET_PULSE").map(PathBuf::from)
+}
+
+/// 解析 pulse v2 → (fleet_running, fleet_alert)。
+/// running+waiting_approval>0 → running；blocked+error>0 → alert。
+fn read_pulse_flag() -> Option<(bool, bool)> {
+    let txt = std::fs::read_to_string(pulse_path()?).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
+    if v.get("v").and_then(|x| x.as_u64()) != Some(2) {
+        return None;
+    }
+    let f = v.get("fleet")?;
+    let n = |k: &str| f.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    Some((
+        n("running") + n("waiting_approval") > 0,
+        n("blocked") + n("error") > 0,
+    ))
+}
+
+/// X2:fleet 脉冲看门狗（2s 轮询，与 33ms hash 看门狗独立任务，避免互相阻塞）。
+fn start_pulse_watchdog(app: &AppHandle) {
+    if pulse_path().is_none() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last = (false, false);
+        let mut logged = false;
+        loop {
+            tokio::time::sleep(Duration::from_millis(2000)).await;
+            match read_pulse_flag() {
+                Some(cur) => {
+                    logged = false;
+                    if cur != last {
+                        last = cur;
+                        app.state::<pet_native::NativePet>().set_fleet(cur.0, cur.1);
+                    }
+                }
+                None => {
+                    if last != (false, false) {
+                        last = (false, false);
+                        app.state::<pet_native::NativePet>().set_fleet(false, false);
+                    }
+                    if !logged {
+                        logged = true;
+                        app_log_line("[pulse] fleet-pulse.json 不可用 → fleet 指示关闭\n");
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn start_hash_watchdog(app: &AppHandle) {

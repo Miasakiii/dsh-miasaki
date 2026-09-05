@@ -46,8 +46,15 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
   字段回传，Rust `compose` 按 **waiting > busy > intensity** 优先级映射立绘/姿态：
   waiting 强制 kurumi `wait` 行 / whale·inverse `work` 立绘 + **常驻"等待审批"气泡**；
   waiting 中**单击桌宠 = 唤起主窗口**（跳过 hop 动画）。选择器集中在 `runtime.js` 顶部
-  常量区，校准方式：console 跑 `__miasakiProbe()` 看候选按钮文本。agent 员工状态
-  后续归 `dsh-miasaki-fleet/fleet-monitor/` 工作面板，不进桌宠。
+   常量区，校准方式：console 跑 `__miasakiProbe()` 看候选按钮文本。agent 员工状态
+   后续归 `dsh-miasaki-fleet/fleet-monitor/` 工作面板，不进桌宠。
+- **Fleet 指示器（v2026-09-04，可选联动）**：设环境变量 `MIASAKI_FLEET_PULSE`
+  指向 `dsh-miasaki-fleet/state/fleet-pulse.json`（由 fleet 侧
+  `node workers/pulse/publish-pulse.mjs` 发布，契约见
+  `dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`），桌面端
+  脉冲看门狗 2s 轮询，桌宠按 **fleet 告警(blocked/error，failed 行 + 常驻
+  “需要你的批准”气泡）> DSH 等待审批 > fleet 运行中（work 立绘 + 常驻“忙碌中…”）
+  > busy > intensity** 映射；未设变量时联动静默关闭。
 - 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`（v1：位置 + 隐藏状态，原子写；
   位置不在任何可见显示器工作区时自动回默认 (1200,500)，修复拔掉副屏/分辨率变化后的「桌宠丢了」）
 - **设置入口**：DSH「设置 → 桌宠」面板（`plugins/dsh-pet-panel/`）提供：
@@ -96,20 +103,33 @@ desktop/
 ├─ ui/loading.html           # 本地唤醒页（探活/拉起状态 + 重试 + 随主题换肤/统一标题栏）
 ├─ themes/                   # 主题源（原创设计）
 │  ├─ pure.css / zafkiel.css / kurkuriel.css
-│  └─ runtime.js             # 注入运行时：主题属性/明暗锁定/切换条/过渡/水印/标题栏（几何同步+主题装饰）
+│  ├─ src/                   # 注入运行时分片（9 片，按 MANIFEST.json 拼接；改这里）
+│  │                         #   （00-boot.js 含 DSH 鉴权 cookie 注入：dsh web 重启后
+│  │                         #    旧 cookie 失效黑屏时自动重签并重载，见 CHANGELOG 2026-09-05）
+│  └─ runtime.js             # legacy 回退源（build-init 缺 src/ 时使用）
 ├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
-├─ plugins/dsh-token-monitor/    # DSH web profile bundle：会话视图「用量」Tab（上下文剩余 hero + 今日限额/趋势账本 + 模型明细）
+├─ plugins/dsh-token-monitor/    # DSH web profile bundle：会话视图「用量」Tab（总览五卡 + 年热力图 + 每日趋势/模型用量占比 + 上下文 hero + 今日限额 + 模型明细）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
+├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
+├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡台词位图精灵表（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
-   ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航
+   ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航 + fleet 脉冲看门狗（环境变量 MIASAKI_FLEET_PULSE）
+   ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
    ├─ injected/theme-init.js # 构建产物（include_str! 注入，勿手改）
    └─ capabilities/          # 最小权限（core:default）
 ```
 
 ## DSH 插件：免费模型池（`plugins/dsh-free-model-pool/`）
+
+> **官方 dsh 0.1.2-rc.1 适配（2026-09-05）**：三个插件与 `@miasaki/dsh-canvas` 已核对
+> 并跟进官方 0.1.2 插件 API（peerDeps 对齐 `^0.1.2-rc.1`，canvas 清理已消失的
+> `dsh-client-runtime` 依赖声明）。注意 0.1.2 的 `llm-pi-ai` 配置校验收紧：
+> `settings.yaml` 里模型 id 不在官方 catalog 的平台必须显式声明 `api` 与 `baseURL`
+> 才能整节通过校验（否则整节失效、免费模型池平台列表为空）。适配细节与排查记录见
+> `design/CHANGELOG.md`。
 
 检出免费模型并给出能力画像与适用性决策，Web 面板挂在 DSH「设置 → 免费模型池」：
 

@@ -5,6 +5,7 @@
   "description": "Miasaki 专属 DSH 桌面端（Tauri 2 薄壳 + 三主题）",
   "scripts": {
     "gen-init": "node scripts/build-init.mjs",
+    "tokens:diff": "node scripts/diff-tokens.mjs",
     "verify": "node scripts/verify-themes.mjs",
     "tauri": "tauri",
     "dev": "tauri dev",
