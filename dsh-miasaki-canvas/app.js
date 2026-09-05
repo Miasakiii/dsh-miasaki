@@ -57,7 +57,7 @@ const state = {
   summaries: [], workspace: null, activeId: null, selectedCardId: null, mode: 'canvas', zoom: 1, currentDsh: null, sidebarCollapsed: false,
   dshWorkspaces: [], selectedDshWorkspaceId: null,
   historyBySession: new Map(), historyRequests: new Map(), pendingReplies: new Map(), pendingRpc: new Map(), liveReplies: new Map(),
-  draft: null, error: '', workspaceLoad: 0, mergePanel: null, mergeBusyId: null, branchAnchors: new Map(savedBranchAnchors), cardPositions: new Map(savedCardPositions), collapsedCardIds: new Set(savedCollapsedCards), quickPhrases: savedQuickPhrases, quickPhraseEditorOpen: false,
+  draft: null, error: '', workspaceLoad: 0, mergePanel: null, mergeBusyId: null, mergeGesture: null, expandLineage: false, selectedCardIds: new Set(), branchAnchors: new Map(savedBranchAnchors), cardPositions: new Map(savedCardPositions), collapsedCardIds: new Set(savedCollapsedCards), quickPhrases: savedQuickPhrases, quickPhraseEditorOpen: false,
   dragging: false, canvasGesture: false, canvasRefreshAfter: 0, canvasViewInitialized: false, canvasCamera: { x: 0, y: 0 }, mapCardSessionSwitches: new Set(),
   expandedMessageIds: new Set(),
   canvasCards: undefined, canvasCardsById: undefined, canvasGraph: undefined, mountedCardIds: new Set(), canvasNeedsCenter: false,
@@ -147,10 +147,17 @@ function messagesFromEvents(events) {
   return events.flatMap(event => {
     const content = event?.data?.message?.content ?? event?.data?.content
     const text = Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).filter(Boolean).join('\n') : ''
-    if (event?.type === 'user/message' && text && !text.startsWith('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.')) return [{ kind: 'user', text, at: event.time, sourceSeq: event.seq }]
+    if (event?.type === 'user/message' && text && !isInternalTurnText(text)) return [{ kind: 'user', text, at: event.time, sourceSeq: event.seq }]
     if (event?.type === 'assistant/message' && text) return [{ kind: 'assistant', text, at: event.time, sourceSeq: event.seq }]
     return []
   })
+}
+
+function isInternalTurnText(text) {
+  if (typeof text !== 'string') return false
+  const normalized = text.trimStart()
+  return normalized.startsWith('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.')
+    || normalized.startsWith('<system-reminder>')
 }
 
 async function loadThreadHistory() {}
@@ -333,20 +340,36 @@ function openBranch(parent, atSeq = undefined, anchorId = undefined) {
   window.setTimeout(() => document.querySelector('[data-draft] textarea')?.focus(), 0)
 }
 
-function openMerge(thread, anchorId = undefined, anchorSeq = undefined) {
+function openMerge(thread, anchorId = undefined, anchorSeq = undefined, presetTargetId = undefined) {
   if (thread.dshSessionId === null) return setError('该节点没有关联的 DSH 会话')
   if (thread.mergeState === 'draft') return setError('这条合并请求草稿已在画布上，等它执行或取消')
   if (thread.mergeState === 'committed') return setError('这条线已被合并；请从合并产物或另一条线重新发起')
   const candidates = (state.workspace?.threads ?? []).filter(item => item.id !== thread.id && item.dshSessionId !== null && item.mergeState == null)
   if (candidates.length === 0) return setError('当前画布没有可合并的另一条会话线')
+  const preset = presetTargetId !== undefined ? candidates.find(item => item.id === presetTargetId) : undefined
   state.mergePanel = {
     sourceThreadId: thread.id,
     anchorId,
     anchorSeq: Number.isInteger(anchorSeq) && anchorSeq > 0 ? anchorSeq : latestMessage(thread, 'assistant')?.sourceSeq ?? null,
-    targetThreadId: candidates[0].id,
+    targetThreadId: preset?.id ?? candidates[0].id,
     sending: false,
   }
   render()
+}
+
+/** Distinct mergeable lines among the multi-selected cards, in selection order. */
+function mergeableSelectedLines() {
+  const byId = state.canvasCardsById
+  if (byId === undefined) return []
+  const lines = new Map()
+  for (const cardId of state.selectedCardIds) {
+    const card = byId.get(cardId)
+    if (card === undefined) continue
+    const thread = state.workspace?.threads.find(item => item.id === card.dshThreadId)
+    if (thread === undefined || thread.dshSessionId === null || thread.mergeState != null) continue
+    if (!lines.has(thread.id)) lines.set(thread.id, thread)
+  }
+  return [...lines.values()]
 }
 
 function closeMergePanel() { state.mergePanel = null; render() }
@@ -525,10 +548,10 @@ function settlePendingReply(thread, messages) {
 }
 
 function messagesFor(thread) {
-  // A runtime-context snapshot is internal DSH state, never a user turn.
-  // Filter here as well as during persistence so existing saved workspaces
-  // immediately render one question and its answer as one card.
-  const messages = persistedMessagesFor(thread).filter(message => !(message.kind === 'user' && typeof message.text === 'string' && message.text.trimStart().startsWith('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.')))
+  // A runtime-context snapshot is internal DSH state, never a user turn, and
+  // 0.1.2 adds <system-reminder> hint turns — filter both here as well as
+  // during persistence so existing saved workspaces render real turns only.
+  const messages = persistedMessagesFor(thread).filter(message => !(message.kind === 'user' && isInternalTurnText(message.text)))
   const pending = state.pendingReplies.get(thread.dshSessionId)
   if (pending === undefined) return messages
   if (settlePendingReply(thread, messages)) {
@@ -779,7 +802,11 @@ function conversationCards(threads) {
   const cards = []
   const cardsByThread = new Map()
   for (const thread of threads) {
-    const merge = thread.mergeState === null || thread.mergeState === undefined ? null : { state: thread.mergeState, from: thread.mergeFrom, absorbedBy: Array.isArray(thread.absorbedBy) ? thread.absorbedBy : [] }
+    // Merge nodes carry their plan; absorbed sources carry a back-reference
+    // so the canvas can flag them without them being merge nodes themselves.
+    const merge = thread.mergeState === null || thread.mergeState === undefined
+      ? (thread.absorbedBy?.length ?? 0) > 0 ? { state: null, from: null, absorbedBy: thread.absorbedBy } : null
+      : { state: thread.mergeState, from: thread.mergeFrom, absorbedBy: thread.absorbedBy ?? [] }
     const messages = messagesFor(thread)
     const turns = []
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
@@ -1016,6 +1043,7 @@ function canvasConnectors(cards) {
 
 function conversationCard(card, graph) {
   const selected = card.id === state.selectedCardId ? 'selected' : ''
+  const multiSelected = state.selectedCardIds.has(card.id) ? ' multi-selected' : ''
   const source = card.parentId === null ? 'DSH 会话' : card.turnIndex === 0 ? 'DSH 分支' : '追问'
   if (card.merge?.state === 'draft') return mergeDraftCard(card)
   const isMergeNode = card.merge?.state === 'committed'
@@ -1030,10 +1058,14 @@ function conversationCard(card, graph) {
   const mergeButton = card.canContinue === true && card.merge === null
     ? `<button class="graph-merge-button" data-action="open-merge" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" data-seq="${Number.isInteger(card.answer?.sourceSeq) ? card.answer.sourceSeq : ''}" aria-label="发起合并" title="与另一条会话线合并"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M8 2 14 8 8 14 2 8Z"/></svg></button>`
     : ''
-  return `<article class="thread-card ${selected}${isMergeNode ? ' is-merge-node' : ''}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#3478f6">
+  // Weakened absorbed marker: the line stays alive, the dot just tells you a
+  // later merge already folded its content. Click jumps to the merge node.
+  const absorbedBy = card.canContinue === true ? card.merge?.absorbedBy ?? [] : []
+  const absorbedBadge = absorbedBy.length === 0 ? '' : `<button class="absorbed-badge" data-action="reveal-merge" data-thread="${escapeHtml(absorbedBy[0])}" title="这条线的内容已被后续合并吸收，点击查看合并节点">已被吸收 ◇</button>`
+  return `<article class="thread-card ${selected}${multiSelected}${isMergeNode ? ' is-merge-node' : ''}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#3478f6">
     <button class="node-handle" data-drag-card="${card.id}" aria-label="拖动 ${escapeHtml(card.question)}" title="拖动卡片"></button>
     ${continueButton}${foldButton}${branchButton}${mergeButton}
-    <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}</div>
+    <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}${absorbedBadge}</div>
     <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}</div>
     <div class="thread-answer">${card.answer === null ? (card.error === null ? '<p class="thread-answer-empty">等待助手回复</p>' : '') : card.answer.pending && card.answer.text === '' ? '<p class="thread-answer-pending">正在回复</p>' : `${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="thread-answer-pending">正在回复</p>' : ''}`}${card.error === null ? '' : `<p class="thread-answer-error" title="${escapeHtml(card.error.text)}">本轮失败：${escapeHtml(card.error.text)}</p>`}</div>
     <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="open-dsh" data-thread="${card.dshThreadId}" data-seq="${Number.isInteger(card.sourceSeq) ? card.sourceSeq : ''}" title="在 DSH 中打开" aria-label="在 DSH 中打开"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v6.5A1.5 1.5 0 0 0 4.5 13H11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M9.5 3.5h3v3M12.4 3.6 7.5 8.5"/></svg>DSH</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
@@ -1196,6 +1228,23 @@ function syncCanvasViewport() {
   }
 }
 
+function mergeGestureBubble(cards) {
+  const gesture = state.mergeGesture
+  if (gesture === null) return ''
+  const byId = new Map((state.workspace?.threads ?? []).map(item => [item.id, item]))
+  const source = byId.get(gesture.sourceThreadId)
+  const target = byId.get(gesture.targetThreadId)
+  if (source === undefined || target === undefined) return ''
+  return `<div class="merge-gesture"><div class="merge-gesture-body" role="alertdialog" aria-label="合并确认"><strong>合并这两条线？</strong><p>「${escapeHtml(source.title)}」并置到了「${escapeHtml(target.title)}」旁。合并会从其中一条 fork 新会话并注入另一条的内容。</p><div class="merge-gesture-actions"><button type="button" data-action="cancel-merge-gesture">取消</button><button class="primary" type="button" data-action="confirm-merge-gesture">发起合并</button></div></div></div>`
+}
+
+function multiSelectBar() {
+  const count = state.selectedCardIds.size
+  if (count === 0) return ''
+  const lines = mergeableSelectedLines()
+  return `<div class="multi-select-bar"><span>已选 ${count} 张卡 · ${lines.length} 条线${lines.length >= 2 ? '（不同线）' : ''}</span>${lines.length >= 2 ? '<button class="primary" type="button" data-action="merge-selected">合并这两条线</button>' : ''}<button type="button" data-action="clear-selection">清除选择</button></div>`
+}
+
 function renderCanvas() {
   const threads = state.workspace?.threads ?? []
   if (threads.length === 0 && state.draft?.kind !== 'new') return `<section class="empty-canvas"><strong>当前工作目录还没有 DSH 对话。</strong><p>点击新会话，在画布中输入第一条消息。</p><div><button class="primary" type="button" data-action="create-session">新建会话</button></div></section>`
@@ -1220,7 +1269,7 @@ function renderCanvas() {
   state.mountedCardIds = new Set(visible)
   const mounted = cards.filter(card => visible.has(card.id))
   const inspector = state.inspectorCardId === null ? '' : renderCardInspector(state.canvasCardsById.get(state.inspectorCardId))
-  return `<section class="canvas-view"><div class="canvas-viewport"><div class="canvas-content" style="transform:translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})"><svg class="connectors">${canvasConnectors(cards)}</svg><div class="cards-layer">${mounted.map(card => conversationCard(card, graph)).join('')}${draftCard(cards)}</div></div></div>${inspector}</section>`
+  return `<section class="canvas-view"><div class="canvas-viewport"><div class="canvas-content" style="transform:translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})"><svg class="connectors">${canvasConnectors(cards)}</svg><div class="cards-layer">${mounted.map(card => conversationCard(card, graph)).join('')}${draftCard(cards)}</div></div></div>${multiSelectBar()}${mergeGestureBubble(cards)}${inspector}</section>`
 }
 
 function isProcessMessage(message) {
@@ -1326,7 +1375,36 @@ function renderThread() {
   const messages = messagesFor(thread)
   const waiting = state.pendingReplies.has(thread.dshSessionId)
   const latestAssistantSeq = [...messages].reverse().find(message => Number.isInteger(message.sourceSeq))?.sourceSeq
-  return `<section class="detail-view"><header class="detail-head"><div class="detail-head-title"><div class="detail-head-meta"><span class="detail-badge">${thread.parentId === null ? '会话' : '分支'}</span>${thread.dshSessionTitle ?? thread.title ? `<span class="detail-subtitle">${escapeHtml(thread.dshSessionTitle ?? thread.title)}</span>` : ''}</div><h1>${escapeHtml(questionFor(thread))}</h1></div><div class="detail-head-actions"><button data-action="open-dsh" data-thread="${thread.id}" data-seq="${Number.isInteger(latestAssistantSeq) ? latestAssistantSeq : ''}" title="在原生对话中打开此会话">在 DSH 中打开</button><button data-action="open-branch" data-thread="${thread.id}" title="基于最新回答创建分支">创建分支</button><button class="primary" data-action="show-canvas">返回画布</button></div></header><div class="detail-scroll">${messages.map(message => threadMessage(thread, message)).join('') || '<div class="note-empty">等待这条会话的第一条消息。</div>'}</div><form class="message-composer" data-compose="${thread.id}"><textarea maxlength="4000" placeholder="继续当前会话…" ${waiting ? 'disabled' : ''}></textarea><button class="primary" type="submit" ${waiting ? 'disabled' : ''}>${waiting ? '等待回复' : '发送'}</button></form></section>`
+  const isMerge = thread.mergeState === 'draft' || thread.mergeState === 'committed'
+  const threadsByIdMap = new Map((state.workspace?.threads ?? []).map(item => [item.id, item]))
+  const directSources = (thread.mergeFrom?.sources ?? []).map(id => threadsByIdMap.get(id)).filter(Boolean)
+  const absorbedByLine = (thread.absorbedBy ?? []).map(id => threadsByIdMap.get(id)).filter(Boolean)
+  // D 方案的详情「传递血缘」视图：默认只连直接来源，按需展开全部祖先。
+  const transitive = state.expandLineage === true ? mergeAncestors(threadsByIdMap, directSources) : []
+  const lineage = isMerge && directSources.length > 0
+    ? `<div class="detail-lineage"><span class="detail-lineage-label">合并来源</span>${directSources.map(source => `<button type="button" data-action="reveal-merge" data-thread="${source.id}" title="跳转到 ${escapeHtml(source.title)}">${escapeHtml(source.title)}${source.mergeState ? ' ◆' : ''}</button>`).join('')}<button type="button" class="detail-lineage-expand" data-action="toggle-lineage" aria-expanded="${state.expandLineage === true ? 'true' : 'false'}">${state.expandLineage === true ? '收起传递血缘' : `传递血缘${transitive.length > 0 ? ` (${transitive.length})` : '…'}`}</button></div>${transitive.length > 0 ? `<div class="detail-lineage-transitive">${transitive.map(item => `<button type="button" data-action="reveal-merge" data-thread="${item.id}" title="跳转到 ${escapeHtml(item.title)}">${'· '.repeat(Math.min(item.depth, 4))}${escapeHtml(item.title)}${item.mergeState ? ' ◆' : ''}</button>`).join('')}</div>` : ''}`
+    : absorbedByLine.length > 0 ? `<div class="detail-lineage"><span class="detail-lineage-label">已被合并吸收</span>${absorbedByLine.map(item => `<button type="button" data-action="reveal-merge" data-thread="${item.id}" title="跳转到合并节点 ${escapeHtml(item.title)}">◆ ${escapeHtml(item.title)}</button>`).join('')}</div>`
+    : ''
+  const badge = isMerge ? '合并' : thread.parentId === null ? '会话' : '分支'
+  return `<section class="detail-view"><header class="detail-head"><div class="detail-head-title"><div class="detail-head-meta"><span class="detail-badge">${badge}</span>${thread.dshSessionTitle ?? thread.title ? `<span class="detail-subtitle">${escapeHtml(thread.dshSessionTitle ?? thread.title)}</span>` : ''}</div><h1>${escapeHtml(questionFor(thread))}</h1>${lineage}</div><div class="detail-head-actions"><button data-action="open-dsh" data-thread="${thread.id}" data-seq="${Number.isInteger(latestAssistantSeq) ? latestAssistantSeq : ''}" title="在原生对话中打开此会话">在 DSH 中打开</button><button data-action="open-branch" data-thread="${thread.id}" title="基于最新回答创建分支">创建分支</button><button class="primary" data-action="show-canvas">返回画布</button></div></header><div class="detail-scroll">${messages.map(message => threadMessage(thread, message)).join('') || '<div class="note-empty">等待这条会话的第一条消息。</div>'}</div><form class="message-composer" data-compose="${thread.id}"><textarea maxlength="4000" placeholder="继续当前会话…" ${waiting ? 'disabled' : ''}></textarea><button class="primary" type="submit" ${waiting ? 'disabled' : ''}>${waiting ? '等待回复' : '发送'}</button></form></section>`
+}
+
+/** Transitive ancestry of merge sources: parents and merge sources, depth-first, cycle-safe. */
+function mergeAncestors(byId, directSources) {
+  const ancestors = []
+  const seen = new Set(directSources.map(source => source.id))
+  const visit = (thread, depth) => {
+    for (const nextId of [thread.parentId, ...(thread.mergeFrom?.sources ?? [])]) {
+      if (nextId === null || seen.has(nextId)) continue
+      const next = byId.get(nextId)
+      if (next === undefined) continue
+      seen.add(nextId)
+      ancestors.push({ id: next.id, title: next.title, depth, mergeState: next.mergeState })
+      visit(next, depth + 1)
+    }
+  }
+  for (const source of directSources) visit(source, 0)
+  return ancestors
 }
 
 function render() {
@@ -1485,6 +1563,13 @@ function bindDragHandle(handle) {
       rememberCardPosition(cardId, position, aliases)
       state.dragging = false
       deferCanvasRefresh(120)
+      // 并置合并手势：拖放落点与他线卡片重叠时，弹「合并这两条线？」确认气泡。
+      const collision = findMergeCollision(cardId, position)
+      if (collision !== null) {
+        state.mergeGesture = { sourceThreadId: collision.sourceThread.id, targetThreadId: collision.targetThread.id, anchorCardId: collision.sourceCard.id, anchorSeq: collision.sourceCard.answer?.sourceSeq ?? null }
+        render()
+        return
+      }
       // No full render: only the dragged card's inline position and its
       // connectors changed; rebuilding the whole canvas on drop is the jank.
     }
@@ -1496,6 +1581,34 @@ function bindDragHandle(handle) {
 
 function installDragging() {
   for (const handle of document.querySelectorAll('[data-drag-card]')) bindDragHandle(handle)
+}
+
+/**
+ * Proximity-merge gesture: the dropped card overlaps a card of another
+ * mergeable line. Anchors resolve to each line's tail at confirm time.
+ */
+function findMergeCollision(draggedCardId, position) {
+  const cards = state.canvasCards
+  const threads = state.workspace?.threads
+  if (cards === undefined || threads === undefined) return null
+  const dragged = cards.find(card => card.id === draggedCardId)
+  if (dragged === undefined) return null
+  const mergeable = thread => thread !== undefined && thread.dshSessionId !== null && thread.mergeState == null
+  const sourceThread = threads.find(item => item.id === dragged.dshThreadId)
+  if (!mergeable(sourceThread)) return null
+  let best = null
+  for (const card of cards) {
+    if (card.id === draggedCardId || card.dshThreadId === dragged.dshThreadId) continue
+    const targetThread = threads.find(item => item.id === card.dshThreadId)
+    if (!mergeable(targetThread)) continue
+    const overlapping = Math.abs(card.position.x - position.x) < CARD_WIDTH && Math.abs(card.position.y - position.y) < CARD_HEIGHT
+    if (!overlapping) continue
+    const distance = Math.hypot(card.position.x - position.x, card.position.y - position.y)
+    if (best === null || distance < best.distance) best = { card, thread: targetThread, distance }
+  }
+  if (best === null) return null
+  const tail = cards.filter(card => card.dshThreadId === dragged.dshThreadId).at(-1)
+  return { sourceCard: tail ?? dragged, sourceThread, targetThread: best.thread }
 }
 
 function canvasViewport(target) {
@@ -1612,6 +1725,51 @@ app.addEventListener('pointerdown', event => {
   const viewport = canvasViewport(event.target)
   if (!(viewport instanceof HTMLElement) || event.target instanceof Element && event.target.closest('.thread-card, button, textarea, select')) return
   event.preventDefault()
+  // Ctrl/⌘ + blank-area drag draws a selection marquee instead of panning;
+  // cards intersecting the world-space rectangle join the multi-selection.
+  if (event.ctrlKey || event.metaKey) {
+    const bounds = viewport.getBoundingClientRect()
+    const start = { x: event.clientX - bounds.left, y: event.clientY - bounds.top }
+    let current = { ...start }
+    let frame = 0
+    const marquee = document.createElement('div')
+    marquee.className = 'canvas-marquee'
+    viewport.appendChild(marquee)
+    const draw = () => {
+      frame = 0
+      marquee.style.left = `${Math.min(start.x, current.x)}px`
+      marquee.style.top = `${Math.min(start.y, current.y)}px`
+      marquee.style.width = `${Math.abs(current.x - start.x)}px`
+      marquee.style.height = `${Math.abs(current.y - start.y)}px`
+    }
+    const move = moveEvent => {
+      current = { x: moveEvent.clientX - bounds.left, y: moveEvent.clientY - bounds.top }
+      if (frame === 0) frame = window.requestAnimationFrame(draw)
+    }
+    const stop = () => {
+      document.removeEventListener('pointermove', move)
+      document.removeEventListener('pointerup', stop)
+      document.removeEventListener('pointercancel', stop)
+      if (frame !== 0) { window.cancelAnimationFrame(frame); frame = 0 }
+      const worldRect = {
+        left: (Math.min(start.x, current.x) - state.canvasCamera.x) / state.zoom,
+        top: (Math.min(start.y, current.y) - state.canvasCamera.y) / state.zoom,
+        right: (Math.max(start.x, current.x) - state.canvasCamera.x) / state.zoom,
+        bottom: (Math.max(start.y, current.y) - state.canvasCamera.y) / state.zoom,
+      }
+      marquee.remove()
+      for (const card of state.canvasCards ?? []) {
+        if (card.position.x < worldRect.right && card.position.x + CARD_WIDTH > worldRect.left && card.position.y < worldRect.bottom && card.position.y + CARD_HEIGHT > worldRect.top) state.selectedCardIds.add(card.id)
+      }
+      deferCanvasRefresh(120)
+      render()
+    }
+    document.addEventListener('pointermove', move)
+    document.addEventListener('pointerup', stop)
+    document.addEventListener('pointercancel', stop)
+    return
+  }
+  if (state.selectedCardIds.size > 0) { state.selectedCardIds.clear(); render() }
   const origin = { x: event.clientX, y: event.clientY, camera: { ...state.canvasCamera } }
   let pendingCamera = null
   let frame = 0
@@ -1684,7 +1842,10 @@ app.addEventListener('pointerup', queueSelectionFollowup)
 app.addEventListener('scroll', hideSelectionFollowup, true)
 document.addEventListener('selectionchange', queueSelectionFollowup)
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Escape' || state.mode !== 'canvas' || state.inspectorCardId === null) return
+  if (event.key !== 'Escape' || state.mode !== 'canvas') return
+  if (state.mergeGesture !== null) { state.mergeGesture = null; render(); return }
+  if (state.selectedCardIds.size > 0) { state.selectedCardIds.clear(); render(); return }
+  if (state.inspectorCardId === null) return
   event.preventDefault()
   closeCardInspector({ animate: false })
 })
@@ -1703,6 +1864,14 @@ app.addEventListener('click', async event => {
     if (thread === undefined) return
     const cardId = card.dataset.cardId
     if (cardId === undefined) return
+    // Ctrl/⌘ click toggles multi-selection (合并手势的前置)，不切当前会话。
+    if (event.ctrlKey || event.metaKey) {
+      if (state.selectedCardIds.has(cardId)) state.selectedCardIds.delete(cardId)
+      else state.selectedCardIds.add(cardId)
+      render()
+      return
+    }
+    if (state.selectedCardIds.size > 0) { state.selectedCardIds.clear(); render() }
     state.activeId = thread.id
     state.selectedCardId = cardId
     openCardInspector(cardId)
@@ -1790,6 +1959,32 @@ app.addEventListener('click', async event => {
       openBranch(thread, Number.isInteger(requestedSeq) ? requestedSeq : fallbackSeq, button.dataset.card)
     }
     if (button.dataset.action === 'open-merge' && thread !== undefined) openMerge(thread, button.dataset.card, Number(button.dataset.seq))
+    if (button.dataset.action === 'reveal-merge' && thread !== undefined) {
+      state.activeId = thread.id
+      state.mode = 'canvas'
+      render()
+      focusActiveCard()
+      return
+    }
+    if (button.dataset.action === 'toggle-lineage') { state.expandLineage = !state.expandLineage; renderPreservingDetailScroll(); return }
+    if (button.dataset.action === 'clear-selection') { state.selectedCardIds.clear(); state.mergeGesture = null; render(); return }
+    if (button.dataset.action === 'merge-selected') {
+      const lines = mergeableSelectedLines()
+      if (lines.length < 2) return setError('选中的卡片需要覆盖至少两条可合并的会话线')
+      const [source, target] = lines
+      openMerge(source, undefined, undefined, target.id)
+      return
+    }
+    if (button.dataset.action === 'confirm-merge-gesture') {
+      const gesture = state.mergeGesture
+      state.mergeGesture = null
+      if (gesture === null) return
+      const source = state.workspace?.threads.find(item => item.id === gesture.sourceThreadId)
+      if (source === undefined) return setError('拖拽的来源线已不在当前画布')
+      openMerge(source, gesture.anchorCardId, gesture.anchorSeq, gesture.targetThreadId)
+      return
+    }
+    if (button.dataset.action === 'cancel-merge-gesture') { state.mergeGesture = null; render(); return }
     if (button.dataset.action === 'submit-merge-panel') await submitMergePanel()
     if (button.dataset.action === 'cancel-merge-panel') closeMergePanel()
     if (button.dataset.action === 'execute-merge' && thread !== undefined) await executeMerge(thread)

@@ -135,8 +135,7 @@ test('migrates v3 tool cards into the assistant process records', async () => {
   assert.match(await readFile(dataFile, 'utf8'), /"version": ?5/)
 })
 
-test('does not persist the DSH runtime context as a user conversation turn', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-runtime-context-'))
+test('does not persist the DSH runtime context as a user conversation turn', async () => {  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-runtime-context-'))
   const store = new WorkspaceStore(join(directory, 'state.json'))
   await store.projectSession({
     id: 'runtime-context', header: { meta: { cwd: 'C:\\work\\canvas' } }, firstLiveSeq: 0,
@@ -297,4 +296,20 @@ test('truncates over-long projections with a detail-view marker', async () => {
   const assistant = graph.threads[0].messages.find(message => message.kind === 'assistant')
   assert.equal(assistant.text.length, 8_000 + '\n——…（详情查看全文）'.length)
   assert.ok(assistant.text.endsWith('——…（详情查看全文）'))
+})
+
+test('does not project harness <system-reminder> turns as question cards', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-reminder-'))
+  const store = new WorkspaceStore(join(directory, 'state.json'))
+  await store.projectEvents(
+    { id: 's-reminder', header: { meta: { cwd: 'C:\\work\\x' } }, events: [] },
+    [
+      { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '<system-reminder>\nA skill is a reusable set of guidance' }] } },
+      { type: 'user/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: '真实问题' }] } },
+      { type: 'assistant/message', seq: 3, time: 3, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '真实回答' }] } } },
+    ],
+  )
+  const [workspace] = await store.list()
+  const graph = await store.get(workspace.id)
+  assert.deepEqual(graph.threads[0].messages.map(message => message.text), ['真实问题', '真实回答'])
 })

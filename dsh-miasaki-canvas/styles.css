@@ -495,3 +495,38 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 [data-theme="dark"] .merge-panel-row select, [data-theme="dark"] .merge-panel-row textarea { border-color: #3a3f47; background: #121316; color: #e5e7eb; }
 [data-theme="dark"] .merge-panel-actions button { background: #1b1c1f; border-color: #3a3f47; color: #d1d5db; }
 [data-theme="dark"] .merge-panel-actions .primary { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+
+/* --- M3: multi-select, marquee, proximity-merge gesture, absorbed marker, lineage --- */
+.thread-card.multi-selected { border-color: #3478f6; box-shadow: 0 0 0 2px rgba(52,120,246,.45), 0 3px 11px rgba(33,48,67,.12); }
+.canvas-marquee { position: absolute; z-index: 30; border: 1px solid #3478f6; background: rgba(52,120,246,.12); border-radius: 3px; pointer-events: none; }
+.multi-select-bar { position: absolute; left: 50%; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 10px; transform: translateX(-50%); border: 1px solid #d1d5db; border-radius: 10px; background: #fff; padding: 8px 14px; box-shadow: 0 8px 24px rgba(33,48,67,.18); font-size: 12px; color: #374151; white-space: nowrap; }
+.multi-select-bar button { min-height: 28px; border-color: #d1d5db; border-radius: 6px; background: #fff; padding: 0 10px; color: #374151; font-size: 12px; font-weight: 650; }
+.multi-select-bar .primary { border-color: #7c3aed; background: #7c3aed; color: #fff; }
+.multi-select-bar .primary:hover { border-color: #6d28d9; background: #6d28d9; }
+.merge-gesture { position: absolute; inset: 0; z-index: 65; display: grid; place-items: center; background: rgba(15,23,42,.24); }
+.merge-gesture-body { display: grid; width: min(380px, calc(100vw - 64px)); gap: 8px; border: 1px solid #a78bfa; border-radius: 10px; background: #fff; padding: 16px; box-shadow: 0 18px 48px rgba(49,26,110,.3); }
+.merge-gesture-body strong { color: #1e1b4b; font-size: 14px; }
+.merge-gesture-body p { margin: 0; color: #526174; font-size: 12px; line-height: 1.55; }
+.merge-gesture-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.merge-gesture-actions button { min-height: 30px; border-color: #d1d5db; border-radius: 6px; background: #fff; padding: 0 12px; color: #374151; font-size: 12px; font-weight: 650; }
+.merge-gesture-actions .primary { border-color: #7c3aed; background: #7c3aed; color: #fff; }
+.thread-card .absorbed-badge { display: inline-flex; align-items: center; margin-left: auto; border: 0; border-radius: 9px; background: transparent; padding: 0 6px; color: #9ca3af; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.thread-card .absorbed-badge:hover { color: #7c3aed; background: #f5f3ff; }
+.thread-card .absorbed-badge:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; }
+.thread-card:has(.absorbed-badge) .merge-badge { margin-left: 0; }
+.detail-lineage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; }
+.detail-lineage-label { color: #94a3b8; font-weight: 650; }
+.detail-lineage button { min-height: 24px; border-color: #ddd6fe; border-radius: 999px; background: #faf8ff; padding: 0 9px; color: #6d28d9; font-size: 11px; font-weight: 650; }
+.detail-lineage button:hover { border-color: #a78bfa; background: #f5f3ff; }
+.detail-lineage .detail-lineage-expand { border-style: dashed; color: #7c3aed; }
+.detail-lineage-transitive { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; padding-left: 12px; }
+.detail-lineage-transitive button { border-color: #ede9fe; background: transparent; color: #8b5cf6; font-size: 11px; }
+[data-theme="dark"] .thread-card.multi-selected { box-shadow: 0 0 0 2px rgba(91,141,239,.5), 0 3px 11px rgba(0,0,0,.4); }
+[data-theme="dark"] .canvas-marquee { border-color: #5b8def; background: rgba(91,141,239,.16); }
+[data-theme="dark"] .multi-select-bar, [data-theme="dark"] .merge-gesture-body { border-color: #3a3f47; background: #1b1c1f; color: #d1d5db; }
+[data-theme="dark"] .multi-select-bar button, [data-theme="dark"] .merge-gesture-actions button { background: #121316; border-color: #3a3f47; color: #d1d5db; }
+[data-theme="dark"] .multi-select-bar .primary, [data-theme="dark"] .merge-gesture-actions .primary { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+[data-theme="dark"] .thread-card .absorbed-badge { color: #6b7280; }
+[data-theme="dark"] .thread-card .absorbed-badge:hover { color: #c4b5fd; background: #2e1065; }
+[data-theme="dark"] .detail-lineage button { background: #251c3d; border-color: #3b2a63; color: #c4b5fd; }
+[data-theme="dark"] .detail-lineage .detail-lineage-expand { border-style: dashed; color: #a78bfa; }

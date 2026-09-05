@@ -653,6 +653,28 @@ export class WorkspaceStore {
   summary(workspace) {
     return { id: workspace.id, kind: workspace.kind ?? 'manual', cwd: workspace.cwd ?? null, title: workspace.title, createdAt: workspace.createdAt, updatedAt: workspace.updatedAt, threadCount: workspace.threads.length }
   }
+
+  /** Whether any thread carrying this DSH session already has projected content. */
+  hasProjectionContent(sessionId) {
+    for (const workspace of this.state.workspaces) {
+      for (const thread of workspace.threads) {
+        if (thread.dshSessionId === sessionId && (thread.messages?.length ?? 0) > 0) return true
+      }
+    }
+    return false
+  }
+
+  /** DSH session ids whose threads are still content-less skeletons. */
+  sessionIdsNeedingBackfill(limit) {
+    const ids = []
+    for (const workspace of this.state.workspaces) {
+      for (const thread of workspace.threads) {
+        if (typeof thread.dshSessionId !== 'string' || ids.length >= limit) continue
+        if ((thread.messages?.length ?? 0) === 0 && !ids.includes(thread.dshSessionId)) ids.push(thread.dshSessionId)
+      }
+    }
+    return ids
+  }
 }
 
 class InputError extends Error {}
@@ -892,7 +914,12 @@ function mergeRequestText(forkThread, otherThread, forkExchange, otherExchange, 
 }
 
 function isRuntimeContextText(text) {
-  return typeof text === 'string' && text.trimStart().startsWith('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.')
+  if (typeof text !== 'string') return false
+  const normalized = text.trimStart()
+  return normalized.startsWith('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.')
+    // Harness-injected reminder turns (skill hints, context notes) are not
+    // user intent; projecting them would litter the canvas with pseudo cards.
+    || normalized.startsWith('<system-reminder>')
 }
 
 function isRuntimeContextMessage(message) {
@@ -992,10 +1019,37 @@ export function apply(ctx, config) {
     ctx.on('session/created', replaySession)
     ctx.on('session/event', enqueueProjection)
     // Startup replay: 0.1.1 lists restored sessions synchronously; 0.1.2
-    // restores lazily, so this can be empty there — live events and the
-    // persisted store cover those sessions instead.
+    // restores lazily, so this can be empty there — the sync backfill below
+    // covers those sessions instead.
     for (const session of ctx.sessions.list()) replaySession(session)
   }
+  // 0.1.2 backfill: the host sessions service only holds LIVE sessions (its
+  // `get(id)` is a memory lookup — it cannot restore from disk), so untouched
+  // history cannot be backfilled from a host plugin. What this tick covers:
+  // any session that becomes live later (opened natively, restored by another
+  // plugin) gets its persisted events replayed into the canvas skeleton
+  // within one tick. Low-frequency by design: the scan is in-memory only.
+  const backfillInFlight = new Set()
+  const backfillBatch = () => store.ready.then(() => {
+    for (const sessionId of store.sessionIdsNeedingBackfill(8)) {
+      if (backfillInFlight.has(sessionId)) continue
+      backfillInFlight.add(sessionId)
+      void (async () => {
+        try {
+          const session = await ctx.sessions.get(sessionId)
+          if (session !== undefined) replaySession(session)
+        } catch (error) {
+          reportProjectionFailure(error)
+        } finally {
+          backfillInFlight.delete(sessionId)
+        }
+      })()
+    }
+  })
+  const backfillTimer = setInterval(() => void backfillBatch().catch(() => {}), 30_000)
+  ctx.effect(() => () => clearInterval(backfillTimer), 'canvas: backfill timer')
+  void backfillBatch().catch(() => {})
+  const backfillFromSync = () => void backfillBatch().catch(() => {})
   // The DSH /api browser-trust fence does not cover /canvas routes, so this
   // handler checks the Host header itself: localhost is allowed by default and
   // additional authorities opt in through config.trustedHosts (mirrors the
@@ -1026,7 +1080,7 @@ export function apply(ctx, config) {
       if (mergePrepare !== null && req.method === 'POST') return sendJson(res, 200, await store.prepareMergeMessage(mergePrepare[1]))
       const mergeCommit = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/merge\/commit$/i.exec(path)
       if (mergeCommit !== null && req.method === 'POST') return sendJson(res, 200, { thread: await store.commitMerge(mergeCommit[1], await readJson(req)) })
-      if (path === '/canvas/api/sessions/sync' && req.method === 'POST') { const body = await readJson(req); return sendJson(res, 200, { workspaces: await store.syncSessions(body.sessions, body.removedSessionIds) }) }
+      if (path === '/canvas/api/sessions/sync' && req.method === 'POST') { const body = await readJson(req); const workspaces = await store.syncSessions(body.sessions, body.removedSessionIds); if (autoProjection) backfillFromSync(); return sendJson(res, 200, { workspaces }) }
       const messages = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/messages$/i.exec(path)
       if (messages !== null && req.method === 'POST') return sendJson(res, 201, { thread: await store.addMessage(messages[1], (await readJson(req)).text) })
       const thread = /^\/canvas\/api\/threads\/([0-9a-f-]+)$/i.exec(path)
