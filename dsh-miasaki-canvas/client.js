@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
       document.head.append(style)
       const host = document.createElement('div')
       host.className = 'dsh-canvas-host'
-      host.innerHTML = '<div class="dsh-canvas-switch" role="group" aria-label="视图切换"><button type="button" data-view="dialog" class="active" aria-pressed="true">对话</button><button type="button" data-view="map" aria-pressed="false">会话地图</button></div><section class="dsh-canvas-overlay" hidden><iframe title="会话地图" src="/canvas/"></iframe></section>'
+      host.innerHTML = '<div class="dsh-canvas-switch" role="group" aria-label="视图切换"><button type="button" data-view="dialog" class="active" aria-pressed="true">对话</button><button type="button" data-view="map" aria-pressed="false">会话布</button></div><section class="dsh-canvas-overlay" hidden><iframe title="会话布" src="/canvas/"></iframe></section>'
       document.body.append(host)
       const dialogButton = host.querySelector('[data-view="dialog"]')
       const mapButton = host.querySelector('[data-view="map"]')
