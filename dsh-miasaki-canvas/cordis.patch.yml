@@ -1,0 +1,15 @@
+# @miasaki/dsh-canvas only extends the Web profile: it reuses the existing
+# DSH server rather than running a second application process.
+- insert:
+    # `name` is the npm package the loader imports; `id` is the service id.
+    - id: canvas
+      name: "@miasaki/dsh-canvas"
+      config:
+        # Canvas metadata lives in its own directory, deliberately not shared
+        # with upstream dsh-synapse's `synapse/` data directory.
+        dataFile: !!js dshHomePath('miasaki-canvas/workspaces.json')
+        autoProjection: true
+        projectionWorkspaceTitle: DSH 任务
+        # Extra authorities the /canvas Host check accepts (host or host:port);
+        # localhost and 127.0.0.1 are always allowed.
+        trustedHosts: []
