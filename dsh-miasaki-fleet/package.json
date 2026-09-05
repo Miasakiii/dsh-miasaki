@@ -1,0 +1,11 @@
+{
+  "name": "miasaki-fleet",
+  "private": true,
+  "version": "0.15.0",
+  "description": "Miasaki 多 Agent CLI 编排线（文件总线）",
+  "scripts": {
+    "validate": "node workers/validate-bus.mjs",
+    "validate:strict": "node workers/validate-bus.mjs --strict",
+    "pulse": "node workers/pulse/publish-pulse.mjs"
+  }
+}

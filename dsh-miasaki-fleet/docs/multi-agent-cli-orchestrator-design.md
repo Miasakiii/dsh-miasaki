@@ -1,7 +1,7 @@
 # 多 Agent CLI 协作模式 — 设计文档
 
-- 版本：v0.14
-- 日期：2026-08-24
+- 版本：v0.15
+- 日期：2026-09-05
 - 状态：Draft
 - 作者：总指挥（Miasaki 会话）
 
@@ -20,6 +20,7 @@
 > - v0.8 依据 GitHub 社区仓库 [xiaobright/dsh-anchored-standard](https://github.com/xiaobright/dsh-anchored-standard)（2885★ 两阶段锚定预设，2026-08-16 分析）补充：§6.3「工具面是第一杠杆」证据；§7.5 三层工具目录 v2 方向；§7.6 轨迹扰动证据与技能按需加载；§12 社区参考实现与插件工程纪律；§13/§14 M6 参考与复测开放问题。
 > - v0.9 依据 Datawhale《最新！DeepSeek Harness 桌面版和 CLI 来了！》（2026-08-16，归档于 `docs/ref-datawhale-dsh-desktop-cli-2026-08-16.md`）补充：§8.3 TUI / 桌宠形态社区先例（dsh-TUI 1.8k★、DSH Desktop 11.1k★）；§12 入口形态与 Headless 一次性任务入口；§11.2 凭证卫生；§7.6 工作区范围。
 > - v0.14 依据腾讯技术工程《DeepSeek Harness 规模化踩坑实录：耗时、成本、失败到底该怎么查》（2026-08-24，归档于 `../dsh-miasaki-shared-docs/dsh-platform/ref-tencent-agent-obs-2026-08-24.md`）补充：DSH 可观测生态情报——腾讯云官方插件 `tencentcloud-agentobs-sdk-dsh`（支持 DSH >=0.1.0-rc.6 <0.2.0）以状态树+延迟发射把 DSH 事件流还原为五层调用树（entry/agent/step/chat/tool，OpenTelemetry GenAI 语义约定；一次 turn 一条 trace、`gen_ai.session.id` 横向关联、重试不合并 `dsh.llm.attempt`、中断补发带错误码 Span）；结论：与 fleet 现有任务级文件总线观测互补而非替代（插件仅覆盖 dsh 单 CLI、需云凭证、captureContent 默认上送会话内容），五层 schema 作为未来 dsh worker step 级观测参考；dsh 缺 headless profile 仍为非活动 worker，暂不接入。
+> - v0.15 文件总线治理批次（2026-09-04/05）：**F1 契约校验**——`schemas/*.schema.json`（registry/manifest/control/status/tasks/ledger/events/usage/pulse 七类）+ `workers/validate-bus.mjs`（零依赖全量校验，`--strict` 额外要求 `state/fleet-pulse.json` 存在；BOM 自动剥离、`agents/archive/` 标本跳过、被 ignore 的运行时文件缺失跳过；实测 23 文件 0 错误）；§4.2 `control.json` 强制 `force_kill` 字段（agent-browser 已补，见 schemas/README）；**F2 计量全源覆盖**——派单器 `Get-UsageRow` 按 `metering_source` 注册表解析，新增 `session`（dsh 会话级，需 dsh usage 手工回填）与 `console-usage`（bl console 侧，需 Operator 对账）及未知源统一写**显式未计量行**（`cost:0, metered:false`），杜绝静默"无计量"（§9.1 回写）；**X1 脉冲发布**——`workers/pulse/publish-pulse.mjs` 聚合 fleet 五计数（online/running/waiting_approval/blocked/error）+ 当日成本原子写 `state/fleet-pulse.json` v2，作为 A×B 桌宠↔fleet 联动唯一契约（契约文档 `../dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`，桌面端 `MIASAKI_FLEET_PULSE` 环境变量 2s 轮询）；`fleet-monitor/server.js` 读取 JSON/JSONL 加 BOM 剥离与 CRLF 分行容错；新增根级 `package.json`（`npm run validate` / `pulse`）。
 
 ---
 
@@ -554,12 +555,15 @@ loop:
 ### 9.1 计量来源（按 runtime）
 | runtime | usage 来源 | 说明 |
 |---|---|---|
-| `cli`（bl） | `bl usage` / console 用量回执 | 派单后由派单器查询 console usage 增量；v1 可先标记"无计量" |
+| `cli`（bl） | `bl usage` / console 用量回执 | 派单器写**显式未计量行**（`metered:false`，`console-usage` 源），需 Operator 按 bl console 对账后回填 ledger |
 | `cli`（claude） | `claude -p --output-format json` 的 costUSD/token 字段 | **已实现**：派单器 json-cost-usd 解析器自动落盘 usage.jsonl（t-0006 实测：cache_read 608,768 是成本大头） |
-| `cli`（opencode / pi / gemini / mimo / agent-browser） | 待校准（`--help` 或官方文档确认） | 校准前 `metering_source:"unknown"`，面板显示"无计量" |
-| `dsh` | 会话用量记录 | 读取 DSH 持久化的 usage 事件（含 cache_read / cache_write token，见 §4.4） |
+| `cli`（opencode / pi / gemini / mimo / agent-browser） | 待校准（`--help` 或官方文档确认） | 校准前 `metering_source:"unknown"`，派单器写显式未计量行（`cost:0, metered:false`），面板可区分"跑过未计量"与"没跑过" |
+| `dsh` | 会话用量记录 | 派单器写显式未计量行（`session` 源），需 `dsh usage` 查询后手工回填 ledger（含 cache_read / cache_write token，见 §4.4） |
 | `custom` | 薄壳自行从 API 响应提取 | 旧路线，已废弃（§0） |
-| `fork`（M1 手动阶段） | subagent_fork 无 usage 回执 | `metering=false`，豁免 §4.4，面板显示"无计量" |
+| `fork`（M1 手动阶段） | subagent_fork 无 usage 回执 | 不走派单器，豁免 §4.4，面板显示"无计量" |
+
+> 注（F2，2026-09-04）：解析器注册表集中在派单器 `Get-UsageRow`（`workers/dispatch/dispatch-task.ps1`），
+> 全源覆盖、无静默缺口；新增来源只需在注册表加分支。
 
 ### 9.2 写入义务
 - `usage.jsonl` 是成本唯一原始来源；worker **漏报 = 故障**，面板对"运行中但 60s 无新 usage 记录"的 worker 给出黄灯提示；

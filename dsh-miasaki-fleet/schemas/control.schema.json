@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "agent control (Operator 唯一写者)",
+  "type": "object",
+  "required": ["enabled", "force_kill"],
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "force_kill": { "type": "boolean" },
+    "updated_at": { "type": "string" },
+    "updated_by": { "type": "string" }
+  }
+}

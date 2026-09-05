@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "agent manifest",
+  "type": "object",
+  "required": ["id", "name", "runtime", "cli", "limits"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "name": { "type": "string", "minLength": 1 },
+    "runtime": { "type": "string", "enum": ["cli", "custom"] },
+    "model": { "type": "string" },
+    "metering_source": { "type": "string", "enum": ["json-cost-usd", "console-usage", "session", "unknown"] },
+    "cli": {
+      "type": "object",
+      "required": ["command", "binPath", "version", "invoke"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "binPath": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "invoke": { "type": "string", "minLength": 1 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["budget_per_day", "timeout_ms", "heartbeat_ms"],
+      "properties": {
+        "budget_per_day": { "type": "number", "exclusiveMinimum": 0 },
+        "timeout_ms": { "type": "number", "exclusiveMinimum": 0 },
+        "heartbeat_ms": { "type": "number", "exclusiveMinimum": 0 },
+        "max_concurrent_tasks": { "type": "number", "minimum": 1 },
+        "max_tokens_per_task": { "type": "number", "minimum": 1 }
+      }
+    },
+    "skills": { "type": "array", "items": { "type": "string" } }
+  }
+}

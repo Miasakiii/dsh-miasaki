@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "fleet-pulse v2 (A×B 唯一契约，X1)",
+  "type": "object",
+  "required": ["v", "ts", "fleet"],
+  "properties": {
+    "v": { "type": "number", "const": 2 },
+    "ts": { "type": "string", "minLength": 1 },
+    "fleet": {
+      "type": "object",
+      "required": ["online", "running", "waiting_approval", "blocked", "error"],
+      "properties": {
+        "online": { "type": "integer", "minimum": 0 },
+        "running": { "type": "integer", "minimum": 0 },
+        "waiting_approval": { "type": "integer", "minimum": 0 },
+        "blocked": { "type": "integer", "minimum": 0 },
+        "error": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "today_cost": { "type": "number", "minimum": 0 },
+    "top_task": { "type": ["string", "null"] }
+  }
+}

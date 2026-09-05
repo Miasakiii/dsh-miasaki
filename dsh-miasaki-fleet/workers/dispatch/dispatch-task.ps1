@@ -98,6 +98,50 @@ function Parse-JsonCostUsd([string]$stdout, [string]$taskId, [string]$agentId) {
   return $null
 }
 
+function Parse-Unmetered([string]$source, [string]$taskId, [string]$agentId, [string]$reason) {
+  # F2：无机器可读计量时的显式审计行（cost 0 + metered=false），替代静默"无计量"。
+  # 预算不受影响（0 cost），但面板/台账可区分"跑过未计量"与"没跑过"。
+  return @{
+    ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    task = $taskId
+    model = 'cli-default'
+    input_tokens = 0
+    output_tokens = 0
+    cache_read_tokens = 0
+    cache_write_tokens = 0
+    step = 1
+    takeover = 0
+    cost = 0.0
+    metered = $false
+    note = "$agentId/$source 未计量运行：$reason"
+  }
+}
+
+function Parse-SessionUsage([string]$stdout, [string]$taskId, [string]$agentId) {
+  # dsh：会话级计量，无 stdout 机器格式 → 显式未计量行，需 dsh usage 查询后手工回填 ledger
+  return Parse-Unmetered 'session' $taskId $agentId 'dsh 会话级计量，需 dsh usage 手工回填'
+}
+
+function Parse-ConsoleUsage([string]$stdout, [string]$taskId, [string]$agentId) {
+  # bl：用量在 console 侧，需 bl auth status 有效会话 → 显式未计量行
+  return Parse-Unmetered 'console-usage' $taskId $agentId 'bl console 侧计量，需 Operator 对账'
+}
+
+function Get-UsageRow([string]$source, [string]$stdout, [string]$taskId, [string]$agentId) {
+  # F2：metering_source → 解析器注册表（全源覆盖，无静默缺口）
+  switch ($source) {
+    'json-cost-usd' { return Parse-JsonCostUsd $stdout $taskId $agentId }
+    'session' { return Parse-SessionUsage $stdout $taskId $agentId }
+    'console-usage' { return Parse-ConsoleUsage $stdout $taskId $agentId }
+    default {
+      if ([string]::IsNullOrEmpty($source) -or $source -eq 'unknown') {
+        return Parse-Unmetered 'unknown' $taskId $agentId '该 CLI 尚无计量解析器，见 cli-calibration 待校清单'
+      }
+      return $null
+    }
+  }
+}
+
 if ($CheckOnly) {
   $manifest = Read-JsonFile (Join-Path $agentDir 'manifest.json')
   if (-not $manifest) { Write-Host "[budget] agent $Agent 无档案"; exit 2 }
@@ -135,8 +179,7 @@ if ($ParseOnly) {
   if ($latest.Count -eq 0) { Write-Host "[parse] 无日志可解析：$logDir\$TaskId-stdout*.log"; exit 2 }
   $stdout = Get-Content $latest[0].FullName -Raw
   $source = $manifest.metering_source
-  $row = $null
-  if ($source -eq 'json-cost-usd') { $row = Parse-JsonCostUsd $stdout $TaskId $Agent }
+  $row = Get-UsageRow $source $stdout $TaskId $Agent
   if ($row) {
     Write-Host "[parse] $source 解析成功（$($latest[0].Name)）："
     $row | ConvertTo-Json -Compress
@@ -192,7 +235,7 @@ $usageRow = $null
 if ($exitCode -eq 0) {
   $stdout = Get-Content $outFile -Raw
   $source = $manifest.metering_source
-  if ($source -eq 'json-cost-usd') { $usageRow = Parse-JsonCostUsd $stdout $TaskId $Agent }
+  $usageRow = Get-UsageRow $source $stdout $TaskId $Agent
   if ($usageRow) {
     ($usageRow | ConvertTo-Json -Compress) | Add-Content (Join-Path $agentDir 'usage.jsonl')
     Write-Host "[usage] $source 已落盘：in $($usageRow.input_tokens) / out $($usageRow.output_tokens) / cache-read $($usageRow.cache_read_tokens) / cost $('{0:N4}' -f $usageRow.cost)"

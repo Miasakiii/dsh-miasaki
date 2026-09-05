@@ -1,5 +1,6 @@
 {
   "enabled": false,
+  "force_kill": false,
   "updated_at": "2026-08-19T13:08:10.339Z",
   "updated_by": "operator-panel"
 }

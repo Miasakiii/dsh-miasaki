@@ -34,9 +34,11 @@ const CACHE_TTL = 800; // ms
 
 /* ---------- 工具函数 ---------- */
 
+function stripBom(s) { return s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s; }
+
 function safeReadJSON(filePath) {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8').trim();
+    const raw = stripBom(fs.readFileSync(filePath, 'utf-8')).trim();
     if (!raw || raw === '[BLOCKED]') return null;
     return JSON.parse(raw);
   } catch {
@@ -46,9 +48,9 @@ function safeReadJSON(filePath) {
 
 function safeReadJSONL(filePath) {
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8').trim();
+    const raw = stripBom(fs.readFileSync(filePath, 'utf-8')).trim();
     if (!raw) return [];
-    return raw.split('\n').map(line => {
+    return raw.split(/\r?\n/).map(line => {
       try { return JSON.parse(line); } catch { return null; }
     }).filter(Boolean);
   } catch {
