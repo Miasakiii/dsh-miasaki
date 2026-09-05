@@ -536,3 +536,18 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 .thread-meta .merge-retry:hover { background: #ffedd5; }
 .thread-meta .merge-retry::before { content: none; }
 [data-theme="dark"] .thread-meta .merge-retry { background: #431407; color: #fdba74; }
+
+/* --- Minimap: node overview + viewport outline, click/drag to navigate --- */
+.canvas-minimap { position: absolute; right: 16px; bottom: 16px; z-index: 55; border: 1px solid #cbd5e1; border-radius: 8px; background: rgba(255,255,255,.92); padding: 4px; box-shadow: 0 6px 20px rgba(33,48,67,.16); backdrop-filter: blur(6px); cursor: crosshair; user-select: none; }
+.canvas-minimap svg { display: block; }
+.minimap-card { fill: #94a3b8; rx: 1; }
+.minimap-card-merge { fill: #8b5cf6; }
+.minimap-card-selected { fill: #3478f6; }
+.minimap-card-active { fill: #3478f6; }
+.minimap-viewport { fill: rgba(52,120,246,.10); stroke: #3478f6; stroke-width: 1.2; rx: 2; }
+[data-theme="dark"] .canvas-minimap { border-color: #3a3f47; background: rgba(27,28,31,.92); }
+[data-theme="dark"] .minimap-card { fill: #4b5563; }
+[data-theme="dark"] .minimap-card-merge { fill: #a78bfa; }
+[data-theme="dark"] .minimap-card-selected, [data-theme="dark"] .minimap-card-active { fill: #5b8def; }
+[data-theme="dark"] .minimap-viewport { fill: rgba(91,141,239,.12); stroke: #5b8def; }
+.canvas-controls button.active { border-color: #3478f6; color: #3478f6; }

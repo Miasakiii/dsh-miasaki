@@ -1261,6 +1261,58 @@ function multiSelectBar() {
   return `<div class="multi-select-bar"><span>已选 ${count} 张卡 · ${lines.length} 条线${lines.length >= 2 ? '（不同线）' : ''}</span>${lines.length >= 2 ? '<button class="primary" type="button" data-action="merge-selected">合并这两条线</button>' : ''}<button type="button" data-action="clear-selection">清除选择</button></div>`
 }
 
+function minimapEnabled() { try { return localStorage.getItem('dsh-canvas:minimap:v1') !== '0' } catch { return true } }
+
+function setMinimapEnabled(value) { try { localStorage.setItem('dsh-canvas:minimap:v1', value ? '1' : '0') } catch { /* Private browsing may disable local storage. */ } }
+
+/**
+ * Node overview in the corner: every card as a tiny rect (merge/selected/
+ * active lines tinted), the current viewport as an outline. Click or drag
+ * anywhere on it to move the camera there.
+ */
+function canvasMinimap(cards) {
+  if (!minimapEnabled() || cards.length === 0) { state.minimapMeta = undefined; return '' }
+  const pad = 80
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const card of cards) {
+    if (card.position.x < minX) minX = card.position.x
+    if (card.position.y < minY) minY = card.position.y
+    if (card.position.x + CARD_WIDTH > maxX) maxX = card.position.x + CARD_WIDTH
+    if (card.position.y + CARD_HEIGHT > maxY) maxY = card.position.y + CARD_HEIGHT
+  }
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad
+  const worldWidth = maxX - minX
+  const worldHeight = maxY - minY
+  const width = 200
+  const height = Math.max(90, Math.min(170, Math.round(width * worldHeight / worldWidth)))
+  const scale = Math.min(width / worldWidth, height / worldHeight)
+  const offsetX = (width - worldWidth * scale) / 2
+  const offsetY = (height - worldHeight * scale) / 2
+  const rects = cards.map(card => {
+    const classes = ['minimap-card']
+    if (card.merge?.state === 'committed') classes.push('minimap-card-merge')
+    if (state.selectedCardIds.has(card.id)) classes.push('minimap-card-selected')
+    if (card.dshThreadId === state.activeId) classes.push('minimap-card-active')
+    return `<rect class="${classes.join(' ')}" x="${((card.position.x - minX) * scale + offsetX).toFixed(1)}" y="${((card.position.y - minY) * scale + offsetY).toFixed(1)}" width="${Math.max(2, CARD_WIDTH * scale).toFixed(1)}" height="${Math.max(2, CARD_HEIGHT * scale).toFixed(1)}"></rect>`
+  }).join('')
+  state.minimapMeta = { minX, minY, scale, offsetX, offsetY }
+  return `<div class="canvas-minimap" role="img" aria-label="画布缩略图，点击定位"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${rects}<rect class="minimap-viewport" x="0" y="0" width="0" height="0"></rect></svg></div>`
+}
+
+function updateMinimapViewport() {
+  const meta = state.minimapMeta
+  const outline = document.querySelector('.minimap-viewport')
+  const viewport = document.querySelector('.canvas-viewport')
+  if (meta === undefined || outline === null || !(viewport instanceof HTMLElement)) return
+  const bounds = viewport.getBoundingClientRect()
+  const x = (-state.canvasCamera.x / state.zoom - meta.minX) * meta.scale + meta.offsetX
+  const y = (-state.canvasCamera.y / state.zoom - meta.minY) * meta.scale + meta.offsetY
+  outline.setAttribute('x', x.toFixed(1))
+  outline.setAttribute('y', y.toFixed(1))
+  outline.setAttribute('width', (bounds.width / state.zoom * meta.scale).toFixed(1))
+  outline.setAttribute('height', (bounds.height / state.zoom * meta.scale).toFixed(1))
+}
+
 function renderCanvas() {
   const threads = state.workspace?.threads ?? []
   if (threads.length === 0 && state.draft?.kind !== 'new') return `<section class="empty-canvas"><strong>当前工作目录还没有 DSH 对话。</strong><p>点击新会话，在画布中输入第一条消息。</p><div><button class="primary" type="button" data-action="create-session">新建会话</button></div></section>`
@@ -1285,7 +1337,7 @@ function renderCanvas() {
   state.mountedCardIds = new Set(visible)
   const mounted = cards.filter(card => visible.has(card.id))
   const inspector = state.inspectorCardId === null ? '' : renderCardInspector(state.canvasCardsById.get(state.inspectorCardId))
-  return `<section class="canvas-view"><div class="canvas-viewport"><div class="canvas-content" style="transform:translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})"><svg class="connectors">${canvasConnectors(cards)}</svg><div class="cards-layer">${mounted.map(card => conversationCard(card, graph)).join('')}${draftCard(cards)}</div></div></div>${multiSelectBar()}${mergeGestureBubble(cards)}${inspector}</section>`
+  return `<section class="canvas-view"><div class="canvas-viewport"><div class="canvas-content" style="transform:translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})"><svg class="connectors">${canvasConnectors(cards)}</svg><div class="cards-layer">${mounted.map(card => conversationCard(card, graph)).join('')}${draftCard(cards)}</div></div></div>${multiSelectBar()}${mergeGestureBubble(cards)}${canvasMinimap(cards)}${inspector}</section>`
 }
 
 function isProcessMessage(message) {
@@ -1455,7 +1507,7 @@ function render() {
   const view = state.mode === 'thread' ? renderThread() : renderCanvas()
   const choices = workspaceChoices()
   const selectedWorkspaceId = state.selectedDshWorkspaceId ?? workspace?.id
-  const canvasControls = state.mode === 'canvas' && (threads.length > 0 || state.draft?.kind === 'new') ? `<div class="canvas-controls"><button data-action="layout" title="整理节点" aria-label="整理节点"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>整理</button><button data-action="focus-active" title="定位到当前会话" aria-label="定位到当前会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v2.6M8 11.9v2.6M1.5 8h2.6M11.9 8h2.6"/></svg>定位</button><button data-action="zoom-out" aria-label="缩小" title="缩小"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button><span>${Math.round(state.zoom * 100)}%</span><button data-action="zoom-in" aria-label="放大" title="放大"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button></div>` : ''
+  const canvasControls = state.mode === 'canvas' && (threads.length > 0 || state.draft?.kind === 'new') ? `<div class="canvas-controls"><button data-action="layout" title="整理节点" aria-label="整理节点"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>整理</button><button data-action="focus-active" title="定位到当前会话" aria-label="定位到当前会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v2.6M8 11.9v2.6M1.5 8h2.6M11.9 8h2.6"/></svg>定位</button><button data-action="toggle-minimap" class="${minimapEnabled() ? 'active' : ''}" title="缩略图开关" aria-label="缩略图开关" aria-pressed="${minimapEnabled() ? 'true' : 'false'}"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2" y="3" width="12" height="10" rx="1.2"/><path d="m5 10 2.5-3 2 2.2L11.5 7" stroke-linecap="round"/></svg>缩略图</button><button data-action="zoom-out" aria-label="缩小" title="缩小"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button><span>${Math.round(state.zoom * 100)}%</span><button data-action="zoom-in" aria-label="放大" title="放大"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button></div>` : ''
   const detailAvailable = currentThread() !== null
   const canvasTabs = `<nav class="canvas-tabs" aria-label="会话布视图"><button class="${state.mode === 'canvas' ? 'active' : ''}" data-action="show-canvas">布</button><button class="${state.mode === 'thread' ? 'active' : ''}" data-action="show-thread" data-thread="${state.activeId ?? ''}" ${detailAvailable ? '' : 'disabled'}>详情</button></nav>`
   app.innerHTML = `<main class="canvas-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="Canvas"><svg class="brand-mark" aria-hidden="true" viewBox="0 0 32 32" fill="none"><path d="M9 10.5 16 7l7 3.5M9 10.5v8L16 22m0-15v15m7-11.5v8L16 22"/><circle cx="9" cy="10" r="2.5"/><circle cx="23" cy="10" r="2.5"/><circle cx="16" cy="23" r="2.5"/></svg><strong>Canvas</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threads.map(thread => `<button class="tree-row ${thread.id === state.activeId ? 'active' : ''}" data-action="select-thread" data-thread="${thread.id}" style="--thread-color:#374151"><span class="tree-dot"></span><span>${escapeHtml(threadListTitle(thread))}</span>${thread.parentId === null ? '' : '<i>分支</i>'}</button>`).join('') || '<p class="tree-empty">暂未同步会话</p>'}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话布</button></div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}${mergePanelCard()}</section></main>`
@@ -1536,6 +1588,7 @@ function closeCardInspector({ animate = true } = {}) {
 function applyCanvasTransform() {
   const content = document.querySelector('.canvas-content')
   if (content instanceof HTMLElement) content.style.transform = `translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})`
+  updateMinimapViewport()
 }
 
 function bindDragHandle(handle) {
@@ -1822,6 +1875,38 @@ app.addEventListener('pointerdown', event => {
   document.addEventListener('pointercancel', stop)
 })
 
+app.addEventListener('pointerdown', event => {
+  const map = event.target instanceof Element ? event.target.closest('.canvas-minimap') : null
+  if (!(map instanceof HTMLElement)) return
+  event.preventDefault()
+  const jump = pointerEvent => {
+    const meta = state.minimapMeta
+    if (meta === undefined) return
+    const rect = map.getBoundingClientRect()
+    const worldX = (pointerEvent.clientX - rect.left - meta.offsetX) / meta.scale + meta.minX
+    const worldY = (pointerEvent.clientY - rect.top - meta.offsetY) / meta.scale + meta.minY
+    const viewport = document.querySelector('.canvas-viewport')
+    if (!(viewport instanceof HTMLElement)) return
+    const bounds = viewport.getBoundingClientRect()
+    state.canvasCamera = {
+      x: bounds.width / 2 - worldX * state.zoom,
+      y: bounds.height / 2 - worldY * state.zoom,
+    }
+    applyCanvasTransform()
+    syncCanvasViewport()
+  }
+  jump(event)
+  const move = moveEvent => jump(moveEvent)
+  const stop = () => {
+    document.removeEventListener('pointermove', move)
+    document.removeEventListener('pointerup', stop)
+    document.removeEventListener('pointercancel', stop)
+  }
+  document.addEventListener('pointermove', move)
+  document.addEventListener('pointerup', stop)
+  document.addEventListener('pointercancel', stop)
+})
+
 app.addEventListener('wheel', event => {
   const viewport = canvasViewport(event.target)
   if (!(viewport instanceof HTMLElement)) return
@@ -2001,6 +2086,7 @@ app.addEventListener('click', async event => {
       return
     }
     if (button.dataset.action === 'cancel-merge-gesture') { state.mergeGesture = null; render(); return }
+    if (button.dataset.action === 'toggle-minimap') { setMinimapEnabled(!minimapEnabled()); render(); return }
     if (button.dataset.action === 'submit-merge-panel') await submitMergePanel()
     if (button.dataset.action === 'cancel-merge-panel') closeMergePanel()
     if (button.dataset.action === 'execute-merge' && thread !== undefined) await executeMerge(thread)
