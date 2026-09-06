@@ -65,6 +65,12 @@
   - 注 2026-09-04：Rust `Frames::kurumi_row` 单测（harness `cargo test` 通过）、
     dispatch 解析器四路 pwsh 实测通过；parse_fragment 单测仍待
 - [ ] 升级策略(DSH rc.x 升级后跑 verify-themes + 令牌面 diff,build-init 已内建令牌校验)
+- [ ] **依赖安全跟踪（GHSA-wrw7-89jp-8q8g）**：`Cargo.lock` 中 glib 0.18.5 受 `VariantStrIter`
+  unsoundness 影响（修复版 0.20.0）；其为 Tauri 仅 Linux(GTK) 目标的传递依赖
+  （webkit2gtk 2.0.2 → gtk ^0.18 → glib ^0.18），上游 tauri/webkit2gtk 最新版均未迁移
+  gtk-rs 0.20 世代，官方生态暂无修复版本；本项目仅发布 Windows 桌面端，受影响代码
+  不进任何产物，Dependabot 告警 #1 已按 not_used 驳回（2026-09-06）。待上游迁移后
+  `cargo update` 跟随升级并重新核对。
 
 ## 历史教训(勿重犯)
 
