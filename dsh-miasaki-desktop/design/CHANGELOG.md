@@ -2,6 +2,53 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-07 · 会话日志下载入口迁移:主界面 → 轨迹页搜索栏左侧（新 bundle dsh-session-log-move）
+
+依据:用户要求「Session 日志」下载按钮不在主界面,改放轨迹页搜索栏左边;
+规划设计见 `design/session-log-download-relocate.md`（方案 A 动态插件验证 → B 固化 bundle,
+C 改平台源码不采纳——安装目录升级即覆盖）。
+
+- **方案 A 验证（动态 cordis 插件 `slogm-1`,v3 验收通过）**:
+  - v1 用 `slots.inject` 隐藏官方按钮无效 —— 动态插件晚于页面激活,`inject` 只对
+    “未来声明”的 slot 触发回应,已命名的 slot 被错过;改 `slots.register` 直接替换即生效
+    （occupants 由官方 H5 → `dyn/slogm-1` active,官方条目 active:false）;
+  - 轨迹页 toolbar 无官方 slot（全树核对 `conversation.view`/`trajectory.images` 均非
+    toolbar 挂点）,采用 DOM 注入:`[role=toolbar]` 内 `input[type=search]` 容器左侧
+    `insertBefore`,MutationObserver + 500ms 重试兜底（约 30s）,React 重渲染冲掉自动补挂;
+  - 下载复用官方 client 服务 `sessionLogDownload.download()`（缺失降级 `<a download>`
+    直触 `/api/session.export`）,按钮内联文案反馈并自动复位;
+  - client 闭包环境遮蔽 `fetch/timers`（`new Function` 参数梯形成了教学错误）,对
+    `document/MutationObserver` 则未遮蔽可直接用——降级路径因此不能走 `fetch`。
+- **B 固化**:新增 `plugins/dsh-session-log-move/`（纯 client bundle,host 空壳）:
+  `package.json`（dsh.bundle.patch + dsh.client web + peer cordis ^4.0.2）、
+  `cordis.patch.yml`（insert id）、`lib/client.js`（替换+注入+下载+反馈,逻辑与验证版
+  同源）、`lib/index.js`/`lib/index.d.ts`、`lib/types/client/index.d.ts`、`README.md`。
+- 触摸点:`plugins/dsh-session-log-move/`（新增）、`README.md`（目录树 + 插件专节）、
+  本文件、`design/session-log-download-relocate.md`（新）。
+- 用户待执行:profile `%USERPROFILE%\.dsh\profiles\web\package.json` 挂 file: 依赖
+  `dsh-session-log-move` + `dsh.profile.bundles`,profile 目录 install 后 host 重启生效;
+  动态插件验证版随时可 `cordis_stop` 停用（可逆）。
+
+## 2026-09-06 · 标题栏 v4:窗控去胶囊化——无壳裸键（阶段 A）+ 真机验收收官
+
+依据:用户对 v3 悬浮胶囊「外壳感」的观感反馈;规划设计见 `design/titlebar-v4-embed.md`
+（路线 A 无壳裸键 → A+ 几何嵌入 → B 官方 Slot 真嵌入,B 留 roadmap 待评估）。
+
+- **去胶囊壳**:`.tb-capsule` → `.tb-group`（`03-switcher.js` 删半透明底/边框/圆角/
+  backdrop-filter/box-shadow/padding 整段壳样式;`06-titlebar.js` DOM 类名同步）,
+  三键以裸键形态直接落右上角,hover 底色只落单按钮（Win11 原生标题栏同款,零新增样式,
+  关闭键 hover 红底不变）。
+- **徽章保留**:16px 主题小圆留在按钮组左侧（原 18px）,为启动页唯一主题标识
+  ——用户拍板 2026-09-06。
+- **让位收窄**:132px → 118px（裸键组 ≈108px + 余量）;真机三主题 × 最小宽度 960
+  复核「Session 日志/工具」无叠压（v3 初版 104px 叠压教训未复发）。
+- **零行为变更回归全过**:hash 命令链（min/max/close/want-max）、关闭确认弹窗、
+  36px 空白拖动 + 按钮区不拖、双击标题栏、Win+↑ 系统路径图标同步（≤1.5s 巡检）、
+  重开窗口状态恢复、非 DSH 页（404/loading 同注入路径）窗控同形态可用;
+  `npm run gen-init` + `npm run verify` 18/18 无告警。
+- 触摸点:`themes/src/03-switcher.js`、`themes/src/06-titlebar.js`、本文件、
+  `README.md`（标题栏段 v3→v4）、`design/titlebar-v4-embed.md`（新,方案 + 验收记录）。
+
 ## 2026-09-06 · 「用量」页重构:会话/全局一刀切 + 侧栏「用量统计」浮窗（token-monitor v0.4.0）
 
 依据:用户对 v0.3.3「用量」Tab 两条诉求——会话页只统计当前会话（与「轨迹」页同口径）、

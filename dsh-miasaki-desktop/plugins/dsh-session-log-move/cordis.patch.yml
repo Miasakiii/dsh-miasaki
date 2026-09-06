@@ -1,0 +1,16 @@
+# dsh-session-log-move
+#
+# DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧）。
+# - client half：
+#   · 隐藏主界面官方按钮 —— conversation.session.header.utilities 注册
+#     id: session-log-download 的空条目（官方支持同 id 替换该 cell），
+#     官方「Session 日志」胶囊按钮不再渲染；
+#   · 轨迹页注入 —— 在 [role=toolbar] 内 input[type=search] 的容器左侧
+#     注入同功能「Session 日志」下载按钮（纯原生 DOM + MutationObserver +
+#     重试兜底），点击复用官方 sessionLogDownload service（缺失时降级为
+#     <a download> 直接触发 /api/session.export 流式下载）；
+#   · 下载反馈文案随按钮内联展示（准备中/已开始下载/下载失败重试）。
+# - host half：无职责（空壳 apply，纯 client bundle）。
+- insert:
+    - id: dsh-session-log-move
+      name: 'dsh-session-log-move'

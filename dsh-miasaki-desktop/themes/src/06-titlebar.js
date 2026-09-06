@@ -1,4 +1,4 @@
-  /* ---------- 主题化窗控胶囊 + 空白拖动（无边框窗口 · V3 零占位叠加） ---------- */
+  /* ---------- 主题化窗控裸键组 + 空白拖动（无边框窗口 · V3 零占位 / V4 去胶囊） ---------- */
 
   // 窗口控制按钮图标：四枚统一 10×10 视口 SVG（stroke=currentColor、圆头端帽、Fluent 线形），
   // 取代 Unicode 字符（–/□/✕）：字符字形粗细/基线/视觉重量不一，SVG 统一描边后三按钮一致
@@ -75,7 +75,7 @@
           if (e.button !== 0) return
           if (e.detail !== 1 && e.detail !== 2) return
           if (e.clientY > DRAG_H) return
-          // 事件路径自底向上：胶囊自身/内部(窗控、徽章)不拖；首个可交互元素即放行点击
+          // 事件路径自底向上：按钮组自身/内部(窗控、徽章)不拖；首个可交互元素即放行点击
           var node = e.target
           while (node && node.nodeType === 1) {
             if (node.id === 'miasaki-titlebar') return
@@ -94,12 +94,12 @@
   }
 
   function buildTitlebar() {
-    // 本地唤醒页同样需要窗控胶囊（无边框窗口）；页面零占位，胶囊浮于内容之上
+    // 本地唤醒页同样需要窗控按钮组（无边框窗口）；页面零占位，按钮组浮于内容之上
     if (document.getElementById('miasaki-titlebar') || !document.body) return
     var bar = document.createElement('div')
     bar.id = 'miasaki-titlebar'
     bar.innerHTML =
-      '<div class="tb-capsule">' +
+      '<div class="tb-group">' +
       '<img class="tb-brand" src="' + ICON_BASE + META[current].icon + '" alt="" title="">' +
       '<div class="tb-btn" data-act="min" title="\u6700\u5C0F\u5316">' + TB_ICONS.min + '</div>' +
       '<div class="tb-btn" data-act="max" title="\u6700\u5927\u5316/\u8FD8\u539F">' + TB_ICONS.max + '</div>' +

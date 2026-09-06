@@ -43,25 +43,19 @@
     'border:1px solid transparent;opacity:.55;}' +
     '#miasaki-switcher .ms-bright .mb:hover{background:var(--ms-hover,#2a2434);opacity:.9;}' +
     '#miasaki-switcher .ms-bright .mb.on{border-color:var(--ms-accent,#d9b36a);opacity:1;}' +
-    // 标题栏 = 零占位叠加层(V3):对 DSH 页面零布局侵入——不设色带、不推挤页面(y=0 起,
-    // 页面顶部控件与 web 端同位置)。窗控收进右上角悬浮胶囊(半透明+毛玻璃,悬停实色),
-    // 胶囊/标题栏容器 pointer-events:none,仅胶囊内子元素接收事件;拖动由 06-titlebar.js
-    // 的 document 级命中判定接管(空白拖动,可点击元素一律放行)。
+    // 标题栏 = 零占位叠加层(V4):对 DSH 页面零布局侵入——不设色带、不推挤页面(y=0 起,
+    // 页面顶部控件与 web 端同位置)。窗控三键无壳裸排右上角(去胶囊:无底色/无边框/无毛
+    // 玻璃/padding),hover 底色只落在单按钮上(Win11 原生标题栏同款);标题栏容器
+    // pointer-events:none,仅按钮组内子元素接收事件;拖动由 06-titlebar.js 的 document
+    // 级命中判定接管(空白拖动,可点击元素一律放行)。
     '#miasaki-titlebar{position:fixed;left:0;top:0;right:0;height:0;z-index:100000;' +
     'pointer-events:none;background:transparent;' +
     'color:var(--dsw-alias-label-primary,var(--ms-text,#e4def0));font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
     'user-select:none;-webkit-user-select:none;cursor:default;}' +
     '#miasaki-titlebar>*{pointer-events:auto;}' +
-    '#miasaki-titlebar .tb-capsule{position:fixed;top:5px;right:8px;display:flex;align-items:center;gap:2px;' +
-    'padding:3px;border-radius:999px;' +
-    'background:color-mix(in srgb, var(--ms-panel,#1e1a27) 74%, transparent);' +
-    'border:1px solid var(--ms-border,#3a3243);' +
-    'box-shadow:0 2px 10px rgba(0,0,0,.16);' +
-    'backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);' +
-    'transition:background .18s ease;}' +
-    '#miasaki-titlebar .tb-capsule:hover{background:var(--ms-panel,#1e1a27);}' +
-    '#miasaki-titlebar .tb-brand{width:18px;height:18px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
-    'margin:0 3px;box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));}' +
+    '#miasaki-titlebar .tb-group{position:fixed;top:5px;right:8px;display:flex;align-items:center;gap:2px;}' +
+    '#miasaki-titlebar .tb-brand{width:16px;height:16px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
+    'margin:0 4px;box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));}' +
     '@keyframes ms-brand-breathe{0%,100%{opacity:.78}50%{opacity:1}}' +
     '#miasaki-titlebar .tb-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;' +
     'cursor:pointer;font-size:13px;border-radius:7px;color:var(--dsw-alias-label-secondary,var(--ms-text,#e4def0));' +
@@ -73,9 +67,10 @@
     '#miasaki-titlebar .tb-btn svg{width:11px;height:11px;display:block;fill:none;' +
     'stroke:currentColor;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;}' +
     '#miasaki-titlebar .tb-btn.tb-close:hover{background:var(--ms-danger,#c23a2e);color:#fff;opacity:1;}' +
-    // 顶行让位:会话页头部(含 tabs 行)右侧预留胶囊宽度(实测胶囊 ≈114px + 回车余量),
-    // Session 日志/工具按钮左移,不再与悬浮胶囊叠压(与 VSCode 等自绘标题栏同款让位)。
-    '#root header:has([role="tablist"]){padding-right:132px;}' +
+    // 顶行让位:会话页头部(含 tabs 行)右侧预留裸键按钮组宽度(徽章 16+4 + 三键 26×3 +
+    // gap ≈104-108px,+10px 余量),Session 日志/工具按钮左移,不再与窗控按钮组叠压
+    // (与 VSCode 等自绘标题栏同款让位)。
+    '#root header:has([role="tablist"]){padding-right:118px;}' +
     'html,body{height:100%;overflow:hidden;}' +
     '#miasaki-switcher .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +
     '#miasaki-switcher .ms-btn img{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;}' +

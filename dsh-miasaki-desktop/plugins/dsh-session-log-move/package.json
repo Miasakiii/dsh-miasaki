@@ -1,0 +1,35 @@
+{
+  "name": "dsh-session-log-move",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "把「Session 日志」下载入口从主界面会话头部搬到轨迹页工具栏搜索栏左侧：同 id 替换隐藏官方按钮（conversation.session.header.utilities / session-log-download），并在 [role=toolbar] 搜索框左侧注入同功能按钮（复用官方 sessionLogDownload 服务与 /api/session.export 端点）。",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

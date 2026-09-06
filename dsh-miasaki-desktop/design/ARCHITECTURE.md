@@ -118,17 +118,18 @@ Remove dist\ui -Recurse; Copy desktop\ui → dist\ui
   `--dsh-state-ongoing` 已失效(主题内为死覆盖,无害);视觉漂移点在 alias 表达处。
 - **单实例**:tauri-plugin-single-instance(二次启动唤起已有窗口)。
 - 主窗口关闭 = 退出应用(DSH 服务保持运行);托盘菜单可隐藏主窗口。
-- **标题栏**(v3 2026-09-05):**零占位叠加**——窗口自绘壳对 DSH 页面零布局侵入
+- **标题栏**(v4 2026-09-06,自 v3 2026-09-05 演进):**零占位叠加**——窗口自绘壳对 DSH 页面零布局侵入
   (无顶带/无下推/无卡片,页面 y=0 起渲染,顶部控件与 web 端同位置);窗控 = 右上角
-  悬浮胶囊(pointer-events:none 容器,仅胶囊子元素接收事件);拖动 = document 级
-  mousedown 捕获 + 顶部 36px 命中判定(复用 tauri drag-region 判定口径:路径上有
-  可点击标签/contenteditable/tabindex/交互 role 即放行点击,否则
+  **无壳裸键组**(v3 悬浮胶囊外壳已删:无底色/边框/毛玻璃/padding,hover 底色只落单按钮;
+  主题徽章 16px 保留在按钮组左侧;`pointer-events:none` 容器,仅按钮组子元素接收事件);
+  拖动 = document 级 mousedown 捕获 + 顶部 36px 命中判定(复用 tauri drag-region 判定口径:
+  路径上有可点击标签/contenteditable/tabindex/交互 role 即放行点击,否则
   `plugin:window|start_dragging`/双击 `internal_toggle_maximize`);唯一页面级调整 =
-  `#root header:has([role="tablist"]){padding-right:132px}` 给胶囊让位(初版 104px
-  真机叠压后加宽;选择器锚定 `role=tablist`,DSH 升级时随 verify-themes 复核)。
-  底座为 Win11 Mica(`apply_mica` DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE` + 透明窗口底,
-  面板令牌半透明后透出,与胶囊共享同一材质),Mica 不可用(Win10)回退主题实色底
-  (见 CHANGELOG 2026-09-05 条目)。侧栏色块模拟/几何同步已随 v2 移除(历史见
+  `#root header:has([role="tablist"]){padding-right:118px}` 给裸键组让位(v3 胶囊时代
+  132px;初版 104px 真机叠压后加宽;选择器锚定 `role=tablist`,DSH 升级时随
+  verify-themes 复核)。底座为 Win11 Mica(`apply_mica` DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE` + 透明窗口底,
+  面板令牌半透明后透出),Mica 不可用(Win10)回退主题实色底
+  (见 CHANGELOG 2026-09-05 / 2026-09-06 条目)。侧栏色块模拟/几何同步已随 v2 移除(历史见
   CHANGELOG 2026-08-29 / 2026-09-05 各条)。
 - **Rust→页面单向通道(eval + CustomEvent)**:远程页 capability 只授 start-dragging,
   无 IPC 权限;Rust 侧经 `wv.eval` 派发 CustomEvent 下发状态(`miasaki-pet-state` /

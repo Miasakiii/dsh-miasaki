@@ -81,19 +81,24 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
   页面按钮/页签/输入框照常点击不受影响。远程页面（http://127.0.0.1:3080）的子
   capability `remote-dsh.json` 必须授予 `core:window:allow-start-dragging`（已授），
   否则拖动手势会被插件 ACL 拒绝且无任何提示。
-- **窗口控制按钮**：右上角悬浮胶囊内最小化/最大化/关闭为统一内联 SVG 线图标（10×10 视口、
-  `stroke-width 1`、`currentColor` 描边、圆头端帽 Fluent 风格，三按钮视觉重量一致），
+- **窗口控制按钮**：右上角**无壳裸键组**内最小化/最大化/关闭为统一内联 SVG 线图标（10×10 视口、
+  `stroke-width 1`、`currentColor` 描边、圆头端帽 Fluent 风格，三按钮视觉重量一致；
+  v4 起无底色/无边框/无毛玻璃，hover 底色只落单按钮——Win11 原生同款），
   最大化后按钮自动切换为「还原」错位双框图标——远程页无 IPC 权限，状态由 Rust 侧
   `on_window_event`（Resized，150ms 防抖）经 eval 派发 `miasaki-max-state` CustomEvent
   驱动，页面加载后延迟补推、页面经 hash `cmd=want-max` 可请求重推；双击顶部空白 /
   Win+↑ 等系统路径同样同步；非 Tauri 环境（浏览器调试预览）点击时本地翻转兜底。
-- **标题栏 × 主界面一体化（v3 · 零占位叠加）**：系统标题栏移除（`decorations(false)`）
-  后，桌面壳对 DSH 页面**零布局侵入**——无 32px 顶带、无下推、无卡片，页面从 y=0
-  起渲染，顶部控件（会话头「对话/轨迹/用量」页签、Session 日志等）位置与 web 端
-  完全一致；窗控收进右上角**悬浮胶囊**（主题徽章 + 三键，半透明 + 毛玻璃，悬停
-  实色，胶囊外 pointer-events:none）；唯一页面级调整 = `#root header:has([role="tablist"])`
-  右侧 padding 132px 给胶囊让位（初版 104px 真机叠压后加宽；DSH 升级时随
-  verify-themes 复核选择器）。底座仍为
+- **标题栏 × 主界面一体化（v3 零占位叠加 → v4 去胶囊 · 无壳裸键）**：系统标题栏移除
+  （`decorations(false)`）后，桌面壳对 DSH 页面**零布局侵入**——无 32px 顶带、无下推、
+  无卡片，页面从 y=0 起渲染，顶部控件（会话头「对话/轨迹/用量」页签、Session 日志等）
+  位置与 web 端完全一致；窗控三键以**无壳裸键**直接落在右上角（v3 的悬浮胶囊外壳已删：
+  无底色/无边框/无毛玻璃/padding，观感接近标准无边框应用；主题徽章 16px 保留在按钮组
+  左侧，为启动页唯一主题标识——用户拍板 2026-09-06），hover 底色只落在单按钮上
+  （Win11 原生同款，关闭键 hover 红底）；唯一页面级调整 =
+  `#root header:has([role="tablist"])` 右侧 padding 118px 给裸键组让位（≈108px + 余量；
+  v3 胶囊时代为 132px）。命令链/拖动/最大化同步与 v3 相同：hash `cmd=min/max/close`
+  → Rust watchdog；双击顶部空白 / Win+↑ 等系统路径同样同步；裸键组仍在
+  `#miasaki-titlebar` 内，拖动排除自动生效。底座仍为
   **Win11 Mica**（DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE`，窗口底透明），`.shadow(true)`
   恢复圆角/阴影/描边；Mica 不可用（Win10）时回退主题实色底，pure 保持原版实色。
 - 气泡台词为**构建期预渲染**的位图帧（`ui/pets/bubbles.png`，20 帧：17 台词 + 3 状态帧
@@ -117,6 +122,7 @@ desktop/
 ├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
 ├─ plugins/dsh-token-monitor/    # DSH web profile bundle：用量监控（会话「用量」Tab 纯会话视角 + 侧栏脚部「用量统计」入口 → 全局浮窗：总览六卡/年热力图/趋势/模型与会话 Top N 分布/今日限额，v0.4.0）
+├─ plugins/dsh-session-log-move/ # DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧，见下）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
 ├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）
@@ -131,7 +137,7 @@ desktop/
 
 ## DSH 插件：免费模型池（`plugins/dsh-free-model-pool/`）
 
-> **官方 dsh 0.1.2-rc.1 适配（2026-09-05）**：三个插件与 `@miasaki/dsh-canvas` 已核对
+> **官方 dsh 0.1.2-rc.1 适配（2026-09-05）**：四个插件与 `@miasaki/dsh-canvas` 已核对
 > 并跟进官方 0.1.2 插件 API（peerDeps 对齐 `^0.1.2-rc.1`，canvas 清理已消失的
 > `dsh-client-runtime` 依赖声明）。注意 0.1.2 的 `llm-pi-ai` 配置校验收紧：
 > `settings.yaml` 里模型 id 不在官方 catalog 的平台必须显式声明 `api` 与 `baseURL`
@@ -178,6 +184,22 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 安装：同免费模型池 —— profile `package.json` 的 `dependencies` + `dsh.profile.bundles`
 加 `dsh-pet-panel`（file: 依赖），profile 目录 `pnpm install` 后核对
 `node_modules/dsh-pet-panel/lib/*` 与源码哈希一致；host 重启后生效。
+
+## DSH 插件：会话日志下载入口迁移（`plugins/dsh-session-log-move/`）
+
+把「Session 日志」下载按钮从**主界面会话头部**迁移到**轨迹页工具栏搜索栏左侧**：
+
+- **主界面隐藏**：`conversation.session.header.utilities` 同 id（`session-log-download`）
+  替换为空条目（平台 slot 语义：同 id 复用即替换该 cell），官方「Session 日志」胶囊不渲染；
+- **轨迹页注入**：`[role=toolbar]` 内搜索框容器左侧插入同功能按钮（toolbar 无官方 slot，
+  DOM 注入 + MutationObserver + 500ms 重试兜底约 30s，重渲染冲掉自动补挂）；
+- **下载链路**：复用官方 `sessionLogDownload` 服务（缺失降级 `<a download>` 触发
+  `/api/session.export?sessionId=…&includeDescendants=true` 流式下载）；
+- **反馈**：按钮内联文案（准备中 / 已开始下载 / 下载失败，重试）自动复位；
+- 全部副作用挂 `ctx.effect` disposer，停用即完全复原。host 半空壳无职责。
+
+先行动态插件验证（2026-09-07）通过后按此形态固化；设计见
+`design/session-log-download-relocate.md`，安装同 token-monitor profile bundle。
 
 ## 设计规范
 
