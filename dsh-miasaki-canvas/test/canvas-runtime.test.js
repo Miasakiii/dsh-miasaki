@@ -101,8 +101,8 @@ test('keeps conversation highlighting separate from the exact selected card', as
   assert.match(connectors, /active-connector/)
   assert.match(cardClick, /state\.selectedCardId = cardId/)
   assert.match(selectThread, /state\.selectedCardId = null/)
-  assert.match(styles, /\.connectors path\.active-connector \{ stroke: #3478f6; \}/)
-  assert.match(styles, /\[data-theme="dark"\] \.connectors path\.active-connector \{ stroke: #5b8def; \}/)
+  assert.match(styles, /\.connectors path\.active-connector \{ stroke: var\(--canvas-accent\); \}/)
+  assert.match(styles, /\[data-theme="dark"\] \.connectors path\.active-connector \{ stroke: var\(--canvas-accent-ink\); \}/)
   assert.doesNotMatch(styles, /\.thread-card\.active/)
 })
 

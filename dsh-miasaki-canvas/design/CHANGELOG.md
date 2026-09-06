@@ -2,6 +2,20 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-06（五）
+
+- **画布品牌色不随桌面端主题切换（用户报告，版本升至 `0.5.0-miasaki.3`）**：桌面端主题切换器是**热切换**——`html[data-miasaki-theme]` 属性 + 热替换主题 style 层（`runtime.js` setAttr/syncDark，无 reload）；而画布 `themeObserver` 只监听 `body[data-ds-dark-theme]`，且 sessions/workspaces 订阅只在列表变化时触发——切品牌主题（pure↔zafkiel↔kurkuriel）时既不触发 observer 也无 tick，画布停在旧品牌色。修复：同一 MutationObserver 实例加挂 `documentElement[data-miasaki-theme]` 观察（亮度三档切换走 body 属性本就触发）；防御性收窄——令牌瞬时读空（主题 style 层被页面重渲染清掉后的 ~1s 自愈窗口期）时只发明暗不下发，保留画布现有品牌色，避免被打回兜底蓝且无人再触发重发。验证：浏览器注入测试 CSS 模拟桌面切换（`html[data-miasaki-theme="zafkiel"]` 令牌覆盖 + 热设属性），画布 `--canvas-accent` 实时 `#5686fe → #c23a2e →` 移除属性回落 `#5686fe`；`pnpm run build` + `pnpm test` 75/75。触摸点：`client.js`（host 侧代码，重启 `dsh web` 生效）。
+
+## 2026-09-06（四）
+
+- **桌面端画布页三问题修复**（版本升至 `0.5.0-miasaki.2`；用户截图 + 视觉模型复核定位，修复全部落在画布线，不动桌面端）：
+  - **右上角叠压遮挡**：桌面端标题栏 v3 的窗控胶囊 `#miasaki-titlebar .tb-capsule`（`fixed; top:5px; right:8px`，零占位浮层）盖住画布工具条（`.canvas-controls`，同为 fixed 右上）的缩放按钮。修复：`client.js` 新增 `syncChrome()`——量出胶囊左缘到视口右缘距离 + 6px 余量，经 `canvas:chrome` 下发；`app.js` 写入 iframe 根变量 `--canvas-chrome-reserve`，`.canvas-controls` 与 `.status-message` 的 `right` 改为 `calc(16px + var(--canvas-chrome-reserve))` 整体让位。胶囊宽度与 right 偏移固定、不随窗口尺寸变化，故不监听 resize；普通浏览器无胶囊恒传 0，行为不变。
+  - **主题没对应**：画布 iframe 是独立文档不继承 DSH 令牌，此前 `client.js` 只同步明暗布尔，iframe 内 `#3478f6/#5b8def/#7ea6f5/#2563eb` 等强调色全部硬编码蓝系——绯红主题下画布仍是蓝。修复：`syncTheme()` 扩展读父文档 `--dsw-static-deepseek-450`（pure=`#3964fe` 原生 / kurkuriel=`#9e1b1b` / zafkiel=`#c23a2e`，pure 不覆盖令牌时读 DSH 原生值；格式校验防脏值）随 `canvas:theme` 下发；`app.js` 写入 iframe 根 `--canvas-accent`，styles.css 派生变量组——`--canvas-accent-hover`（color-mix 加深，替 #2563eb）、`--canvas-accent-ink`（暗色下 color-mix 提亮做文字/线条色，替 #5b8def/#7ea6f5——深红原值在暗底上不可读）、`--canvas-accent-soft`（品牌淡底，替 #eef4ff/#eaf0fa/#eaf1ff/#1e2a44 系）；约 60 处硬编码替换为变量/color-mix：tabs 激活、连接线（含草稿虚线）、选中卡阴影、框选、小地图选中/视口框、focus 轮廓、主按钮（亮 #111827/暗 #3478f6 双套）、「对话/会话布」激活胶囊（暗色由白底黑字改品牌底白字）。**语义色不动**：live 绿、merge 紫、错误红、警示橙、中性灰阶；`brand::after` 徽章保留黑底。
+  - **滚动条突兀**：此前仅 `.thread-answer` 有自定义滚动条（灰色硬编码常显），侧边栏/详情/检查器/对比页等裸奔系统条。统一规则覆盖全部 15 个滚动容器（`.thread-answer`、`.thread-tree`、`.card-inspector-scroll`、`.detail-scroll`、`.compare-view`、`.merge-plan`、`.process-args/result/error` 及三处代码块/表格横向滚动）：6px、透明轨道、胶囊圆角、thumb 色走 `--canvas-scroll-thumb`（亮中性灰半透/暗半透白，随主题）、thumb hover 变品牌色；**默认隐藏，容器 hover/focus-within 时显现**（卡片上不再常驻灰条）；Firefox 以 `scrollbar-width:thin + scrollbar-color` 常显兜底。
+  - **顺手**：暗色下 `.dsh-canvas-overlay` 遮罩层同步深色（`body[data-ds-dark-theme]` 选择器，消除亮色壳套暗色画布的一圈亮边）。
+  - 测试同步：`canvas-runtime.test.js` 两条 connectors 颜色断言改断变量形式。`pnpm run build`（node --check 三文件）+ `pnpm test` 75/75 通过。
+- 触摸点：`styles.css` / `client.js` / `app.js` / `test/canvas-runtime.test.js`（link 开发模式，重启 `dsh web` + 刷新页面生效）。
+
 ## 2026-09-06（三）
 
 - **切换按钮改为官方插槽注册（叠压问题彻底关闭）**：上一版 DOM 注入 `.headerActions`

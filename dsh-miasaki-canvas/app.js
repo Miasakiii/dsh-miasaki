@@ -2245,6 +2245,15 @@ window.addEventListener('message', event => {
   }
   if (data.type === 'canvas:theme') {
     document.documentElement.dataset.theme = data.dark === true ? 'dark' : 'light'
+    // DSH 品牌色令牌（client.js 从父文档 --dsw-static-deepseek-450 读出下发）；
+    // 其余强调色全部由 styles.css 从该变量 color-mix 派生。缺席时回落兜底蓝。
+    if (typeof data.accent === 'string' && data.accent !== '') document.documentElement.style.setProperty('--canvas-accent', data.accent)
+    else document.documentElement.style.removeProperty('--canvas-accent')
+  }
+  if (data.type === 'canvas:chrome') {
+    // 桌面端窗控胶囊让位宽度（px）；0/缺省 = 普通浏览器，右上角不吃任何保留位
+    const reserve = Number.isFinite(data.reserve) && data.reserve > 0 ? Math.round(data.reserve) : 0
+    document.documentElement.style.setProperty('--canvas-chrome-reserve', `${reserve}px`)
   }
   if (data.type === 'canvas:workspaces') {
     state.dshWorkspaces = Array.isArray(data.workspaces) ? data.workspaces.filter(workspace => typeof workspace?.id === 'string' && typeof workspace.title === 'string' && Array.isArray(workspace.sessionIds)) : []

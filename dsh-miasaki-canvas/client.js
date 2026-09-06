@@ -44,7 +44,7 @@ window.__ModuleLoader__.load({
       // 切换按钮走 DSH 会话头 actions 插槽（官方槽渲染、与「后台任务」同一 flex 行，
       // 结构上不可能叠压），配色全部用 DSH 主题令牌（激活胶囊随主题品牌色：
       // 原版蓝 / 刻刻帝绯红 / 狂狂帝血绯）。
-      style.textContent = '.dsh-canvas-switch{display:flex;gap:2px;margin-left:2px;padding:3px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.92));backdrop-filter:blur(10px)}.dsh-canvas-switch button{height:28px;border:0;border-radius:999px;background:transparent;padding:0 11px;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}.dsh-canvas-switch button:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}.dsh-canvas-switch button.active{background:var(--dsw-static-deepseek-450,#111827);color:var(--dsw-static-neutral-bluish-00,#fff)}.dsh-canvas-switch button:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}.dsh-canvas-overlay{position:fixed;z-index:100;inset:0;background:#f5f7fa}.dsh-canvas-overlay.is-opening{visibility:hidden}.dsh-canvas-overlay[hidden]{display:none}.dsh-canvas-overlay iframe{display:block;width:100%;height:100%;border:0}'
+      style.textContent = '.dsh-canvas-switch{display:flex;gap:2px;margin-left:2px;padding:3px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.92));backdrop-filter:blur(10px)}.dsh-canvas-switch button{height:28px;border:0;border-radius:999px;background:transparent;padding:0 11px;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}.dsh-canvas-switch button:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}.dsh-canvas-switch button.active{background:var(--dsw-static-deepseek-450,#111827);color:var(--dsw-static-neutral-bluish-00,#fff)}.dsh-canvas-switch button:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}.dsh-canvas-overlay{position:fixed;z-index:100;inset:0;background:#f5f7fa}.dsh-canvas-overlay.is-opening{visibility:hidden}.dsh-canvas-overlay[hidden]{display:none}.dsh-canvas-overlay iframe{display:block;width:100%;height:100%;border:0}body[data-ds-dark-theme] .dsh-canvas-overlay{background:#0f1115}'
       document.head.append(style)
       const host = document.createElement('div')
       host.className = 'dsh-canvas-host'
@@ -126,12 +126,40 @@ window.__ModuleLoader__.load({
       }
       const syncTheme = () => {
         const dark = document.body?.hasAttribute?.('data-ds-dark-theme') === true
-        send('canvas:theme', { dark })
+        // 品牌令牌随主题下发（pure=#3964fe 原生蓝 / zafkiel=#c23a2e / kurkuriel=#9e1b1b），
+        // 画布 iframe 是独立文档不继承令牌，读到什么发什么；读不到则画布保持兜底蓝。
+        let accent = ''
+        try {
+          accent = getComputedStyle(document.documentElement).getPropertyValue('--dsw-static-deepseek-450').trim()
+          if (accent === '') accent = getComputedStyle(document.body).getPropertyValue('--dsw-static-deepseek-450').trim()
+        } catch { /* 父文档样式不可读（极少见），保持画布默认色 */ }
+        if (!/^#[0-9a-f]{3,8}$/i.test(accent) && !/^rgba?\(/i.test(accent)) accent = ''
+        // 读不到令牌（桌面主题样式层被重渲染清掉的自愈窗口期）时只发明暗，
+        // 保留画布现有品牌色，避免被打回兜底蓝且无人再触发重发。
+        const payload = { dark }
+        if (accent !== '') payload.accent = accent
+        send('canvas:theme', payload)
+      }
+      // 桌面端无边框窗口的窗控胶囊（#miasaki-titlebar .tb-capsule，fixed top:5px right:8px）
+      // 零占位浮在页面右上角，画布工具条同为 fixed 右上会叠压。量出胶囊左缘到视口右缘
+      // 的距离 + 余量下发，iframe 用它做 --canvas-chrome-reserve；普通浏览器无胶囊传 0。
+      // 胶囊宽度与 right 偏移固定，不随窗口尺寸变化，故无需监听 resize。
+      const syncChrome = () => {
+        let reserve = 0
+        try {
+          const capsule = document.querySelector('#miasaki-titlebar .tb-capsule')
+          if (capsule instanceof HTMLElement) {
+            const rect = capsule.getBoundingClientRect()
+            if (rect.width > 0) reserve = Math.ceil(window.innerWidth - rect.left + 6)
+          }
+        } catch { /* 无父文档场景兜底 0 */ }
+        send('canvas:chrome', { reserve })
       }
       const syncCurrentSession = () => {
         syncSessions()
         syncLiveSessions()
         syncTheme()
+        syncChrome()
         if (!overlay.hidden) {
           send('canvas:workspaces', { workspaces: workspaceSnapshot(ctx) })
           send('canvas:current-session', { session: currentSession(ctx) })
@@ -236,13 +264,17 @@ window.__ModuleLoader__.load({
         }
       }
       const onKeyDown = event => { if (event.key === 'Escape' && !overlay.hidden) close() }
-      // Follow DSH's live theme switch: body[data-ds-dark-theme] is the web
-      // client's dark-mode signal, mirrored into the map iframe via canvas:theme.
+      // Follow DSH's live theme switch — both signals, one observer:
+      // body[data-ds-dark-theme] is the web client's dark-mode flag, and
+      // html[data-miasaki-theme] is the desktop shell's brand-theme attribute
+      // (hot-swapped with its style layer, no reload); without watching the
+      // latter the map keeps the old brand color after a desktop theme switch.
       const themeObserver = typeof MutationObserver === 'undefined'
         ? null
         : new MutationObserver(() => syncTheme())
       if (themeObserver !== null && document.body) {
         themeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
+        themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-miasaki-theme'] })
       }
       const unsubscribeSessions = ctx.sessions.list.subscribe(syncCurrentSession)
       const unsubscribeWorkspaces = ctx.workspaces.list.subscribe(syncCurrentSession)
