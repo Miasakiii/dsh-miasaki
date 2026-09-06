@@ -18,9 +18,12 @@
  *   跨 host 重启持久。数据目录：优先宿主提供的插件数据目录服务，否则
  *   `~/.dsh/plugins-data/dsh-token-monitor/`。
  *
- * 对外暴露（webServer 精确路由，`{ok, error}` 包装对齐 dsh-free-model-pool）：
- * - GET  /dsh-token-monitor/summary?sessionId=…  官方 + 实时 + 账本（今日 /
- *        近 30 天趋势含按模型明细 / 总览统计 stats）+ 限额
+ * 对外暴露（webServer 精确路由，`{ok, error}` 包装对齐 dsh-free-model-pool）。
+ * v0.4.0 起按视图拆分（旧 /summary 退役）：会话内归 /session，跨会话归 /global。
+ * - GET  /dsh-token-monitor/session?sessionId=…  当前会话：官方聚合 + 实时明细
+ *        （live.calls / live.tools 按 sessionId 过滤 + 会话活跃跨度）——会话页专用
+ * - GET  /dsh-token-monitor/global               跨会话：总览统计 / 今日 / 近 30 天
+ *        趋势（含按模型明细）/ 会话用量 Top N（近 30 日按 sessionId 聚合）/ 限额
  * - GET  /dsh-token-monitor/heatmap              稀疏每日账单（热力图数据源）
  * - GET  /dsh-token-monitor/config               限额配置
  * - POST /dsh-token-monitor/config               body `{dailyTokenLimit: number|null}`
@@ -42,6 +45,8 @@ const LEDGER_DAYS = 380;
 const TAIL_BYTES = 8 * 1024 * 1024;
 /** 会话跨度快照最小推进间隔：活跃会话每分钟至多落一行。 */
 const SPAN_FLUSH_MS = 60 * 1000;
+/** 全局页「会话用量 Top N」条数。 */
+const SESSION_TOPN = 10;
 
 /** 本地时区日期键（YYYY-MM-DD，用户视角的"今日"）。 */
 function localDate(t) {
@@ -83,7 +88,18 @@ function resolveDataDir(ctx) {
 
 export function apply(ctx) {
 	const live = { calls: {}, tools: {} };
+	/** sessionId -> {first, last}：本进程内会话活跃跨度（会话页「活跃时长」，实时口径）。 */
+	const liveSpans = new Map();
 	const now = () => Date.now();
+
+	/** 本进程内会话活跃跨度（min first / max last 合并，与会话页实时口径配套）。 */
+	function touchLiveSpan(sessionId, ts) {
+		if (!sessionId || sessionId === '?') return;
+		let s = liveSpans.get(sessionId);
+		if (!s) { s = { first: ts, last: ts }; liveSpans.set(sessionId, s); return; }
+		if (ts < s.first) s.first = ts;
+		if (ts > s.last) s.last = ts;
+	}
 
 	// ---- 跨会话账本与限额配置 ------------------------------------------
 
@@ -435,6 +451,7 @@ export function apply(ctx) {
 			const date = localDate();
 			addToLedger(date, sessionId, provider, model, dIn, dOut, dCache, dReason, 1);
 			touchSpan(date, sessionId, now());
+			touchLiveSpan(sessionId, now());
 		});
 	});
 
@@ -451,6 +468,7 @@ export function apply(ctx) {
 			entry.lastAt = now();
 			// 工具活动同样视为会话活跃（参与聊天时长跨度）。
 			touchSpan(localDate(), sessionId, now());
+			touchLiveSpan(sessionId, now());
 		} catch (e) { /* 隔离 */ }
 	});
 
@@ -498,10 +516,17 @@ export function apply(ctx) {
 		return out;
 	}
 
-	async function buildSummary(sessionId) {
+	/**
+	 * 会话路由载荷：官方聚合 + 实时明细。live.calls / live.tools 按 sessionId
+	 * 过滤后再下发（修复 v0.3.3 全量返回、混入同进程其他会话数据的边界缺陷），
+	 * 并附本进程内会话活跃跨度（会话页「活跃时长」实时口径）。
+	 */
+	async function buildSessionPayload(sessionId) {
 		const calls = [];
 		const tools = [];
+		const prefix = (sessionId || '') + '|';
 		for (const k of Object.keys(live.calls)) {
+			if (sessionId && !k.startsWith(prefix)) continue;
 			const c = live.calls[k];
 			if (c.provider === '?') continue;
 			calls.push({
@@ -513,23 +538,87 @@ export function apply(ctx) {
 		}
 		calls.sort((a, b) => b.total - a.total);
 		for (const k of Object.keys(live.tools)) {
+			if (sessionId && !k.startsWith(prefix)) continue;
 			const t = live.tools[k];
 			tools.push({ name: t.name, count: t.count, lastAt: t.lastAt });
 		}
 		tools.sort((a, b) => b.count - a.count);
+		const span = (sessionId && liveSpans.get(sessionId)) || null;
 		return {
+			ok: true,
 			sessionId: sessionId || null,
 			official: await officialSummary(sessionId),
-			live: { calls, tools, sampledAt: now() },
-			stats: computeStats(),
-			ledger: {
-				today: aggregateDay(localDate()),
-				trend: ledgerTrend(30),
-				since: ledgerSince || localDate(),
-				error: ledgerError
+			live: {
+				calls, tools,
+				activeSpan: span ? { first: span.first, last: span.last } : null,
+				sampledAt: now()
 			},
+			note: '官方聚合（tokenUsage / contextPressure / sessionStats）由会话日志投影、覆盖本会话全程（含插件启用前历史、跨重启），与「轨迹」页同源；按模型明细、工具计数与会话活跃时长由本插件实时采集、仅统计本进程启动之后的本会话。本页不含任何跨会话累计，全局总量统计请见左侧边栏「用量统计」。'
+		};
+	}
+
+	/**
+	 * 近 days 天按会话聚合排行（全局页「会话用量 Top N」）：tokens 总量 +
+	 * 轮消息 + 账本活跃跨度（同会话跨天合并 min first / max last）。
+	 * 会话标题尽力解析（sessions.get），失败降级为 null（客户端显示 ID）。
+	 */
+	function sessionRanking(days, limit) {
+		const cutoff = dateOffset(-(days - 1));
+		const bySession = new Map();
+		for (const [date, day] of ledgerDays) {
+			if (date < cutoff) continue;
+			for (const e of day.values()) {
+				const sid = e.sessionId || '?';
+				let s = bySession.get(sid);
+				if (!s) {
+					s = { sessionId: sid, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, total: 0, calls: 0, first: null, last: null };
+					bySession.set(sid, s);
+				}
+				s.inputTokens += e.inputTokens; s.outputTokens += e.outputTokens;
+				s.cacheReadTokens += e.cacheReadTokens; s.reasoningTokens += e.reasoningTokens;
+				s.total = s.inputTokens + s.outputTokens + s.cacheReadTokens + s.reasoningTokens;
+				s.calls += e.calls || 0;
+			}
+		}
+		for (const [date, day] of spans) {
+			if (date < cutoff) continue;
+			for (const [sid, s] of day) {
+				const t = bySession.get(sid);
+				if (!t) continue;
+				if (t.first === null || s.first < t.first) t.first = s.first;
+				if (t.last === null || s.last > t.last) t.last = s.last;
+			}
+		}
+		const rows = Array.from(bySession.values());
+		for (const r of rows) { if (r.first === null) { r.first = 0; r.last = 0; } }
+		rows.sort((a, b) => b.total - a.total || b.calls - a.calls);
+		const out = rows.slice(0, limit);
+		let sessionsSvc = null;
+		try { sessionsSvc = ctx.get('sessions'); } catch (e) { /* 无服务则标题降级 */ }
+		for (const r of out) {
+			let title = null;
+			try {
+				const s = sessionsSvc && sessionsSvc.get(r.sessionId);
+				if (s && typeof s.title === 'string' && s.title.trim()) title = s.title.trim();
+			} catch (e) { /* 降级 */ }
+			r.title = title;
+		}
+		return out;
+	}
+
+	/** 全局路由载荷：跨会话账本统计（总览 / 今日 / 趋势 / 会话 Top N）+ 限额。 */
+	async function buildGlobalPayload() {
+		return {
+			ok: true,
+			stats: computeStats(),
+			today: aggregateDay(localDate()),
+			trend: ledgerTrend(30),
+			sessions: { windowDays: 30, limit: SESSION_TOPN, rows: sessionRanking(30, SESSION_TOPN) },
+			since: ledgerSince || localDate(),
 			config: { dailyTokenLimit: config.dailyTokenLimit },
-			note: '模型明细与工具统计自插件（进程）启动起实时采集；官方聚合与估算覆盖整个会话日志；总览统计、热力图、近 30 天趋势与模型用量占比来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久；限额为本地自定义配置（DSH 无配额接口）。'
+			error: ledgerError,
+			sampledAt: now(),
+			note: '全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话排行基于账本 sessionId 按近 30 日聚合，标题尽力解析、已归档或删除的会话只显示 ID；日限额为本地自定义配置（DSH 无配额接口）。'
 		};
 	}
 
@@ -540,18 +629,24 @@ export function apply(ctx) {
 		res.end(JSON.stringify(obj));
 	}
 
-	function handler(req, res) {
+	function sessionHandler(req, res) {
 		let sessionId;
 		try {
 			const url = new URL(req.url || '/', 'http://localhost');
 			sessionId = url.searchParams.get('sessionId') || undefined;
 		} catch (e) {
-			sendJSON(res, 400, { error: 'bad url' });
+			sendJSON(res, 400, { ok: false, error: 'bad url' });
 			return;
 		}
-		buildSummary(sessionId).then((data) => sendJSON(res, 200, data)).catch((e) => {
-			sendJSON(res, 500, { error: String(e && e.message || e) });
-		});
+		buildSessionPayload(sessionId)
+			.then((data) => sendJSON(res, 200, data))
+			.catch((e) => sendJSON(res, 500, { ok: false, error: String(e && e.message || e) }));
+	}
+
+	function globalHandler(req, res) {
+		buildGlobalPayload()
+			.then((data) => sendJSON(res, 200, data))
+			.catch((e) => sendJSON(res, 500, { ok: false, error: String(e && e.message || e) }));
 	}
 
 	function heatmapHandler(req, res) {
@@ -626,8 +721,13 @@ export function apply(ctx) {
 
 	ctx.webServer.register({
 		kind: 'exact',
-		path: '/dsh-token-monitor/summary',
-		handler
+		path: '/dsh-token-monitor/session',
+		handler: sessionHandler
+	});
+	ctx.webServer.register({
+		kind: 'exact',
+		path: '/dsh-token-monitor/global',
+		handler: globalHandler
 	});
 	ctx.webServer.register({
 		kind: 'exact',

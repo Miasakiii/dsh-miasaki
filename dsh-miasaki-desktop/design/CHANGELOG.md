@@ -2,6 +2,70 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-06 · 「用量」页重构:会话/全局一刀切 + 侧栏「用量统计」浮窗（token-monitor v0.4.0）
+
+依据:用户对 v0.3.3「用量」Tab 两条诉求——会话页只统计当前会话（与「轨迹」页同口径）、
+总量统计整体收口到侧栏独立入口;规划设计见 `design/usage-stats-redesign.md`（四决策点
+已拍板:D1 浮窗 / D2 日限额迁全局页 / D3 模型+会话 Top N / D4 加会话活跃时长卡）。
+
+- **host 拆路由（旧 `/summary` 退役）**:`/session?sessionId=…` 只回官方聚合 + 按
+  `sessionId` 过滤的实时明细（载荷瘦身）;`/global` 承接跨会话账本统计 + 新增
+  **会话 Top N 聚合**（近 30 日按账本 sessionId 聚合 tokens/calls/活跃跨度,Top 10,
+  会话标题经 `sessions.get` 尽力解析、失败降级 ID）。`heatmap`/`config`/`reset` 不变,
+  账本写入路径零改动,历史统计零迁移。
+- **顺带修复现存缺陷**:v0.3.3 `buildSummary` 把 `live.calls`/`live.tools` 全量返回、
+  未按 sessionId 过滤,会话页混入了同进程其他会话的数据——现按会话过滤后再下发。
+- **会话 Tab 精简**:保留上下文剩余 hero / 会话用量总览卡组（新增「会话活跃时长」卡,
+  实时口径）/ 按模型明细（仅本会话）/ 工具调用 / 性能 / 会话口径脚注;迁出总览五卡、
+  热力图、近 7/30 日趋势、模型环形图、今日用量、日限额、重置账本。
+- **全局浮窗**:client 半新增 `sidebar.footer.action`（id `usage-stats`,设置按钮旁,
+  展开态全宽钮/收起态 36px 圆图标钮）+ `shell.overlay`（id `usage-stats-overlay`,
+  全帧背板 + 居中面板,Esc/关闭钮/点背板收起）两个槽位条目,开合经模块级
+  useSyncExternalStore store 共享;开启期间 `/global` 5s + `/heatmap` 60s 轮询,
+  关闭即停。模块序按用户点名:总览六卡 → 热力图 → 使用趋势 → 使用分布（模型环形 +
+  会话 Top N）→ 今日与限额（含重置账本）→ 全局口径脚注。图表组件原样复用,
+  `--tokmn-*` 中性色作用域扩展到 `.tokmn-ov`。
+- 触摸点:`plugins/dsh-token-monitor/{lib/index.js,lib/client.js,package.json,
+  cordis.patch.yml,README.md}`、`README.md`（目录树）、本文件、
+  `design/usage-stats-redesign.md`（规划稿→定稿）。
+- 验证:node --check 双半通过;临时 mock 验证（stub React 渲染 + stub host 路由）覆盖
+  会话过滤（s1/s2 不串扰）、Top N 聚合与标题降级、限额读写、重置归零、存量载入不翻倍、
+  浮窗开合与空/有数据两态渲染,全绿后脚本已删。机上验证:profile 目录 `pnpm install`
+  → 重启 host → 目检会话 Tab 数字随会话切换、浮窗与切会话解耦、重置后热力图归零。
+- **目检修复（同日第二轮,用户报告三处问题）**:
+  1. 侧栏「用量统计」按钮不谐入（浏览器默认样式边框）+ 浮窗整体无样式堆叠在左上角
+     ——同一根因:`UsageStatsButton` 里 `return createElement(style), createElement(div)`
+     **逗号表达式**只返回后者,`<style>` 被求值后丢弃,CSS 从未挂载。改为返回
+     `[style, …]` 数组,浮窗根组件也自持一份 `<style>`（三个槽位条目独立挂载点,
+     样式各自成立）;按钮形态对齐宿主设置触发钮实测 CSS（42px/12px 圆角/透明底/
+     hover 同令牌/行高 22px,展开态 `flex:1` 撑满 footerActions,收起态 36px 圆钮）。
+  2. 浮窗报「Failed to execute 'json' on 'Response': Unexpected end of JSON」——
+     `api()` 未检查 `res.ok`,404 空响应直接 `res.json()` 炸出裸解析错。抽出
+     `readJSON` 统一解包（先查状态码,404 给出「host 路由未注册」可读提示）,
+     `fetchSession` 一并收编。
+  3. 会话页 404「host 路由未注册」——机上状态问题:host 进程 14:36 boot 早于
+     profile 拷贝完成（14:38）,跑的是旧 host 半（无 `/session`/`/global`）而 client
+     按请求读盘已是新码,新旧混搭。重启 host 后路由全部就位（curl 实测 `/session`
+     `/global` 200、旧 `/summary` 按设计 404 退役）。教训落进插件 README:同步必须
+     「拷贝完全落盘 → 再重启 host」。
+  修复后探针回归（stub React 渲染断言三槽位组件树,归档
+  `_refs/scripts-archive/test-token-monitor-v040-fix.cjs`）ALL-PASS;浏览器实机目检:
+  按钮与「设置」同构、会话 Tab 真实数据（90% 剩余/2.5M 累计）、浮窗居中背板 +
+  六卡/热力图/趋势/Top N/限额全量渲染、Esc 与关闭钮收起均通过。
+- **目检修复（同日第三轮,浮窗版式两处）**:
+  1. 热力图/趋势图右侧大片空白——热力图网格固定 52 周×14px≈730px 而卡片全宽,
+     改 max-content 水平居中;趋势图 `chartW` 的 ResizeObserver 挂在 `[]` 依赖上,
+     首挂时数据未到、图表容器未渲染,测量落空后宽度永远回退 640px——改为趋势容器
+     无条件渲染（空态文案也放进容器）,observer 首挂即测得真宽,SVG 随面板伸缩。
+  2. 每周/累计两模式图表一样「没变化」——账本现只有 2026-09-05/06 两天、同属一周,
+     逐周聚合与逐周累计在数学上就是同一根柱,属数据形态而非代码缺陷;仍做形态优化:
+     两模式由「整条柱同色分档」改为**变高柱**（柱高 ∝ 值,零周 3px 空柱做基线,
+     底部对齐）,并给三模式各配口径脚注（峰值周 X / 累计 X·截至 Y / 活跃日 N）,
+     数据跨多周后累计模式自然呈爬坡形态与每周分化。
+  验证:node --check + 探针回归 ALL-PASS;仅 client 半变更,`cp` 覆盖 profile 后页面
+  刷新生效（host 半零改动无需重启）;浏览器目检每日格点/每周柱/累计柱三态脚注、
+  热力图居中与趋势图全宽均通过。
+
 ## 2026-09-06 · 人格会话联动改道（修复「人格会话创建失败:not found」）
 
 依据:用户报告切换主题时 toast「人格会话创建失败:Unexpected token 'o', "not found"

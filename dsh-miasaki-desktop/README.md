@@ -116,7 +116,7 @@ desktop/
 │  └─ runtime.js             # legacy 回退源（build-init 缺 src/ 时使用）
 ├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
-├─ plugins/dsh-token-monitor/    # DSH web profile bundle：会话视图「用量」Tab（总览五卡 + 年热力图 + 每日趋势/模型用量占比 + 上下文 hero + 今日限额 + 模型明细）
+├─ plugins/dsh-token-monitor/    # DSH web profile bundle：用量监控（会话「用量」Tab 纯会话视角 + 侧栏脚部「用量统计」入口 → 全局浮窗：总览六卡/年热力图/趋势/模型与会话 Top N 分布/今日限额，v0.4.0）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
 ├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）

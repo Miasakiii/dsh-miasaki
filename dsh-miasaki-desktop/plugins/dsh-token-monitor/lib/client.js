@@ -12,8 +12,9 @@ window.__ModuleLoader__.load({
 		const CSS = `
 			/* host 浅色模式下 --dsw-alias-border-l1 仅 4% 黑、--dsw-alias-bg-layer-2 与
 			   layer-1 同为纯白：卡片边框/趋势图网格/热力空格/进度轨道会整体隐形。
-			   故以 label-secondary 为基在插件内自派生三档中性色，深浅主题自适应。 */
-			.tokmn-pane {
+			   故以 label-secondary 为基在插件内自派生三档中性色，深浅主题自适应。
+			   变量同时作用于会话页（.tokmn-pane）与全局浮窗（.tokmn-ov）。 */
+			.tokmn-pane, .tokmn-ov {
 				--tokmn-border: color-mix(in srgb, var(--dsw-alias-label-secondary) 34%, transparent);
 				--tokmn-hairline: color-mix(in srgb, var(--dsw-alias-label-secondary) 20%, transparent);
 				--tokmn-cell-empty: color-mix(in srgb, var(--dsw-alias-label-secondary) 15%, transparent);
@@ -25,12 +26,12 @@ window.__ModuleLoader__.load({
 			.tokmn-card-title { font-size: 12px; color: var(--dsw-alias-label-secondary); margin: 0 0 10px; font-weight: 600; letter-spacing: 0.02em; }
 			.tokmn-stat-value { font-size: 24px; font-weight: 700; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; line-height: 1.15; }
 			.tokmn-stat-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 4px; word-break: break-all; }
-			/* 总览五卡（ZCode 用量面板头部统计行） */
-			.tokmn-stats5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
-			@media (max-width: 860px) { .tokmn-stats5 { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); } }
-			.tokmn-stat5 { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 10px; padding: 14px 8px 12px; text-align: center; min-width: 0; }
-			.tokmn-stat5-v { font-size: 21px; font-weight: 700; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-			.tokmn-stat5-l { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 6px; }
+			/* 总览六卡（全局浮窗头部统计行，ZCode 用量面板同构） */
+			.tokmn-stats6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 16px; }
+			@media (max-width: 860px) { .tokmn-stats6 { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); } }
+			.tokmn-stat6 { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 10px; padding: 14px 8px 12px; text-align: center; min-width: 0; }
+			.tokmn-stat6-v { font-size: 21px; font-weight: 700; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+			.tokmn-stat6-l { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 6px; }
 			/* 分段切换（每日/每周/累计 · 近7日/近30日） */
 			.tokmn-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 10px; flex-wrap: wrap; }
 			.tokmn-seg { display: inline-flex; background: var(--tokmn-cell-empty); border-radius: 999px; padding: 2px; gap: 2px; }
@@ -40,7 +41,7 @@ window.__ModuleLoader__.load({
 			/* 热力图（Token 活动） */
 			.tokmn-heat-scroll { overflow-x: auto; }
 			.tokmn-heat { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 11px); grid-auto-columns: 11px; gap: 3px; width: max-content; }
-			.tokmn-heat-weekly { grid-template-rows: 95px; }
+			.tokmn-heat-weekly { grid-template-rows: 95px; align-items: end; }
 			.tokmn-heat-weekly .tokmn-heat-cell { border-radius: 4px; }
 			.tokmn-heat-cell { width: 11px; height: 100%; border-radius: 3px; background: var(--tokmn-cell-empty); }
 			.tokmn-heat-cell:hover { outline: 1px solid var(--dsw-alias-label-secondary); }
@@ -62,6 +63,18 @@ window.__ModuleLoader__.load({
 			.tokmn-model-row:last-child { border-bottom: none; }
 			.tokmn-code { font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace; font-size: 12px; }
 			.tokmn-pct { margin-left: auto; font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+			/* 使用分布两列（环形图 | 会话 Top N） */
+			.tokmn-dist { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+			@media (max-width: 980px) { .tokmn-dist { grid-template-columns: 1fr; } }
+			/* 会话用量 Top N */
+			.tokmn-topn-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--tokmn-hairline); }
+			.tokmn-topn-row:last-child { border-bottom: none; }
+			.tokmn-topn-idx { width: 20px; text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; flex: none; }
+			.tokmn-topn-main { flex: 1; min-width: 0; }
+			.tokmn-topn-title { font-size: 13px; color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.tokmn-topn-bar { height: 5px; border-radius: 3px; background: var(--tokmn-cell-empty); overflow: hidden; margin-top: 5px; }
+			.tokmn-topn-bar-fill { height: 100%; border-radius: 3px; background: var(--dsw-alias-brand-primary); }
+			.tokmn-topn-num { width: 80px; text-align: right; font-size: 13px; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; flex: none; }
 			/* hero：上下文剩余（ZCode context bar 语言） */
 			.tokmn-hero { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 12px; padding: 16px 20px 14px; margin-bottom: 16px; }
 			.tokmn-hero-wait { font-size: 13px; color: var(--dsw-alias-label-secondary); padding: 10px 0 6px; }
@@ -105,6 +118,25 @@ window.__ModuleLoader__.load({
 			.tokmn-foot { font-size: 11px; color: var(--dsw-alias-label-secondary); line-height: 1.8; margin-top: 6px; }
 			.tokmn-empty { font-size: 12px; color: var(--dsw-alias-label-secondary); padding: 14px 0; }
 			.tokmn-mono { font-variant-numeric: tabular-nums; }
+			/* 全局用量统计浮窗（shell.overlay：全帧背板 + 居中面板） */
+			.tokmn-ov-backdrop { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; padding: 32px; }
+			.tokmn-ov-panel { width: min(1120px, 100%); max-height: min(86vh, 920px); display: flex; flex-direction: column; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 14px; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35); overflow: hidden; }
+			.tokmn-ov-head { display: flex; align-items: center; gap: 12px; padding: 13px 20px; border-bottom: 1px solid var(--tokmn-hairline); flex: none; }
+			.tokmn-ov-title { font-size: 15px; font-weight: 700; color: var(--dsw-alias-label-primary); margin: 0; }
+			.tokmn-ov-body { padding: 14px 20px 24px; overflow-y: auto; min-height: 0; }
+			.tokmn-iconbtn { width: 30px; height: 30px; border: none; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none; padding: 0; }
+			.tokmn-iconbtn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+			/* 侧栏脚部「用量统计」入口（sidebar.footer.action）：形态对齐宿主设置
+			   触发钮（settings trigger：42px 高 / 12px 圆角 / 透明底 / hover
+			   interactive-bg-hover / padding 0 10px 0 8px / 14px·22px），展开态
+			   flex:1 撑满 footerActions 行（list 槽位无包裹层，本元素即 flex 子项），
+			   收起态 36px 圆形图标钮（对齐 _rail）。 */
+			.tokmn-fa { flex: 1 1 0; min-width: 0; margin-top: 8px; display: flex; }
+			.tokmn-fa-btn { flex: 1; min-width: 0; height: 42px; display: inline-flex; align-items: center; gap: 8px; border: none; background: transparent; border-radius: 12px; color: var(--dsw-alias-label-primary); cursor: pointer; font-family: inherit; font-size: 14px; line-height: 22px; padding: 0 10px 0 8px; overflow: hidden; }
+			.tokmn-fa-btn:hover, .tokmn-fa-btn[data-active="true"] { background: var(--dsw-alias-interactive-bg-hover); }
+			.tokmn-fa-label { flex: 1; min-width: 0; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+			.tokmn-fa-rail { flex: none; width: 36px; justify-content: center; }
+			.tokmn-fa-rail .tokmn-fa-btn { width: 36px; height: 36px; border-radius: 50%; justify-content: center; gap: 0; padding: 0; }
 			/* 用量 Tab 激活期间解除与对话页列宽调节的联动：两侧列宽手柄（对话页
 			   「对话框大小调节」，拖拽持久化 localStorage dsh.conversation.contentWidth）
 			   隐藏，避免在用量页误拖改写对话页列宽；底部输入框宽度回到 DSH 默认档
@@ -119,6 +151,22 @@ window.__ModuleLoader__.load({
 			}
 		`;
 
+		/** 统一响应解包：先查 HTTP 状态再解析 JSON，404 等非 2xx 给出可读错误，
+		    避免「Failed to execute 'json' on 'Response'」这类裸解析报错。 */
+		async function readJSON(res) {
+			if (!res.ok) throw new Error("HTTP " + res.status + "（" + (res.status === 404 ? "host 路由未注册 —— 请重启 dsh web 使 host 半生效" : res.statusText || "请求失败") + "）");
+			const text = await res.text();
+			if (!text) throw new Error("空响应（host 半未激活）");
+			try {
+				const j = JSON.parse(text);
+				if (!j.ok) throw new Error(j.error || "请求失败");
+				return j;
+			} catch (e) {
+				if (e instanceof SyntaxError) throw new Error("非 JSON 响应: " + text.slice(0, 80));
+				throw e;
+			}
+		}
+
 		/** One JSON call against the host-side route（对齐 dsh-free-model-pool 约定）。 */
 		async function api(method, path, body) {
 			const res = await fetch(path, {
@@ -126,22 +174,18 @@ window.__ModuleLoader__.load({
 				headers: body === undefined ? {} : { "content-type": "application/json" },
 				body: body === undefined ? undefined : JSON.stringify(body)
 			});
-			const payload = await res.json();
-			if (!payload.ok) throw new Error(payload.error || "请求失败");
-			return payload;
+			return readJSON(res);
 		}
 
-		function fetchSummary(sessionId) {
-			const url = "/dsh-token-monitor/summary?sessionId=" + encodeURIComponent(String(sessionId || ""));
-			return window.fetch(url, { cache: "no-store" })
-				.then((r) => {
-					if (!r.ok) throw new Error("HTTP " + r.status + "（" + (r.status === 404 ? "host 路由未注册" : r.statusText || "请求失败") + "）");
-					return r.text();
-				})
-				.then((text) => {
-					if (!text) throw new Error("空响应（host 半未激活）");
-					try { return JSON.parse(text); } catch (e) { throw new Error("非 JSON 响应: " + text.slice(0, 80)); }
-				});
+		/** 会话路由（v0.4.0 起）：官方聚合 + 按会话过滤的实时明细。 */
+		function fetchSession(sessionId) {
+			const url = "/dsh-token-monitor/session?sessionId=" + encodeURIComponent(String(sessionId || ""));
+			return window.fetch(url, { cache: "no-store" }).then(readJSON);
+		}
+
+		/** 全局路由（v0.4.0 起）：跨会话账本统计 + 限额。 */
+		function fetchGlobal() {
+			return api("GET", "/dsh-token-monitor/global");
 		}
 
 		/** 阈值分档（ZCode 用量面板 45/75/95 分档）。 */
@@ -291,14 +335,91 @@ window.__ModuleLoader__.load({
 				}, o.label)));
 		}
 
-		/**
-		 * Token 用量监控视图：会话视图第三 Tab（对话/轨迹右侧）。
-		 * 信息架构参考 ZCode 用量面板：总览五卡 → Token 活动热力图 →
-		 * 时间范围 + 每日趋势 + 模型用量占比 → 上下文剩余 → 今日/限额 →
-		 * 统计卡 → 模型/工具明细。
-		 */
-		function TokenMonitorView(props) {
-			const sessionId = props && props.sessionId;
+		/** 已删除会话等场景的 ID 降级显示（头部…尾部）。 */
+		function shortId(sid) {
+			const s = String(sid || "");
+			return s.length > 18 ? s.slice(0, 10) + "…" + s.slice(-6) : s;
+		}
+
+		/** 浮窗开合 store：侧栏按钮（sidebar.footer.action）与浮层（shell.overlay）
+		    是两个独立槽位条目，经此模块级极简发布订阅共享状态，不引入依赖。 */
+		const overlayStore = (() => {
+			let open = false;
+			const subs = new Set();
+			return {
+				get: () => open,
+				set(v) { if (v !== open) { open = !!v; subs.forEach((f) => f()); } },
+				subscribe(f) { subs.add(f); return () => subs.delete(f); }
+			};
+		})();
+
+		function useOverlayOpen() {
+			return react.useSyncExternalStore(overlayStore.subscribe, overlayStore.get);
+		}
+
+		/** 侧栏脚部「用量统计」入口按钮（sidebar.footer.action）。
+		    props.wide 为宿主传入的侧栏展开态：展开 42px 全宽钮，收起 36px 圆形图标钮。 */
+		function UsageStatsButton(props) {
+			const wide = !!(props && props.wide);
+			const open = useOverlayOpen();
+			const icon = react.createElement("svg", {
+				width: wide ? 15 : 17, height: wide ? 15 : 17, viewBox: "0 0 16 16", "aria-hidden": "true"
+			},
+				react.createElement("rect", { x: 2, y: 8, width: 3, height: 6, rx: 1, fill: "currentColor" }),
+				react.createElement("rect", { x: 6.5, y: 4, width: 3, height: 10, rx: 1, fill: "currentColor" }),
+				react.createElement("rect", { x: 11, y: 6, width: 3, height: 8, rx: 1, fill: "currentColor" }));
+			// 注意必须返回数组：此前写成 `return createElement(style), createElement(div)`
+			// 逗号表达式 —— <style> 被求值后丢弃，按钮与浮窗的 CSS 全部失效
+			//（按钮裸奔成浏览器默认样式、浮窗无样式堆叠），v0.4.0 目检修复。
+			return [
+				react.createElement("style", { key: "css" }, CSS),
+				react.createElement("div", { key: "btn", className: "tokmn-fa" + (wide ? "" : " tokmn-fa-rail") },
+					react.createElement("button", {
+						type: "button", className: "tokmn-fa-btn", "data-active": open ? "true" : "false",
+						"aria-label": "用量统计", title: wide ? undefined : "用量统计",
+						onClick: () => overlayStore.set(true)
+					}, icon, wide ? react.createElement("span", { className: "tokmn-fa-label" }, "用量统计") : null))
+			];
+		}
+
+		/** 全局用量统计浮窗（shell.overlay，root 作用域）：关闭态返回 null、
+		    开启态渲染全帧背板 + 内容面板；开启期间才挂载数据轮询，关闭即停。
+		    浮层自持 <style>（不依赖侧栏按钮的那份）——overlayLayer 与侧栏脚部
+		    是两个独立挂载点，任一单独挂载时样式都必须成立。 */
+		function GlobalUsageOverlay() {
+			const open = useOverlayOpen();
+			react.useEffect(() => {
+				if (!open) return undefined;
+				const onKey = (e) => { if (e.key === "Escape") overlayStore.set(false); };
+				window.addEventListener("keydown", onKey);
+				return () => window.removeEventListener("keydown", onKey);
+			}, [open]);
+			if (!open) return null;
+			return [
+				react.createElement("style", { key: "css" }, CSS),
+				react.createElement("div", {
+					key: "backdrop",
+					className: "tokmn-ov tokmn-ov-backdrop",
+					onMouseDown: (e) => { if (e.target === e.currentTarget) overlayStore.set(false); }
+				},
+				react.createElement("div", { className: "tokmn-ov-panel", role: "dialog", "aria-modal": "true", "aria-label": "用量统计" },
+					react.createElement("div", { className: "tokmn-ov-head" },
+						react.createElement("h3", { className: "tokmn-ov-title" }, "用量统计"),
+						react.createElement("span", { className: "tokmn-meta" }, "跨会话总量 · 与当前会话无关"),
+						react.createElement("button", {
+							type: "button", className: "tokmn-iconbtn", "aria-label": "关闭", title: "关闭（Esc）",
+							style: { marginLeft: "auto" },
+							onClick: () => overlayStore.set(false)
+						},
+							react.createElement("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" },
+								react.createElement("path", { d: "M3 3l8 8M11 3l-8 8", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" })))),
+					react.createElement(GlobalStatsContent, null))) ];
+		}
+
+		/** 全局统计内容：总览六卡 → 热力图 → 使用趋势 → 使用分布（模型环形 +
+		    会话 Top N）→ 使用总量（今日 + 限额 + 重置）→ 口径脚注。
+		    开启期间 /global 5 秒、/heatmap 60 秒轮询；组件卸载即全部停止。 */
+		function GlobalStatsContent() {
 			const [data, setData] = react.useState(null);
 			const [error, setError] = react.useState(null);
 			const [limitEditing, setLimitEditing] = react.useState(false);
@@ -317,19 +438,20 @@ window.__ModuleLoader__.load({
 			const heatCardRef = react.useRef(null);
 			const chartRef = react.useRef(null);
 
-			// 摘要（含官方聚合 / 实时明细 / 账本统计）3s 轮询。
+			// 全局账本统计 5s 轮询（挂到 ref 供「重置账本」后立即刷新）。
+			const loadGlobalRef = react.useRef(() => {});
 			react.useEffect(() => {
 				let alive = true;
-				const load = () => fetchSummary(sessionId)
+				const load = () => fetchGlobal()
 					.then((j) => { if (alive) { setData(j); setError(null); } })
 					.catch((e) => { if (alive) setError(String(e && e.message || e)); });
+				loadGlobalRef.current = load;
 				load();
-				const timer = window.setInterval(load, 3000);
+				const timer = window.setInterval(load, 5000);
 				return () => { alive = false; window.clearInterval(timer); };
-			}, [sessionId]);
+			}, []);
 
-			// 热力图账单 60s 轮询（数据量随账本增长，不随主轮询刷）；load 挂到
-			// ref 上供「重置账本」后立即刷新。
+			// 热力图账单 60s 轮询（数据量随账本增长，不随主轮询刷）。
 			const loadHeatmapRef = react.useRef(() => {});
 			react.useEffect(() => {
 				let alive = true;
@@ -343,7 +465,7 @@ window.__ModuleLoader__.load({
 				return () => { alive = false; window.clearInterval(timer); };
 			}, []);
 
-			// 趋势图容器宽度（ResizeObserver，SVG 随面板伸缩）。
+			// 趋势图容器宽度（ResizeObserver，SVG 随浮窗伸缩）。
 			react.useEffect(() => {
 				const el = chartRef.current;
 				if (!el || typeof window.ResizeObserver !== "function") return;
@@ -357,69 +479,23 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			// 保存限额后立刻拉一次（不经 alive 守卫：能点按钮组件必然挂着）。
-			const loadNow = () => fetchSummary(sessionId).then((j) => { setData(j); }).catch(() => {});
+			const loadNow = () => fetchGlobal().then((j) => { setData(j); }).catch(() => {});
 
-			const official = (data && data.official) || {};
-			const tu = official.tokenUsage || {};
-			const stats = official.sessionStats || {};
-			const cp = official.contextPressure || {};
-			const cb = official.contextBreakdown || {};
-			const calls = (data && data.live && data.live.calls) || [];
-			const tools = (data && data.live && data.live.tools) || [];
-			const ledger = (data && data.ledger) || {};
-			const today = ledger.today || { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, total: 0, calls: 0 };
-			const trend = (ledger.trend || []);
-			const overview = (data && data.stats) || {
-				totalTokens: 0, peakDayTokens: 0, peakDayDate: null,
-				longestSessionMs: 0, currentStreakDays: 0, longestStreakDays: 0, since: null
-			};
+			const overview = data ? (data.stats || {}) : {};
+			const today = (data && data.today) || { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, total: 0, calls: 0 };
+			const trend = (data && data.trend) || [];
+			const topn = (data && data.sessions && data.sessions.rows) || [];
 			const limit = data && data.config ? (data.config.dailyTokenLimit || null) : null;
-			const sampledAt = data && data.live && data.live.sampledAt;
+			const since = (data && data.since) || null;
 
-			// ---- 总览五卡 ----------------------------------------------------
-			const stat5 = (value, label, sub) => react.createElement("div", { className: "tokmn-stat5", title: sub || label },
-				react.createElement("div", { className: "tokmn-stat5-v" }, value),
-				react.createElement("div", { className: "tokmn-stat5-l" }, label));
-
-			// ---- 上下文 hero：分母 = contextWindow，剩余视角 -----------------
-			const hasCtx = typeof cp.contextWindow === "number" && cp.contextWindow > 0;
-			const ctxUsed = hasCtx ? Math.min(cp.projectedTokens || 0, cp.contextWindow) : 0;
-			const ctxUsedPct = hasCtx ? Math.min(100, Math.round((ctxUsed / cp.contextWindow) * 100)) : 0;
-			const ctxFreePct = hasCtx ? 100 - ctxUsedPct : 0;
-			const cbParts = [
-				{ label: "系统提示", v: cb.systemTokens || 0, c: "var(--dsw-alias-brand-primary)" },
-				{ label: "工具", v: cb.toolsTokens || 0, c: "var(--dsw-alias-state-warn-primary)" },
-				{ label: "消息", v: cb.messageTokens || 0, c: "var(--dsw-alias-state-success-primary)" }
-			];
-			const cbSum = Math.max(1, cbParts[0].v + cbParts[1].v + cbParts[2].v);
-			// 已用超出窗口时以已用和为分母（三段保持相对比例、剩余归零）。
-			const heroScale = hasCtx ? Math.max(cp.contextWindow, cbSum) : cbSum;
-			const ctxFreeV = hasCtx ? Math.max(0, cp.contextWindow - cbSum) : 0;
+			// ---- 总览六卡 ----------------------------------------------------
+			const stat6 = (value, label, sub) => react.createElement("div", { className: "tokmn-stat6", title: sub || label },
+				react.createElement("div", { className: "tokmn-stat6-v" }, value),
+				react.createElement("div", { className: "tokmn-stat6-l" }, label));
 
 			// ---- 限额 --------------------------------------------------------
 			const limitPct = limit ? Math.min(100, Math.round((today.total / limit) * 100)) : null;
 			const limitLeft = limit ? Math.max(0, limit - today.total) : null;
-
-			const tuTotal = (tu.uncachedInputTokens || 0) + (tu.outputTokens || 0) + (tu.cacheReadTokens || 0) + (tu.cacheWriteTokens || 0);
-			const maxCall = Math.max(1, ...calls.map((c) => c.total || 0));
-			const decodeSpeed = (typeof stats.decodeMs === "number" && stats.decodeMs > 0 && typeof stats.decodeTokens === "number")
-				? (stats.decodeTokens / (stats.decodeMs / 1000)).toFixed(1) + " tok/s" : "—";
-
-			const segs = (parts, scale) => react.createElement("div", { className: "tokmn-bar" },
-				parts.map((p, i) => p.v > 0 ? react.createElement("div", {
-					key: i, className: "tokmn-bar-seg",
-					style: { width: Math.max(2, Math.round((p.v / scale) * 100)) + "%", background: p.c },
-					title: p.label + ": " + full(p.v)
-				}) : null));
-
-			const stat = (label, value, sub) => react.createElement("div", { className: "tokmn-card" },
-				react.createElement("div", { className: "tokmn-card-title" }, label),
-				react.createElement("div", { className: "tokmn-stat-value", title: full(value) }, String(value)),
-				sub ? react.createElement("div", { className: "tokmn-stat-sub" }, sub) : null);
-
-			const perfItem = (label, value) => react.createElement("div", null,
-				react.createElement("div", { className: "tokmn-perf-label" }, label),
-				react.createElement("div", { className: "tokmn-perf-value" }, value));
 
 			const saveLimit = async () => {
 				const n = parseFloat(limitValue);
@@ -544,6 +620,25 @@ window.__ModuleLoader__.load({
 			const weekMax = weekStats
 				? Math.max(1, ...weekStats.map((w) => (heatMode === "weekly" ? w.total : w.cum)))
 				: 1;
+			// 模式相关脚注：三种模式各自说明口径。每周=逐周柱、累计=单调爬坡柱，
+			// 数据跨多周后柱形自然分化；单周数据期靠文案区分口径。
+			let heatFootMain, heatFootSide;
+			if (heatMode === "daily") {
+				heatFootMain = "共 " + ((overview.activeDays) || 0) + " 个活跃日 —— 悬浮查看当日明细";
+				heatFootSide = "颜色深浅 = 用量多少";
+			} else if (heatMode === "weekly") {
+				const pk = weekStats.reduce((a, w) => (w.total > a.total ? w : a), { total: 0, first: null, last: null });
+				heatFootMain = pk.total > 0 && pk.first
+					? "峰值周 " + fmtCn(pk.total) + " tokens（" + longDate(pk.first) + " ~ " + shortDate(pk.last) + "）"
+					: "暂无整周用量";
+				heatFootSide = "柱高 = 当周用量 · 悬浮查看整周明细";
+			} else {
+				const lastW = weekStats[weekStats.length - 1];
+				heatFootMain = lastW && lastW.cum > 0
+					? "累计 " + fmtCn(lastW.cum) + " tokens（截至 " + shortDate(lastW.last || lastW.first) + "）"
+					: "暂无累计用量";
+				heatFootSide = "柱高 = 逐周累计 · 悬浮查看各周累计";
+			}
 			const monthLabels = [];
 			{
 				let pm = -1;
@@ -570,15 +665,24 @@ window.__ModuleLoader__.load({
 				}));
 				heatGrid = cells;
 			} else {
+				// 每周/累计：变高柱（高度 ∝ 值，零周画 3px 空柱当基线），底部对齐。
+				// 逐周模式各柱独立取当周总量；累计模式取逐周累加值（爬坡形态）。
 				heatGrid = weeks.map((col, ci) => {
 					const w = weekStats[ci];
+					const v = heatMode === "weekly" ? w.total : w.cum;
 					const lines = !w || !w.first
 						? null
 						: heatMode === "weekly"
 							? [longDate(w.first) + " ~ " + shortDate(w.last), full(w.total) + " tokens · " + w.calls + " 轮消息"]
 							: ["截至 " + longDate(w.last || w.first), "累计 " + full(w.cum) + " tokens"];
-					return react.createElement("div", Object.assign({ key: "w" + ci },
-						heatCellProps(heatMode === "weekly" ? w.total : w.cum, weekMax, false, lines)));
+					return react.createElement("div", {
+						key: "w" + ci, className: "tokmn-heat-cell",
+						style: v > 0
+							? { height: Math.max(6, Math.round((v / weekMax) * 100)) + "%", background: "var(--dsw-alias-brand-primary)", opacity: 0.9 }
+							: { height: "3px", background: "var(--tokmn-cell-empty)" },
+						onMouseEnter: lines ? (e) => showHeatTip(e, lines) : undefined,
+						onMouseLeave: () => setHeatTip(null)
+					});
 				});
 			}
 
@@ -673,51 +777,21 @@ window.__ModuleLoader__.load({
 				return { color: m.color, dash, off };
 			});
 
-			const heroBlock = !hasCtx
-				? react.createElement("div", { className: "tokmn-hero" },
-					react.createElement("div", { className: "tokmn-hero-wait" }, "等待会话投影数据 —— 发起一次对话后，此处将显示上下文剩余。"))
-				: react.createElement("div", { className: "tokmn-hero" },
-					react.createElement("div", { className: "tokmn-hero-top" },
-						react.createElement("div", null,
-							react.createElement("div", { className: "tokmn-hero-big", style: { color: tierColor(ctxUsedPct) } }, ctxFreePct + "%"),
-							react.createElement("div", { className: "tokmn-hero-label" }, "上下文剩余 · " + tierWord(ctxUsedPct))),
-						react.createElement("div", { className: "tokmn-hero-side" },
-							react.createElement("div", null, "已用 ", react.createElement("strong", { className: "tokmn-num" }, fmt(ctxUsed)), " / ", fmt(cp.contextWindow)),
-							react.createElement("div", null, "投影 ", fmt(cp.projectedTokens), " · 压力 ", fmt(cp.pressureTokens)))),
-					react.createElement("div", { className: "tokmn-bar tokmn-bar-lg" },
-						cbParts.map((p, i) => p.v > 0 ? react.createElement("div", {
-							key: i, className: "tokmn-bar-seg",
-							style: { width: Math.max(2, Math.round((p.v / heroScale) * 100)) + "%", background: p.c },
-							title: p.label + ": " + full(p.v)
-						}) : null)),
-					react.createElement("div", { style: { display: "flex", flexWrap: "wrap", marginTop: 10 } },
-						cbParts.map((p) => react.createElement("span", { className: "tokmn-legend", key: p.label },
-							react.createElement("span", { className: "tokmn-dot", style: { background: p.c } }),
-							p.label + " " + fmt(p.v))).concat([
-							react.createElement("span", { className: "tokmn-legend", key: "_free" },
-								react.createElement("span", {
-									className: "tokmn-dot",
-									style: { background: "var(--tokmn-cell-empty)", boxShadow: "inset 0 0 0 1px var(--tokmn-border)" }
-								}),
-								"未使用 " + fmt(ctxFreeV))
-						])));
+			// 会话 Top N：占比条以榜首为满刻度。
+			const topnMax = Math.max(1, ...topn.map((r) => r.total || 0));
 
-			return react.createElement("div", { className: "tokmn-pane" },
-				react.createElement("style", null, CSS),
-				react.createElement("div", { className: "tokmn-head" },
-					react.createElement("h3", { style: { margin: 0, fontSize: 16, color: "var(--dsw-alias-label-primary)" } }, "Token 用量"),
-					react.createElement("span", { className: "tokmn-stat-sub" },
-						sampledAt ? "更新于 " + new Date(sampledAt).toLocaleTimeString("zh-CN", { hour12: false }) + " · 每 3 秒" : "每 3 秒自动刷新")),
+			return react.createElement("div", { className: "tokmn-ov-body" },
 				error ? react.createElement("p", { style: { color: "var(--dsw-alias-state-error-primary)", fontSize: 12 } }, "加载失败: " + error) : null,
 
-				// 总览五卡
-				react.createElement("div", { className: "tokmn-stats5" },
-					stat5(fmtCn(overview.totalTokens), "累计 Token 数", full(overview.totalTokens) + " tokens"),
-					stat5(fmtCn(overview.peakDayTokens), "峰值 Token 数",
+				// 总览六卡
+				react.createElement("div", { className: "tokmn-stats6" },
+					stat6(fmtCn(overview.totalTokens), "累计 Token 数", full(overview.totalTokens) + " tokens"),
+					stat6(fmtCn(overview.peakDayTokens), "峰值 Token 数",
 						"单日最高" + (overview.peakDayDate ? " · " + overview.peakDayDate : "")),
-					stat5(fmtDuration(overview.longestSessionMs), "最长聊天时长", "单会话活跃跨度（账本）"),
-					stat5(overview.currentStreakDays + " 天", "当前连续天数", "连续有用量的天数"),
-					stat5(overview.longestStreakDays + " 天", "最长连续天数", "历史最长连续天数")),
+					stat6((overview.activeDays || 0) + " 天", "活跃天数", "有用量的日历日数"),
+					stat6(fmtDuration(overview.longestSessionMs), "最长聊天时长", "单会话活跃跨度（账本）"),
+					stat6(overview.currentStreakDays + " 天", "当前连续天数", "连续有用量的天数"),
+					stat6(overview.longestStreakDays + " 天", "最长连续天数", "历史最长连续天数")),
 
 				// Token 活动热力图
 				react.createElement("div", { className: "tokmn-sec", ref: heatCardRef, style: { position: "relative" } },
@@ -725,38 +799,43 @@ window.__ModuleLoader__.load({
 						react.createElement("div", null,
 							react.createElement("span", { className: "tokmn-sec-title", style: { marginRight: 10 } }, "Token 活动"),
 							react.createElement("span", { className: "tokmn-meta" },
-								"自 " + ((heatDays && heatDays.length && heatDays[0].date) || overview.since || "—") + " 起记录")),
+								"自 " + ((heatDays && heatDays.length && heatDays[0].date) || since || "—") + " 起记录")),
 						Seg({
 							options: [{ value: "daily", label: "每日" }, { value: "weekly", label: "每周" }, { value: "cumulative", label: "累计" }],
 							value: heatMode, onChange: setHeatMode
 						})),
 					react.createElement("div", { className: "tokmn-card" },
 						react.createElement("div", { className: "tokmn-heat-scroll" },
-							react.createElement("div", null,
+							// max-content + 水平居中：52 周网格约 730px 宽，卡片全宽时
+							// 左对齐会在右侧留一大块空白，居中后随面板对称。
+							react.createElement("div", { style: { width: "max-content", margin: "0 auto" } },
 								react.createElement("div", { className: "tokmn-heat" + (heatMode === "daily" ? "" : " tokmn-heat-weekly") }, heatGrid),
 								react.createElement("div", { className: "tokmn-heat-months", style: { width: Math.max(1, weeks.length * 14 - 3) + "px" } },
 									monthLabels.map((m) => react.createElement("span", {
 										key: m.ci, className: "tokmn-heat-month", style: { left: (m.ci * 14) + "px" }
 									}, m.label))))),
 						react.createElement("div", { className: "tokmn-heat-foot" },
-							react.createElement("span", { className: "tokmn-meta" }, "共 " + ((data && data.stats && data.stats.activeDays) || 0) + " 个活跃日 —— 悬浮查看当日明细"),
-							react.createElement("span", { className: "tokmn-meta" }, "颜色深浅 = 用量多少"))),
+							react.createElement("span", { className: "tokmn-meta" }, heatFootMain),
+							react.createElement("span", { className: "tokmn-meta" }, heatFootSide))),
 					heatTip ? react.createElement("div", { className: "tokmn-tip", style: { left: heatTip.x, top: heatTip.y } },
 						heatTip.lines.map((l, i) => react.createElement("div", { key: i, className: i === 0 ? "" : "tokmn-tip-sub" }, l))) : null),
 
-				// 时间范围 + 每日趋势 + 模型用量
+				// 使用趋势
 				react.createElement("div", { className: "tokmn-sec" },
 					react.createElement("div", { className: "tokmn-sec-head" },
-						react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "时间范围"),
+						react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "使用趋势"),
 						Seg({
 							options: [{ value: 7, label: "近 7 日" }, { value: 30, label: "近 30 日" }],
 							value: range, onChange: setRange
 						})),
-					react.createElement("div", { className: "tokmn-card", style: { marginBottom: 12 } },
+					react.createElement("div", { className: "tokmn-card" },
 						react.createElement("div", { className: "tokmn-sec-title" }, "每日 Token 趋势图"),
-						models.length === 0
-							? react.createElement("div", { className: "tokmn-empty" }, "暂无数据 —— 账本启用后的模型用量会按日绘制在这里。")
-							: react.createElement("div", null,
+						// 图表容器无条件渲染：chartW 来自首挂时的 ResizeObserver 测量，
+						// 若等数据到了才挂载容器，测量落空、宽度永远回退 640px（右侧留白）。
+						react.createElement("div", { className: "tokmn-chart-wrap", ref: chartRef },
+							models.length === 0
+								? react.createElement("div", { className: "tokmn-empty" }, "暂无数据 —— 账本启用后的模型用量会按日绘制在这里。")
+								: react.createElement("div", null,
 								react.createElement("div", null,
 									models.map((m) => react.createElement("span", {
 										key: m.key,
@@ -767,8 +846,7 @@ window.__ModuleLoader__.load({
 										react.createElement("span", { className: "tokmn-dot", style: { background: m.color } }),
 										m.label,
 										react.createElement("span", { className: "tokmn-meta" }, fmtCn(m.total))))),
-								react.createElement("div", { className: "tokmn-chart-wrap", ref: chartRef },
-									react.createElement("svg", { width: chartWpx, height: CH_H, style: { display: "block" } },
+								react.createElement("svg", { width: chartWpx, height: CH_H, style: { display: "block" } },
 										[0, 0.25, 0.5, 0.75, 1].map((f, gi) => {
 											const y = PAD_T + plotH - f * plotH;
 											return react.createElement("g", { key: "g" + gi },
@@ -823,74 +901,215 @@ window.__ModuleLoader__.load({
 												react.createElement("span", { className: "tokmn-dot", style: { background: r.m.color } }),
 												react.createElement("span", null, r.m.label),
 												react.createElement("span", { className: "tokmn-mono", style: { marginLeft: "auto", paddingLeft: 12 } }, fmtCn(r.v)))))
-										: null))),
-					react.createElement("div", { className: "tokmn-card" },
-						react.createElement("div", { className: "tokmn-sec-title" }, "模型用量"),
-						models.length === 0
-							? react.createElement("div", { className: "tokmn-empty" }, "暂无数据。")
-							: react.createElement("div", { className: "tokmn-donut" },
-								react.createElement("svg", { width: D_SIZE, height: D_SIZE },
-									react.createElement("circle", { cx: D_CX, cy: D_CY, r: D_R, fill: "none", stroke: "var(--tokmn-cell-empty)", strokeWidth: D_SW }),
-									donutSegs.map((s, i) => react.createElement("circle", {
-										key: i, cx: D_CX, cy: D_CY, r: D_R, fill: "none",
-										stroke: s.color, strokeWidth: D_SW,
-										strokeDasharray: s.dash + " " + (D_C - s.dash),
-										strokeDashoffset: s.off,
-										transform: "rotate(-90 " + D_CX + " " + D_CY + ")"
-									})),
-									react.createElement("text", {
-										x: D_CX, y: D_CY - 1, textAnchor: "middle", fontSize: 20, fontWeight: 700,
-										fill: "var(--dsw-alias-label-primary)"
-									}, fmtCn(rangeTotal)),
-									react.createElement("text", {
-										x: D_CX, y: D_CY + 17, textAnchor: "middle", fontSize: 10,
-										fill: "var(--dsw-alias-label-secondary)"
-									}, "tokens")),
-								react.createElement("div", null,
-									models.map((m) => {
-										const frac = rangeTotal > 0 ? m.total / rangeTotal : 0;
-										return react.createElement("div", { className: "tokmn-model-row", key: m.key },
-											react.createElement("span", { className: "tokmn-dot", style: { background: m.color } }),
-											react.createElement("div", { style: { minWidth: 0 } },
-												react.createElement("div", { className: "tokmn-name tokmn-code", title: m.provider }, m.label),
-												react.createElement("div", { className: "tokmn-meta", title: full(m.total) }, fmtCn(m.total) + " tokens")),
-											react.createElement("span", { className: "tokmn-pct" }, fmtPct(frac)));
-									}))))),
+										: null)))),
+
+					// 使用分布：模型环形图 + 会话 Top N
+					react.createElement("div", { className: "tokmn-sec" },
+						react.createElement("div", { className: "tokmn-sec-head" },
+							react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "使用分布"),
+							react.createElement("span", { className: "tokmn-meta" }, "近 " + range + " 日")),
+						react.createElement("div", { className: "tokmn-dist" },
+							react.createElement("div", { className: "tokmn-card" },
+								react.createElement("div", { className: "tokmn-sec-title" }, "模型用量"),
+								models.length === 0
+									? react.createElement("div", { className: "tokmn-empty" }, "暂无数据。")
+									: react.createElement("div", { className: "tokmn-donut" },
+										react.createElement("svg", { width: D_SIZE, height: D_SIZE },
+											react.createElement("circle", { cx: D_CX, cy: D_CY, r: D_R, fill: "none", stroke: "var(--tokmn-cell-empty)", strokeWidth: D_SW }),
+											donutSegs.map((s, i) => react.createElement("circle", {
+												key: i, cx: D_CX, cy: D_CY, r: D_R, fill: "none",
+												stroke: s.color, strokeWidth: D_SW,
+												strokeDasharray: s.dash + " " + (D_C - s.dash),
+												strokeDashoffset: s.off,
+												transform: "rotate(-90 " + D_CX + " " + D_CY + ")"
+											})),
+											react.createElement("text", {
+												x: D_CX, y: D_CY - 1, textAnchor: "middle", fontSize: 20, fontWeight: 700,
+												fill: "var(--dsw-alias-label-primary)"
+											}, fmtCn(rangeTotal)),
+											react.createElement("text", {
+												x: D_CX, y: D_CY + 17, textAnchor: "middle", fontSize: 10,
+												fill: "var(--dsw-alias-label-secondary)"
+											}, "tokens")),
+										react.createElement("div", null,
+											models.map((m) => {
+												const frac = rangeTotal > 0 ? m.total / rangeTotal : 0;
+												return react.createElement("div", { className: "tokmn-model-row", key: m.key },
+													react.createElement("span", { className: "tokmn-dot", style: { background: m.color } }),
+													react.createElement("div", { style: { minWidth: 0 } },
+														react.createElement("div", { className: "tokmn-name tokmn-code", title: m.provider }, m.label),
+														react.createElement("div", { className: "tokmn-meta", title: full(m.total) }, fmtCn(m.total) + " tokens")),
+													react.createElement("span", { className: "tokmn-pct" }, fmtPct(frac)));
+											})))),
+							react.createElement("div", { className: "tokmn-card" },
+								react.createElement("div", { className: "tokmn-sec-title" }, "会话用量 Top " + (topn.length || 10)),
+								topn.length === 0
+									? react.createElement("div", { className: "tokmn-empty" }, "暂无数据 —— 近 30 日有用量的会话会按总量排在这里。")
+									: topn.map((r, i) => react.createElement("div", { className: "tokmn-topn-row", key: r.sessionId + "#" + i },
+										react.createElement("span", { className: "tokmn-topn-idx" }, i + 1),
+										react.createElement("div", { className: "tokmn-topn-main" },
+											react.createElement("div", { className: "tokmn-topn-title", title: r.sessionId },
+												r.title || shortId(r.sessionId)),
+											react.createElement("div", { className: "tokmn-topn-bar" },
+												react.createElement("div", {
+													className: "tokmn-topn-bar-fill",
+													style: { width: Math.max(2, Math.round(((r.total || 0) / topnMax) * 100)) + "%" }
+												}))),
+										react.createElement("div", { className: "tokmn-topn-num", title: full(r.total) },
+											fmtCn(r.total),
+											react.createElement("div", { className: "tokmn-meta" }, (r.calls || 0) + " 轮消息"))))))),
+
+					// 使用总量：今日 + 限额 + 重置
+					react.createElement("div", { className: "tokmn-sec" },
+						react.createElement("div", { className: "tokmn-sec-head" },
+							react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "今日用量 · 全部会话"),
+							react.createElement("button", {
+								className: "tokmn-btn tokmn-btn-sm", disabled: resetBusy,
+								onClick: doReset, title: "清空账本历史统计（不可恢复，限额配置保留）"
+							}, resetBusy ? "重置中…" : "重置账本")),
+						react.createElement("div", { className: "tokmn-card tokmn-today" },
+							react.createElement("div", null,
+								react.createElement("div", { className: "tokmn-today-big", title: full(today.total) }, fmtCn(today.total)),
+								react.createElement("div", { className: "tokmn-stat-sub" },
+									"输入 " + fmt(today.inputTokens) + " · 输出 " + fmt(today.outputTokens)
+									+ " · 缓存读 " + fmt(today.cacheReadTokens) + " · " + (today.calls || 0) + " 轮消息")),
+							limitBlock),
+						limitMsg ? react.createElement("div", {
+							style: {
+								fontSize: 12, marginTop: 8,
+								color: limitMsg.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)"
+							}
+						}, limitMsg.text) : null),
+
+				react.createElement("p", { className: "tokmn-foot" },
+					(data && data.note) ||
+					"全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话排行基于账本 sessionId 按近 30 日聚合，标题尽力解析、已归档或删除的会话只显示 ID；日限额为本地自定义配置（DSH 无配额接口）。"));
+		}
+
+		/**
+		 * 会话「用量」Tab（v0.4.0 精简为纯会话视角）：上下文剩余 hero →
+		 * 会话用量总览（官方口径 + 活跃时长）→ 按模型明细（仅本会话）→
+		 * 工具调用 → 性能 → 口径脚注。跨会话统计已整体迁往侧栏「用量统计」浮窗。
+		 */
+		function TokenMonitorView(props) {
+			const sessionId = props && props.sessionId;
+			const [data, setData] = react.useState(null);
+			const [error, setError] = react.useState(null);
+
+			// 会话摘要（官方聚合 + 按会话过滤的实时明细）3s 轮询。
+			react.useEffect(() => {
+				let alive = true;
+				const load = () => fetchSession(sessionId)
+					.then((j) => { if (alive) { setData(j); setError(null); } })
+					.catch((e) => { if (alive) setError(String(e && e.message || e)); });
+				load();
+				const timer = window.setInterval(load, 3000);
+				return () => { alive = false; window.clearInterval(timer); };
+			}, [sessionId]);
+
+			const official = (data && data.official) || {};
+			const tu = official.tokenUsage || {};
+			const stats = official.sessionStats || {};
+			const cp = official.contextPressure || {};
+			const cb = official.contextBreakdown || {};
+			const calls = (data && data.live && data.live.calls) || [];
+			const tools = (data && data.live && data.live.tools) || [];
+			const activeSpan = (data && data.live && data.live.activeSpan) || null;
+			const sampledAt = data && data.live && data.live.sampledAt;
+
+			// ---- 上下文 hero：分母 = contextWindow，剩余视角 -----------------
+			const hasCtx = typeof cp.contextWindow === "number" && cp.contextWindow > 0;
+			const ctxUsed = hasCtx ? Math.min(cp.projectedTokens || 0, cp.contextWindow) : 0;
+			const ctxUsedPct = hasCtx ? Math.min(100, Math.round((ctxUsed / cp.contextWindow) * 100)) : 0;
+			const ctxFreePct = hasCtx ? 100 - ctxUsedPct : 0;
+			const cbParts = [
+				{ label: "系统提示", v: cb.systemTokens || 0, c: "var(--dsw-alias-brand-primary)" },
+				{ label: "工具", v: cb.toolsTokens || 0, c: "var(--dsw-alias-state-warn-primary)" },
+				{ label: "消息", v: cb.messageTokens || 0, c: "var(--dsw-alias-state-success-primary)" }
+			];
+			const cbSum = Math.max(1, cbParts[0].v + cbParts[1].v + cbParts[2].v);
+			// 已用超出窗口时以已用和为分母（三段保持相对比例、剩余归零）。
+			const heroScale = hasCtx ? Math.max(cp.contextWindow, cbSum) : cbSum;
+			const ctxFreeV = hasCtx ? Math.max(0, cp.contextWindow - cbSum) : 0;
+
+			const tuTotal = (tu.uncachedInputTokens || 0) + (tu.outputTokens || 0) + (tu.cacheReadTokens || 0) + (tu.cacheWriteTokens || 0);
+			const maxCall = Math.max(1, ...calls.map((c) => c.total || 0));
+			const decodeSpeed = (typeof stats.decodeMs === "number" && stats.decodeMs > 0 && typeof stats.decodeTokens === "number")
+				? (stats.decodeTokens / (stats.decodeMs / 1000)).toFixed(1) + " tok/s" : "—";
+			const activeMs = activeSpan ? Math.max(0, (activeSpan.last || 0) - (activeSpan.first || 0)) : null;
+
+			const segs = (parts, scale) => react.createElement("div", { className: "tokmn-bar" },
+				parts.map((p, i) => p.v > 0 ? react.createElement("div", {
+					key: i, className: "tokmn-bar-seg",
+					style: { width: Math.max(2, Math.round((p.v / scale) * 100)) + "%", background: p.c },
+					title: p.label + ": " + full(p.v)
+				}) : null));
+
+			const stat = (label, value, sub) => react.createElement("div", { className: "tokmn-card" },
+				react.createElement("div", { className: "tokmn-card-title" }, label),
+				react.createElement("div", { className: "tokmn-stat-value", title: full(value) }, String(value)),
+				sub ? react.createElement("div", { className: "tokmn-stat-sub" }, sub) : null);
+
+			const perfItem = (label, value) => react.createElement("div", null,
+				react.createElement("div", { className: "tokmn-perf-label" }, label),
+				react.createElement("div", { className: "tokmn-perf-value" }, value));
+
+			const heroBlock = !hasCtx
+				? react.createElement("div", { className: "tokmn-hero" },
+					react.createElement("div", { className: "tokmn-hero-wait" }, "等待会话投影数据 —— 发起一次对话后，此处将显示上下文剩余。"))
+				: react.createElement("div", { className: "tokmn-hero" },
+					react.createElement("div", { className: "tokmn-hero-top" },
+						react.createElement("div", null,
+							react.createElement("div", { className: "tokmn-hero-big", style: { color: tierColor(ctxUsedPct) } }, ctxFreePct + "%"),
+							react.createElement("div", { className: "tokmn-hero-label" }, "上下文剩余 · " + tierWord(ctxUsedPct))),
+						react.createElement("div", { className: "tokmn-hero-side" },
+							react.createElement("div", null, "已用 ", react.createElement("strong", { className: "tokmn-num" }, fmt(ctxUsed)), " / ", fmt(cp.contextWindow)),
+							react.createElement("div", null, "投影 ", fmt(cp.projectedTokens), " · 压力 ", fmt(cp.pressureTokens)))),
+					react.createElement("div", { className: "tokmn-bar tokmn-bar-lg" },
+						cbParts.map((p, i) => p.v > 0 ? react.createElement("div", {
+							key: i, className: "tokmn-bar-seg",
+							style: { width: Math.max(2, Math.round((p.v / heroScale) * 100)) + "%", background: p.c },
+							title: p.label + ": " + full(p.v)
+						}) : null)),
+					react.createElement("div", { style: { display: "flex", flexWrap: "wrap", marginTop: 10 } },
+						cbParts.map((p) => react.createElement("span", { className: "tokmn-legend", key: p.label },
+							react.createElement("span", { className: "tokmn-dot", style: { background: p.c } }),
+							p.label + " " + fmt(p.v))).concat([
+							react.createElement("span", { className: "tokmn-legend", key: "_free" },
+								react.createElement("span", {
+									className: "tokmn-dot",
+									style: { background: "var(--tokmn-cell-empty)", boxShadow: "inset 0 0 0 1px var(--tokmn-border)" }
+								}),
+								"未使用 " + fmt(ctxFreeV))
+						])));
+
+			return react.createElement("div", { className: "tokmn-pane" },
+				react.createElement("style", null, CSS),
+				react.createElement("div", { className: "tokmn-head" },
+					react.createElement("h3", { style: { margin: 0, fontSize: 16, color: "var(--dsw-alias-label-primary)" } }, "Token 用量 · 当前会话"),
+					react.createElement("span", { className: "tokmn-stat-sub" },
+						sampledAt ? "更新于 " + new Date(sampledAt).toLocaleTimeString("zh-CN", { hour12: false }) + " · 每 3 秒" : "每 3 秒自动刷新")),
+				error ? react.createElement("p", { style: { color: "var(--dsw-alias-state-error-primary)", fontSize: 12 } }, "加载失败: " + error) : null,
 
 				heroBlock,
 
-				react.createElement("div", { className: "tokmn-sec" },
-					react.createElement("div", { className: "tokmn-sec-head" },
-						react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "今日用量 · 全部会话（账本）"),
-						react.createElement("button", {
-							className: "tokmn-btn tokmn-btn-sm", disabled: resetBusy,
-							onClick: doReset, title: "清空账本历史统计（不可恢复，限额配置保留）"
-						}, resetBusy ? "重置中…" : "重置账本")),
-					react.createElement("div", { className: "tokmn-card tokmn-today" },
-						react.createElement("div", null,
-							react.createElement("div", { className: "tokmn-today-big", title: full(today.total) }, fmtCn(today.total)),
-							react.createElement("div", { className: "tokmn-stat-sub" },
-								"输入 " + fmt(today.inputTokens) + " · 输出 " + fmt(today.outputTokens)
-								+ " · 缓存读 " + fmt(today.cacheReadTokens) + " · " + (today.calls || 0) + " 轮消息")),
-						limitBlock),
-					limitMsg ? react.createElement("div", {
-						style: {
-							fontSize: 12, marginTop: 8,
-							color: limitMsg.ok ? "var(--dsw-alias-state-success-primary)" : "var(--dsw-alias-state-error-primary)"
-						}
-					}, limitMsg.text) : null),
-
+				// 会话用量总览（官方口径 + 活跃时长）
 				react.createElement("div", { className: "tokmn-grid" },
+					stat("累计 Tokens（官方）", fmt(tuTotal),
+						"未缓存输入 " + fmt(tu.uncachedInputTokens) + " · 输出 " + fmt(tu.outputTokens)
+						+ (official.meter && typeof official.meter.totalTokens === "number" ? " · 计量 " + fmtCn(official.meter.totalTokens) : "")),
 					stat("模型输出", fmt(tu.outputTokens), "解码 " + fmt(stats.decodeTokens) + " tok"),
 					stat("缓存读取 / 写入", fmt(tu.cacheReadTokens) + " / " + fmt(tu.cacheWriteTokens), "上下文复用与持久化"),
-					stat("累计 Tokens（官方）", fmt(tuTotal), "未缓存输入 " + fmt(tu.uncachedInputTokens) + " · 输出 " + fmt(tu.outputTokens)),
-					stat("轮次 / 步数", fmt(stats.turns) + " / " + fmt(stats.steps))),
+					stat("轮次 / 步数", fmt(stats.turns) + " / " + fmt(stats.steps), "本会话对话轮次与执行步数"),
+					stat("会话活跃时长", fmtDuration(activeMs), activeSpan
+						? "本进程内首次至最近一次活动"
+						: "暂无本进程活动记录")),
 
 				react.createElement("div", { className: "tokmn-sec" },
-					react.createElement("div", { className: "tokmn-sec-title" }, "按模型明细 · 实时采集（自插件启用起）"),
+					react.createElement("div", { className: "tokmn-sec-title" }, "按模型明细 · 实时采集（仅本会话）"),
 					react.createElement("div", { className: "tokmn-card" },
 						calls.length === 0
-							? react.createElement("div", { className: "tokmn-empty" }, "暂无数据 —— 插件启用后的模型调用会显示在这里。")
+							? react.createElement("div", { className: "tokmn-empty" }, "暂无数据 —— 本会话在本进程内发起的模型调用会显示在这里。")
 							: calls.map((c) => react.createElement("div", { className: "tokmn-row", key: c.provider + "|" + c.model },
 								react.createElement("div", { className: "tokmn-name", title: c.provider },
 									c.model,
@@ -904,7 +1123,7 @@ window.__ModuleLoader__.load({
 								react.createElement("div", { className: "tokmn-num", style: { width: 78, textAlign: "right" }, title: full(c.total) }, fmt(c.total) + " tok"))))),
 
 				react.createElement("div", { className: "tokmn-sec" },
-					react.createElement("div", { className: "tokmn-sec-title" }, "工具调用 · 实时采集"),
+					react.createElement("div", { className: "tokmn-sec-title" }, "工具调用 · 实时采集（仅本会话）"),
 					tools.length === 0
 						? react.createElement("div", { className: "tokmn-empty" }, "暂无数据。")
 						: react.createElement("div", null, tools.map((t) => react.createElement("span", {
@@ -923,12 +1142,14 @@ window.__ModuleLoader__.load({
 							perfItem("工具耗时", fmtMs(stats.toolMs))))),
 
 				react.createElement("p", { className: "tokmn-foot" },
-					"口径说明：官方聚合（tokenUsage / contextPressure / sessionStats）由会话日志投影，跨进程重启、含插件启用前历史；按模型的令牌明细与工具计数由本插件实时采集，仅统计进程启动之后；总览统计、Token 活动热力图、每日趋势与模型用量占比来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，「最长聊天时长」为账本记录的单会话活跃跨度；限额为本地自定义配置（DSH 无配额接口）。")
+					(data && data.note) ||
+					"官方聚合由会话日志投影、覆盖本会话全程（含插件启用前历史、跨重启），与「轨迹」页同源；按模型明细、工具计数与会话活跃时长由本插件实时采集、仅统计本进程启动之后的本会话。本页不含任何跨会话累计 —— 全局总量统计请见左侧边栏「用量统计」。")
 			);
 		}
 
 		/**
-		 * Client plugin body: register the usage view tab beside chat/trajectory.
+		 * Client plugin body: 会话「用量」Tab + 侧栏脚部「用量统计」入口 +
+		 * 全局用量统计浮窗（三个槽位条目共用同一插件与账本）。
 		 */
 		function apply(ctx) {
 			ctx.slots.inject("conversation.view", () => ctx.slots.register({
@@ -937,6 +1158,14 @@ window.__ModuleLoader__.load({
 				order: 15,
 				label: "用量"
 			}, TokenMonitorView));
+			ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({
+				name: "sidebar.footer.action",
+				id: "usage-stats"
+			}, UsageStatsButton));
+			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
+				name: "shell.overlay",
+				id: "usage-stats-overlay"
+			}, GlobalUsageOverlay));
 		}
 
 		exports.apply = apply;

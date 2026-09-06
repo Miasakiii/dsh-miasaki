@@ -1,14 +1,18 @@
 # dsh-token-monitor
 #
-# DSH web profile bundle: 会话视图「用量」Tab（token 用量监控）。
-# - client half：注册 conversation.view（id: token-monitor, order: 15 ——
-#   对话(0)/轨迹(10) 之后），3 秒轮询本插件的 HTTP 路由拉取数据。
+# DSH web profile bundle: 用量监控（token-monitor）。
+# - client half（v0.4.0 起三个槽位条目，共用同一插件与账本）：
+#   · conversation.view（id: token-monitor, order: 15 —— 对话(0)/轨迹(10) 之后）
+#     「用量」Tab：纯当前会话视角，3 秒轮询 /session；
+#   · sidebar.footer.action（id: usage-stats）：侧栏脚部「用量统计」入口按钮；
+#   · shell.overlay（id: usage-stats-overlay）：全局用量统计浮窗，开启期间
+#     /global 5 秒 + /heatmap 60 秒轮询，关闭即停。
 # - host half：监听 llm/stream（按 sessionId|provider|model 累计真实 usage
 #   实报值；usage 为 [DONE] 前仅出现一次的每请求全量口径）与 tools/result
-#   （按会话×工具名计数），并注册 GET|POST
-#   /dsh-token-monitor/{summary,heatmap,config,reset} 路由，summary 返回
-#   官方持久聚合（sessionProjections: tokenUsage/contextPressure/
-#   contextBreakdown/sessionStats + tokenMeter.measure）+ 实时明细 + 账本。
+#   （按会话×工具名计数），双写跨会话账本 usage-log.jsonl，并注册
+#   /dsh-token-monitor/{session,global,heatmap,config,reset} 路由
+#   （v0.4.0 拆分：/session 按会话过滤的官方聚合 + 实时明细；
+#   /global 跨会话账本统计 + 会话 Top N 聚合；旧 /summary 退役）。
 - insert:
     - id: dsh-token-monitor
       name: 'dsh-token-monitor'
