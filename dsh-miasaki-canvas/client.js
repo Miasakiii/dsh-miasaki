@@ -140,14 +140,15 @@ window.__ModuleLoader__.load({
         if (accent !== '') payload.accent = accent
         send('canvas:theme', payload)
       }
-      // 桌面端无边框窗口的窗控胶囊（#miasaki-titlebar .tb-capsule，fixed top:5px right:8px）
-      // 零占位浮在页面右上角，画布工具条同为 fixed 右上会叠压。量出胶囊左缘到视口右缘
-      // 的距离 + 余量下发，iframe 用它做 --canvas-chrome-reserve；普通浏览器无胶囊传 0。
-      // 胶囊宽度与 right 偏移固定，不随窗口尺寸变化，故无需监听 resize。
+      // 桌面端无边框窗口的窗控按钮组（V4 #miasaki-titlebar .tb-group，V3 兜底 .tb-capsule，
+      // fixed top:5px right:8px）零占位浮在页面右上角，画布工具条同为 fixed 右上会叠压。
+      // 量出按钮组左缘到视口右缘的距离 + 余量下发，iframe 用它做 --canvas-chrome-reserve；
+      // 普通浏览器无窗控组传 0。按钮组宽度与 right 偏移固定，不随窗口尺寸变化，故无需监听 resize。
       const syncChrome = () => {
         let reserve = 0
         try {
-          const capsule = document.querySelector('#miasaki-titlebar .tb-capsule')
+          const capsule = document.querySelector('#miasaki-titlebar .tb-group') ??
+            document.querySelector('#miasaki-titlebar .tb-capsule')
           if (capsule instanceof HTMLElement) {
             const rect = capsule.getBoundingClientRect()
             if (rect.width > 0) reserve = Math.ceil(window.innerWidth - rect.left + 6)

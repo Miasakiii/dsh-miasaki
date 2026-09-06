@@ -14,7 +14,7 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 
 侧边栏「会话」栏按血缘树状呈现（分支缩进于父线之下、按最近活动排序），树点与画布卡片共用会话线颜色，流式回复中的线带绿色脉冲「回复中」标识；侧边栏滚动位置在全量重渲染间保持（2026-09-05 修复滚动跳顶）。对话页顶部「对话/会话布」切换按钮**注册进 DSH 会话头 actions 官方插槽**（`conversation.session.header.actions`，与「后台任务」同一 flex 行渲染，2026-09-06 从悬浮/注入改为插槽方案）——由 DSH 布局驱动，结构上不可能叠压，随头部重渲染自动重挂；配色全部走 DSH 主题令牌（激活胶囊随主题品牌色：原版蓝/刻刻帝绯红/狂狂帝血绯）。
 
-**桌面端（无边框窗口）适配**（2026-09-06，v0.5.0-miasaki.2）：桥接层 `client.js` 把两类父文档状态同步进画布 iframe——①桌面窗控胶囊（`#miasaki-titlebar .tb-capsule`）的右上占位宽度（`canvas:chrome` → `--canvas-chrome-reserve`，画布工具条与错误条整体左移让位，普通浏览器为 0 不受影响）；②主题品牌色（`canvas:theme` 除明暗外带 `--dsw-static-deepseek-450` → `--canvas-accent`，画布内所有强调色/激活胶囊/小地图/主按钮由它 color-mix 派生，三主题随动）。画布全部滚动容器统一 6px 主题化胶囊滚动条，默认隐藏、容器 hover/聚焦时显现（Firefox 走 `scrollbar-width/color` 常显兜底）；暗色下画布遮罩层同步深色，消除亮色壳暗色画布的亮边。
+**桌面端（无边框窗口）适配**（2026-09-06，v0.5.0-miasaki.2；2026-09-07 跟进桌面端标题栏 v4 改名）：桥接层 `client.js` 把两类父文档状态同步进画布 iframe——①桌面窗控按钮组（V4 `#miasaki-titlebar .tb-group`，V3 兜底 `.tb-capsule`）的右上占位宽度（`canvas:chrome` → `--canvas-chrome-reserve`，画布工具条与错误条整体左移让位，普通浏览器为 0 不受影响）；②主题品牌色（`canvas:theme` 除明暗外带 `--dsw-static-deepseek-450` → `--canvas-accent`，画布内所有强调色/激活胶囊/小地图/主按钮由它 color-mix 派生，三主题随动）。画布全部滚动容器统一 6px 主题化胶囊滚动条，默认隐藏、容器 hover/聚焦时显现（Firefox 走 `scrollbar-width/color` 常显兜底）；暗色下画布遮罩层同步深色，消除亮色壳暗色画布的亮边。
 
 ## 合并怎么用
 

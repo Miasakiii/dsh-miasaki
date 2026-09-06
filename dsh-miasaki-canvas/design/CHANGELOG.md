@@ -2,6 +2,10 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-07
+
+- **跟进桌面端标题栏 v4 改名（版本升至 `0.5.0-miasaki.4`）**：桌面端 2026-09-06 标题栏 v4 去胶囊化把窗控容器类名 `.tb-capsule` 改为 `.tb-group`，而本线 `syncChrome()` 只查 `.tb-capsule`——v4 下量不到窗控组，`--canvas-chrome-reserve` 恒为 0，画布工具条与桌面端窗控组右上角叠压回归（v0.5.0-miasaki.2 修过的问题）。修复：选择器改为 `.tb-group` 优先 + `.tb-capsule` 兜底（与 sidebar 线同款兼容做法）。触摸点：`client.js`（host 侧代码，重启 `dsh web` 生效）、`package.json` 版本、`README.md`（桌面端适配段）。
+
 ## 2026-09-06（五）
 
 - **画布品牌色不随桌面端主题切换（用户报告，版本升至 `0.5.0-miasaki.3`）**：桌面端主题切换器是**热切换**——`html[data-miasaki-theme]` 属性 + 热替换主题 style 层（`runtime.js` setAttr/syncDark，无 reload）；而画布 `themeObserver` 只监听 `body[data-ds-dark-theme]`，且 sessions/workspaces 订阅只在列表变化时触发——切品牌主题（pure↔zafkiel↔kurkuriel）时既不触发 observer 也无 tick，画布停在旧品牌色。修复：同一 MutationObserver 实例加挂 `documentElement[data-miasaki-theme]` 观察（亮度三档切换走 body 属性本就触发）；防御性收窄——令牌瞬时读空（主题 style 层被页面重渲染清掉后的 ~1s 自愈窗口期）时只发明暗不下发，保留画布现有品牌色，避免被打回兜底蓝且无人再触发重发。验证：浏览器注入测试 CSS 模拟桌面切换（`html[data-miasaki-theme="zafkiel"]` 令牌覆盖 + 热设属性），画布 `--canvas-accent` 实时 `#5686fe → #c23a2e →` 移除属性回落 `#5686fe`；`pnpm run build` + `pnpm test` 75/75。触摸点：`client.js`（host 侧代码，重启 `dsh web` 生效）。
