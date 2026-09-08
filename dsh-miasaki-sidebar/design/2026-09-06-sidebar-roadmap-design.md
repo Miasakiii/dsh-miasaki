@@ -77,6 +77,13 @@
 | 主题 | 直接消费宿主 `--dsw-alias-*`（面板底 `--dsw-alias-bg-layer-1`，**不用** `--dsw-specific-sidebar-fill`）；品牌强调 `--dsw-static-deepseek-450` 派生 |
 | 持久化 | localStorage `miasaki-sidebar:v2:<sessionId>`：面板开合/宽度/tab **按会话隔离**（2026-09-08 落地，原为全局单键）；旧全局键 `miasaki-sidebar:v1` 在首个读到的会话上一次性迁移并删除；无记录的会话保持当前 UI 状态、下次变更时落自己的键（切会话不闪关） |
 
+**抽屉右滑关闭（2026-09-08 补齐）**：<768px 抽屉此前只有遮罩点击关闭，与本表「遮罩 + 右滑关闭」不符——已按设计补齐。要点：
+
+- **手势**：面板 `touch-action: pan-y`（水平手势交给 pointer 处理，代价是抽屉内横向滚动被抑制——窄视口以垂直滚动为主，可接受）；8px 轴锁定，垂直意图一律释放回标签页滚动（不 `preventDefault`），拖动期间面板 `translateX` 跟手，松手后回弹或关闭；
+- **判定为纯函数** `drawerCloseDecision({dx, dy, width, elapsedMs})`：只认向右 → 垂直意图优先 → 位移门 `max(64px, 宽度 × 30%)` → 快滑门 `≥32px 且 ≥0.6px/ms`；`elapsedMs ≤ 0` 不参与速度门（不做除零）；
+- **回归**：`test/drawer-gesture.test.js` 9 项（client.js 无导出，按源码抽取方式覆盖——与 desktop 线验证注入层的做法一致）；
+- 抽屉模式下推宽把手隐藏（`[data-drawer] .dsh-sidebar-resize{display:none}`），宽度拖拽仍只在推挤模式生效。
+
 ### 3.1.1 spike 实测结论（2026-09-06，本机 DSH 0.1.2，bundle 静态分析 + 浏览器实测）
 
 **原生三列布局的发现与决策**：

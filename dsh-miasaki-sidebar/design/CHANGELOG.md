@@ -2,6 +2,14 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-08
+
+- **审查 tab 改版 + 浏览器式标签页方案定稿（纯规划，未写代码）**：`design/2026-09-08-sidebar-review-redesign-implementation.md`（v0.5.0 目标形态）。
+  - 参考图要求：视图下拉（未暂存/已暂存/全部分支更改/上一轮更改）+ 目录分组文件列表（类型图标 + 文件名 + 灰色目录 + `+N -M` 统计 + 展开）+ 浏览器式多标签（每标签独立 ×、`＋` 新建、keep-mounted 保留状态）；
+  - **语义拍板**：「上一轮更改」= 最近一次 git 提交（`git show HEAD` 视角，非会话轮次追踪）；「全部分支更改」= 工作区全部改动 vs HEAD（未暂存 + 已暂存 + 未跟踪）；
+  - 方案要点：host `review/status` 加 `view` 白名单参数 + `git diff --numstat` / `diff-tree` 统计（untracked 逐文件 `--no-index`，200 个设界）+ 空仓库 `noCommits` 降级；client `store.tab` 单值 → `tabs[]/active` 多实例、持久化 v2→v3 一次性迁移、空态重定义为「新标签页」；既有点名 / diff 展开 / 60s TTL / visible 门 / 未点名红描边全部保留；
+  - 待用户拍板 3 项后按批 A（host 数据面）→ B（审查 UI）→ C（标签框架）→ D（版本/文档）实施。
+
 ## 2026-09-06
 
 - **新线立项（路线 D 拍板）**：轻量右侧边栏，无基座完全自研。背景：调研 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（v0.18.0，MIT）后，先倾向"基座复用 + 自研审查 tab"（路线 C），用户质疑重基座问题（裁剪开关只轻界面，骨架/跟随成本仍在），重开后拍板路线 D。
@@ -168,8 +176,27 @@
     `v2:session-51a6af9d…` → `tab:"review"`），切到无记录会话时面板不闪关（保持当前 UI 状态）；
   - **响应式**：1100px 视口 → `position:fixed` 右侧浮层 + scrim、frame 不推挤；
     700px → 抽屉 + scrim（宽度 `min(viewport, 400)`）；1280px 恢复推挤；
-  - **顺带发现（待拍板，非加固回归）**：设计 §3.1 写「<768px 全屏抽屉（遮罩 + 右滑关闭）」，
+  - **顺带发现（当晚已拍板补齐，见本段末条）**：设计 §3.1 写「<768px 全屏抽屉（遮罩 + 右滑关闭）」，
     实现为 `width = min(viewport, 持久化宽度)` 且无右滑关闭手势（遮罩点击关闭）——
     只有视口窄于面板宽度时才满宽；
   - **本轮未覆盖**：桌面壳环境（标题栏入口、32px 让位分支、三主题）未复验——未启动桌面壳；
     `visible` 性能门只做了 bundle 标记核对（后台跳过刷新需 60s TTL 观察，未做）。
+
+- **抽屉右滑关闭补齐（v0.4.1-miasaki.1，设计 §3.1 遗留项，用户拍板）**：上条「顺带发现」列出的
+  「设计写右滑关闭、实现只有遮罩点击」已按设计补齐。
+  - **手势**：面板 `touch-action: pan-y` 把水平手势交给 pointer 处理（代价：抽屉内横向滚动被抑制，
+    窄视口以垂直滚动为主，可接受）；8px 轴锁定——垂直意图一律释放回标签页滚动（不 `preventDefault`，
+    原生滚动不受影响）；拖动期间 `translateX` 跟手，松手回弹或关闭；
+  - **判定抽为纯函数** `drawerCloseDecision({dx, dy, width, elapsedMs})`：只认向右 → 垂直意图优先 →
+    位移门 `max(64px, 宽度 × 30%)` → 快滑门 `≥32px 且 ≥0.6px/ms`；`elapsedMs ≤ 0` 不参与速度门
+    （不做除零）。阈值刻意定义在函数内部，使其可被独立求值（client.js 是 `__ModuleLoader__`
+    bundle、无导出，与 desktop 线验证注入层的做法一致）；
+  - **新增 `test/drawer-gesture.test.js`（9 项，源码抽取）**：本线 20 → **29 项全绿**；
+    `node ..\scripts\verify-all.mjs sidebar` **6/6**（新测试文件被目录扫描自动纳入）；
+  - **顺带**：抽屉模式下推宽把手隐藏（`[data-drawer] .dsh-sidebar-resize{display:none}`），宽度拖拽
+    仍只在推挤模式生效；`pointercancel`（系统手势/失焦）一律回弹，绝不代替用户关闭面板。
+  - 触摸点：`client.js`、`test/drawer-gesture.test.js`（新）、`package.json`（0.4.1-miasaki.1）、
+    `README.md`、`design/2026-09-06-sidebar-roadmap-design.md`（§3.1 补记）、本文件。
+  - **生效条件**：client bundle 在 host 启动时载入内存，**须重启 `dsh web`**；
+    `GET /sidebar/api/health` 返回 `0.4.1-miasaki.1` 即已加载。
+  - **实机待验**（<768px 视口）：右滑关闭、垂直滚动不受干扰、遮罩点击与 Esc 仍可用。

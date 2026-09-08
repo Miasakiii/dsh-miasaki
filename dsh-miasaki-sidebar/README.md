@@ -8,7 +8,7 @@ DSH（DeepSeek Harness）web 轻量右侧边栏插件：**无重基座**的自�
 
 ## 状态
 
-**M1 功能收口**（2026-09-07 收口 / 2026-09-08 cwd 守卫修复 + 右栏实现加固，v0.4.0-miasaki.1）：右栏壳 + 审查 tab + 终端启动器三项全部落地，单测 20/20 通过、四线静态回归 5/5。
+**M1 功能收口**（2026-09-07 收口 / 2026-09-08 cwd 守卫修复 + 右栏实现加固 + 抽屉右滑关闭补齐，v0.4.1-miasaki.1）：右栏壳 + 审查 tab + 终端启动器三项全部落地，单测 29/29 通过、四线静态回归 6/6。
 
 - 壳：AppFrame padding 推挤（实测 center 1000→600px）、`shell.overlay` 挂载、空态标签选择页（Edge 范式）、双环境入口（桌面壳标题栏徽章左侧 / 浏览器会话头）、三主题令牌跟随；
 - 审查 tab：host `/sidebar/api/review/{status,diff,checklist}`（git CLI 只读、2000 条设界、自研 unified diff 解析、按 cwd 隔离的清单持久化）+ 收尾自检清单 UI（逐条点名 / 未点名红色警示 / 行级 diff 展开 / 60s TTL 刷新）。实测本仓 16 条改动全部渲染、点名与 diff 往返正常。
@@ -20,6 +20,7 @@ DSH（DeepSeek Harness）web 轻量右侧边栏插件：**无重基座**的自�
   - **`visible` 性能门**：tab 组件接收 `visible`，窗口切后台时审查 tab 的 60s TTL 刷新跳过；
   - **持久化按会话**：`miasaki-sidebar:v2:<sessionId>`（旧全局 `v1` 一次性迁移），切会话不闪关；
   - **修复**：`#miasaki-titlebar` 在浏览器环境存在但高度为 0 时，旧式 `: 32` 兜底会让面板顶部多出 32px 空白——已改为高度 0 即让位 0。
+- **抽屉右滑关闭（2026-09-08 补齐，设计 §3.1）**：<768px 抽屉此前只有遮罩点击关闭，与设计「遮罩 + 右滑关闭」不符——补齐右滑手势：8px 轴锁定（垂直意图释放回标签页滚动、不 `preventDefault`）、位移门 `max(64px, 宽度 × 30%)` 或快滑门 `≥32px 且 ≥0.6px/ms`、拖动跟手 + 松手回弹/关闭；判定抽为纯函数 `drawerCloseDecision`，`test/drawer-gesture.test.js` 9 项覆盖；抽屉模式下推宽把手隐藏。
 
 ## 组件蓝图（M1–M3）
 
@@ -43,9 +44,12 @@ dsh-miasaki-sidebar/
 ├── test/
 │   ├── review-data.test.js      # diff 解析器 / 文档同步检测 / checklists 持久化单测（4 项）
 │   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
-│   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 404（8 项）
+│   ├── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道（9 项）
+│   └── drawer-gesture.test.js    # 抽屉右滑关闭判定（源码抽取，9 项）
 └── design/
     ├── 2026-09-06-sidebar-roadmap-design.md   # 路线 D 总设计（§3.1.1 spike 结论 + §3.1 入口定稿）
+    ├── 2026-09-08-tavern-sidebar-comparison.md # 对照 dsh-tavern/better-sidebar 的实现调研
+    ├── 2026-09-08-better-sidebar-compat-assessment.md # betterSidebar 兼容层评估（用户拍板项）
     └── CHANGELOG.md                            # 本线变更记录
 ```
 
@@ -84,10 +88,11 @@ dsh-miasaki-sidebar/
 ## 验证
 
 ```powershell
-# 本线单测（20 项：审查 4 + 终端 7 + 路由 9）
+# 本线单测（29 项：审查 4 + 终端 7 + 路由 9 + 抽屉手势 9）
 node test/review-data.test.js
 node test/terminal-launcher.test.js
 node test/api-routing.test.js     # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏与两道浏览器信任检查
+node test/drawer-gesture.test.js  # 抽屉右滑关闭判定（从 client.js 抽取纯函数求值）
 
 # 四线统一静态回归（含本线）
 node ..\scripts\verify-all.mjs sidebar
@@ -95,7 +100,7 @@ node ..\scripts\verify-all.mjs sidebar
 
 改完 `index.js` / `client.js` 后**必须重启 `dsh web`**——本线以 `link:` 装入 profile，源码即时落盘，
 但 host 半与 client bundle 都在启动时载入内存，刷新/强刷页面均无效。`GET /sidebar/api/health` 的
-`version` 字段是判断 host 是否已加载新 bundle 的可靠信号（本次应为 `0.4.0-miasaki.1`）。
+`version` 字段是判断 host 是否已加载新 bundle 的可靠信号（本次应为 `0.4.1-miasaki.1`）。
 
 ## 规划来源
 

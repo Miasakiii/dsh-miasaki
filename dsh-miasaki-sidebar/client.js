@@ -16,6 +16,9 @@ window.__ModuleLoader__.load({
     // panel floats over a scrim, and under 768px it becomes a full drawer.
     const PUSH_MIN_VIEWPORT = 1280
     const DRAWER_MAX_VIEWPORT = 768
+    // Axis lock for the drawer swipe (px): below this the gesture is still
+    // ambiguous and is neither claimed nor released.
+    const DRAWER_SWIPE_AXIS_PX = 8
     // Below canvas's fixed overlay (z-index 100) on purpose: the fullscreen
     // canvas covers the sidebar by design, and raising z would stack the
     // sidebar on top of the canvas toolbar (design §3.1.1 constraint 4).
@@ -41,6 +44,31 @@ window.__ModuleLoader__.load({
     }
 
     const clampWidth = px => Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(px)))
+
+    // Swipe-to-close for the narrow-viewport drawer (design §3.1: "遮罩 + 右滑
+    // 关闭"). Pure decision, thresholds kept LOCAL so the function is
+    // self-contained and test/drawer-gesture.test.js can extract and evaluate it
+    // without a DOM (client.js has no other unit coverage — it is a
+    // __ModuleLoader__ bundle, see smoke-test-matrix §5). Rules, in order:
+    //   1. rightward only — a leftward drag is not a dismiss gesture;
+    //   2. vertical intent wins: a mostly-vertical gesture belongs to the tab
+    //      body's scrolling and must never close the panel;
+    //   3. past 30% of the panel width (or 64px, whichever is larger) → close;
+    //   4. otherwise a short fast flick (≥32px at ≥0.6px/ms) → close;
+    //   5. everything else springs back. elapsedMs ≤ 0 (synthetic events,
+    //      clock quirks) can never satisfy the flick gate.
+    const drawerCloseDecision = ({ dx, dy, width, elapsedMs }) => {
+      const MIN_DISTANCE_PX = 64
+      const WIDTH_FRACTION = 0.3
+      const MIN_FLICK_PX = 32
+      const FLICK_VELOCITY_PX_PER_MS = 0.6
+      if (!(dx > 0)) return false
+      if (Math.abs(dx) <= Math.abs(dy)) return false
+      if (dx >= Math.max(MIN_DISTANCE_PX, width * WIDTH_FRACTION)) return true
+      if (dx < MIN_FLICK_PX) return false
+      const ms = elapsedMs > 0 ? elapsedMs : Number.POSITIVE_INFINITY
+      return dx / ms >= FLICK_VELOCITY_PX_PER_MS
+    }
 
     const TAB_IDS = ['review', 'terminal', 'sidechat']
     const normalizePersisted = raw => ({
@@ -91,6 +119,11 @@ window.__ModuleLoader__.load({
         sessionId: null,
         viewport: 0,
         dragging: false,
+        // Drawer swipe-to-close (drawer mode only): live finger offset in px
+        // and the axis-locked drag flag. Neither is persisted — the persist
+        // whitelist below is ['open','width','tab'] only.
+        drawerOffset: 0,
+        drawerDragging: false,
         chromeReserve: 0,
         titlebarVisible: false,
         reviewCwd: null,
@@ -206,6 +239,16 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-scrim{position:fixed;inset:0;z-index:${PANEL_Z};background:rgba(0,0,0,.32)}`,
         `.dsh-sidebar-panel{position:fixed;top:var(--sidebar-chrome-reserve,0);right:0;bottom:0;z-index:${PANEL_Z};display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1,#f5f7fa);border-left:1px solid var(--dsw-alias-border-l2,#d1d5db);color:var(--dsw-alias-label-primary,#111827);transition:width .18s ease}`,
         `.dsh-sidebar-panel[data-dragging]{transition:none}`,
+        // Drawer mode only: animate the swipe-to-close offset, and kill the
+        // transition while the finger is down so the panel tracks the pointer.
+        // `touch-action:pan-y` hands horizontal gestures to our pointer
+        // handlers instead of the browser's scroll/back-swipe — the trade-off
+        // is that horizontal scrolling INSIDE the drawer is suppressed, which
+        // is acceptable on a <768px viewport (the tab bodies scroll
+        // vertically) and is the standard mobile-drawer behaviour.
+        `.dsh-sidebar-panel[data-drawer]{transition:width .18s ease,transform .18s ease;touch-action:pan-y}`,
+        `.dsh-sidebar-panel[data-drawer-dragging]{transition:none;user-select:none}`,
+        `.dsh-sidebar-panel[data-drawer] .dsh-sidebar-resize{display:none}`,
         `.dsh-sidebar-tabs{display:flex;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:none}`,
         `.dsh-sidebar-tab{height:28px;border:0;border-radius:8px;background:transparent;padding:0 10px;color:var(--dsh-sidebar-ink,var(--dsw-alias-label-secondary,#6b7280));font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}`,
         `.dsh-sidebar-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
@@ -739,6 +782,58 @@ window.__ModuleLoader__.load({
           window.addEventListener('pointermove', onMove)
           window.addEventListener('pointerup', onUp)
         }
+        // Swipe-to-close (drawer mode only, design §3.1). The axis is locked on
+        // the first significant move: a vertical gesture is released back to
+        // the tab body (no preventDefault, so native scrolling keeps working),
+        // a horizontal one drives the live offset and is decided on release.
+        const startDrawerSwipe = event => {
+          if (!drawerMode) return
+          if (event.pointerType === 'mouse' && event.button !== 0) return
+          const startX = event.clientX
+          const startY = event.clientY
+          const startedAt = event.timeStamp
+          const panelWidth = width
+          let axis = null
+          const finish = () => {
+            window.removeEventListener('pointermove', onMove)
+            window.removeEventListener('pointerup', onUp)
+            window.removeEventListener('pointercancel', onCancel)
+          }
+          const onMove = moveEvent => {
+            const dx = moveEvent.clientX - startX
+            const dy = moveEvent.clientY - startY
+            if (axis === null) {
+              if (Math.abs(dx) < DRAWER_SWIPE_AXIS_PX && Math.abs(dy) < DRAWER_SWIPE_AXIS_PX) return
+              axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+              if (axis === 'y') return
+              store.set({ drawerDragging: true })
+            }
+            if (axis !== 'x') return
+            store.set({ drawerOffset: Math.max(0, dx) })
+          }
+          const onUp = upEvent => {
+            finish()
+            const dx = upEvent.clientX - startX
+            const dy = upEvent.clientY - startY
+            const close = axis === 'x' && drawerCloseDecision({
+              dx,
+              dy,
+              width: panelWidth,
+              elapsedMs: upEvent.timeStamp - startedAt,
+            })
+            store.set({ drawerDragging: false, drawerOffset: 0 })
+            if (close) store.set({ open: false })
+          }
+          // A cancelled pointer (system gesture, focus loss) springs back — it
+          // must never dismiss the panel on the user's behalf.
+          const onCancel = () => {
+            finish()
+            store.set({ drawerDragging: false, drawerOffset: 0 })
+          }
+          window.addEventListener('pointermove', onMove)
+          window.addEventListener('pointerup', onUp)
+          window.addEventListener('pointercancel', onCancel)
+        }
         const TabBody = activeTab === null ? null : (TAB_BODIES[activeTab.id] ?? null)
         // Visibility gate: a tab pauses its polling/subscriptions when the
         // document is hidden (the panel being closed already unmounts it).
@@ -748,10 +843,16 @@ window.__ModuleLoader__.load({
           react.createElement('section', {
             className: 'dsh-sidebar-panel',
             'data-dragging': state.dragging || undefined,
+            'data-drawer': drawerMode || undefined,
+            'data-drawer-dragging': state.drawerDragging || undefined,
             style: {
               width: `${width}px`,
               '--sidebar-chrome-reserve': `${state.chromeReserve}px`,
+              // Live swipe offset — drawer mode only, and only while dragging
+              // rightward (0 renders nothing, so the panel sits flush).
+              transform: drawerMode && state.drawerOffset > 0 ? `translateX(${state.drawerOffset}px)` : undefined,
             },
+            onPointerDown: startDrawerSwipe,
             role: 'complementary',
             'aria-label': '侧栏',
           },
