@@ -24,7 +24,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/
 
 | 线 | 项数 | 内容 | 结果 |
 |---|---:|---|---|
-| sidebar | 5 | `index.js`/`client.js` 语法 + review-data 4 项 + terminal-launcher 7 项 + api-routing 9 项（真实 HTTP 路由） | PASS |
+| sidebar | 6 | `index.js`/`client.js` 语法 + review-data 4 项 + terminal-launcher 7 项 + api-routing 9 项（真实 HTTP 路由）+ drawer-gesture 9 项（client 半源码抽取） | PASS |
 | canvas | 9 | 三入口语法 + 6 个测试文件共 79 项（含 mergeStale 失效 4 项） | PASS |
 | fleet | 5 | liveness 单测 7 项 + server.js 语法 + validate-bus + publish-pulse + validate-bus --strict | PASS |
 | desktop | 4 | gen-init（令牌校验）+ tokens:diff（无漂移）+ patch verify（模型设置补丁离线自证）+ cargo test 5 项（pulse stale 语义） | PASS |
@@ -104,8 +104,9 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/
 
 ## 5. 已知边界
 
-- **L0 无法覆盖 client 半的运行时行为**：`client.js` 只做 `node --check` 语法校验，
-  React 组件行为依赖真实 DSH 页面，只能在 L3 验证。
+- **L0 对 client 半的覆盖有限**：`client.js` 主体只做 `node --check` 语法校验，React 行为依赖真实
+  DSH 页面，只能在 L3 验证。**唯一例外**是抽屉右滑关闭的判定——它是无 DOM 依赖的纯函数
+  `drawerCloseDecision`，由 `test/drawer-gesture.test.js` 按源码抽取求值（9 项），因此进了 L1。
 - **fleet 生命周期自动化仍不全**：F1 总线 + F3 心跳判活已有测试；worker 调度级
   （超时 / 重试 / orphan 回收）尚无自动化覆盖。
 - **Desktop `compose` 优先级映射靠 L3/L4 人工核对**：`main.rs` 已有 pulse stale 判活
@@ -118,3 +119,4 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/
 | 2026-09-07 | 建立本矩阵与 `scripts/verify-all.mjs`；记录首个四线全绿基线（sidebar 4 / canvas 9 / fleet 3 / desktop 2） |
 | 2026-09-07(晚) | 异常恢复批次：fleet 增加 liveness F3 单测（5 项）、desktop 增加 `cargo test`（3 项）；canvas 79 用例（mergeStale）；矩阵更新基线（sidebar 4 / canvas 79 / fleet 5 / desktop 3），L4 增补 stale 检查项 |
 | 2026-09-08 | desktop 增加 `patch verify`（模型设置补丁离线自证，desktop 3/3 → 4/4）；sidebar cwd 守卫修复 + 浏览器信任围栏补两道（api-routing 8 → 9 项）；基线更新为 **sidebar 5 / canvas 9 / fleet 5 / desktop 4**（本表 §1） |
+| 2026-09-08(晚) | sidebar 增加 `drawer-gesture`（client 半纯函数源码抽取 9 项，L1 首次覆盖 client.js 逻辑）→ 基线 **sidebar 6/6**；§5 已知边界补该例外说明 |
