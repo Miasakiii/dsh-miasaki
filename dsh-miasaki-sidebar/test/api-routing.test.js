@@ -176,6 +176,27 @@ test('createApi: an explicit trustedHosts entry is honored', async () => {
   }
 })
 
+test('GET /review/status: the view parameter is whitelisted, four legal views answer', async () => {
+  const api = await startApi()
+  try {
+    // 非 git 目录只让 git 命令降级为空数据，不影响路由层判定（真实行集由
+    // review-view.test.js 的集成用例覆盖）。
+    const cwd = encodeURIComponent(tmpdir())
+
+    const bad = await request(api.port, { path: `/sidebar/api/review/status?cwd=${cwd}&view=bogus` })
+    assert.equal(bad.status, 400, '未知视图必须显式拒绝，不能静默回落成别的视图')
+    assert.match(bad.json.error, /未知的审查视图/)
+
+    for (const view of ['unstaged', 'staged', 'all', 'last']) {
+      const res = await request(api.port, { path: `/sidebar/api/review/status?cwd=${cwd}&view=${view}` })
+      assert.equal(res.status, 200, `${view}: ${res.text}`)
+      assert.equal(res.json.status.view, view, 'view 必须回显——客户端据此丢弃切视图竞态里的陈旧响应')
+    }
+  } finally {
+    await api.close()
+  }
+})
+
 // 2026-09-08 加固：Host 围栏之外补两道浏览器信任检查（对齐 better-sidebar
 // 的 trust-fence.ts）。Host 只证明「请求打到了本机」，不证明「是本站发起的」；
 // DNS-rebinding / 跨站页面仍可满足 Host 检查。

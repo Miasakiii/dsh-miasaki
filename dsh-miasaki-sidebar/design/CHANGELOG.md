@@ -198,3 +198,59 @@
   - **语义拍板**：「上一轮更改」= 最近一次 git 提交（`git show HEAD` 视角，非会话轮次追踪）；「全部分支更改」= 工作区全部改动 vs HEAD（未暂存 + 已暂存 + 未跟踪）；
   - 方案要点：host `review/status` 加 `view` 白名单参数 + `git diff --numstat` / `diff-tree` 统计（untracked 逐文件 `--no-index`，200 个设界）+ 空仓库 `noCommits` 降级；client `store.tab` 单值 → `tabs[]/active` 多实例、持久化 v2→v3 一次性迁移、空态重定义为「新标签页」；既有点名 / diff 展开 / 60s TTL / visible 门 / 未点名红描边全部保留；
   - 待用户拍板 3 项后按批 A（host 数据面）→ B（审查 UI）→ C（标签框架）→ D（版本/文档）实施。
+
+- **审查 tab 改版 + 浏览器式标签页落地（v0.5.0-miasaki.1，同日拍板后开工）**：方案见
+  `design/2026-09-08-sidebar-review-redesign-implementation.md`（§10 三项拍板、§11 实测校准）。
+  单测 29 → **46 项**（新增 `test/review-view.test.js` 6 项 + `test/client-tabs.test.js` 10 项，
+  前者含 2 项真实 git 集成用例在受限环境自动跳过），路由 9 → 10 项。
+  - **批 A 数据面（index.js）**：`/review/status` 加 `view` 白名单（`unstaged|staged|all|last`，非法 400，无参保持旧语义）。
+    **实测校准推翻了方案初稿的三条假设**（探针 `_refs/git-probe`，用后即删）：
+    ① numstat 人类格式的 rename 是 `old => new`（不是 `{old => new}`），路径含 ` => ` 即歧义 → 改用 **`-z` 机器格式**，
+    rename 记录为 `add\tdel\t\0old\0new\0`，按**新路径**归并；
+    ② `git diff-tree` 对 **root commit 默认输出为空**（需 `--root`）→ 改用 `git show --numstat -z --format=`，
+    首提交与普通提交统一处理且默认带 rename 检测；
+    ③ `--no-index --numstat` 输出带 `NUL => ` 前缀且需逐文件 spawn → **untracked 统计改为 host 读文件**
+    （行数 / NUL 字节判二进制 / 2MB 设界 / 200 个文件设界），零 spawn。
+    另修：`git status --short` 对含空格路径加引号、非 ASCII 走八进制 UTF-8（`"\344\270\255"`），
+    旧代码把引号原样透传给 diff 路由 —— 新增 `unquoteGitPath()`（按**字节**收集转义再一次性解码，
+    否则多字节字符会被拆成替换字符）。空仓库 `diff HEAD` / `diff-tree` / `rev-parse` 均退 128 → `noCommits` 降级。
+  - **批 B 审查 UI（client.js）**：视图下拉（`menuitemradio` + ✓，浮层 fixed 定位绕开列表 overflow 裁剪，
+    **切换即拉取**——`view` 进 effect 依赖）+ 目录分组列表（组头**默认折叠**，组统计为组内求和）+
+    扩展名配色图标 + 每文件 `+N`/`-M`（二进制显示 `bin`，无统计显示 `-`）；
+    **点名、未点名红描边、DiffViewer、60s TTL、`visible` 门全部保留**（交互不变：点行点名、点 `▾` 展开 diff）。
+  - **批 C 标签框架（client.js）**：`store.tab` 单值 → `tabs[]` + `active` 多实例；每标签独立 × 关闭
+    （关闭激活标签时激活其左邻，浏览器行为）、`⌄` 全部标签菜单（本期实现）、`＋` 新建标签（类型选择浮层）、
+    空态 = 新标签页选择卡；**非激活标签 keep-mounted**（`display:none`，切回不丢状态、不重复拉取）；
+    标签标题同类型自动编号（审查 / 审查 2）。持久化 **v3**：`miasaki-sidebar:v3:<sessionId>` =
+    `{open,width,tabs,active}`，v2（按会话单 tab）与 v1（全局）一次性迁移后删除。
+  - **顺带对齐**：`/sidebar/api/health` 的 version 此前是 `0.4.0-miasaki.1` 而 `package.json` 已升 `0.4.1`
+    （并行会话升版时漏改）——现统一为 `0.5.0-miasaki.1`。
+  - 触摸点：`index.js`、`client.js`、`test/review-view.test.js`（新）、`test/client-tabs.test.js`（新）、
+    `test/api-routing.test.js`、`package.json`、`README.md`、本文件、设计文档（状态改「已落地」+ §11 实测校准）。
+  - **生效条件**：host 半与 client bundle 均在 `dsh web` 启动时载入内存，**须重启**；
+    `GET /sidebar/api/health` 返回 `0.5.0-miasaki.1` 即已加载。
+  - **实机已验（2026-09-09，重启 host 后）**：四视图切换与统计、目录分组折叠、多标签开/切/关与
+    keep-mounted、v2→v3 迁移（注入旧键实测）全部通过，逐项证据见下方 2026-09-09 段。
+
+## 2026-09-09
+
+- **v0.5.0 改版实机复验通过（重启 `dsh web` 后，浏览器环境）**：
+  - 生效确认：`GET /sidebar/api/health` → `0.5.0-miasaki.1`（重启前仍是 `0.4.0-miasaki.1`，正是本次修的对齐问题）；
+    四线静态回归 `sidebar 8/8`。
+  - **四视图**：下拉 4 项（✓未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）切换即拉取、逐视图刷新数据——
+    已暂存 = 空（本仓无暂存）→「这个视图下没有改动」；上一轮更改 = `design/ +218 -8`（与 `git show HEAD`
+    两文件 +212 -0 / +6 -8 一致）；未暂存与全部分支更改 = 3 组同数（含未跟踪 391 行，符合设计 §4.1「unstaged 含未跟踪」）。
+  - **目录分组折叠**：默认全折叠；展开 `dsh-miasaki-sidebar/` 得 4 行（README +20 -7 / client.js +472 -119 /
+    index.js +213 -12 / package.json +1 -1），合计恰等于组头 +706 -139（组统计 = 组内求和）；再点收起。
+  - **多标签 keep-mounted**：`＋` 浮层（审查 / 终端 / 辅助对话禁用）新建「审查 2」（同类型自动编号）；
+    标签 2 切「上一轮更改」并展开组后，切到标签 1 再切回——视图、展开态与 DOM 节点身份（探针属性）全部保留，
+    非激活 pane 为 `display:none` 而非卸载；`×` 关闭激活标签后左邻激活（浏览器行为）；`⌄` 菜单以
+    `menuitemradio` 列出全部标签并带 ✓ 激活态。
+  - **v2→v3 迁移**：删 v3 键并注入 `v2:<sessionId> = {open,width:360,tab:"terminal"}`，刷新后得
+    `v3 = {open,width:360,tabs:[{id:"terminal-1",type:"terminal"}],active:"terminal-1"}`、v2 键被删除、
+    面板宽 360px 生效、终端标签激活——形状与 `normalizePersisted` 一致。
+  - **改版回归抽查**：点名往返（8 → 7 → 8 条未点名，行 `unnamed` 类与 title 同步）与行级 diff 展开
+    （README.md 渲染 20 增 / 7 删，与 `git diff --numstat` 一致）均正常，检查清单已还原。
+  - 环境注记：IAB 浏览器对本页侧栏节点的 Playwright 主 frame 定位器不解析（`getByRole`/CSS 均超时、坐标点击
+    不达页面），交互改经页面内原生 `click()` 触发（React 事件委托），可点性另由 `elementFromPoint` 命中测试确认；
+    截图归档 `_refs/sidebar-v0.5.0-verify.png`（不入库）。

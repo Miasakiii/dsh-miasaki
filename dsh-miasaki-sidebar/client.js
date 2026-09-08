@@ -4,10 +4,12 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const react = require('react')
 
-    const STORAGE_PREFIX = 'miasaki-sidebar:v2'
-    // Pre-session global key (≤ v0.3.x). Migrates once into the first session
-    // that asks for its state, then is removed — see loadPersisted().
-    const LEGACY_STORAGE_KEY = 'miasaki-sidebar:v1'
+    const STORAGE_PREFIX = 'miasaki-sidebar:v3'
+    // Migration sources, newest first: v2 was per-session with a single `tab`,
+    // v1 (≤ v0.3.x) was one global key. Each is read once, rewritten as v3 and
+    // removed — see loadPersisted().
+    const LEGACY_PREFIX_V2 = 'miasaki-sidebar:v2'
+    const LEGACY_KEY_V1 = 'miasaki-sidebar:v1'
     const WIDTH_MIN = 300
     const WIDTH_MAX = 600
     const WIDTH_DEFAULT = 400
@@ -70,31 +72,59 @@ window.__ModuleLoader__.load({
       return dx / ms >= FLICK_VELOCITY_PX_PER_MS
     }
 
-    const TAB_IDS = ['review', 'terminal', 'sidechat']
-    const normalizePersisted = raw => ({
-      open: raw.open === true,
-      width: clampWidth(typeof raw.width === 'number' ? raw.width : WIDTH_DEFAULT),
-      // null = no active tab: the shell shows the "open a tab" empty state
-      // (Edge-style picker) instead of a tab page.
-      tab: TAB_IDS.includes(raw.tab) ? raw.tab : null,
-    })
+    // --- Tab model (v0.5.0 browser-style tabs) ---------------------------
+    // A tab instance is `{ id, type, view? }`: id is `${type}-${seq}` and is
+    // what persistence and React keys use, type picks the body component, and
+    // the review view travels with the tab so each instance remembers which
+    // working-tree view it shows.
+    const TAB_TYPES = ['review', 'terminal', 'sidechat']
+    const REVIEW_VIEWS = ['unstaged', 'staged', 'all', 'last']
+    const REVIEW_VIEW_LABELS = { unstaged: '未暂存', staged: '已暂存', all: '全部分支更改', last: '上一轮更改' }
+    const REVIEW_DEFAULT_VIEW = 'unstaged'
+
+    const normalizeTab = raw => {
+      if (raw === null || typeof raw !== 'object' || !TAB_TYPES.includes(raw.type)) return null
+      const id = typeof raw.id === 'string' && raw.id !== '' ? raw.id : `${raw.type}-1`
+      const tab = { id, type: raw.type }
+      if (raw.type === 'review') tab.view = REVIEW_VIEWS.includes(raw.view) ? raw.view : REVIEW_DEFAULT_VIEW
+      return tab
+    }
+
+    // v3 shape: { open, width, tabs: [{id, type, view?}], active }. v2 stored a
+    // single `tab` id; v1 stored nothing but open/width/tab. Both migrate into
+    // a one-element tab list (active = that tab), so an upgrade never loses the
+    // panel state the user had.
+    const normalizePersisted = raw => {
+      const legacyTabs = TAB_TYPES.includes(raw.tab)
+        ? [{ id: `${raw.tab}-1`, type: raw.tab, ...(raw.tab === 'review' ? { view: REVIEW_DEFAULT_VIEW } : {}) }]
+        : []
+      const tabs = Array.isArray(raw.tabs) ? raw.tabs.map(normalizeTab).filter(tab => tab !== null) : legacyTabs
+      const active = tabs.some(tab => tab.id === raw.active) ? raw.active : (tabs.length > 0 ? tabs[tabs.length - 1].id : null)
+      return {
+        open: raw.open === true,
+        width: clampWidth(typeof raw.width === 'number' ? raw.width : WIDTH_DEFAULT),
+        tabs,
+        active,
+      }
+    }
     const sessionStorageKey = sessionId => `${STORAGE_PREFIX}:${sessionId}`
 
-    // Per-session persistence (2026-09-08): panel open/width/tab are remembered
-    // per session id. A session with no record keeps the current UI state and
-    // starts its own record on the next change, so switching sessions never
-    // snaps the panel shut. The pre-session global key migrates once into the
-    // first session that asks, then disappears.
+    // Per-session persistence (v3): open/width/tab-list/active per session id.
+    // A session with no record keeps the current UI state and starts its own
+    // record on the next change, so switching sessions never snaps the panel
+    // shut. v2 (per-session single tab) and v1 (global) migrate once into the
+    // first session that asks, then disappear.
     const loadPersisted = sessionId => {
       if (typeof sessionId !== 'string' || sessionId === '') return null
       try {
         const stored = localStorage.getItem(sessionStorageKey(sessionId))
         if (stored !== null) return normalizePersisted(JSON.parse(stored))
-        const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
-        if (legacy !== null) {
+        for (const legacyKey of [`${LEGACY_PREFIX_V2}:${sessionId}`, LEGACY_KEY_V1]) {
+          const legacy = localStorage.getItem(legacyKey)
+          if (legacy === null) continue
           const migrated = normalizePersisted(JSON.parse(legacy))
           localStorage.setItem(sessionStorageKey(sessionId), JSON.stringify(migrated))
-          localStorage.removeItem(LEGACY_STORAGE_KEY)
+          localStorage.removeItem(legacyKey)
           return migrated
         }
       } catch { /* 私有模式 / 损坏数据：回落到当前状态 */ }
@@ -104,7 +134,7 @@ window.__ModuleLoader__.load({
     const savePersisted = (sessionId, state) => {
       if (typeof sessionId !== 'string' || sessionId === '') return
       try {
-        localStorage.setItem(sessionStorageKey(sessionId), JSON.stringify({ open: state.open, width: state.width, tab: state.tab }))
+        localStorage.setItem(sessionStorageKey(sessionId), JSON.stringify({ open: state.open, width: state.width, tabs: state.tabs, active: state.active }))
       } catch { /* 私有模式等写入失败时丢弃 */ }
     }
 
@@ -115,13 +145,14 @@ window.__ModuleLoader__.load({
       state: {
         open: false,
         width: WIDTH_DEFAULT,
-        tab: null,
+        tabs: [],
+        active: null,
         sessionId: null,
         viewport: 0,
         dragging: false,
         // Drawer swipe-to-close (drawer mode only): live finger offset in px
         // and the axis-locked drag flag. Neither is persisted — the persist
-        // whitelist below is ['open','width','tab'] only.
+        // whitelist below is ['open','width','tabs','active'] only.
         drawerOffset: 0,
         drawerDragging: false,
         chromeReserve: 0,
@@ -135,7 +166,7 @@ window.__ModuleLoader__.load({
       get: () => store.state,
       set(patch) {
         const next = { ...store.state, ...patch }
-        const persistKeys = ['open', 'width', 'tab']
+        const persistKeys = ['open', 'width', 'tabs', 'active']
         if (persistKeys.some(key => next[key] !== store.state[key])) savePersisted(next.sessionId, next)
         store.state = next
         for (const listener of store.listeners) listener()
@@ -144,6 +175,40 @@ window.__ModuleLoader__.load({
         store.listeners.add(listener)
         return () => store.listeners.delete(listener)
       },
+    }
+
+    // --- Tab list operations ---------------------------------------------
+    // Every mutation REPLACES the tabs array so useSyncExternalStore sees a new
+    // reference; the store's persist check compares by identity on purpose.
+    const mkTab = (type, tabs) => {
+      let seq = 1
+      while (tabs.some(tab => tab.id === `${type}-${seq}`)) seq += 1
+      const tab = { id: `${type}-${seq}`, type }
+      if (type === 'review') tab.view = REVIEW_DEFAULT_VIEW
+      return tab
+    }
+    const openTab = type => {
+      if (!TAB_TYPES.includes(type)) return
+      const tabs = store.get().tabs
+      const tab = mkTab(type, tabs)
+      store.set({ tabs: [...tabs, tab], active: tab.id })
+    }
+    const activateTab = id => {
+      if (store.get().tabs.some(tab => tab.id === id)) store.set({ active: id })
+    }
+    // Closing the active tab activates its LEFT neighbour, falling back to the
+    // one that slid into its slot — browser behaviour, not "close everything".
+    const closeTab = id => {
+      const tabs = store.get().tabs
+      const index = tabs.findIndex(tab => tab.id === id)
+      if (index === -1) return
+      const next = tabs.filter(tab => tab.id !== id)
+      const active = store.get().active === id ? (next[index - 1]?.id ?? next[index]?.id ?? null) : store.get().active
+      store.set({ tabs: next, active })
+    }
+    const setTabView = (id, view) => {
+      if (!REVIEW_VIEWS.includes(view)) return
+      store.set({ tabs: store.get().tabs.map(tab => (tab.id === id ? { ...tab, view } : tab)) })
     }
 
     /** Desktop shell reserves its fixed 32px titlebar row: the panel top must clear it (spike §3.1.1: #root is margin-top'd by the shell). */
@@ -249,17 +314,41 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-panel[data-drawer]{transition:width .18s ease,transform .18s ease;touch-action:pan-y}`,
         `.dsh-sidebar-panel[data-drawer-dragging]{transition:none;user-select:none}`,
         `.dsh-sidebar-panel[data-drawer] .dsh-sidebar-resize{display:none}`,
-        `.dsh-sidebar-tabs{display:flex;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:none}`,
-        `.dsh-sidebar-tab{height:28px;border:0;border-radius:8px;background:transparent;padding:0 10px;color:var(--dsh-sidebar-ink,var(--dsw-alias-label-secondary,#6b7280));font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}`,
+        // Tab strip (v0.5.0 browser-style): the strip scrolls horizontally when
+        // tabs overflow, so every popover anchored to a button INSIDE it must
+        // be position:fixed — an absolute child would be clipped by this
+        // overflow (see .dsh-sidebar-popover).
+        `.dsh-sidebar-tabs{display:flex;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}`,
+        `.dsh-sidebar-tab{display:flex;align-items:center;gap:4px;height:28px;flex:none;max-width:170px;border:0;border-radius:8px;background:transparent;padding:0 3px 0 10px;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}`,
         `.dsh-sidebar-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         // Selected tab reuses the hover token (the DSH left sidebar's neutral
         // gray pill is the agreed reference, not the brand-blue selected).
         `.dsh-sidebar-tab[aria-selected="true"]{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-tab[disabled]{opacity:.45;cursor:not-allowed}`,
-        `.dsh-sidebar-spacer{flex:1}`,
-        `.dsh-sidebar-close{height:24px;width:24px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center}`,
-        `.dsh-sidebar-close:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-body{flex:1;min-height:0;overflow:auto;padding:14px 16px;font:400 12px/1.7 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        `.dsh-sidebar-tab:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:-2px}`,
+        `.dsh-sidebar-tab-label{overflow:hidden;text-overflow:ellipsis}`,
+        `.dsh-sidebar-tab-close{flex:none;width:18px;height:18px;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:600 12px Inter,system-ui,sans-serif;line-height:1;display:flex;align-items:center;justify-content:center}`,
+        `.dsh-sidebar-tab-close:hover{background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-tablist{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center}`,
+        `.dsh-sidebar-tablist:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-newtab{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:600 13px Inter,system-ui,sans-serif;line-height:1;display:flex;align-items:center;justify-content:center}`,
+        `.dsh-sidebar-newtab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
+        // Popovers: fixed, because their anchors live inside overflow:auto
+        // containers (tab strip / review list head).
+        `.dsh-sidebar-popover{position:fixed;z-index:${PANEL_Z + 1};min-width:150px;max-width:280px;max-height:60vh;overflow:auto;padding:4px;border-radius:10px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 8px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:1px}`,
+        `.dsh-sidebar-menuitem{display:flex;align-items:center;gap:6px;width:100%;min-height:28px;padding:4px 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;text-align:left;font:400 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-menuitem:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
+        `.dsh-sidebar-menuitem[disabled]{opacity:.45;cursor:not-allowed}`,
+        `.dsh-sidebar-menuitem[aria-checked="true"]{font-weight:600}`,
+        `.dsh-sidebar-menutick{flex:none;width:12px;font-size:11px}`,
+        `.dsh-sidebar-menuicon{flex:none;display:flex;color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        `.dsh-sidebar-menuicon svg{width:14px;height:14px}`,
+        // Panes: every open tab stays mounted (browser semantics) and inactive
+        // ones are display:none, so switching back never refetches or resets.
+        `.dsh-sidebar-panes{flex:1;min-height:0;display:flex;flex-direction:column}`,
+        `.dsh-sidebar-pane{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px 14px;font:400 12px/1.7 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        // Used inside a pane (which already pads), so it carries no padding of
+        // its own — only its own scroll and type scale.
+        `.dsh-sidebar-body{flex:1;min-height:0;overflow:auto;font:400 12px/1.7 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280)}`,
         `.dsh-sidebar-body strong{color:var(--dsw-alias-label-primary,#111827)}`,
         // Empty state: Edge-style tab picker (user reference 2026-09-06) —
         // centered headline + one card per tab; clicking a card opens it.
@@ -273,29 +362,40 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-card[disabled]{opacity:.4;cursor:not-allowed}`,
         `.dsh-sidebar-card svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.1;stroke-linecap:round;stroke-linejoin:round}`,
         `.dsh-sidebar-resize{position:absolute;top:0;bottom:0;left:-3px;width:6px;cursor:col-resize;touch-action:none;z-index:1}`,
-        // Review tab: checklist header, per-entry naming, line-level diff.
-        `.dsh-sidebar-review{display:flex;flex-direction:column;gap:12px;height:100%}`,
+        // Review tab (v0.5.0): view dropdown + directory groups + per-file
+        // type icon and +N/-M stats. Naming (点名) stays: an unnamed file row
+        // carries a red inset edge, exactly like the pre-v0.5 border.
+        `.dsh-sidebar-review{flex:1;min-height:0;display:flex;flex-direction:column;gap:10px}`,
         `.dsh-sidebar-review-head{display:flex;align-items:center;gap:8px;flex:none}`,
-        `.dsh-sidebar-review-title{font:600 13px Inter,system-ui,sans-serif;color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-viewbtn{display:flex;align-items:center;gap:4px;height:26px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:transparent;padding:0 8px;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:600 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-viewbtn:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
+        `.dsh-sidebar-caret{font-size:9px;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
         `.dsh-sidebar-badge{font:600 11px Inter,system-ui,sans-serif;border-radius:999px;padding:2px 8px;line-height:1.4}`,
         `.dsh-sidebar-badge-warn{background:var(--dsw-static-deepseek-450,#9e1b1b);color:#fff}`,
         `.dsh-sidebar-badge-ok{background:var(--dsw-alias-interactive-bg-selected,#e5e7eb);color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-refresh{margin-left:auto;width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:14px;line-height:1}`,
         `.dsh-sidebar-refresh:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-note-attach{display:flex;flex-direction:column;gap:8px;flex:none}`,
-        `.dsh-sidebar-filelist{display:flex;flex-direction:column;min-height:0;overflow:auto}`,
-        `.dsh-sidebar-file{border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.04));margin-bottom:6px;flex:none;display:flex;align-items:stretch}`,
-        `.dsh-sidebar-file-main{flex:1;min-width:0;display:flex;flex-direction:column}`,
-        `.dsh-sidebar-file.unnamed{border-color:var(--dsw-static-deepseek-450,#9e1b1b)}`,
-        `.dsh-sidebar-file-row{display:flex;align-items:center;gap:8px;width:100%;min-height:34px;padding:5px 8px;border:0;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;text-align:left;font:400 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-filelist{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}`,
+        `.dsh-sidebar-group{border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.06));flex:none}`,
+        `.dsh-sidebar-group:last-child{border-bottom:0}`,
+        `.dsh-sidebar-group-head{display:flex;align-items:center;gap:6px;width:100%;min-height:28px;padding:3px 2px;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer;text-align:left;font:600 11px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-group-head:hover{color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-grouptoggle{flex:none;width:11px;font-size:9px;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-groupdir{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Inter,monospace}`,
+        `.dsh-sidebar-file-entry{display:flex;flex-direction:column}`,
+        `.dsh-sidebar-file-rowwrap{display:flex;align-items:center;gap:2px}`,
+        `.dsh-sidebar-file-row{display:flex;align-items:center;gap:7px;width:100%;min-height:30px;padding:3px 2px 3px 17px;border:0;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;text-align:left;font:400 12px Inter,system-ui,sans-serif}`,
         `.dsh-sidebar-file-row:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
-        `.dsh-sidebar-xy{font:600 10px/1 Inter,monospace;background:var(--dsw-alias-interactive-bg-selected,#e5e7eb);border-radius:4px;padding:2px 4px;color:var(--dsw-alias-label-secondary,#6b7280);flex:none}`,
-        `.dsh-sidebar-fpath{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Inter,monospace}`,
-        `.dsh-sidebar-notechip{flex:none;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
-        `.dsh-sidebar-file.named .dsh-sidebar-notechip{color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-expandbtn{flex:none;width:24px;border:0;border-left:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:12px}`,
-        `.dsh-sidebar-expandbtn:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-syncdot{flex:none;color:var(--dsw-static-deepseek-450,#9e1b1b);font-size:12px}`,
+        `.dsh-sidebar-file-row.unnamed{box-shadow:inset 2px 0 0 var(--dsw-static-deepseek-450,#9e1b1b)}`,
+        `.dsh-sidebar-fileicon{flex:none;width:14px;height:14px;display:block}`,
+        `.dsh-sidebar-fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`,
+        `.dsh-sidebar-syncdot{flex:none;color:var(--dsw-static-deepseek-450,#9e1b1b);font-size:11px}`,
+        `.dsh-sidebar-stat{flex:none;display:flex;gap:5px;font:600 10px/1 Inter,monospace}`,
+        `.dsh-sidebar-stat-add{color:#16a34a}`,
+        `.dsh-sidebar-stat-del{color:#dc2626}`,
+        `.dsh-sidebar-stat-binary{color:var(--dsw-alias-label-tertiary,#9ca3af);font-weight:400}`,
+        `.dsh-sidebar-expandbtn{flex:none;width:20px;border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:11px}`,
+        `.dsh-sidebar-expandbtn:hover{color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-hunkwrap{border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))}`,
         `.dsh-sidebar-dline{font:400 11px/1.5 Consolas,'Courier New',monospace;padding:0 8px;white-space:pre;color:var(--dsw-alias-label-secondary,#6b7280)}`,
         `.dsh-sidebar-dline-add{background:rgba(22,163,74,.16);color:var(--dsw-alias-label-primary,#111827)}`,
@@ -307,7 +407,9 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-emptyhint{padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary,#9ca3af);font:400 12px Inter,system-ui,sans-serif}`,
         // Terminal launcher tab (design §6.1): cwd readout, shell picker,
         // primary launch button, last-result panel.
-        `.dsh-sidebar-term{display:flex;flex-direction:column;gap:12px}`,
+        // Terminal tab scrolls inside its own pane (the pane itself is
+        // overflow:hidden so the review list can own its scrolling).
+        `.dsh-sidebar-term{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px}`,
         `.dsh-sidebar-term-label{font:600 11px Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280);text-transform:uppercase;letter-spacing:.04em}`,
         `.dsh-sidebar-term-cwdrow{display:flex;align-items:stretch;gap:6px}`,
         `.dsh-sidebar-term-cwd{flex:1;min-width:0;font:400 11px/1.5 Consolas,'Courier New',monospace;padding:7px 9px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.04));color:var(--dsw-alias-label-primary,#111827);word-break:break-all}`,
@@ -451,7 +553,7 @@ window.__ModuleLoader__.load({
         } catch { return null }
       }
 
-      /** Restore the active session's remembered panel state (open / width / tab). */
+      /** Restore the active session's remembered panel state (open / width / tab list). */
       const applySessionState = () => {
         const sessionId = currentSessionId()
         if (sessionId === store.get().sessionId) return
@@ -465,17 +567,168 @@ window.__ModuleLoader__.load({
         return react.useSyncExternalStore(store.subscribe, () => store.get().reviewCwd)
       }
 
-      // List of every changed file, one line per entry (design §4.1: status
-      // snapshot is the M1 "本轮改动" view; no session-event tracking yet).
-      function ReviewTab({ visible = true } = {}) {
+      /** One tab's persisted view (review tabs only); other types read the default. */
+      function useTabView(tabId) {
+        return react.useSyncExternalStore(store.subscribe, () => {
+          const tab = store.get().tabs.find(item => item.id === tabId)
+          return tab?.view ?? REVIEW_DEFAULT_VIEW
+        })
+      }
+
+      // --- Popover (shared by view menu / tab list / new tab) ---------------
+      // Anchored to a button that may sit inside an overflow:auto container
+      // (tab strip, review head), so the panel is position:fixed and re-measures
+      // on resize/scroll. A pointerdown outside or Escape closes it; a
+      // pointerdown on the anchor is ignored so the button's own toggle wins.
+      function Popover({ anchorRef, onClose, children, align = 'left' }) {
+        const [rect, setRect] = react.useState(null)
+        react.useEffect(() => {
+          const update = () => {
+            const node = anchorRef.current
+            if (node instanceof HTMLElement) setRect(node.getBoundingClientRect())
+          }
+          update()
+          window.addEventListener('resize', update)
+          window.addEventListener('scroll', update, true)
+          return () => {
+            window.removeEventListener('resize', update)
+            window.removeEventListener('scroll', update, true)
+          }
+        }, [anchorRef])
+        react.useEffect(() => {
+          const onPointerDown = event => {
+            const target = event.target
+            if (target instanceof Node && anchorRef.current?.contains(target)) return
+            if (target instanceof Element && target.closest('.dsh-sidebar-popover') !== null) return
+            onClose()
+          }
+          const onKeyDown = event => { if (event.key === 'Escape') onClose() }
+          document.addEventListener('pointerdown', onPointerDown, true)
+          document.addEventListener('keydown', onKeyDown)
+          return () => {
+            document.removeEventListener('pointerdown', onPointerDown, true)
+            document.removeEventListener('keydown', onKeyDown)
+          }
+        }, [anchorRef, onClose])
+        if (rect === null) return null
+        return react.createElement('div', {
+          className: 'dsh-sidebar-popover',
+          role: 'menu',
+          style: {
+            top: `${Math.round(rect.bottom + 4)}px`,
+            ...(align === 'right'
+              ? { right: `${Math.round(Math.max(4, window.innerWidth - rect.right))}px` }
+              : { left: `${Math.round(Math.max(4, rect.left))}px` }),
+            minWidth: `${Math.round(Math.max(rect.width, 150))}px`,
+          },
+        }, children)
+      }
+
+      /** A button that owns a popover; `renderMenu(close)` builds the items. */
+      function MenuButton({ className, label, title, text, align, renderMenu }) {
+        const [open, setOpen] = react.useState(false)
+        const anchorRef = react.useRef(null)
+        const close = react.useCallback(() => setOpen(false), [])
+        return react.createElement(react.Fragment, null,
+          react.createElement('button', {
+            ref: anchorRef,
+            type: 'button',
+            className,
+            'aria-label': label,
+            title: title ?? label,
+            'aria-haspopup': 'menu',
+            'aria-expanded': String(open),
+            onClick: () => setOpen(value => !value),
+          }, text),
+          open && react.createElement(Popover, { anchorRef, align, onClose: close }, renderMenu(close)))
+      }
+
+      // Per-extension icon color. Values are design-owned (not theme tokens):
+      // they carry the file-type identity, while every surface around them
+      // stays on --dsw-alias-* tokens.
+      const FILE_COLORS = {
+        ts: '#3178c6', tsx: '#3178c6', mts: '#3178c6', cts: '#3178c6',
+        js: '#c9a227', jsx: '#c9a227', mjs: '#c9a227', cjs: '#c9a227',
+        json: '#b58900', jsonc: '#b58900', md: '#519aba', markdown: '#519aba',
+        css: '#563d7c', scss: '#c9418f', less: '#563d7c', sass: '#c9418f',
+        html: '#e34c26', htm: '#e34c26', vue: '#41b883', svelte: '#ff3e00',
+        py: '#3572a5', rs: '#dea584', go: '#00add8', java: '#b07219',
+        rb: '#701516', php: '#4f5d95', sh: '#89e051', ps1: '#3b78c3',
+        yml: '#8b8b8b', yaml: '#8b8b8b', toml: '#9c4221', ini: '#8b8b8b',
+        sql: '#e38c00', png: '#a074c4', jpg: '#a074c4', jpeg: '#a074c4',
+        gif: '#a074c4', webp: '#a074c4', svg: '#ffb13b', ico: '#a074c4',
+        lock: '#8b8b8b', txt: '#8b8b8b', log: '#8b8b8b',
+      }
+      const fileColor = path => {
+        const name = path.slice(path.lastIndexOf('/') + 1)
+        const dot = name.lastIndexOf('.')
+        const ext = dot === -1 ? '' : name.slice(dot + 1).toLowerCase()
+        return FILE_COLORS[ext] ?? '#8b8b8b'
+      }
+
+      /** File-type icon: a document glyph tinted by extension. */
+      function FileIcon({ path }) {
+        return react.createElement('svg', {
+          className: 'dsh-sidebar-fileicon',
+          viewBox: '0 0 16 16',
+          'aria-hidden': 'true',
+          style: { color: fileColor(path) },
+        },
+          react.createElement('path', {
+            d: 'M9.4 1.5H4.7a1.2 1.2 0 0 0-1.2 1.2v10.6a1.2 1.2 0 0 0 1.2 1.2h6.6a1.2 1.2 0 0 0 1.2-1.2V5.2L9.4 1.5Z',
+            fill: 'currentColor',
+            opacity: '.25',
+          }),
+          react.createElement('path', {
+            d: 'M9.4 1.5v3.1a.6.6 0 0 0 .6.6h3.1',
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeWidth: '1.2',
+            strokeLinejoin: 'round',
+          }))
+      }
+
+      /** `+N -M` (green/red); binary files and stat-less entries show a dash. */
+      function StatCell({ add, del, binary }) {
+        if (binary === true) return react.createElement('span', { className: 'dsh-sidebar-stat-binary' }, 'bin')
+        return react.createElement('span', { className: 'dsh-sidebar-stat' },
+          react.createElement('span', { className: 'dsh-sidebar-stat-add' }, typeof add === 'number' ? `+${add}` : '-'),
+          react.createElement('span', { className: 'dsh-sidebar-stat-del' }, typeof del === 'number' ? `-${del}` : '-'))
+      }
+
+      /** Group entries by directory; a group's stats are the sum of its files. */
+      const groupEntries = entries => {
+        const groups = new Map()
+        for (const entry of entries) {
+          const normalized = entry.path.replace(/\\/g, '/')
+          const slash = normalized.lastIndexOf('/')
+          const dir = slash === -1 ? '' : normalized.slice(0, slash)
+          const name = slash === -1 ? normalized : normalized.slice(slash + 1)
+          if (!groups.has(dir)) groups.set(dir, { dir, label: dir === '' ? './' : `${dir}/`, entries: [], add: 0, del: 0, counted: 0 })
+          const group = groups.get(dir)
+          group.entries.push({ ...entry, name })
+          if (typeof entry.add === 'number') { group.add += entry.add; group.counted += 1 }
+          if (typeof entry.del === 'number') group.del += entry.del
+        }
+        return [...groups.values()].sort((a, b) => a.dir.localeCompare(b.dir))
+      }
+
+      // Review tab: view dropdown (未暂存 / 已暂存 / 全部分支更改 / 上一轮更改)
+      // over directory groups. Naming, diff expansion, the 60s TTL and the
+      // visible gate are unchanged from v0.4 — only presentation moved.
+      function ReviewTab({ tabId, visible = true } = {}) {
         const cwd = useReviewCwd()
+        const view = useTabView(tabId)
         const [entries, setEntries] = react.useState([])
+        const [statusMeta, setStatusMeta] = react.useState(null)
         const [loading, setLoading] = react.useState(true)
         const [docSync, setDocSync] = react.useState({ pending: [] })
         const [notes, setNotes] = react.useState({})
-        const [seenAt, setSeenAt] = react.useState(null)
         const [refreshTick, setRefreshTick] = react.useState(0)
         const [expanded, setExpanded] = react.useState(new Set())
+        // Directory groups start COLLAPSED (user decision 2026-09-08): the set
+        // holds the EXPANDED dirs, so an empty set is the default state.
+        const [openGroups, setOpenGroups] = react.useState(new Set())
 
         react.useEffect(() => {
           if (cwd === null) { setLoading(false); return }
@@ -484,13 +737,15 @@ window.__ModuleLoader__.load({
           const fetchAll = () => {
             if (cancelled) return
             setLoading(true)
-            fetchSidebar('/review/status')
+            // `view` is a dependency: switching the dropdown refetches at once
+            // (user decision — switch implies pull, no manual refresh needed).
+            fetchSidebar('/review/status?view=' + encodeURIComponent(view))
               .then(d => {
                 if (cancelled) return
                 if (d.status) {
                   setEntries(d.status.entries ?? [])
+                  setStatusMeta(d.status)
                   setDocSync(d.docSync ?? { pending: [] })
-                  setSeenAt(Date.now())
                 }
                 setLoading(false)
               })
@@ -501,7 +756,7 @@ window.__ModuleLoader__.load({
           // tick (the effect re-runs and refreshes at once when it returns).
           timer = window.setInterval(() => { if (visible) fetchAll() }, 60_000)
           return () => { cancelled = true; window.clearInterval(timer) }
-        }, [cwd, refreshTick, visible])
+        }, [cwd, view, refreshTick, visible])
 
         react.useEffect(() => {
           if (cwd === null) return
@@ -517,9 +772,19 @@ window.__ModuleLoader__.load({
             react.createElement('p', null, '打开一个会话后即可查看审查数据。'))
         }
 
+        const groups = groupEntries(entries)
         const unnamedCount = entries.filter(entry => !(notes[entry.path] || '').trim()).length
         const syncMissing = (docSync.pending ?? []).flatMap(p => p.missing)
         const allNamed = entries.length > 0 && unnamedCount === 0
+        const emptyHint = statusMeta?.noCommits === true && view === 'last'
+          ? '仓库还没有提交，尚无「上一轮更改」'
+          : view === 'last' ? '最近一次提交没有改动' : '这个视图下没有改动'
+        const toggleGroup = dir => setOpenGroups(prev => {
+          const next = new Set(prev)
+          if (next.has(dir)) next.delete(dir)
+          else next.add(dir)
+          return next
+        })
         const openExpand = path => {
           setExpanded(prev => {
             const next = new Set(prev)
@@ -541,9 +806,22 @@ window.__ModuleLoader__.load({
 
         return react.createElement('div', { className: 'dsh-sidebar-review' },
           react.createElement('div', { className: 'dsh-sidebar-review-head' },
-            react.createElement('span', { className: 'dsh-sidebar-review-title' }, '收尾自检'),
+            react.createElement(MenuButton, {
+              className: 'dsh-sidebar-viewbtn',
+              label: '审查视图',
+              title: '切换审查视图',
+              text: [REVIEW_VIEW_LABELS[view], react.createElement('span', { key: 'caret', className: 'dsh-sidebar-caret' }, '▾')],
+              renderMenu: close => REVIEW_VIEWS.map(item => react.createElement('button', {
+                key: item,
+                type: 'button',
+                role: 'menuitemradio',
+                'aria-checked': String(item === view),
+                className: 'dsh-sidebar-menuitem',
+                onClick: () => { setTabView(tabId, item); close() },
+              }, react.createElement('span', { className: 'dsh-sidebar-menutick' }, item === view ? '✓' : ''), REVIEW_VIEW_LABELS[item])),
+            }),
             react.createElement('span', { className: 'dsh-sidebar-badge ' + (allNamed ? 'dsh-sidebar-badge-ok' : 'dsh-sidebar-badge-warn') },
-              entries.length === 0 ? '工作区干净' : (allNamed ? '全部点名' : `${unnamedCount} 条未点名`)),
+              entries.length === 0 ? '无改动' : (allNamed ? '全部点名' : `${unnamedCount} 条未点名`)),
             react.createElement('button', {
               type: 'button',
               className: 'dsh-sidebar-refresh',
@@ -551,38 +829,51 @@ window.__ModuleLoader__.load({
               onClick: refresh,
             }, '↻')),
           react.createElement('div', { className: 'dsh-sidebar-filelist' },
-            loading
+            loading && entries.length === 0
               ? react.createElement('div', { className: 'dsh-sidebar-emptyhint' }, '载入中…')
               : entries.length === 0
-                ? react.createElement('div', { className: 'dsh-sidebar-emptyhint' }, '工作区干净，无需审查')
-                : entries.map(entry => {
-                    const note = (notes[entry.path] || '').trim()
-                    const isOpen = expanded.has(entry.path)
-                    return react.createElement('div', {
-                      key: entry.path,
-                      className: 'dsh-sidebar-file ' + (note !== '' ? 'named' : 'unnamed'),
-                    },
-                      react.createElement('div', { className: 'dsh-sidebar-file-main' },
-                        react.createElement('button', {
-                          type: 'button',
-                          className: 'dsh-sidebar-file-row',
-                          title: note !== '' ? `已点名：${note}` : '点击点名',
-                          onClick: () => toggleNote(entry.path),
-                        },
-                          react.createElement('span', { className: 'dsh-sidebar-xy' }, entry.xy),
-                          react.createElement('span', { className: 'dsh-sidebar-fpath' }, entry.path),
-                          syncMissing.length > 0 && react.createElement('span', { className: 'dsh-sidebar-syncdot' }, '⚠'),
-                          note !== ''
-                            ? react.createElement('span', { className: 'dsh-sidebar-notechip' }, '已点名')
-                            : react.createElement('span', { className: 'dsh-sidebar-notechip' }, '点名…')),
-                        isOpen && react.createElement('div', { className: 'dsh-sidebar-hunkwrap' },
-                          react.createElement(DiffViewer, { path: entry.path }))),
+                ? react.createElement('div', { className: 'dsh-sidebar-emptyhint' }, emptyHint)
+                : groups.map(group => {
+                    const isGroupOpen = openGroups.has(group.dir)
+                    return react.createElement('div', { key: group.dir, className: 'dsh-sidebar-group' },
                       react.createElement('button', {
                         type: 'button',
-                        className: 'dsh-sidebar-expandbtn',
-                        title: isOpen ? '收起 diff' : '展开 diff',
-                        onClick: () => openExpand(entry.path),
-                      }, isOpen ? '−' : '+'))
+                        className: 'dsh-sidebar-group-head',
+                        'aria-expanded': String(isGroupOpen),
+                        title: isGroupOpen ? '收起目录' : '展开目录',
+                        onClick: () => toggleGroup(group.dir),
+                      },
+                        react.createElement('span', { className: 'dsh-sidebar-grouptoggle' }, isGroupOpen ? '▾' : '▸'),
+                        react.createElement('span', { className: 'dsh-sidebar-groupdir' }, group.label),
+                        react.createElement(StatCell, {
+                          add: group.counted > 0 ? group.add : null,
+                          del: group.counted > 0 ? group.del : null,
+                        })),
+                      isGroupOpen && group.entries.map(entry => {
+                        const note = (notes[entry.path] || '').trim()
+                        const isDiffOpen = expanded.has(entry.path)
+                        return react.createElement('div', { key: entry.path, className: 'dsh-sidebar-file-entry' },
+                          react.createElement('div', { className: 'dsh-sidebar-file-rowwrap' },
+                            react.createElement('button', {
+                              type: 'button',
+                              className: 'dsh-sidebar-file-row' + (note !== '' ? '' : ' unnamed'),
+                              title: note !== '' ? `已点名：${note}（点击取消）` : '点击点名',
+                              onClick: () => toggleNote(entry.path),
+                            },
+                              react.createElement(FileIcon, { path: entry.path }),
+                              react.createElement('span', { className: 'dsh-sidebar-fname' }, entry.name),
+                              syncMissing.length > 0 && react.createElement('span', { className: 'dsh-sidebar-syncdot' }, '⚠'),
+                              react.createElement(StatCell, { add: entry.add, del: entry.del, binary: entry.binary })),
+                            react.createElement('button', {
+                              type: 'button',
+                              className: 'dsh-sidebar-expandbtn',
+                              title: isDiffOpen ? '收起 diff' : '展开 diff',
+                              'aria-expanded': String(isDiffOpen),
+                              onClick: () => openExpand(entry.path),
+                            }, isDiffOpen ? '−' : '+')),
+                          isDiffOpen && react.createElement('div', { className: 'dsh-sidebar-hunkwrap' },
+                            react.createElement(DiffViewer, { path: entry.path })))
+                      }))
                   })))
       }
 
@@ -741,8 +1032,19 @@ window.__ModuleLoader__.load({
         },
       ]
 
-      // Edge-style empty state: the picker the panel opens on when no tab is
-      // active (first run, or after closing the last tab).
+      const tabMeta = type => TABS.find(tab => tab.id === type) ?? TABS[0]
+      // Same-type instances get a numeric suffix (browser semantics:
+      // 审查 / 审查 2), so the strip stays readable with duplicates open.
+      const tabLabel = (tabs, tab) => {
+        const same = tabs.filter(item => item.type === tab.type)
+        const base = tabMeta(tab.type).label
+        if (same.length <= 1) return base
+        return `${base} ${same.findIndex(item => item.id === tab.id) + 1}`
+      }
+
+      // Edge-style empty state: the picker the panel opens on when NO tab is
+      // open (first run, or after closing the last one). Clicking a card opens
+      // a new tab instance.
       function EmptyState() {
         return react.createElement('div', { className: 'dsh-sidebar-empty' },
           react.createElement('h3', null, '打开标签页'),
@@ -753,7 +1055,7 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dsh-sidebar-card',
               disabled: tab.id === 'sidechat',
-              onClick: () => store.set({ tab: tab.id }),
+              onClick: () => openTab(tab.id),
             }, tab.icon, react.createElement('span', null, tab.label)))))
       }
 
@@ -765,7 +1067,7 @@ window.__ModuleLoader__.load({
         const pushMode = state.viewport >= PUSH_MIN_VIEWPORT
         const drawerMode = !pushMode && state.viewport < DRAWER_MAX_VIEWPORT
         const width = drawerMode ? Math.min(state.viewport, state.width) : state.width
-        const activeTab = state.tab === null ? null : (TABS.find(tab => tab.id === state.tab) ?? TABS[0])
+        const tabs = state.tabs
         const onScrimClick = () => store.set({ open: false })
         const startDrag = event => {
           if (!pushMode) return
@@ -834,10 +1136,10 @@ window.__ModuleLoader__.load({
           window.addEventListener('pointerup', onUp)
           window.addEventListener('pointercancel', onCancel)
         }
-        const TabBody = activeTab === null ? null : (TAB_BODIES[activeTab.id] ?? null)
-        // Visibility gate: a tab pauses its polling/subscriptions when the
-        // document is hidden (the panel being closed already unmounts it).
-        const tabVisible = state.open && state.pageVisible
+        // Visibility gate: only the ACTIVE tab polls, and only while the
+        // document is visible. Inactive panes stay mounted but idle (browser
+        // semantics: switching back must not refetch or reset their state).
+        const pageVisible = state.open && state.pageVisible
         return react.createElement(react.Fragment, null,
           !pushMode && react.createElement('div', { className: 'dsh-sidebar-scrim', onClick: onScrimClick, 'aria-hidden': 'true' }),
           react.createElement('section', {
@@ -856,33 +1158,84 @@ window.__ModuleLoader__.load({
             role: 'complementary',
             'aria-label': '侧栏',
           },
-            activeTab === null
+            react.createElement('div', { className: 'dsh-sidebar-tabs', role: 'tablist', 'aria-label': '侧栏标签页' },
+              // ⌄ 全部标签列表（用户拍板本期实现）：标签溢出时也能点到。
+              tabs.length > 0 && react.createElement(MenuButton, {
+                className: 'dsh-sidebar-tablist',
+                label: '所有标签',
+                title: '所有标签',
+                text: '⌄',
+                renderMenu: close => tabs.map(tab => react.createElement('button', {
+                  key: tab.id,
+                  type: 'button',
+                  role: 'menuitemradio',
+                  'aria-checked': String(tab.id === state.active),
+                  className: 'dsh-sidebar-menuitem',
+                  onClick: () => { activateTab(tab.id); close() },
+                },
+                  react.createElement('span', { className: 'dsh-sidebar-menutick' }, tab.id === state.active ? '✓' : ''),
+                  react.createElement('span', { className: 'dsh-sidebar-menuicon' }, tabMeta(tab.type).icon),
+                  tabLabel(tabs, tab))),
+              }),
+              tabs.map(tab => react.createElement('button', {
+                key: tab.id,
+                type: 'button',
+                role: 'tab',
+                className: 'dsh-sidebar-tab',
+                'aria-selected': tab.id === state.active ? 'true' : 'false',
+                title: tabLabel(tabs, tab),
+                onClick: () => activateTab(tab.id),
+              },
+                react.createElement('span', { className: 'dsh-sidebar-tab-label' }, tabLabel(tabs, tab)),
+                // A span, not a button: nesting a button inside a button is
+                // invalid HTML. Keyboard users reach the same action through
+                // the ⌄ list, so this one stays out of the tab order.
+                react.createElement('span', {
+                  className: 'dsh-sidebar-tab-close',
+                  role: 'button',
+                  'aria-label': `关闭 ${tabLabel(tabs, tab)}`,
+                  title: '关闭标签页',
+                  onClick: event => { event.stopPropagation(); closeTab(tab.id) },
+                }, '×'))),
+              react.createElement(MenuButton, {
+                className: 'dsh-sidebar-newtab',
+                label: '新建标签',
+                title: '新建标签',
+                text: '＋',
+                align: 'right',
+                renderMenu: close => TABS.map(item => react.createElement('button', {
+                  key: item.id,
+                  type: 'button',
+                  role: 'menuitem',
+                  className: 'dsh-sidebar-menuitem',
+                  disabled: item.id === 'sidechat',
+                  onClick: () => {
+                    if (item.id === 'sidechat') return
+                    openTab(item.id)
+                    close()
+                  },
+                },
+                  react.createElement('span', { className: 'dsh-sidebar-menuicon' }, item.icon),
+                  item.label)),
+              })),
+            tabs.length === 0
               ? react.createElement(EmptyState)
-              : react.createElement(react.Fragment, null,
-                  react.createElement('div', { className: 'dsh-sidebar-tabs', role: 'tablist', 'aria-label': '侧栏工具' },
-                    TABS.map(tab => react.createElement('button', {
+              : react.createElement('div', { className: 'dsh-sidebar-panes' },
+                  tabs.map(tab => {
+                    const meta = tabMeta(tab.type)
+                    const Body = TAB_BODIES[tab.type]
+                    const isActive = tab.id === state.active
+                    return react.createElement('div', {
                       key: tab.id,
-                      type: 'button',
-                      role: 'tab',
-                      className: 'dsh-sidebar-tab',
-                      'aria-selected': tab.id === state.tab ? 'true' : 'false',
-                      disabled: tab.id === 'sidechat',
-                      title: tab.label,
-                      onClick: () => store.set({ tab: tab.id }),
-                    }, tab.label)),
-                    react.createElement('div', { className: 'dsh-sidebar-spacer' }),
-                    react.createElement('button', {
-                      type: 'button',
-                      className: 'dsh-sidebar-close',
-                      'aria-label': '关闭当前标签页',
-                      title: '关闭标签页',
-                      onClick: () => store.set({ tab: null }),
-                    }, '×')),
-                  TabBody === null
-                    ? react.createElement('div', { className: 'dsh-sidebar-body' },
-                        react.createElement('strong', null, activeTab.label), ' — ', activeTab.note)
-                    : react.createElement('div', { className: 'dsh-sidebar-body dsh-sidebar-review-wrap' },
-                        react.createElement(TabBody, { visible: tabVisible }))),
+                      className: 'dsh-sidebar-pane',
+                      role: 'tabpanel',
+                      'aria-hidden': String(!isActive),
+                      style: { display: isActive ? 'flex' : 'none' },
+                    }, Body === undefined
+                      ? react.createElement('div', { className: 'dsh-sidebar-body' },
+                          react.createElement('strong', null, meta.label), ' — ', meta.note)
+                      : react.createElement(Body, { tabId: tab.id, visible: isActive && pageVisible }))
+                  })),
             react.createElement('div', { className: 'dsh-sidebar-resize', onPointerDown: startDrag, 'aria-hidden': 'true' })))
       }
       ctx.slots.inject('shell.overlay', () => ctx.slots.register({

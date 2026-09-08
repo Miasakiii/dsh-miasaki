@@ -1,7 +1,8 @@
 # 审查 tab 改版 + 浏览器式标签页 — 实施方案（v0.5.0）
 
 - 日期：2026-09-08
-- 状态：方案定稿（未写代码，待用户拍板后开工）
+- 状态：**已落地并实机复验**（v0.5.0-miasaki.1，批 A–D 全部完成；2026-09-09 重启 host 后**浏览器环境**
+  四视图 / 分组折叠 / 多标签 keep-mounted / v2→v3 迁移全部通过，复验记录见 `design/CHANGELOG.md` 2026-09-09 段）
 - 参考图：用户提供（侧边栏审查面板：视图下拉 + 目录分组文件列表 + 浏览器式标签头）
 - 语义拍板（2026-09-08 用户确认）：
   - **「上一轮更改」= 最近一次 git 提交（HEAD vs HEAD^，`git show HEAD` 视角）**，非会话轮次追踪；
@@ -94,7 +95,7 @@ ReviewTab (props: visible, tabId)
 ### 5.2 视图切拉
 
 - `ViewMenu`：`role="menu"` + `menuitemradio`（`aria-checked`），↑↓/Enter/Esc 键盘支持；浮层 `position: fixed`（由按钮 getBoundingClientRect 定位），点外部关闭；选中项 ✓；
-- 视图切换 → `setView(view)` → 重新 `fetchSidebar('/review/status', { view })`（复用现有效果链，60s TTL/visible 门/手动刷新全部沿用）；
+- 视图切换 → `setView(view)` → **切换即拉取**（用户拍板：立刻 `fetchSidebar('/review/status', { view })`，与手动刷新走同一链路；60s TTL / visible 门 / 手动刷新全部沿用）；
 - 视图状态属于 **tab 实例级**（存 tab 记录 `view` 字段，随持久化 v3 一起落盘），切换标签互不干扰。
 
 ### 5.3 目录分组与文件行
@@ -157,27 +158,33 @@ TABS = [
 
 ## 7. 测试计划
 
-| 项 | 覆盖 | 文件 |
-|---|---|---|
-| `parseNumstat` | 正常三列、二进制 `-`、rename 输出形态（实测校准）、quoted path | `test/review-view.test.js`（新） |
-| `filterStatusByView` | 四视图的行集过滤（M/MM/??/R/MM 组合）、untracked 归属 unstaged/all | 同上 |
-| `parseDiffTree` | 状态字母与 numstat 合并、首提交（root commit）降级 | 同上 |
-| **真实临时 git 仓库** | init + 配置 user + 首提交 + 制造 M/MM/??/R/二进制/空格路径 → 逐视图断言行集与统计 | `test/review-view.test.js`（新，走 repo fixture） |
-| 路由 | `view` 白名单（非法 400）、四视图 200、`noCommits` 降级 | `test/api-routing.test.js`（扩） |
-| 既有 | `parseUnifiedDiff` / `verifyDocSync` / `ChecklistStore` / 终端 7 项 / 路由 9 项 | 保持全绿，20 项基线不回退 |
+| 项 | 覆盖 | 文件 | 落地结果 |
+|---|---|---|---|
+| `parseNumstatZ` | 普通三列、二进制 `-`、rename `add\tdel\t\0old\0new\0`、混合不错位 | `test/review-view.test.js`（新） | ✅ |
+| `parseNameStatusZ` | A/M/D + `R100\0old\0new` | 同上 | ✅ |
+| `unquoteGitPath` / `parseStatusRows` | 引号、空格、`\t`、八进制 UTF-8（整串按字节解码）、rename 目标 | 同上 | ✅ |
+| **真实临时 git 仓库** | root commit + 第二提交（rename / 删除 / 修改 / 二进制 / 空格路径 / untracked）→ 四视图逐条断言行集与统计 | 同上（`spawnSync` fixture） | ✅ 6/6（含 2 项集成） |
+| 路由 | `view` 白名单（非法 400）、四视图 200 且 `status.view` 回显 | `test/api-routing.test.js`（扩） | ✅ 10/10 |
+| client 纯函数 | 持久化 v3 归一 + v2/v1 迁移（键删除、v3 优先）、目录分组与统计求和、二进制不计和 | `test/client-tabs.test.js`（新，源码抽取） | ✅ 10/10 |
+| 既有 | review-data 4 / terminal 7 / drawer-gesture 9 / 路由原 9 | 不回退 | ✅ 全绿 |
 
-- client 侧纯逻辑只保留「分组/图标映射」两个纯函数，**无法单测**（client.js 非模块化入口）→ 以「实机验证清单」覆盖：四视图往返、分组统计求和、点名红描边/展开 diff、多标签开关/keep-mounted 状态保持、v2→v3 迁移（localStorage 注入旧键实测）。
+- client 侧纯逻辑（分组 / 图标映射 / 持久化归一与迁移）以 `test/client-tabs.test.js` 的**源码抽取**方式单测
+  （client.js 是 `__ModuleLoader__` bundle，无法 import）；其余交互（四视图往返、分组折叠、多标签开/切/关、
+  keep-mounted 状态保持）以「实机验证清单」覆盖。
+- 集成用例在**无法捕获子进程输出**的环境（如受限沙箱：Node `spawn` 返回 EPERM）自动 `skip` 并打印原因，
+  不误报失败；本机提权执行时 6/6 全绿。
 
 ## 8. 实施批次与验收
 
-| 批 | 内容 | 文件 | 验收 |
+| 批 | 内容 | 文件 | 状态 |
 |---|---|---|---|
-| A | view 枚举 + numstat/diff-tree + untracked 统计 + 过滤纯函数 + 路由白名单 + 单测 | `index.js`、`test/review-view.test.js`(新)、`test/api-routing.test.js` | 单测全绿；`view` 四值 curl 200、非法 400 |
-| B | ViewMenu + 分组列表 + 图标 + 统计 + 未点名保留 | `client.js` | 参考图逐项对照；点名/diff/未点名红线回归 |
-| C | tabs[]/active + 持久化 v3 迁移 + 标签栏（×/＋/滚动/keep-mounted）+ 空态 = 新标签页 | `client.js` | 多标签开/切/关、状态保持、刷新后恢复、v2 键迁移 |
-| D | 版本号同步 + README（组件蓝图/验证清单）+ CHANGELOG + 本设计文档状态改「已落地」 | `package.json`、`README.md`、`design/CHANGELOG.md`、本文件 | 文档同步纪律自检 |
+| A | view 枚举 + numstat/diff-tree 解析 + untracked 统计 + 路由白名单 + 单测 | `index.js`、`test/review-view.test.js`(新)、`test/api-routing.test.js` | ✅ 完成（单测 6/6、路由 10/10） |
+| B | ViewMenu + 分组列表 + 图标 + 统计 + 未点名保留 | `client.js` | ✅ 完成（待实机对照） |
+| C | tabs[]/active + 持久化 v3 迁移 + 标签栏（×/⌄/＋/滚动/keep-mounted）+ 空态 = 新标签页 | `client.js` | ✅ 完成（待实机复验） |
+| D | 版本号同步 + README（组件蓝图/验证清单）+ CHANGELOG + 本设计文档状态改「已落地」 | `package.json`、`README.md`、`design/CHANGELOG.md`、本文件 | ✅ 完成 |
 
 批次内顺序：A → B → C → D；A/B 可与 C 并行（A 只动 host、B/C 只动 client，但 B 依赖 A 的响应结构，故 B 在 A 后；C 独立）。
+实际执行按 A → B+C → D（B 与 C 同在 `client.js`，合并一次改造以减少并行会话冲突面）。
 
 ## 9. 风险与取舍
 

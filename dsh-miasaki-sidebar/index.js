@@ -31,7 +31,11 @@ export const inject = ['webServer']
 
 const GIT_TIMEOUT_MS = 10_000
 const GIT_MAX_BUFFER = 16 * 1024 * 1024
-const GIT_BIN = 'C:\\Program Files\\Git\\cmd\\git.exe'
+// Absolute path by default: the DSH host process was observed to have no Git
+// on PATH (2026-09-07), and `spawn('git')` would then fail at runtime rather
+// than at config time. Overridable for a different install layout, which is
+// also what the integration tests use.
+export const GIT_BIN = process.env.DSH_SIDEBAR_GIT ?? 'C:\\Program Files\\Git\\cmd\\git.exe'
 // Git --no-index needs an actual existing empty file as the "before" side;
 // /dev/null works on Unix but not through execFile on Windows (no /dev tree),
 // so resolve the platform null device at module load.
@@ -42,6 +46,13 @@ const STATUS_MAX_ENTRIES = 2000
 // Parsed diff lines cap per request; larger diffs truncate with a marker.
 const DIFF_MAX_LINES = 20_000
 const CHECKLIST_PATCH_MAX_BYTES = 64 * 1024
+// Review views (v0.5.0, design 2026-09-08 §4.1). The whitelist lives here so
+// an unknown `view` is a 400, never a silent fallback to a different view.
+export const REVIEW_VIEWS = ['unstaged', 'staged', 'all', 'last']
+// untracked files have no single-call numstat in git, so the host counts them
+// itself; cap the work and leave the rest stat-less (the UI shows `-`).
+const UNTRACKED_STAT_MAX_FILES = 200
+const UNTRACKED_STAT_MAX_BYTES = 2 * 1024 * 1024
 
 /** Host/host:port fence for the /sidebar API (mirrors the canvas plugin): the DSH /api browser-trust fence does not cover plugin routes. */
 function trustedHostSet(config) {
@@ -108,24 +119,209 @@ async function diffForFile(cwd, rel, cached) {
   return runGit(cwd, ['diff', 'HEAD', '--', rel])
 }
 
-async function reviewStatus(cwd, logger) {
+/**
+ * Undo git's C-style path quoting. `status --short` quotes paths containing
+ * spaces, and with the default core.quotepath=true a non-ASCII path arrives as
+ * octal UTF-8 escapes (`"\344\270\255"`). Escapes are collected as BYTES and
+ * decoded once at the end — decoding each octal escape on its own would split
+ * a multi-byte character into replacement characters.
+ */
+export function unquoteGitPath(raw) {
+  const trimmed = raw.replace(/\t.*$/, '').trim()
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed
+  const body = trimmed.slice(1, -1)
+  const bytes = []
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]
+    if (ch !== '\\') { bytes.push(...Buffer.from(ch, 'utf8')); continue }
+    const next = body[i + 1]
+    if (next === undefined) break
+    if (next === '\\' || next === '"') { bytes.push(next.charCodeAt(0)); i += 1; continue }
+    if (next === 't') { bytes.push(9); i += 1; continue }
+    if (next === 'n') { bytes.push(10); i += 1; continue }
+    if (next === 'r') { bytes.push(13); i += 1; continue }
+    const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1))
+    if (octal !== null) { bytes.push(Number.parseInt(octal[0], 8) & 0xff); i += octal[0].length; continue }
+    bytes.push(next.charCodeAt(0)); i += 1
+  }
+  return Buffer.from(bytes).toString('utf8')
+}
+
+/**
+ * `git status --short` rows → [{ xy, path }]. A rename prints `R  old -> new`
+ * (the target wins) and every path is unquoted — the pre-v0.5 inline version
+ * kept the surrounding quotes, so a path with a space was sent to the diff
+ * route verbatim as `"a b.ts"`.
+ */
+export function parseStatusRows(text) {
+  return text.split('\n')
+    .filter(line => line.length >= 3 && line.trim() !== '')
+    .map(line => {
+      const raw = line.slice(3)
+      const arrow = raw.indexOf(' -> ')
+      return { xy: line.slice(0, 2), path: unquoteGitPath(arrow === -1 ? raw : raw.slice(arrow + 4)) }
+    })
+}
+
+/**
+ * `git diff|show --numstat -z` → Map(path → { add, del, binary }). The -z form
+ * is used because the human format renders a rename as `old => new`, which is
+ * ambiguous as soon as a path contains ` => `; in -z a rename record is
+ * `add\tdel\t\0old\0new\0` and is keyed by the NEW path (probe-measured
+ * 2026-09-08, design §11).
+ */
+export function parseNumstatZ(text) {
+  const stats = new Map()
+  const fields = text.split('\0')
+  for (let i = 0; i < fields.length; i++) {
+    const record = fields[i]
+    if (record === '') continue
+    const firstTab = record.indexOf('\t')
+    const secondTab = record.indexOf('\t', firstTab + 1)
+    if (firstTab === -1 || secondTab === -1) continue
+    const addRaw = record.slice(0, firstTab)
+    const delRaw = record.slice(firstTab + 1, secondTab)
+    let path = record.slice(secondTab + 1)
+    if (path === '') {
+      const oldPath = fields[i + 1] ?? ''
+      path = fields[i + 2] ?? oldPath
+      i += 2
+    }
+    if (path === '') continue
+    const binary = addRaw === '-' || delRaw === '-'
+    stats.set(path, { add: binary ? null : Number(addRaw), del: binary ? null : Number(delRaw), binary })
+  }
+  return stats
+}
+
+/** `git show|diff --name-status -z` → [{ code, path, from? }]; rename/copy records carry old then new path. */
+export function parseNameStatusZ(text) {
+  const rows = []
+  const fields = text.split('\0')
+  for (let i = 0; i < fields.length; i++) {
+    const code = fields[i]
+    if (code === '') continue
+    const letter = code[0]
+    if (letter === 'R' || letter === 'C') {
+      const from = fields[i + 1] ?? ''
+      rows.push({ code: letter, path: fields[i + 2] ?? from, from })
+      i += 2
+    } else {
+      rows.push({ code: letter, path: fields[i + 1] ?? '' })
+      i += 1
+    }
+  }
+  return rows
+}
+
+/**
+ * Count one untracked file by reading it (additions = line count, deletions =
+ * 0). Reading beats `git diff --no-index` here: that would be one spawn per
+ * file, and its numstat output carries a `NUL => ` prefix. Binary (a NUL byte)
+ * and oversized files report no numbers rather than a wrong count.
+ */
+async function statUntracked(cwd, rel) {
+  if (rel.split(/[\\/]/).includes('..')) return { add: null, del: null, binary: false }
+  try {
+    const buffer = await readFile(join(cwd, rel))
+    if (buffer.length > UNTRACKED_STAT_MAX_BYTES) return { add: null, del: null, binary: false }
+    if (buffer.includes(0)) return { add: null, del: null, binary: true }
+    const text = buffer.toString('utf8')
+    if (text === '') return { add: 0, del: 0, binary: false }
+    const lines = text.split('\n')
+    return { add: lines[lines.length - 1] === '' ? lines.length - 1 : lines.length, del: 0, binary: false }
+  } catch { return { add: null, del: null, binary: false } }
+}
+
+/**
+ * One reviewed working tree for one view (design §4.1). Every git call is
+ * read-only and bounded; a view that cannot be computed on this repo (no
+ * commit yet → no HEAD) degrades to `noCommits` instead of throwing, so an
+ * empty repository still renders a panel instead of a 500.
+ */
+export async function reviewStatus(cwd, { view = 'all', logger } = {}) {
   // `logger` is passed in from apply(): this module has no ambient ctx, and an
   // earlier version referenced one here — a git failure then threw
   // ReferenceError instead of degrading to an empty field.
   const maybe = args => runGit(cwd, args).catch(error => {
-    logger?.warn?.(`sidebar:review status ${args.join(' ')}: ${error instanceof Error ? error.message : String(error)}`)
+    logger?.warn?.(`sidebar:review ${args.join(' ')}: ${error instanceof Error ? error.message : String(error)}`)
     return ''
   })
-  const [branch, head, statusText] = await Promise.all([
+  const [branch, head, statusText, headProbe] = await Promise.all([
     maybe(['branch', '--show-current']),
     maybe(['rev-parse', '--short', 'HEAD']),
     maybe(['status', '--short', '--untracked-files=all']),
+    maybe(['rev-parse', '--verify', '--quiet', 'HEAD']),
   ])
-  const lines = (statusText || '').split('\n').filter(line => line.length >= 3 && line.trim() !== '')
-  const truncated = lines.length > STATUS_MAX_ENTRIES
-  const entries = lines.slice(0, STATUS_MAX_ENTRIES).map(line => ({ xy: line.slice(0, 2), path: renameTarget(line.slice(3)) }))
-  function renameTarget(raw) { const arrow = raw.indexOf(' -> '); return arrow === -1 ? raw : raw.slice(arrow + 4) }
-  return { branch, head, entries, truncated, total: lines.length }
+  const hasHead = headProbe.trim() !== ''
+
+  // --- 上一轮更改：最近一次提交（git show 视角） ---
+  if (view === 'last') {
+    if (!hasHead) return { view, branch, head: '', noCommits: true, entries: [], truncated: false, total: 0 }
+    // `show` (not diff-tree) handles the root commit without extra flags and
+    // enables rename detection by default; both calls are -z machine format.
+    const [nameZ, numZ] = await Promise.all([
+      maybe(['show', '--name-status', '-z', '--format=', 'HEAD']),
+      maybe(['show', '--numstat', '-z', '--format=', 'HEAD']),
+    ])
+    const stats = parseNumstatZ(numZ)
+    const named = parseNameStatusZ(nameZ)
+    const entries = named.slice(0, STATUS_MAX_ENTRIES).map(row => {
+      const stat = stats.get(row.path)
+      return {
+        path: row.path,
+        from: row.from ?? null,
+        code: row.code,
+        add: stat?.add ?? null,
+        del: stat?.del ?? null,
+        binary: stat?.binary ?? false,
+      }
+    })
+    return { view, branch, head, entries, truncated: named.length > STATUS_MAX_ENTRIES, total: named.length }
+  }
+
+  // --- 工作区三视图 ---
+  const rows = parseStatusRows(statusText)
+  const selectedAll = rows.filter(row => {
+    // `??` is untracked: a working-tree change for `unstaged`, but NOT staged
+    // (`xy[0]` is `?`, which would otherwise pass the staged test).
+    if (view === 'staged') return row.xy !== '??' && row.xy[0] !== ' '
+    return view === 'unstaged' ? row.xy[1] !== ' ' : true
+  })
+  const selected = selectedAll.slice(0, STATUS_MAX_ENTRIES)
+
+  let stats
+  if (view === 'staged') stats = parseNumstatZ(await maybe(['diff', '--cached', '--numstat', '-z']))
+  else if (view === 'unstaged') stats = parseNumstatZ(await maybe(['diff', '--numstat', '-z']))
+  // `all` compares the working tree against HEAD; with no commit yet there is
+  // no HEAD, so the index becomes the baseline (everything reads as new).
+  else stats = parseNumstatZ(await maybe(hasHead ? ['diff', 'HEAD', '--numstat', '-z'] : ['diff', '--cached', '--numstat', '-z']))
+
+  const untracked = selected.filter(row => row.xy === '??' && !stats.has(row.path))
+  const untrackedStats = new Map(await Promise.all(
+    untracked.slice(0, UNTRACKED_STAT_MAX_FILES).map(async row => [row.path, await statUntracked(cwd, row.path)]),
+  ))
+
+  const entries = selected.map(row => {
+    const stat = stats.get(row.path) ?? untrackedStats.get(row.path)
+    return {
+      path: row.path,
+      xy: row.xy,
+      add: stat?.add ?? null,
+      del: stat?.del ?? null,
+      binary: stat?.binary ?? false,
+    }
+  })
+  return {
+    view,
+    branch,
+    head,
+    entries,
+    truncated: selectedAll.length > STATUS_MAX_ENTRIES,
+    total: selectedAll.length,
+    untrackedTruncated: untracked.length > UNTRACKED_STAT_MAX_FILES,
+    ...(hasHead ? {} : { noCommits: true }),
+  }
 }
 
 /**
@@ -441,11 +637,16 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
       const path = new URL(req.url ?? '/', 'http://dsh.local').pathname
       if (path === '/sidebar/api/health') {
         await ready
-        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: '0.4.0-miasaki.1' })
+        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: '0.5.0-miasaki.1' })
       }
       if (path === '/sidebar/api/review/status' && req.method === 'GET') {
-        const cwd = resolveWorkdir(new URL(req.url, 'http://dsh.local').searchParams.get('cwd'))
-        const status = await reviewStatus(cwd, logger)
+        const params = new URL(req.url, 'http://dsh.local').searchParams
+        const cwd = resolveWorkdir(params.get('cwd'))
+        // No `view` keeps the pre-v0.5 behaviour (full working tree vs HEAD);
+        // the client always sends an explicit view.
+        const view = params.get('view') ?? 'all'
+        if (!REVIEW_VIEWS.includes(view)) throw new InputError(`未知的审查视图：${String(view).slice(0, 20)}`)
+        const status = await reviewStatus(cwd, { view, logger })
         return sendJson(res, 200, { status, docSync: verifyDocSync(status.entries) })
       }
       if (path === '/sidebar/api/review/diff' && req.method === 'POST') {
