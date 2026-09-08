@@ -254,3 +254,26 @@
   - 环境注记：IAB 浏览器对本页侧栏节点的 Playwright 主 frame 定位器不解析（`getByRole`/CSS 均超时、坐标点击
     不达页面），交互改经页面内原生 `click()` 触发（React 事件委托），可点性另由 `elementFromPoint` 命中测试确认；
     截图归档 `_refs/sidebar-v0.5.0-verify.png`（不入库）。
+
+- **L3 桌面壳环境复验 + 让位描述补正（同日，无头 Edge + CDP 注入真机同款 `theme-init.js`）**：
+  桌面壳环境此前只做过「假标题栏」往返验证，本轮用与 WebView2 `initialization_script` 同路径的
+  **真实注入层**把桌面壳分支完整跑起来，**40/40 通过**（脚本归档
+  `_refs/scripts-archive/verify-sidebar-l3.mjs`、截图 `_refs/sidebar-l3-desktop-shell.png`，均不入库）。
+  - **入口**：`.tb-sidebar` 注入 `.tb-group` 组内首位、位于 `.tb-brand` 左侧；沿用壳 `.tb-btn` 规格
+    26×26 / 圆角 7px / 透明底，图标覆写 16×16 + `scaleX(-1)`；`aria-pressed` 开合往返正确，
+    会话头按钮正确不出现（走标题栏分支）。
+  - **推挤与令牌**：1440px 视口 → `--miasaki-sidebar-width: 400px`、AppFrame `padding-right: 400px`，
+    关闭后变量清空、padding 归 0；三主题面板底色 pure `rgb(255,255,255)` / zafkiel `rgba(30,26,39,.9)` /
+    kurkuriel `rgba(252,250,248,.94)`，品牌令牌 `#5686fe` / `#c23a2e` / `#9e1b1b`。
+  - **可点性**：面板打开时标题栏按钮仍被 `elementFromPoint` 命中（标题栏层叠 100000 > 面板 60）。
+  - **让位描述补正（本次发现的唯一文档问题，非功能缺陷）**：`#miasaki-titlebar` 在桌面壳环境
+    **同样是 `height:0`**——V4 标题栏是零占位叠加层（`themes/src/03-switcher.js:51` 明写
+    `#miasaki-titlebar{height:0}`、按钮组 `position:fixed`），`#root` 也无 `margin-top`，
+    故 `--sidebar-chrome-reserve` 恒为 0、面板 `top:0px`（探针实测）。`README.md`、设计 §3.1、
+    本文件 v0.1.0 段与 tavern 报告里「桌面壳 32px 让位」依据的是**未同步的 legacy
+    `themes/runtime.js`**（构建链已改 `themes/src/` 分片），描述已一并修正；代码分支
+    `rect.height > 0 ? Math.ceil(rect.bottom) : 0` **保持不变**（零占位下即正确行为）。
+  - 触摸点：`client.js`（注释）、`README.md`、`design/2026-09-06-sidebar-roadmap-design.md` §3.1、
+    `design/2026-09-08-tavern-sidebar-comparison.md`（§3.1 / §6.5 / §7）、本文件。
+  - **真机人工目检（CDP 模拟覆盖不到）**：标题栏按钮 hover / 按压手感、三主题观感、
+    拖动与最大化还原时面板位置跟随（真机 IPC）。

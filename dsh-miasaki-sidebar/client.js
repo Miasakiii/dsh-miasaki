@@ -211,18 +211,22 @@ window.__ModuleLoader__.load({
       store.set({ tabs: store.get().tabs.map(tab => (tab.id === id ? { ...tab, view } : tab)) })
     }
 
-    /** Desktop shell reserves its fixed 32px titlebar row: the panel top must clear it (spike §3.1.1: #root is margin-top'd by the shell). */
+    /** Chrome reserve = the shell titlebar's measured height. The V4 titlebar is a
+     *  ZERO-OCCUPANCY overlay (`themes/src/03-switcher.js`: `#miasaki-titlebar{height:0}`,
+     *  button group `position:fixed`), so this resolves to 0 in BOTH environments today
+     *  (L3 probe 2026-09-09, desktop-shell markup: rect.height === 0, `#root` has no
+     *  margin-top). The branch stays for a shell that renders a real band (V3-style). */
     const measureChromeReserve = () => {
       let reserve = 0
       try {
         const bar = document.getElementById('miasaki-titlebar')
         if (bar instanceof HTMLElement) {
           const rect = bar.getBoundingClientRect()
-          // A node that exists but renders 0-height reserves nothing. The old
-          // `: 32` fallback then pushed the panel down 32px in the browser
-          // environment, where the shell ships a hidden titlebar node
-          // (probe-measured 2026-09-08: element present, rect.height === 0).
-          // The desktop shell keeps rect.height > 0, so it still reserves.
+          // A node that exists but renders 0-height reserves nothing — true in
+          // BOTH environments since the V4 titlebar became a zero-occupancy
+          // overlay (probe 2026-09-08 browser / L3 2026-09-09 desktop shell:
+          // element present, rect.height === 0). The >0 branch remains for a
+          // shell that renders a real band.
           reserve = rect.height > 0 ? Math.ceil(rect.bottom) : 0
         }
       } catch { /* 无桌面壳时兜底 0 */ }

@@ -77,7 +77,7 @@ ctx.effect(() => ctx.betterSidebar.registerTab({
 - **面板宿主**：`[data-dsh-panel-host]` 为 `fixed inset-0 z-40` 的含块层，用于免疫桌面套壳中间层 `transform` 对 `position:fixed` 含块的劫持。
 - **几何自检降级**：挂载后一帧量测宿主 rect，与视口不符（>8px）即打 `data-dsh-panel-host-degraded` 并逐帧补 `translate` 抵消祖先变换，直到祖先变换真正消失才退出（避免"修正后看起来已修复"的抖动）。
 
-我们对比：面板挂官方 `shell.overlay` 槽（`overlayLayer` 是 `absolute inset-0; z-20`），面板本体 `fixed` + `--sidebar-chrome-reserve` 让位桌面壳标题栏（实测 32px/0）。**官方槽更合规，但缺少"祖先 transform 劫持"的自检**——桌面壳若给 `#root` 加 transform，我们的 fixed 面板会错位且无告警。
+我们对比：面板挂官方 `shell.overlay` 槽（`overlayLayer` 是 `absolute inset-0; z-20`），面板本体 `fixed` + `--sidebar-chrome-reserve` 让位桌面壳标题栏（**V4 零占位标题栏下 2026-09-09 L3 复验实测两环境均为 0**，见 §6.5 补正）。**官方槽更合规，但缺少"祖先 transform 劫持"的自检**——桌面壳若给 `#root` 加 transform，我们的 fixed 面板会错位且无告警。
 
 ### 3.2 推挤：CSS 变量 + 三类规则（与我们的差异核心）
 
@@ -278,9 +278,19 @@ viewport w=1280 h=800
 2. ✅ **官方锚点链完整**：`[data-slot="conversation"]` 自身是 `display: contents` 的锚点 div（即 `ANCHOR_STYLE`），`parentElement` = `div.pI_x6G_centerCol`，再上一级 = frame；`closest('div[style*="grid-template-columns"]')` 同样得到 frame。三种写法等价。
 3. ✅ **基座选择器在本机确实不匹配**：`[data-dsh-frame]` 与 `[data-pane]` 计数均为 0，印证 2026-09-06 spike 结论；基座靠 `#root > [data-slot="root"] > div` 兜底才生效。**照抄它的 `#root [data-dsh-frame]` 会完全失效。**
 4. ✅ **基座的详情列平移规则在本机失效**：`[data-side="details"]` 计数为 0——`frame.child[2]`（detailsCol）没有任何 `data-side` 属性，页面里唯一带 `data-side` 的是拖拽把手（`data-side=sidebar`）。即 better-sidebar 的 `… > [data-side="details"] { transform: translateX(...) }` 在本机选不中详情列，其"把手跟随推挤"不生效。
-5. **附带观察（待复核，非本次结论）**：探针运行时 `.dsh-sidebar-panel` 不存在（面板未打开，符合预期）；但 `#miasaki-titlebar` **元素存在且 `height=0`**。按 `client.js` 现有分支 `reserve = Math.ceil(rect.height > 0 ? rect.bottom : 32)`，此时会取兜底 32px 而非 0，与 README「浏览器无壳时为 0」的记载不符。建议改为「元素不存在**或**高度为 0 都按 0 让位」，并在桌面壳与浏览器两环境下各复验一次。
+5. **附带观察（2026-09-08，已复核并于 2026-09-09 补正）**：探针运行时 `.dsh-sidebar-panel` 不存在（面板未打开，符合预期）；但 `#miasaki-titlebar` **元素存在且 `height=0`**。按当时 `client.js` 的分支 `reserve = Math.ceil(rect.height > 0 ? rect.bottom : 32)`，会取兜底 32px 而非 0，与 README「浏览器无壳时为 0」的记载不符——已改为「元素不存在**或**高度为 0 都按 0 让位」（v0.4.0-miasaki.1）。
+   **2026-09-09 补正（L3 复验，见下条）**：高度 0 **不是浏览器独有现象**——V4 标题栏本身就是零占位叠加层（`themes/src/03-switcher.js`: `#miasaki-titlebar{height:0}`、按钮组 `position:fixed`），`#root` 也无 `margin-top`，因此**桌面壳环境同样是 0**。README / 设计 §3.1 / CHANGELOG 里「桌面壳 32px 让位」的描述依据的是未同步的 legacy `themes/runtime.js`，已一并修正。
 
 探针与输出文件已在验证后删除（`cordis_undefine` + 删除 `_refs/sidebar-anchor-probe.txt`），不留残留。
+
+### 6.5 L3 复验补正（2026-09-09）
+
+用无头 Edge + CDP 注入**真机同款** `src-tauri/injected/theme-init.js`（与 WebView2 `initialization_script` 同路径），把 sidebar 的桌面壳分支真正跑起来，40/40 通过。与本报告相关的结论：
+
+- `#miasaki-titlebar` `rect.height === 0`（V4 零占位叠加层，与 `03-switcher.js:51` 一致）→ `--sidebar-chrome-reserve` 为 0 → 面板 `top: 0px`；**桌面壳与浏览器两环境行为一致**；
+- 让位为 0 无功能影响：标题栏层叠 `z-index:100000` > 面板 `60`，面板打开时按钮仍被 `elementFromPoint` 命中；
+- 其余桌面壳分支正常：`.tb-sidebar` 注入 `.tb-group` 组内首位、位于 `.tb-brand` 左侧、沿用壳 26×26/7px 规格 + 16px 镜像图标、三主题令牌随动、推挤 400px 往返。
+- 脚本与截图归档 `_refs/scripts-archive/verify-sidebar-l3.mjs`、`_refs/sidebar-l3-desktop-shell.png`（不入库）。
 
 ## 7. 落地状态（用户 2026-09-08 拍板「按建议批次开工」）
 
@@ -291,6 +301,6 @@ viewport w=1280 h=800
 | 3 | `visible` 性能门（§5-C） | 低 | **已实施** |
 | 4 | 按会话持久化 v2（§5-E） | 低 | **已实施**（含 v1 一次性迁移） |
 | 5 | betterSidebar 兼容层（§5-D） | 高 | 未启动（M1 实机验收后再评估） |
-| — | §6 附带发现：`#miasaki-titlebar` 高度 0 误让位 | 低 | **已修复** |
+| — | §6 附带发现：`#miasaki-titlebar` 高度 0 误让位 | 低 | **已修复**；**2026-09-09 补正**：该 0 高度在桌面壳环境同样成立（V4 零占位标题栏），「桌面壳 32px 让位」描述已修正，代码分支 `>0 ? bottom : 0` 保持不变 |
 
 设计 §3.1.1 的既有结论（原生 `details` 槽否决、z-index < 100、推挤下限 1280px）**全部仍然成立**，本调研增补了锚点、推挤载体、性能门、会话级持久化、围栏三道共五处。

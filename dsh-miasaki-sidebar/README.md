@@ -30,7 +30,7 @@ DSH（DeepSeek Harness）web 轻量右侧边栏插件：**无重基座**的自�
   - **host 围栏**由「仅 Host」补齐为三道：Host → `sec-fetch-site: cross-site` 拒绝 → `Origin` hostname 比对；
   - **`visible` 性能门**：tab 组件接收 `visible`，窗口切后台时审查 tab 的 60s TTL 刷新跳过；
   - **持久化按会话**：`miasaki-sidebar:v2:<sessionId>`（旧全局 `v1` 一次性迁移），切会话不闪关；
-  - **修复**：`#miasaki-titlebar` 在浏览器环境存在但高度为 0 时，旧式 `: 32` 兜底会让面板顶部多出 32px 空白——已改为高度 0 即让位 0。
+  - **修复**：`#miasaki-titlebar` 存在但高度为 0 时，旧式 `: 32` 兜底会让面板顶部多出 32px 空白——已改为高度 0 即让位 0。**2026-09-09 L3 复验补正**：V4 标题栏是**零占位叠加层**（`themes/src/03-switcher.js` 明写 `#miasaki-titlebar{height:0}`、按钮组 `position:fixed`；`#root` 无 `margin-top`），因此让位在**桌面壳与浏览器两环境均为 0**（面板 `top:0`）；此前「桌面壳 32px」的描述源自未同步的 legacy `themes/runtime.js`。功能无影响——标题栏层叠 100000 > 面板 60，按钮始终可点（`elementFromPoint` 实测）。
 - **抽屉右滑关闭（2026-09-08 补齐，设计 §3.1）**：<768px 抽屉此前只有遮罩点击关闭，与设计「遮罩 + 右滑关闭」不符——补齐右滑手势：8px 轴锁定（垂直意图释放回标签页滚动、不 `preventDefault`）、位移门 `max(64px, 宽度 × 30%)` 或快滑门 `≥32px 且 ≥0.6px/ms`、拖动跟手 + 松手回弹/关闭；判定抽为纯函数 `drawerCloseDecision`，`test/drawer-gesture.test.js` 9 项覆盖；抽屉模式下推宽把手隐藏。
 
 ## 组件蓝图（M1–M3）
