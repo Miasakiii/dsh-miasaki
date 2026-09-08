@@ -1,36 +1,56 @@
   // 主题同步通道：URL hash（replaceState 不触发刷新；Rust 侧轮询解析 → 联动桌宠）
   // hash 内附带诊断位：stylesLen.headOK.attached.switcher.errCount.baseOK.switcherTop.vh.topEl.switcherCss，
   // 便于无 IPC 环境远程排障（2026-09-05 侧栏几何同步移除后 diag 尾两位固定为 0.0）
-  function syncHash() {
+  //
+  // 性能约束（2026-09-08）：diag 段里的 getBoundingClientRect / document.elementFromPoint /
+  // getComputedStyle 都是**强制同步布局**调用，而 syncHash 由 05-sensors 的状态扫描每 1.5s
+  // 触发一次；在长会话 + agent 流式输出（DOM 持续变化）时，每轮重算会把渲染主线程拖住
+  // （实测每次 15~47ms 尖峰），表现为输入迟钝 / 发送无响应 / 输出不刷新。
+  // 因此 diag 改为按 DIAG_MIN_INTERVAL_MS 节流重算并缓存，常规同步只写轻量字段。
+  var DIAG_MIN_INTERVAL_MS = 10000
+  var DIAG_CACHE = '0.0.0.0.0.0.0.0.0.0.0.0'
+  var DIAG_AT = 0
+
+  function computeDiag() {
+    var d = '0.0.0.0.0.0.0.0.0.0.0.0'
+    try {
+      var len = (STYLES[current] || '').length
+      var headOk = document.head ? 1 : 0
+      var attached = styleEl && styleEl.parentNode !== null ? 1 : 0
+      var sw = document.getElementById('miasaki-switcher') ? 1 : 0
+      var baseOk = baseEl && baseEl.parentNode !== null && baseEl.textContent.length > 100 ? 1 : 0
+      var swEl = document.getElementById('miasaki-switcher')
+      var swTop = swEl ? Math.round(swEl.getBoundingClientRect().top) : -999
+      var vh = window.innerHeight || 0
+      var eSw = '?'
+      var swCss = '?'
+      if (swEl && document.elementFromPoint) {
+        var rect = swEl.getBoundingClientRect()
+        var cx2 = Math.round(rect.left + rect.width / 2)
+        var cy2 = Math.round(rect.top + rect.height / 2)
+        var topEl = (cx2 > 0 && cy2 > 0 && cx2 < vh * 2) ? document.elementFromPoint(cx2, cy2) : null
+        eSw = topEl ? (topEl.id || topEl.tagName || '?').toString().slice(0, 8) : 'null'
+        var cs = getComputedStyle(swEl)
+        swCss = cs.position + '/' + cs.zIndex + '/' + cs.visibility + '/' + cs.display
+      }
+      d = len + '.' + headOk + '.' + attached + '.' + sw + '.' + ERR_COUNT + '.' + baseOk + '.' + swTop + '.' + vh + '.' + encodeURIComponent(eSw) + '.' + encodeURIComponent(swCss) +
+        '.0.0'
+    } catch (e) { /* ignore */ }
+    return d
+  }
+
+  // force=true：主题切换/启动等样式层刚变的时机，立即重算 diag（不等节流窗口）
+  function syncHash(force) {
     try {
       if (history.replaceState) {
-        var d = '0.0.0.0.0.0.0.0.0.0.0.0'
-        try {
-          var len = (STYLES[current] || '').length
-          var headOk = document.head ? 1 : 0
-          var attached = styleEl && styleEl.parentNode !== null ? 1 : 0
-          var sw = document.getElementById('miasaki-switcher') ? 1 : 0
-          var baseOk = baseEl && baseEl.parentNode !== null && baseEl.textContent.length > 100 ? 1 : 0
-          var swEl = document.getElementById('miasaki-switcher')
-          var swTop = swEl ? Math.round(swEl.getBoundingClientRect().top) : -999
-          var vh = window.innerHeight || 0
-          var eSw = '?'
-          var swCss = '?'
-          if (swEl && document.elementFromPoint) {
-            var rect = swEl.getBoundingClientRect()
-            var cx2 = Math.round(rect.left + rect.width / 2)
-            var cy2 = Math.round(rect.top + rect.height / 2)
-            var topEl = (cx2 > 0 && cy2 > 0 && cx2 < vh * 2) ? document.elementFromPoint(cx2, cy2) : null
-            eSw = topEl ? (topEl.id || topEl.tagName || '?').toString().slice(0, 8) : 'null'
-            var cs = getComputedStyle(swEl)
-            swCss = cs.position + '/' + cs.zIndex + '/' + cs.visibility + '/' + cs.display
-          }
-          d = len + '.' + headOk + '.' + attached + '.' + sw + '.' + ERR_COUNT + '.' + baseOk + '.' + swTop + '.' + vh + '.' + encodeURIComponent(eSw) + '.' + encodeURIComponent(swCss) +
-            '.0.0'
-        } catch (e) { /* ignore */ }
+        var now = Date.now()
+        if (force === true || now - DIAG_AT >= DIAG_MIN_INTERVAL_MS) {
+          DIAG_AT = now
+          DIAG_CACHE = computeDiag()
+        }
         var actPart = '&act=' + CUR_ACT
         var waitPart = CUR_WAIT ? '&wait=1' : '&wait=0'
-        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + '&diag=' + d)
+        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + '&diag=' + DIAG_CACHE)
       }
     } catch (e) { /* ignore */ }
   }
@@ -139,7 +159,8 @@
     syncDark()
     try { localStorage.setItem(KEY, t) } catch (e) { /* ignore */ }
     // 核心同步优先:桌宠 hash 通道 / 切换条图标 / 标题栏 —— 装饰层失败不得阻断
-    syncHash()
+    // force=true：样式层刚换，diag 需立即反映新主题（不等节流窗口）
+    syncHash(true)
     notifyPet()
     refreshSwitcher()
     updateTitlebar()

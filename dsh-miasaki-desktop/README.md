@@ -13,6 +13,35 @@ npm run tauri dev           # 开发运行
 npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/release/）
 ```
 
+静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
+
+```bash
+node ../scripts/verify-all.mjs desktop   # gen-init + tokens:diff + patch verify + cargo test
+```
+
+`npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
+CDP target，属实机项；无 host 时会以 `CDP target not found` 失败。实机冒烟清单
+（启动恢复 / 窗口 / 桌宠 / pulse 联动）见
+[四线统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3–§4。
+
+## DSH 运行时补丁（本体例外）
+
+`patches/` 存放**唯一**一处「修改 DSH 本体」的补丁——设置页模型能力增强（思考强度 +
+逐模型连通性测试）。它改写已安装包 `@deepseek-ai/dsh-client-ui-settings-models` 的
+编译产物，**DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件已入库，可重建/可校验/可回退。
+
+```powershell
+cd patches/dsh-client-ui-settings-models
+node patch.mjs verify    # 离线自证（已并入 verify-all）
+node patch.mjs status    # 检查安装目录状态
+node patch.mjs apply     # 备份 + 应用（幂等）
+node patch.mjs revert    # 还原
+```
+
+详见 [patches/dsh-client-ui-settings-models/README.md](patches/dsh-client-ui-settings-models/README.md)
+与[模型设置工具包设计](../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md)。
+除该补丁外，本线对 DSH 的一切改动都在令牌层，DSH 升级不受影响。
+
 ## 三个主题
 
 | 主题 | 概念 | 说明 |

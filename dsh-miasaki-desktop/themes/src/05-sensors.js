@@ -62,14 +62,17 @@
   }
 
   // 检测"生成中":页面上存在"停止生成"类按钮(限 #miasaki-switcher / 主题注入组件外)
+  // 顺序即性能：文本匹配（廉价，不碰布局）先行，命中后才做 closest/可见性判断——
+  // el.offsetParent 会触发强制同步布局，原先对每个按钮都求值，在流式输出时成本可观。
   function scanActivity() {
     if (!document.body) return 'idle'
     var btns = document.querySelectorAll('button, [role="button"]')
     for (var i = 0; i < btns.length; i++) {
       var el = btns[i]
+      if (!isBtnTextMatch(el.textContent, ACT_BTN_TEXT)) continue
       if (el.closest && (el.closest('#miasaki-switcher') || el.closest('#miasaki-titlebar'))) continue
       if (!el.offsetParent && getComputedStyle(el).visibility !== 'visible') continue
-      if (isBtnTextMatch(el.textContent, ACT_BTN_TEXT)) return 'busy'
+      return 'busy'
     }
     return 'idle'
   }
@@ -94,10 +97,26 @@
     return false
   }
 
+  // 扫描节奏分级（2026-09-08 性能收敛）：activity 每轮（只查 button + 文本匹配，廉价）；
+  // effort / approval 属重量级全量查询（遍历整棵 DOM，approval 还带 [class*="modal" i]
+  // 这类属性选择器），降到每 PET_HEAVY_EVERY 轮一次；主窗口隐藏时整体再降到
+  // 每 PET_HIDDEN_EVERY 轮一次（此时 Chromium 本就节流页面，实时性收益极低）。
+  var PET_HEAVY_EVERY = 2
+  var PET_HIDDEN_EVERY = 4
+  var _tick = 0
+
   function petEvalIntensity() {
-    var tier = scanEffort()
-    if (tier !== null && tier !== CUR_INT) {
-      CUR_INT = tier
+    _tick++
+    var hidden = false
+    try { hidden = document.visibilityState === 'hidden' } catch (e) { /* ignore */ }
+    if (hidden && (_tick % PET_HIDDEN_EVERY) !== 0) return
+    var heavy = (_tick % PET_HEAVY_EVERY) === 0
+
+    if (heavy) {
+      var tier = scanEffort()
+      if (tier !== null && tier !== CUR_INT) {
+        CUR_INT = tier
+      }
     }
     // act 防抖(2 次连续一致才生效,防流式指示闪烁)
     var act = scanActivity()
@@ -110,18 +129,20 @@
     if (_actPendingN >= PET_ACT_CONFIRM_N && _actPending !== CUR_ACT) {
       CUR_ACT = _actPending
     }
-    // wait:出现立即上报;消失 2 次确认
-    var wait = scanApproval()
-    if (wait) {
-      CUR_WAIT = true
-      _waitPending = false
-      _waitPendingN = 0
-    } else {
-      if (_waitPending) _waitPendingN++
-      else { _waitPending = true; _waitPendingN = 1 }
-      if (_waitPendingN >= PET_WAIT_CONFIRM_N_OFF) {
-        CUR_WAIT = false
+    // wait:出现立即上报;消失 2 次确认（随 heavy 轮次走，确认窗口由 2×1.5s 变 2×3s）
+    if (heavy) {
+      var wait = scanApproval()
+      if (wait) {
+        CUR_WAIT = true
         _waitPending = false
+        _waitPendingN = 0
+      } else {
+        if (_waitPending) _waitPendingN++
+        else { _waitPending = true; _waitPendingN = 1 }
+        if (_waitPendingN >= PET_WAIT_CONFIRM_N_OFF) {
+          CUR_WAIT = false
+          _waitPending = false
+        }
       }
     }
     syncHash()

@@ -34,6 +34,7 @@ Miasaki.exe (Tauri 2, 单进程)
 | 重试 = BOOTSTRAP_GEN 代际计数(+1 后旧序列自行退出) | spawn 失败后旧循环不再 spawn,原「重试」按钮形同虚设;换代后新序列完整重跑 |
 | 桌宠缩放 = 预乘空间双线性采样(2026-08-30) | 非整数最近邻(208→270 ×1.298)把单点杂色撕成锯齿簇,540→270 隔行丢像素破坏抗锯齿;双线性在预乘空间下数学正确且 ULW 兼容 |
 | 桌宠状态源 = DOM 扫描 + 优先级映射(2026-08-30) | 总指挥活动/审批状态只能从 DSH 主页面 DOM 取(无 IPC,无 fleet 文件总线);等待审批在 kurumi 复用既有 `wait` 行(偶发语义对)+ 常驻气泡 |
+| 桌宠状态扫描 = 节奏分级 + 零强制布局(2026-09-08) | 原实现每轮对每个 button 求 `offsetParent`(强制布局)、且每轮重算含 `elementFromPoint`/`getComputedStyle` 的 diag;长会话+流式输出下实测每 1.5s 出现 15~47ms 主线程尖峰,表现为输入发涩/发送无响应。改为 activity 每轮、effort/approval 每 2 轮、hidden 时每 4 轮,diag 按 10s 节流重算 |
 
 ## 3. 数据流
 
@@ -55,15 +56,18 @@ tb-drag pointerdown → 记录起点;pointermove → move=累计物理增量(×d
 ### 3.3 思考强度
 页面 DOM 变异计数(MutationObserver,忽略注入层自身)每 2.5s 分级 idle/work/deep → hash `int=` → set_intensity。
 
-### 3.4 桌宠状态源(2026-08-30)
+### 3.4 桌宠状态源(2026-08-30;节奏分级 2026-09-08)
 ```
 DSH 主页面 DOM(总指挥会话)
-  │  runtime.js 每 1.5s 扫描:
-  │    scanActivity()   → "停止生成"按钮? → act=busy
-  │    scanApproval()   → dialog/modal 内"允许"+"拒绝"成对? → wait=1
-  │    scanEffort()     → 模型选择器推理等级 → int=idle/work/deep
-  │  act 翻转需 2 次连续确认(防抖);wait 出现即时上报/消失 2 次确认
-  ▼  URL hash 扩展:#miasaki-theme=X&int=Y&act=Z&wait=0|1
+  │  runtime.js petEvalIntensity(PET_TIER_MS=1.5s 一轮,三级节奏):
+  │    scanActivity()   → "停止生成"按钮? → act=busy              每轮(只查 button + 文本匹配)
+  │    scanApproval()   → dialog/modal 内"允许"+"拒绝"成对? → wait=1  每 2 轮(3s,重量级全量查询)
+  │    scanEffort()     → 模型选择器推理等级 → int=idle/work/deep     每 2 轮(3s,重量级全量查询)
+  │    (document.hidden 时整体降到每 4 轮/6s)
+  │  act 翻转需 2 次连续确认(防抖);wait 出现即时上报/消失 2 次确认(确认窗口 2×3s)
+  ▼  URL hash 扩展:#miasaki-theme=X&int=Y&act=Z&wait=0|1&diag=…
+     (diag 段含 getBoundingClientRect/elementFromPoint/getComputedStyle 等强制布局调用,
+      按 DIAG_MIN_INTERVAL_MS=10s 节流重算 + 缓存;主题切换/启动首帧 force 立即重算)
 main.rs parse_fragment + start_hash_watchdog
   ▼  pet.set_intensity / set_activity / set_waiting_approval
 pet_native.rs compose 优先级映射:

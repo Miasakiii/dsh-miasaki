@@ -2,6 +2,133 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-08(晚) · 注入层状态扫描性能收敛:去掉每轮强制同步布局
+
+依据:用户报告桌面端「有时断连」。实机问诊后现象为**界面还在但消息发不出、输出卡住不动**
+(而非 DSH 的「连接异常,点击立即重连」)。排查出两条叠加因素,本次只动桌面端那一侧:
+
+- **机制层(DSH 本体,未改)**:事件流走 WebSocket mux,服务端 `websocketHeartbeatIntervalMs`
+  默认 **2000ms**、`MAX_MISSED_HEARTBEATS = 2`——连续 2 次收不到 pong(约 4~6s)即
+  `socket.terminate()`;断后前端才走指数退避重连(500ms→10s),该窗口内界面无任何更新。
+  即:任何 ≥4s 的进程冻结/主线程卡顿都会被放大成「断连 + 静默期」。
+- **桌面端特有(本次修)**:注入层每 1.5s 的状态扫描链路里含多次**强制同步布局**调用。
+
+- **`02-core.js`:`syncHash` 拆出 `computeDiag`,diag 段按 10s 节流重算 + 缓存**:
+  diag 里的 `getBoundingClientRect()`(×2)、`document.elementFromPoint()`、
+  `getComputedStyle()` 都是强制同步布局;而 `syncHash` 由状态扫描每 1.5s 触发一次,
+  在长会话 + 流式输出(DOM 持续变化)时每轮都要重算一次完整布局。
+  新增 `DIAG_MIN_INTERVAL_MS = 10000` 与 `DIAG_CACHE`/`DIAG_AT`;`syncHash(force)` 在
+  主题切换(`apply`)与启动首帧(`08-ready`)传 `true` 立即重算,常规同步只写
+  `theme/int/act/wait` + 缓存 diag(字段格式与取值语义不变,Rust 侧 `hash-diag` 落盘逻辑零改动)。
+- **`05-sensors.js`:`scanActivity` 把廉价判断前置**:
+  原实现对**每个** button 求 `el.offsetParent`(强制布局)后才做文本匹配;改为先
+  `isBtnTextMatch(textContent)`(不碰布局),命中后才做 `closest`/可见性判断——
+  常规轮次对绝大多数按钮零布局开销。
+- **`05-sensors.js`:`petEvalIntensity` 扫描节奏分级**:
+  `activity` 每轮(只查 button,廉价);`effort`/`approval` 属重量级全量查询
+  (遍历整棵 DOM,approval 还带 `[class*="modal" i]` 属性选择器)降到每
+  `PET_HEAVY_EVERY = 2` 轮(3s)一次;`document.visibilityState === 'hidden'` 时整体降到每
+  `PET_HIDDEN_EVERY = 4` 轮(6s)一次(此时 Chromium 本就节流页面,实时性收益极低)。
+- **可感知的行为变化(折中,已评估可接受)**:思考强度/等待审批的检测间隔 1.5s→3s;
+  审批气泡消失确认窗口 3s→6s(防抖更强);忙碌指示保持 1.5s 不变;主窗口隐藏时扫描
+  1.5s→6s;hash diag 段 1.5s→10s 重算(主题切换/启动仍即时)。
+- **实机实测依据**(2026-09-08 21:5x~22:4x,当前 pure 主题,工具
+  `_refs/scripts-archive/measure-render-cpu.ps1`):
+  - 渲染进程:平均 **3.9~4.2% 单核**,每 ~1.5s 出现一次 **15~47ms** 尖峰,节奏与
+    `PET_TIER_MS` 完全吻合(长会话 + 流式输出时尖峰更高)。
+  - GPU 进程(加载 `d3d11/dxgi/nvldumdx`):**39~58% 单核持续占用**(随页面活动波动,
+    流式输出时接近满载)——pure 主题无光斑仍如此,故主因是「透明窗口 + Mica + 流式重绘」的
+    合成开销,**不是**主题装饰;本次不动,已列为后续候选。
+  - DSH 主机 HTTP 延迟中位 1ms / P90 2ms(健康);仅在跑构建 / `cargo test` 期间出现
+    348~597ms 尖峰,说明主机响应对同机系统负载敏感。
+  - **边界(诚实说明)**:本次优化去掉的是渲染主线程每轮的强制同步布局,收益在长会话 +
+    高输出场景下更明显;它**不能单独解释**「断连」——DSH 心跳 4~6s 窗口、Modern Standby
+    冻结、GPU 持续高占用仍是并列候选,需复现取证才能定论。
+  - 系统事件日志另有 9/7 多次 Modern Standby 进出与 9/5 一次 `Miasaki.exe` AppHang 记录。
+- **未改动(待用户拍板)**:WebView2 后台节流参数(`additionalBrowserArgs`)、运行期后端
+  存活监控 + 自动重启、DSH 侧心跳间隔调大(经 `cordis.patch.yml` 覆盖)。
+- **遗留提示**:`themes/runtime.js`(legacy 回退源)早于本次改动即与 `themes/src/` 拼接结果
+  不一致(1101 行 vs 1042 行),构建链路以 `MANIFEST.json` 为准,未同步;若日后要复活回退
+  路径需先重新拼接。另:`ARCHITECTURE.md` §3.3 关于「思考强度」的描述(MutationObserver
+  计数 / 2.5s 分级)与实现(`scanEffort` 读模型选择器推理等级)不符,属历史遗留,待后续核对。
+- 触摸点:`themes/src/02-core.js`、`themes/src/05-sensors.js`、`themes/src/08-ready.js`、
+  `src-tauri/injected/theme-init.js`(构建产物)、`design/ARCHITECTURE.md` §3.4、本文件。
+- 验证:`npm run gen-init`(令牌完备性通过,产物 65 KB);`node --check` 产物语法通过;
+  `node ../scripts/verify-all.mjs desktop` **4/4 通过**;另用 `vm` 抽取改动后的真源码
+  (02-core + 05-sensors)做逻辑验证 **14/14 通过**——diag 节流(force 后重算 1 次 / 3s 内
+  两次常规同步不重算 / 超 10s 重算 1 次)、`scanActivity` 判定语义逐分支未变(可见→busy、
+  `offsetParent` 空且 visibility=hidden→idle、注入层内→idle),且 5 个文本不匹配的按钮
+  `offsetParent` 读取 **0 次**(原实现为 5 次)。脚本归档
+  `_refs/scripts-archive/verify-inject-scan-logic.mjs`(仓库根运行,可复跑)。
+- 排查工具(一次性,归档未入库,均从仓库根运行):
+  - `_refs/scripts-archive/diag-desktop-conn.ps1`——卡住瞬间跑一次,抓齐主机 HTTP 延迟 /
+    3080 连接与 TIME_WAIT / 各 WebView2 子进程角色与负载 / 三份日志时间线 / 会话日志活性,
+    用于区分「主机卡」「连接被掐」「前端卡」三种成因;
+  - `_refs/scripts-archive/measure-render-cpu.ps1`——按角色(GPU/渲染/网络)采 CPU 与尖峰,
+    优化前后对比用(注意:同机常有其他 `msedgewebview2` 宿主,脚本按进程树/启动时间筛 Miasaki 的);
+  - `_refs/scripts-archive/verify-inject-scan-logic.mjs`——注入层扫描逻辑回归(14 项)。
+- 用户待执行:**重启 Miasaki** 使注入层新代码生效(`src-tauri/injected/theme-init.js` 已重新生成)。
+  验证点:①桌宠思考强度跟随模型选择器仍正确(最多延迟 3s);②等待审批气泡仍及时出现;
+  ③长会话流式输出时输入/滚动不再发涩;④`%LOCALAPPDATA%\miasaki\pet.log` 的 `hash-diag` 行
+  频率应明显下降(原每 1.5s 变化即落盘);⑤重启后跑
+  `pwsh -File _refs/scripts-archive/measure-render-cpu.ps1` 复采一次,与本次基线对比
+  「渲染进程」的 >50ms 次数与平均值。
+
+## 2026-09-08 · 模型设置运行时补丁入库（本体例外 · 可重建可回退）
+
+依据:状态盘点发现「设置页模型能力增强」补丁此前**只存在于 `vendor/runtime-bundle/`（gitignore，不入库）**,
+而 `vendor/` 丢失或换机即无法重建;同时该目录里的 `patch-runtime.mjs` **已损坏**
+（第 93 行 `probe.pруютсяrovider` 混入乱码、第 167-169 行 `if (next === Nt)', => {` 是无效语法、
+`replaceAtShift` 未定义,`node --check` 直接报 SyntaxError),其第 5 步块内容与实际产物也不一致
+（脚本写 `jsx`/`lv`/`orphan`,产物是 `jsxs`/`level`）。即:唯一的重建脚本既跑不起来,也不忠实。
+
+- **新建 `patches/dsh-client-ui-settings-models/`**:补丁规则 + 基线 + CLI 一体入库。
+  - `patch.mjs`——**7 条锚点编辑规则**(5 处插入 + 2 处字典替换),锚点按 trim 全等匹配、
+    要求唯一(不唯一即报错);`reasoning-ui` 一条用「锚点 +2 行」并断言目标行内容,避免改版后插错层级。
+    CLI 四模式:`verify`(离线自证)/ `status`(状态判定 original/patched/unknown)/ `apply`(备份+幂等应用)/ `revert`。
+  - `baseline/client.original.js`——DSH **0.1.2-rc.1** 官方原版(137,701 B,SHA-256 `7ACF9736…`),
+    与安装目录 `client.js.dsh-bak` **逐字节一致**(独立副本交叉验证过)。
+  - `baseline/client.patched.js`——补丁产物(143,340 B,SHA-256 `18D114AC…`),兼作黄金对照与升级后 diff 基准。
+- **重建闭环已自证**:`node patch.mjs verify` 由 baseline 原始文件重建,与 baseline 产物
+  **逐字节一致**(非仅哈希;7 条编辑、SHA-256 `18D114AC19CC2C9E…`)。
+  途中修正两处自身缺陷:探测路径把已含 scope 的包名重复拼了一层(导致 `status` 找不到安装目录)、
+  字节数报的是字符数而非 UTF-8 字节。
+- **实机验证**(不碰安装目录):`status` 自动探测到运行中的安装目录并判定 `patched`;
+  对副本 `apply` 幂等跳过、对原始副本 `apply` 产出与 baseline 一致的哈希、`revert` 还原成功。
+- **接入统一回归**:`scripts/verify-all.mjs` desktop 线新增 `patch verify`(纯离线、不依赖安装目录),
+  desktop 3/3 → **4/4**。注意它证明的是「补丁规则与基线自洽」,不是「补丁此刻在安装目录里」——
+  DSH 升级覆盖补丁后该项仍应 PASS,而 `status` 会显示 `unknown`。
+- **边界**:这是本项目「不修改 DSH 本体」原则的**唯一例外**,代价(升级覆盖、需重打)已在
+  `patches/…/README.md` 写清;补丁只改该包 client 产物,不动 DSH 源码与其他包。
+- 触摸点:`patches/dsh-client-ui-settings-models/{README.md,patch.mjs,baseline/*}`(新)、
+  `README.md`(本线)、`../scripts/verify-all.mjs`、`../dsh-miasaki-shared-docs/cross/{model-settings-toolkit-design-2026-09-07.md,smoke-test-matrix.md}`、根 `../README.md`、本文件。
+- 用户待执行:无(补丁已在安装目录中生效);DSH 升级后按 `patches/…/README.md`「升级后怎么办」重打。
+
+## 2026-09-07(晚) · Fleet 脉冲 stale 语义 + Rust 单测首建
+
+依据:桌宠 Fleet 指示器此前不检查 `fleet-pulse.json` 的 `ts` 时效——发布器（常驻
+`--interval-ms`）一旦崩溃或被杀,文件仍留在盘上、内容仍是合法 v2 JSON,桌宠会永远停在
+「忙碌中…」/「需要你的批准」,且无任何告警(陈旧数据比没有数据更危险)。
+
+- **`read_pulse_flag` 改为 `parse_pulse_flag(txt, now_ms)` + 阈值 `PULSE_STALE_SECS = 30`**:
+  龄期 > 30s(发布器建议间隔 5s 的 6 倍)即 stale,等同不可用 → 桌宠 fleet 指示关闭;
+  `ts` 缺失/不可解析、未来时间戳(超前>30s,时钟回拨或跨机复制的文件)同判不可信;
+  `v != 2`/缺 `fleet`/非 JSON 仍按不可用。
+- **新增 `parse_iso8601_ms()`**:极简 ISO-8601 UTC 解析(带小数秒 / `+00:00` 等价形式),
+  非 UTC 偏移拒绝;不引第三方时间库。
+- **看门狗日志区分三类不可用**:`文件不存在` / `存在但不可用（stale/格式错误)` /
+  `未配置 MIASAKI_FLEET_PULSE`——排查时能立刻分清「发布器死了」与「没配变量」。
+- **首建 Rust 单测**(`src/main.rs` `#[cfg(test)] mod tests`, 4 项)+ 既有
+  `pet_native::image::tests` 共 5 项:`iso8601_parses_utc_forms_and_rejects_offsets`、
+  `fresh_pulse_maps_counts_to_running_and_alert`、`stale_pulse_is_rejected_so_the_pet_cannot_freeze_on_busy`(29s 边界有效/31s 已 stale)、
+  `malformed_pulse_degrades_to_none`(BOM 前缀容错、单字段缺失按 0 处理)。
+- 触摸点:`src-tauri/src/main.rs`(改)、`design/CHANGELOG.md`(本条目)、
+  `../dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`(时效语义补记)、
+  `../scripts/verify-all.mjs`(desktop 线新增 `cargo test`)。
+- 验证:`cargo test --bin miasaki` 5/5 通过;`node scripts/verify-all.mjs desktop` 3/3 通过。
+- 用户待执行:cargo 在 `~/.cargo/bin` 不在 PATH,`verify-all.mjs` 已自动探测;
+  若本机另装 rustup 到别处,`cargo test --bin miasaki --quiet` 手动跑亦可。
+
 ## 2026-09-07 · 会话日志下载入口迁移:主界面 → 轨迹页搜索栏左侧（新 bundle dsh-session-log-move）
 
 依据:用户要求「Session 日志」下载按钮不在主界面,改放轨迹页搜索栏左边;

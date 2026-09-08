@@ -24,7 +24,7 @@
       try { buildAurora() } catch (e) {}
     }
     refreshSwitcher()
-    syncHash()
+    syncHash(true) // 启动首帧强制重算 diag（后续按 DIAG_MIN_INTERVAL_MS 节流）
     notifyPet()
     // 自愈：切换条/标题栏/主题属性/样式层被页面重渲染清掉时自动重建（1s 巡检，切换后无空窗）
     setInterval(function () {

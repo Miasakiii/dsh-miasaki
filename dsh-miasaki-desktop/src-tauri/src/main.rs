@@ -520,12 +520,24 @@ fn pulse_path() -> Option<PathBuf> {
     std::env::var_os("MIASAKI_FLEET_PULSE").map(PathBuf::from)
 }
 
-/// 解析 pulse v2 → (fleet_running, fleet_alert)。
+/// pulse 时效上限：超过此龄期的 pulse 视为 stale（发布器已死），不再当作实时状态。
+/// 发布器建议 5s 间隔（契约文档），取 6 倍留足抖动余量。
+const PULSE_STALE_SECS: i64 = 30;
+
+/// 解析 pulse v2 文本 → (fleet_running, fleet_alert)。
 /// running+waiting_approval>0 → running；blocked+error>0 → alert。
-fn read_pulse_flag() -> Option<(bool, bool)> {
-    let txt = std::fs::read_to_string(pulse_path()?).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
+/// `now_ms` 为当前 UNIX 毫秒；`ts` 超出 PULSE_STALE_SECS 龄期则返回 None（stale
+/// 等同不可用），否则发布器一崩，桌宠会永远停在最后一帧「忙碌中…」。
+/// 未来时间戳同样按 stale 处理：时钟回拨或跨机器复制的文件不可信。
+fn parse_pulse_flag(txt: &str, now_ms: i64) -> Option<(bool, bool)> {
+    let v: serde_json::Value = serde_json::from_str(txt.trim_start_matches('\u{feff}')).ok()?;
     if v.get("v").and_then(|x| x.as_u64()) != Some(2) {
+        return None;
+    }
+    // ts 缺失/不可解析 → 无法判定时效，按 stale 拒绝（契约要求 ts 必填）。
+    let ts = v.get("ts").and_then(|x| x.as_str())?;
+    let age_ms = now_ms - parse_iso8601_ms(ts)?;
+    if age_ms.abs() > PULSE_STALE_SECS * 1000 {
         return None;
     }
     let f = v.get("fleet")?;
@@ -534,6 +546,47 @@ fn read_pulse_flag() -> Option<(bool, bool)> {
         n("running") + n("waiting_approval") > 0,
         n("blocked") + n("error") > 0,
     ))
+}
+
+/// 极简 ISO-8601 UTC 解析（`2026-09-04T07:40:08Z` / 带小数秒 / `+00:00`）→ UNIX 毫秒。
+/// 只为算龄期，不引第三方时间库；非 UTC 偏移一律拒绝（发布器恒写 Z）。
+fn parse_iso8601_ms(ts: &str) -> Option<i64> {
+    let bytes = ts.as_bytes();
+    if bytes.len() < 19 {
+        return None;
+    }
+    let num = |range: std::ops::Range<usize>| ts.get(range)?.parse::<i64>().ok();
+    let (y, mo, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (h, mi, s) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let tail = &ts[19..];
+    let tail = tail.trim_start_matches(|c: char| c == '.' || c.is_ascii_digit());
+    if !(tail == "Z" || tail == "+00:00" || tail == "-00:00") {
+        return None;
+    }
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // days_from_civil（Howard Hinnant 算法）：公历日 → UNIX epoch 天数。
+    let y_adj = if mo <= 2 { y - 1 } else { y };
+    let era = if y_adj >= 0 { y_adj } else { y_adj - 399 } / 400;
+    let yoe = y_adj - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(((days * 86_400) + h * 3600 + mi * 60 + s) * 1000)
+}
+
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn read_pulse_flag() -> Option<(bool, bool)> {
+    let txt = std::fs::read_to_string(pulse_path()?).ok()?;
+    parse_pulse_flag(&txt, now_unix_ms())
 }
 
 /// X2:fleet 脉冲看门狗（2s 轮询，与 33ms hash 看门狗独立任务，避免互相阻塞）。
@@ -562,7 +615,16 @@ fn start_pulse_watchdog(app: &AppHandle) {
                     }
                     if !logged {
                         logged = true;
-                        app_log_line("[pulse] fleet-pulse.json 不可用 → fleet 指示关闭\n");
+                        // 区分「文件没了」与「发布器死了」——后者文件仍在但 ts 过龄，
+                        // 是最容易误判为「fleet 一直在跑」的情形，日志必须点明。
+                        let reason = match pulse_path() {
+                            Some(p) if p.exists() => "存在但不可用（stale/格式错误）",
+                            Some(_) => "文件不存在",
+                            None => "未配置 MIASAKI_FLEET_PULSE",
+                        };
+                        app_log_line(&format!(
+                            "[pulse] fleet-pulse.json {reason} → fleet 指示关闭\n"
+                        ));
                     }
                 }
             }
@@ -1113,4 +1175,86 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Miasaki");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 契约样例（ab-linkage-pulse-v2-2026-09-04.md）的时间戳基准。
+    const TS: &str = "2026-09-04T07:40:08Z";
+    fn base_ms() -> i64 {
+        parse_iso8601_ms(TS).expect("契约样例 ts 必须可解析")
+    }
+    fn pulse(running: u64, waiting: u64, blocked: u64, error: u64) -> String {
+        format!(
+            r#"{{"v":2,"ts":"{TS}","fleet":{{"online":4,"running":{running},"waiting_approval":{waiting},"blocked":{blocked},"error":{error}}},"today_cost":0,"top_task":null}}"#
+        )
+    }
+
+    #[test]
+    fn iso8601_parses_utc_forms_and_rejects_offsets() {
+        // 1970 epoch 与已知日期锚点：算法正确性而非自洽。
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_ms("1970-01-02T00:00:00Z"), Some(86_400_000));
+        assert_eq!(parse_iso8601_ms("2000-03-01T00:00:00Z"), Some(951_868_800_000));
+        // 闰年边界（2024-02-29 存在）
+        assert_eq!(parse_iso8601_ms("2024-02-29T00:00:00Z"), Some(1_709_164_800_000));
+        // 小数秒与 +00:00 等价形式
+        let z = parse_iso8601_ms("2026-09-04T07:40:08Z").unwrap();
+        assert_eq!(parse_iso8601_ms("2026-09-04T07:40:08.512Z"), Some(z));
+        assert_eq!(parse_iso8601_ms("2026-09-04T07:40:08+00:00"), Some(z));
+        // 非 UTC 偏移一律拒绝：发布器恒写 Z，带偏移的文件来源不可信
+        assert_eq!(parse_iso8601_ms("2026-09-04T07:40:08+08:00"), None);
+        assert_eq!(parse_iso8601_ms("2026-09-04 07:40:08"), None);
+        assert_eq!(parse_iso8601_ms("not-a-timestamp"), None);
+        assert_eq!(parse_iso8601_ms(""), None);
+    }
+
+    #[test]
+    fn fresh_pulse_maps_counts_to_running_and_alert() {
+        let now = base_ms();
+        assert_eq!(parse_pulse_flag(&pulse(0, 0, 0, 0), now), Some((false, false)));
+        assert_eq!(parse_pulse_flag(&pulse(2, 0, 0, 0), now), Some((true, false)));
+        // waiting_approval 单独也算 running（契约：running+waiting>0）
+        assert_eq!(parse_pulse_flag(&pulse(0, 1, 0, 0), now), Some((true, false)));
+        assert_eq!(parse_pulse_flag(&pulse(0, 0, 1, 0), now), Some((false, true)));
+        assert_eq!(parse_pulse_flag(&pulse(0, 0, 0, 3), now), Some((false, true)));
+        // 告警与运行可同时成立，优先级由 compose 决定，解析层不吞
+        assert_eq!(parse_pulse_flag(&pulse(1, 0, 1, 0), now), Some((true, true)));
+    }
+
+    #[test]
+    fn stale_pulse_is_rejected_so_the_pet_cannot_freeze_on_busy() {
+        let now = base_ms();
+        // 边界内：29s 龄期仍视为有效
+        assert_eq!(
+            parse_pulse_flag(&pulse(1, 0, 0, 0), now + 29_000),
+            Some((true, false))
+        );
+        // 超过 30s：发布器已死，必须返回 None 而不是继续报「运行中」
+        assert_eq!(parse_pulse_flag(&pulse(1, 0, 0, 0), now + 31_000), None);
+        assert_eq!(parse_pulse_flag(&pulse(0, 0, 1, 0), now + 600_000), None);
+        // 未来时间戳（时钟回拨/跨机复制）同样不可信
+        assert_eq!(parse_pulse_flag(&pulse(1, 0, 0, 0), now - 31_000), None);
+    }
+
+    #[test]
+    fn malformed_pulse_degrades_to_none() {
+        let now = base_ms();
+        // 版本不符 / 缺 fleet / 缺 ts / 非 JSON / 空
+        assert_eq!(parse_pulse_flag(r#"{"v":1,"ts":"2026-09-04T07:40:08Z","fleet":{}}"#, now), None);
+        assert_eq!(parse_pulse_flag(r#"{"v":2,"ts":"2026-09-04T07:40:08Z"}"#, now), None);
+        assert_eq!(parse_pulse_flag(r#"{"v":2,"fleet":{"running":1}}"#, now), None);
+        assert_eq!(parse_pulse_flag("{ not json", now), None);
+        assert_eq!(parse_pulse_flag("", now), None);
+        // BOM 前缀（本机 PowerShell 产物常见）必须容错，与 fleet 侧同口径
+        let with_bom = format!("\u{feff}{}", pulse(1, 0, 0, 0));
+        assert_eq!(parse_pulse_flag(&with_bom, now), Some((true, false)));
+        // 计数字段缺失按 0 处理，不因单字段缺失丢掉整份 pulse
+        assert_eq!(
+            parse_pulse_flag(r#"{"v":2,"ts":"2026-09-04T07:40:08Z","fleet":{"running":1}}"#, now),
+            Some((true, false))
+        );
+    }
 }
