@@ -47,6 +47,10 @@
   - 系统事件日志另有 9/7 多次 Modern Standby 进出与 9/5 一次 `Miasaki.exe` AppHang 记录。
 - **未改动(待用户拍板)**:WebView2 后台节流参数(`additionalBrowserArgs`)、运行期后端
   存活监控 + 自动重启、DSH 侧心跳间隔调大(经 `cordis.patch.yml` 覆盖)。
+- **部署复核(2026-09-09)**:`dist/Miasaki.exe` 与 `src-tauri/target/release/miasaki.exe`
+  哈希一致(`983382110f870e6a15265cc5ed756724`,42851840 B,9/8 23:15 构建,含本次收敛)——
+  重新复制落盘并重启桌面壳(新进程主窗口 `Miasaki · DSH` 正常、DSH host 复用),
+  本次优化已进入用户实际使用的二进制;端到端目检仍待用户实操。
 - **遗留提示**:`themes/runtime.js`(legacy 回退源)早于本次改动即与 `themes/src/` 拼接结果
   不一致(1101 行 vs 1042 行),构建链路以 `MANIFEST.json` 为准,未同步;若日后要复活回退
   路径需先重新拼接。另:`ARCHITECTURE.md` §3.3 关于「思考强度」的描述(MutationObserver
