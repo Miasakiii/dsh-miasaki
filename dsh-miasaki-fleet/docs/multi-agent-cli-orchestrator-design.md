@@ -1,7 +1,7 @@
 # 多 Agent CLI 协作模式 — 设计文档
 
-- 版本：v0.15
-- 日期：2026-09-05
+- 版本：v0.16
+- 日期：2026-09-07
 - 状态：Draft
 - 作者：总指挥（Miasaki 会话）
 
@@ -21,6 +21,7 @@
 > - v0.9 依据 Datawhale《最新！DeepSeek Harness 桌面版和 CLI 来了！》（2026-08-16，归档于 `docs/ref-datawhale-dsh-desktop-cli-2026-08-16.md`）补充：§8.3 TUI / 桌宠形态社区先例（dsh-TUI 1.8k★、DSH Desktop 11.1k★）；§12 入口形态与 Headless 一次性任务入口；§11.2 凭证卫生；§7.6 工作区范围。
 > - v0.14 依据腾讯技术工程《DeepSeek Harness 规模化踩坑实录：耗时、成本、失败到底该怎么查》（2026-08-24，归档于 `../dsh-miasaki-shared-docs/dsh-platform/ref-tencent-agent-obs-2026-08-24.md`）补充：DSH 可观测生态情报——腾讯云官方插件 `tencentcloud-agentobs-sdk-dsh`（支持 DSH >=0.1.0-rc.6 <0.2.0）以状态树+延迟发射把 DSH 事件流还原为五层调用树（entry/agent/step/chat/tool，OpenTelemetry GenAI 语义约定；一次 turn 一条 trace、`gen_ai.session.id` 横向关联、重试不合并 `dsh.llm.attempt`、中断补发带错误码 Span）；结论：与 fleet 现有任务级文件总线观测互补而非替代（插件仅覆盖 dsh 单 CLI、需云凭证、captureContent 默认上送会话内容），五层 schema 作为未来 dsh worker step 级观测参考；dsh 缺 headless profile 仍为非活动 worker，暂不接入。
 > - v0.15 文件总线治理批次（2026-09-04/05）：**F1 契约校验**——`schemas/*.schema.json`（registry/manifest/control/status/tasks/ledger/events/usage/pulse 七类）+ `workers/validate-bus.mjs`（零依赖全量校验，`--strict` 额外要求 `state/fleet-pulse.json` 存在；BOM 自动剥离、`agents/archive/` 标本跳过、被 ignore 的运行时文件缺失跳过；实测 23 文件 0 错误）；§4.2 `control.json` 强制 `force_kill` 字段（agent-browser 已补，见 schemas/README）；**F2 计量全源覆盖**——派单器 `Get-UsageRow` 按 `metering_source` 注册表解析，新增 `session`（dsh 会话级，需 dsh usage 手工回填）与 `console-usage`（bl console 侧，需 Operator 对账）及未知源统一写**显式未计量行**（`cost:0, metered:false`），杜绝静默"无计量"（§9.1 回写）；**X1 脉冲发布**——`workers/pulse/publish-pulse.mjs` 聚合 fleet 五计数（online/running/waiting_approval/blocked/error）+ 当日成本原子写 `state/fleet-pulse.json` v2，作为 A×B 桌宠↔fleet 联动唯一契约（契约文档 `../dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`，桌面端 `MIASAKI_FLEET_PULSE` 环境变量 2s 轮询）；`fleet-monitor/server.js` 读取 JSON/JSONL 加 BOM 剥离与 CRLF 分行容错；新增根级 `package.json`（`npm run validate` / `pulse`）。
+> - v0.16 心跳判活批次（2026-09-07）：**F3 心跳判活落地**——此前 `alive` 只判 `state !== 'stopped'`、`heartbeat_at` 无人消费，worker 崩溃后遗留的 `status.json`（仍为合法的 `running`）会让面板与 pulse 永远显示在跑、桌宠永远「忙碌中…」，属「陈旧数据比没有数据更危险」；新增 **`workers/lib/liveness.cjs`（+`.mjs` ESM 门面，单一实现两处消费）**：`evaluateLiveness(status, manifest, nowMs)` 以 `limits.heartbeat_ms × 3`（默认 30s×3=90s）为预算，心跳过龄的 `running/draining` 降级为 `unknown`、不进 running 计数，未来时间戳与缺失/非法心跳同判不可信，终态（idle/blocked/error/stopped）不受判活改写；**publish-pulse 与 fleet-monitor/server.js 均改用该口径**，pulse 输出新增附加字段 `stale_agents`（降级计数，不改五计数契约，旧读者忽略）；`schemas/pulse.schema.json` 补 `stale_agents`；**本线首个自动化测试** `tests/liveness.test.mjs`（7 项：UTC 解析、新鲜计活、过龄降级、缺心跳不可信、未来戳 stale、终态保留、兜底默认周期），并入仓库级统一回归 `node scripts/verify-all.mjs fleet`。
 
 ---
 

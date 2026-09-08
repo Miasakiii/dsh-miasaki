@@ -7,6 +7,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { evaluateLiveness } from '../lib/liveness.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const AGENTS_DIR = path.join(ROOT, 'agents')
@@ -51,6 +52,8 @@ function buildPulse() {
   const fleet = { online: 0, running: 0, waiting_approval: 0, blocked: 0, error: 0 }
   let todayCost = 0
   let topTask = null
+  let staleCount = 0
+  const nowMs = Date.now()
   for (const id of dirs) {
     const dir = path.join(AGENTS_DIR, id)
     const manifest = readJSON(path.join(dir, 'manifest.json'))
@@ -58,9 +61,15 @@ function buildPulse() {
     const control = readJSON(path.join(dir, 'control.json'))
     const status = readJSON(path.join(dir, 'status.json'))
     const enabled = control ? !!control.enabled : false
-    const alive = !!(status && status.state && status.state !== 'stopped')
-    if (enabled && alive) fleet.online++
-    const st = status ? status.state : null
+    // F3 判活：心跳过龄的 running/draining 降级为 unknown，不再计入 running。
+    // 否则 worker 崩溃后其 status.json 会让 fleet 永远显示「在跑」。
+    const live = evaluateLiveness(status, manifest, nowMs)
+    if (live.stale) {
+      staleCount++
+      console.warn(`[pulse] ${id}: ${live.reason} → 降级为 unknown`)
+    }
+    if (enabled && live.alive) fleet.online++
+    const st = live.state
     if (st === 'running') {
       fleet.running++
       if (looksWaiting(status.step)) fleet.waiting_approval++
@@ -84,6 +93,9 @@ function buildPulse() {
     fleet,
     today_cost: Math.round(todayCost * 1000000) / 1000000,
     top_task: topTask,
+    // 心跳过龄被降级的 agent 数（F3）。附加字段，不改动 fleet 五计数契约，
+    // 旧读者忽略即可；面板与排查用它区分「确实空闲」与「疑似崩溃」。
+    stale_agents: staleCount,
   }
 }
 

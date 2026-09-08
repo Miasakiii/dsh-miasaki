@@ -43,6 +43,26 @@ npm run validate / validate:strict / pulse
 - **BOM/CRLF 容错**：`fleet-monitor/server.js` 与脉冲发布器读取 JSON/JSONL
   均剥离 BOM、按 `\r?\n` 分行，兼容本机 PowerShell 产物。
 
+## 统一回归
+
+本线的 F1 总线校验与 F3 心跳判活单测已并入仓库级统一回归入口（2026-09-07 建立）：
+
+```bash
+node ../scripts/verify-all.mjs fleet
+# 1) tests/liveness.test.mjs        F3 心跳判活单测（7 项，本线首个自动化测试）
+# 2) node --check fleet-monitor/server.js
+# 3) validate-bus                   F1 总线校验
+# 4) publish-pulse                  X1 脉冲发布
+# 5) validate-bus --strict          （要求 fleet-pulse.json 存在，故排在第 4 步后）
+```
+
+实机联动项（pulse → 桌宠状态映射、pulse 缺失/损坏时静默降级）见
+[四线统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §4。
+
+> 已知边界：判活针对「status 文件级的陈旧」；desktop 侧另有 pulse 文件级 stale 检查
+> （防发布器自身死亡），两层各管一段。worker 的调度级生命周期（超时 / 重试 /
+> orphan 回收）尚无自动化覆盖。
+
 ## 变更记录
 
 设计决策与协议变更记录在

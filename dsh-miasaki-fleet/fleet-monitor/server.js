@@ -19,6 +19,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+// F3 判活：与 publish-pulse 共用同一口径（实现在 workers/lib/liveness.cjs）。
+const { evaluateLiveness } = require('../workers/lib/liveness.cjs');
 
 /* ---------- 配置 ---------- */
 const WORKSPACE = process.argv[2] || path.resolve(__dirname, '..');
@@ -136,8 +138,11 @@ function aggregateFleet() {
       if (t) currentTask = { id: t.id, title: t.title, status: t.status };
     }
 
-    // 进程存活判断：status.json 存在且非空 → 近似存活
-    const alive = !!(status && status.state && status.state !== 'stopped');
+    // 进程存活判断（F3）：心跳必须新鲜。此前只判 `state !== 'stopped'`，
+    // worker 崩溃后遗留的 status.json 会让面板永远显示它在跑；
+    // 与 publish-pulse 共用 workers/lib/liveness.mjs 同一口径。
+    const live = evaluateLiveness(status, manifest, now);
+    const alive = live.alive;
 
     const agent = {
       id: manifest.id || id,
@@ -152,7 +157,12 @@ function aggregateFleet() {
       // 状态
       enabled: enabled,
       alive: alive,
-      state: status ? (status.state || 'unknown') : 'no-status',
+      // 修正后的状态：心跳过龄的 running/draining 已降级为 unknown。
+      state: live.state,
+      // 原始上报值与降级原因一并暴露，便于面板区分「真空闲」与「疑似崩溃」。
+      reported_state: status ? (status.state || 'unknown') : 'no-status',
+      stale: live.stale,
+      stale_reason: live.reason,
       current_task: currentTask,
       progress: status ? (status.progress || 0) : 0,
       step: status ? (status.step || '') : '',
