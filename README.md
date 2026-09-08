@@ -6,10 +6,10 @@
 
 | 线 | 目录 | 定位与现状 |
 |---|---|---|
-| 桌面端 | [`dsh-miasaki-desktop/`](dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH web 插件：免费模型池、桌宠面板、用量监控（token-monitor v0.4.0）、会话日志下载入口迁移（dsh-session-log-move）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响。 |
-| Fleet | [`dsh-miasaki-fleet/`](dsh-miasaki-fleet/) | 多 Agent CLI 编排（v0.15）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / X1 脉冲发布（与桌宠 A×B 联动）。 |
-| Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.3，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。 |
-| Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 轻量右侧边栏插件 `@miasaki/dsh-sidebar`（路线 D 无基座自研，2026-09-06 拍板）：右栏壳 + 审查 tab + 辅助对话 tab + 终端启动器。M1 实现中——壳与审查 tab 已实机验证（v0.2.0-miasaki.1），下一项终端启动器。 |
+| 桌面端 | [`dsh-miasaki-desktop/`](dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH web 插件：免费模型池、桌宠面板、用量监控（token-monitor v0.4.0）、会话日志下载入口迁移（dsh-session-log-move）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的设置页模型能力补丁（规则 + 基线入库，可重建 / 校验 / 回退）。 |
+| Fleet | [`dsh-miasaki-fleet/`](dsh-miasaki-fleet/) | 多 Agent CLI 编排（v0.16）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）。 |
+| Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.5，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。 |
+| Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 轻量右侧边栏插件 `@miasaki/dsh-sidebar`（路线 D 无基座自研，2026-09-06 拍板）：右栏壳 + 审查 tab + 终端启动器（辅助对话 tab 归 M2）。**M1 功能收口并实机复验**（v0.4.0-miasaki.1）——三项全部落地、单测 20/20；右栏加固（官方锚点推挤 / 三道浏览器信任围栏 / 按会话持久化）已在浏览器环境复验，桌面壳环境待复验。 |
 | 共享参考 | [`dsh-miasaki-shared-docs/`](dsh-miasaki-shared-docs/) | `cross/` 跨线设计契约（如 A×B 桌宠↔fleet 联动、sidebar 路线讨论）、`dsh-platform/` DSH 平台调研与升级回归记录。 |
 
 四条线代码零耦合，仅共享 `dsh-miasaki-shared-docs/`；跨线引用使用 `../dsh-miasaki-shared-docs/…` 相对路径（同仓 clone 后不断）。
@@ -18,14 +18,28 @@
 
 ```
 dsh-miasaki/
-├─ dsh-miasaki-desktop/     # 桌面端线（design/ 在其内：ARCHITECTURE / CHANGELOG / TODO）
+├─ dsh-miasaki-desktop/     # 桌面端线（design/ 在其内；patches/ 为 DSH 运行时补丁：规则 + 基线 + CLI）
 ├─ dsh-miasaki-fleet/       # Fleet 线（agents / state / tasks / workers / fleet-monitor / docs / tests）
 ├─ dsh-miasaki-canvas/      # Canvas 线（design/ 在其内）
 ├─ dsh-miasaki-sidebar/     # Sidebar 线（design/ 在其内：路线 D 总设计 / CHANGELOG）
-├─ dsh-miasaki-shared-docs/ # 跨线共享参考
+├─ dsh-miasaki-shared-docs/ # 跨线共享参考（含 cross/smoke-test-matrix.md 回归矩阵）
+├─ scripts/verify-all.mjs   # 四线统一静态回归入口（L0 + L1）
 ├─ AGENTS.md                # 工作区纪律（缓存卫生 / 目录职责 / 提交纪律 / 收尾清单）
 └─ .gitignore               # _refs/ vendor/ dist/ .vs/ .workbuddy/ .learnings/ 等均已忽略
 ```
+
+## 统一回归（四线）
+
+```bash
+node scripts/verify-all.mjs            # 四线全量（L0 静态检查 + L1 单线单测）
+node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fleet / desktop）
+```
+
+2026-09-08 基线（DSH 0.1.2-rc.1 / Node v24.15.0）：sidebar 5/5、canvas 9/9、fleet 5/5、desktop 4/4 全绿。
+desktop 项含 `cargo test`（5 项 Rust 单测，pulse stale 语义）与 `patch verify`（模型设置补丁离线自证，
+由基线原始文件重建并与产物逐字节比对）——script 会在 `PATH` 外自动探测 `~/.cargo/bin/cargo`。
+需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
+不在脚本内，清单见 [四线统一回归矩阵](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
 
 ## 快速开始
 
@@ -54,7 +68,7 @@ node workers/pulse/publish-pulse.mjs     # 发布 fleet-pulse.json v2（A×B 联
 cd dsh-miasaki-canvas
 pnpm install
 pnpm run build   # node --check 三个入口文件
-pnpm test        # 75 项回归测试
+pnpm test        # 79 项回归测试
 # 开发模式：DSH profile 以 link 方式指向本目录，重启 dsh web + 刷新页面生效
 ```
 
@@ -64,7 +78,7 @@ pnpm test        # 75 项回归测试
 cd dsh-miasaki-sidebar
 pnpm install
 pnpm run build   # node --check 两个入口文件（index.js / client.js）
-pnpm test        # review-data 单测（diff 解析 / doc-sync / 清单持久化）
+pnpm test        # 20 项单测（审查 4 / 终端 7 / 路由 9，路由项走真实 HTTP）
 # 开发模式：DSH profile 以 link 方式指向本目录，重启 dsh web + 刷新页面生效（client bundle 重启 host 生效）
 ```
 

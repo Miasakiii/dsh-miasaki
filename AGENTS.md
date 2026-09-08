@@ -33,6 +33,9 @@
 
 - **桌宠预设维护材料唯一住处**：`dsh-miasaki-desktop/preset-sources/`（`*.persona.txt` + `*.preset.yml` +
   `apply-presets.ps1` 同居；改人设源文件后重跑脚本同步 `%USERPROFILE%\.dsh\.agent-presets\`）。
+- **DSH 本体补丁唯一住处**：`dsh-miasaki-desktop/patches/<包名>/`（补丁规则 `patch.mjs` + `baseline/` 原始与产物
+  + README 写清升级后重打流程）。**禁止**只在 `vendor/`（不入库）留补丁产物；新增/修改补丁后必须
+  `node patch.mjs verify` 自证，并同步 `verify-all.mjs` 与设计文档。
 - **临时/探针产物即时清理**：会话中为验证而写的探针插件（cordis）、一次性输出文件，任务结束即删；
   确有留存价值的进 `_refs/scripts-archive/`，不留在根或构建链目录。
 - **收尾自检清单**（每个会话结束前）：
