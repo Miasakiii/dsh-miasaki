@@ -2,14 +2,6 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
-## 2026-09-08
-
-- **审查 tab 改版 + 浏览器式标签页方案定稿（纯规划，未写代码）**：`design/2026-09-08-sidebar-review-redesign-implementation.md`（v0.5.0 目标形态）。
-  - 参考图要求：视图下拉（未暂存/已暂存/全部分支更改/上一轮更改）+ 目录分组文件列表（类型图标 + 文件名 + 灰色目录 + `+N -M` 统计 + 展开）+ 浏览器式多标签（每标签独立 ×、`＋` 新建、keep-mounted 保留状态）；
-  - **语义拍板**：「上一轮更改」= 最近一次 git 提交（`git show HEAD` 视角，非会话轮次追踪）；「全部分支更改」= 工作区全部改动 vs HEAD（未暂存 + 已暂存 + 未跟踪）；
-  - 方案要点：host `review/status` 加 `view` 白名单参数 + `git diff --numstat` / `diff-tree` 统计（untracked 逐文件 `--no-index`，200 个设界）+ 空仓库 `noCommits` 降级；client `store.tab` 单值 → `tabs[]/active` 多实例、持久化 v2→v3 一次性迁移、空态重定义为「新标签页」；既有点名 / diff 展开 / 60s TTL / visible 门 / 未点名红描边全部保留；
-  - 待用户拍板 3 项后按批 A（host 数据面）→ B（审查 UI）→ C（标签框架）→ D（版本/文档）实施。
-
 ## 2026-09-06
 
 - **新线立项（路线 D 拍板）**：轻量右侧边栏，无基座完全自研。背景：调研 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（v0.18.0，MIT）后，先倾向"基座复用 + 自研审查 tab"（路线 C），用户质疑重基座问题（裁剪开关只轻界面，骨架/跟随成本仍在），重开后拍板路线 D。
@@ -200,3 +192,9 @@
   - **生效条件**：client bundle 在 host 启动时载入内存，**须重启 `dsh web`**；
     `GET /sidebar/api/health` 返回 `0.4.1-miasaki.1` 即已加载。
   - **实机待验**（<768px 视口）：右滑关闭、垂直滚动不受干扰、遮罩点击与 Esc 仍可用。
+
+- **审查 tab 改版 + 浏览器式标签页方案定稿（纯规划，未写代码）**：`design/2026-09-08-sidebar-review-redesign-implementation.md`（v0.5.0 目标形态）。
+  - 参考图要求：视图下拉（未暂存/已暂存/全部分支更改/上一轮更改）+ 目录分组文件列表（类型图标 + 文件名 + 灰色目录 + `+N -M` 统计 + 展开）+ 浏览器式多标签（每标签独立 ×、`＋` 新建、keep-mounted 保留状态）；
+  - **语义拍板**：「上一轮更改」= 最近一次 git 提交（`git show HEAD` 视角，非会话轮次追踪）；「全部分支更改」= 工作区全部改动 vs HEAD（未暂存 + 已暂存 + 未跟踪）；
+  - 方案要点：host `review/status` 加 `view` 白名单参数 + `git diff --numstat` / `diff-tree` 统计（untracked 逐文件 `--no-index`，200 个设界）+ 空仓库 `noCommits` 降级；client `store.tab` 单值 → `tabs[]/active` 多实例、持久化 v2→v3 一次性迁移、空态重定义为「新标签页」；既有点名 / diff 展开 / 60s TTL / visible 门 / 未点名红描边全部保留；
+  - 待用户拍板 3 项后按批 A（host 数据面）→ B（审查 UI）→ C（标签框架）→ D（版本/文档）实施。
