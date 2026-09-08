@@ -140,6 +140,8 @@ export class WorkspaceStore {
         pendingProcess: [],
         mergeFrom,
         mergeState: 'draft',
+        // null = 来源齐备可执行；数组 = 已失效的来源 id（见 sweepMergeDrafts）。
+        mergeStale: null,
         absorbedBy: [],
       }
       workspace.threads.push(thread)
@@ -181,6 +183,12 @@ export class WorkspaceStore {
     await this.ready
     const { workspace, thread } = this.locateThread(threadId)
     if (thread.mergeState !== 'draft' || thread.mergeFrom === null) throw new InputError('只有合并请求草稿可以准备执行')
+    // Re-sweep before reading: state may have been mutated by another client
+    // since this draft was last rendered.
+    sweepMergeDrafts(workspace)
+    if (Array.isArray(thread.mergeStale) && thread.mergeStale.length > 0) {
+      throw new InputError('这条合并请求的来源线已被删除，无法执行；请取消草稿后重新发起')
+    }
     const mergeFrom = thread.mergeFrom
     const [aId, bId] = mergeFrom.sources
     const forkThread = workspace.threads.find(item => item.id === mergeFrom.forkSource)
@@ -245,6 +253,9 @@ export class WorkspaceStore {
         workspace.threads = workspace.threads.filter(thread => !blankIds.has(thread.dshSessionId) && !removedIds.has(thread.dshSessionId))
       }
       this.state.workspaces = this.state.workspaces.filter(workspace => workspace.kind !== 'dsh' || workspace.threads.length > 0)
+      // A session deleted in DSH takes its node with it; drafts pointing at it
+      // must be marked stale here too, not only on explicit removeThread.
+      for (const workspace of this.state.workspaces) sweepMergeDrafts(workspace)
       for (const item of sessions) {
         if (typeof item?.id !== 'string' || item.id === '' || typeof item.cwd !== 'string' || item.cwd === '') continue
         if (item.blank === true) continue
@@ -306,6 +317,9 @@ export class WorkspaceStore {
           item.absorbedBy = item.absorbedBy.filter(id => !removal.has(id))
         }
       }
+      // Forward references (mergeFrom.sources) need the mirror treatment:
+      // a draft whose source was just deleted must stop looking executable.
+      sweepMergeDrafts(workspace)
       workspace.updatedAt = new Date().toISOString()
       if (workspace.threads.length === 0) this.state.workspaces = this.state.workspaces.filter(item => item.id !== workspace.id)
       return { removed: removal.size }
@@ -706,6 +720,11 @@ function normalizeState(value) {
           normalized = { ...normalized, mergeFrom: null, mergeState: null }
           migrated = true
         }
+        // mergeStale 于 2026-09-07 引入；旧文件补 null，随后由 sweep 重算。
+        if (normalized.mergeState === 'draft' && normalized.mergeStale === undefined) {
+          normalized = { ...normalized, mergeStale: null }
+          migrated = true
+        }
         if (Array.isArray(thread.messages)) {
           const messages = thread.messages.filter(message => !isRuntimeContextMessage(message))
           if (messages.length !== thread.messages.length) migrated = true
@@ -747,6 +766,12 @@ function normalizeState(value) {
     if (state.version < 4 && foldLegacyToolCards(state.workspaces)) migrated = true
     state.version = 5
     migrated = true
+  }
+  // Recompute draft staleness on load: a source may have disappeared while the
+  // host was down (or in an older build that never tracked this), and the flag
+  // must be correct before the first render, not only after the next deletion.
+  for (const workspace of state.workspaces) {
+    if (sweepMergeDrafts(workspace)) migrated = true
   }
   return { state, migrated }
 }
@@ -884,6 +909,38 @@ function anchoredExchange(thread, anchorSeq) {
   const answer = (anchorIndex >= 0 ? [...messages.slice(anchorIndex + 1)].reverse() : [...messages].reverse())
     .find(message => message.kind === 'assistant')?.text ?? null
   return { question, answer }
+}
+
+/**
+ * Mark merge drafts whose sources no longer qualify.
+ *
+ * A draft only binds to a real DSH session at commitMerge time, so between
+ * drafting and executing, a source line can be deleted (removeThread) or
+ * vanish from DSH (syncSessions removal). Without this sweep the draft stays
+ * on the canvas looking executable and only fails inside prepareMergeMessage —
+ * late, and after the user already committed to the gesture. Recording the
+ * missing ids lets the card disable execution and say why.
+ *
+ * Derived from the thread list, but persisted deliberately: a draft broken by
+ * a deletion must still read as broken after a reload.
+ */
+function sweepMergeDrafts(workspace) {
+  let changed = false
+  for (const thread of workspace.threads) {
+    if (thread.mergeState !== 'draft' || thread.mergeFrom === null) continue
+    const missing = thread.mergeFrom.sources.filter(id => {
+      const source = workspace.threads.find(item => item.id === id)
+      // Losing the DSH session is as fatal as losing the node: both make the
+      // fork/inject step impossible (same conditions prepareMergeMessage checks).
+      return source === undefined || source.dshSessionId === null
+    })
+    const next = missing.length === 0 ? null : missing
+    if (JSON.stringify(thread.mergeStale ?? null) !== JSON.stringify(next)) {
+      thread.mergeStale = next
+      changed = true
+    }
+  }
+  return changed
 }
 
 /** Validate and normalize a merge request body into the persisted mergeFrom shape. */

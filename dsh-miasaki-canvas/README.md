@@ -29,10 +29,13 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 # 安装到本机 DSH web profile（link 模式，改代码后重启 dsh web + 刷新页面）
 dsh plugin --profile web add link:C:\Users\Asakii\Desktop\dsh-miasaki\dsh-miasaki-canvas
 
-# 语法校验 + 全量测试（上游测试套件，64 个用例）
+# 语法校验 + 全量测试（79 个用例）
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
 corepack pnpm test
+
+# 或走仓库级统一回归入口（三入口语法 + 6 个测试文件共 79 项）
+node ..\scripts\verify-all.mjs canvas
 ```
 
 注意：`cordis.patch.yml` 的 `name` 是 loader import 的**包名**（必须 `@miasaki/dsh-canvas`）；`client.js` 的 ModuleLoader `id` 必须逐字等于包名——两者改错都会让插件加载失败（详见 SPIKE 文档坑 1/坑 2）。

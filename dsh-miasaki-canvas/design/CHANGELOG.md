@@ -4,7 +4,14 @@
 
 ## 2026-09-07
 
-- **跟进桌面端标题栏 v4 改名（版本升至 `0.5.0-miasaki.4`）**：桌面端 2026-09-06 标题栏 v4 去胶囊化把窗控容器类名 `.tb-capsule` 改为 `.tb-group`，而本线 `syncChrome()` 只查 `.tb-capsule`——v4 下量不到窗控组，`--canvas-chrome-reserve` 恒为 0，画布工具条与桌面端窗控组右上角叠压回归（v0.5.0-miasaki.2 修过的问题）。修复：选择器改为 `.tb-group` 优先 + `.tb-capsule` 兜底（与 sidebar 线同款兼容做法）。触摸点：`client.js`（host 侧代码，重启 `dsh web` 生效）、`package.json` 版本、`README.md`（桌面端适配段）。
+- **合并草稿失效标记（mergeStale，版本升至 `0.5.0-miasaki.5`，异常恢复）**：此前 `removeThread` 只清理 `absorbedBy` 反向引用，无人清理 `mergeFrom.sources` 正向引用——源线被删/会话在 DSH 侧消失后，草稿仍留在画布上、看起来可执行，直到点「执行合并」才在 `prepareMergeMessage` 里失败（晚失败，且用户已承诺手势）。修复四层：
+  - `sweepMergeDrafts(workspace)` 共享清扫：`draft` 的来源线若节点消失或 `dshSessionId === null`，把缺失 id 记入新字段 `mergeStale`；
+  - 挂点：`removeThread`、`syncSessions`（DSH 侧删会话）、加载迁移后重算（host 停机期间失效的草稿，首渲即正确，不靠下次删除补）；
+  - 执行边界：`prepareMergeMessage` 前置 re-sweep + 拒绝（`来源线已被删除，无法执行`），多客户端并发改动也不漏；
+  - UI：草稿卡 `mergeStale` 非空时禁用「执行合并」+ 红色说明条（`.merge-plan-stale`，亮/暗主题双色）。
+  - 测试：`test/merge-store.test.js` 增 4 项（删除源线即失效、DSH 侧删会话同步失效、加载时重算不信任文件、失去 DSH 会话即失效）→ 合计 14 项全绿。触摸点：`index.js`、`app.js`、`styles.css`、`test/merge-store.test.js`、本文件。
+
+- 以下为既有条目——**跟进桌面端标题栏 v4 改名（版本升至 `0.5.0-miasaki.4`）**：桌面端 2026-09-06 标题栏 v4 去胶囊化把窗控容器类名 `.tb-capsule` 改为 `.tb-group`，而本线 `syncChrome()` 只查 `.tb-capsule`——v4 下量不到窗控组，`--canvas-chrome-reserve` 恒为 0，画布工具条与桌面端窗控组右上角叠压回归（v0.5.0-miasaki.2 修过的问题）。修复：选择器改为 `.tb-group` 优先 + `.tb-capsule` 兜底（与 sidebar 线同款兼容做法）。触摸点：`client.js`（host 侧代码，重启 `dsh web` 生效）、`package.json` 版本、`README.md`（桌面端适配段）。
 
 ## 2026-09-06（五）
 

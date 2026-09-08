@@ -205,6 +205,76 @@ test('removing a merge node clears absorbedBy back-references', async () => {
   assert.deepEqual(graph.threads.find(thread => thread.id === threadB.id).absorbedBy, [])
 })
 
+test('deleting a source line marks the draft stale and blocks execution', async () => {
+  const { store, workspaceId, threadA, threadB } = await storeWithTwoLines()
+  const draft = await store.createMergeDraft(workspaceId, { sources: [threadA.id, threadB.id], forkSource: threadA.id })
+  assert.equal(draft.mergeStale, null, '来源齐备时草稿不应带失效标记')
+
+  // 删掉注入来源线：草稿仍在画布上，但已不可执行。
+  await store.removeThread(threadB.id)
+  const graph = await store.get(workspaceId)
+  const stale = graph.threads.find(thread => thread.id === draft.id)
+  assert.deepEqual(stale.mergeStale, [threadB.id], '失效标记应点名缺失的来源 id')
+
+  // 关键：在 prepare 阶段就拒绝，而不是等 fork 之后才失败。
+  await assert.rejects(() => store.prepareMergeMessage(draft.id), /来源线已被删除/)
+})
+
+test('a session removed in DSH also marks dependent drafts stale', async () => {
+  const { store, workspaceId, threadA, threadB } = await storeWithTwoLines()
+  const draft = await store.createMergeDraft(workspaceId, { sources: [threadA.id, threadB.id], forkSource: threadA.id })
+
+  // DSH 侧删会话（非画布删节点）：syncSessions 带 removedSessionIds 进来。
+  await store.syncSessions([makeSession('s-a', '线 A')], ['s-b'])
+  const graph = await store.get(workspaceId)
+  const after = graph.threads.find(thread => thread.id === draft.id)
+  assert.deepEqual(after.mergeStale, [threadB.id])
+  await assert.rejects(() => store.prepareMergeMessage(draft.id), /来源线已被删除/)
+})
+
+test('draft staleness is recomputed on load, not trusted from the file', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-stale-load-'))
+  const dataFile = join(directory, 'state.json')
+  // 手写一份 v5 文件：草稿的 mergeStale 记为 null（旧构建的产物），但来源 t-b 已不存在。
+  await writeFile(dataFile, JSON.stringify({
+    version: 5,
+    hiddenSessionIds: [],
+    workspaces: [{
+      id: 'w-1', kind: 'dsh', cwd, title: 'x',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      threads: [
+        {
+          id: 't-a', title: '线 A', parentId: null, sourceParentSessionId: null, sourceSeedLength: null,
+          dshSessionId: 's-a', dshSessionTitle: '线 A', color: '#0f766e', position: { x: 86, y: 82 },
+          createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+          messages: [], pendingProcess: [], mergeFrom: null, mergeState: null, absorbedBy: [],
+        },
+        {
+          id: 't-draft', title: '合并：线 A × 线 B', parentId: null, sourceParentSessionId: null, sourceSeedLength: null,
+          dshSessionId: null, dshSessionTitle: null, color: '#7c3aed', position: { x: 200, y: 400 },
+          createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+          messages: [], pendingProcess: [], absorbedBy: [], mergeState: 'draft', mergeStale: null,
+          mergeFrom: { sources: ['t-a', 't-b'], forkSource: 't-a', anchorSeqA: null, anchorSeqB: null, injectedForm: 'full', userIntent: null },
+        },
+      ],
+    }],
+  }))
+  const store = new WorkspaceStore(dataFile)
+  const graph = await store.get('w-1')
+  const draft = graph.threads.find(thread => thread.id === 't-draft')
+  assert.deepEqual(draft.mergeStale, ['t-b'], '加载时应重算失效标记，不能沿用文件里的 null')
+})
+
+test('a source that lost its DSH session counts as stale', async () => {
+  const { store, workspaceId, threadA, threadB } = await storeWithTwoLines()
+  const draft = await store.createMergeDraft(workspaceId, { sources: [threadA.id, threadB.id], forkSource: threadA.id })
+  // 提交后的合并节点会占用会话；这里模拟来源线本身没有会话可 fork 的情形——
+  // 与节点消失同等致命，prepareMergeMessage 的两个前置校验正是这一对。
+  await store.syncSessions([makeSession('s-a', '线 A'), makeSession('s-b', '线 B')], ['s-b'])
+  const graph = await store.get(workspaceId)
+  assert.deepEqual(graph.threads.find(thread => thread.id === draft.id).mergeStale, [threadB.id])
+})
+
 test('summary injection form quotes a lossy head instead of the full answer', async () => {
   const { store, workspaceId, threadA, threadB } = await storeWithTwoLines()
   await store.projectEvents(

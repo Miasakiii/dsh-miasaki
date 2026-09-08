@@ -865,7 +865,7 @@ function conversationCards(threads) {
     // so the canvas can flag them without them being merge nodes themselves.
     const merge = thread.mergeState === null || thread.mergeState === undefined
       ? (thread.absorbedBy?.length ?? 0) > 0 ? { state: null, from: null, absorbedBy: thread.absorbedBy } : null
-      : { state: thread.mergeState, from: thread.mergeFrom, absorbedBy: thread.absorbedBy ?? [] }
+      : { state: thread.mergeState, from: thread.mergeFrom, absorbedBy: thread.absorbedBy ?? [], stale: thread.mergeStale ?? null }
     const messages = messagesFor(thread)
     const turns = []
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
@@ -1143,7 +1143,10 @@ function mergeDraftCard(card) {
   const lines = (from.sources ?? []).map(id => threads.get(id)).filter(Boolean)
   const forkSource = threads.get(from.forkSource)
   const injected = lines.filter(line => line.id !== from.forkSource)
-  const busy = state.mergeBusyId === card.dshThreadId ? 'disabled' : ''
+  // Sources deleted since drafting: the host marks these, so execution is
+  // blocked here instead of failing after the user clicks (early, not late).
+  const stale = Array.isArray(card.merge.stale) ? card.merge.stale : []
+  const busy = state.mergeBusyId === card.dshThreadId || stale.length > 0 ? 'disabled' : ''
   return `<article class="thread-card draft-card merge-draft-card" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#7c3aed">
     <div class="thread-card-head"><span class="merge-diamond" aria-hidden="true"></span><strong>合并请求（草稿）</strong></div>
     <div class="thread-meta"><span>${escapeHtml(card.question)}</span></div>
@@ -1152,8 +1155,9 @@ function mergeDraftCard(card) {
       <p class="merge-plan-line"><span class="merge-plan-label">注入来源</span>${injected.map(line => escapeHtml(line.title)).join('、') || '—'}</p>
       <p class="merge-plan-line"><span class="merge-plan-label">注入形式</span>${from.injectedForm === 'manual' ? '手选' : from.injectedForm === 'summary' ? '摘要提炼' : '全文引用'}</p>
       ${from.userIntent ? `<p class="merge-plan-line"><span class="merge-plan-label">合并指令</span>${escapeHtml(from.userIntent)}</p>` : ''}
+      ${stale.length > 0 ? `<p class="merge-plan-stale">来源线已被删除，这条合并请求无法执行。请取消草稿后重新发起。</p>` : ''}
     </div>
-    <footer><button class="merge-execute" data-action="execute-merge" data-thread="${card.dshThreadId}" ${busy} title="fork 源线并注入合并请求">${state.mergeBusyId === card.dshThreadId ? '执行中…' : '执行合并'}</button><button data-action="cancel-merge-draft" data-thread="${card.dshThreadId}" ${busy}>取消</button></footer>
+    <footer><button class="merge-execute" data-action="execute-merge" data-thread="${card.dshThreadId}" ${busy} title="${stale.length > 0 ? '来源线已删除，无法执行' : 'fork 源线并注入合并请求'}">${state.mergeBusyId === card.dshThreadId ? '执行中…' : '执行合并'}</button><button data-action="cancel-merge-draft" data-thread="${card.dshThreadId}" ${state.mergeBusyId === card.dshThreadId ? 'disabled' : ''}>取消</button></footer>
   </article>`
 }
 

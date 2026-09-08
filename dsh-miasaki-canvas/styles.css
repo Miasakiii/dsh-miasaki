@@ -483,6 +483,8 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .merge-plan-line { margin: 0 0 4px; }
 .merge-plan-line:last-child { margin-bottom: 0; }
 .merge-plan-label { display: inline-block; margin-right: 6px; color: #7c3aed; font-weight: 650; }
+/* 来源线被删后的失效提示：红色警示，与紫色合并主题区分开。 */
+.merge-plan-stale { margin: 6px 0 0; padding-top: 6px; border-top: 1px solid #ede9fe; color: #b91c1c; font-weight: 650; }
 .thread-card.merge-draft-card footer { display: flex; gap: 8px; padding: 0 14px 12px; }
 .thread-card.merge-draft-card footer button { flex: 1; min-height: 28px; border-color: #a78bfa; border-radius: 6px; background: #fff; color: #6d28d9; font-size: 12px; font-weight: 650; }
 .thread-card.merge-draft-card footer .merge-execute { border-color: #7c3aed; background: #7c3aed; color: #fff; }
@@ -510,6 +512,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .thread-card.merge-draft-card { border-color: #6d28d9; background: #221a33; }
 [data-theme="dark"] .merge-plan { border-color: #3b2a63; background: #251c3d; color: #ddd6fe; }
 [data-theme="dark"] .merge-plan-label { color: #c4b5fd; }
+[data-theme="dark"] .merge-plan-stale { border-top-color: #4c1d95; color: #fca5a5; }
 [data-theme="dark"] .graph-merge-button { background: #1b1c1f; }
 [data-theme="dark"] .graph-merge-button:hover { background: #2e1065; }
 [data-theme="dark"] .merge-panel-body { border-color: #3b2a63; background: #1b1c1f; }
