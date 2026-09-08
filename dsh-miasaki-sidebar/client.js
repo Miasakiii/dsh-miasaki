@@ -4,7 +4,10 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const react = require('react')
 
-    const STORAGE_KEY = 'miasaki-sidebar:v1'
+    const STORAGE_PREFIX = 'miasaki-sidebar:v2'
+    // Pre-session global key (≤ v0.3.x). Migrates once into the first session
+    // that asks for its state, then is removed — see loadPersisted().
+    const LEGACY_STORAGE_KEY = 'miasaki-sidebar:v1'
     const WIDTH_MIN = 300
     const WIDTH_MAX = 600
     const WIDTH_DEFAULT = 400
@@ -18,40 +21,89 @@ window.__ModuleLoader__.load({
     // sidebar on top of the canvas toolbar (design §3.1.1 constraint 4).
     const PANEL_Z = 60
 
-    // Same anchor strategy as the spike: the AppFrame frame div is the only
-    // inline `grid-template-columns` writer under #root; the hashed class is
-    // unstable so the style attribute is the stable fact. One selector, here.
-    const FRAME_SELECTOR = '#root div[style*="grid-template-columns"]'
+    // Frame resolution (2026-09-08 rework, probe-verified on DSH 0.1.2-rc.1):
+    // every slot host renders <div data-slot="<slotKey>">, so the conversation
+    // anchor is the semantic entry point — its parentElement is the AppFrame
+    // center column and one level up is the frame itself. The frame carries NO
+    // stable attribute of its own (data-dsh-frame / data-pane / data-slot are
+    // all absent on this build), so we climb from the official anchor, validate
+    // with the inline-style fingerprint, and keep the fingerprint query as the
+    // last resort. Single place, here.
+    const FRAME_ANCHOR_SELECTOR = '[data-slot="conversation"]'
+    const FRAME_FINGERPRINT = 'div[style*="grid-template-columns"]'
+    const FRAME_FALLBACK_SELECTOR = '#root ' + FRAME_FINGERPRINT
+    const resolveFrame = () => {
+      const anchor = document.querySelector(FRAME_ANCHOR_SELECTOR)
+      const viaAnchor = anchor && anchor.closest ? anchor.closest(FRAME_FINGERPRINT) : null
+      if (viaAnchor instanceof HTMLElement) return viaAnchor
+      const fallback = document.querySelector(FRAME_FALLBACK_SELECTOR)
+      return fallback instanceof HTMLElement ? fallback : null
+    }
 
     const clampWidth = px => Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(px)))
 
     const TAB_IDS = ['review', 'terminal', 'sidechat']
-    const loadPersisted = () => {
+    const normalizePersisted = raw => ({
+      open: raw.open === true,
+      width: clampWidth(typeof raw.width === 'number' ? raw.width : WIDTH_DEFAULT),
+      // null = no active tab: the shell shows the "open a tab" empty state
+      // (Edge-style picker) instead of a tab page.
+      tab: TAB_IDS.includes(raw.tab) ? raw.tab : null,
+    })
+    const sessionStorageKey = sessionId => `${STORAGE_PREFIX}:${sessionId}`
+
+    // Per-session persistence (2026-09-08): panel open/width/tab are remembered
+    // per session id. A session with no record keeps the current UI state and
+    // starts its own record on the next change, so switching sessions never
+    // snaps the panel shut. The pre-session global key migrates once into the
+    // first session that asks, then disappears.
+    const loadPersisted = sessionId => {
+      if (typeof sessionId !== 'string' || sessionId === '') return null
       try {
-        const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')
-        return {
-          open: raw.open === true,
-          width: clampWidth(typeof raw.width === 'number' ? raw.width : WIDTH_DEFAULT),
-          // null = no active tab: the shell shows the "open a tab" empty state
-          // (Edge-style picker) instead of a tab page.
-          tab: TAB_IDS.includes(raw.tab) ? raw.tab : null,
+        const stored = localStorage.getItem(sessionStorageKey(sessionId))
+        if (stored !== null) return normalizePersisted(JSON.parse(stored))
+        const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)
+        if (legacy !== null) {
+          const migrated = normalizePersisted(JSON.parse(legacy))
+          localStorage.setItem(sessionStorageKey(sessionId), JSON.stringify(migrated))
+          localStorage.removeItem(LEGACY_STORAGE_KEY)
+          return migrated
         }
-      } catch { return { open: false, width: WIDTH_DEFAULT, tab: null } }
+      } catch { /* 私有模式 / 损坏数据：回落到当前状态 */ }
+      return null
+    }
+
+    const savePersisted = (sessionId, state) => {
+      if (typeof sessionId !== 'string' || sessionId === '') return
+      try {
+        localStorage.setItem(sessionStorageKey(sessionId), JSON.stringify({ open: state.open, width: state.width, tab: state.tab }))
+      } catch { /* 私有模式等写入失败时丢弃 */ }
     }
 
     // Module-level store shared by the header toggle and the shell overlay
     // entry (useSyncExternalStore across both slot components; DSH React is
     // 18.3.1 — same pattern as the canvas switch store).
     const store = {
-      state: { ...loadPersisted(), viewport: 0, dragging: false, chromeReserve: 0, titlebarVisible: false, reviewCwd: null },
+      state: {
+        open: false,
+        width: WIDTH_DEFAULT,
+        tab: null,
+        sessionId: null,
+        viewport: 0,
+        dragging: false,
+        chromeReserve: 0,
+        titlebarVisible: false,
+        reviewCwd: null,
+        // Page-visibility gate: a hidden document must not keep polling the
+        // host, so tab components receive this as their `visible` prop.
+        pageVisible: typeof document === 'undefined' ? true : document.visibilityState !== 'hidden',
+      },
       listeners: new Set(),
       get: () => store.state,
       set(patch) {
         const next = { ...store.state, ...patch }
         const persistKeys = ['open', 'width', 'tab']
-        if (persistKeys.some(key => next[key] !== store.state[key])) {
-          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(persistKeys.map(key => [key, next[key]])))) } catch { /* 私有模式等写入失败时丢弃 */ }
-        }
+        if (persistKeys.some(key => next[key] !== store.state[key])) savePersisted(next.sessionId, next)
         store.state = next
         for (const listener of store.listeners) listener()
       },
@@ -68,26 +120,48 @@ window.__ModuleLoader__.load({
         const bar = document.getElementById('miasaki-titlebar')
         if (bar instanceof HTMLElement) {
           const rect = bar.getBoundingClientRect()
-          reserve = Math.ceil(rect.height > 0 ? rect.bottom : 32)
+          // A node that exists but renders 0-height reserves nothing. The old
+          // `: 32` fallback then pushed the panel down 32px in the browser
+          // environment, where the shell ships a hidden titlebar node
+          // (probe-measured 2026-09-08: element present, rect.height === 0).
+          // The desktop shell keeps rect.height > 0, so it still reserves.
+          reserve = rect.height > 0 ? Math.ceil(rect.bottom) : 0
         }
       } catch { /* 无桌面壳时兜底 0 */ }
       if (reserve !== store.get().chromeReserve) store.set({ chromeReserve: reserve })
     }
 
-    const pushFrame = () => {
-      const frame = document.querySelector(FRAME_SELECTOR)
-      if (!(frame instanceof HTMLElement)) return
+    // Layout push (2026-09-08 rework): the reserved size lives in a CSS
+    // variable on <html> and a standing rule consumes it, so a React
+    // re-render of the frame cannot drop the reservation (the previous code
+    // wrote inline padding and relied on the watchdog to re-add it). The
+    // inline write stays as a fallback for the case where the rule's selector
+    // stops matching after a DSH upgrade; both carry the same value, so they
+    // never double-push. No transition is added here on purpose: the frame's
+    // own `transition: grid-template-columns` belongs to the host, and a
+    // `transition` shorthand of ours would silently replace it.
+    const PUSH_VAR = '--miasaki-sidebar-width'
+    const pushWidth = () => {
       const state = store.get()
-      // Dragging keeps pushing (live squeeze feedback); `data-dragging` only
-      // disables the CSS width transition while the pointer is down.
-      const push = state.open && state.viewport >= PUSH_MIN_VIEWPORT ? state.width : 0
+      // Dragging keeps pushing (live squeeze feedback).
+      return state.open && state.viewport >= PUSH_MIN_VIEWPORT ? state.width : 0
+    }
+
+    const pushFrame = () => {
+      const push = pushWidth()
       const wanted = push > 0 ? `${push}px` : ''
-      if (frame.style.paddingRight !== wanted) frame.style.paddingRight = wanted
+      // Skip identical writes: the watchdog re-runs this on every DOM mutation
+      // and an unchanged setProperty still dirties the root style attribute.
+      const root = document.documentElement
+      if (root.style.getPropertyValue(PUSH_VAR) !== wanted) root.style.setProperty(PUSH_VAR, wanted)
+      const frame = resolveFrame()
+      if (frame !== null && frame.style.paddingRight !== wanted) frame.style.paddingRight = wanted
     }
 
     const pushClear = () => {
-      const frame = document.querySelector(FRAME_SELECTOR)
-      if (frame instanceof HTMLElement && frame.style.paddingRight !== '') frame.style.paddingRight = ''
+      document.documentElement.style.removeProperty(PUSH_VAR)
+      const frame = resolveFrame()
+      if (frame !== null && frame.style.paddingRight !== '') frame.style.paddingRight = ''
     }
 
     module.exports.inject = ['slots', 'layout', 'sessions']
@@ -123,6 +197,12 @@ window.__ModuleLoader__.load({
         // the pressed state a plain ink change, no filled block.
         `#miasaki-titlebar .tb-btn.tb-sidebar svg{width:16px;height:16px;transform:scaleX(-1)}`,
         `#miasaki-titlebar .tb-btn.tb-sidebar[aria-pressed="true"]{background:none;color:var(--dsw-alias-label-primary,#fff);opacity:1}`,
+        // Standing layout-push rule: consumes the variable pushFrame() writes.
+        // First selector is the official root-slot anchor chain (probe-verified
+        // 2026-09-08: #root > [data-slot="root"] > div IS the AppFrame frame);
+        // the second is the inline-style fingerprint fallback. No transition —
+        // see the PUSH_VAR comment.
+        `#root > [data-slot="root"] > div,${FRAME_FALLBACK_SELECTOR}{padding-right:var(${PUSH_VAR},0px)}`,
         `.dsh-sidebar-scrim{position:fixed;inset:0;z-index:${PANEL_Z};background:rgba(0,0,0,.32)}`,
         `.dsh-sidebar-panel{position:fixed;top:var(--sidebar-chrome-reserve,0);right:0;bottom:0;z-index:${PANEL_Z};display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1,#f5f7fa);border-left:1px solid var(--dsw-alias-border-l2,#d1d5db);color:var(--dsw-alias-label-primary,#111827);transition:width .18s ease}`,
         `.dsh-sidebar-panel[data-dragging]{transition:none}`,
@@ -182,6 +262,27 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-dline-del::before{content:'-'}`,
         `.dsh-sidebar-diffnote{padding:8px;font:400 11px/1.5 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
         `.dsh-sidebar-emptyhint{padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary,#9ca3af);font:400 12px Inter,system-ui,sans-serif}`,
+        // Terminal launcher tab (design §6.1): cwd readout, shell picker,
+        // primary launch button, last-result panel.
+        `.dsh-sidebar-term{display:flex;flex-direction:column;gap:12px}`,
+        `.dsh-sidebar-term-label{font:600 11px Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280);text-transform:uppercase;letter-spacing:.04em}`,
+        `.dsh-sidebar-term-cwdrow{display:flex;align-items:stretch;gap:6px}`,
+        `.dsh-sidebar-term-cwd{flex:1;min-width:0;font:400 11px/1.5 Consolas,'Courier New',monospace;padding:7px 9px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.04));color:var(--dsw-alias-label-primary,#111827);word-break:break-all}`,
+        `.dsh-sidebar-term-copy{flex:none;width:30px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:12px}`,
+        `.dsh-sidebar-term-copy:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-term-shells{display:flex;flex-direction:column;gap:4px}`,
+        `.dsh-sidebar-term-shell{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:400 12px Inter,system-ui,sans-serif;text-align:left}`,
+        `.dsh-sidebar-term-shell:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
+        `.dsh-sidebar-term-shell[aria-checked="true"]{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);border-color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-term-shell[disabled]{opacity:.45;cursor:not-allowed}`,
+        `.dsh-sidebar-term-shellname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`,
+        `.dsh-sidebar-term-shellnote{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-term-go{width:100%;min-height:34px;border:0;border-radius:8px;background:var(--dsw-static-deepseek-450,#4b5563);color:#fff;cursor:pointer;font:600 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-term-go:hover:not([disabled]){filter:brightness(1.08)}`,
+        `.dsh-sidebar-term-go[disabled]{opacity:.5;cursor:not-allowed}`,
+        `.dsh-sidebar-term-result{padding:8px 9px;border-radius:8px;font:400 11px/1.5 Inter,system-ui,sans-serif;border:1px solid var(--dsw-alias-border-l2,#d1d5db);color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        `.dsh-sidebar-term-result.err{border-color:var(--dsw-static-deepseek-450,#9e1b1b);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-term-retry{margin-top:6px;border:0;border-radius:6px;padding:3px 8px;background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:600 11px Inter,system-ui,sans-serif}`,
       ].join('')
       document.head.append(style)
 
@@ -264,15 +365,15 @@ window.__ModuleLoader__.load({
         if (!store.get().titlebarVisible) store.set({ titlebarVisible: true })
       }
 
-      // --- Review tab data interface (roadmap §4.1) -----------------------
-      const REVIEW_PREFIX = '/sidebar/api/review'
+      // --- Host API access (review §4.1 + terminal §6.1) ------------------
+      const API_PREFIX = '/sidebar/api'
       // cwd lives in the store, refreshed from the DSH sessions service; the
-      // review routes take it as a query param (status/checklist) or in the
-      // POST body (diff) — always send both from the caller's payload.
-      const fetchReview = (path, opts = {}) => {
+      // routes take it as a query param (status/checklist) or in the POST body
+      // (diff/terminal open) — always send both from the caller's payload.
+      const fetchSidebar = (path, opts = {}) => {
         const cwd = store.get().reviewCwd
         if (cwd === null || cwd === undefined) return Promise.reject(new Error('当前会话没有工作区'))
-        const url = new URL(REVIEW_PREFIX + path, location.origin)
+        const url = new URL(API_PREFIX + path, location.origin)
         url.searchParams.set('cwd', cwd)
         // The diff route reads cwd from the POST body (not the query param),
         // so inject it into any JSON body automatically.
@@ -288,6 +389,14 @@ window.__ModuleLoader__.load({
           .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(r.status + ' ' + t))))
       }
 
+      /** Current DSH session id (best-effort; null when no session is open). */
+      const currentSessionId = () => {
+        try {
+          const id = ctx.sessions.list.getSnapshot().current
+          return typeof id === 'string' && id !== '' ? id : null
+        } catch { return null }
+      }
+
       /** Current DSH session cwd (best-effort; null when no session is open). */
       const currentSessionCwd = () => {
         try {
@@ -299,13 +408,23 @@ window.__ModuleLoader__.load({
         } catch { return null }
       }
 
+      /** Restore the active session's remembered panel state (open / width / tab). */
+      const applySessionState = () => {
+        const sessionId = currentSessionId()
+        if (sessionId === store.get().sessionId) return
+        const restored = loadPersisted(sessionId)
+        // No record for this session: keep the current UI state and let the
+        // next change write this session's own record.
+        store.set(restored === null ? { sessionId } : { sessionId, ...restored })
+      }
+
       function useReviewCwd() {
         return react.useSyncExternalStore(store.subscribe, () => store.get().reviewCwd)
       }
 
       // List of every changed file, one line per entry (design §4.1: status
       // snapshot is the M1 "本轮改动" view; no session-event tracking yet).
-      function ReviewTab() {
+      function ReviewTab({ visible = true } = {}) {
         const cwd = useReviewCwd()
         const [entries, setEntries] = react.useState([])
         const [loading, setLoading] = react.useState(true)
@@ -322,7 +441,7 @@ window.__ModuleLoader__.load({
           const fetchAll = () => {
             if (cancelled) return
             setLoading(true)
-            fetchReview('/status')
+            fetchSidebar('/review/status')
               .then(d => {
                 if (cancelled) return
                 if (d.status) {
@@ -335,15 +454,16 @@ window.__ModuleLoader__.load({
               .catch(() => { if (!cancelled) setLoading(false) })
           }
           fetchAll()
-          // 60s TTL: keep the panel authoritative without constant polling.
-          timer = window.setInterval(fetchAll, 60_000)
+          // 60s TTL while the tab is actually visible; a hidden page skips the
+          // tick (the effect re-runs and refreshes at once when it returns).
+          timer = window.setInterval(() => { if (visible) fetchAll() }, 60_000)
           return () => { cancelled = true; window.clearInterval(timer) }
-        }, [cwd, refreshTick])
+        }, [cwd, refreshTick, visible])
 
         react.useEffect(() => {
           if (cwd === null) return
           let cancelled = false
-          fetchReview('/checklist')
+          fetchSidebar('/review/checklist')
             .then(d => { if (!cancelled && d.checklist) setNotes(d.checklist.notes ?? {}) })
             .catch(() => {})
           return () => { cancelled = true }
@@ -369,7 +489,7 @@ window.__ModuleLoader__.load({
           const current = (notes[path] || '').trim()
           const next = { ...notes, [path]: current !== '' ? '' : '已点名' }
           setNotes(next)
-          fetchReview('/checklist', {
+          fetchSidebar('/review/checklist', {
             method: 'POST',
             body: JSON.stringify({ patch: { notes: { [path]: current !== '' ? '' : '已点名' } } }),
           }).catch(() => {})
@@ -431,7 +551,7 @@ window.__ModuleLoader__.load({
         react.useEffect(() => {
           let cancelled = false
           setState('loading')
-          fetchReview('/diff', {
+          fetchSidebar('/review/diff', {
             method: 'POST',
             body: JSON.stringify({ path }),
           })
@@ -452,6 +572,109 @@ window.__ModuleLoader__.load({
             }, line.s || '')))))
       }
 
+      // Terminal launcher tab (design §6.1): the host spawns a real system
+      // terminal at the session cwd. State machine is explicit —
+      // checking → idle → opening → opened | failed — so the button never
+      // reports success on a failed spawn.
+      function TerminalTab() {
+        const cwd = react.useSyncExternalStore(store.subscribe, () => store.get().reviewCwd)
+        const [shells, setShells] = react.useState(null)
+        const [picked, setPicked] = react.useState(null)
+        const [phase, setPhase] = react.useState('checking')
+        const [result, setResult] = react.useState(null)
+
+        react.useEffect(() => {
+          let cancelled = false
+          setPhase('checking')
+          fetchSidebar('/terminal/options')
+            .then(data => {
+              if (cancelled) return
+              const list = data.shells ?? []
+              setShells(list)
+              // Default to the host's fallback pick (first available in the
+              // documented wt → pwsh → powershell → cmd order).
+              setPicked(data.fallback ?? list.find(shell => shell.available)?.id ?? null)
+              setPhase('idle')
+            })
+            .catch(error => {
+              if (cancelled) return
+              setShells([])
+              setPhase('idle')
+              setResult({ ok: false, message: '无法探测可用终端：' + error.message })
+            })
+          return () => { cancelled = true }
+        }, [cwd])
+
+        if (cwd === null || cwd === undefined) {
+          return react.createElement('div', { className: 'dsh-sidebar-body' },
+            react.createElement('p', null, '打开一个带工作区的会话后即可启动终端。'))
+        }
+
+        const open = () => {
+          if (picked === null) return
+          setPhase('opening')
+          setResult(null)
+          fetchSidebar('/terminal/open', { method: 'POST', body: JSON.stringify({ shell: picked }) })
+            .then(data => {
+              setPhase('opened')
+              setResult({ ok: true, message: `已启动 ${data.bin}${data.pid ? `（pid ${data.pid}）` : ''}` })
+            })
+            .catch(error => {
+              setPhase('failed')
+              setResult({ ok: false, message: error.message })
+            })
+        }
+        const copyCwd = () => {
+          try { navigator.clipboard?.writeText(cwd) } catch { /* 无剪贴板权限时静默 */ }
+        }
+
+        const busy = phase === 'checking' || phase === 'opening'
+        const available = (shells ?? []).filter(shell => shell.available)
+        return react.createElement('div', { className: 'dsh-sidebar-term' },
+          react.createElement('div', null,
+            react.createElement('div', { className: 'dsh-sidebar-term-label' }, '工作目录'),
+            react.createElement('div', { className: 'dsh-sidebar-term-cwdrow' },
+              react.createElement('div', { className: 'dsh-sidebar-term-cwd' }, cwd),
+              react.createElement('button', {
+                type: 'button', className: 'dsh-sidebar-term-copy', title: '复制路径',
+                'aria-label': '复制路径', onClick: copyCwd,
+              }, '⧉'))),
+          react.createElement('div', null,
+            react.createElement('div', { className: 'dsh-sidebar-term-label' }, '终端类型'),
+            phase === 'checking'
+              ? react.createElement('div', { className: 'dsh-sidebar-diffnote' }, '探测可用终端…')
+              : available.length === 0
+                ? react.createElement('div', { className: 'dsh-sidebar-diffnote' }, '未探测到可用的系统终端。')
+                : react.createElement('div', { className: 'dsh-sidebar-term-shells', role: 'radiogroup', 'aria-label': '终端类型' },
+                  (shells ?? []).map(shell => react.createElement('button', {
+                    key: shell.id,
+                    type: 'button',
+                    role: 'radio',
+                    className: 'dsh-sidebar-term-shell',
+                    'aria-checked': String(picked === shell.id),
+                    // Not installed → refuse the pick outright rather than
+                    // silently falling back to a shell the user did not choose.
+                    disabled: !shell.available || busy,
+                    onClick: () => setPicked(shell.id),
+                  },
+                    react.createElement('span', { className: 'dsh-sidebar-term-shellname' }, shell.label),
+                    react.createElement('span', { className: 'dsh-sidebar-term-shellnote' },
+                      shell.available ? shell.bin : '未安装'))))),
+          react.createElement('button', {
+            type: 'button',
+            className: 'dsh-sidebar-term-go',
+            disabled: busy || picked === null,
+            onClick: open,
+          }, phase === 'opening' ? '正在启动…' : '打开系统终端'),
+          result !== null && react.createElement('div', {
+            className: 'dsh-sidebar-term-result' + (result.ok ? '' : ' err'),
+            role: 'status',
+          },
+            result.message,
+            !result.ok && react.createElement('div', null,
+              react.createElement('button', { type: 'button', className: 'dsh-sidebar-term-retry', onClick: open }, '重试'))))
+      }
+
       // --- Shell overlay panel --------------------------------------------
       const cardIcon = paths => react.createElement('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
         paths.map((d, i) => d.shape === 'rect'
@@ -465,7 +688,7 @@ window.__ModuleLoader__.load({
         },
         {
           id: 'terminal', label: '终端',
-          note: '打开系统终端到会话 cwd 的启动器（M1 待填充）。',
+          note: '把系统终端打开到当前会话的工作目录。',
           icon: cardIcon([{ shape: 'rect', x: 1.5, y: 2.5, w: 13, h: 11 }, { d: 'M4.5 6l2.5 2-2.5 2M9 10.5h3' }]),
         },
         {
@@ -491,7 +714,7 @@ window.__ModuleLoader__.load({
             }, tab.icon, react.createElement('span', null, tab.label)))))
       }
 
-      const TAB_BODIES = { review: ReviewTab }
+      const TAB_BODIES = { review: ReviewTab, terminal: TerminalTab }
 
       function Shell() {
         const state = react.useSyncExternalStore(store.subscribe, store.get)
@@ -517,6 +740,9 @@ window.__ModuleLoader__.load({
           window.addEventListener('pointerup', onUp)
         }
         const TabBody = activeTab === null ? null : (TAB_BODIES[activeTab.id] ?? null)
+        // Visibility gate: a tab pauses its polling/subscriptions when the
+        // document is hidden (the panel being closed already unmounts it).
+        const tabVisible = state.open && state.pageVisible
         return react.createElement(react.Fragment, null,
           !pushMode && react.createElement('div', { className: 'dsh-sidebar-scrim', onClick: onScrimClick, 'aria-hidden': 'true' }),
           react.createElement('section', {
@@ -555,7 +781,7 @@ window.__ModuleLoader__.load({
                     ? react.createElement('div', { className: 'dsh-sidebar-body' },
                         react.createElement('strong', null, activeTab.label), ' — ', activeTab.note)
                     : react.createElement('div', { className: 'dsh-sidebar-body dsh-sidebar-review-wrap' },
-                        react.createElement(TabBody))),
+                        react.createElement(TabBody, { visible: tabVisible }))),
             react.createElement('div', { className: 'dsh-sidebar-resize', onPointerDown: startDrag, 'aria-hidden': 'true' })))
       }
       ctx.slots.inject('shell.overlay', () => ctx.slots.register({
@@ -563,8 +789,11 @@ window.__ModuleLoader__.load({
         id: 'sidebar-shell',
       }, Shell))
 
-      // --- Layout sync: push + watchdog + chrome reserve + viewport -------
+      // --- Layout sync: session state + push + watchdog + chrome reserve ----
       const syncAll = () => {
+        // Session state first: a restored width/tab must land before the push
+        // computation reads it.
+        applySessionState()
         pushFrame()
         syncTitlebarButton()
         measureChromeReserve()
@@ -603,8 +832,11 @@ window.__ModuleLoader__.load({
         if (!state.open || state.viewport >= PUSH_MIN_VIEWPORT) return
         store.set({ open: false })
       }
+      // Page visibility: tabs consume this through their `visible` prop.
+      const onVisibilityChange = () => store.set({ pageVisible: document.visibilityState !== 'hidden' })
       window.addEventListener('resize', onResize)
       window.addEventListener('keydown', onKeyDown)
+      document.addEventListener('visibilitychange', onVisibilityChange)
       store.subscribe(syncAll)
       syncAll()
 
@@ -615,6 +847,7 @@ window.__ModuleLoader__.load({
         window.clearInterval(watchdogTimer)
         window.removeEventListener('resize', onResize)
         window.removeEventListener('keydown', onKeyDown)
+        document.removeEventListener('visibilitychange', onVisibilityChange)
         unsubscribeSessions()
         store.listeners.clear()
         document.querySelector('#miasaki-titlebar .tb-sidebar')?.remove()

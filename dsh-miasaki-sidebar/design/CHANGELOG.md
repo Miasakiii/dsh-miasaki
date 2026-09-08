@@ -39,3 +39,137 @@
   - **实机验证**（本仓真实 16 条改动）：status 全量渲染 ✓、未点名徽标 15 ✓、点名往返（点击→「已点名」→持久化）✓、README.md diff 展开 25 行（11 增/7 删）✓；
   - **途中修复**：① 浏览器 fetch 传参链——统一 `URL/searchParams` + diff 路由 cwd 改从 POST body 注入（host 端）；② untracked diff：`git diff --no-index` 需 `NUL`（Windows 无 /dev/null）且 exit 1 时仍要 stdout（自写 spawn 封装）；③ git 二进制绝对路径（`dsh web` 进程 PATH 无 Git dir）；④ checklist 原子写 await 完成后才返回（早期 fire-and-forget 导致二次读取陈旧）；⑤ 0.1.2 会话懒恢复——cwd 订阅可能不触发，并入 1.5s watchdog 轮询。
   - 单测 4/4（diff 解析器三形态、doc-sync 规则、checklist 持久化往返）。`test/review-data.test.js` 入仓。
+
+- **终端启动器落地（v0.3.0-miasaki.1，M1 第三项 / M1 功能收口）**：设计 §6.1 的启动器形态实现完毕。
+  - host `/sidebar/api/terminal/options`：按平台列出终端候选并标 `available`。探测方式**改为 PATH 查询**
+    （`where.exe` / `which`）而非执行终端——原设计的 `wt.exe -v` 式探测会在用户桌面闪出真实窗口；
+    跨平台查询（如 Windows 上问 linux 项）一律返回 `available: false`，不做无意义 spawn。
+  - host `/sidebar/api/terminal/open`：`launchTerminal()` 先校验 cwd（不存在 → 404 / 是文件 → 400），
+    再由 `terminalCommand()` 按固定枚举产出 `{ bin, args }` 交给 `spawn`（`detached + stdio:'ignore' + unref`）。
+    **四条安全约束**：① shell 只能是 `TERMINAL_SHELLS` 里的 id，客户端无法指定任意 executable；
+    ② 全程参数数组、不经 shell，cwd 只占独立参数位（`powershell` / `cmd` 干脆不接路径参数，直接继承
+    spawn 的 cwd，恶意路径连 argv 都进不去）；③ cwd 必须绝对且为已存在目录；④ 未安装的终端在 UI 置灰，
+    **不静默回落**到用户没选的终端（回落顺序 `wt→pwsh→powershell→cmd` 仅用于默认选中项）。
+  - client 终端 tab：显式状态机 `checking → idle → opening → opened | failed`——启动失败绝不显示成功；
+    cwd 回显 + 复制、终端类型单选（未安装项 disabled 并标注）、启动中禁用按钮、失败面板带原因与重试。
+  - **途中修复**：`reviewStatus()` 内引用了模块作用域不存在的 `ctx`，git 命令失败时会抛
+    `ReferenceError` 而非降级为空字段——改为从 `apply()` 显式传入 `logger`。
+  - **重命名**：`fetchReview`/`REVIEW_PREFIX` → `fetchSidebar`/`API_PREFIX`（前缀收到 `/sidebar/api`），
+    四处调用点同步带上 `/review` 段。
+  - 单测 7/7（`test/terminal-launcher.test.js`：argv 构造、恶意路径原样落参数位、未知 shell id 与
+    非绝对 cwd 拒绝、平台过滤与回落链、跨平台探测、cwd 三类错误、缺失二进制报名不挂起）；
+    本线合计 11/11。**实机验收待用户重启 `dsh web`**——已确认运行中 host 仍是 `0.2.0-miasaki.1`
+    旧 bundle，新路由返回 404，符合 `link:` 部署契约。
+  - 顺带修正 README 里 `../../dsh-miasaki-shared-docs/…` 越级链接为同仓 `../`。
+
+## 2026-09-08
+
+- **cwd 守卫修复（v0.3.0-miasaki.2）**：状态盘点时以真实 HTTP 负向用例实测终端启动器，发现
+  README 宣称的第 3 条安全约束「cwd 必须是绝对路径」**在真实路由上从未生效**——相对路径用例返回
+  404 而非 400，且错误信息里的路径已被解释为「相对 host 进程 cwd」（实测 host cwd =
+  `dsh-miasaki-desktop\dist`）。
+  - **根因**：`resolveWorkdir()` 先 `resolve(raw)` 再判 `isAbsolute(cwd)`；`resolve()` 会把相对路径
+    补成绝对路径，于是该判断恒为真，校验形同虚设。危害不在 404——**若该相对路径恰好存在于 host
+    cwd 之下，会在 host 自己的目录里真的拉起一个终端**（`test`、`dist` 这类目录名很容易撞上）。
+  - **修复**：绝对性判断前置到 `resolve()` 之前（`raw.trim()` → `isAbsolute` → `resolve`），
+    非绝对路径一律 400「需要工作区的绝对路径」；UNC 路径仍按绝对放行，绝对路径的既有行为
+    （存在性由 `assertDirectory` 判 404 / 文件判 400）不变。
+  - **可测性重构**：路由 handler 从 `apply()` 内联闭包抽为导出的 `createApi({ dataFile, trustedHosts, logger })`，
+    `apply()` 只负责取配置并 `ctx.webServer.register`。理由是这条约束只在「路由确实调用了守卫」时才成立，
+    单测辅助函数无法证明链路（旧单测 `terminalCommand('cmd','relative\\path')` 确实抛 400，但路由永远先 resolve，
+    该断言在真实链路上不可达）。
+  - **新增 `test/api-routing.test.js`（8 项，走真实 HTTP server）**：`resolveWorkdir` 形态矩阵
+    （相对/驱动器相对/`.`/`..`/空/非字符串拒绝，UNC 与绝对路径放行）；`POST /terminal/open` 相对 cwd → **400**
+    （回归点：修复前是 404）；**「存在但相对」的危险用例**（`cwd: 'test'` + 未知 shell id，零副作用地证明
+    cwd 守卫先于 shell 枚举）；`GET /review/status` 同守卫；绝对但不存在仍 404（不误伤）；
+    health 200 / 不可信 Host 403 / 未知路由 404；`trustedHosts` 并集生效。
+  - 本线单测 11 → **19 项全绿**；`node ..\scripts\verify-all.mjs sidebar` 5/5（新增一个测试文件）。
+  - 触摸点：`index.js`、`test/api-routing.test.js`（新）、`package.json`、`README.md`、本文件。
+  - **生效条件**：host 半在启动时载入内存，须重启 `dsh web`；`GET /sidebar/api/health` 返回
+    `0.3.0-miasaki.2` 即已加载（盘点时运行中 host 为 `0.3.0-miasaki.1`，终端路由本身可用）。
+
+- **dsh-tavern 右侧边栏对比调研（`design/2026-09-08-tavern-sidebar-comparison.md`，纯调研不动代码）**：
+  起因是用户给出 [dsh-tavern](https://github.com/flizzywine/dsh-tavern) 作为右栏参考。调研结论：
+  - **它的右栏不是自研**——`tavern-plugin/package.json` 的 client `inject` 明写 `dsh-better-sidebar`，
+    右侧 7 个面板（酒馆状态/人物卡库/预设库/系统提示词/世界书库/剧本库/用户画像）全部走
+    `ctx.betterSidebar.registerTab({id,title,order,single,createTab,component})`；左栏则是
+    `slots.inject("sidebar.workspaces", …)` 整槽替换。所以"参考它"实际是参考基座框架 + 接入用法。
+  - **推挤同思路、载体不同**：基座在 `<html>` 写 `--dsh-sidebar-width`、由常驻 CSS 规则消费
+    （`layout.css` 命中 AppFrame frame 并平移 details 列），我们目前是 JS 直写
+    `frame.style.paddingRight` + watchdog 抢救。前者抗 React 重渲染，后者依赖重写。
+  - **新发现（本机 DSH 0.1.2-rc.1 静态取证）**：`dsh-client-ui-renderer` 给每个 slot 宿主渲染
+    `<div data-slot="<slotKey>">`，故 `[data-slot="conversation"]` 是稳定语义锚点，其 parentElement
+    即 AppFrame 的 `div.centerCol`、再上一级即 frame；frame 自身**无** `data-dsh-frame`/`data-slot`
+    （印证 2026-09-06 spike 结论），基座的 `#root [data-dsh-frame]` 在本机不匹配，靠
+    `#root > [data-slot="root"] > div` 兜底。建议我们改走
+    `document.querySelector('[data-slot="conversation"]')?.closest('div[style*="grid-template-columns"]')`
+    （官方锚点 + 特征校验叠加）。
+  - **另外两项低成本可吸收**：tab 组件补 `visible` 性能门（M2 辅助对话的前置）；host 围栏补
+    `sec-fetch-site: cross-site` 拒绝与 `Origin` hostname 比对（我们目前只比 Host，基座的
+    `trust-fence.ts` 有三道）。
+  - **明确不采纳**：服务化 `registerTab` 框架 / betterSidebar 兼容层（17 字段 + 17 方法，
+    且需先有"多 tab 并列"UI，成本与 M2/M3 同量级，M1 验收后再评估）；多 tab 分栏 / 底部面板 /
+    自由浮窗 / body portal 挂载 / 左栏整槽替换（重工作台形态，与轻量右栏定位冲突）。
+  - **真机实测（同日，一次性 Cordis 探针 `probe-1`，验完已 undefine + 删输出文件）**：在真实页面
+    （DSH 0.1.2-rc.1，1280×800）只读查询 DOM，报告 §6 两条待确认项全部落地：
+    `#root > [data-slot="root"] > div` 即 AppFrame frame（`#root` 仅一个子元素）；`[data-slot="conversation"]`
+    自身 `display:contents`，parent=centerCol、parent.parent=frame、`closest(...)` 亦命中 frame；
+    `[data-dsh-frame]` / `[data-pane]` / `[data-side="details"]` 三个基座选择器计数**全为 0**
+    ——基座在本机靠 `#root > [data-slot="root"] > div` 兜底，其详情列平移规则选不中 detailsCol（失效）。
+    **附带发现（待复核）**：探针运行时 `#miasaki-titlebar` 元素存在但 `height=0`，按
+    `measureChromeReserve()` 的 `rect.height > 0 ? rect.bottom : 32` 会取兜底 32px，与
+    README「浏览器无壳时为 0」不符——建议改为「元素不存在或高度为 0 均让位 0」，两环境各复验一次。
+  - 触摸点：`design/2026-09-08-tavern-sidebar-comparison.md`（新）、`README.md`、本文件。
+    参考仓库克隆在 `_refs/dsh-tavern`、`_refs/dsh-better-sidebar`（均已 ignore，不入库）。
+
+- **右栏实现加固（v0.4.0-miasaki.1，用户拍板「按建议批次开工」）**：按报告 §7 落地批 1–3 + 附带修复，
+  单测 19 → **20 项全绿**，`node ..\scripts\verify-all.mjs sidebar` **5/5**。
+  - **批 1-a 推挤锚点（client.js）**：`FRAME_SELECTOR`（单一特征选择器）→ `resolveFrame()`：
+    主选官方语义锚点 `[data-slot="conversation"]` 的 `closest('div[style*="grid-template-columns"]')`，
+    特征查询 `#root div[style*="grid-template-columns"]` 兜底。依据是同日探针实测（见上一条与报告 §6）：
+    frame 自身无 `data-dsh-frame` / `data-pane`，而 `#root > [data-slot="root"] > div` 即 frame。
+  - **批 1-b host 围栏（index.js）**：Host 单道 → 三道。新增 `sec-fetch-site: cross-site` → 403、
+    `Origin` hostname 与 Host hostname 比对（比 hostname 不比 `host:port`；`null`/不可解析按不透明来源拒绝）。
+    `test/api-routing.test.js` 新增 1 项走真实 HTTP 的正负用例（跨站标记 / 外部 Origin / `null` → 403，
+    同源 Origin / 无 Origin → 200），路由测试 8 → 9 项。
+  - **批 1-c 桌面壳让位（client.js）**：`measureChromeReserve()` 的 `rect.height > 0 ? rect.bottom : 32`
+    在浏览器环境（`#miasaki-titlebar` 存在但高度 0）会误让位 32px → 改为高度 0 即让位 0；
+    桌面壳 `rect.height > 0` 分支行为不变。
+  - **批 2 推挤载体（client.js）**：`frame.style.paddingRight` 直写 → `<html>` 的
+    `--miasaki-sidebar-width` + 常驻 CSS 规则 `#root > [data-slot="root"] > div, #root div[style*=...]`
+    消费，React 重渲染 frame 不再丢推挤；inline `padding-right` 保留为"规则选择器漂移"时的同值兜底
+    （两者同值，不会双推）。**刻意不加 transition**：`transition` 简写会覆盖宿主 frame 自身的
+    `transition: grid-template-columns`，代价大于收益（已在代码注释与设计文档说明）。
+  - **批 3-a `visible` 性能门（client.js）**：store 增 `pageVisible`（`visibilitychange` 驱动），
+    壳向 tab 组件传 `visible = open && pageVisible`，审查 tab 的 60s TTL 回调据此跳过；
+    本线只渲染激活 tab、面板关闭即卸载，"非激活暂停"天然成立，该门补的是"窗口切后台"。
+  - **批 3-b 按会话持久化 v2（client.js）**：全局单键 `miasaki-sidebar:v1` → 按会话
+    `miasaki-sidebar:v2:<sessionId>`；旧键在首个读到的会话上一次性迁移并删除；无记录的会话
+    **保持当前 UI 状态**（切会话不闪关）并在下次变更时落自己的键。
+  - **未做**：betterSidebar 兼容层（§5-D，成本与 M2 同量级，M1 实机验收后再评估）。
+  - **生效条件**：host 半与 client bundle 均在 `dsh web` 启动时载入内存，**须重启**；
+    `GET /sidebar/api/health` 返回 `0.4.0-miasaki.1` 即已加载。
+
+- **M1 实机复验（浏览器环境，2026-09-08 晚）**：盘点发现运行中 host 仍是 `0.3.0-miasaki.2`——
+  `/sidebar/api/health` 报旧版本，且围栏探针反推同样如此（`Origin: https://evil.example` 与
+  `sec-fetch-site: cross-site` 均返回 200，属加固前行为）。即 **v0.4.0 加固当时尚未加载**，
+  在它之前跑的验收轮覆盖的是旧 bundle。重启 host 后（原进程空闲：无页面连接、无在途 turn；
+  新进程 detached，启动日志 `_refs/diag/dsh-web-20260908-2255.*.log`）完成复验，`health` =
+  `0.4.0-miasaki.1`：
+  - **host 侧**：围栏三道实测（外部 Origin / `sec-fetch-site: cross-site` / `Origin: null` → 403，
+    同源 Origin 与无 Origin → 200）、cwd 守卫（相对路径 400、绝对但不存在 404）、
+    `review/status` 与 `terminal/options` 200；
+  - **client 侧（真实页面 1280×720，受控浏览器）**：`--miasaki-sidebar-width: 400px` 挂 `<html>`，
+    frame 计算样式 `padding-right: 400px`；锚点 `[data-slot="conversation"]` →
+    `closest('div[style*="grid-template-columns"]')` 命中 `div.pI_x6G_frame`（与特征查询兜底同元素）；
+    面板 `top=0`（浏览器无标题栏 → 让位 0）、`z-index 60`；关闭面板后变量清空、padding 归 0，
+    重开恢复 400px；
+  - **按会话持久化**：两个会话各自独立键（`v2:session-3be425f7…` → `tab:"terminal"`、
+    `v2:session-51a6af9d…` → `tab:"review"`），切到无记录会话时面板不闪关（保持当前 UI 状态）；
+  - **响应式**：1100px 视口 → `position:fixed` 右侧浮层 + scrim、frame 不推挤；
+    700px → 抽屉 + scrim（宽度 `min(viewport, 400)`）；1280px 恢复推挤；
+  - **顺带发现（待拍板，非加固回归）**：设计 §3.1 写「<768px 全屏抽屉（遮罩 + 右滑关闭）」，
+    实现为 `width = min(viewport, 持久化宽度)` 且无右滑关闭手势（遮罩点击关闭）——
+    只有视口窄于面板宽度时才满宽；
+  - **本轮未覆盖**：桌面壳环境（标题栏入口、32px 让位分支、三主题）未复验——未启动桌面壳；
+    `visible` 性能门只做了 bundle 标记核对（后台跳过刷新需 60s TTL 观察，未做）。

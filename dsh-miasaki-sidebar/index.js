@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
 const execFileP = (...args) => new Promise((resolve, reject) => {
@@ -54,11 +54,16 @@ function sendJson(res, status, body) {
 }
 
 /** Validate a client-supplied cwd: absolute, resolvable, a real directory. spawn args never touch a shell, so the only injection surface is a bogus path. */
-function resolveWorkdir(raw) {
+export function resolveWorkdir(raw) {
   if (typeof raw !== 'string' || raw.trim() === '') throw new InputError('需要工作区的绝对路径')
-  const cwd = resolve(raw)
+  const cwd = raw.trim()
+  // Absolute-ness must be judged BEFORE resolve(): resolve() turns a relative
+  // path into an absolute one against the host process cwd, so the old
+  // post-resolve check was always true and a relative cwd was silently
+  // reinterpreted — it either 404'd on a bogus path or, if the path happened to
+  // exist under the host cwd, launched a terminal there.
   if (!isAbsolute(cwd)) throw new InputError('需要工作区的绝对路径')
-  return cwd
+  return resolve(cwd)
 }
 
 class InputError extends Error {}
@@ -103,9 +108,12 @@ async function diffForFile(cwd, rel, cached) {
   return runGit(cwd, ['diff', 'HEAD', '--', rel])
 }
 
-async function reviewStatus(cwd) {
+async function reviewStatus(cwd, logger) {
+  // `logger` is passed in from apply(): this module has no ambient ctx, and an
+  // earlier version referenced one here — a git failure then threw
+  // ReferenceError instead of degrading to an empty field.
   const maybe = args => runGit(cwd, args).catch(error => {
-    ctx.logger.warn(`sidebar:review status ${args.join(' ')}: ${error instanceof Error ? error.message : String(error)}`)
+    logger?.warn?.(`sidebar:review status ${args.join(' ')}: ${error instanceof Error ? error.message : String(error)}`)
     return ''
   })
   const [branch, head, statusText] = await Promise.all([
@@ -200,6 +208,115 @@ export function verifyDocSync(entries) {
   return { pending }
 }
 
+// --- Terminal launcher (design §6.1) ---------------------------------------
+// Fixed shell registry: the client may only name a key from here. No
+// client-supplied executable, no shell string interpolation — every launch is
+// an argv array handed to spawn(), so a hostile cwd cannot become a command.
+export const TERMINAL_SHELLS = [
+  { id: 'wt', label: 'Windows Terminal', bin: 'wt.exe', platform: 'win32' },
+  { id: 'pwsh', label: 'PowerShell 7', bin: 'pwsh.exe', platform: 'win32' },
+  { id: 'powershell', label: 'Windows PowerShell', bin: 'powershell.exe', platform: 'win32' },
+  { id: 'cmd', label: '命令提示符', bin: 'cmd.exe', platform: 'win32' },
+  { id: 'terminal-app', label: 'Terminal.app', bin: 'open', platform: 'darwin' },
+  { id: 'x-terminal', label: 'x-terminal-emulator', bin: 'x-terminal-emulator', platform: 'linux' },
+]
+
+/** Fallback order used when the requested shell is missing: design §6.1 wt → pwsh → powershell → cmd. */
+export const TERMINAL_FALLBACK_ORDER = ['wt', 'pwsh', 'powershell', 'cmd']
+
+export function shellsForPlatform(platform = process.platform) {
+  return TERMINAL_SHELLS.filter(shell => shell.platform === platform)
+}
+
+/**
+ * Build the argv for one launch. Returns { bin, args } — never a command
+ * string. `cwd` only ever lands in a dedicated argument slot, so quoting and
+ * metacharacters are the OS's problem, not a shell's.
+ */
+export function terminalCommand(shellId, cwd) {
+  const shell = TERMINAL_SHELLS.find(entry => entry.id === shellId)
+  if (shell === undefined) throw new InputError(`未知的终端类型：${String(shellId).slice(0, 40)}`)
+  if (typeof cwd !== 'string' || cwd === '' || !isAbsolute(cwd)) throw new InputError('终端工作目录必须是绝对路径')
+  switch (shell.id) {
+    case 'wt': return { bin: shell.bin, args: ['-d', cwd] }
+    // -WorkingDirectory only applies to a new pwsh session, so keep it as the
+    // first arg and hold the window open with -NoExit (a launcher window that
+    // exits immediately is useless).
+    case 'pwsh': return { bin: shell.bin, args: ['-NoLogo', '-NoExit', '-WorkingDirectory', cwd] }
+    // Windows PowerShell 5 has no -WorkingDirectory; it inherits spawn's cwd,
+    // so no path argument is needed at all (one less place a path could be
+    // reinterpreted). Same for cmd: /K keeps the window open, `cd` just echoes
+    // the inherited directory as confirmation.
+    case 'powershell': return { bin: shell.bin, args: ['-NoLogo', '-NoExit'] }
+    case 'cmd': return { bin: shell.bin, args: ['/K', 'cd'] }
+    case 'terminal-app': return { bin: shell.bin, args: ['-a', 'Terminal', cwd] }
+    case 'x-terminal': return { bin: shell.bin, args: ['--working-directory', cwd] }
+    default: throw new InputError(`未知的终端类型：${shell.id}`)
+  }
+}
+
+/**
+ * Probe by PATH lookup, not by executing the shell: running `wt.exe -v` or
+ * `cmd /c` to test availability flashes real windows on the user's desktop.
+ * `where`/`which` exits non-zero when the name is unknown.
+ */
+async function probeShell(shell) {
+  const [probeBin, probeArgs] = process.platform === 'win32'
+    ? ['where.exe', [shell.bin]]
+    : ['/usr/bin/which', [shell.bin]]
+  try {
+    const { stdout } = await execFileP(probeBin, probeArgs, { timeout: 4000, windowsHide: true })
+    return stdout.trim() !== ''
+  } catch { return false }
+}
+
+/** Available terminals for the current platform, each with an `available` flag (probe result). */
+export async function terminalOptions(platform = process.platform) {
+  const candidates = shellsForPlatform(platform)
+  const probed = await Promise.all(candidates.map(async shell => ({
+    id: shell.id,
+    label: shell.label,
+    bin: shell.bin,
+    available: platform === process.platform ? await probeShell(shell) : false,
+  })))
+  const fallback = probed.find(entry => entry.available)?.id ?? null
+  return { platform, shells: probed, fallback }
+}
+
+/** cwd must be an existing directory; a missing/file path is a user error, not a 500. */
+async function assertDirectory(cwd) {
+  let info
+  try { info = await stat(cwd) } catch { throw new NotFoundError(`工作目录不存在：${cwd}`) }
+  if (!info.isDirectory()) throw new InputError(`不是目录：${cwd}`)
+}
+
+/**
+ * Launch a system terminal at `cwd`. Detached + unref'd so the terminal
+ * outlives this request and never blocks the DSH host; a spawn error surfaces
+ * as a 4xx/5xx with the shell that failed, never a silent success.
+ */
+export async function launchTerminal({ shellId, cwd, logger }) {
+  await assertDirectory(cwd)
+  const { bin, args } = terminalCommand(shellId, cwd)
+  return await new Promise((resolvePromise, reject) => {
+    const child = spawn(bin, args, { cwd, detached: true, stdio: 'ignore', windowsHide: false })
+    let settled = false
+    child.on('error', error => {
+      if (settled) return
+      settled = true
+      logger?.warn?.(`sidebar:terminal spawn ${bin}: ${error instanceof Error ? error.message : String(error)}`)
+      if (error?.code === 'ENOENT') reject(new NotFoundError(`未安装或找不到 ${bin}`))
+      else reject(new InputError(`终端启动失败：${error instanceof Error ? error.message : String(error)}`))
+    })
+    child.on('spawn', () => {
+      if (settled) return
+      settled = true
+      child.unref()
+      resolvePromise({ ok: true, shell: shellId, bin, cwd, pid: child.pid ?? null })
+    })
+  })
+}
+
 /** Checklist store: one JSON per workspace (cwd hash → filename), notes keyed by file path plus two hand-checked flags. */
 export class ChecklistStore {
   constructor(dir) {
@@ -272,24 +389,43 @@ async function readJson(req, maxBytes) {
 }
 
 /**
- * Mount the sidebar host half on the existing DSH Web Server. Route families
- * (roadmap design §2.1): review/* lands with the M1 review tab; terminal and
- * sidechat namespaces open with their milestones.
+ * Build the `/sidebar/api` handler bound to one data directory. Route families
+ * (roadmap design §2.1): review/* + terminal/* land with M1; the sidechat
+ * namespace opens with its milestone.
+ *
+ * Exported so tests can drive the real routing layer — the cwd guard only
+ * matters if a route actually reaches it, which unit-testing the helper alone
+ * cannot prove.
  */
-export function apply(ctx, config) {
-  const dataFile = typeof config?.dataFile === 'string' && config.dataFile !== ''
-    ? config.dataFile
-    : throwConfig('dataFile')
+export function createApi({ dataFile, trustedHosts = [], logger = console } = {}) {
+  if (typeof dataFile !== 'string' || dataFile === '') throwConfig('dataFile')
   const dataDir = dirname(dataFile)
   const checklists = new ChecklistStore(join(dataDir, 'checklists'))
   const ready = mkdir(dataDir, { recursive: true }).then(() => undefined, error => {
-    ctx.logger.warn(new Error(`sidebar: data directory unavailable (${error instanceof Error ? error.message : String(error)})`))
+    logger?.warn?.(new Error(`sidebar: data directory unavailable (${error instanceof Error ? error.message : String(error)})`))
   })
-  const trustedHosts = trustedHostSet(config)
-  const api = async (req, res) => {
+  const trusted = trustedHostSet({ trustedHosts })
+  return async (req, res) => {
     try {
       const hostname = (typeof req.headers.host === 'string' ? req.headers.host : '').replace(/:\d+$/, '').toLowerCase()
-      if (!trustedHosts.has(hostname)) return sendJson(res, 403, { error: '不被信任的 Host' })
+      if (!trusted.has(hostname)) return sendJson(res, 403, { error: '不被信任的 Host' })
+      // Browser-trust fence, layers 2 and 3 (layer 1 is the Host check above;
+      // mirrors better-sidebar's trust-fence.ts, MIT, and the DSH /api fence).
+      // `sec-fetch-site: cross-site` is the browser's own verdict that another
+      // site initiated the request — it never belongs to this UI. `Origin`,
+      // when present, must name our hostname: compare hostname, not authority,
+      // because some Chromium builds serialize a loopback Origin without its
+      // non-default port (comparing host:port would reject every legitimate
+      // request). The literal `null` (sandboxed iframe / file:) fails the URL
+      // parse and is refused as an opaque origin. An absent Origin is fine —
+      // the Host fence already bound the request.
+      if (req.headers['sec-fetch-site'] === 'cross-site') return sendJson(res, 403, { error: '跨站请求被拒绝' })
+      const origin = req.headers.origin
+      if (typeof origin === 'string' && origin !== '') {
+        let originHostname = null
+        try { originHostname = new URL(origin).hostname.toLowerCase() } catch { originHostname = null }
+        if (originHostname === null || originHostname !== hostname) return sendJson(res, 403, { error: '跨站来源被拒绝' })
+      }
       // Browser CORS preflight (OPTIONS): the DSH /api prefix does not emit
       // CORS headers, so the sidebar API answers its own.
       if (req.method === 'OPTIONS') {
@@ -305,11 +441,11 @@ export function apply(ctx, config) {
       const path = new URL(req.url ?? '/', 'http://dsh.local').pathname
       if (path === '/sidebar/api/health') {
         await ready
-        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: '0.2.0-miasaki.1' })
+        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: '0.4.0-miasaki.1' })
       }
       if (path === '/sidebar/api/review/status' && req.method === 'GET') {
         const cwd = resolveWorkdir(new URL(req.url, 'http://dsh.local').searchParams.get('cwd'))
-        const status = await reviewStatus(cwd)
+        const status = await reviewStatus(cwd, logger)
         return sendJson(res, 200, { status, docSync: verifyDocSync(status.entries) })
       }
       if (path === '/sidebar/api/review/diff' && req.method === 'POST') {
@@ -330,14 +466,31 @@ export function apply(ctx, config) {
         const cwd = resolveWorkdir(body.cwd)
         return sendJson(res, 200, { checklist: await checklists.patch(cwd, body.patch ?? null) })
       }
+      // --- terminal launcher (design §6.1) ---
+      if (path === '/sidebar/api/terminal/options' && req.method === 'GET') {
+        return sendJson(res, 200, await terminalOptions())
+      }
+      if (path === '/sidebar/api/terminal/open' && req.method === 'POST') {
+        const body = await readJson(req, 8 * 1024)
+        const cwd = resolveWorkdir(body.cwd)
+        const shellId = typeof body.shell === 'string' ? body.shell.trim() : ''
+        // Enum-only: an unknown id never reaches spawn (terminalCommand throws).
+        const result = await launchTerminal({ shellId, cwd, logger })
+        return sendJson(res, 200, result)
+      }
       return sendJson(res, 404, { error: '接口不存在' })
     } catch (error) {
       if (error instanceof InputError) return sendJson(res, 400, { error: error.message })
       if (error instanceof NotFoundError) return sendJson(res, 404, { error: error.message })
-      ctx.logger.error(error instanceof Error ? error : new Error(String(error)))
+      logger?.error?.(error instanceof Error ? error : new Error(String(error)))
       return sendJson(res, 500, { error: 'sidebar 数据暂时不可用' })
     }
   }
+}
+
+/** Mount the sidebar host half on the existing DSH Web Server. */
+export function apply(ctx, config) {
+  const api = createApi({ dataFile: config?.dataFile, trustedHosts: config?.trustedHosts ?? [], logger: ctx.logger })
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/sidebar/api', handler: api }), 'sidebar: api')
 }
 

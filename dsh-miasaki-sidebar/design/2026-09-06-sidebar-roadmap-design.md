@@ -71,11 +71,11 @@
 | 默认宽度 | 400px，可拖拽 300–600px，边缘把手 6px |
 | 折叠态 | **取消（用户拍板 2026-09-06）**——右栏不做 48px 图标栏折叠态，开合即全部；原折叠态设计随空态标签选择页取代 |
 | 响应式 | **≥1280px 推挤主区**；1024–1279px 浮层（实测推挤后 center 568–600px 过窄）；<1024px 遮罩浮层（官方左栏此时自动收 56px rail，主区压力最大）；<768px 全屏抽屉（遮罩 + 右滑关闭）。2026-09-06 spike 实测修正：原 ≥1024 推挤在 900px 视口下 center 仅 444px，弃 |
-| 推挤锚点 | **AppFrame 三列 grid 容器 + `padding-right` 推挤**（2026-09-06 spike 实测定稿）。better-sidebar 的 `data-pane="conversation"` 锚点在本机 DSH 0.1.2 bundle 中不存在（`data-dsh-frame`/`data-pane` 全 bundle 无匹配）。真实结构：AppFrame（`dsh-client-ui-layout`）渲染 `grid-template-columns: {sidebar}px minmax(0,1fr) {details}px` 的三列 frame，对它注入 `padding-right: var(--miasaki-sidebar-width)` 即推挤——grid 1fr 轨道自动吸收，实测 1280px 视口下 center 1000→600px。锚点选择器集中一处 + 看门狗重挂（canvas 教训）；`pI_x6G_*` 类名是构建哈希不可依赖，以 `style*="grid-template-columns"` 特征定位（`#root` 下唯一） |
+| 推挤锚点 | **AppFrame 三列 grid 容器 + `padding-right` 推挤**（2026-09-06 spike 定稿，**2026-09-08 探针实测重定锚点与载体**）。frame 自身**无稳定属性**——本机 DSH 0.1.2-rc.1 探针实测 `[data-dsh-frame]` / `[data-pane]` / `[data-slot]`（在 frame 上）全为 0，better-sidebar 的 `#root [data-dsh-frame]` 因此不匹配；官方语义锚点是 slot 宿主 div 的 `data-slot="<slotKey>"`（`dsh-client-ui-renderer` 的 `renderOutletContent` 渲染 `<div data-slot={slotKey} style="display:contents">`）。实测层级：`#root > [data-slot="root"] > div` 即 frame；`[data-slot="conversation"]` 的 `parentElement` 即 centerCol、再上一级即 frame。**定稿：主选 `[data-slot="conversation"]` → `closest('div[style*="grid-template-columns"]')`（官方锚点 + 特征校验叠加），`#root div[style*="grid-template-columns"]` 特征查询兜底**。载体改为 `<html>` 上的 `--miasaki-sidebar-width` + 常驻 CSS 规则消费（抗 React 重渲染清 inline），inline `padding-right` 同值兜底；**不加 transition**（`transition` 简写会覆盖宿主 frame 自己的 `transition:grid-template-columns`）。实测 1280px 视口下 center 1000→600px |
 | 入口 | **桌面壳（用户拍板 2026-09-06，三轮迭代）：图标按钮注入标题栏按钮组（V4 `.tb-group`，旧 V3 `.tb-capsule` 兜底兼容）、位于徽章 `tb-brand` 左侧 = 窗控列首位；风格用 DSH 原生**——28px 圆形透明钮 + 原生 `.panelIcon` 16px 填充图标（`scaleX(-1)` 镜像、面板列朝右），按压态仅图标变 `label-primary` 无色块（用户拍板弃深色块方案）；**浏览器 fallback：头部 actions 官方插槽同款原生风格按钮**（order 30）。双入口同一 React 注册运行时自切换（标题栏可见→会话头按钮渲染 null；watchdog 1.5s 兜底双向跟随，实测往返闭环） |
-| 桌面壳让位 | **整条标题栏让位（M1 实现修正）**：桌面壳 `body #root` 已 margin-top 32px（`themes/runtime.js`），右栏 fixed 面板 top 同步让位标题栏实际高度（`--sidebar-chrome-reserve`，实测 `#miasaki-titlebar` rect.bottom=32，浏览器无壳时 0）；canvas 的窗控胶囊水平量测思路不适用于垂直让位，直接量标题栏 |
+| 桌面壳让位 | **整条标题栏让位（M1 实现修正；2026-09-08 修 0 高度误判）**：桌面壳 `body #root` 已 margin-top 32px（`themes/runtime.js`），右栏 fixed 面板 top 同步让位标题栏实际高度（`--sidebar-chrome-reserve`，实测 `#miasaki-titlebar` rect.bottom=32）；canvas 的窗控胶囊水平量测思路不适用于垂直让位，直接量标题栏。**2026-09-08 探针发现浏览器环境该元素存在但 `rect.height===0`，旧式 `rect.height > 0 ? rect.bottom : 32` 会误让位 32px——已改为高度为 0 即让位 0** |
 | 主题 | 直接消费宿主 `--dsw-alias-*`（面板底 `--dsw-alias-bg-layer-1`，**不用** `--dsw-specific-sidebar-fill`）；品牌强调 `--dsw-static-deepseek-450` 派生 |
-| 持久化 | localStorage `miasaki-sidebar:v1:<sessionId>`：面板开合/宽度/每会话 tab 布局 |
+| 持久化 | localStorage `miasaki-sidebar:v2:<sessionId>`：面板开合/宽度/tab **按会话隔离**（2026-09-08 落地，原为全局单键）；旧全局键 `miasaki-sidebar:v1` 在首个读到的会话上一次性迁移并删除；无记录的会话保持当前 UI 状态、下次变更时落自己的键（切会话不闪关） |
 
 ### 3.1.1 spike 实测结论（2026-09-06，本机 DSH 0.1.2，bundle 静态分析 + 浏览器实测）
 
@@ -89,9 +89,17 @@
 6. **头部 actions 插槽可用性**：本机实测 canvas「对话/会话布」按钮正常渲染于会话头（`conversation.session.header.actions`），注册法沿用；右栏按钮的 `order` 值实现时实测定；
 7. **桌面壳窗控胶囊让位**：量测思路复用 canvas `syncChrome`（`#miasaki-titlebar .tb-capsule` getBoundingClientRect），浏览器 spike 无法覆盖，M1 实现后进桌面壳联调验证。
 
+**2026-09-08 探针实测补充**（一次性 Cordis client 探针，DSH 0.1.2-rc.1，1280×800）：
+
+8. **`data-slot` 锚点链**：`#root` 只有一个子元素 `[data-slot="root"]`，其 `firstElementChild` 即 `div.pI_x6G_frame`；`[data-slot="conversation"]` 自身 `display:contents`，`parentElement` = `div.pI_x6G_centerCol`、再上一级 = frame；`closest('div[style*="grid-template-columns"]')` 同样得到 frame。
+9. **基座选择器在本机全数落空**：`[data-dsh-frame]` / `[data-pane]` / `[data-side="details"]` 计数均为 0——frame 的五个子元素是 `sidebarCol / centerCol / detailsCol / overlayLayer[data-shell-overlay] / handle[data-side=sidebar]`，**detailsCol 自身没有 `data-side`**，故 better-sidebar 的详情列平移规则在本机选不中（其"把手跟随推挤"不生效）。结论：**不能照抄基座选择器**。
+10. **`#miasaki-titlebar` 在浏览器环境存在但 `height===0`**：旧式兜底 `rect.height > 0 ? rect.bottom : 32` 会误让位 32px（见 §3.1 桌面壳让位行）。
+
 ### 3.2 tab 框架
 
 私有注册表（`{ id, title, icon, component, badge?, onOpen?, onClose? }`），壳负责：tab 栏渲染（图标 + 标题 + 角标 + 关闭）、激活切换、`visible` 信号（非激活 tab 暂停轮询——better-sidebar 同款性能门）、右键菜单（关闭/关闭其他）。不做拖拽重排/分栏/自由窗口（重基座的教训：M1 不做，需要再说）。
+
+**`visible` 门（2026-09-08 落地）**：壳向 tab 组件传 `visible = open && pageVisible`（`pageVisible` 来自 `visibilitychange`）。本线只渲染激活 tab、面板关闭即整体卸载，故"非激活暂停"天然成立；`visible` 额外覆盖"面板开着但窗口被切到后台"的场景，审查 tab 的 60s TTL 刷新据此跳过。
 
 **空态（用户拍板 2026-09-06，Edge 侧边栏范式）**：`tab: null`（首次打开/关闭最后一个 tab 后）时面板不渲染 tab 栏，显示居中「打开标签页」引导 + 每 tab 一张图标卡片（横排，点卡片激活；`sidechat` 卡片 M2 禁用态）；tab 栏常驻 × 关闭钮回空态。空态与 tab 态随持久化 `tab` 字段自然往返。
 
@@ -225,3 +233,4 @@ M1 内部顺序：壳（含桌面壳让位）→ 审查数据面 → 审查 UI �
 |---|---|
 | 2026-09-06 | 路线 D：无基座自研（用户否决路线 C 重基座方案）；终端同屏内嵌**先规划后实现**（M3 条件立项），M1 先做系统终端启动器；审查 tab 独立新线 `dsh-miasaki-sidebar/`（用户拍板）；「文件变动」类能力由自研审查 tab 承担，不装上游 |
 | 2026-09-06 | spike 定稿（见 §3.1.1）：better-sidebar 推挤锚点在本机 DSH 不存在，改 AppFrame frame `padding-right` 推挤 + `shell.overlay` 挂载；原生 `details` 插槽路线否决（single 槽注入即顶掉官方工具详情面板）；右栏 z-index < 100（canvas 全屏盖住右栏为预期行为）；响应式推挤下限从 1024 提到 1280 |
+| 2026-09-08 | **对照 dsh-tavern/better-sidebar 的右栏调研（`2026-09-08-tavern-sidebar-comparison.md`）后落地三项改造**：① 推挤锚点改「官方 `data-slot` 链 + 特征校验」、载体改 CSS 变量 + 常驻规则（探针实测重定，见 §3.1.1 第 8–10 条）；② host 围栏补 `sec-fetch-site` / `Origin` 两道；③ tab 补 `visible` 性能门、持久化改按会话 v2（含 v1 迁移）。**不采纳**服务化 `registerTab` 框架与 betterSidebar 兼容层（17 字段 + 17 方法，且需先有"多 tab 并列"UI，与轻量右栏定位冲突），不采纳多 tab 分栏 / 底部面板 / 自由浮窗 / body portal 挂载 / 左栏整槽替换 |
