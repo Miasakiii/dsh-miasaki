@@ -8,7 +8,7 @@
 | 层 | 内容 | 载体 | 可自动化 |
 |---|---|---|---|
 | **L0** 静态检查 | 语法（`node --check`）、令牌完备性、令牌漂移 | `node scripts/verify-all.mjs` | 是 |
-| **L1** 单线单测 | Canvas 79 项、Sidebar 19 项、Fleet 总线校验 | `node scripts/verify-all.mjs` | 是 |
+| **L1** 单线单测 | Canvas 79 项、Sidebar 46 项、Fleet 总线校验 | `node scripts/verify-all.mjs` | 是 |
 | **L2** 插件加载 | 装 profile → 重启 host → 页面刷新 → 插件生效/停用可恢复 | 本文档 §2 | 否（需重启 host） |
 | **L3** 实机冒烟 | 桌面壳启动、窗口、主题、桌宠、Canvas、Sidebar | 本文档 §3 | 否（需真机） |
 | **L4** 跨线联动 | Fleet pulse → 桌宠；主题 → Canvas/Sidebar；标题栏让位 | 本文档 §4 | 否 |
@@ -20,11 +20,11 @@ node scripts/verify-all.mjs            # 四线全量
 node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/desktop）
 ```
 
-**2026-09-08 基线**（DSH 0.1.2-rc.1 / Node v24.15.0，全部 PASS）：
+**2026-09-09 基线**（DSH 0.1.2-rc.1 / Node v24.15.0，全部 PASS）：
 
 | 线 | 项数 | 内容 | 结果 |
 |---|---:|---|---|
-| sidebar | 6 | `index.js`/`client.js` 语法 + review-data 4 项 + terminal-launcher 7 项 + api-routing 9 项（真实 HTTP 路由）+ drawer-gesture 9 项（client 半源码抽取） | PASS |
+| sidebar | 8 | `index.js`/`client.js` 语法 + review-data 4 项 + review-view 6 项（四视图解析器 + 真实临时 git 仓库集成）+ client-tabs 10 项（持久化 v3 迁移 / 目录分组统计，源码抽取）+ terminal-launcher 7 项 + api-routing 10 项（真实 HTTP 路由）+ drawer-gesture 9 项（client 半源码抽取） | PASS |
 | canvas | 9 | 三入口语法 + 6 个测试文件共 79 项（含 mergeStale 失效 4 项） | PASS |
 | fleet | 5 | liveness 单测 7 项 + server.js 语法 + validate-bus + publish-pulse + validate-bus --strict | PASS |
 | desktop | 4 | gen-init（令牌校验）+ tokens:diff（无漂移）+ patch verify（模型设置补丁离线自证）+ cargo test 5 项（pulse stale 语义） | PASS |
@@ -44,7 +44,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/
 | 检查项 | 步骤 | 通过判据 |
 |---|---|---|
 | 安装 | `dsh plugin --profile web add link:<线目录>` | profile 出现该包 |
-| host 半生效 | 重启 `dsh web` | `GET /sidebar/api/health` 返回当前 `version` |
+| host 半生效 | 重启 `dsh web` | `GET /sidebar/api/health` 返回当前 `version`（sidebar 现为 `0.5.0-miasaki.1`） |
 | client 半生效 | 重启 host **后**刷新页面 | 会话头 / 标题栏出现按钮 |
 | 停用可恢复 | 移除插件 → 重启 host | DSH 原生界面无残留（右栏推挤复位、会话头按钮消失） |
 | 运行时补丁在位 | `node dsh-miasaki-desktop/patches/dsh-client-ui-settings-models/patch.mjs status` | 输出 `patched`；**DSH 升级后变 `unknown` 即需按该目录 README 重打** |
@@ -86,7 +86,9 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/
 |---|---|
 | 右栏开合 | ≥1280px 推挤（center 缩窄）；<1280 浮层 + scrim；<768 抽屉 |
 | 空态选择页 | `tab: null` 显示三张卡片，点击进入对应 tab |
-| 审查 tab | status 全量渲染、未点名徽标、点名往返持久化、单文件 diff 行级展开 |
+| 审查 tab | 四视图下拉**切换即拉取**（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改；空视图显示「无改动」）、目录分组默认折叠且组统计 = 组内求和、未点名徽标、点名往返持久化、单文件 diff 行级展开 |
+| **标签栏** | `＋` 类型选择浮层新建（同类型自动编号）、每标签 `×` 关闭（关闭激活标签后左邻激活）、`⌄` 菜单列出全部标签并标 ✓、非激活标签 keep-mounted（切回不丢视图/展开态、不重复拉取） |
+| **持久化 v3** | 按会话 `miasaki-sidebar:v3:<sessionId>`；删除 v3 键并注入 `v2` 旧键后刷新 → 迁移为单元素 `tabs` 且 v2 键消失（v1 同理，全局键） |
 | **终端 tab** | cwd 回显与复制、终端类型探测（未安装置灰）、启动到 cwd、失败显示原因 + 重试 |
 | 与 canvas 共存 | canvas 全屏 overlay（z-100）盖住右栏（z-60）为预期，不得反向提 z |
 
@@ -105,8 +107,9 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/
 ## 5. 已知边界
 
 - **L0 对 client 半的覆盖有限**：`client.js` 主体只做 `node --check` 语法校验，React 行为依赖真实
-  DSH 页面，只能在 L3 验证。**唯一例外**是抽屉右滑关闭的判定——它是无 DOM 依赖的纯函数
-  `drawerCloseDecision`，由 `test/drawer-gesture.test.js` 按源码抽取求值（9 项），因此进了 L1。
+  DSH 页面，只能在 L3 验证。**例外**是两处无 DOM 依赖的纯函数，按源码抽取求值后进了 L1：
+  抽屉右滑关闭判定 `drawerCloseDecision`（`test/drawer-gesture.test.js`，9 项）与持久化 v3 迁移 /
+  目录分组统计（`test/client-tabs.test.js`，10 项）。
 - **fleet 生命周期自动化仍不全**：F1 总线 + F3 心跳判活已有测试；worker 调度级
   （超时 / 重试 / orphan 回收）尚无自动化覆盖。
 - **Desktop `compose` 优先级映射靠 L3/L4 人工核对**：`main.rs` 已有 pulse stale 判活
@@ -120,3 +123,4 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar/canvas/fleet/
 | 2026-09-07(晚) | 异常恢复批次：fleet 增加 liveness F3 单测（5 项）、desktop 增加 `cargo test`（3 项）；canvas 79 用例（mergeStale）；矩阵更新基线（sidebar 4 / canvas 79 / fleet 5 / desktop 3），L4 增补 stale 检查项 |
 | 2026-09-08 | desktop 增加 `patch verify`（模型设置补丁离线自证，desktop 3/3 → 4/4）；sidebar cwd 守卫修复 + 浏览器信任围栏补两道（api-routing 8 → 9 项）；基线更新为 **sidebar 5 / canvas 9 / fleet 5 / desktop 4**（本表 §1） |
 | 2026-09-08(晚) | sidebar 增加 `drawer-gesture`（client 半纯函数源码抽取 9 项，L1 首次覆盖 client.js 逻辑）→ 基线 **sidebar 6/6**；§5 已知边界补该例外说明 |
+| 2026-09-09 | sidebar 审查改版 + 浏览器式标签页（v0.5.0）**实机复验通过**（四视图 / 分组折叠 / 多标签 keep-mounted / v2→v3 迁移，重启 host 后浏览器环境）；单测新增 review-view 6 项 + client-tabs 10 项、api-routing 9 → 10 项 → 基线 **sidebar 8/8**（四线全绿重跑）；§2 标注 health 版本、§3.4 增补标签栏与持久化检查项、§5 例外改为两处纯函数 |

@@ -9,7 +9,7 @@
 | 桌面端 | [`dsh-miasaki-desktop/`](dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH web 插件：免费模型池、桌宠面板、用量监控（token-monitor v0.4.0）、会话日志下载入口迁移（dsh-session-log-move）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的设置页模型能力补丁（规则 + 基线入库，可重建 / 校验 / 回退）。 |
 | Fleet | [`dsh-miasaki-fleet/`](dsh-miasaki-fleet/) | 多 Agent CLI 编排（v0.16）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）。 |
 | Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.5，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。 |
-| Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 轻量右侧边栏插件 `@miasaki/dsh-sidebar`（路线 D 无基座自研，2026-09-06 拍板）：右栏壳 + 审查 tab + 终端启动器（辅助对话 tab 归 M2）。**M1 功能收口并实机复验**（v0.4.1-miasaki.1）——三项全部落地、单测 29/29；右栏加固（官方锚点推挤 / 三道浏览器信任围栏 / 按会话持久化）已在浏览器环境复验，抽屉右滑关闭按设计补齐，桌面壳环境待复验。 |
+| Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 轻量右侧边栏插件 `@miasaki/dsh-sidebar`（路线 D 无基座自研，2026-09-06 拍板）：右栏壳 + 审查 tab + 终端启动器（辅助对话 tab 归 M2）。**审查改版 + 浏览器式标签页已实机复验**（v0.5.0-miasaki.1，2026-09-09 浏览器环境）——四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）、目录分组折叠、多标签 keep-mounted、持久化 v3（v2/v1 一次性迁移）全部通过；单测 46 项、四线静态回归 8/8。 |
 | 共享参考 | [`dsh-miasaki-shared-docs/`](dsh-miasaki-shared-docs/) | `cross/` 跨线设计契约（如 A×B 桌宠↔fleet 联动、sidebar 路线讨论）、`dsh-platform/` DSH 平台调研与升级回归记录。 |
 
 四条线代码零耦合，仅共享 `dsh-miasaki-shared-docs/`；跨线引用使用 `../dsh-miasaki-shared-docs/…` 相对路径（同仓 clone 后不断）。
@@ -35,7 +35,7 @@ node scripts/verify-all.mjs            # 四线全量（L0 静态检查 + L1 单
 node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fleet / desktop）
 ```
 
-2026-09-08 基线（DSH 0.1.2-rc.1 / Node v24.15.0）：sidebar 6/6、canvas 9/9、fleet 5/5、desktop 4/4 全绿。
+2026-09-09 基线（DSH 0.1.2-rc.1 / Node v24.15.0）：sidebar 8/8、canvas 9/9、fleet 5/5、desktop 4/4 全绿。
 desktop 项含 `cargo test`（5 项 Rust 单测，pulse stale 语义）与 `patch verify`（模型设置补丁离线自证，
 由基线原始文件重建并与产物逐字节比对）——script 会在 `PATH` 外自动探测 `~/.cargo/bin/cargo`。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
@@ -78,7 +78,7 @@ pnpm test        # 79 项回归测试
 cd dsh-miasaki-sidebar
 pnpm install
 pnpm run build   # node --check 两个入口文件（index.js / client.js）
-pnpm test        # 29 项单测（审查 4 / 终端 7 / 路由 9 / 抽屉手势 9，后两类走真实 HTTP 与源码抽取）
+pnpm test        # 46 项单测（审查 4 / 审查视图 6 / client 纯函数 10 / 终端 7 / 路由 10 / 抽屉手势 9）
 # 开发模式：DSH profile 以 link 方式指向本目录，重启 dsh web + 刷新页面生效（client bundle 重启 host 生效）
 ```
 
