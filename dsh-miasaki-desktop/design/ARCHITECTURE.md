@@ -129,9 +129,16 @@ Remove dist\ui -Recurse; Copy desktop\ui → dist\ui
   拖动 = document 级 mousedown 捕获 + 顶部 36px 命中判定(复用 tauri drag-region 判定口径:
   路径上有可点击标签/contenteditable/tabindex/交互 role 即放行点击,否则
   `plugin:window|start_dragging`/双击 `internal_toggle_maximize`);唯一页面级调整 =
-  `#root header:has([role="tablist"]){padding-right:118px}` 给裸键组让位(v3 胶囊时代
-  132px;初版 104px 真机叠压后加宽;选择器锚定 `role=tablist`,DSH 升级时随
-  verify-themes 复核)。底座为 Win11 Mica(`apply_mica` DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE` + 透明窗口底,
+  **右上角安全区让位**(2026-09-10 晚重写):`:root{--ms-titlebar-reserve:128px}`
+  (裸键组 108px + right 8px + 12px 呼吸位),按恒存锚点让位官方右栏两处控件 ——
+  `#root header:has([data-conversation-header-corner]){padding-right:var(--ms-titlebar-reserve)}`
+  + `#root [data-conversation-header-corner]{margin-right:0}`(抵消官方 -16px),
+  `#root [data-sidebar-right-panel] [data-dockkit-strip-chrome]{margin-right:calc(var(--ms-titlebar-reserve) - 6px)}`;
+  `.tb-group` 的 `top:11px` 使窗控中心与官方控件同落 24px 线。v4 原有的
+  `header:has([role="tablist"]){padding-right:118px}` 已废(该行官方仅在 view tab >1 时渲染,
+  单 tab 会话整条失效;且未计入 corner 的 -16px,实际只让出 102px)。选择器一律带 `#root` 提权
+  (官方 CSS Module 运行时注入,时机晚于我们)。改动随 verify-themes 第 6 节复核。底座为
+  Win11 Mica(`apply_mica` DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE` + 透明窗口底,
   面板令牌半透明后透出),Mica 不可用(Win10)回退主题实色底
   (见 CHANGELOG 2026-09-05 / 2026-09-06 条目)。侧栏色块模拟/几何同步已随 v2 移除(历史见
   CHANGELOG 2026-08-29 / 2026-09-05 各条)。

@@ -4,6 +4,16 @@
 > B（官方 Slot 真嵌入）留作 roadmap 不再实施（验收记录见 `design/CHANGELOG.md` 2026-09-06 条目）
 > 承接：标题栏 v1 → v2 → v2.1 → v3 演进（历史见 `design/CHANGELOG.md` 2026-08-23 ~ 2026-09-05 各条）
 > 关联现状：`design/ARCHITECTURE.md` §6 已知约束（v3 零占位叠加）
+>
+> **后续修正（2026-09-10 晚，DSH 0.1.5-rc.1）**：本方案 §2 表格「页面让位」行所记的
+> `#root header:has([role="tablist"]){padding-right:118px}` 已**废弃**。官方右栏把
+> 「打开右侧边栏」（会话头 corner）与面板 chrome（dockkit strip 末端全屏/收起）放进了窗控
+> 必经的右上角，而 `role=tablist` 仅在多 view tab 时渲染、118px 也未计入 corner 的
+> `margin-right:-16px`，两处均叠压。现规则 = `--ms-titlebar-reserve:128px` 安全线 +
+> 两个恒存锚点（`[data-conversation-header-corner]` / `[data-dockkit-strip-chrome]`），
+> 另把 `.tb-group` 的 `top` 由 5px 调至 11px 与官方控件同水平线。§4.3 的「118px」核算基准
+> 相应改为「128px（108px 组宽 + 8px 偏移 + 12px 呼吸位）」。根因、实测与文件清单见
+> `design/CHANGELOG.md` 2026-09-10(晚) 条目。
 
 ## 1. 目标
 
@@ -23,7 +33,7 @@
 | DOM | `#miasaki-titlebar`（fixed、height:0、`pointer-events:none`）> `.tb-capsule`（fixed `top:5px; right:8px`）> 徽章 img + `.tb-btn`×3 | `themes/src/06-titlebar.js` `buildTitlebar()` |
 | 胶囊壳样式 | 半透明 `--ms-panel` + `backdrop-filter:blur(12px)` + 圆角 999px + 边框，hover 变实色 | `themes/src/03-switcher.js` SWITCHER_CSS 标题栏段（50–75 行） |
 | 按钮样式 | 26×26 命中区、10×10 视口 SVG 线图标、hover 底 + 关闭 hover 红底 | 同上（66–75 行） |
-| 页面让位 | `#root header:has([role="tablist"]){padding-right:132px}`（胶囊实测 ≈114px + 余量） | `03-switcher.js` 78 行 |
+| 页面让位 | ~~`#root header:has([role="tablist"]){padding-right:132px}`（胶囊实测 ≈114px + 余量）~~ → v4 为 118px，**2026-09-10 废，改右上角安全区规则（见文首修正块）** | `03-switcher.js` 78 行 |
 | 命令链 | hash `cmd=min/max/close` → Rust watchdog；max 状态经 `wv.eval` 派发 `miasaki-max-state` 回推 | `06-titlebar.js` + `src-tauri/src/main.rs` |
 | 拖动 | document 级 mousedown，顶部 36px 空白 → `start_dragging`；事件路径含 `#miasaki-titlebar` 即放行点击 | `06-titlebar.js` `wireDragZone()` |
 | 主题变量 | `--ms-panel/--ms-accent/--ms-danger/--ms-hover/--ms-border/--ms-text` 定义于三主题 CSS（`:root` 主题选择器内） | `themes/{pure,zafkiel,kurkuriel}.css` |

@@ -1,7 +1,8 @@
 // verify-themes.mjs — 端到端主题注入验证
 // 用无头 Edge + CDP 模拟 WebView2 initialization_script 注入路径：
 //   Page.addScriptToEvaluateOnNewDocument(theme-init.js) → 导航 DSH → 断言
-// 覆盖：属性管理 / 明暗锁定 / 令牌计算值 / 悬浮切换条 / 水印 / 持久化
+// 覆盖：属性管理 / 明暗锁定 / 令牌计算值 / 悬浮切换条 / 水印 / 持久化 /
+//      右上角安全区（窗控按钮组 × 官方右栏两处控件不叠压）
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -20,6 +21,7 @@ const edge = spawn(EDGE, [
   '--remote-allow-origins=*',
   '--no-first-run',
   '--disable-gpu',
+  '--window-size=1280,860',
   `--user-data-dir=${join(root, '.edge-test-profile')}`,
   'about:blank'
 ], { stdio: 'ignore' })
@@ -68,6 +70,9 @@ const results = []
 function check(name, ok, detail = '') {
   results.push({ name, ok, detail })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ->  ' + detail : ''}`)
+}
+function skip(name, why) {
+  console.log(`SKIP  ${name}  ->  ${why}`)
 }
 
 try {
@@ -157,6 +162,61 @@ try {
   await sleep(1000)
   const attr = await evaluate(`document.documentElement.getAttribute('data-miasaki-theme')`)
   check('切回 pure 生效', attr === 'pure', String(attr))
+
+  // ---------- 6. 右上角安全区：窗控按钮组 × 官方右栏两处控件 ----------
+  // 桌面壳窗控裸键组常驻右上角（fixed / 宽 108px / 距右缘 [8,116]px）。DSH 0.1.5 官方右栏
+  // 有两个控件落进这一带：折叠态的 ExpandButton（会话头 conversation.session.header.corner）
+  // 与展开态的面板 chrome（dockkit strip 末端）。本节在真实页面上量矩形，断言互不相交。
+  const GEOM = `(function(){
+    function rc(sel){var e=document.querySelector(sel);if(!e)return null;var r=e.getBoundingClientRect();
+      return {l:+r.left.toFixed(2),t:+r.top.toFixed(2),r:+r.right.toFixed(2),b:+r.bottom.toFixed(2),w:+r.width.toFixed(2),h:+r.height.toFixed(2)};}
+    function ov(a,b){if(!a||!b)return null;var w=Math.min(a.r,b.r)-Math.max(a.l,b.l);var h=Math.min(a.b,b.b)-Math.max(a.t,b.t);
+      return +(Math.max(0,w)*Math.max(0,h)).toFixed(2);}
+    var g=rc('#miasaki-titlebar .tb-group');
+    var out={vw:innerWidth,group:g,reserve:getComputedStyle(document.documentElement).getPropertyValue('--ms-titlebar-reserve').trim()};
+    var ex=rc('[data-sidebar-right-expand]');
+    out.collapsed={expand:ex,overlap:ov(g,ex)};
+    var ch=rc('[data-dockkit-strip-chrome]'), tg=rc('[data-sidebar-right-toggle]'), md=rc('[data-sidebar-right-mode]');
+    out.expanded={chrome:ch,toggle:tg,mode:md,overlap:ov(g,ch),overlapToggle:ov(g,tg),overlapMode:ov(g,md)};
+    out.verticalDelta=(ch&&g)?+Math.abs((ch.t+ch.b)/2-(g.t+g.b)/2).toFixed(2):null;
+    return JSON.stringify(out);
+  })()`
+  const span = (r) => (r ? `[${r.l}..${r.r}]` : 'null')
+
+  let g = JSON.parse(await evaluate(GEOM))
+  if (!g.collapsed.expand) {
+    skip('折叠态：窗控组与「打开右侧边栏」不叠压', '未找到 [data-sidebar-right-expand]（DSH < 0.1.5，或右栏默认已展开）')
+  } else {
+    const reservePx = parseFloat(g.reserve) || 0
+    check('右上角安全区变量已定义且覆盖窗控组',
+      reservePx >= g.group.w + 8,
+      `--ms-titlebar-reserve=${g.reserve}，窗控组宽 ${g.group.w}px`)
+    check('折叠态：窗控组与「打开右侧边栏」不叠压',
+      g.collapsed.overlap === 0,
+      `overlap=${g.collapsed.overlap}px² 窗控${span(g.group)} 官方${span(g.collapsed.expand)}`)
+  }
+
+  // 点官方展开按钮 → 面板 chrome（全屏/收起）出现，再量一次
+  const opened = await evaluate(
+    `(function(){var b=document.querySelector('[data-sidebar-right-expand]');if(!b)return false;b.click();return true})()`)
+  await sleep(1500)
+  g = JSON.parse(await evaluate(GEOM))
+  if (!opened || !g.expanded.chrome) {
+    skip('展开态：窗控组与面板 chrome 不叠压', '未能展开官方右栏（无 [data-dockkit-strip-chrome]）')
+  } else {
+    check('展开态：窗控组与面板 chrome 不叠压',
+      g.expanded.overlap === 0,
+      `overlap=${g.expanded.overlap}px² 窗控${span(g.group)} chrome${span(g.expanded.chrome)}`)
+    check('展开态：窗控组与「收起侧边栏」按钮不叠压',
+      g.expanded.overlapToggle === 0,
+      `overlap=${g.expanded.overlapToggle}px² 收起键${span(g.expanded.toggle)}`)
+    check('展开态：窗控组与「全屏」按钮不叠压',
+      g.expanded.overlapMode === 0,
+      `overlap=${g.expanded.overlapMode}px² 全屏键${span(g.expanded.mode)}`)
+    check('窗控组与官方控件同一条水平线（中心差 ≤ 2px）',
+      g.verticalDelta !== null && g.verticalDelta <= 2,
+      `Δ=${g.verticalDelta}px`)
+  }
 
   const failed = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - failed}/${results.length} 项通过`)

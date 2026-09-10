@@ -36,11 +36,11 @@ const PATCHED_FILE = join(BASELINE, 'client.patched.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-settings-models'
 /** DSH 版本基线：锚点文本与两份 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.2-rc.1'
+export const BASELINE_DSH_VERSION = '0.1.5-rc.1'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '7ACF9736EDEEA519C63791E946A135F5CC854C95C299FD9864E82074FCE587E5'
-/** 应用本补丁后的 SHA-256（安装目录 2026-09-07 起的状态）。 */
-export const PATCHED_SHA256 = '18D114AC19CC2C9E42188E6088C8168EF8714A483124AEEED371FEAE8C4A840D'
+export const ORIGINAL_SHA256 = 'A60FD86357F9FBC6F5276ED0393682F7F2223FAEDEC4F30C719D66E99600B1BB'
+/** 应用本补丁后的 SHA-256（安装目录 2026-09-10 起的状态）。 */
+export const PATCHED_SHA256 = 'E602C1F1518F5436D8624B30A4295ECBB525655C8CA004AD264F04EC84DBED45'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = 'const REASONING_LEVELS = '
 

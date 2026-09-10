@@ -2,6 +2,551 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-10(晚) · 窗控 × 官方右栏:右上角安全区让位(V4 让位规则重写)
+
+依据:用户升级到 DSH 0.1.5-rc.1 后的两张截图 —— 折叠态下官方「打开右侧边栏」按钮被窗控
+徽章压住,展开态下官方面板的「全屏/收起」两键与窗控的最小化/最大化/关闭几乎完全重合,
+即「窗控与新右侧边栏的关闭与展开都不适配」。
+
+### 一、根因(两处让位全部失效,且是两条独立的失效路径)
+
+DSH 0.1.5 的官方右栏(`ui-sidebar-right`)把两个控件放在了桌面壳窗控的必经之路上。窗控裸键
+组实测宽 = 徽章(16+4×2) + 三键(26×3) + gap(2×3) = **108px**,加 `right:8px` 后恒占
+**距窗口右缘 [8,116]px** 这一带;而 v4 时代留下的让位规则
+`#root header:has([role="tablist"]){padding-right:118px}` 同时踩了两个坑:
+
+| # | 位置 | 官方几何 | 与窗控的实际交叠 |
+|---|---|---|---|
+| ① | 折叠态:`conversation.session.header.corner` 的 ExpandButton(`data-sidebar-right-expand`) | 官方给 corner 挂 `margin-right:-16px`,118px 让位实际只让出 **102px** | **14px 硬叠压**;更糟的是 `[role="tablist"]` 那一行官方只在 view tab 数 >1 时渲染(`tabs.length>1`),单 tab 会话下**整条规则静默失效**,corner 回到距右缘 12px → 叠压 32px |
+| ② | 展开态:dockkit strip 末端的 PanelChrome(`data-dockkit-strip-chrome`:全屏 + 收起) | 该 strip 官方只有 `padding-right:6px`,两个 28px 按钮占距右缘 **[6,70]px** | 与窗控 close[8,34] / max[36,62] **几乎完全重合** —— 旧规则压根不覆盖这一处 |
+
+叠加顺序上窗控 `z-index:100000` 远高于官方 UI,因此表现是「官方按钮被盖住、双方都难点」。
+
+### 二、修复(`themes/src/03-switcher.js` 常驻 CSS)
+
+1. **让位锚点换成恒存属性**(不再依赖 `role=tablist`):
+   - `#root header:has([data-conversation-header-corner]){padding-right:var(--ms-titlebar-reserve)}`
+     —— corner 容器在任意活跃会话下都恒在 DOM(`:empty` 时仅 `display:none`),选择器不再随 tab 数抖动;
+   - `#root [data-conversation-header-corner]{margin-right:0}` —— 抵消官方的 -16px 负边距,否则
+     按钮会反向探入安全区 16px;
+   - `#root [data-sidebar-right-panel] [data-dockkit-strip-chrome]{margin-right:calc(var(--ms-titlebar-reserve) - 6px)}`
+     —— 直接作用在 chrome 容器上。dockkit 只在 `chromePaneId`(分栏时的**最右一格**)渲染该容器
+     (`data-dockkit-strip-chrome` 为恒存属性),因此分栏左格天然不受影响;`-6px` 是补掉 strip 自带的
+     `padding-right`,使 ② 与 ① 落在同一条安全线上。浮窗(`[data-sidebar-right-float-host]`)不在
+     `[data-sidebar-right-panel]` 内,不受此规则影响。
+2. **安全区变量化**:`:root{--ms-titlebar-reserve:128px}`(= 窗控组 116px + 12px 呼吸位)。
+   变量名与 sidebar 线 `design/2026-09-09-sidebar-launcher-design.md` §5 的规划一致 —— 该线若将来
+   用 `measureChromeReserve()` 量测 `.tb-group` 宽度写 `documentElement.style`,inline 变量会**自动
+   覆盖**这里的默认值,两侧无需再改选择器。
+3. **垂直对齐(优化项)**:`.tb-group` 的 `top:5px` → `top:11px`。官方视图控件的垂直中心落在
+   24~25px(会话头 titleRow = header `padding-top:10px` + 30px 行高内居中;dockkit strip =
+   `padding-top:10px` + 28px 高),旧值让窗控中心停在 18px,比官方低 6~7px;改后中心 24px 与之齐平。
+
+选择器一律带 `#root` 提权:官方 CSS Module 是运行时插到 head 末尾的,注入时机晚于我们,
+同特异性会被反超。
+
+### 三、验证(`npm run verify`,无头 Edge + 真实 DSH 页面,视口 1280)
+
+`scripts/verify-themes.mjs` 新增第 6 节「右上角安全区」,在真实页面上量矩形(该脚本会把完整
+注入层 `Page.addScriptToEvaluateOnNewDocument`,因此页面上同时存在窗控按钮组与官方右栏):
+
+| 断言 | 实测 |
+|---|---|
+| 安全区变量覆盖窗控组 | `--ms-titlebar-reserve=128px`,窗控组宽 108px |
+| 折叠态:窗控组 × 「打开右侧边栏」 | overlap **0px²** —— 窗控[1140..1248] / 官方[1100..1128],间隔 12px |
+| 展开态:窗控组 × 面板 chrome | overlap **0px²** —— chrome[1064..1128] |
+| 展开态:窗控组 × 「收起」/「全屏」 | 各 **0px²**,收起键[1100..1128] / 全屏键[1064..1092] |
+| 与官方控件同一水平线 | 中心差 **Δ=0px** |
+
+同轮 22/24 项通过;两项 FAIL(`pure: html[data-miasaki-theme]` 得到 `zafkiel`、`pure: 无水印`)
+是 `.edge-test-profile` 里 localStorage 的**上次运行残留**(第 4/5 节持久化断言本轮 PASS),
+与本轮改动无关 —— 需要干净基线时删掉该 profile 目录重跑即可(需重新登录 DSH)。
+
+### 四、变更文件
+
+| 文件 | 改动 |
+|---|---|
+| `themes/src/03-switcher.js` | 让位规则重写 + `--ms-titlebar-reserve` + `.tb-group` top 11px |
+| `scripts/verify-themes.mjs` | 新增第 6 节安全区断言;`--window-size=1280,860`(让视口贴近桌面壳) |
+| `src-tauri/injected/theme-init.js` | `npm run gen-init` 重新生成(构建产物,不入库) |
+
+**待用户执行**:`cd dsh-miasaki-desktop && npm run gen-init && npm run tauri dev`(或重打 release)
+后重启桌面壳;人工目检项:三主题下右上角无叠压、窗控与官方展开/收起键同高。
+
+## 2026-09-10(深夜) · token-monitor v0.5.1:span 快照重复回写修复 + 分布显示优化
+
+依据:v0.5.0 重启后用户实测截图(主问题已解决 —— 会话列全是可读中文标题),
+反馈「优化显示」;同时本轮排查发现账本长期膨胀。
+
+### 一、span 快照重复回写(账本 19% 是纯冗余)
+
+**根因**:`loadLedger()` 载入 `type:'span'` 行时经 `touchSpan` 把这些键**重新标脏**,
+而 `process.on('exit')` 的 `flushLedger(true)` 是**强制写**(刻意绕过节流判断),
+于是每次 host 正常退出都把全部存量快照重写一遍。
+
+**对照实测**(真实退出路径 `process.exit` → exit 钩子;合成账本含 45 个 span 存量):
+
+| 版本 | 退出前 | 退出后 | 增量 |
+|---|---|---|---|
+| 未修复 | 46 行 | 92 行 | **+46**(45 行存量重复 + 1 行真实推进) |
+| 已修复 | 46 行 | 47 行 | **+1**(仅本次真实推进的那个会话) |
+
+**影响面(本机真实账本)**:4884 行中 span 行 998、去重后仅 51 个唯一
+`(date|sessionId)` —— **947 行为纯冗余(19%)**,单键最多重复 82 次(≈ 重启 82 回)。
+幂等快照不改统计结果(载入即 min/max 合并),但文件不可逆地膨胀。
+
+**修复**:`touchSpan(date, sessionId, ts, dirty)` 增 `dirty` 形参,载入路径传 `false`
+(存量已在磁盘上,不再标脏);本次真实推进的会话**照常**在退出时落盘(实测 +1 行,功能未削弱)。
+
+**存量清理**:新增 `plugins/dsh-token-monitor/scripts/dedupe-usage-ledger.mjs`
+(默认预演,`--apply` 才写,`--file` 可指定),按 `(date, sessionId)` **无损合并**为一行
+(取 min first / max last,与载入语义完全一致),写盘前做**语义等价校验**
+(用量聚合 + span 合并摘要比对),不一致直接拒绝写入;执行前自动备份 `.bak-<时间戳>`。
+实测:4884 → 3937 行、1.13 MB → 983 KB(**省 148 KB**),语义校验一致。
+
+### 二、分布显示优化(用户截图反馈)
+
+| 截图里的问题 | 改法 | 依据 |
+|---|---|---|
+| 条带渲染成"一整条灰带 + 右侧一个深块" | 改**底部对齐的迷你柱**:空日只留 3px 基线、有量给 5–18px 高柱(高度 + 透明度双编码) | 实测按会话维度填充率仅 4%,等高画法必然满屏灰且看不出趋势 |
+| `近 7 日` 挂在「使用分布」区头部 | **口径错位** —— 它只作用于模型环形图,会话分布固定近 30 日;移到模型卡标题旁 | `models` 由 `trend.slice(-range)` 得出,列表则固定 30 日 |
+| `298 轮消息` 占宽 | 压成 `298 轮`;占比列 120 → 96px、数值列 78 → 84px,宽度让给条带 | — |
+| 10 行两行式文本连排容易串行 | 行间加极细分隔线(`.tokmn-sess-row + .tokmn-sess-row`) | 对齐参考图的行间细线 |
+| 默认 Top 10 却要滚动才看全 | 列表限高 376 → **420px**,默认档恰好一屏放满 | 行高约 42px × 10 |
+
+**形态实测**(真实账本 + ASCII 化,`·` = 空日基线):
+
+```
+会话维度   97768382   7%  ························▆█····
+目录维度   552890592  20%  ························▅▄▃▄▃█   ← 同项目多会话叠加后成形
+```
+
+### 三、二轮回修(交付后第二轮用户截图)
+
+用户刷新后再截图,暴露四处**布局溢出** —— 其中第一处是本轮改动**引入的回归**,
+另三处是既有问题(超长模型名 + 缺收缩约束):
+
+| 现象 | 根因 | 修法 |
+|---|---|---|
+| 模型列表的百分比跑到卡片外、叠到右列卡片上 | 上一轮把 `.tokmn-dist` 左列收窄成 `minmax(300px, 380px)`;`.tokmn-donut` 的 `1fr` 与 `.tokmn-dist` 两列都受 grid 项默认 `min-width: auto` 约束 → 列被撑到 min-content,`.tokmn-pct` 的 `margin-left: auto` 被推出卡片 | 三处 `minmax(0, …)`(`.tokmn-dist` 两列 + `.tokmn-donut` 列表列)+ `.tokmn-pct { flex: none }`;左列改比例 `minmax(0,1fr) minmax(0,1.15fr)`,不再定宽挤压 |
+| 趋势图悬浮提示被面板右边界裁掉、数字看不见 | `.tokmn-tip { white-space: nowrap }` 遇超长模型名(`deepseek-v4.1-flash-expires-on-0910`)把提示框撑宽,而定位仍按硬编码 `chartWpx - 190` 留位 | 提示框 `max-width: 340px; overflow: hidden`;模型名走 `.tokmn-tip-name`(flex + ellipsis)、数值 `.tokmn-tip-val { flex: none }`;定位改按实际上限留位(`- 366`);热力图 tooltip 的硬编码 `cr.width - 170` 同步改 `- 366` |
+| 悬浮提示列出 8 个模型、其中 7 个当日为 0 | `hoverRows` 对 `visibleModels` 只做 map + sort,未过滤 | 加 `.filter((r) => r.v > 0)` —— hover 明细回答的是"这天用了什么" |
+| 卡头 meta「近 30 日 · 共 3 个工作目录」被卡片边界裁掉 | 标题区 div 是 flex item 却缺 `min-width: 0`,不可收缩 | 新增 `.tokmn-sess-head-l`(flex + `min-width: 0`):标题 `flex: none`、meta `flex: 0 1 auto` + ellipsis |
+
+**验证边界(如实记录)**:JS 侧(过滤逻辑、类名、定位数值)已静态复核 + 语法检查通过;
+**CSS 布局效果无法在本机自动验证**(浏览器工具屏蔽本地地址),需刷新页面目检 ——
+四处都属"约束缺失"类问题,修法是 CSS 布局的确定性规则(`minmax(0,…)` 允许收缩、
+`flex: none` 防压缩),但视觉效果以实际渲染为准。
+
+**同批(用户点名)**:「模型用量」的悬浮信息补全。`models` 此前只有 `label`(显示名,同名
+跨供应商时带 provider 前缀)与 `provider`,列表 hover 给的是 `title: m.provider` —— 悬浮
+只看到供应商名,而窄列**必然**把模型名截断(`deepseek-v4.1-flash-exp…`),等于没给。补
+`model: nm` 字段后,三处 hover 统一改为给出完整模型名:
+
+| 位置 | 改动 |
+|---|---|
+| 模型列表名称 | `title: m.model + " · " + m.provider`(原为只给 `m.provider`) |
+| 趋势图图例 chip | 同上 + `" · 点击显示/隐藏"` |
+| 环形图扇区 | **新增** SVG 原生 `<title>`:`模型名 · 用量 · 占比` —— 扇区此前 hover 不出任何信息(只有颜色,无图例对应关系) |
+
+### 四、用户需执行
+
+`lib/client.js`、`lib/index.js`、`package.json` 覆盖为仓库最新 → **刷新页面**
+(client 半按请求读盘);界面未变再重启 host。本次未改协议,`usage-log.jsonl`
+与 `config.json` 格式不变(清理只删重复行,未动任何用量行)。
+
+## 2026-09-10(深夜·续) · hash 同步通道节流:33ms → 基准 150ms + 自适应退避
+
+依据:本轮对 09-01 → 09-04 改动的审查。**未在该区间找到直接致命改动**,但发现一条**长期存在**
+的结构性风险链路,本次予以削弱。
+
+### 一、审查结论(09-01 → 09-04 逐项核查)
+
+| 改动 | 结论 |
+|---|---|
+| `pet_native.rs` 1433 行 → 拆 6 模块 | 纯重构;`Arc<Mutex<PetShared>>` 语义与锁范围未变 |
+| 注入层 `themes/runtime.js` → 拆 9 文件 | 纯重构;**定时器周期完全一致**(旧版亦为 `PET_TIER_MS = 1500`,1s 自愈巡检同样存在) |
+| `main.rs` +57 行 Fleet 脉冲看门狗 | **从未启动** —— `MIASAKI_FLEET_PULSE` 未设,函数首行即 `return`;pet.log 无任何 `[pulse]` 行 |
+| GDI 兜底(ULW 失败计数 / 表面重建) | **从未触发** —— pet.log 中 `ULW failed` 计数为 0 |
+
+→ 区间内无「冒烟的枪」;**嫌疑未能在该区间收口**。
+
+### 二、发现的结构性风险(非 9/4 引入)
+
+`start_hash_watchdog` 每 **33ms** 调用一次 `wv.url()`。在 Tauri 2.11.5 中该路径为:
+tokio 线程 → `run_on_main_thread` → **无超时阻塞等待**(`rx.recv()`)→ 主线程执行 WebView2
+`ICoreWebView2::get_Source()` **同步 COM 调用**。而注入层每 **1.5s** 才 `replaceState` 一次
+—— **45 倍冗余轮询**。一旦渲染侧无响应,这条 30 次/秒的同步链路会把「局部卡顿」放大为
+「整个 UI 冻结」(黑屏 + 托盘无响应 + 关闭失效,与四次挂起现象吻合)。
+
+**推理修正**:pet.log 停写**不等同于** tokio 线程卡住 —— 更可能是渲染进程先停摆,注入层
+`setInterval` 不再执行、hash 不再变化,于是 watchdog 每轮走 `continue`(该分支不写日志)。
+即:**渲染侧压力是因,33ms 同步轮询是放大器。**
+
+### 三、改动(`src-tauri/src/main.rs`,一处函数 + 一处拖窗分支)
+
+- 新增常量:`HASH_POLL_MS = 150` / `HASH_POLL_FAST_MS = 33` / `HASH_SLOW_MS = 250` /
+  `HASH_BACKOFF_MS = 1000` / `HASH_BACKOFF_HOLD_MS = 3000` / `HASH_DRAG_HOLD_MS = 400`。
+- 轮询间隔由固定 33ms 改为**三档决策**(优先级:退避 > 拖窗提速 > 基准):
+  ①**基准 150ms**;②**拖窗期间保持 33ms**(`move=` 出现即置 `drag_until`,松开 400ms 后回落
+  —— **不牺牲拖动跟手**);③单次 `url()` 耗时 ≥250ms,或连续失败 ≥3 次 → **退避 3s 内用 1000ms**。
+- 新增诊断日志(便于下次挂起时判读):`hash poll slow {n}ms → backoff 3000ms`(前 5 次 +
+  每 50 次)、`hash poll url() failed x{n}`(首次 + 每 20 次)。
+- **净效果**:主线程上的 WebView2 COM 调用由 **30 次/秒 → 6.7 次/秒(-78%)**,
+  异常时自动降至 **1 次/秒**;卡顿撞上轮询的概率同步下降。
+
+### 四、验证
+
+- `cargo build --release` 通过(**31.30s,无编译错误**)。
+- 产物 `target/release/miasaki.exe`:PE 时间戳 **`6aa28262`**(2026-09-10 18:11:46),24.5 MB;
+  二进制串校验 `hash poll slow` / `hash poll url() failed` / `MIASAKI_NO_MICA` /
+  `mica skipped (MIASAKI_NO_MICA)` **均存在**。
+- **体积较上一版小 16.3 MB 属预期,已核实非缺件**:工作区删除了 5 个**切帧用源素材**
+  (`pets/{kurumi,whale}/spritesheet.webp`、`pets/inverse/raw/blue-{deep,idle,work}.png`,
+  合计 16.3 MB,与差值精确吻合);逐条核验 `assets.rs` 的 **75 条内嵌引用零缺失**,且
+  **不引用**上述任何文件(运行时只读切好的 `frames/` 与 `states/`)→ 产物功能完整。
+
+- **修订(收尾整理):上述 5 个文件**全部恢复入库**(合计 16.3 MB)。**
+  原核验只覆盖了**运行时**(那部分结论依然成立:`assets.rs` 不引用它们,只读切好的
+  `frames/` 与 `states/`),**漏核了构建链** —— 逐条查证后,5 个文件各有脚本消费,删掉即断链:
+
+  | 文件 | 消费者(脚本内的真实读取点) |
+  |---|---|
+  | `pets/kurumi/spritesheet.webp` | `scripts/build-init.mjs:15`(webp→png 图集转换,产物即被追踪的 `spritesheet.png`)、`scripts/make-icons.mjs:14`(图标裁切源) |
+  | `pets/whale/spritesheet.webp` | `scripts/build-init.mjs:15`(同上转换) |
+  | `pets/inverse/raw/blue-{deep,idle,work}.png` | `scripts/inverse-states.mjs:30,48`(`RAW` 是其唯一输入,抠出 `states/*.png`) |
+
+  另:`ui/pets/{whale,kurumi,inverse}/pet.json` 的 `spritesheetPath` 均指向 `spritesheet.webp`。
+  **为什么删了却没被发现**:`build-init.mjs` 的转换带 `existsSync(src)` 守卫,源缺失即**静默跳过**
+  —— 删掉 webp 后 `verify-all` 的 `gen-init` 仍 PASS(用旧的 `spritesheet.png` 顶替),
+  断链不会自己暴露。**教训:大素材的"能不能删"必须核对脚本输入,而非只核对运行时引用。**
+  **结论:本次瘦身全部回退,仓库体积与上一版持平;运行时产物不受影响(删或恢复均不进
+  `assets.rs`)。**
+
+- **触摸点**:`src-tauri/src/main.rs`;`README.md`(§桌宠设置面板 通信段);本文件。
+  新增 `_refs/scripts-archive/deploy-miasaki.ps1`(部署脚本,自动等待进程退出 + SHA256 校验)。
+- **验证点(用户执行)**:先**退出桌面端**(运行中会锁定 `dist/Miasaki.exe`),再运行
+  `deploy-miasaki.ps1` 完成部署;启动后**拖动窗口应仍跟手**(拖窗档 33ms),常态下 pet.log
+  仅在异常时出现 `hash poll slow` —— 若长期无该行,即说明 UI 线程未再被同步调用拖住。
+
+## 2026-09-10(升级会话) · DSH 0.1.5-rc.1:persona 拆分致三个 preset 失效,改为模板生成
+
+**现象**:DSH 全局升级到 `0.1.5-rc.1` 后,`whale` / `kurumi` / `inverse` 三个 agent preset 全部失效。
+
+**根因**(已核实,非推测):`@deepseek-ai/dsh-persona` 的 Config schema 在 0.1.5 由单字段改为前后缀:
+
+```js
+// node_modules/@deepseek-ai/dsh-persona/lib/index.js
+prefix: z.string().required(),        // ← 必填
+suffix: z.string().default(""),       // 缺省为空,且**缺省即遮蔽部署级后缀**(不继承)
+complete: z.boolean().default(false),
+includeRuntimeContext: z.boolean().default(true),
+```
+
+旧字段 `config.text` **已不存在**,而三个 preset 里写的仍是 `text:` → schema 校验必然失败,preset 无法加载。这正是 0.1.5 release note 所说「自定义 persona 配置拆分为前缀和后缀」。
+
+**底座差异**:把用户侧 `whale/agent.cordis.yml` 与 0.1.5 的 `dsh-agent-presets/presets/standard/agent.cordis.yml` 逐行 diff,共 6 处:
+
+| 处 | 0.1.5 底座 | 本仓库自定义 | 处置 |
+|---|---|---|---|
+| persona 行 | `suffix` + `prefix` 两字段 | 原 `text`(自包含 model 与 cwd) | 映射到 `prefix`,**不设 suffix** |
+| goals 段 | 新增 `command-goal` 行 | — | 采用底座 |
+| delegation 注释 | 删去 tool-subagent-report 段 | — | 采用底座 |
+| tool-subagent | 新增 `modelSelectionSettings: true` | `agentOptions` → openrouter / z-ai/glm-5.2:free / 32768 | **两者都保留** |
+| tool-subagent-fork | 删去 `agentOptions`(注释说明:fork 继承父模型才能复用 KV Cache) | 同上 `agentOptions` | **保留自定义**(放弃该优化换子 agent 免费) |
+| tool-web | `fetch: true` | `fetch: false` | **保留自定义** |
+| 文件末尾 | 新增 `present` 行(`@deepseek-ai/dsh-tool-present`) | — | 采用底座 |
+
+**改动**:
+
+1. **新增 `preset-sources/agent.base.cordis.yml`** —— 0.1.5 `standard` 底座全文,persona 行改为占位符 `__PERSONA__`,本仓库三处自定义已就地合并并加注释标注。
+2. **`apply-presets.ps1` 重写** —— 从"在已安装底座上做 persona 文本锚点替换"改为**读模板整体生成**。旧做法的 `$oldText` 锚点是 0.1.2 的模板措辞,底座一变就 `throw "persona anchor not found"`;新做法幂等、不依赖底座措辞,覆盖前留 `.bak`。
+3. **新增 `preset-sources/verify-presets.cjs`** —— 校验产物:persona 字段形状、自定义项是否保留、0.1.5 新增行是否就位。自带 `!!js` 标签 schema(preset 里的 `disabled: !!js process.platform === 'win32'` 会让标准 js-yaml 报 unknown tag)。
+4. **用户侧 `~/.dsh/.agent-presets/<id>/` 从此是生成产物** —— 不再手改,改动一律进 `preset-sources/`。
+
+**验证**:以 `$env:USERPROFILE` 指向临时目录干跑脚本,三个 preset × 12 项检查全部通过(prefix 存在、text 已移除、suffix 未设、含 `{{model}}`/`{{cwd}}`、多行块、两处 agentOptions 保留、fetch=false 保留、command-goal 与 present 就位)。
+
+**补丁重打(同日完成)**:`patches/dsh-client-ui-settings-models` 被本次升级覆盖(`status` 报 `unknown`,`.dsh-bak` 丢失)。核对结果:**7 个锚点在新版 client.js 中全部唯一命中**(新版 138,937 B,比 0.1.2 多 1,236 B),`insertAfterOffset` 的期望值检查也全部通过 —— 因此**未改动任何 EDITS**,只换了两份 baseline 并更新三个常量(`BASELINE_DSH_VERSION` → `0.1.5-rc.1`、`ORIGINAL_SHA256` → `A60FD863…`、`PATCHED_SHA256` → `E602C1F1…`)。`verify` PASS(7 条编辑逐字节一致),`apply` 成功(144,576 B,安装目录已 `patched`,备份 `client.js.dsh-bak` 重建),`verify-all.mjs desktop` **4/4 通过**。基线沿革已记入补丁 README。
+
+## 2026-09-10(深夜) · 【重大更正】Mica 假设被推翻:首挂早于 Mica 上线 4h44m
+
+依据:对上方 WER 取证结果的交叉验证。**本轮推翻 2026-09-09 条目的核心论断**,无代码改动,
+只更正认知并重定向排查方向。
+
+### 一、Mica 假设不成立(三重独立证据)
+
+2026-09-09 条目称「挂起首次出现在 9/05,与当日「标题栏与主界面融为一体(Mica)」同日 →
+时间拐点指向 Mica」。该推断**只比对了日期,未核实 9/05 当天的先后顺序** —— 而首挂其实
+**早于** Mica:
+
+| # | 证据类型 | 内容 |
+|---|---|---|
+| 1 | 运行时 | pet.log 中 `mica backdrop applied` **首次**出现在 **09-05 22:43:28**;此前每次会话(含 17:57:23 启动、17:59:27 挂起的那次)启动段**全无 mica 行**,亦无 `mica unavailable` |
+| 2 | 二进制 | 首挂 WER `P3=6a9a7b15` = **09-04 16:02:29** 构建的产物(对照:旧 dist 备份为 `6aa0269d`/09-08 23:15,系**另一次**构建) |
+| 3 | 提交 | Mica 改动(`DWMWA_SYSTEMBACKDROP_TYPE` 与 `.shadow(true)`)由提交 **8f48216(09-06 01:26)** 引入 `main.rs` |
+
+→ **首挂(09-05 17:59:27)比 Mica 首次运行早 4 小时 44 分、比其提交早约 7.5 小时**,
+因果方向不成立。
+
+### 二、新证据:挂起签名跨产物恒定
+
+| 次序 | 时刻 | P3(产物) | 构建时间 | 含 Mica | P4(HangSig) | P5(HangType) |
+|---|---|---|---|---|---|---|
+| 1 | 09-05 17:59:27 | `6a9a7b15` | 09-04 16:02 | 否 | `c27d` | `67246080` |
+| 2 | 09-09 00:52:37 | `6aa0269d` | 09-08 23:15 | 是 | `c27d` | `67246080` |
+| 3 | 09-09 01:09:02 | `6aa0269d` | 09-08 23:15 | 是 | `c27d` | `67246080` |
+| 4 | 09-10 17:01:07 | `6aa0269d` | 09-08 23:15 | 是 | `c27d` | `67246080` |
+
+- **P4/P5 四次完全相同** → 同一挂起模式,不是随机噪声(也与「首挂与后三次成因可能不同」的
+  猜想相左:签名一致,更像**同一成因**、只是首挂那次 fault bucket 归并不同)。
+- **产物跨越两次构建**(且首挂那次**不含 Mica**) → **排除「某一次构建引入的缺陷」**,
+  指向长期存在的代码路径或环境侧因素。
+- **嫌疑区间收窄**:产物 `6a968676`(09-01 16:01,即根 `dist/Miasaki.exe`)在 9/1~9/4 支撑
+  多次会话且**零挂起** → 引入区间锁定在 **09-01 16:01 → 09-04 16:02**,对应 CHANGELOG
+  2026-09-04 条目所载「运行时拆分 / 桌宠模块化 / GDI 兜底 / 令牌漂移 / Fleet 指示器」。
+
+### 三、跨进程挂起已排除(更正上方条目的疑点)
+
+上方条目注意到 `ConsentKey=AppHangXProcB1`。经查**该字段不表示实际跨进程**:真正的
+`AppHangXProcB1` 在**事件日志 `Event Name`** 处即写作 `AppHangXProcB1`,且问题签名
+**`P6` = 被等待的进程名**(实例见 Microsoft Q&A:`P1: explorer.exe … P5: HangType
+P6: svchost.exe`)。本机四次事件的 **`Event Name` 均为 `AppHangB1`、`P6` 均为空**
+→ **非跨进程挂起**。
+
+### 四、新增(未确证)线索:WebView2 更新节奏
+
+`EdgeWebView\Application\SetupMetrics` 记录的更新活动:09-02 13:32、09-03 11:54、
+**09-05 00:00:26**、**09-06 22:59:41**(后者与 WebView2 目录 `152.0.4191.66` 的创建时间
+09-06 22:59:36 吻合);首挂在 09-05 00:00 那次更新后约 18 小时。**反向证据**:事件日志自
+7/23 起**只有 Miasaki 挂起**,本机其他 WebView2 应用(微信等)均无记录 → 若为运行时通用
+缺陷应波及他者,故更像 Miasaki 特有路径。**列为待验假设,不作结论。**
+
+### 五、A/B 的价值重估
+
+Mica 既已排除,`MIASAKI_NO_MICA` 关闭组由「主验证」降为「最终确认」(成本低,可继续跑,
+但已不在关键路径上)。**真正的瓶颈仍是缺挂起瞬间的线程栈**:WER 无 dump、`LoadedModule`
+为 0,含栈定位不可得。
+
+- **触摸点**:本文件;`design/TODO.md`。**无代码改动**。
+  (`_refs/scripts-archive/read-wer-hang.ps1` 本轮升级:导出完整 Report.wer 供离线分析)
+
+## 2026-09-10(晚·续) · token-monitor v0.5.0:**会话活跃分布** + 会话身份折叠
+
+依据:用户实测反馈 —— 「用量统计里的**会话用量不清晰**」,进一步澄清为
+「**显示的是一串内部编号,不清楚是哪个会话,这才是问题所在**」;同时给出一张
+「工作空间活跃分布」参考图(名称 | 数值 | 占比·会话数 | 行内迷你分布条 +
+排序键/搜索/条数三组控件)作为设计路径。
+
+### 一、根因(先查清楚再动手)
+
+1. 账本 `usage-log.jsonl` 按 `sessionId` 聚合,**本身不含标题**;
+2. 旧实现唯一标题来源是 `ctx.sessions.get(id)` —— 那是**内存 store**,只认当前
+   活着的会话,已归档会话一律 `undefined` → 降级成截断 ID。实测账本 45 个会话中
+   绝大多数属第二类,于是整列编号。
+
+### 二、方案与实测依据(不靠猜 API)
+
+- 用 Inspect 查 `Service.listService` 后锁定 `ctx.sessionQuery`:
+  `readTitleSnapshots(ids[])` —— 批量、**支持已持久化(非内存)会话**、按会话隔离
+  失败,返回 `{session: SessionHeader, title?}`,header 带 `cwd`/`createdAt`/
+  `origin`/`agentPreset`。
+- **临时 host 探针插件实测**(`tprobe-1`,用完即删):10 个真实历史会话 **10/10**
+  取到标题(来源 `provider`/`fallback`),带回工作目录与 `origin=subagent`;
+  **冷读 2.8s / 10 会话** —— 该数字决定了缓存与预热是必需项而非优化项。
+
+### 三、改动
+
+- **lib/index.js**:新增「会话身份折叠」通道 —— TTL 缓存(有标题 30min / 无标题
+  2min 重试)+ 单飞任务 + 启动预热(账本载入后 1.5s 起跑)+ 首屏等待上限 2.5s
+  (超时用 ID 兜底、后台补完,下一轮轮询即有);降级链 缓存 → 内存 store → 截断 ID,
+  **绝不编造名字**。`sessionRanking` 增出 `dates[]`/`rows[].daily[]` 与
+  `totalAll`/`callsAll`/`matched` 三个口径字段;下发上限 `SESSION_TOPN` 10 → 50
+  (排序键切换与搜索若在截断后的 Top 10 上做,结果会错)。
+- **lib/client.js**:「会话用量 Top N」→「**会话活跃分布**」:名称列两行(标题 +
+  `工作目录 · 最后活跃日`,子会话标签,hover 给完整 ID/cwd/预设)、数值列、
+  `占比% · N 轮消息`(分母 = 窗口内**全部**会话)、**近 30 日逐日分布格**(空日极淡、
+  有量按**该行自身峰值** 4 档提亮)、**四组控件**(维度 / 排序键 / 搜索标题·ID·目录 /
+  条数 Top 10–50,全部本地即时生效);「使用分布」两列改为 `minmax(300,380) 1fr`,
+  把宽度让给排行。
+- **维度切换是实测逼出来的,不是照抄参考图**:第一版只有「按会话」,真实账本回放
+  直接证伪 —— 45 个会话 / 1350 格**只有 50 格非零(4%)**,单行最多活跃 2 天,条带
+  几乎全空。单会话时间跨度天生短(多在当天活跃),须按工作目录叠加才成形:补
+  `cwdRanking` 后 4 个目录 / 120 格 **21 格非零(18%)**、单行最多活跃 6 天。
+  聚合入参用**全量**会话行(截断后聚合会随口径漂移);未解析出目录的会话计入
+  `unresolved` 如实提示,**不塞进"未知目录"假分组**。
+- **会话「用量」Tab 一行未动**(用户明确要求只改「用量统计」全局浮窗这一处)。
+
+### 四、验证
+
+- 源码级探针(host 真跑 `apply` + 真调 `/global`;client 从 `client.js` 原文截取
+  组件函数体渲染):**61/61 通过** —— 两个维度的聚合与渲染、逐日分布、分母口径、
+  标题折叠、子会话标记、三个降级场景(无 `sessionQuery` / 单会话失败 / 整批抛错)、
+  四组控件交互全覆盖。
+- 真实账本回放(副本,不碰原账本):45 会话 / 4 目录,确认上述填充率对比;首屏
+  2ms 返回(命中预热缓存),折叠按全量 45 个 id 单飞一次,第二轮不再触发。
+- 目检待办:host 重启后确认整列显示中文标题、身份行目录/日期正确、分布条形态可读。
+
+### 五、附带发现 → **已由 v0.5.1 修复**(见上方条目)
+
+`flushLedger(true)` 在 `process.on('exit')` 触发时,**强制**写出所有 `spanDirty`
+条目,而 `loadLedger()` 载入 span 行时经 `touchSpan` 把这些键重新标脏 —— 于是
+**每次 host 正常退出都会向 `usage-log.jsonl` 追加一批重复的 span 快照行**
+(本机 45 个会话 ≈ 45 行 / 次)。追加的是幂等快照,不改统计结果,只是账本缓慢膨胀。
+实测本机账本因此积了 **947 行纯冗余(占 19%)**;修复、存量清理与对照实验见上方
+v0.5.1 条目。
+
+### 六、用户需执行
+
+`%USERPROFILE%\.dsh\profiles\web\node_modules\dsh-token-monitor\lib\` 覆盖为仓库
+最新两文件 → **重启 host** → 刷新页面 → 侧栏「用量统计」。
+
+## 2026-09-10(晚) · WER 提权取证完成:**确认无 dump** + **A/B 正式开跑**
+
+> ⚠️ **2026-09-10(深夜) 补正两处**:①`Sig[4]=67246080` 的十六进制应为 **`0x04021800`**
+> (非 `0x04020000`);②`ConsentKey=AppHangXProcB1` **不代表跨进程挂起** —— 判定依据是事件
+> `Event Name` 与签名 `P6`,本机为 `AppHangB1` 且 `P6` 空。详见上方 2026-09-10(深夜) 条目。
+
+依据:用户以管理员身份运行 `read-wer-hang.ps1`,并用 `miasaki-mica-off.cmd` 启动。
+原始报告落盘 `_refs/scripts-archive/wer-hang-report-20260910-173656.txt`(14,320 B)。
+
+### 一、WER 提权读取结论(admin: True)
+
+- **Miasaki 报告目录仅 1 个** —— `Critical_Miasaki.exe_5f97eb7b…`(modified 2026-09-10
+  17:01:10),目录内含**唯一文件 `Report.wer`(56,346 B)**。
+- **`>>> no dump in this report`** —— 四次挂起**全部无 dump**,与既有判断一致。
+  `LoadedModule entries: 0`:报告未记录任何已加载模块 → **「hung module」这一路彻底走不通**。
+  根因仍只能靠排除法,含栈定位不可得。
+- **`Sig[4]` 实测已取到**(此前判断「需提权才能拿」正确,但**取值与预期不同**):
+
+  | 字段 | 值 |
+  |---|---|
+  | `EventType` | `AppHangB1` |
+  | `ConsentKey` | `AppHangXProcB1` |
+  | `FriendlyEventName` | `Stopped responding and was closed` |
+  | `Sig[3]`(Hang Signature) | `c27d` |
+  | **`Sig[4]`(Hang Type)** | **`67246080`** |
+  | `DynamicSig[22..28]` | `c27d7f28a4f1ea1f22a0d6d606cd5fc8` / `3f2f` / `3f2fe0835551d23dfc45a490bcc50b94` |
+
+  **重要更正**:`Sig[4]` 的值是十进制整数 `67246080`(即 `0x04020000`),**并非**此前设想的
+  可读字符串 `Top level window is idle`。后者是**事件日志** `1002` 的 `HangType` 字段语义,
+  两套通道字段名撞车但取值格式不同 —— 后续取证勿再混淆。
+- **Fault bucket 序列(9/05 与 9/09/9/10 不同)**:
+  - 9/05 17:59:31 → `1181927956033363949`(**孤例**)
+  - 9/09 00:52:42 / 01:09:05 / 9/10 17:01:10 → **`2204849698794992458`**(连续三次**相同**)
+  - 即**首挂与后三次成因可能不同**;后三次已构成稳定的可比基线。
+- 每次挂起伴随 `1001`(Windows Error Reporting)紧邻 `1002`,时间戳一一对应。
+- `OsInfo[39].servicinginprogress = 1` —— 留意:挂起期间系统有 servicing 在挂起态,
+  属环境噪声,不足以解释(9/05 首挂未标注)。
+
+### 二、A/B 正式开跑(硬证据)
+
+`MIASAKI_NO_MICA` 部署修复**已实证生效**,pet.log 第 2497 行:
+
+```
+[1789033056s] mica skipped (MIASAKI_NO_MICA) → opaque background
+```
+
+- 时间 **2026-09-10 17:37:36**,`mica skipped` 计数 = **1**(历史首次出现)。
+- 该行**直接跟在** `asset-server listening :39800` 之后、`window created` 之前 ——
+  与 `main.rs` 的设计一致:窗口**从创建起**即用实色底,不存在「先透明后补实色」的中间态。
+- 对照:此前 28 次启动(pet.log 第 1524~2477 行)**全部**为
+  `mica backdrop applied (window transparent)`,`mica skipped` 出现次数为 **0**。
+- **A/B 自此正式开始,观察起点 = 2026-09-10 17:37:36。**
+
+### 三、本轮方法学修正(写入长期记忆)
+
+- `read-wer-hang.ps1` 的 dump 判定**需提权**(`ReportArchive\*` 内容受 ACL 保护,实测
+  所有 WER 报告目录一致,非 Miasaki 特有);但 **`HangType` / `ReportId` / `ProcessId` /
+  `ExeFileName` 等字段可经 `wevtutil qe Application /f:xml` 免提权取得**,
+  足以覆盖事件通道诉求。
+- **进程级提权在助手侧不可用**:`Start-Process -Verb RunAs` 与
+  `[Diagnostics.Process]::Start` 均被安全策略拦截 → 需 UAC 的动作**只能由用户手动执行**。
+
+## 2026-09-10 · 「全黑无响应」第 4 次复现,并查明诊断开关从未部署(A/B 实际未开始)
+
+依据:用户「刚刚突然又全黑屏关不掉了」。
+
+- **事件定性(第 4 次)**:今天 17:01:07 `Application Hang`(Id 1002 / `AppHangB1`),WER fault
+  bucket `2204849698794992458` —— 与 9/09 两次**完全相同** → 同一成因。四次记录:9/05 17:59:27、
+  9/09 00:52:37、9/09 01:09:02、9/10 17:01:07。
+- **本次为「全进程冻结」而非仅窗口无响应**:pet.log 最后写入 16:55:19,此后连桌宠线程也不再
+  有任何输出(该文件由桌宠窗口线程与 hash 看门狗共同写入)。
+- **【决定性发现】`MIASAKI_NO_MICA` 诊断开关从未部署到用户实际运行路径**:
+  1. 带开关的构建产物是 `src-tauri/target/release/miasaki.exe`(2026-09-09 01:23:53,二进制串
+     校验含 `MIASAKI_NO_MICA` / `mica skipped (MIASAKI_NO_MICA)`);
+  2. 但桌面快捷方式 `Miasaki-dsh.lnk` 与 `_refs/scripts-archive/miasaki-mica-{on,off}.cmd`
+     **全部指向** `dsh-miasaki-desktop/dist/Miasaki.exe`(2026-09-09 00:07:59),该产物
+     **不含**上述字符串;
+  3. 即 9/09 那次「构建通过」后**遗漏了 dist 同步**,`miasaki-mica-off.cmd` 设的环境变量被旧
+     exe 完全忽略。硬证据:pet.log 全程只有 `mica backdrop applied (window transparent)`,
+     **从未出现** `mica skipped (MIASAKI_NO_MICA) → opaque background`。
+  - **结论:至今 4 次挂起全部发生在 Mica 模式下,Mica 假设既未被证实也未被排除;
+    9/09 计划的 A/B 对比实际从未开始。**
+- **本轮新排除**:
+  ①**WebView2/Edge 版本更新** —— `EBWebView.bak/Last Version` = `152.0.4191.62`(首挂 9/05 时),
+  今天为 `152.0.4191.66`,**两个版本均挂起**;
+  ②**WebView2 侧崩溃** —— `Local State` 的 `system_crash_count: 0`、`Crashpad/reports` 为空、
+  `exited_cleanly: true`,即 WebView2 未崩溃,是挂起。
+- **「黑屏」与「关不掉」的机制(对既有现象的补充解释)**:Mica 模式窗口底色为 `RGBA(0,0,0,0)`
+  (全透明),画面完全依赖 DWM 合成 + WebView2 提交帧,窗口挂起后无内容可合成 → 纯黑(区别于
+  普通窗口挂起会保留最后一帧);「关不掉」是因为 `main.rs` 对 `CloseRequested` 调
+  `api.prevent_close()` 并把关闭交给**前端弹窗**确认,前端已挂起则弹窗不出现,而兜底(5s 内二次)
+  只认 Alt+F4 系统路径,**消息循环停摆时连 `WM_CLOSE` 都无法分发** → 只能任务管理器。
+- **改动**:
+  1. **部署修复** —— 将 `target/release/miasaki.exe` 复制为 `dist/Miasaki.exe`(SHA256
+     `CBA9F54B94A5AF46313995CFC85A2A178EE1382F7DD7156E2F900CB21E3D0EE3`,与源逐字节一致);
+     旧产物备份至 `_refs/bin-archive/Miasaki.exe.20260909-0007.bak`。至此 `MIASAKI_NO_MICA`
+     才真正可用。
+  2. 新增取证脚本 `_refs/scripts-archive/read-wer-hang.ps1`(自提权):列出 Miasaki 的全部 WER
+     报告目录与文件、抽取 `Report.wer` 关键字段与 LoadedModule 尾段、**并重点报告是否存在
+     dump**(有 dump 即可读全线程栈直接定位根因)。
+- **验证**:`dist/Miasaki.exe` 与 `target/release/miasaki.exe` SHA256 一致;二进制串校验
+  `MIASAKI_NO_MICA` / `mica skipped (MIASAKI_NO_MICA)` / `mica backdrop applied` /
+  `mica unavailable` 四项均存在;`read-wer-hang.ps1` 通过 PowerShell AST 语法检查,其事件筛选
+  段在非提权下实测命中 12 条记录。
+- **触摸点**:`dsh-miasaki-desktop/dist/Miasaki.exe`(产物,已 gitignore);本文件;`design/TODO.md`;
+  新增 `_refs/scripts-archive/read-wer-hang.ps1` 与 `_refs/bin-archive/`。
+- **验证点(用户执行)**:①以**管理员身份**运行 `read-wer-hang.ps1`,看是否存在 dump 与 hung
+  module;②用 `miasaki-mica-off.cmd` 启动,pet.log 应出现
+  `mica skipped (MIASAKI_NO_MICA) → opaque background` —— 出现即证明开关生效、A/B 正式开始。
+
+## 2026-09-09 · 偶发「全黑无响应」取证:新增 MIASAKI_NO_MICA 诊断开关
+
+依据:用户「桌面端会突然全黑屏无法操作，必须通过任务管理器才能终止程序」。本轮**只做取证与
+可回退实验**，不改默认行为。
+
+- **现象定性**:Windows 事件日志为 `Application Hang`(Id 1002) + WER `Critical_Miasaki.exe_*`，
+  **不是崩溃**。三次记录:2026-09-05 17:59:27、2026-09-09 00:52:37、01:09:02；后两次
+  fault bucket 相同(`2204849698794992458`) → 同一成因、可复现。窗口纯黑且连托盘都无响应，
+  说明主窗口消息循环整体停摆、WebView2 侧已无内容——区别于「渲染冻结」（那会保留最后一帧）。
+- **时间拐点（本次关键证据）**:事件日志覆盖 7/23 起，Miasaki 记录只有两类——8/21~8/22 五次
+  `Application Error`（即 TODO 的「闪退」，第六轮 GDI 修复后彻底消失）与 9/5 起三次
+  `Application Hang`。**挂起首次出现在 2026-09-05，与该日「标题栏与主界面融为一体
+  (Win11 Mica + 圆角 + 零分界)」同日**（那次引入 `.background_color(0,0,0,0)` +
+  `apply_mica()` + `.shadow(true)`，窗口自此不再自绘底色，画面完全依赖 DWM 合成 +
+  WebView2 提交帧）。
+- **已排除**:①401 cookie 黑屏——`.credentials.yaml` 的 `client-connection/browser-session`
+  secret 与 `themes/src/00-boot.js` 硬编码值 SHA-256 一致(`8712c86000fec812…`)，注入仍有效；
+  ②后端——dsh web 进程 `Responding=True`、CPU 约 23% 单核；③GPU 驱动超时/硬件错误——近 6 天
+  `System` 日志无 TDR(4101)/WHEA/BugCheck；④待机冻结——Modern Standby 仅 9/7、9/8 22:05~22:31，
+  两次挂起不在窗口内；⑤桌宠渲染——pet.log 中 `ULW failed`/`surface rebuilt` 兜底路径从未触发。
+- **改动**（`src-tauri/src/main.rs`，三处，默认行为不变）:
+  1. 新增 `no_mica_requested()`:`MIASAKI_NO_MICA=1`（或 `true`）时启用；
+  2. `apply_mica()` 顶部短路:跳过 DWM Mica、直接 `set_background_color(fallback_bg)`，
+     并落盘 `mica skipped (MIASAKI_NO_MICA) → opaque background`；
+  3. 窗口创建处 `.background_color(window_bg)`:`no_mica` 时从建窗起就用实色主题底，
+     避免「先透明后补实色」闪一下。
+- **验证**:`cargo build --release` 通过（36.53s，产物 `target/release/miasaki.exe`，
+  42,797,056 B）；产物内嵌字符串 `MIASAKI_NO_MICA` / `mica skipped` 已确认存在。
+- **触摸点**:`src-tauri/src/main.rs`；本文件；`design/TODO.md`。
+- **验证点（用户执行）**:A/B 对比——「开 Mica」（不设变量）与「关 Mica」各跑几天，比较挂起频率；
+  关 Mica 时 `%LOCALAPPDATA%\miasaki\pet.log` 应出现
+  `mica skipped (MIASAKI_NO_MICA) → opaque background`。若关 Mica 后不再挂起，即坐实
+  「透明窗口 + Mica 合成」成因，再定正式修复方案。
+- **取证工具**（一次性，归档未入库）:`_refs/scripts-archive/watch-miasaki-hang.ps1`
+  （后台常驻，检测到 `Responding=False` 自动抓 CPU 采样 / 逐线程 state-wait / WebView2 子进程 /
+  日志尾部 / 前台窗口）、`_refs/scripts-archive/diag-miasaki-hang.ps1`（手动单次快照）。
+
 ## 2026-09-08(晚) · 注入层状态扫描性能收敛:去掉每轮强制同步布局
 
 依据:用户报告桌面端「有时断连」。实机问诊后现象为**界面还在但消息发不出、输出卡住不动**

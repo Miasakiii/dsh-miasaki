@@ -53,7 +53,11 @@
     'color:var(--dsw-alias-label-primary,var(--ms-text,#e4def0));font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;' +
     'user-select:none;-webkit-user-select:none;cursor:default;}' +
     '#miasaki-titlebar>*{pointer-events:auto;}' +
-    '#miasaki-titlebar .tb-group{position:fixed;top:5px;right:8px;display:flex;align-items:center;gap:2px;}' +
+    // 按钮组纵向位置:DSH 视图控件的垂直中心落在 24~25px(会话头 titleRow = header
+    // padding-top 10px + 30px 行高内居中;dockkit strip = padding-top 10px + 28px 高),
+    // 故 top:11px 使 26px 裸键组中心停在 24px,与官方「展开/收起」同一条水平线;
+    // 旧值 5px 会让中心停在 18px,与官方控件错开 6~7px。
+    '#miasaki-titlebar .tb-group{position:fixed;top:11px;right:8px;display:flex;align-items:center;gap:2px;}' +
     '#miasaki-titlebar .tb-brand{width:16px;height:16px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
     'margin:0 4px;box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));}' +
     '@keyframes ms-brand-breathe{0%,100%{opacity:.78}50%{opacity:1}}' +
@@ -67,10 +71,27 @@
     '#miasaki-titlebar .tb-btn svg{width:11px;height:11px;display:block;fill:none;' +
     'stroke:currentColor;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;}' +
     '#miasaki-titlebar .tb-btn.tb-close:hover{background:var(--ms-danger,#c23a2e);color:#fff;opacity:1;}' +
-    // 顶行让位:会话页头部(含 tabs 行)右侧预留裸键按钮组宽度(徽章 16+4 + 三键 26×3 +
-    // gap ≈104-108px,+10px 余量),Session 日志/工具按钮左移,不再与窗控按钮组叠压
-    // (与 VSCode 等自绘标题栏同款让位)。
-    '#root header:has([role="tablist"]){padding-right:118px;}' +
+    // ---------- 右上角安全区:官方右栏两处控件的让位(DSH 0.1.5 起) ----------
+    // 窗控裸键组实测宽 = 徽章(16+4×2=24) + 三键(26×3=78) + gap(2×3=6) = 108px,加
+    // right:8px 后恒占「距窗口右缘 [8,116]px、高 [11,37]px」这一带。DSH 0.1.5 官方右栏
+    // 有两个控件正好落在这里,且按钮尺寸(28px)/图标(15px)都比窗控大,叠压后双方都难点:
+    //   ① 折叠态的「打开侧边栏」= conversation.session.header.corner 里的 ExpandButton
+    //      (只在右栏折叠时渲染);官方自带 margin-right:-16px 会把按钮推进安全区。
+    //   ② 展开态的面板 chrome = dockkit strip 末端的全屏/收起两键,该 strip 官方只有
+    //      padding-right:6px,按钮右缘落在距窗口右缘 6px 处 —— 与窗控几乎完全重合。
+    // 旧规则只认 [role="tablist"],而该行仅在 view tab 数 >1 时渲染(官方 tabs.length>1),
+    // 单 tab 会话下整条让位静默失效;且 118px 未计入 corner 的 -16px,实际只让出 102px。
+    // 现在按恒存锚点让位:corner 容器(条件属性但它恒在 DOM,仅 :empty 时 display:none)
+    // 与 dockkit 的 data-dockkit-strip-chrome(恒存)。后者只在 chromePaneId(分栏时最右
+    // 一格)渲染,故分栏左格天然不受影响。两条让位线都落在 --ms-titlebar-reserve 上,
+    // 与官方控件保持 12px 呼吸位。选择器一律带 #root 提权,压过官方 CSS Module(注入
+    // 时机晚于我们,同特异性会反超)。
+    ':root{--ms-titlebar-reserve:128px;}' +
+    '#root header:has([data-conversation-header-corner]){padding-right:var(--ms-titlebar-reserve);}' +
+    '#root [data-conversation-header-corner]{margin-right:0;}' +
+    '#root [data-sidebar-right-panel] [data-dockkit-strip-chrome]{' +
+    'margin-right:calc(var(--ms-titlebar-reserve) - 6px);}' +
+    'html,body{height:100%;overflow:hidden;}' +
     'html,body{height:100%;overflow:hidden;}' +
     '#miasaki-switcher .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +
     '#miasaki-switcher .ms-btn img{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;}' +

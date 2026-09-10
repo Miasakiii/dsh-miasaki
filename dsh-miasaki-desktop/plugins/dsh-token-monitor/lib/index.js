@@ -17,13 +17,19 @@
  *   LEDGER_DAYS 天，超窗条目在 flush 时剪除。限额配置存 `config.json`，
  *   跨 host 重启持久。数据目录：优先宿主提供的插件数据目录服务，否则
  *   `~/.dsh/plugins-data/dsh-token-monitor/`。
+ * - 会话身份（v0.5.0）：账本按 sessionId 聚合，而 `session-<uuid>` 排在一列
+ *   等于没有信息，且 `sessions.get` 只认当前活着的会话（已归档一律
+ *   undefined）。标题与工作目录改由 `sessionQuery.readTitleSnapshots` 折叠
+ *   会话日志取得（支持已持久化会话、批量、按会话隔离失败），带 TTL 缓存 +
+ *   启动预热；冷读约 0.3s/会话，只发生在首轮。
  *
  * 对外暴露（webServer 精确路由，`{ok, error}` 包装对齐 dsh-free-model-pool）。
  * v0.4.0 起按视图拆分（旧 /summary 退役）：会话内归 /session，跨会话归 /global。
  * - GET  /dsh-token-monitor/session?sessionId=…  当前会话：官方聚合 + 实时明细
  *        （live.calls / live.tools 按 sessionId 过滤 + 会话活跃跨度）——会话页专用
  * - GET  /dsh-token-monitor/global               跨会话：总览统计 / 今日 / 近 30 天
- *        趋势（含按模型明细）/ 会话用量 Top N（近 30 日按 sessionId 聚合）/ 限额
+ *        趋势（含按模型明细）/ 会话活跃分布（近 30 日按 sessionId 聚合，含逐日
+ *        用量与窗口分母）/ 限额
  * - GET  /dsh-token-monitor/heatmap              稀疏每日账单（热力图数据源）
  * - GET  /dsh-token-monitor/config               限额配置
  * - POST /dsh-token-monitor/config               body `{dailyTokenLimit: number|null}`
@@ -45,8 +51,22 @@ const LEDGER_DAYS = 380;
 const TAIL_BYTES = 8 * 1024 * 1024;
 /** 会话跨度快照最小推进间隔：活跃会话每分钟至多落一行。 */
 const SPAN_FLUSH_MS = 60 * 1000;
-/** 全局页「会话用量 Top N」条数。 */
-const SESSION_TOPN = 10;
+/**
+ * 全局页「会话活跃分布」下发的会话条数上限（v0.5.0）：客户端在这份集合上做
+ * 排序键切换 / 标题搜索 / 条数切换，避免每次交互都回主机取数；只取 Top N
+ * 会让"按轮消息"排序与搜索在截断后的集合上进行，故上限放到 50。
+ */
+const SESSION_TOPN = 50;
+/** 「会话活跃分布」目录维度的下发条数上限（与会话维度同量级）。 */
+const CWD_TOPN = 50;
+/** 会话标题缓存窗口：已有标题 30 分钟内不重读日志。 */
+const TITLE_TTL_MS = 30 * 60 * 1000;
+/** 尚无标题（日志里还没落 title 事件的会话）的重试间隔。 */
+const TITLE_RETRY_MS = 2 * 60 * 1000;
+/** 全局页等待标题折叠的上限：超时则本次先用截断 ID，后台补完下一轮轮询即有。 */
+const TITLE_WAIT_MS = 2500;
+/** 账本载入后预热标题的延迟（先让宿主 boot 稳定，再去做磁盘侧折叠）。 */
+const TITLE_WARM_DELAY_MS = 1500;
 
 /** 本地时区日期键（YYYY-MM-DD，用户视角的"今日"）。 */
 function localDate(t) {
@@ -101,6 +121,112 @@ export function apply(ctx) {
 		if (ts > s.last) s.last = ts;
 	}
 
+	// ---- 会话身份（标题 / 工作目录）折叠与缓存 --------------------------
+	//
+	// 账本里只有 sessionId，拼不出"这是哪个会话"——45 个 `session-<uuid>` 排在一
+	// 起等于没信息。标题真相不在账本里也不在内存 store 里：`sessions.get` 只认
+	// 当前活着的会话，已归档会话一律 undefined（旧实现因此整列显示截断 ID）。
+	// 日志才是真相源，由 `sessionQuery.readTitleSnapshots` 折叠（支持已持久化
+	// 会话、批量、按会话隔离失败），顺带给出 header 的 cwd / origin / preset。
+	// 冷读有成本（实测 10 会话 ≈ 2.8s），故：命中缓存零成本、未命中才批量折叠
+	// 一次，且同一时刻只有一个折叠任务在飞（5s 轮询与启动预热不会重读同一批）。
+
+	/** sessionId -> {title,titleSource,cwd,cwdName,createdAt,origin,agentPreset,at}。 */
+	const titleCache = new Map();
+	/** 单飞的标题折叠任务。 */
+	let titleJob = null;
+
+	/** 缓存是否仍然新鲜（有标题走长 TTL，无标题走短重试）。 */
+	function titleFresh(id) {
+		const c = titleCache.get(id);
+		if (!c) return false;
+		return (Date.now() - c.at) < (c.title ? TITLE_TTL_MS : TITLE_RETRY_MS);
+	}
+
+	/** 折叠一批会话标题写入缓存；单会话失败被隔离，留待下轮重试。 */
+	async function runTitleJob(ids) {
+		const q = ctx.get('sessionQuery');
+		if (!q || typeof q.readTitleSnapshots !== 'function') return;
+		const results = await q.readTitleSnapshots(ids);
+		const at = Date.now();
+		for (const r of (results || [])) {
+			const id = r && r.sessionId ? String(r.sessionId) : '';
+			if (!id || !r || r.status !== 'fulfilled' || !r.value) continue;
+			const h = r.value.session || {};
+			const t = r.value.title || null;
+			const cwd = typeof h.cwd === 'string' && h.cwd ? h.cwd : null;
+			titleCache.set(id, {
+				title: (t && typeof t.title === 'string' && t.title.trim()) ? t.title.trim() : null,
+				titleSource: (t && t.source && typeof t.source.kind === 'string') ? t.source.kind : null,
+				cwd,
+				cwdName: cwd ? (cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd) : null,
+				createdAt: typeof h.createdAt === 'number' ? h.createdAt : null,
+				origin: typeof h.origin === 'string' ? h.origin : null,
+				agentPreset: typeof h.agentPreset === 'string' ? h.agentPreset : null,
+				at
+			});
+		}
+	}
+
+	/** 补齐给定会话的标题（命中即返回；未命中则等当前折叠任务，最多两轮）。 */
+	async function ensureTitles(ids) {
+		for (let round = 0; round < 2; round++) {
+			const missing = ids.filter((id) => !titleFresh(id));
+			if (missing.length === 0) return;
+			if (!titleJob) titleJob = runTitleJob(missing).finally(() => { titleJob = null; });
+			await titleJob.catch((e) => { ledgerError = String(e && e.message || e); });
+		}
+	}
+
+	/** Promise.race 的超时腿（只放弃等待，不取消底下的折叠任务）。 */
+	function sleep(ms) {
+		return new Promise((resolve) => {
+			const t = setTimeout(resolve, ms);
+			if (t && typeof t.unref === 'function') t.unref();
+		});
+	}
+
+	/**
+	 * 把身份贴到排行行上。缓存未命中时退回内存 store 的标题（零成本），
+	 * 再不行保留 null —— 客户端降级显示截断 ID，绝不凭空编造名字。
+	 */
+	function decorateSessions(rows) {
+		let sessionsSvc = null;
+		try { sessionsSvc = ctx.get('sessions'); } catch (e) { /* 无服务则仅用缓存 */ }
+		for (const r of rows) {
+			const c = titleCache.get(r.sessionId);
+			r.title = (c && c.title) || null;
+			r.titleSource = (c && c.titleSource) || null;
+			r.cwd = (c && c.cwd) || null;
+			r.cwdName = (c && c.cwdName) || null;
+			r.agentPreset = (c && c.agentPreset) || null;
+			r.createdAt = (c && c.createdAt) || null;
+			r.subagent = !!(c && c.origin === 'subagent');
+			if (!r.title) {
+				try {
+					const s = sessionsSvc && sessionsSvc.get(r.sessionId);
+					if (s && typeof s.title === 'string' && s.title.trim()) {
+						r.title = s.title.trim();
+						r.titleSource = 'live';
+					}
+				} catch (e) { /* 降级 */ }
+			}
+		}
+	}
+
+	/** 预热：把窗口内全部会话的标题一次折出来，浮窗首开就有名字。 */
+	function warmTitles() {
+		const cutoff = dateOffset(-29);
+		const ids = new Set();
+		for (const [date, day] of ledgerDays) {
+			if (date < cutoff) continue;
+			for (const e of day.values()) {
+				if (e.sessionId && e.sessionId !== '?') ids.add(e.sessionId);
+			}
+		}
+		if (ids.size > 0) ensureTitles(Array.from(ids)).catch(() => { /* 预热失败不致命 */ });
+	}
+
 	// ---- 跨会话账本与限额配置 ------------------------------------------
 
 	const dataDir = resolveDataDir(ctx);
@@ -153,8 +279,15 @@ export function apply(ctx) {
 		} catch (e) { ledgerError = String(e && e.message || e); }
 	}
 
-	/** 记录会话活跃跨度（min first / max last 合并，快照幂等）。 */
-	function touchSpan(date, sessionId, ts) {
+	/**
+	 * 记录会话活跃跨度（min first / max last 合并，快照幂等）。
+	 *
+	 * `dirty=false` 专供**启动载入**：磁盘上的存量快照已经在文件里了，绝不能再标脏。
+	 * 否则 `process.on('exit')` 的强制 flush 会把这些键当成本次推进重新写一遍 ——
+	 * 每次 host 正常退出都追加一批重复 span 行（v0.5.1 修复；实测本机账本因此积了
+	 * 920 行冗余、单键最多重复 82 次，占全账本 20%）。
+	 */
+	function touchSpan(date, sessionId, ts, dirty) {
 		if (!sessionId || sessionId === '?') return;
 		try {
 			let day = spans.get(date);
@@ -167,7 +300,7 @@ export function apply(ctx) {
 				if (ts < s.first) s.first = ts;
 				if (ts > s.last) s.last = ts;
 			}
-			spanDirty.add(date + '|' + sessionId);
+			if (dirty !== false) spanDirty.add(date + '|' + sessionId);
 		} catch (e) { /* 隔离 */ }
 	}
 
@@ -247,8 +380,10 @@ export function apply(ctx) {
 			if (!j || typeof j.date !== 'string' || j.date < cutoff) continue;
 			if (j.type === 'span') {
 				if (typeof j.sessionId === 'string' && typeof j.first === 'number' && typeof j.last === 'number') {
-					touchSpan(j.date, j.sessionId, j.first);
-					touchSpan(j.date, j.sessionId, j.last);
+					// 载入存量快照：只进内存聚合（dirty=false），不标脏 —— 否则退出时的
+					// 强制 flush 会把它们当成本次推进重复回写（v0.5.1 修复）。
+					touchSpan(j.date, j.sessionId, j.first, false);
+					touchSpan(j.date, j.sessionId, j.last, false);
 					spanWritten.set(j.date + '|' + j.sessionId, j.last);
 					if (!ledgerSince || j.date < ledgerSince) ledgerSince = j.date;
 				}
@@ -558,26 +693,49 @@ export function apply(ctx) {
 	}
 
 	/**
-	 * 近 days 天按会话聚合排行（全局页「会话用量 Top N」）：tokens 总量 +
-	 * 轮消息 + 账本活跃跨度（同会话跨天合并 min first / max last）。
-	 * 会话标题尽力解析（sessions.get），失败降级为 null（客户端显示 ID）。
+	 * 近 days 天按会话聚合（全局页「会话活跃分布」，v0.5.0 由 Top N 排行升级）：
+	 * - 每会话：tokens 总量 + 轮消息 + 账本活跃跨度（跨天合并 min first / max last）
+	 *   + 逐日用量 `daily[i]`（对齐 dates[i]，空日 0；客户端按各会话自身峰值分档
+	 *   着色，表达"哪些天在活跃"而不是"和最大会话比有多小"）；
+	 * - 集合级：`totalAll` / `callsAll` = 窗口内全部会话合计（**含未进 rows 的长尾**，
+	 *   作排行占比分母；若用 rows 之和做分母，长尾会话会让占比整体虚高）、
+	 *   `matched` = 窗口内有量的会话总数。
+	 *
+	 * limit 只作下发上限（客户端在其上做排序 / 搜索 / 条数切换）。
+	 * 标题与工作目录等身份字段由 decorateSessions 从 titleCache 贴上，本函数
+	 * 只负责账本侧聚合，不碰磁盘。
 	 */
 	function sessionRanking(days, limit) {
 		const cutoff = dateOffset(-(days - 1));
+		const dates = [];
+		const dateIdx = new Map();
+		for (let i = days - 1; i >= 0; i--) {
+			const d = dateOffset(-i);
+			dateIdx.set(d, dates.length);
+			dates.push(d);
+		}
 		const bySession = new Map();
 		for (const [date, day] of ledgerDays) {
 			if (date < cutoff) continue;
+			const di = dateIdx.get(date);
 			for (const e of day.values()) {
 				const sid = e.sessionId || '?';
 				let s = bySession.get(sid);
 				if (!s) {
-					s = { sessionId: sid, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, total: 0, calls: 0, first: null, last: null };
+					s = {
+						sessionId: sid, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0,
+						reasoningTokens: 0, total: 0, calls: 0, first: null, last: null,
+						daily: new Array(days).fill(0)
+					};
 					bySession.set(sid, s);
 				}
 				s.inputTokens += e.inputTokens; s.outputTokens += e.outputTokens;
 				s.cacheReadTokens += e.cacheReadTokens; s.reasoningTokens += e.reasoningTokens;
 				s.total = s.inputTokens + s.outputTokens + s.cacheReadTokens + s.reasoningTokens;
 				s.calls += e.calls || 0;
+				if (di !== undefined) {
+					s.daily[di] += e.inputTokens + e.outputTokens + e.cacheReadTokens + e.reasoningTokens;
+				}
 			}
 		}
 		for (const [date, day] of spans) {
@@ -591,34 +749,93 @@ export function apply(ctx) {
 		}
 		const rows = Array.from(bySession.values());
 		for (const r of rows) { if (r.first === null) { r.first = 0; r.last = 0; } }
+		let totalAll = 0, callsAll = 0;
+		for (const r of rows) { totalAll += r.total; callsAll += r.calls; }
 		rows.sort((a, b) => b.total - a.total || b.calls - a.calls);
 		const out = rows.slice(0, limit);
-		let sessionsSvc = null;
-		try { sessionsSvc = ctx.get('sessions'); } catch (e) { /* 无服务则标题降级 */ }
-		for (const r of out) {
-			let title = null;
-			try {
-				const s = sessionsSvc && sessionsSvc.get(r.sessionId);
-				if (s && typeof s.title === 'string' && s.title.trim()) title = s.title.trim();
-			} catch (e) { /* 降级 */ }
-			r.title = title;
-		}
-		return out;
+		return { windowDays: days, dates, rows: out, all: rows, totalAll, callsAll, matched: rows.length };
 	}
 
-	/** 全局路由载荷：跨会话账本统计（总览 / 今日 / 趋势 / 会话 Top N）+ 限额。 */
+	/**
+	 * 按工作目录聚合（「会话活跃分布」的第二维度，对齐参考图的"按工作空间"）。
+	 *
+	 * 为什么必须有这个维度：近 30 日窗口里**单会话的时间跨度天生很短**——实测真实
+	 * 账本 45 个会话、1350 个「会话×日」格只有 50 格非零（4%），Top 会话也只活跃
+	 * 1–2 天。逐日分布若只看单会话，条带几乎全空、比原来的比例条更没信息。按目录
+	 * 把同一项目的多个会话叠加，才看得出"这个项目哪几天在烧 token"，形态与参考图
+	 * 的密集条带一致。
+	 *
+	 * 入参是**全量**会话行（不是 Top N 截断后的），否则聚合结果会随截断口径漂移。
+	 * 依赖 decorateSessions 先贴上 cwd；未折叠出目录的会话不参与（计入 unresolved，
+	 * 由客户端如实提示，不塞进"未知目录"这种假分组）。
+	 */
+	function cwdRanking(all, days) {
+		const byCwd = new Map();
+		let unresolved = 0;
+		for (const r of all) {
+			const key = r.cwd;
+			if (!key) { unresolved++; continue; }
+			let g = byCwd.get(key);
+			if (!g) {
+				g = {
+					kind: 'cwd', key, sessionId: 'cwd:' + key, title: r.cwdName || key,
+					cwd: key, cwdName: r.cwdName || key, subagent: false,
+					total: 0, calls: 0, sessions: 0, first: null, last: null,
+					daily: new Array(days).fill(0)
+				};
+				byCwd.set(key, g);
+			}
+			g.sessions++;
+			g.total += r.total || 0;
+			g.calls += r.calls || 0;
+			if (r.first && (g.first === null || r.first < g.first)) g.first = r.first;
+			if (r.last && (g.last === null || r.last > g.last)) g.last = r.last;
+			for (let i = 0; i < days; i++) g.daily[i] += r.daily[i] || 0;
+		}
+		const out = Array.from(byCwd.values())
+			.sort((a, b) => b.total - a.total || b.calls - a.calls)
+			.slice(0, CWD_TOPN);
+		let total = 0, calls = 0;
+		for (const g of byCwd.values()) { total += g.total; calls += g.calls; }
+		return { rows: out, unresolved, matched: byCwd.size, totalAll: total, callsAll: calls };
+	}
+
+	/** 全局路由载荷：跨会话账本统计（总览 / 今日 / 趋势 / 会话活跃分布）+ 限额。 */
 	async function buildGlobalPayload() {
+		const rank = sessionRanking(30, SESSION_TOPN);
+		// 折叠与身份都按**全量**会话走：目录维度要在全量上聚合，只看 Top N 会让
+		// 结果随截断口径漂移。
+		const ids = rank.all.map((r) => r.sessionId);
+		if (ids.length > 0 && ids.some((id) => !titleFresh(id))) {
+			// 冷读（或 TTL 到期）时等一小段：首屏尽量带名字；超时则本次先用
+			// 截断 ID 兜底，折叠任务继续在后台跑完，下一轮 5s 轮询即有标题。
+			await Promise.race([
+				ensureTitles(ids).catch((e) => { ledgerError = String(e && e.message || e); }),
+				sleep(TITLE_WAIT_MS)
+			]);
+		} else if (ids.length > 0) {
+			ensureTitles(ids).catch((e) => { ledgerError = String(e && e.message || e); });
+		}
+		decorateSessions(rank.all);
+		const byCwd = cwdRanking(rank.all, rank.windowDays);
 		return {
 			ok: true,
 			stats: computeStats(),
 			today: aggregateDay(localDate()),
 			trend: ledgerTrend(30),
-			sessions: { windowDays: 30, limit: SESSION_TOPN, rows: sessionRanking(30, SESSION_TOPN) },
+			sessions: {
+				windowDays: rank.windowDays, limit: SESSION_TOPN, dates: rank.dates,
+				rows: rank.rows, totalAll: rank.totalAll, callsAll: rank.callsAll, matched: rank.matched,
+				byCwd: {
+					limit: CWD_TOPN, rows: byCwd.rows, unresolved: byCwd.unresolved,
+					matched: byCwd.matched, totalAll: byCwd.totalAll, callsAll: byCwd.callsAll
+				}
+			},
 			since: ledgerSince || localDate(),
 			config: { dailyTokenLimit: config.dailyTokenLimit },
 			error: ledgerError,
 			sampledAt: now(),
-			note: '全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话排行基于账本 sessionId 按近 30 日聚合，标题尽力解析、已归档或删除的会话只显示 ID；日限额为本地自定义配置（DSH 无配额接口）。'
+			note: '全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按所选行自身峰值分档（按会话看时间跨度天生短，按工作目录看才是同一项目的叠加形态），标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，冷读约 0.3s/会话，命中缓存后零成本；取不到时降级显示截断 ID，不参与目录聚合）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口）。'
 		};
 	}
 
@@ -750,6 +967,10 @@ export function apply(ctx) {
 	loadLedger();
 	loadConfig();
 	pruneOld();
+	// 账本载入后预热会话标题：账本只有 sessionId，标题须折日志（冷读有成本），
+	// 提前跑掉，浮窗第一次打开就带名字；延迟一拍让宿主 boot 先稳定。
+	const warmTimer = setTimeout(() => { try { warmTitles(); } catch (e) { /* 预热失败不致命 */ } }, TITLE_WARM_DELAY_MS);
+	if (warmTimer && typeof warmTimer.unref === 'function') warmTimer.unref();
 	const flushTimer = setInterval(() => { flushLedger(); pruneOld(); }, 5000);
 	if (typeof flushTimer.unref === 'function') flushTimer.unref();
 	// 信号默认终止也会经过 'exit'，此处只做同步 flush（span 快照强制落盘），不干预宿主退出逻辑。

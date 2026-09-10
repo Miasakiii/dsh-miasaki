@@ -24,6 +24,11 @@ CDP target，属实机项；无 host 时会以 `CDP target not found` 失败。�
 （启动恢复 / 窗口 / 桌宠 / pulse 联动）见
 [四线统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3–§4。
 
+> **沙箱注意**：无头 Edge 需要创建命名管道，在受限文件沙箱（`workspace-write`）下必然
+> 以 `CDP target not found` 失败——用 `danger-full-access` 重跑**同一条命令**即可
+> （2026-09-10 实测跑通；断言含第 6 节「右上角安全区」：窗控裸键组与官方右栏两处控件的
+> 矩形交叠必须为 0，且垂直中心差 ≤ 2px）。
+
 ## DSH 运行时补丁（本体例外）
 
 `patches/` 存放**唯一**一处「修改 DSH 本体」的补丁——设置页模型能力增强（思考强度 +
@@ -32,11 +37,17 @@ CDP target，属实机项；无 host 时会以 `CDP target not found` 失败。�
 
 ```powershell
 cd patches/dsh-client-ui-settings-models
-node patch.mjs verify    # 离线自证（已并入 verify-all）
-node patch.mjs status    # 检查安装目录状态
-node patch.mjs apply     # 备份 + 应用（幂等）
-node patch.mjs revert    # 还原
+node patch.mjs verify       # 离线自证（已并入 verify-all）
+node patch.mjs status       # 检查安装目录状态
+node patch.mjs apply        # 备份 + 应用（幂等）
+node patch.mjs revert       # 还原
+node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
 ```
+
+> **当前基线：DSH 0.1.5-rc.1**（2026-09-10 重打，原版 `A60FD863…` → 补丁版 `E602C1F1…`；
+> 0.1.2 的 7 个锚点在新版中全部唯一命中，未改动任何 `EDITS`）。
+> 下次升级的流程：`status` 报 `unknown` → `rebuild-baseline.mjs` 重建 → 按它打印的值
+> 更新 `patch.mjs` 的三个常量 → `verify` → `apply`。
 
 详见 [patches/dsh-client-ui-settings-models/README.md](patches/dsh-client-ui-settings-models/README.md)
 与[模型设置工具包设计](../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md)。
@@ -100,8 +111,13 @@ node patch.mjs revert    # 还原
   workspace；RPC 不可用或预设缺失时静默降级，不影响主题切换。
   三个预设定义在 `%USERPROFILE%\.dsh\.agent-presets\{whale,kurumi,inverse}\`
   （standard 底座 + 桌宠中文人设，persona 含「入戏边界」：工具/错误/审批一律标准语气）。
-  维护材料在 `preset-sources/`（`*.persona.txt` / `*.preset.yml` / `apply-presets.ps1`，
-  改人设后重跑脚本再生成 `%USERPROFILE%\.dsh\.agent-presets\` 下对应文件）。
+  **用户侧是生成产物，不要手改**；维护材料全部在 `preset-sources/`：
+  `agent.base.cordis.yml`（DSH 0.1.5 `standard` 底座全文 + 本仓库自定义，persona 行为
+  `__PERSONA__` 占位符）、`*.persona.txt` / `*.preset.yml`（人设与预设元数据）、
+  `apply-presets.ps1`（读模板整体生成，覆盖前留 `.bak`）、`verify-presets.cjs`
+  （校验产物字段与自定义项，自带 `!!js` 标签 schema）。改人设或换底座后重跑脚本并复验。
+  注：DSH 0.1.5 起 persona 拆为 `prefix`（必填）+ `suffix`（缺省即遮蔽部署级后缀），
+  旧 `text` 字段已不存在。
 - 悬浮主题条切换时，主窗口通过 `set_pet_mode` 命令联动宠物角色
 - **主窗口拖动（V3 空白拖动）**：窗口零占位叠加后没有自绘拖动条——注入运行时在
   document 级捕获 mousedown：落在顶部 36px 内且事件路径上无「可交互元素」（复用
@@ -123,9 +139,15 @@ node patch.mjs revert    # 还原
   位置与 web 端完全一致；窗控三键以**无壳裸键**直接落在右上角（v3 的悬浮胶囊外壳已删：
   无底色/无边框/无毛玻璃/padding，观感接近标准无边框应用；主题徽章 16px 保留在按钮组
   左侧，为启动页唯一主题标识——用户拍板 2026-09-06），hover 底色只落在单按钮上
-  （Win11 原生同款，关闭键 hover 红底）；唯一页面级调整 =
-  `#root header:has([role="tablist"])` 右侧 padding 118px 给裸键组让位（≈108px + 余量；
-  v3 胶囊时代为 132px）。命令链/拖动/最大化同步与 v3 相同：hash `cmd=min/max/close`
+  （Win11 原生同款，关闭键 hover 红底）。**唯一页面级调整 = 右上角安全区让位**（2026-09-10
+  晚重写）：裸键组实测宽 108px，加 `right:8px` 后恒占距窗口右缘 `[8,116]px`，故声明
+  `--ms-titlebar-reserve:128px`（含 12px 呼吸位），再按**恒存锚点**让位 DSH 0.1.5 官方右栏的
+  两处控件——折叠态的「打开右侧边栏」（`[data-conversation-header-corner]`，其官方
+  `margin-right:-16px` 需归零）与展开态的面板 chrome 全屏/收起两键
+  （`[data-dockkit-strip-chrome]`，只在分栏最右一格渲染）；裸键组 `top:11px` 使其中心与官方
+  控件同落在 24px 水平线上。旧规则 `header:has([role="tablist"]){padding-right:118px}` 已废
+  （依赖仅在多 view tab 时才渲染的 `role=tablist`，单 tab 会话下整条失效）。命令链/拖动/
+  最大化同步与 v3 相同：hash `cmd=min/max/close`
   → Rust watchdog；双击顶部空白 / Win+↑ 等系统路径同样同步；裸键组仍在
   `#miasaki-titlebar` 内，拖动排除自动生效。底座仍为
   **Win11 Mica**（DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE`，窗口底透明），`.shadow(true)`
@@ -150,7 +172,7 @@ desktop/
 │  └─ runtime.js             # legacy 回退源（build-init 缺 src/ 时使用）
 ├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
-├─ plugins/dsh-token-monitor/    # DSH web profile bundle：用量监控（会话「用量」Tab 纯会话视角 + 侧栏脚部「用量统计」入口 → 全局浮窗：总览六卡/年热力图/趋势/模型与会话 Top N 分布/今日限额，v0.4.0）
+├─ plugins/dsh-token-monitor/    # DSH web profile bundle：用量监控（会话「用量」Tab 纯会话视角 + 侧栏脚部「用量统计」入口 → 全局浮窗：总览六卡/年热力图/趋势/模型用量 + 会话活跃分布（标题折叠自会话日志／近 30 日逐日分布条／排序·搜索·条数控件）/今日限额，v0.5.0）
 ├─ plugins/dsh-session-log-move/ # DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧，见下）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
@@ -206,7 +228,9 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
   CustomEvent 回推当前 `hidden`，与显示/隐藏联动保持同步。
 - **通信（零 host 职责）**：面板命令经主窗口 URL hash 通道
   （`#…&cmd=pet-show|pet-hide|pet-reset|pet-state&seq=…`，`history.replaceState`
-  不触发刷新），由桌面端 hash watchdog 33ms 轮询执行；host 侧 `lib/index.js` 为空壳。
+  不触发刷新），由桌面端 hash watchdog 轮询执行（**基准 150ms**；拖窗期间自动提速至 33ms
+  保证跟手；单次取用 ≥250ms 或连续失败则退避至 1000ms —— 见 CHANGELOG 2026-09-10(深夜·续)）；
+  host 侧 `lib/index.js` 为空壳。
 - **降级**：非桌面端（普通浏览器打开 DSH，无 `window.__MIASAKI_BOOTED__`）面板提示
   命令不会生效，不阻断设置页。
 

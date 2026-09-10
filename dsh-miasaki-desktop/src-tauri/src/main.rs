@@ -632,6 +632,20 @@ fn start_pulse_watchdog(app: &AppHandle) {
     });
 }
 
+/// hash 同步通道的轮询节流参数（2026-09-10 性能审查）。
+///
+/// 背景：注入层每 1.5s 才 `history.replaceState` 一次，而原先固定 33ms 轮询（30 次/秒）
+/// 属 45 倍冗余；更关键的是每次 `wv.url()` 都要 dispatch 到主线程执行 WebView2 的
+/// `get_Source()` 同步 COM 调用 —— 一旦渲染侧无响应，这条 30 次/秒的链路会把「局部卡顿」
+/// 放大成「整个 UI 冻结」（主窗口黑屏 + 托盘无响应 + 关闭失效）。
+/// 现改为：基准 150ms / 拖窗期间 33ms（保持跟手）/ 慢调用或失败时自适应退避。
+const HASH_POLL_MS: u64 = 150;
+const HASH_POLL_FAST_MS: u64 = 33;
+const HASH_SLOW_MS: u128 = 250;
+const HASH_BACKOFF_MS: u64 = 1000;
+const HASH_BACKOFF_HOLD_MS: u64 = 3000;
+const HASH_DRAG_HOLD_MS: u64 = 400;
+
 fn start_hash_watchdog(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -640,10 +654,55 @@ fn start_hash_watchdog(app: &AppHandle) {
         let mut last_diag = String::new();
         // 拖窗：累计增量差值应用(JS 发相对按下起点的累计值;Rust 应用与上次的差,不丢帧不重复)
         let mut last_move: (i32, i32) = (0, 0);
+        // —— 节流状态 ——
+        let mut fail_streak: u32 = 0;
+        let mut slow_hits: u32 = 0;
+        let mut backoff_until = Instant::now();
+        let mut drag_until = Instant::now();
         loop {
-            tokio::time::sleep(Duration::from_millis(33)).await;
+            // 间隔决策优先级：退避 > 拖窗提速 > 基准
+            let now = Instant::now();
+            let interval = if now < backoff_until {
+                HASH_BACKOFF_MS
+            } else if now < drag_until {
+                HASH_POLL_FAST_MS
+            } else {
+                HASH_POLL_MS
+            };
+            tokio::time::sleep(Duration::from_millis(interval)).await;
+            let t0 = Instant::now();
             let Some(wv) = app.get_webview_window("main") else { continue };
-            let Ok(url) = wv.url() else { continue };
+            let url = match wv.url() {
+                Ok(u) => {
+                    fail_streak = 0;
+                    // 慢调用 → 退避一会儿，降低再次撞上同步阻塞的概率
+                    let cost = t0.elapsed().as_millis();
+                    if cost >= HASH_SLOW_MS {
+                        backoff_until = Instant::now() + Duration::from_millis(HASH_BACKOFF_HOLD_MS);
+                        if slow_hits < 5 || slow_hits % 50 == 0 {
+                            app_log_line(&format!(
+                                "[{}] hash poll slow {cost}ms → backoff {HASH_BACKOFF_HOLD_MS}ms\n",
+                                chrono_now()
+                            ));
+                        }
+                        slow_hits += 1;
+                    }
+                    u
+                }
+                Err(_) => {
+                    fail_streak += 1;
+                    if fail_streak == 1 || fail_streak % 20 == 0 {
+                        app_log_line(&format!(
+                            "[{}] hash poll url() failed x{fail_streak}\n",
+                            chrono_now()
+                        ));
+                    }
+                    if fail_streak >= 3 {
+                        backoff_until = Instant::now() + Duration::from_millis(HASH_BACKOFF_HOLD_MS);
+                    }
+                    continue;
+                }
+            };
             let Some(fragment) = url.fragment() else { continue };
             if fragment == last_fragment {
                 continue;
@@ -686,6 +745,8 @@ fn start_hash_watchdog(app: &AppHandle) {
                 last_move = (0, 0);
             }
             if let Some((dx, dy)) = move_xy {
+                // 拖窗期间提速轮询保证跟手；松开后 HASH_DRAG_HOLD_MS 内回落基准间隔
+                drag_until = Instant::now() + Duration::from_millis(HASH_DRAG_HOLD_MS);
                 let apply = (dx - last_move.0, dy - last_move.1);
                 last_move = (dx, dy);
                 if apply.0 != 0 || apply.1 != 0 {
@@ -867,6 +928,15 @@ fn export_diagnostics() -> Result<String, String> {
 
 /* ---------------- Win11 Mica 材质（标题栏 × 主界面一体化的底座） ---------------- */
 
+/// 诊断开关：`MIASAKI_NO_MICA=1`（或 `true`）时跳过 DWM Mica，改走实色主题底。
+/// 用途：验证「透明窗口 + Mica 合成」是否与偶发 AppHang（主窗口纯黑、连托盘也无响应）相关。
+/// 默认未设置时行为与既有版本完全一致；删掉环境变量即回退。
+fn no_mica_requested() -> bool {
+    std::env::var("MIASAKI_NO_MICA")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// 直调 DWM 设置 SYSTEMBACKDROP = MAINWINDOW（Mica，跟随系统明暗）。
 /// 不用 tauri 的 set_effects：其内部吞掉 window-vibrancy 错误无法探测 Win10 ，
 /// 而此处需按 DWM 返回值决定 WebView2 透明底是否可用（失败回退实色主题底）。
@@ -875,6 +945,15 @@ fn apply_mica(wv: &tauri::WebviewWindow, fallback_bg: tauri::utils::config::Colo
     use windows_sys::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW,
     };
+    // 诊断开关：跳过 Mica 与透明窗口底，用于验证合成链路是否为偶发挂起成因
+    if no_mica_requested() {
+        app_log_line(&format!(
+            "[{}] mica skipped (MIASAKI_NO_MICA) → opaque background\n",
+            chrono_now()
+        ));
+        let _ = wv.set_background_color(Some(fallback_bg));
+        return;
+    }
     let ok = wv
         .hwnd()
         .map(|hwnd| {
@@ -1090,6 +1169,12 @@ fn main() {
                 "kurkuriel" => tauri::utils::config::Color(247, 244, 241, 255),
                 _ => tauri::utils::config::Color(12, 11, 17, 255),
             };
+            // MIASAKI_NO_MICA=1：窗口从创建起就用实色底，避免「先透明后补实色」闪一下
+            let window_bg = if no_mica_requested() {
+                bg
+            } else {
+                tauri::utils::config::Color(0, 0, 0, 0)
+            };
             let webview = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("loading.html".into()))
                 .title("Miasaki · DSH")
                 .inner_size(1280.0, 800.0)
@@ -1103,7 +1188,7 @@ fn main() {
                 // 背景无加载期白闪；DSH 页面板令牌已半透明化（themes/*.css），与自绘标题栏
                 // 共享同一张 Mica 材质 → 标题栏与主界面融为一体。
                 // Mica 不可用（Win10 等）时 apply_mica 回退实色主题底。
-                .background_color(tauri::utils::config::Color(0, 0, 0, 0))
+                .background_color(window_bg)
                 .initialization_script(&init)
                 .on_page_load(|webview, payload| {
                     let _ = webview.show();

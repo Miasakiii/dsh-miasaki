@@ -48,33 +48,63 @@ window.__ModuleLoader__.load({
 			.tokmn-heat-months { position: relative; height: 15px; margin-top: 6px; }
 			.tokmn-heat-month { position: absolute; top: 0; font-size: 10px; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
 			.tokmn-heat-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; gap: 12px; flex-wrap: wrap; }
-			/* 悬浮提示（热力图 / 趋势图共用） */
-			.tokmn-tip { position: absolute; z-index: 20; pointer-events: none; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 8px; padding: 7px 11px; font-size: 11px; color: var(--dsw-alias-label-primary); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; }
+			/* 悬浮提示（热力图 / 趋势图共用）：限宽 + 名字截断 —— 模型名可以很长
+			   （deepseek-v4.1-flash-expires-on-0910），nowrap 下会把提示框撑到面板外，
+			   数字被边界裁掉（v0.5.1 用户截图）。 */
+			.tokmn-tip { position: absolute; z-index: 20; pointer-events: none; background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 8px; padding: 7px 11px; font-size: 11px; color: var(--dsw-alias-label-primary); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); white-space: nowrap; max-width: 340px; overflow: hidden; }
 			.tokmn-tip-sub { color: var(--dsw-alias-label-secondary); margin-top: 2px; }
+			.tokmn-tip-row { display: flex; gap: 6px; align-items: center; }
+			.tokmn-tip-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+			.tokmn-tip-val { flex: none; margin-left: auto; padding-left: 12px; }
 			/* 趋势图 */
 			.tokmn-chart-wrap { position: relative; }
 			.tokmn-legend-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary); margin: 0 14px 8px 0; cursor: pointer; user-select: none; }
 			.tokmn-legend-chip:hover { color: var(--dsw-alias-label-primary); }
 			.tokmn-legend-chip-off { opacity: 0.35; }
-			/* 环形图 + 模型列表 */
-			.tokmn-donut { display: grid; grid-template-columns: auto 1fr; gap: 28px; align-items: center; }
+			/* 环形图 + 模型列表：1fr 写成 minmax(0,1fr) 才能收缩 —— grid 项默认
+			   min-width:auto，长模型名会把列撑到 min-content，.tokmn-pct 的
+			   margin-left:auto 于是被推到卡片外、叠到右列上（v0.5.1 用户截图）。 */
+			.tokmn-donut { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; align-items: center; }
 			@media (max-width: 720px) { .tokmn-donut { grid-template-columns: 1fr; } }
 			.tokmn-model-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--tokmn-hairline); }
 			.tokmn-model-row:last-child { border-bottom: none; }
 			.tokmn-code { font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace; font-size: 12px; }
-			.tokmn-pct { margin-left: auto; font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
-			/* 使用分布两列（环形图 | 会话 Top N） */
-			.tokmn-dist { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+			.tokmn-pct { flex: none; margin-left: auto; font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+			/* 使用分布两列（模型环形图 | 会话活跃分布）：右列要承载逐日分布条，故略偏右；
+			   两列都写 minmax(0,…) 防溢出（同 .tokmn-donut 的理由），窄屏单列堆叠。 */
+			.tokmn-dist { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 12px; align-items: start; }
 			@media (max-width: 980px) { .tokmn-dist { grid-template-columns: 1fr; } }
-			/* 会话用量 Top N */
-			.tokmn-topn-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--tokmn-hairline); }
-			.tokmn-topn-row:last-child { border-bottom: none; }
-			.tokmn-topn-idx { width: 20px; text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; flex: none; }
-			.tokmn-topn-main { flex: 1; min-width: 0; }
-			.tokmn-topn-title { font-size: 13px; color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-			.tokmn-topn-bar { height: 5px; border-radius: 3px; background: var(--tokmn-cell-empty); overflow: hidden; margin-top: 5px; }
-			.tokmn-topn-bar-fill { height: 100%; border-radius: 3px; background: var(--dsw-alias-brand-primary); }
-			.tokmn-topn-num { width: 80px; text-align: right; font-size: 13px; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; flex: none; }
+			/* 会话活跃分布（v0.5.0）：密集排行 —— 序号 | 标题 | 总量 | 占比·轮次 | 近 30 日逐日格 */
+			.tokmn-sess { display: flex; flex-direction: column; min-width: 0; }
+			/* 卡头标题区：meta 文案（"近 30 日 · 共 45 个工作目录"）在窄列下要被压缩
+			   截断，而不是把卡片撑破（v0.5.1 用户截图里它被边界裁掉）。 */
+			.tokmn-sess-head-l { display: flex; align-items: baseline; min-width: 0; }
+			.tokmn-sess-head-l > .tokmn-sec-title { flex: none; }
+			.tokmn-sess-head-l > .tokmn-meta { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.tokmn-sess-ctl { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+			.tokmn-sess-search { width: 116px; }
+			.tokmn-select { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); border: 1px solid var(--tokmn-border); border-radius: 6px; padding: 3px 6px; font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; }
+			.tokmn-select:focus { outline: none; border-color: var(--dsw-alias-brand-primary); }
+			/* 默认 Top 10 恰好一屏放满（不需滚动）；切更大条数才内滚 */
+			.tokmn-sess-list { max-height: 420px; overflow-y: auto; overflow-x: hidden; }
+			.tokmn-sess-row { display: flex; align-items: center; gap: 10px; padding: 5px 6px; margin: 0 -6px; border-radius: 6px; }
+			/* 行间极淡分隔线：10 行两行式文本连排时容易串行，给一条可跟随的引导线 */
+			.tokmn-sess-row + .tokmn-sess-row { border-top: 1px solid var(--tokmn-hairline); }
+			.tokmn-sess-row:hover { background: var(--dsw-alias-interactive-bg-hover); }
+			.tokmn-sess-idx { width: 16px; flex: none; text-align: right; font-size: 11px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+			/* 名称列两行：标题（认得出是哪个会话）+ 身份行（工作目录 · 最后活跃日） */
+			.tokmn-sess-name { flex: 1 1 auto; min-width: 56px; display: flex; flex-direction: column; gap: 1px; }
+			.tokmn-sess-title { font-size: 13px; line-height: 1.3; color: var(--dsw-alias-label-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.tokmn-sess-id { font-size: 11px; line-height: 1.25; color: var(--dsw-alias-label-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+			.tokmn-sess-tag { display: inline-block; margin-right: 5px; padding: 0 5px; border-radius: 4px; background: var(--tokmn-cell-empty); font-size: 10px; line-height: 14px; }
+			.tokmn-sess-num { flex: none; width: 84px; text-align: right; font-size: 13px; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+			.tokmn-sess-sub { flex: none; width: 96px; text-align: right; font-size: 11px; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+			/* 逐日分布：**底部对齐的迷你柱**（空日 3px 基线、有量 5–18px 高柱，见
+			   distCellStyle）。等高条带遇稀疏数据会渲染成"一整条灰带 + 右侧一个深块"，
+			   既没有信息量又添视觉噪声；矮基线 + 高柱才扫得动。 */
+			.tokmn-sess-spark { flex: none; display: flex; align-items: flex-end; gap: 2px; height: 18px; }
+			.tokmn-sess-cell { width: 5px; border-radius: 2px; background: var(--tokmn-cell-empty); }
+			@media (max-width: 720px) { .tokmn-sess-sub { display: none; } }
 			/* hero：上下文剩余（ZCode context bar 语言） */
 			.tokmn-hero { background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--tokmn-border); border-radius: 12px; padding: 16px 20px 14px; margin-bottom: 16px; }
 			.tokmn-hero-wait { font-size: 13px; color: var(--dsw-alias-label-secondary); padding: 10px 0 6px; }
@@ -250,6 +280,15 @@ window.__ModuleLoader__.load({
 			return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 		}
 
+		/** 毫秒时间戳 → 「今天」/「09-10」：会话身份行里的最后活跃日。 */
+		function fmtDayShort(ms) {
+			if (typeof ms !== "number" || !isFinite(ms) || ms <= 0) return "";
+			const d = new Date(ms);
+			const today = new Date();
+			if (d.toDateString() === today.toDateString()) return "今天";
+			return String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+		}
+
 		function parseKey(k) {
 			const p = String(k || "").split("-").map(Number);
 			return new Date(p[0] || 1970, (p[1] || 1) - 1, p[2] || 1);
@@ -324,6 +363,24 @@ window.__ModuleLoader__.load({
 			return { background: "var(--dsw-alias-brand-primary)", opacity: op };
 		}
 
+		/**
+		 * 会话活跃分布格（v0.5.0 起）。
+		 *
+		 * 以**该行自身峰值**归一化 —— 分布回答的是"这行哪几天在活跃"，跨行的绝对
+		 * 量级已由数值列表达；若按全局峰值归一化，小行会整条褪成近底色、形态不可读。
+		 *
+		 * v0.5.1 改为**底部对齐的柱**（空日只留 3px 基线、有量给 5–18px 高柱，高度与
+		 * 透明度双编码）：实测按会话维度近 30 日只有 4% 的格非零，等高条带会渲染成
+		 * "一整条灰带 + 右侧一个深块"，看不出趋势也压不住噪声；矮基线 + 高柱把
+		 * "哪天在活跃、量有多大"变成可直接横向扫读的形态。
+		 */
+		function distCellStyle(v, max) {
+			if (!(v > 0) || !(max > 0)) return { height: "3px", background: "var(--tokmn-cell-empty)" };
+			const r = Math.min(1, v / max);
+			const op = r < 0.1 ? 0.45 : r < 0.3 ? 0.62 : r < 0.6 ? 0.82 : 1;
+			return { height: Math.round(5 + r * 13) + "px", background: "var(--dsw-alias-brand-primary)", opacity: op };
+		}
+
 		/** 分段切换控件。 */
 		function Seg(options) {
 			const opts = options.options, value = options.value, onChange = options.onChange;
@@ -382,6 +439,154 @@ window.__ModuleLoader__.load({
 			];
 		}
 
+		/**
+		 * 会话活跃分布（全局浮窗「使用分布」右列，v0.5.0 替代原「会话用量 Top N」）。
+		 *
+		 * 首要解决的是**认不认得出是哪个会话**：主机折叠会话日志给出标题与工作
+		 * 目录，行内以「标题 + 身份行（目录 · 最后活跃 · 子会话）」两行呈现；只有
+		 * 折叠彻底失败时才退回截断 ID（此时身份行补上 ID，避免整行无信息）。
+		 *
+		 * 其次是**看不看得出分布**：原"单条按榜首归一化的比例条"只能回答"谁排
+		 * 第一"，逐日格把时间维度摊到行内，一眼可辨"长期滴灌"与"单日爆发"。
+		 *
+		 * 三组控件（排序键 / 搜索 / 条数）全部在**本地集合**上即时生效：主机下发
+		 * Top 50 候选（`sessions.rows`）+ 窗口分母（`totalAll` / `callsAll`），
+		 * 交互不回主机取数，5s 轮询照常刷新。搜索匹配标题 / ID / 工作目录。
+		 *
+		 * 占比分母 = 窗口内**全部**会话合计，而非所选行之和（长尾会话会让后者虚高）。
+		 */
+		function SessionActivityCard(props) {
+			const p = props || {};
+			const rows = p.rows || [];
+			const byCwd = p.byCwd || {};
+			const cwdRows = byCwd.rows || [];
+			const cwdUnresolved = byCwd.unresolved || 0;
+			const dates = p.dates || [];
+			const totalAll = p.totalAll || 0;
+			const callsAll = p.callsAll || 0;
+			const matched = typeof p.matched === "number" ? p.matched : rows.length;
+			const windowDays = p.windowDays || dates.length || 30;
+			const [dim, setDim] = react.useState("session");
+			const [sortKey, setSortKey] = react.useState("tokens");
+			const [query, setQuery] = react.useState("");
+			const [limit, setLimit] = react.useState(10);
+
+			// 两个维度共用同一套控件与行结构，只是数据源与"名称/身份行"的语义不同：
+			// 会话维度回答"这个会话"，目录维度回答"这个项目"（把同目录多个会话叠加，
+			// 单会话只有 1–2 天活跃，叠加后才看得出项目的活跃形态）。
+			const isCwd = dim === "cwd";
+			const srcRows = isCwd ? cwdRows : rows;
+			const denom = isCwd ? (byCwd.totalAll || 0) : totalAll;
+			const srcMatched = isCwd ? (byCwd.matched || cwdRows.length) : matched;
+
+			const q = query.trim().toLowerCase();
+			const shown = srcRows
+				.filter((r) => !q
+					|| String(r.title || "").toLowerCase().indexOf(q) >= 0
+					|| String(r.sessionId || "").toLowerCase().indexOf(q) >= 0
+					|| String(r.cwdName || "").toLowerCase().indexOf(q) >= 0)
+				.slice()
+				.sort((a, b) => (sortKey === "calls"
+					? (b.calls || 0) - (a.calls || 0) || (b.total || 0) - (a.total || 0)
+					: (b.total || 0) - (a.total || 0) || (b.calls || 0) - (a.calls || 0)))
+				.slice(0, limit);
+
+			const list = shown.length === 0
+				? react.createElement("div", { className: "tokmn-empty" }, srcRows.length === 0
+					? (isCwd
+						? "暂无数据 —— 近 " + windowDays + " 日尚无可归入工作目录的会话。"
+						: "暂无数据 —— 近 " + windowDays + " 日有用量的会话会按总量排在这里。")
+					: "没有匹配「" + query.trim() + "」的" + (isCwd ? "目录" : "会话") + "。")
+				: react.createElement("div", { className: "tokmn-sess-list" },
+					shown.map((r, i) => {
+						const daily = Array.isArray(r.daily) ? r.daily : [];
+						const peak = Math.max(1, ...daily);
+						const pct = denom > 0 ? (r.total || 0) / denom : 0;
+						const cwdRow = r.kind === "cwd";
+						const cells = [];
+						for (let d = 0; d < windowDays; d++) {
+							const v = daily[d] || 0;
+							cells.push(react.createElement("span", {
+								key: d, className: "tokmn-sess-cell", style: distCellStyle(v, peak),
+								title: (dates[d] || ("第 " + (d + 1) + " 日")) + " · " + (v > 0 ? full(v) + " tokens" : "无用量")
+							}));
+						}
+						// 身份行：会话维度是「工作目录 · 最后活跃日」，目录维度是「N 个会话 · 最后活跃日」；
+						// 整行既无标题也无身份可用时，把截断 ID 放这里兜底（不编造名字）。
+						const meta = [];
+						if (cwdRow) {
+							meta.push((r.sessions || 0) + " 个会话");
+							if (r.last) meta.push(fmtDayShort(r.last));
+						} else {
+							if (r.cwdName) meta.push(String(r.cwdName));
+							if (r.last) meta.push(fmtDayShort(r.last));
+						}
+						let metaText = meta.join(" · ");
+						if (!metaText && !r.title) metaText = shortId(r.sessionId);
+						const idLine = ((!cwdRow && r.subagent) || metaText)
+							? react.createElement("div", { className: "tokmn-sess-id", title: r.cwd || undefined },
+								(!cwdRow && r.subagent) ? react.createElement("span", { className: "tokmn-sess-tag" }, "子会话") : null,
+								metaText)
+							: null;
+						return react.createElement("div", { className: "tokmn-sess-row", key: (cwdRow ? "cwd:" + r.key : r.sessionId) + "#" + i },
+							react.createElement("span", { className: "tokmn-sess-idx" }, i + 1),
+							react.createElement("div", {
+								className: "tokmn-sess-name",
+								title: cwdRow
+									? (r.cwd || r.cwdName || "") + "\n" + (r.sessions || 0) + " 个会话"
+									: (r.title ? r.title + "\n" : "") + "ID " + r.sessionId
+										+ (r.cwd ? "\n目录 " + r.cwd : "")
+										+ (r.agentPreset ? "\n预设 " + r.agentPreset : "")
+							},
+								react.createElement("div", { className: "tokmn-sess-title" },
+									cwdRow ? (r.cwdName || r.title || r.key) : (r.title || shortId(r.sessionId))),
+								idLine),
+							react.createElement("div", { className: "tokmn-sess-num", title: full(r.total) + " tokens" },
+								fmtCn(r.total)),
+							react.createElement("div", {
+								className: "tokmn-sess-sub",
+								title: "占" + (cwdRow ? "已归入目录的" : "窗口内全部会话") + " " + full(denom) + " tokens 的 " + fmtPct(pct)
+									+ "；该" + (cwdRow ? "目录 " + (r.sessions || 0) + " 个会话" : "会话") + "共 " + (r.calls || 0) + " 轮"
+									+ "，窗口内共 " + full(cwdRow ? (byCwd.callsAll || 0) : callsAll) + " 轮消息"
+							}, fmtPct(pct) + " · " + (r.calls || 0) + " 轮"),
+							react.createElement("div", { className: "tokmn-sess-spark" }, cells));
+					}));
+
+			return react.createElement("div", { className: "tokmn-sess" },
+				react.createElement("div", { className: "tokmn-sec-head" },
+					react.createElement("div", { className: "tokmn-sess-head-l" },
+						react.createElement("span", { className: "tokmn-sec-title", style: { marginRight: 10 } }, "会话活跃分布"),
+						react.createElement("span", {
+							className: "tokmn-meta",
+							title: cwdUnresolved > 0
+								? cwdUnresolved + " 个会话的日志尚未解析出工作目录，未计入目录维度（首轮折叠完成后自动补齐）"
+								: undefined
+						},
+							"近 " + windowDays + " 日 · 共 " + srcMatched + " 个" + (isCwd ? "工作目录" : "会话"))),
+					react.createElement("div", { className: "tokmn-sess-ctl" },
+						Seg({
+							options: [{ value: "session", label: "按会话" }, { value: "cwd", label: "按工作目录" }],
+							value: dim, onChange: setDim
+						}),
+						Seg({
+							options: [{ value: "tokens", label: "按 Token" }, { value: "calls", label: "按轮消息" }],
+							value: sortKey, onChange: setSortKey
+						}),
+						react.createElement("input", {
+							className: "tokmn-input tokmn-sess-search", type: "text",
+							value: query, placeholder: isCwd ? "搜索目录…" : "搜索会话…",
+							"aria-label": isCwd ? "搜索工作目录" : "搜索会话",
+							onChange: (e) => setQuery(e.target.value)
+						}),
+						react.createElement("select", {
+							className: "tokmn-select", value: String(limit),
+							"aria-label": "显示条数", title: "显示条数",
+							onChange: (e) => setLimit(Number(e.target.value) || 10)
+						}, [10, 20, 30, 50].map((n) =>
+							react.createElement("option", { key: n, value: String(n) }, "Top " + n))))),
+				list);
+		}
+
 		/** 全局用量统计浮窗（shell.overlay，root 作用域）：关闭态返回 null、
 		    开启态渲染全帧背板 + 内容面板；开启期间才挂载数据轮询，关闭即停。
 		    浮层自持 <style>（不依赖侧栏按钮的那份）——overlayLayer 与侧栏脚部
@@ -417,7 +622,7 @@ window.__ModuleLoader__.load({
 		}
 
 		/** 全局统计内容：总览六卡 → 热力图 → 使用趋势 → 使用分布（模型环形 +
-		    会话 Top N）→ 使用总量（今日 + 限额 + 重置）→ 口径脚注。
+		    会话活跃分布）→ 使用总量（今日 + 限额 + 重置）→ 口径脚注。
 		    开启期间 /global 5 秒、/heatmap 60 秒轮询；组件卸载即全部停止。 */
 		function GlobalStatsContent() {
 			const [data, setData] = react.useState(null);
@@ -484,7 +689,17 @@ window.__ModuleLoader__.load({
 			const overview = data ? (data.stats || {}) : {};
 			const today = (data && data.today) || { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, reasoningTokens: 0, total: 0, calls: 0 };
 			const trend = (data && data.trend) || [];
-			const topn = (data && data.sessions && data.sessions.rows) || [];
+			// 会话活跃分布（v0.5.0）：主机下发 Top 50 候选 + 窗口分母，排序 / 搜索 /
+			// 条数切换全部在客户端这份集合上即时完成，不额外回主机取数。
+			const sess = (data && data.sessions) || {};
+			const sessRows = sess.rows || [];
+			const sessDates = sess.dates || [];
+			const sessWindowTotal = sess.totalAll || 0;
+			const sessWindowCalls = sess.callsAll || 0;
+			const sessMatched = typeof sess.matched === "number" ? sess.matched : sessRows.length;
+			const sessWindowDays = sess.windowDays || sessDates.length || 30;
+			// 第二维度：按工作目录聚合（同目录多会话叠加，才看得出项目的活跃形态）。
+			const sessByCwd = sess.byCwd || {};
 			const limit = data && data.config ? (data.config.dailyTokenLimit || null) : null;
 			const since = (data && data.since) || null;
 
@@ -597,7 +812,9 @@ window.__ModuleLoader__.load({
 				if (!card) return;
 				const cr = card.getBoundingClientRect();
 				const tr = e.currentTarget.getBoundingClientRect();
-				const x = Math.max(0, Math.min(tr.left - cr.left + tr.width / 2 - 80, cr.width - 170));
+				// 右边界按提示框上限留位（max-width 340 + padding 22 + 余量），而不是
+				// 早先硬编码的 170 —— 后者是"内容最多 170px"的旧假设，现已不成立。
+				const x = Math.max(0, Math.min(tr.left - cr.left + tr.width / 2 - 80, Math.max(0, cr.width - 366)));
 				const y = (tr.top - cr.top) < 54 ? (tr.bottom - cr.top + 8) : (tr.top - cr.top - 50);
 				setHeatTip({ x, y, lines });
 			};
@@ -720,6 +937,10 @@ window.__ModuleLoader__.load({
 					const nm = parts[1];
 					return {
 						key: entry[0], provider: parts[0],
+						// 显示名：同名模型跨供应商时加 provider 前缀以便区分。`model` 单独留着，
+						// 供 hover 提示给出**完整模型名** —— 窄列下 label 必然被截断
+						// （deepseek-v4.1-flash-expires-on-0910），提示里只给 provider 等于没给。
+						model: nm,
 						label: modelNameCount[nm] > 1 ? parts[0] + "/" + nm : nm,
 						total: entry[1], color: colorOf[entry[0]] || PALETTE[0]
 					};
@@ -759,9 +980,12 @@ window.__ModuleLoader__.load({
 				const last = slice.length - 1;
 				if (last >= 0 && tickIdx.indexOf(last) < 0) tickIdx.push(last);
 			}
+			// hover 明细只列当日**有量**的模型：这天没用到的模型列出来既占地，又会用
+			// 长名字把提示框撑宽（v0.5.1 用户截图：8 行里 7 行是 0，数字还被裁掉）。
 			const hoverRows = (hoverIdx !== null && hoverIdx >= 0 && hoverIdx < slice.length)
 				? visibleModels
 					.map((m) => ({ m, v: valMaps[hoverIdx][m.key] || 0 }))
+					.filter((r) => r.v > 0)
 					.sort((a, b) => b.v - a.v)
 				: [];
 
@@ -774,11 +998,14 @@ window.__ModuleLoader__.load({
 				const dash = Math.max(0.004, frac - 0.01) * D_C;
 				const off = -dAcc * D_C;
 				dAcc += frac;
-				return { color: m.color, dash, off };
+				// 每个扇形带一份提示文案：环形图此前只有颜色、悬浮不出任何信息。
+				return {
+					color: m.color, dash, off,
+					tip: m.model + " · " + fmtCn(m.total) + " tokens（" + fmtPct(frac) + "）"
+				};
 			});
 
-			// 会话 Top N：占比条以榜首为满刻度。
-			const topnMax = Math.max(1, ...topn.map((r) => r.total || 0));
+			// 会话分布条按各会话自身峰值归一化（见 distCellStyle），无需全局满刻度。
 
 			return react.createElement("div", { className: "tokmn-ov-body" },
 				error ? react.createElement("p", { style: { color: "var(--dsw-alias-state-error-primary)", fontSize: 12 } }, "加载失败: " + error) : null,
@@ -841,7 +1068,7 @@ window.__ModuleLoader__.load({
 										key: m.key,
 										className: "tokmn-legend-chip" + (hiddenModels.has(m.key) ? " tokmn-legend-chip-off" : ""),
 										onClick: () => toggleModel(m.key),
-										title: m.provider + " · 点击显示/隐藏"
+										title: m.model + " · " + m.provider + " · 点击显示/隐藏"
 									},
 										react.createElement("span", { className: "tokmn-dot", style: { background: m.color } }),
 										m.label,
@@ -892,25 +1119,32 @@ window.__ModuleLoader__.load({
 										? react.createElement("div", {
 											className: "tokmn-tip",
 											style: {
-												left: Math.max(0, Math.min(xAt(hoverIdx) + 12, chartWpx - 190)),
+												// 右边界按提示框实际最大宽度（max-width 340 + 左右 padding 22）
+												// 留位，而不是早先硬编码的 190 —— 后者对长模型名不够，
+												// 提示框被面板裁掉、数字看不见。
+												left: Math.max(0, Math.min(xAt(hoverIdx) + 12, chartWpx - 366)),
 												top: PAD_T + 4
 											}
 										},
 											react.createElement("div", null, longDate(parseKey(slice[hoverIdx].date)) + " · " + full(slice[hoverIdx].total) + " tokens"),
-											hoverRows.map((r) => react.createElement("div", { key: r.m.key, className: "tokmn-tip-sub", style: { display: "flex", gap: 6, alignItems: "center" } },
+											hoverRows.map((r) => react.createElement("div", { key: r.m.key, className: "tokmn-tip-sub tokmn-tip-row" },
 												react.createElement("span", { className: "tokmn-dot", style: { background: r.m.color } }),
-												react.createElement("span", null, r.m.label),
-												react.createElement("span", { className: "tokmn-mono", style: { marginLeft: "auto", paddingLeft: 12 } }, fmtCn(r.v)))))
+												react.createElement("span", { className: "tokmn-tip-name" }, r.m.label),
+												react.createElement("span", { className: "tokmn-mono tokmn-tip-val" }, fmtCn(r.v)))))
 										: null)))),
 
-					// 使用分布：模型环形图 + 会话 Top N
+					// 使用分布：模型环形图 + 会话活跃分布（逐日柱）
+					// 注：「近 N 日」只作用于模型环形图（它按趋势窗口切片），故挂在
+					// 模型卡标题旁 —— 挂在区域头部会被误读成整块（含会话分布，固定
+					// 近 30 日）的口径。
 					react.createElement("div", { className: "tokmn-sec" },
 						react.createElement("div", { className: "tokmn-sec-head" },
-							react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "使用分布"),
-							react.createElement("span", { className: "tokmn-meta" }, "近 " + range + " 日")),
+							react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "使用分布")),
 						react.createElement("div", { className: "tokmn-dist" },
 							react.createElement("div", { className: "tokmn-card" },
-								react.createElement("div", { className: "tokmn-sec-title" }, "模型用量"),
+								react.createElement("div", { className: "tokmn-sec-head", style: { margin: "0 0 10px" } },
+									react.createElement("div", { className: "tokmn-sec-title", style: { margin: 0 } }, "模型用量"),
+									react.createElement("span", { className: "tokmn-meta" }, "近 " + range + " 日")),
 								models.length === 0
 									? react.createElement("div", { className: "tokmn-empty" }, "暂无数据。")
 									: react.createElement("div", { className: "tokmn-donut" },
@@ -922,7 +1156,9 @@ window.__ModuleLoader__.load({
 												strokeDasharray: s.dash + " " + (D_C - s.dash),
 												strokeDashoffset: s.off,
 												transform: "rotate(-90 " + D_CX + " " + D_CY + ")"
-											})),
+											},
+												// SVG 原生提示（零 JS）：扇形 hover 给出模型名 / 用量 / 占比。
+												react.createElement("title", null, s.tip))),
 											react.createElement("text", {
 												x: D_CX, y: D_CY - 1, textAnchor: "middle", fontSize: 20, fontWeight: 700,
 												fill: "var(--dsw-alias-label-primary)"
@@ -937,27 +1173,19 @@ window.__ModuleLoader__.load({
 												return react.createElement("div", { className: "tokmn-model-row", key: m.key },
 													react.createElement("span", { className: "tokmn-dot", style: { background: m.color } }),
 													react.createElement("div", { style: { minWidth: 0 } },
-														react.createElement("div", { className: "tokmn-name tokmn-code", title: m.provider }, m.label),
+														react.createElement("div", {
+									className: "tokmn-name tokmn-code",
+									title: m.model + " · " + m.provider
+								}, m.label),
 														react.createElement("div", { className: "tokmn-meta", title: full(m.total) }, fmtCn(m.total) + " tokens")),
 													react.createElement("span", { className: "tokmn-pct" }, fmtPct(frac)));
 											})))),
 							react.createElement("div", { className: "tokmn-card" },
-								react.createElement("div", { className: "tokmn-sec-title" }, "会话用量 Top " + (topn.length || 10)),
-								topn.length === 0
-									? react.createElement("div", { className: "tokmn-empty" }, "暂无数据 —— 近 30 日有用量的会话会按总量排在这里。")
-									: topn.map((r, i) => react.createElement("div", { className: "tokmn-topn-row", key: r.sessionId + "#" + i },
-										react.createElement("span", { className: "tokmn-topn-idx" }, i + 1),
-										react.createElement("div", { className: "tokmn-topn-main" },
-											react.createElement("div", { className: "tokmn-topn-title", title: r.sessionId },
-												r.title || shortId(r.sessionId)),
-											react.createElement("div", { className: "tokmn-topn-bar" },
-												react.createElement("div", {
-													className: "tokmn-topn-bar-fill",
-													style: { width: Math.max(2, Math.round(((r.total || 0) / topnMax) * 100)) + "%" }
-												}))),
-										react.createElement("div", { className: "tokmn-topn-num", title: full(r.total) },
-											fmtCn(r.total),
-											react.createElement("div", { className: "tokmn-meta" }, (r.calls || 0) + " 轮消息"))))))),
+								react.createElement(SessionActivityCard, {
+									rows: sessRows, dates: sessDates, totalAll: sessWindowTotal,
+									callsAll: sessWindowCalls, matched: sessMatched, windowDays: sessWindowDays,
+									byCwd: sessByCwd
+								})))),
 
 					// 使用总量：今日 + 限额 + 重置
 					react.createElement("div", { className: "tokmn-sec" },
@@ -983,7 +1211,7 @@ window.__ModuleLoader__.load({
 
 				react.createElement("p", { className: "tokmn-foot" },
 					(data && data.note) ||
-					"全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话排行基于账本 sessionId 按近 30 日聚合，标题尽力解析、已归档或删除的会话只显示 ID；日限额为本地自定义配置（DSH 无配额接口）。"));
+					"全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按各会话自身峰值分档，标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，取不到时降级显示截断 ID）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口）。"));
 		}
 
 		/**
