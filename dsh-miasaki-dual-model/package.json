@@ -1,0 +1,42 @@
+{
+  "name": "@miasaki/dsh-dual-model",
+  "version": "0.1.0-miasaki.0",
+  "description": "DSH web dual-model plugin: session-level primary + assist model, so images can be attached whenever either one accepts them.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/",
+    "test/",
+    "patches/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node --check index.js && node --check client.js && node --check lib/content.js && node --check lib/routing.js && node --check lib/capability.js && node --check lib/store.js && node --check patches/dsh-api-session-controller/patch.mjs",
+    "prepare": "pnpm run build",
+    "test": "node --test test/*.test.js",
+    "patch:verify": "node patches/dsh-api-session-controller/patch.mjs verify",
+    "patch:status": "node patches/dsh-api-session-controller/patch.mjs status"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": false
+    }
+  }
+}

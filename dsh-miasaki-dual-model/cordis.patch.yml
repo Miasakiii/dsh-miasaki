@@ -1,0 +1,12 @@
+# @miasaki/dsh-dual-model only extends the Web profile: it reuses the existing
+# DSH server rather than running a second application process.
+#
+# 注意：本插件同时依赖 `patches/dsh-api-session-controller/` 的运行时补丁（或把它
+# 判定委托给本插件的 `dualModelVisionRoute` 服务）。未打补丁时插件仍可装载，只是
+# 「图片准入」保持 DSH 原生行为（主模型不支持图片即拒收）—— 功能降级而非报错。
+- insert:
+    - id: dual-model
+      name: "@miasaki/dsh-dual-model"
+      config:
+        # 本线独占的数据目录（辅助模型配置），刻意不与其它线共享。
+        dataDir: !!js dshHomePath('miasaki-dual-model/')
