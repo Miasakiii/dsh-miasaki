@@ -1,0 +1,14 @@
+# @miasaki/dsh-ssh only extends the Web profile: it reuses the existing DSH
+# server rather than running a second application process.
+- insert:
+    - id: ssh
+      name: "@miasaki/dsh-ssh"
+      config:
+        # All SSH-line state (connection library + known_hosts) lives in its
+        # own directory, deliberately not shared with any other line.
+        dataDir: !!js dshHomePath('miasaki-ssh/')
+        # Extra authorities the /ssh Host check accepts (host or host:port);
+        # localhost and 127.0.0.1 are always allowed. Keep empty.
+        trustedHosts: []
+        # Connection/auth limits.
+        scrollbackBytes: 262144

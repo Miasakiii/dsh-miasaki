@@ -1,0 +1,10 @@
+# @miasaki/dsh-ssh — pnpm workspace settings (pnpm ≥ 11).
+#
+# ssh2 / cpu-features ship optional native build scripts purely as a
+# performance accelerator; the ssh2 client is fully functional as pure JS with
+# them skipped. The DSH host has no guarantee of VS Build Tools, so we
+# explicitly mark both never-built: `pnpm install` / `pnpm test` stay
+# deterministic (exit 0) with no node-gyp step.
+allowBuilds:
+  cpu-features: false
+  ssh2: false

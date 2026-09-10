@@ -1,0 +1,48 @@
+{
+  "name": "@miasaki/dsh-ssh",
+  "version": "0.1.0-miasaki.0",
+  "description": "DSH web SSH plugin: conversation-view tab entry + in-page interactive terminal for cloud servers.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "app.js",
+    "styles.css",
+    "lib/",
+    "test/",
+    "cordis.patch.yml",
+    "pnpm-workspace.yaml",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node --check index.js && node --check client.js && node --check app.js && node --check lib/store.js && node --check lib/runtime.js",
+    "prepare": "pnpm run build",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "ssh2": "^1.17.0",
+    "ws": "^8.18.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": false
+    }
+  }
+}
