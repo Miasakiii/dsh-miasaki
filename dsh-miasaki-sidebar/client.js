@@ -4,6 +4,11 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const react = require('react')
 
+    // 自研右栏壳已于 2026-09-10 退役（design/2026-09-10-migrate-to-official-rightbar.md）：
+    // 审查 / 终端改为官方右栏的 tab 类型（@deepseek-ai/dsh-client-ui-sidebar-right）。
+    // 壳层的注册点与生命周期已移除，但部分壳函数（推挤 / tab 列表 / 空态 / 抽屉判定）
+    // 仍作为**未调用的死代码**留在文件里，待第二阶段清理 —— 它们不再产生任何副作用。
+
     const STORAGE_PREFIX = 'miasaki-sidebar:v3'
     // Migration sources, newest first: v2 was per-session with a single `tab`,
     // v1 (≤ v0.3.x) was one global key. Each is read once, rewritten as v3 and
@@ -26,15 +31,22 @@ window.__ModuleLoader__.load({
     // sidebar on top of the canvas toolbar (design §3.1.1 constraint 4).
     const PANEL_Z = 60
 
-    // Frame resolution (2026-09-08 rework, probe-verified on DSH 0.1.2-rc.1):
-    // every slot host renders <div data-slot="<slotKey>">, so the conversation
-    // anchor is the semantic entry point — its parentElement is the AppFrame
-    // center column and one level up is the frame itself. The frame carries NO
-    // stable attribute of its own (data-dsh-frame / data-pane / data-slot are
-    // all absent on this build), so we climb from the official anchor, validate
-    // with the inline-style fingerprint, and keep the fingerprint query as the
-    // last resort. Single place, here.
-    const FRAME_ANCHOR_SELECTOR = '[data-slot="conversation"]'
+    // Frame resolution (2026-09-08 rework; re-verified on DSH 0.1.5-rc.1,
+    // 2026-09-10): every slot host renders <div data-slot="<slotKey>">, so the
+    // centre-panel anchor is the semantic entry point — its parentElement is
+    // the AppFrame center column and one level up is the frame itself. DSH
+    // 0.1.2 hosted the conversation at a ROOT-level 'conversation' slot; 0.1.5
+    // moved it under the root 'main' keyed slot (key 'conversation'), so the
+    // host is now [data-slot="main"] and the old selector matches nothing.
+    // Both are listed because each build matches exactly one — the climb stays
+    // unambiguous either way. The frame STILL carries no stable attribute of
+    // its own (0.1.5's frame data-* are all conditional, present only when
+    // true), so we climb from the anchor, validate with the inline-style
+    // fingerprint, and keep the fingerprint query as the last resort.
+    // Probe-verified on 0.1.5-rc.1: all three paths resolve to the same node,
+    // and the push moved the centre column by exactly the requested amount.
+    // Single place, here.
+    const FRAME_ANCHOR_SELECTOR = '[data-slot="main"], [data-slot="conversation"]'
     const FRAME_FINGERPRINT = 'div[style*="grid-template-columns"]'
     const FRAME_FALLBACK_SELECTOR = '#root ' + FRAME_FINGERPRINT
     const resolveFrame = () => {
@@ -266,7 +278,7 @@ window.__ModuleLoader__.load({
       if (frame !== null && frame.style.paddingRight !== '') frame.style.paddingRight = ''
     }
 
-    module.exports.inject = ['slots', 'layout', 'sessions']
+    module.exports.inject = ['slots', 'sessions', 'sidebarRightTabs']
     module.exports.apply = ctx => {
       // Idempotence guard: DSH HMR/page remount can re-run apply while the old
       // instance's DOM/listeners are still alive (canvas lesson).
@@ -282,8 +294,19 @@ window.__ModuleLoader__.load({
       }
 
       const style = document.createElement('style')
-      // All colors come from DSH alias tokens so the panel follows the three
-      // themes (web dark/light + desktop brand themes) without any bridge.
+      // Colors come from DSH alias tokens so the panel follows the three themes
+      // (web dark/light + desktop brand themes) without any bridge. Type and
+      // geometry now follow DSH's OWN design language, measured from the
+      // 0.1.2-rc.1 client-ui packages (2026-09-09, 37 packages / ~2.7M chars):
+      //   · Type — DSH ships shorthand tokens (--dsw-font-xxxs-11 … -l-20) whose
+      //     family is var(--dsw-font-family) and whose strong weight is 500.
+      //     Hardcoded "Inter, system-ui" + 600 read as a foreign component and
+      //     ignored the user's font-size setting; monospace must use
+      //     var(--ds-font-family-code) (Inter is NOT monospace).
+      //   · Geometry — radius ladder 4/6/8/10/12/999/50%; control heights
+      //     24/28/32; list rows are 32px tall with an 8px radius and 6px 8px
+      //     padding (jobs/session packages); the official details column draws
+      //     its edge as `.5px solid var(--dsw-alias-border-l3)` — matched here.
       style.textContent = [
         // Browser fallback entry: DSH-native icon-button style (28px circle,
         // transparent, secondary ink, hover token lift — copied from
@@ -306,7 +329,7 @@ window.__ModuleLoader__.load({
         // see the PUSH_VAR comment.
         `#root > [data-slot="root"] > div,${FRAME_FALLBACK_SELECTOR}{padding-right:var(${PUSH_VAR},0px)}`,
         `.dsh-sidebar-scrim{position:fixed;inset:0;z-index:${PANEL_Z};background:rgba(0,0,0,.32)}`,
-        `.dsh-sidebar-panel{position:fixed;top:var(--sidebar-chrome-reserve,0);right:0;bottom:0;z-index:${PANEL_Z};display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1,#f5f7fa);border-left:1px solid var(--dsw-alias-border-l2,#d1d5db);color:var(--dsw-alias-label-primary,#111827);transition:width .18s ease}`,
+        `.dsh-sidebar-panel{position:fixed;top:var(--sidebar-chrome-reserve,0);right:0;bottom:0;z-index:${PANEL_Z};display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1,#f5f7fa);border-left:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));color:var(--dsw-alias-label-primary,#111827);transition:width .18s ease}`,
         `.dsh-sidebar-panel[data-dragging]{transition:none}`,
         // Drawer mode only: animate the swipe-to-close offset, and kill the
         // transition while the finger is down so the panel tracks the pointer.
@@ -322,48 +345,60 @@ window.__ModuleLoader__.load({
         // tabs overflow, so every popover anchored to a button INSIDE it must
         // be position:fixed — an absolute child would be clipped by this
         // overflow (see .dsh-sidebar-popover).
-        `.dsh-sidebar-tabs{display:flex;align-items:center;gap:2px;padding:6px 8px;border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}`,
-        `.dsh-sidebar-tab{display:flex;align-items:center;gap:4px;height:28px;flex:none;max-width:170px;border:0;border-radius:8px;background:transparent;padding:0 3px 0 10px;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}`,
+        `.dsh-sidebar-tabs{display:flex;align-items:center;gap:2px;padding:6px 12px;border-bottom:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:none;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}`,
+        `.dsh-sidebar-tab{display:flex;align-items:center;gap:4px;height:28px;flex:none;max-width:170px;border:0;border-radius:8px;background:transparent;padding:0 3px 0 10px;color:var(--dsw-alias-label-secondary,#6b7280);font:var(--dsw-font-xxs-strong-12,500 12px/18px system-ui);cursor:pointer;white-space:nowrap}`,
         `.dsh-sidebar-tab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         // Selected tab reuses the hover token (the DSH left sidebar's neutral
         // gray pill is the agreed reference, not the brand-blue selected).
         `.dsh-sidebar-tab[aria-selected="true"]{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-tab:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:-2px}`,
         `.dsh-sidebar-tab-label{overflow:hidden;text-overflow:ellipsis}`,
-        `.dsh-sidebar-tab-close{flex:none;width:18px;height:18px;border:0;border-radius:5px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:600 12px Inter,system-ui,sans-serif;line-height:1;display:flex;align-items:center;justify-content:center}`,
+        `.dsh-sidebar-tab-close{flex:none;width:18px;height:18px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:var(--dsw-font-xxs-strong-12,500 12px/18px system-ui);line-height:1;display:flex;align-items:center;justify-content:center}`,
         `.dsh-sidebar-tab-close:hover{background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-tablist{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center}`,
+        `.dsh-sidebar-tablist{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:var(--dsw-font-xxxs-11,11px/14px system-ui);line-height:1;display:flex;align-items:center;justify-content:center}`,
         `.dsh-sidebar-tablist:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-newtab{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:600 13px Inter,system-ui,sans-serif;line-height:1;display:flex;align-items:center;justify-content:center}`,
+        `.dsh-sidebar-newtab{flex:none;width:22px;height:22px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:var(--dsw-font-xs-13,13px/20px system-ui);line-height:1;display:flex;align-items:center;justify-content:center}`,
         `.dsh-sidebar-newtab:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         // Popovers: fixed, because their anchors live inside overflow:auto
-        // containers (tab strip / review list head).
-        `.dsh-sidebar-popover{position:fixed;z-index:${PANEL_Z + 1};min-width:150px;max-width:280px;max-height:60vh;overflow:auto;padding:4px;border-radius:10px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 8px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:1px}`,
-        `.dsh-sidebar-menuitem{display:flex;align-items:center;gap:6px;width:100%;min-height:28px;padding:4px 8px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;text-align:left;font:400 12px Inter,system-ui,sans-serif}`,
+        // containers (tab strip / review list head). Radius 8px = DSH's most
+        // common overlay radius (was 10px, an off-ladder value).
+        `.dsh-sidebar-popover{position:fixed;z-index:${PANEL_Z + 1};min-width:150px;max-width:280px;max-height:60vh;overflow:auto;padding:4px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 8px 24px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:1px}`,
+        `.dsh-sidebar-menuitem{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:6px 8px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;text-align:left;font:var(--dsw-font-xxs-12,12px/18px system-ui)}`,
         `.dsh-sidebar-menuitem:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
         `.dsh-sidebar-menuitem[disabled]{opacity:.45;cursor:not-allowed}`,
         `.dsh-sidebar-menuitem[aria-checked="true"]{font-weight:600}`,
-        `.dsh-sidebar-menutick{flex:none;width:12px;font-size:11px}`,
+        `.dsh-sidebar-menutick{flex:none;width:12px;font:var(--dsw-font-xxxs-11,11px/14px system-ui)}`,
         `.dsh-sidebar-menuicon{flex:none;display:flex;color:var(--dsw-alias-label-secondary,#6b7280)}`,
         `.dsh-sidebar-menuicon svg{width:14px;height:14px}`,
         // Panes: every open tab stays mounted (browser semantics) and inactive
         // ones are display:none, so switching back never refetches or resets.
+        // Horizontal padding 12px matches DSH's --dsh-sidebar-inline-padding,
+        // so the panel's left gutter lines up with the host's own sidebars.
         `.dsh-sidebar-panes{flex:1;min-height:0;display:flex;flex-direction:column}`,
-        `.dsh-sidebar-pane{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px 14px;font:400 12px/1.7 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        `.dsh-sidebar-pane{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px;font:var(--dsw-font-xs-13,13px/20px system-ui);color:var(--dsw-alias-label-secondary,#6b7280)}`,
         // Used inside a pane (which already pads), so it carries no padding of
         // its own — only its own scroll and type scale.
-        `.dsh-sidebar-body{flex:1;min-height:0;overflow:auto;font:400 12px/1.7 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        `.dsh-sidebar-body{flex:1;min-height:0;overflow:auto;font:var(--dsw-font-xs-13,13px/20px system-ui);color:var(--dsw-alias-label-secondary,#6b7280);scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,rgba(127,127,127,.3)) transparent}`,
         `.dsh-sidebar-body strong{color:var(--dsw-alias-label-primary,#111827)}`,
         // Empty state: Edge-style tab picker (user reference 2026-09-06) —
-        // centered headline + one card per tab; clicking a card opens it.
-        `.dsh-sidebar-empty{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 20px;text-align:center}`,
-        `.dsh-sidebar-empty h3{margin:0 0 4px;font:600 15px/1.4 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-empty p{margin:0 0 20px;font:400 12px/1.6 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        // headline + one card per tab; clicking a card opens it. Anchored to
+        // the TOP of the pane (was vertically centred, which left ~310px of
+        // dead space above and made the panel read as unfinished — visual
+        // review 2026-09-09).
+        `.dsh-sidebar-empty{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;padding:36px 20px 24px;text-align:center}`,
+        `.dsh-sidebar-empty h3{margin:0 0 6px;font:var(--dsw-font-base-strong-16,500 16px/24px system-ui);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-empty p{margin:0 0 24px;font:var(--dsw-font-xxs-12,12px/18px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
         `.dsh-sidebar-cards{display:flex;gap:10px;width:100%;max-width:340px;justify-content:center}`,
-        `.dsh-sidebar-card{flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;padding:18px 8px 13px;border-radius:12px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.06));cursor:pointer;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-card{position:relative;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:16px 8px;border-radius:12px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.06));cursor:pointer;color:var(--dsw-alias-label-secondary,#6b7280);font:var(--dsw-font-xxs-strong-12,500 12px/18px system-ui)}`,
         `.dsh-sidebar-card:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);border-color:var(--dsw-alias-border-l3,rgba(127,127,127,.35));color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-card:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}`,
-        `.dsh-sidebar-card[disabled]{opacity:.4;cursor:not-allowed}`,
+        // Disabled card (sidechat, M2): keep the SAME surface as its siblings
+        // and express "not yet" with a corner tag + muted label. The old
+        // `opacity:.4` greyed the whole card to ~2:1 contrast and made one card
+        // look like a different component (visual review 2026-09-09).
+        `.dsh-sidebar-card[disabled]{cursor:not-allowed;color:var(--dsw-alias-label-tertiary,#9ca3af);background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.06))}`,
+        `.dsh-sidebar-card[disabled]:hover{background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.06));border-color:var(--dsw-alias-border-l2,#d1d5db)}`,
+        `.dsh-sidebar-cardtag{position:absolute;top:6px;right:6px;font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
         `.dsh-sidebar-card svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.1;stroke-linecap:round;stroke-linejoin:round}`,
         `.dsh-sidebar-resize{position:absolute;top:0;bottom:0;left:-3px;width:6px;cursor:col-resize;touch-action:none;z-index:1}`,
         // Review tab (v0.5.0): view dropdown + directory groups + per-file
@@ -371,148 +406,71 @@ window.__ModuleLoader__.load({
         // carries a red inset edge, exactly like the pre-v0.5 border.
         `.dsh-sidebar-review{flex:1;min-height:0;display:flex;flex-direction:column;gap:10px}`,
         `.dsh-sidebar-review-head{display:flex;align-items:center;gap:8px;flex:none}`,
-        `.dsh-sidebar-viewbtn{display:flex;align-items:center;gap:4px;height:26px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:transparent;padding:0 8px;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:600 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-viewbtn{display:flex;align-items:center;gap:4px;height:28px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:transparent;padding:0 8px;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:var(--dsw-font-xxs-strong-12,500 12px/18px system-ui)}`,
         `.dsh-sidebar-viewbtn:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
-        `.dsh-sidebar-caret{font-size:9px;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
-        `.dsh-sidebar-badge{font:600 11px Inter,system-ui,sans-serif;border-radius:999px;padding:2px 8px;line-height:1.4}`,
+        `.dsh-sidebar-caret{font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-badge{font:var(--dsw-font-xxxs-strong-11,500 11px/14px system-ui);border-radius:999px;padding:2px 8px;line-height:1.4}`,
         `.dsh-sidebar-badge-warn{background:var(--dsw-static-deepseek-450,#9e1b1b);color:#fff}`,
-        `.dsh-sidebar-badge-ok{background:var(--dsw-alias-interactive-bg-selected,#e5e7eb);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-refresh{margin-left:auto;width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:14px;line-height:1}`,
+        `.dsh-sidebar-badge-ok{background:var(--dsw-alias-interactive-bg-hover,#e5e7eb);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-refresh{margin-left:auto;width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:var(--dsw-font-s-14,14px/22px system-ui);line-height:1}`,
         `.dsh-sidebar-refresh:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-filelist{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column}`,
+        `.dsh-sidebar-filelist{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,rgba(127,127,127,.3)) transparent}`,
         `.dsh-sidebar-group{border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.06));flex:none}`,
         `.dsh-sidebar-group:last-child{border-bottom:0}`,
-        `.dsh-sidebar-group-head{display:flex;align-items:center;gap:6px;width:100%;min-height:28px;padding:3px 2px;border:0;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer;text-align:left;font:600 11px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-group-head{display:flex;align-items:center;gap:6px;width:100%;min-height:28px;padding:3px 4px;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer;text-align:left;font:var(--dsw-font-xxxs-strong-11,500 11px/14px system-ui)}`,
         `.dsh-sidebar-group-head:hover{color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-grouptoggle{flex:none;width:11px;font-size:9px;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
-        `.dsh-sidebar-groupdir{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:Inter,monospace}`,
+        `.dsh-sidebar-grouptoggle{flex:none;width:11px;font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-groupdir{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--ds-font-family-code,Consolas,monospace)}`,
         `.dsh-sidebar-file-entry{display:flex;flex-direction:column}`,
         `.dsh-sidebar-file-rowwrap{display:flex;align-items:center;gap:2px}`,
-        `.dsh-sidebar-file-row{display:flex;align-items:center;gap:7px;width:100%;min-height:30px;padding:3px 2px 3px 17px;border:0;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;text-align:left;font:400 12px Inter,system-ui,sans-serif}`,
+        // List row = DSH's own row spec (jobs/session): 32px tall, 8px radius,
+        // 6px 8px padding, xs-13 type. The indent carries the tree depth.
+        `.dsh-sidebar-file-row{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:6px 8px 6px 17px;border:0;border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;text-align:left;font:var(--dsw-font-xs-13,13px/20px system-ui)}`,
         `.dsh-sidebar-file-row:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
         `.dsh-sidebar-file-row.unnamed{box-shadow:inset 2px 0 0 var(--dsw-static-deepseek-450,#9e1b1b)}`,
         `.dsh-sidebar-fileicon{flex:none;width:14px;height:14px;display:block}`,
         `.dsh-sidebar-fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`,
-        `.dsh-sidebar-syncdot{flex:none;color:var(--dsw-static-deepseek-450,#9e1b1b);font-size:11px}`,
-        `.dsh-sidebar-stat{flex:none;display:flex;gap:5px;font:600 10px/1 Inter,monospace}`,
-        `.dsh-sidebar-stat-add{color:#16a34a}`,
-        `.dsh-sidebar-stat-del{color:#dc2626}`,
+        `.dsh-sidebar-syncdot{flex:none;color:var(--dsw-static-deepseek-450,#9e1b1b);font:var(--dsw-font-xxxs-11,11px/14px system-ui)}`,
+        `.dsh-sidebar-stat{flex:none;display:flex;gap:5px;font:var(--dsw-font-xxxs-strong-11,500 11px/14px system-ui);font-family:var(--ds-font-family-code,Consolas,monospace)}`,
+        `.dsh-sidebar-stat-add{color:var(--dsw-alias-state-success-primary,#16a34a)}`,
+        `.dsh-sidebar-stat-del{color:var(--dsw-alias-state-error-primary,#dc2626)}`,
         `.dsh-sidebar-stat-binary{color:var(--dsw-alias-label-tertiary,#9ca3af);font-weight:400}`,
-        `.dsh-sidebar-expandbtn{flex:none;width:20px;border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:11px}`,
+        `.dsh-sidebar-expandbtn{flex:none;width:20px;border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:var(--dsw-font-xxxs-11,11px/14px system-ui)}`,
         `.dsh-sidebar-expandbtn:hover{color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-hunkwrap{border-top:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08))}`,
-        `.dsh-sidebar-dline{font:400 11px/1.5 Consolas,'Courier New',monospace;padding:0 8px;white-space:pre;color:var(--dsw-alias-label-secondary,#6b7280)}`,
-        `.dsh-sidebar-dline-add{background:rgba(22,163,74,.16);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-dline-del{background:rgba(220,38,38,.14);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-dline{font:var(--dsw-font-xxxs-11,11px/14px system-ui);font-family:var(--ds-font-family-code,Consolas,monospace);padding:0 8px;white-space:pre;color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        `.dsh-sidebar-dline-add{background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 16%,transparent);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-dline-del{background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#dc2626) 14%,transparent);color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-dline::before{content:' '}`,
         `.dsh-sidebar-dline-add::before{content:'+'}`,
         `.dsh-sidebar-dline-del::before{content:'-'}`,
-        `.dsh-sidebar-diffnote{padding:8px;font:400 11px/1.5 Inter,system-ui,sans-serif;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
-        `.dsh-sidebar-emptyhint{padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary,#9ca3af);font:400 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-diffnote{padding:8px;font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-emptyhint{padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary,#9ca3af);font:var(--dsw-font-xxs-12,12px/18px system-ui)}`,
         // Terminal launcher tab (design §6.1): cwd readout, shell picker,
         // primary launch button, last-result panel.
         // Terminal tab scrolls inside its own pane (the pane itself is
         // overflow:hidden so the review list can own its scrolling).
         `.dsh-sidebar-term{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px}`,
-        `.dsh-sidebar-term-label{font:600 11px Inter,system-ui,sans-serif;color:var(--dsw-alias-label-secondary,#6b7280);text-transform:uppercase;letter-spacing:.04em}`,
-        `.dsh-sidebar-term-cwdrow{display:flex;align-items:stretch;gap:6px}`,
-        `.dsh-sidebar-term-cwd{flex:1;min-width:0;font:400 11px/1.5 Consolas,'Courier New',monospace;padding:7px 9px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.04));color:var(--dsw-alias-label-primary,#111827);word-break:break-all}`,
-        `.dsh-sidebar-term-copy{flex:none;width:30px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font-size:12px}`,
+        `.dsh-sidebar-term-label{font:var(--dsw-font-xxxs-strong-11,500 11px/14px system-ui);color:var(--dsw-alias-label-secondary,#6b7280);text-transform:uppercase;letter-spacing:.04em}`,
+        `.dsh-sidebar-term-cwdrow{display:flex;align-items:stretch;gap:8px}`,
+        `.dsh-sidebar-term-cwd{flex:1;min-width:0;font:var(--dsw-font-xxxs-11,11px/14px system-ui);font-family:var(--ds-font-family-code,Consolas,monospace);padding:8px;border:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));border-radius:8px;background:var(--dsw-alias-bg-overlay,rgba(127,127,127,.04));color:var(--dsw-alias-label-primary,#111827);word-break:break-all}`,
+        `.dsh-sidebar-term-copy{flex:none;width:30px;border:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:var(--dsw-font-xxs-12,12px/18px system-ui)}`,
         `.dsh-sidebar-term-copy:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-term-shells{display:flex;flex-direction:column;gap:4px}`,
-        `.dsh-sidebar-term-shell{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:400 12px Inter,system-ui,sans-serif;text-align:left}`,
+        `.dsh-sidebar-term-shell{display:flex;align-items:center;gap:8px;padding:8px;border:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:var(--dsw-font-xxs-12,12px/18px system-ui);text-align:left}`,
         `.dsh-sidebar-term-shell:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
         `.dsh-sidebar-term-shell[aria-checked="true"]{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);border-color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
         `.dsh-sidebar-term-shell[disabled]{opacity:.45;cursor:not-allowed}`,
         `.dsh-sidebar-term-shellname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}`,
-        `.dsh-sidebar-term-shellnote{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
-        `.dsh-sidebar-term-go{width:100%;min-height:34px;border:0;border-radius:8px;background:var(--dsw-static-deepseek-450,#4b5563);color:#fff;cursor:pointer;font:600 12px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-term-shellnote{flex:none;font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-term-go{width:100%;min-height:32px;border:0;border-radius:8px;background:var(--dsw-static-deepseek-450,#4b5563);color:#fff;cursor:pointer;font:var(--dsw-font-xs-strong-13,500 13px/20px system-ui)}`,
         `.dsh-sidebar-term-go:hover:not([disabled]){filter:brightness(1.08)}`,
         `.dsh-sidebar-term-go[disabled]{opacity:.5;cursor:not-allowed}`,
-        `.dsh-sidebar-term-result{padding:8px 9px;border-radius:8px;font:400 11px/1.5 Inter,system-ui,sans-serif;border:1px solid var(--dsw-alias-border-l2,#d1d5db);color:var(--dsw-alias-label-secondary,#6b7280)}`,
-        `.dsh-sidebar-term-result.err{border-color:var(--dsw-static-deepseek-450,#9e1b1b);color:var(--dsw-alias-label-primary,#111827)}`,
-        `.dsh-sidebar-term-retry{margin-top:6px;border:0;border-radius:6px;padding:3px 8px;background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:600 11px Inter,system-ui,sans-serif}`,
+        `.dsh-sidebar-term-result{padding:8px;border-radius:8px;font:var(--dsw-font-xxxs-11,11px/14px system-ui);border:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));color:var(--dsw-alias-label-secondary,#6b7280)}`,
+        `.dsh-sidebar-term-result.err{border-color:var(--dsw-alias-state-error-primary,#9e1b1b);color:var(--dsw-alias-label-primary,#111827)}`,
+        `.dsh-sidebar-term-retry{margin-top:6px;border:0;border-radius:6px;padding:4px 8px;background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:var(--dsw-font-xxxs-strong-11,500 11px/14px system-ui)}`,
       ].join('')
       document.head.append(style)
-
-      // --- Toggle entry, environment-switched ------------------------------
-      // Desktop shell (miasaki-titlebar present): an icon button rides the
-      // shell's own .tb-btn metrics inside the caption group, first in the
-      // column (left of the brand badge). Plain browser: the same icon lands
-      // in the official session-header actions slot instead. One React
-      // registration, the component hides itself when the shell titlebar
-      // owns the entry. Icon = DSH's native panel glyph (dsh-client-ui-sidebar
-      // `.panelIcon`, 16px fill glyph), mirrored so the panel column reads
-      // right-side — user picked the native style over a custom one.
-      const SIDEBAR_ICON_PATH = '<path fill-rule="evenodd" clip-rule="evenodd" fill="currentColor" d="M9.67272 0.522841C10.8339 0.522841 11.76 0.522714 12.4963 0.602493C13.2453 0.683657 13.8789 0.854248 14.4264 1.25197C14.7504 1.48739 15.0355 1.77247 15.2709 2.0965C15.6686 2.64394 15.8392 3.27758 15.9204 4.02655C16.0002 4.7629 16 5.68895 16 6.85014V9.14986C16 10.3111 16.0002 11.2371 15.9204 11.9735C15.8392 12.7224 15.6686 13.3561 15.2709 13.9035C15.0355 14.2275 14.7504 14.5126 14.4264 14.748C13.8789 15.1458 13.2453 15.3163 12.4963 15.3975C11.76 15.4773 10.8339 15.4772 9.67272 15.4772H6.3273C5.16611 15.4772 4.24006 15.4773 3.50371 15.3975C2.75474 15.3163 2.1211 15.1458 1.57366 14.748C1.24963 14.5126 0.964549 14.2275 0.729131 13.9035C0.331407 13.3561 0.160817 12.7224 0.0796529 11.9735C-0.000126137 11.2371 1.25338e-09 10.3111 1.25338e-09 9.14986V6.85014C1.25329e-09 5.68895 -0.000126137 4.7629 0.0796529 4.02655C0.160817 3.27758 0.331407 2.64394 0.729131 2.0965C0.964549 1.77247 1.24963 1.48739 1.57366 1.25197C2.1211 0.854248 2.75474 0.683657 3.50371 0.602493C4.24006 0.522714 5.16611 0.522841 6.3273 0.522841H9.67272ZM5.54303 1.88715V14.1118C5.78636 14.1128 6.04709 14.1169 6.3273 14.1169H9.67272C10.8639 14.1169 11.7032 14.1164 12.3493 14.0465C12.9824 13.9779 13.3497 13.8494 13.6268 13.6482C13.8354 13.4966 14.0195 13.3125 14.1711 13.1039C14.3723 12.8268 14.5007 12.4595 14.5693 11.8264C14.6393 11.1803 14.6398 10.341 14.6398 9.14986V6.85014C14.6398 5.65896 14.6393 4.81967 14.5693 4.1736C14.5007 3.54048 14.3723 3.17318 14.1711 2.89609C14.0195 2.68747 13.8354 2.50337 13.6268 2.35179C13.3497 2.1506 12.9824 2.02212 12.3493 1.95353C11.7032 1.88358 10.8639 1.88307 9.67272 1.88307H6.3273C6.04709 1.88307 5.78636 1.8862 5.54303 1.88715ZM4.1828 1.91166C3.99125 1.9216 3.8148 1.93577 3.65076 1.95353C3.01764 2.02212 2.65034 2.1506 2.37325 2.35179C2.16463 2.50337 1.98052 2.68747 1.82895 2.89609C1.62776 3.17318 1.49928 3.54048 1.43069 4.1736C1.36074 4.81967 1.36023 5.65896 1.36023 6.85014V9.14986C1.36023 10.341 1.36074 11.1803 1.43069 11.8264C1.49928 12.4595 1.62776 12.8268 1.82895 13.1039C1.98052 13.3125 2.16463 13.4966 2.37325 13.6482C2.65034 13.8494 3.01764 13.9779 3.65076 14.0465C3.81478 14.0642 3.99127 14.0774 4.1828 14.0873V1.91166Z"></path>'
-      const SIDEBAR_ICON_SVG = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">${SIDEBAR_ICON_PATH}</svg>`
-      const toggleFrom = current => {
-        store.set({ open: !current })
-        if (!current) closeNativeDetails()
-      }
-
-      function ToggleButton() {
-        const state = react.useSyncExternalStore(store.subscribe, () => {
-          const snapshot = store.get()
-          return snapshot.open + '|' + snapshot.titlebarVisible
-        })
-        const [openText, titlebarVisibleText] = state.split('|')
-        if (titlebarVisibleText === 'true') return null
-        const open = openText === 'true'
-        return react.createElement('button', {
-          type: 'button',
-          className: 'dsh-sidebar-toggle',
-          'aria-pressed': String(open),
-          'aria-label': '侧栏',
-          title: '侧栏',
-          onClick: () => toggleFrom(open),
-        }, react.createElement('svg', {
-          width: 16,
-          height: 16,
-          viewBox: '0 0 16 16',
-          fill: 'none',
-          'aria-hidden': 'true',
-          dangerouslySetInnerHTML: { __html: SIDEBAR_ICON_PATH },
-        }))
-      }
-      // order lands next to the canvas switch (order 25); browser-only entry.
-      ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
-        name: 'conversation.session.header.actions',
-        id: 'sidebar-toggle',
-        order: 30,
-      }, ToggleButton))
-
-      // Inject the titlebar variant when the desktop shell is up. The shell
-      // builds #miasaki-titlebar independently of this plugin, so the watchdog
-      // keeps probing and (re)injects; removing it on teardown restores the
-      // shell's own markup (the button carries no shell-side wiring — its
-      // click listener is ours and dies with the node). Anchored to the V4
-      // `.tb-group` (badge + window controls) with a V3 `.tb-capsule` fallback,
-      // placed BEFORE the brand badge per the user's picked spot.
-      const syncTitlebarButton = () => {
-        const group = document.querySelector('#miasaki-titlebar .tb-group') ?? document.querySelector('#miasaki-titlebar .tb-capsule')
-        const visible = group instanceof HTMLElement
-        if (!visible) {
-          document.querySelector('#miasaki-titlebar .tb-sidebar')?.remove()
-          if (store.get().titlebarVisible) store.set({ titlebarVisible: false })
-          return
-        }
-        let button = group.querySelector('.tb-sidebar')
-        if (!button) {
-          button = document.createElement('div')
-          button.className = 'tb-btn tb-sidebar'
-          button.setAttribute('data-act', 'sidebar')
-          button.setAttribute('role', 'button')
-          button.setAttribute('tabindex', '0')
-          button.setAttribute('title', '侧栏')
-          button.setAttribute('aria-label', '侧栏')
-          button.innerHTML = SIDEBAR_ICON_SVG
-          button.addEventListener('click', () => toggleFrom(store.get().open))
-          group.insertBefore(button, group.firstChild)
-        }
-        button.setAttribute('aria-pressed', String(store.get().open))
-        if (!store.get().titlebarVisible) store.set({ titlebarVisible: true })
-      }
 
       // --- Host API access (review §4.1 + terminal §6.1) ------------------
       const API_PREFIX = '/sidebar/api'
@@ -720,7 +678,12 @@ window.__ModuleLoader__.load({
       // Review tab: view dropdown (未暂存 / 已暂存 / 全部分支更改 / 上一轮更改)
       // over directory groups. Naming, diff expansion, the 60s TTL and the
       // visible gate are unchanged from v0.4 — only presentation moved.
-      function ReviewTab({ tabId, visible = true } = {}) {
+      // 官方右栏正文：框架经 slot 的 inject face 注入 useTabInfo（无需 import）。
+      // 见 design/2026-09-10-migrate-to-official-rightbar.md。
+      function ReviewTab(props) {
+        const tabInfo = props.useTabInfo()
+        const tabId = tabInfo.tab.id
+        const visible = tabInfo.tab.visible
         const cwd = useReviewCwd()
         const view = useTabView(tabId)
         const [entries, setEntries] = react.useState([])
@@ -914,7 +877,9 @@ window.__ModuleLoader__.load({
       // terminal at the session cwd. State machine is explicit —
       // checking → idle → opening → opened | failed — so the button never
       // reports success on a failed spawn.
-      function TerminalTab() {
+      // 官方右栏正文：接收框架注入（本组件目前不消费 tabInfo，但必须接受 props）。
+      function TerminalTab(props) {
+        void props
         const cwd = react.useSyncExternalStore(store.subscribe, () => store.get().reviewCwd)
         const [shells, setShells] = react.useState(null)
         const [picked, setPicked] = react.useState(null)
@@ -1059,8 +1024,12 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dsh-sidebar-card',
               disabled: tab.id === 'sidechat',
+              title: tab.id === 'sidechat' ? '辅助对话（M2 规划中）' : undefined,
               onClick: () => openTab(tab.id),
-            }, tab.icon, react.createElement('span', null, tab.label)))))
+            },
+              tab.id === 'sidechat' && react.createElement('span', { className: 'dsh-sidebar-cardtag' }, 'M2'),
+              tab.icon,
+              react.createElement('span', null, tab.label)))))
       }
 
       const TAB_BODIES = { review: ReviewTab, terminal: TerminalTab }
@@ -1162,7 +1131,11 @@ window.__ModuleLoader__.load({
             role: 'complementary',
             'aria-label': '侧栏',
           },
-            react.createElement('div', { className: 'dsh-sidebar-tabs', role: 'tablist', 'aria-label': '侧栏标签页' },
+            // Empty state owns the whole panel: with zero tabs the strip would
+            // render a lone "＋" floating on blank space, which reads as a stray
+            // glyph rather than a control (visual review 2026-09-09). The
+            // picker cards below are the entry point in that state.
+            tabs.length > 0 && react.createElement('div', { className: 'dsh-sidebar-tabs', role: 'tablist', 'aria-label': '侧栏标签页' },
               // ⌄ 全部标签列表（用户拍板本期实现）：标签溢出时也能点到。
               tabs.length > 0 && react.createElement(MenuButton, {
                 className: 'dsh-sidebar-tablist',
@@ -1242,76 +1215,57 @@ window.__ModuleLoader__.load({
                   })),
             react.createElement('div', { className: 'dsh-sidebar-resize', onPointerDown: startDrag, 'aria-hidden': 'true' })))
       }
-      ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-        name: 'shell.overlay',
-        id: 'sidebar-shell',
-      }, Shell))
+      // --- 官方右栏 tab 类型注册（自研壳 2026-09-10 退役）-------------------
+      // 审查与终端改为官方右栏的 tab 类型；辅助对话待 M2 实现后再注册类型。
+      // 打开入口：官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊。
+      const RIGHT_BAR_TABS = [
+        {
+          id: '@miasaki/dsh-sidebar/review',
+          kind: 'review',
+          title: '审查',
+          description: '收尾自检清单 + 本轮改动 diff',
+          order: 10,
+          Body: ReviewTab,
+        },
+        {
+          id: '@miasaki/dsh-sidebar/terminal',
+          kind: 'terminal',
+          title: '终端',
+          description: '把系统终端打开到当前会话的工作目录',
+          order: 20,
+          Body: TerminalTab,
+        },
+      ]
+      ctx.effect(() => {
+        const disposers = []
+        for (const tab of RIGHT_BAR_TABS) {
+          // ① 类型声明：id 全局唯一，title 在 tab 打开时被捕获。
+          disposers.push(ctx.sidebarRightTabs.register({
+            id: tab.id,
+            kind: tab.kind,
+            title: () => tab.title,
+            guide: [{ kind: tab.kind, title: tab.title, description: tab.description, order: tab.order }],
+          }))
+          // ② 正文：key 是**类型 id**（不是 kind）。
+          disposers.push(ctx.slots.register({ name: 'sidebar.right.pane.tab', key: tab.id }, tab.Body))
+        }
+        return () => { for (const dispose of disposers.reverse()) dispose() }
+      }, 'sidebar: official right-bar tab types')
 
-      // --- Layout sync: session state + push + watchdog + chrome reserve ----
-      const syncAll = () => {
-        // Session state first: a restored width/tab must land before the push
-        // computation reads it.
-        applySessionState()
-        pushFrame()
-        syncTitlebarButton()
-        measureChromeReserve()
-        // 0.1.2 restores sessions lazily: the start-of-apply snapshot may be
-        // empty and the sessions subscription may not fire afterward, so the
-        // watchdog re-reads the cwd too (idempotent, cheap).
-        const cwd = currentSessionCwd()
-        if (cwd !== store.get().reviewCwd) store.set({ reviewCwd: cwd })
-      }
-      const onResize = () => {
-        store.set({ viewport: window.innerWidth })
-        measureChromeReserve()
-        pushFrame()
-      }
+      // --- Session 跟随：审查 tab 需要当前会话的 cwd -----------------------
+      // 原壳的推挤 / watchdog / chrome reserve 随壳退役，这里只留内容层需要的同步。
       store.set({ viewport: window.innerWidth, reviewCwd: currentSessionCwd() })
       const unsubscribeSessions = ctx.sessions.list.subscribe(() => {
         const cwd = currentSessionCwd()
         if (cwd !== store.get().reviewCwd) store.set({ reviewCwd: cwd })
       })
-      syncAll()
-      // Watchdog: a full AppFrame remount drops the inline padding we wrote
-      // from outside React, and the shell titlebar may materialize after this
-      // plugin's apply — re-assert both on DOM churn; the interval covers a
-      // quiet page. Callbacks are idempotent and cheap.
-      const watchdog = new MutationObserver(syncAll)
-      watchdog.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
-      const watchdogTimer = window.setInterval(syncAll, 1500)
-      // Escape closes the floating/drawer panel only; the push mode panel is
-      // part of the working layout and must not close while typing. When the
-      // canvas overlay is up it owns Escape (it covers the panel anyway).
-      const onKeyDown = event => {
-        if (event.key !== 'Escape') return
-        const canvasOverlay = document.querySelector('.dsh-canvas-overlay')
-        if (canvasOverlay && canvasOverlay.hidden === false) return
-        const state = store.get()
-        if (!state.open || state.viewport >= PUSH_MIN_VIEWPORT) return
-        store.set({ open: false })
-      }
-      // Page visibility: tabs consume this through their `visible` prop.
-      const onVisibilityChange = () => store.set({ pageVisible: document.visibilityState !== 'hidden' })
-      window.addEventListener('resize', onResize)
-      window.addEventListener('keydown', onKeyDown)
-      document.addEventListener('visibilitychange', onVisibilityChange)
-      store.subscribe(syncAll)
-      syncAll()
 
       ctx.effect(() => () => {
-        // Reset the idempotence guard so a later full reload can remount.
         window.__DSH_SIDEBAR_BOOTED__ = false
-        watchdog.disconnect()
-        window.clearInterval(watchdogTimer)
-        window.removeEventListener('resize', onResize)
-        window.removeEventListener('keydown', onKeyDown)
-        document.removeEventListener('visibilitychange', onVisibilityChange)
         unsubscribeSessions()
         store.listeners.clear()
-        document.querySelector('#miasaki-titlebar .tb-sidebar')?.remove()
-        pushClear()
         style.remove()
-      }, 'sidebar: shell lifecycle')
+      }, 'sidebar: content lifecycle')
     }
 
     return module.exports

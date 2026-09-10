@@ -2,6 +2,32 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-10
+
+- **DSH 0.1.5-rc.1 兼容：推挤锚点补 0.1.2/0.1.5 双写**。官方 0.1.5 把 root 的子槽从 root 级 `conversation` 改为 keyed 的 `main`（key = `'conversation'`），会话宿主 DOM 相应从 `[data-slot="conversation"]` 变为 `[data-slot="main"]`。本线主锚点在 0.1.5 上匹配数为 0，仅靠特征查询兜底仍能工作，但语义锚点这一环已死。
+  - **改动**：`client.js` 的 `FRAME_ANCHOR_SELECTOR` 改为 `'[data-slot="main"], [data-slot="conversation"]'`（两版各匹配其一，爬升路径无歧义）；同时重写该段注释。推挤载体（`#root > [data-slot="root"] > div` + `<html>` 上的 `--miasaki-sidebar-width`）经实测**无需改动**。
+  - **实测依据**（0.1.5-rc.1 隔离实例 = 私有 `DSH_HOME` + 端口 3099，Playwright 无头 chromium + 临时探针插件）：`[data-slot="conversation"]` 计数 **0**；`[data-slot="main"]` 计数 **1**、`display:contents`、`parentElement` 即 centerCol；三条 frame 解析路径（root 锚点链 / 内联样式指纹 / `main.closest(...)`）**指向同一节点**（`frame-three-paths-agree = true`）；给 frame 加 `padding-right:300px` 后中栏 1160→**860**px、撤销复 1160px。
+  - **连带结论**：frame 在 0.1.5 新增的 `data-sidebar-collapsed` / `data-rightbar-collapsed` / `data-rightbar-fullscreen` / `data-rightbar-instant` 全部是**条件属性**（写法 `|| undefined`，仅真值挂载），**不可作为恒存选择器**；官方 0.1.5 的 `rightbar` 槽即 0.1.2 的 `details` 槽改名（`data-details-collapsed` → `data-rightbar-collapsed`）。
+  - 本轮**只动锚点一处**：三条 web 插件线的 slot 注册名（`conversation.session.header.actions`、`conversation.view`、`shell.overlay`、`sidebar.footer.action`、`settings.section` 等）在 0.1.5 上全部未变，`ctx.slots.inject(key, cb)` 签名与 disposer 语义未变，故其余代码零改动。
+  - 详细取证与逐条影响见跨线文档 `dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.5-rc1-slot-contract-2026-09-10.md`（§8 含完整实测数据表与复现步骤）。
+- **官方右栏落地后的路线重估（待拍板）**：官方 0.1.5 内置了 `@deepseek-ai/dsh-client-ui-sidebar-right`（分栏/全屏/浮窗/拖拽重排 + 文件树/文档预览/模型交付文件 + `ctx.sidebarRightTabs` tab 类型扩展点），详见 `design/2026-09-10-official-rightbar-reeval.md`。要点：
+  - 该槽 `kind: 'single'` 且已被官方占用，**注册即整体顶掉官方右栏**——与 2026-09-06 否决 `details` 槽的理由同构，故"占用 `rightbar` 做自研壳"路线**否决**；
+  - 当年否决"重基座"（分栏/浮窗/自由窗口）的成本前提已消失（如今是官方免费能力），但走官方 tab 类型会丢三项本线产品决策：**按会话持久化**（官方明写状态只在内存、刷新回折叠）、**窄屏抽屉 + 右滑关闭**、**桌面壳标题栏入口**；
+  - **本线需新增"官方右栏共存"处理**：0.1.2 无官方右栏，0.1.5 下用户同时打开两者会出现**推挤叠加**（官方占 grid 第三列 + 自研再加 `padding-right`，主区被压两次）。
+  - **推荐：保持自研壳 + 共存检测**。检测信号用 `[data-rightbar-col]` 的宽度（恒存属性）；**不可**用 frame 的 `data-rightbar-collapsed` / `data-rightbar-fullscreen`（均为 `|| undefined` 条件属性）；`ctx.layout` 只有占位方报告接口，**没有查询右栏是否打开的读接口**。待用户拍板是否接受"两者互斥（官方打开时自研自动收起）"。
+- **用户拍板：走官方右栏，自研壳退役**（同日晚于上条）。原话：「官方做了侧边栏就用官方的，不自己做了，准备更新」。**审查 / 终端 / 辅助对话三个 tab 保留**，改为官方 `sidebar.right.pane.tab` 类型接入；自研壳整体退役（推挤 + `shell.overlay` 挂载 + tab 栏 + 空态选择页 + 抽屉手势 + 桌面壳标题栏入口 + 按会话持久化）。
+  - 设计见 `design/2026-09-10-migrate-to-official-rightbar.md`（含自研→官方逐项映射、丢失能力的补偿讨论、代码改动清单、实施顺序）。
+  - **前置条件：必须先升级到 DSH 0.1.5-rc.1** —— `ctx.sidebarRightTabs` 与 `sidebar.right.pane.tab` 在 0.1.2 上不存在，本迁移无法在旧版本开发或验证。升级方案见 `dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.5-rc1-upgrade-plan-2026-09-10.md`。
+  - 上一条的**推荐路线（A）被用户否决**；`design/2026-09-10-official-rightbar-reeval.md` 保留三条路的对比与分析作为决策依据，其 §4「建议」以本条为准。
+  - 同日已落的锚点双写改动（`FRAME_ANCHOR_SELECTOR`）随壳一起退役，迁移时删除；它的价值是保证**迁移窗口期内**旧壳在 0.1.5 上仍可用。
+- **迁移已实施（v0.6.0-miasaki.0）**：审查与终端改为官方右栏 tab 类型，自研壳停用。
+  - **代码**：`inject` 改为 `['slots', 'sessions', 'sidebarRightTabs']`；新增 `RIGHT_BAR_TABS` 与两阶段注册（`ctx.sidebarRightTabs.register` + `sidebar.right.pane.tab`，正文 key 用**类型 id** 而非 kind）；`ReviewTab` 改为 `function ReviewTab(props)`，经 `props.useTabInfo()` 取 `tab.id` / `tab.visible`（该 hook 由 slot 的 inject face 注入，**无需 import**）；`TerminalTab` 同样接收 props。
+  - **删除**：Toggle entry 整段 79 行（`SIDEBAR_ICON_PATH` / `SIDEBAR_ICON_SVG` / `toggleFrom` / `ToggleButton` / 会话头 `sidebar-toggle` 注册 / `syncTitlebarButton`）；尾部 70 行的 `shell.overlay` 注册 + 推挤/watchdog/chrome-reserve 生命周期。
+  - **保留**：host API 访问层、popover、审查 UI、终端 UI、`REVIEW_VIEWS` 等内容层；样式元素（含审查层 CSS）保留。
+  - **第二阶段待办**：壳函数（`pushFrame` / `resolveFrame` / `drawerCloseDecision` / `measureChromeReserve` / `applySessionState` / tab 列表操作 / `Shell` / `EmptyState` / `TABS` / `TAB_BODIES`）与壳 CSS 仍作为**未调用的死代码**留在文件里，不再产生任何副作用；`test/drawer-gesture.test.js` 与 `client-tabs.test.js` 的持久化部分随之退役。
+  - **验证**：`node --check` 通过；`sidebarRightTabs.register` / `sidebar.right.pane.tab` / `useTabInfo` 就位，`shell.overlay` / `sidebar-toggle` / `syncTitlebarButton` **清零**；44 项单测全绿（壳测试因死代码仍在而暂时保留）。
+  - **待实机验证**：官方右栏「添加控件」→ 引导页出现「审查 / 终端」两个入口胶囊；打开后审查四视图与终端启动器正常；辅助对话仍缺席（M2）。
+
 ## 2026-09-06
 
 - **新线立项（路线 D 拍板）**：轻量右侧边栏，无基座完全自研。背景：调研 [DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（v0.18.0，MIT）后，先倾向"基座复用 + 自研审查 tab"（路线 C），用户质疑重基座问题（裁剪开关只轻界面，骨架/跟随成本仍在），重开后拍板路线 D。
@@ -277,3 +303,47 @@
     `design/2026-09-08-tavern-sidebar-comparison.md`（§3.1 / §6.5 / §7）、本文件。
   - **真机人工目检（CDP 模拟覆盖不到）**：标题栏按钮 hover / 按压手感、三主题观感、
     拖动与最大化还原时面板位置跟随（真机 IPC）。
+
+- **设计语言统一（v0.5.1-miasaki.1，用户要求「统一设计语言」）**：把面板的字体与几何从
+  「自成一体的硬编码」改为**对齐 DSH 原生设计语言**。基准不靠观感，而是从 DSH 0.1.2-rc.1 的
+  37 个 `dsh-client-ui-*` 包（约 275 万字符 CSS）实测提取。
+  - **字体**：DSH 有完整 shorthand 令牌 `--dsw-font-xxxs-11`(11/14) → `xxs-12`(12/18) →
+    `xs-13`(13/20) → `s-14`(14/22) → `base-16`(16/24)，家族 `--dsw-font-family`（系统栈，
+    **无 Inter**）、强调字重 **500**；等宽走 `--ds-font-family-code`。本线此前 **21 处**硬编码
+    `Inter,system-ui,sans-serif` + 字重 600，另有一处 `font-family:Inter,monospace`
+    （Inter 根本不是等宽字体，属笔误）——全部改为令牌。
+  - **几何**：圆角归入 DSH 阶梯 4/6/8/10/12/999/50%（`5px`/`7px` 是 DSH 不存在的值）；
+    控件高度归位 24/28/32（原 `26px`/`34px`）；列表行改用 DSH 自己的行范式
+    `min-height:32px; border-radius:8px; padding:6px 8px; gap:8px`（jobs/session 包实测），
+    替代此前 30px 无圆角通栏行；面板左边框改官方详情列同款 `.5px solid var(--dsw-alias-border-l3)`；
+    容器水平内边距统一 **12px**（= `--dsh-sidebar-inline-padding`），此前 **9 种**取值
+    （2/3/4/8/9/10/14/17/20px）。
+  - **语义色**：`#16a34a` / `#dc2626` / `rgba(22,163,74,.16)` / `rgba(220,38,38,.14)` →
+    `--dsw-alias-state-success-primary` / `--dsw-alias-state-error-primary` + `color-mix`。
+  - **滚动条**：文件列表与正文容器补 `scrollbar-width:thin` +
+    `scrollbar-color:var(--dsw-alias-scrollbar-bg-l2) transparent`。
+  - **新增离线自检：令牌引用校验**——把本线引用的全部 `--dsw-*`/`--ds-*`/`--dsh-*` 与 DSH
+    theme 包的 **367 个定义**比对，发现既有缺陷 `--dsw-alias-interactive-bg-selected`
+    **在 DSH 中并不存在**（`badge-ok` 一直靠 fallback 灰底生效）→ 改用
+    `--dsw-alias-interactive-bg-hover`；现 **22 个引用全部有定义**。
+  - **空态观感修正**（依据同日视觉审查：`deepseek-v4-flash-vision-exp` 对 L3 截图的独立复审）：
+    ① 空态下**不再渲染标签栏**——零标签时顶部只剩一个无底无边的裸「＋」，像多余字形而非控件；
+    ② 禁用卡（辅助对话 / M2）不再整卡 `opacity:.4`（实测对比度仅 ~2:1、与另两卡「同级不同态」），
+    改为**同底色 + 右上角 `M2` 角标 + 降档文字色**，并补 `title` 说明；
+    ③ 空态由垂直居中改**顶部锚定**（`padding-top:36px`），消除上方约 310px 死白；
+    ④ 卡片内边距改对称 `16px 8px`（原 `18px 8px 13px`）、`gap` 9→8px。
+  - 触摸点：`client.js`（样式块 + 空态/卡片 JSX）、`index.js` + `package.json`（版本）、
+    `README.md`、本文件。
+  - **生效条件**：client bundle 在 host 启动时载入内存，**须重启 `dsh web`**；
+    `GET /sidebar/api/health` 返回 `0.5.1-miasaki.1` 即已加载。
+  - **未做（记为待办）**：跟随 DSH 的**用户字号缩放**（`--dsh-content-font-delta`，定义在 `body`）
+    ——本期用固定档位令牌；跟随缩放需同时处理 line-height，留待下一轮。
+
+- **标题栏启动器组设计定稿（同日，用户参考图 + 拍板三项）**：设计
+  [`2026-09-09-sidebar-launcher-design.md`](2026-09-09-sidebar-launcher-design.md)；**M3 内嵌终端从「仅规划」升为已立项**。
+  - **用户拍板**：标题栏按钮组新增两按钮——**外部程序跳转**（VS Code 参考图同款：彩色图标主键直接打开默认程序 + 下拉箭头菜单：资源管理器 / VS Code（✓）/ VS Code Insiders，点菜单项 = 打开 + 设默认）+ **终端展开**（点击展开**底部内嵌终端面板**：xterm + node-pty + WS 路由，再点收起、pty 保活）；两者位于侧栏按钮**左侧**：`[外部程序跳转] [终端展开] [侧栏] [徽章] [min] [max] [close]`；
+  - **落点 = sidebar 线**（标题栏按钮注入本就是本线职责、pty/WS/静态资源需要 host 运行时）；desktop 线唯一改动 = `03-switcher.js` 让位 `118px` → `var(--ms-titlebar-reserve, 118px)`（两个新键 +52px 组宽后写死值必叠压；变量本线注入、保留 118px 兜底）；
+  - **外部程序安全边界沿用启动器纪律**：固定枚举三件 + `Code.exe` 静态定位（`code.cmd` 上溯，**绕开批处理与命令字符串红线**）+ argv 无 shell + cwd 复用 `resolveWorkdir`；未安装项置灰不隐藏、默认选择全局持久化；
+  - **pty 生命周期 = 单实例 + 面板收起保活 + 重连回放**（1MB 环形缓冲）；会话切换**不自动重启**（防误杀运行中任务），仅提示条；内嵌 shell 用新 `PTY_SHELLS`（wt.exe 是容器、不入表）；
+  - **底座推挤**：`--miasaki-terminal-height` 变量与侧栏 `padding-right` 并存、**无 1280px 下限**（高度推挤与宽度吃紧无关）；SPIKE S3 若不吸收则降级浮层；
+  - **立项门（SPIKE 清单 §6）**：S1 node-pty Windows 编译（硬门——降级 = 终端按钮打开系统终端，功能语义不变）/ S3 底部推挤 / S5 xterm 服务 / S2·S4 低风险（SSH 线已证 API 可用）。**未写代码**，README 组件蓝图与目录结构已同步。

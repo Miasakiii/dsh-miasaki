@@ -637,7 +637,7 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
       const path = new URL(req.url ?? '/', 'http://dsh.local').pathname
       if (path === '/sidebar/api/health') {
         await ready
-        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: '0.5.0-miasaki.1' })
+        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: '0.5.1-miasaki.1' })
       }
       if (path === '/sidebar/api/review/status' && req.method === 'GET') {
         const params = new URL(req.url, 'http://dsh.local').searchParams

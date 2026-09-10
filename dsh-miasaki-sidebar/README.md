@@ -1,6 +1,6 @@
 # @miasaki/dsh-sidebar
 
-DSH（DeepSeek Harness）web 轻量右侧边栏插件：**无重基座**的自研右栏，内置辅助对话、审查、终端三类实在工具。
+DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献审查、终端、辅助对话三类实在工具。自研右栏壳已于 2026-09-10 退役，见下方状态说明。
 
 - 路线 D（2026-09-06 拍板）：不安装 `dsh-better-sidebar` 基座，完全自研；与 canvas 线同构技术栈，零代码耦合；
 - 产品理念参考：Codex `/side` 侧边对话、GitHub Copilot 右栏范式、CHI'25 常显侧面板研究（详见设计文档 §2 调研来源）；
@@ -8,12 +8,36 @@ DSH（DeepSeek Harness）web 轻量右侧边栏插件：**无重基座**的自�
 
 ## 状态
 
-**M1 功能收口 + 审查改版**（2026-09-08，v0.5.0-miasaki.1）：右栏壳 + 审查 tab + 终端启动器三项全部落地；
+> ### ⚠️ 2026-09-10 架构变更：自研右栏壳退役，改为接入官方右栏
+>
+> DSH `0.1.5-rc.1` 内置了官方右侧 Sidebar（分栏 / 全屏 / 浮窗 / 文件树 / 文档预览 / 模型交付文件），
+> 用户拍板「官方做了侧边栏就用官方的，不自己做了」。本线**壳层全部退役**：
+> 推挤（`padding-right` + CSS 变量）、`shell.overlay` 挂载、自研 tab 栏、空态选择页、
+> 抽屉手势与遮罩、桌面壳标题栏注入、**两处自研开关按钮**（会话头 actions 与标题栏）、
+> 按会话持久化 —— 全部移除或停用。
+>
+> 审查与终端改为官方右栏的 **tab 类型**（`ctx.sidebarRightTabs.register` +
+> `sidebar.right.pane.tab` 正文），辅助对话待 M2 实现后再注册类型。
+> **打开入口**：官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊。
+> 设计见 [design/2026-09-10-migrate-to-official-rightbar.md](design/2026-09-10-migrate-to-official-rightbar.md)。
+>
+> **本节以下、以及「组件蓝图」「目录结构」中凡涉及壳的描述**（右栏壳、推挤、标签栏、空态、
+> 抽屉、桌面壳让位、双环境入口、持久化 v2/v3）**均已失效**，待第二阶段清理时一并重写。
+> 当前代码里这些壳函数作为**未调用的死代码**保留（不再产生任何副作用）；
+> `test/drawer-gesture.test.js` 与 `client-tabs.test.js` 的持久化部分因此仍能通过，
+> 但它们测的是死代码，第二阶段应随死代码一并退役。
+
+**M1 功能收口 + 审查改版 + 设计语言统一**（2026-09-09，v0.5.1-miasaki.1）：右栏壳 + 审查 tab + 终端启动器三项全部落地；
 审查 tab 按用户参考图改版为「视图下拉 + 目录分组」，标签栏改为浏览器式多标签。单测 46 项
 （其中 2 项真实 git 集成用例在无法捕获子进程输出的受限环境自动跳过）、四线静态回归 8/8。
 **v0.5.0 改版已实机复验**（2026-09-09，重启 host 后，浏览器环境）：四视图切换与统计、目录分组折叠、
 多标签开/切/关与 keep-mounted、持久化 v2→v3 迁移（注入旧键实测）全部通过；
 点名往返（8→7→8 条未点名）与行级 diff 展开（README.md 恰为 +20 -7）同时抽查通过。
+**设计语言统一（v0.5.1）**：字体与几何对齐 DSH 原生——字体改走 `--dsw-font-*` shorthand 令牌
+（家族 `--dsw-font-family`、字重 500、等宽 `--ds-font-family-code`），圆角/控件高度/内边距归入 DSH 阶梯，
+列表行采用官方行范式（32px + 8px 圆角 + `6px 8px` 内边距），语义色与滚动条改走令牌，
+面板边框改官方详情列同款 `.5px + border-l3`；空态按视觉复审修正（隐藏空态标签栏、禁用卡改 `M2` 角标、
+空态顶部锚定）。详见 [CHANGELOG](design/CHANGELOG.md)。
 
 - 壳：AppFrame padding 推挤（实测 center 1000→600px）、`shell.overlay` 挂载、空态标签选择页（Edge 范式）、双环境入口（桌面壳标题栏徽章左侧 / 浏览器会话头）、三主题令牌跟随；
 - 审查 tab：host `/sidebar/api/review/{status,diff,checklist}`（git CLI 只读、2000 条设界、自研 unified diff 解析、按 cwd 隔离的清单持久化）+ 收尾自检清单 UI（逐条点名 / 未点名红色警示 / 行级 diff 展开 / 60s TTL 刷新）。实测本仓 16 条改动全部渲染、点名与 diff 往返正常。
@@ -25,7 +49,7 @@ DSH（DeepSeek Harness）web 轻量右侧边栏插件：**无重基座**的自�
   - **持久化 v3**：`miasaki-sidebar:v3:<sessionId>` = `{open,width,tabs,active}`；v2（按会话单 tab）与 v1（全局）一次性迁移后删除。
   - **顺带修复**：`git status --short` 的引号 / 八进制 UTF-8 路径此前原样透传给 diff 路由（`"a b.ts"` 当成文件名），现统一 `unquoteGitPath()` 还原；`/health` 的 version 与 `package.json` 对齐（此前 0.4.0 / 0.4.1 不一致）。
 - **右栏实现加固（2026-09-08，对照 dsh-tavern/better-sidebar 调研，见 `design/2026-09-08-tavern-sidebar-comparison.md`）**：
-  - **推挤锚点**改走官方语义锚点 `[data-slot="conversation"]` → `closest('div[style*="grid-template-columns"]')`（探针实测：frame 自身无 `data-dsh-frame`/`data-pane`，`#root > [data-slot="root"] > div` 即 frame），特征查询保留兜底；
+  - **推挤锚点**改走官方语义锚点 → `closest('div[style*="grid-template-columns"]')`（探针实测：frame 自身无 `data-dsh-frame`/`data-pane`，`#root > [data-slot="root"] > div` 即 frame），特征查询保留兜底；**2026-09-10 DSH 0.1.5-rc.1 复验**：会话宿主从 root 级 `conversation` 槽迁到 root `main` keyed 槽（key = `conversation`），锚点选择器补为 `'[data-slot="main"], [data-slot="conversation"]'`——两条路径在 0.1.5 隔离实例上与特征查询**指向同一节点**，推挤精确压下 300px（1160→860→1160）；
   - **推挤载体**改为 `<html>` 的 `--miasaki-sidebar-width` + 常驻 CSS 规则（React 重渲染不再丢推挤），inline `padding-right` 同值兜底；
   - **host 围栏**由「仅 Host」补齐为三道：Host → `sec-fetch-site: cross-site` 拒绝 → `Origin` hostname 比对；
   - **`visible` 性能门**：tab 组件接收 `visible`，窗口切后台时审查 tab 的 60s TTL 刷新跳过；
@@ -41,7 +65,7 @@ DSH（DeepSeek Harness）web 轻量右侧边栏插件：**无重基座**的自�
 | 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 浏览器环境复验通过） |
 | 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08：cwd 回显、类型探测与置灰、启动按钮渲染；启动动作本身仍以 host 路由 HTTP 用例覆盖） |
 | 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成 |
-| 内嵌终端 | xterm + node-pty + 自建 WS 路由（同屏） | M3（条件立项） | 仅规划，见设计 §6 |
+| 标题栏启动器组 | 外部程序跳转按钮（explorer / VS Code / VS Code Insiders 菜单，✓ 默认持久化）+ 终端展开按钮（底部内嵌终端面板：xterm + node-pty + WS 回放） | M3（用户拍板立项） | **设计定稿 2026-09-09**，见 [设计](design/2026-09-09-sidebar-launcher-design.md)；前置 spike：node-pty 编译（硬门）+ 底部推挤 + xterm 服务 |
 
 ## 目录结构
 
@@ -64,6 +88,7 @@ dsh-miasaki-sidebar/
     ├── 2026-09-08-tavern-sidebar-comparison.md # 对照 dsh-tavern/better-sidebar 的实现调研
     ├── 2026-09-08-better-sidebar-compat-assessment.md # betterSidebar 兼容层评估（用户拍板项）
     ├── 2026-09-08-sidebar-review-redesign-implementation.md # 审查改版 + 浏览器式标签页实施方案（v0.5.0）
+    ├── 2026-09-09-sidebar-launcher-design.md # 标题栏启动器组：外部程序跳转 + 终端展开（内嵌终端面板，M3 立项）
     └── CHANGELOG.md                            # 本线变更记录
 ```
 
@@ -116,7 +141,7 @@ node ..\scripts\verify-all.mjs sidebar
 
 改完 `index.js` / `client.js` 后**必须重启 `dsh web`**——本线以 `link:` 装入 profile，源码即时落盘，
 但 host 半与 client bundle 都在启动时载入内存，刷新/强刷页面均无效。`GET /sidebar/api/health` 的
-`version` 字段是判断 host 是否已加载新 bundle 的可靠信号（本次应为 `0.5.0-miasaki.1`）。
+`version` 字段是判断 host 是否已加载新 bundle 的可靠信号（本次应为 `0.5.1-miasaki.1`）。
 
 ## 规划来源
 
