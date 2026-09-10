@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// 四线统一静态回归入口（L0 静态检查 + L1 单线单测）。
+// 六线统一静态回归入口（L0 静态检查 + L1 单线单测）。
 //
-// 只跑「无外部依赖、可在任意机器复现」的检查：语法、单测、总线校验、令牌漂移。
-// 需要运行中的 DSH host 或桌面壳的实机项（L2 插件加载 / L3 冒烟 / L4 跨线联动）
-// 不在此脚本内——它们的清单在 dsh-miasaki-shared-docs/cross/smoke-test-matrix.md。
+// 只跑「无外部依赖、可在任意机器复现」的检查：语法、单测、总线校验、令牌漂移、
+// 运行时补丁离线自证。需要运行中的 DSH host 或桌面壳的实机项（L2 插件加载 /
+// L3 冒烟 / L4 跨线联动）不在此脚本内——它们的清单在
+// dsh-miasaki-shared-docs/cross/smoke-test-matrix.md。
 //
 // 用法：
-//   node scripts/verify-all.mjs            # 全部四线
-//   node scripts/verify-all.mjs sidebar    # 只跑指定线（sidebar/canvas/fleet/desktop）
+//   node scripts/verify-all.mjs                      # 全部六线
+//   node scripts/verify-all.mjs dual-model           # 只跑指定线
+//                     （sidebar / canvas / fleet / desktop / ssh / dual-model）
 //
 // 实现注记：子进程一律 stdio: 'inherit'，不做管道捕获——受限沙箱下捕获另一个
 // 程序的 stdio 会以 EPERM 失败，而 inherit 不会。因此本脚本以退出码判定成败，
@@ -20,7 +22,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const LINES = ['sidebar', 'canvas', 'fleet', 'desktop']
+const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model']
 
 /** Run one command, inheriting stdio; resolves to the exit code. */
 function run(cmd, args, cwd) {
@@ -65,10 +67,29 @@ async function planCanvas() {
 
 function planFleet() {
   const dir = join(ROOT, 'dsh-miasaki-fleet')
-  // F3 判活单测（本线首个自动化测试）+ F1 总线校验。
+  // F3 判活单测 + G0 总线契约/applier 单测 + F1 总线校验。
   checks.push({ line: 'fleet', name: 'test liveness (F3 心跳判活)', cmd: process.execPath, args: [join(dir, 'tests/liveness.test.mjs')], cwd: dir })
+  // G0：契约判定（graph/result/event/patch）、applier 超步（CAS/确定性排序）、
+  // 图校验闭环（validate-bus 的引用完整性/版本单调性路径）。
+  // 三者都不捕获子进程管道，因此受限沙箱下同样可跑。
+  checks.push({ line: 'fleet', name: 'test bus-contract (G0 契约判定)', cmd: process.execPath, args: [join(dir, 'tests/bus-contract.test.mjs')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'test bus-apply (G0 applier 超步)', cmd: process.execPath, args: [join(dir, 'tests/bus-apply.test.mjs')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'test bus-integration (G0 图校验闭环)', cmd: process.execPath, args: [join(dir, 'tests/bus-integration.test.mjs')], cwd: dir })
+  // G1：任务图与就绪度判定。含「无 graph 字段的任务与旧规则逐字等价」的验证 ——
+  // 这是 G1 零行为变更的证明，因此必须在回归里常驻。
+  checks.push({ line: 'fleet', name: 'test task-graph (G1 图与就绪度)', cmd: process.execPath, args: [join(dir, 'tests/task-graph.test.mjs')], cwd: dir })
+  // G1 CLI 冒烟：图结构完整性（真实总线上应为 0 个结构问题）。
+  checks.push({ line: 'fleet', name: 'task-ready --check (G1 图结构)', cmd: process.execPath, args: [join(dir, 'workers/graph/task-ready.mjs'), '--check'], cwd: dir })
+  // G2：能力图（词表规范化 / 替代查找 / 选型 / 缺口诊断）。
+  // 测试数据取自真实档案快照 —— 「coder 归档后只有部分替代者」「analyst 无替代者」
+  // 这类结论必须可在回归里复现。
+  checks.push({ line: 'fleet', name: 'test capability-graph (G2 能力图)', cmd: process.execPath, args: [join(dir, 'tests/capability-graph.test.mjs')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'agent-pick --check (G2 能力图结构)', cmd: process.execPath, args: [join(dir, 'workers/graph/agent-pick.mjs'), '--check'], cwd: dir })
+  // G4：验证器选取与异构性判定（自验必须被拒；异构等级按厂商/模型判定）。
+  checks.push({ line: 'fleet', name: 'test verifier (G4 异构验证)', cmd: process.execPath, args: [join(dir, 'tests/verifier.test.mjs')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'verifier-pick --check (G4 契约)', cmd: process.execPath, args: [join(dir, 'workers/graph/verifier-pick.mjs'), '--check'], cwd: dir })
   checks.push({ line: 'fleet', name: 'syntax fleet-monitor/server.js', cmd: process.execPath, args: ['--check', join(dir, 'fleet-monitor/server.js')], cwd: dir })
-  // Bus validation is the fleet line's regression suite (F1 contract).
+  // Bus validation is the fleet line's regression suite (F1 contract + G0 graph/event/result).
   checks.push({ line: 'fleet', name: 'validate-bus', cmd: process.execPath, args: [join(dir, 'workers/validate-bus.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'publish-pulse', cmd: process.execPath, args: [join(dir, 'workers/pulse/publish-pulse.mjs')], cwd: dir })
   // --strict additionally requires fleet-pulse.json, so it must follow publish.
@@ -108,8 +129,40 @@ function planDesktop() {
   }
 }
 
-/** 定位 cargo：优先 CARGO_HOME，其次 rustup 默认安装位置（PATH 里常没有）。 */
-function cargoBin() {
+async function planSsh() {
+  const dir = join(ROOT, 'dsh-miasaki-ssh')
+  // 单测不碰真实 SSH 连接（store 围栏/归一化、runtime 的 TOFU 与错误分类、
+  // http 路由、client 工厂返回契约），因此可在无 sshd 的机器上复现；
+  // 真实连接验收仍是实机项，见 smoke-test-matrix.md。
+  for (const entry of ['index.js', 'client.js', 'app.js', 'lib/store.js', 'lib/runtime.js']) {
+    checks.push({ line: 'ssh', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
+  }
+  for (const file of await testFiles(dir)) {
+    checks.push({ line: 'ssh', name: `test ${file.split(/[\\/]/).pop()}`, cmd: process.execPath, args: [file], cwd: dir })
+  }
+}
+
+async function planDualModel() {
+  const dir = join(ROOT, 'dsh-miasaki-dual-model')
+  for (const entry of ['index.js', 'client.js', 'lib/content.js', 'lib/routing.js', 'lib/capability.js', 'lib/store.js']) {
+    checks.push({ line: 'dual-model', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
+  }
+  for (const file of await testFiles(dir)) {
+    checks.push({ line: 'dual-model', name: `test ${file.split(/[\\/]/).pop()}`, cmd: process.execPath, args: [file], cwd: dir })
+  }
+  // 图片准入补丁的自证：由 baseline 原始文件重建补丁产物并逐字节比对。
+  // 与 desktop 那一项同理——纯离线、不碰安装目录；它证明的是「补丁规则与基线自洽」，
+  // 而不是「补丁此刻在安装目录里」（DSH 升级覆盖后这一项仍应 PASS）。
+  checks.push({
+    line: 'dual-model',
+    name: 'patch verify (图片准入补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-api-session-controller/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+}
+
+/** 定位 cargo：优先 CARGO_HOME，其次 rustup 默认安装位置（PATH 里常没有）。 */function cargoBin() {
   const exe = process.platform === 'win32' ? 'cargo.exe' : 'cargo'
   const home = process.env.CARGO_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.cargo')
   const candidate = join(home, 'bin', exe)
@@ -129,6 +182,8 @@ if (selected.includes('sidebar')) await planSidebar()
 if (selected.includes('canvas')) await planCanvas()
 if (selected.includes('fleet')) planFleet()
 if (selected.includes('desktop')) planDesktop()
+if (selected.includes('ssh')) await planSsh()
+if (selected.includes('dual-model')) await planDualModel()
 
 console.log(`[verify-all] ${selected.join(' / ')} — ${checks.length} 项检查\n`)
 
