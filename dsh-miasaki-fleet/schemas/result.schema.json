@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tasks/<id>/result.json — 节点交付契约（G0）",
+  "description": "与人类可读的 result-<id>.md 并列的机器可读契约。让下游 consumes 校验、验收预检、G4 验证器都拿到结构化事实而非自由文本。权威校验实现见 workers/lib/bus-contract.cjs 的 validateResult。",
+  "type": "object",
+  "required": ["task_id", "status", "conclusion", "evidence"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^t-[0-9]{4}$",
+      "description": "必须与所在任务目录名一致，防止张冠李戴"
+    },
+    "status": {
+      "enum": ["completed", "blocked", "failed"],
+      "description": "交付态。注意与 status.json 的 worker 运行态（idle/running/…）是两回事"
+    },
+    "conclusion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "下游可直接引用或转交的一句话结论"
+    },
+    "completeness": {
+      "type": "object",
+      "properties": {
+        "done": { "type": "array", "items": { "type": "string" } },
+        "missing": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "证据：每项必须是可核对的引用，不接受自由文本。字段必填但可为空数组。",
+      "items": {
+        "type": "object",
+        "required": ["type", "ref"],
+        "properties": {
+          "type": { "enum": ["url", "file", "task", "command"] },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "description": "type=task 时须为 t-NNNN（上游任务 id），这是「边的真实性」可机械校验的关键"
+          },
+          "note": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "status=blocked/failed 时不得为空：失败必须说明卡在哪"
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "产物清单。sha256 必填 —— 它是上下游 consumes 校验与「产物是否被事后篡改」判定的依据",
+      "items": {
+        "type": "object",
+        "required": ["path", "bytes", "sha256"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "broadcast": {
+      "type": "string",
+      "description": "可选：值得写入 collective-memory 的发现（Commander 审阅后决定）"
+    }
+  }
+}

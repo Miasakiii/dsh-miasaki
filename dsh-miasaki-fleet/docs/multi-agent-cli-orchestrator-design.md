@@ -22,6 +22,10 @@
 > - v0.14 依据腾讯技术工程《DeepSeek Harness 规模化踩坑实录：耗时、成本、失败到底该怎么查》（2026-08-24，归档于 `../dsh-miasaki-shared-docs/dsh-platform/ref-tencent-agent-obs-2026-08-24.md`）补充：DSH 可观测生态情报——腾讯云官方插件 `tencentcloud-agentobs-sdk-dsh`（支持 DSH >=0.1.0-rc.6 <0.2.0）以状态树+延迟发射把 DSH 事件流还原为五层调用树（entry/agent/step/chat/tool，OpenTelemetry GenAI 语义约定；一次 turn 一条 trace、`gen_ai.session.id` 横向关联、重试不合并 `dsh.llm.attempt`、中断补发带错误码 Span）；结论：与 fleet 现有任务级文件总线观测互补而非替代（插件仅覆盖 dsh 单 CLI、需云凭证、captureContent 默认上送会话内容），五层 schema 作为未来 dsh worker step 级观测参考；dsh 缺 headless profile 仍为非活动 worker，暂不接入。
 > - v0.15 文件总线治理批次（2026-09-04/05）：**F1 契约校验**——`schemas/*.schema.json`（registry/manifest/control/status/tasks/ledger/events/usage/pulse 七类）+ `workers/validate-bus.mjs`（零依赖全量校验，`--strict` 额外要求 `state/fleet-pulse.json` 存在；BOM 自动剥离、`agents/archive/` 标本跳过、被 ignore 的运行时文件缺失跳过；实测 23 文件 0 错误）；§4.2 `control.json` 强制 `force_kill` 字段（agent-browser 已补，见 schemas/README）；**F2 计量全源覆盖**——派单器 `Get-UsageRow` 按 `metering_source` 注册表解析，新增 `session`（dsh 会话级，需 dsh usage 手工回填）与 `console-usage`（bl console 侧，需 Operator 对账）及未知源统一写**显式未计量行**（`cost:0, metered:false`），杜绝静默"无计量"（§9.1 回写）；**X1 脉冲发布**——`workers/pulse/publish-pulse.mjs` 聚合 fleet 五计数（online/running/waiting_approval/blocked/error）+ 当日成本原子写 `state/fleet-pulse.json` v2，作为 A×B 桌宠↔fleet 联动唯一契约（契约文档 `../dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`，桌面端 `MIASAKI_FLEET_PULSE` 环境变量 2s 轮询）；`fleet-monitor/server.js` 读取 JSON/JSONL 加 BOM 剥离与 CRLF 分行容错；新增根级 `package.json`（`npm run validate` / `pulse`）。
 > - v0.16 心跳判活批次（2026-09-07）：**F3 心跳判活落地**——此前 `alive` 只判 `state !== 'stopped'`、`heartbeat_at` 无人消费，worker 崩溃后遗留的 `status.json`（仍为合法的 `running`）会让面板与 pulse 永远显示在跑、桌宠永远「忙碌中…」，属「陈旧数据比没有数据更危险」；新增 **`workers/lib/liveness.cjs`（+`.mjs` ESM 门面，单一实现两处消费）**：`evaluateLiveness(status, manifest, nowMs)` 以 `limits.heartbeat_ms × 3`（默认 30s×3=90s）为预算，心跳过龄的 `running/draining` 降级为 `unknown`、不进 running 计数，未来时间戳与缺失/非法心跳同判不可信，终态（idle/blocked/error/stopped）不受判活改写；**publish-pulse 与 fleet-monitor/server.js 均改用该口径**，pulse 输出新增附加字段 `stale_agents`（降级计数，不改五计数契约，旧读者忽略）；`schemas/pulse.schema.json` 补 `stale_agents`；**本线首个自动化测试** `tests/liveness.test.mjs`（7 项：UTC 解析、新鲜计活、过龄降级、缺心跳不可信、未来戳 stale、终态保留、兜底默认周期），并入仓库级统一回归 `node scripts/verify-all.mjs fleet`。
+> - v0.17 G0 批次（2026-09-10，**图工程 G 系列第一步**）：**总线写入入口落地**——新增 `workers/bus/bus-apply.mjs`（**唯一写入入口**：补丁校验 → 乐观并发 → 确定性排序 → 原子应用 → 追加事件 → 提交超步版本）+ `workers/lib/bus-contract.cjs`（**契约的唯一可执行定义**，applier 写入时拦截与 validate-bus 事后巡检**共用同一份判定**，杜绝口径漂移）+ `workers/lib/bus-apply-core.cjs`（核心逻辑，不调 `process.exit`，可被测试与非 CLI 消费者调用）；**新增 `state/graph-events.jsonl` 机器事件流**（只追加、由 applier 代写；**总线版本号由它派生**——当前版本 = 最后一条 `superstep.committed` 的 `bus_version`，刻意不落独立状态文件）；**新增 `tasks/<id>/result.json` 节点交付契约**（机器可读结论 + 证据 + 产物 sha256，供下游 consumes 校验与验收预检）；`tasks.jsonl` 的 `graph` 子对象契约与任务图引用完整性校验；§3 目录结构与新增 **§4.8** 回写；`schemas/{graph,result,graph-event,patch}.schema.json` 四类契约镜像；新测试 **51 项**（`tests/bus-{contract,apply,integration}.test.mjs`）并入 `verify-all fleet`（**8/8 PASS**）；设计依据 = 图工程调研与方案（`docs/graph-engineering-survey-2026-09-10.md` / `docs/graph-engineering-fleet-design.md`）。**G1–G4（任务图 / 能力图 / 状态图 / 验证器）仍为设计**，评审通过后并入本协议。
+> - v0.18 G1 判定层批次（2026-09-10，图工程 G 系列第二步）：**任务图的就绪度判定可执行化**——调研发现 `dispatch-task.ps1` 此前**没有任何依赖判定代码**（§5 的依赖规则只靠 Commander 自觉），因此 G1 不是替换旧逻辑，而是**新增一个此前不存在的可执行判定**。新增 **`workers/lib/task-graph.cjs`（就绪度判定的唯一实现）**：台账重放 `foldTasks`、图模型 `buildGraph`/`groupSummary`、依赖的两种语义 `effectiveDeps`、图就绪 `evaluateReadiness`、可派判定 `evaluateDispatchable`（在就绪之上叠加 assignee / 开关 / 判活 / 预算）、就绪集与可派集 `readySet`/`dispatchableSet`；新增 **`workers/graph/task-ready.mjs`** CLI（`--dispatchable` / `--explain <id>` / `--groups` / `--check` / `--json`，退出码 0 有就绪 / 1 无就绪 / 2 环境错误）。**依赖双语义**：`depends_on` 保持旧语义（上游 `done`，不看验收）作为回退路径；声明了 `graph.consumes` 的任务改用严格数据依赖口径（上游 done ∧ **已验收** ∧ **产物存在**）——下游读的是文件，状态 done 不等于产物可用。**零行为变更已证**：手工穷举 6×2×6 种状态组合 + **真实台账（`state/tasks.jsonl`）逐任务比对**，新判定与旧规则完全一致（`tests/task-graph.test.mjs`，13 项）。§3 目录结构、§5 依赖规则、§4.8 注释同步回写；`verify-all fleet` 由 8 项扩至 **10/10 PASS**。CLI 首次运行即暴露历史问题：`t-0003`/`t-0004` 仍处 queued 但 assignee 是**已归档**的 coder/analyst（图就绪、可派被挡——两个集合的差值正是诊断价值）。**边界**：派单器尚未按图调度，判定目前是"可查询"而非"强制"。
+> - v0.19 G2 能力图判定层批次（2026-09-10，图工程 G 系列第三步）：**能力图可执行化**——新增 `workers/lib/capability-graph.cjs`（能力规范化词表 + 图构建 + 替代查找 + 选型打分 + 缺口诊断）与 `workers/graph/agent-pick.mjs` CLI（`--need` / `--substitute` / `--gaps` / `--check` / `--json` / `--all`）；**§6.2 分配流程的②③④ 首次有了可执行实现**（此前"技能匹配"只是字符串交集，且没有任何工具消费它）。**关键决策**：① **能力规范化先行**——真实数据第一次运行即断裂（归档的 coder 声明 `code`、活动 agent 声明 `coding`，字符串不等导致替代查找找不到人），故引入 canonical 能力 id（`cap:coding`）；② **别名表保守且可审计**——只收明确同义的（`code`/`scripting` → `coding`），**不猜相似度**，待确认项由 `--gaps` 报出交人决定（能力词表收敛是语义决策，不该由工具替人拍板）；③ **替代查找分「完全覆盖」与「部分覆盖（带 missing 清单）」两级**，因为真实情况下常常没有完全替代者；④ **confidence 为 agent 级** `(accepted+1)/(accepted+reopened+failed+2)`（能力级需任务声明能力需求，v2 再做；无历史 = 0.5），**这是有意的简化不是遗漏**；⑤ 选型为**可解释的加权和**（覆盖度 100 + confidence 20 − 成本 10 − 负载 5），§6.3 人工决策表降级为**兜底**而非删除。**首次运行的真实产出（G2 最重要的价值不是算法，而是把能力断层变成可见事实）**——发现**四个能力断层**：`research` / `comparative-analysis` / `engineering` / `zh-report` 均**无活动提供者**（仅归档的 coder / analyst 提供），这正是 `t-0003` / `t-0004` 长期卡在 queued 的根因；`--substitute coder` 给出 3 个部分替代者（claude/opencode/pi 各覆盖 1/3，缺 `engineering` 与 `zh-report`），`--substitute analyst` 给出「完全没有替代者」的诚实结论（`analysis ≠ research`，工具不猜）；另报出 8 个活动 agent 的 `model` 全为 `cli-default`（**多模型选型目前缺乏真实数据，成本项无法产生区分度**）与 coder 档案的 `code`/`scripting` 冗余。新增 **17 项测试**（数据取自真实档案快照，使「找不到替代者」这类结论可在回归里复现）；`verify-all fleet` 由 10 项扩至 **12/12 PASS**。**边界**：`capability.json` 尚未持久化（当前为运行时派生），派单流程尚未使用能力图（仍是"可查询"非"强制"）。
+> - v0.20 G4 验证器批次（2026-09-10，图工程 G 系列第五步）：**异构验证可执行化**——新增 `workers/lib/verifier.cjs`（异构性判定 + 验证者选取 + 验证任务书生成 + 结论汇总）与 `workers/graph/verifier-pick.mjs` CLI（`--for` / `--brief` / `--status` / `--check` / `--min-level` / `--json` / `--all`）；**`verdict.json` 契约落地**（`bus-contract.validateVerdict`）——三条硬约束各对应一种真实失效：**验证者必须署名**（匿名验证既无法追责也无法判定异构）、**`verdict=reject` 必须给出 findings**（拒绝必须说明依据，否则只是噪声）、**每条 finding 必须有 evidence**（对抗验证的结论同样要有依据）；已接入 applier 写入校验（`bus-apply-core` 的 `validateValueForPath`）与巡检（`validate-bus`）。**异构等级**（由弱到强）：`none`（同一 agent = 自验，**禁止**）< `agent`（不同 agent）< `model`（不同模型）< `vendor`（不同厂商）。**应对一个现实约束**：勘察发现 8 个活动 agent 的 `manifest.model` **全是 `cli-default`**，「不同模型」这一级在当前数据下无法判定；但 fleet 有**本机 8 个 CLI 天然来自不同厂商**这一别处没有的条件，故以「agent → 厂商」静态映射（`DEFAULT_VENDORS`，可由 `shared/agent-vendors.json` 覆盖）作为**不依赖 manifest 数据**的异构依据——这正是 G4 在当前数据下仍可落地的原因；厂商未登记时**保守降级为 agent 级并说明原因**，绝不假装异构。验证任务书内置三要素：**对抗立场**（你是来推翻它的，找不到反例才给 pass）、**独立契约**（只看产出物与原始验收标准，不看执行者的推理过程——那可能正是盲点）、**结构化输出模板**。新增 **20 项测试**；`verify-all fleet` 由 12 项扩至 **14/14 PASS**。**边界**：验证器目前是 Commander **可查询**的能力，派单流程尚未强制挂载（高风险任务应挂而未挂时无告警）。
 
 ---
 
@@ -132,21 +136,25 @@
 
 ```
 workspace/                          # 本项目根目录
-├─ state/                           # ★ Commander 唯一写者（worker 只读）
+├─ state/                           # ★ 经 applier 写入（见 §4.8；worker 只读）
 │  ├─ tasks.jsonl                   # 任务台账（追加写）
 │  ├─ ledger.jsonl                  # 成本台账（追加写）
-│  └─ events.jsonl                  # 全局事件流（可选，Monitor 消费）
+│  ├─ events.jsonl                  # 全局事件流（人工里程碑，Monitor 消费）
+│  └─ graph-events.jsonl            # ★ 机器事件流（G0，只追加、由 applier 代写；总线版本号由它派生）
 ├─ tasks/
 │  └─ <task-id>/                    # 每任务一目录
 │     ├─ brief.md                   # 任务书（Commander 写）
 │     ├─ context.md                 # 上下文捆绑包（Commander 写）
+│     ├─ result.json                # ★ 节点交付契约（G0，机器可读；下游 consumes 校验的依据）
+│     ├─ verdict.json               # ★ 验证器结论（G4，高风险任务才有）
 │     └─ result/                    # ★ worker 唯一写者（交付区）
-│        ├─ result-<task-id>.md     # 结果报告（固定文件名）
+│        ├─ result-<task-id>.md     # 结果报告（固定文件名，人类可读）
 │        └─ artifacts/              # 产物文件
 ├─ agents/
 │  ├─ registry.json                # ★ 扫描器唯一写者（发现清单快照）
 │  └─ <agent-id>/                   # 每 worker 一目录
 │     ├─ manifest.json              # 档案（runtime:"cli" 由扫描器生成，Operator/Commander 可编辑）
+│     ├─ capability.json            # ★ 能力图（G2，扫描器写结构 + 验收回填 confidence）
 │     ├─ control.json               # ★ Operator 唯一写者（开关 = 派单许可）
 │     ├─ status.json                # ★ 派单器/worker 写者（心跳+进度）
 │     ├─ inbox/                     # ★ Commander 唯一写者（投递任务文件）
@@ -156,6 +164,12 @@ workspace/                          # 本项目根目录
 │     ├─ notes.md                   # ★ worker 唯一写者（自持久记忆）
 │     └─ logs/                      # 进程 stdout/stderr 日志
 ├─ workers/
+│  ├─ bus/bus-apply.mjs             # ★ 总线唯一写入入口（G0）：补丁校验 → 乐观并发 → 原子应用
+│  ├─ graph/task-ready.mjs          # ★ 就绪集查询（G1）：--dispatchable / --explain / --groups / --check
+│  ├─ lib/bus-contract.cjs          # ★ 契约的唯一可执行定义（graph/result/event/patch）
+│  ├─ lib/task-graph.cjs            # ★ 就绪度判定的唯一实现（G1）
+│  ├─ lib/liveness.cjs              # ★ 心跳判活的唯一口径（F3）
+│  ├─ validate-bus.mjs              # 总线校验器（F1 + G0）
 │  └─ discovery/scan-agents.ps1     # 扫描器：探测本机 agent CLI → manifest + registry
 └─ shared/                          # ★ Commander 唯一写者，全体只读
    ├─ collective-memory.md          # 总指挥策展的跨 agent 知识
@@ -332,6 +346,49 @@ workspace/                          # 本项目根目录
 
 ---
 
+### 4.8 总线写入入口与机器事件流（G0，2026-09-10）
+
+**从 G0 起，总线文件不再由各角色直接写入，一律经唯一入口 `workers/bus/bus-apply.mjs` 提交补丁。**
+
+理由：G0 之前 Commander / 派单器 / 扫描器各自直接写文件，只在事后由 `validate-bus.mjs` 巡检，留下三类故障——**格式写坏**（事后才发现，坏数据已进总线）、**并发覆盖**（两个写者读同一旧值，后写者静默覆盖）、**变更不可追溯**（文件变了，但没人记录是谁、为什么改）。
+
+补丁契约：
+
+```json
+{ "op": "append | set | merge",
+  "path": "state/tasks.jsonl",
+  "value": { },
+  "author": "commander",
+  "reason": "assign t-0012 → scout",
+  "expected_version": 17 }
+```
+
+applier 依次执行五步：
+
+| # | 步骤 | 说明 |
+|---|---|---|
+| 1 | **契约校验** | 判定规则来自 `workers/lib/bus-contract.cjs` —— 与 `validate-bus.mjs` **同一份可执行定义**，不存在两处副本 |
+| 2 | **乐观并发** | `expected_version` 必须等于当前总线版本，否则**整批拒绝**（不做部分提交），并回报当前版本供重读重试 |
+| 3 | **确定性排序** | 按 `path → author → op` 排序，**到达时间不参与**。因此同一组补丁无论以什么顺序到达，fold 出的状态相同 —— 这是"重放可复现"的前提 |
+| 4 | **原子应用** | JSONL 追加；JSON 写临时文件后 `rename` |
+| 5 | **提交超步版本号** | 追加一条 `superstep.committed` 事件 |
+
+**一次调用 = 一个超步（superstep）**，只递增一次版本号——这是"多个 worker 并发产出的补丁属于同一批次"的表达。
+
+**总线版本号不落独立文件**：当前版本 = 事件流中最后一条 `superstep.committed` 的 `bus_version`；无事件时为 0。多一份状态文件就多一处可能与真相不一致的地方。查询：`bus-apply.mjs --current-version`。
+
+**可写路径有白名单**（`bus-contract.cjs` 的 `PATCH_PATH_RULES`）：`state/{tasks,graph-events,ledger}.jsonl`、`agents/<id>/capability.json`、`tasks/<id>/{result.json,verdict.json}`。**未登记路径一律拒绝**——总线不接受任意路径写入。
+
+退出码：`0` 成功 / `2` 契约非法 / `3` 版本冲突 / `4` IO 或环境错误。
+
+> **本节只登记已落地的 G0**（写入入口 + 事件流 + `result.json` 契约 + 图/事件/交付物的校验）。
+> **G1 的判定层已落地**（`workers/lib/task-graph.cjs` + `workers/graph/task-ready.mjs`），已登记于 §5 的依赖规则；
+> 但**派单器尚未按图调度**（`dispatch-task.ps1` 未改动，依赖判定目前是"可查询"而非"强制"）。
+> 能力图 / 状态图 / 验证器、失败归因与恢复边界仍为**设计**，
+> 见 [graph-engineering-fleet-design.md](graph-engineering-fleet-design.md)。
+
+---
+
 ## 5. 任务状态机
 
 ```
@@ -367,7 +424,11 @@ workspace/                          # 本项目根目录
 - **同一任务同时只有一个 assignee**，`parallel_limit` 默认 1（v1 不支持一个任务多 worker 并行）；
 - `blocked` 的任务由 Commander 补充 context 后重新投递（reopen 到 queued）；
 - `retries ≥ 3` 且仍不通过 → Commander 换 agent 或降级为人工介入；
-- 依赖（v1）：`depends_on` 中的任务全部 `done` 后，Commander 才允许 assign。
+- 依赖（v1，**G1 起可执行化**）：`depends_on` 中的任务全部 `done` 后，Commander 才允许 assign。
+  **规则本身未变**，但自 G1 起有了唯一实现：`workers/lib/task-graph.cjs` 的 `evaluateReadiness`。
+  声明了 `graph.consumes` 的任务改用严格的数据依赖口径（上游须 done ∧ **已验收** ∧ **产物存在**）；
+  无 `graph` 字段的任务**回退到上面的旧语义**，行为与 G1 之前逐字一致（已用真实台账验证）。
+  查询：`node workers/graph/task-ready.mjs`（就绪集）/ `--dispatchable`（叠加开关/判活/预算）/ `--explain <id>`。
 
 ---
 
@@ -391,6 +452,14 @@ workspace/                          # 本项目根目录
    次优 agent，并在 brief 中显式声明降级原因与风险
 ```
 
+> **G2 起②③④ 有了可执行实现**（`workers/lib/capability-graph.cjs` + `workers/graph/agent-pick.mjs`）：
+> 技能名经**能力词表**规整为 canonical 能力（`code`/`scripting` → `cap:coding`），选型在图上按
+> 「覆盖度 + 历史 confidence − 成本 − 负载」打分。**②的"技能匹配"因此不再是字符串交集**。
+> `--substitute <agent>` 直接对应④之前该问的问题：**有替代者就不该暂存**；
+> `--gaps` 报出「无人提供」与「只有归档提供」的能力断层（真实数据里已发现四个：
+> `research` / `comparative-analysis` / `engineering` / `zh-report`）。
+> **边界**：以上目前是 Commander **可查询**的能力，派单流程尚未强制使用。
+
 ### 6.3 分配决策表（决策依据，按优先级）
 
 | 优先级 | 依据 | 说明 |
@@ -413,6 +482,21 @@ workspace/                          # 本项目根目录
 5. 验收通过后回填台账 `tokens`/`cost`/`steps`/`takeovers`（从 usage 聚合）；
 6. 涉及 UI / 浏览器 / 真实环境的产物**不得只信 worker 自测**：Agent 写的测试易与实现共用盲点（实测案例：DSH 与 Kimi Code 均出现自测通过、真实浏览器失败），须独立运行验证，必要时 Operator 人工试玩确认；
 7. 生产级任务按 **A1 可运行 → A9 项目文档** 的九条式标准逐条验收（Datawhale 生产级抠图实测模式）；安全必查项至少含：登录限流（连续错误应返回 429）、安全响应头（X-Content-Type-Options / X-Frame-Options / Referrer-Policy）、会话过期清理、可访问性对比度、交互语义正确性（如对比视图须两侧分别采样）。
+
+> **G4 起第 6 条有了可执行形态**（`workers/lib/verifier.cjs` + `workers/graph/verifier-pick.mjs`）：
+> **高风险任务**应挂一个 `node_kind: "verify"` 的独立验证任务，由与产出者**异构**的 agent 执行，
+> 产出 `tasks/<id>/verdict.json`（拒绝必须给出 findings，每条 finding 必须有 evidence）。
+>
+> **异构等级**（由弱到强）：`none`（同一 agent，即自验，**禁止**）< `agent`（不同 agent）
+> < `model`（不同模型）< `vendor`（不同厂商）。
+> **现实约束**：当前 8 个活动 agent 的 `manifest.model` 全是 `cli-default`，
+> 「不同模型」这一级**无法判定**；但 fleet 有本机 8 个 CLI 来自不同厂商这一独特条件，
+> 故以「agent → 厂商」静态映射作为不依赖 manifest 数据的异构依据。厂商归属未登记时
+> **保守降级为 agent 级并说明原因**，绝不假装异构。
+>
+> 用法：`verifier-pick.mjs --for <producer>` 挑验证者；`--brief <taskId> --producer <id>` 生成
+> 验证任务书（对抗立场 + 独立契约 + verdict 模板）。**边界**：目前是 Commander 可查询的能力，
+> 派单流程尚未强制挂载验证器。
 
 ### 6.5 fleet 变化应对（Operator 关闭某 agent 时）
 1. 该 agent **queued 状态的任务** → Commander 写 `reassign` 回 queued（`assignee=null`），按 §6.2 重新适配；

@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "task.graph — 任务图节点（G1）",
+  "description": "tasks.jsonl 中 create.task.graph。字段缺失即「不入图」，等同 G1 之前的现状（增量式采用）。权威校验实现见 workers/lib/bus-contract.cjs 的 validateGraph —— 本文件是同一契约的人类可读镜像。",
+  "type": "object",
+  "required": ["node_kind"],
+  "properties": {
+    "node_kind": {
+      "enum": ["work", "fan_out", "reduce", "verify", "gate"],
+      "description": "work=普通工作节点；fan_out=拆解并扇出（运行时才知 N）；reduce=汇合点（必须声明非空 consumes）；verify=独立验证器（必须声明非空 consumes，且执行者须与产出者异构）；gate=人工/条件闸门"
+    },
+    "group": {
+      "type": "string",
+      "pattern": "^g-[0-9]{4}$",
+      "description": "所属钻石图。同组 work 全部 accepted 后 reduce 就绪"
+    },
+    "parent": {
+      "type": "string",
+      "pattern": "^t-[0-9]{4}$",
+      "description": "扇出来源，必须指向 node_kind=fan_out 的任务；失败归因沿它逆向回溯"
+    },
+    "consumes": {
+      "type": "array",
+      "description": "数据依赖：本任务真的要读谁的哪个产物。这是唯一的依赖依据（depends_on 语义收紧为时序偏好）。边按数据命名，不按顺序。",
+      "items": {
+        "type": "object",
+        "required": ["task", "artifact"],
+        "properties": {
+          "task": { "type": "string", "pattern": "^t-[0-9]{4}$" },
+          "artifact": { "type": "string", "minLength": 1, "description": "产物文件名，如 result.json" },
+          "required": { "type": "boolean", "description": "true=产物缺失则不就绪；false=可选输入" }
+        }
+      }
+    },
+    "produces": {
+      "type": "object",
+      "description": "本任务的产出契约，供下游 consumes 引用与校验",
+      "required": ["artifact"],
+      "properties": {
+        "artifact": { "type": "string", "minLength": 1 },
+        "schema": { "type": "string", "description": "对应的 schema 文件名，如 result.schema.json" }
+      }
+    }
+  }
+}

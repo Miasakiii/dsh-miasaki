@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "bus patch — 唯一写入入口的补丁（G0）",
+  "description": "提交给 workers/bus/bus-apply.mjs 的补丁。所有角色不再直接写总线文件，一律提交补丁；applier 依次做契约校验 → 乐观并发 → 确定性排序 → 原子应用 → 追加事件 → 提交超步版本。权威校验实现见 workers/lib/bus-contract.cjs 的 validatePatch。",
+  "type": "object",
+  "required": ["op", "path", "value", "author", "expected_version"],
+  "properties": {
+    "op": {
+      "enum": ["append", "set", "merge"],
+      "description": "append=追加一行 JSONL；set=整体替换 JSON；merge=在已有 JSON 对象上浅合并"
+    },
+    "path": {
+      "type": "string",
+      "description": "目标路径，相对工作区根。必须在白名单内（见 PATCH_PATH_RULES），不在白名单一律拒绝。",
+      "enum": [
+        "state/tasks.jsonl",
+        "state/graph-events.jsonl",
+        "state/ledger.jsonl"
+      ]
+    },
+    "author": {
+      "type": "string",
+      "description": "变更作者，必须能点名（commander / dispatcher / operator / applier / verifier / scanner，角色可带 :<agent-id> 后缀）"
+    },
+    "reason": {
+      "type": "string",
+      "description": "变更理由。op=set/merge 时必填 —— 变更类写入必须说明为什么改"
+    },
+    "expected_version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "乐观并发：必须等于当前总线版本，否则整体拒绝（拒绝盲目覆盖）。当前版本来自事件流，可用 `bus-apply --current-version` 查询。"
+    },
+    "value": {
+      "description": "补丁内容。path 为 state/graph-events.jsonl 时必须是合法事件（见 graph-event.schema.json）；path 为 tasks/<id>/result.json 时必须满足 result.schema.json。"
+    }
+  },
+  "x-path-whitelist-note": "白名单还包含正则形式：agents/<id>/capability.json（set|merge）、tasks/t-NNNN/result.json（set）、tasks/t-NNNN/verdict.json（set）。本枚举仅列固定路径，正则路径由 PATCH_PATH_RULES 定义。"
+}

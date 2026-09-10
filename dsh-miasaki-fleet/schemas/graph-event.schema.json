@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "graph event — 机器事件流（G3）",
+  "description": "state/graph-events.jsonl 的每行一条。只追加、永不改写、由 applier 代写。事件流是唯一真相，tasks.jsonl / status.json / ledger.jsonl 是可从它 fold 出来的派生态。权威校验实现见 workers/lib/bus-contract.cjs 的 validateEvent。",
+  "type": "object",
+  "required": ["ts", "event", "author", "bus_version"],
+  "properties": {
+    "ts": { "type": "string", "description": "ISO-8601 UTC 时间戳" },
+    "event": {
+      "enum": [
+        "task.created",
+        "task.assigned",
+        "task.started",
+        "artifact.written",
+        "edge.consumed",
+        "task.completed",
+        "task.verified",
+        "task.reopened",
+        "failure.detected",
+        "checkpoint.written",
+        "interrupt.raised",
+        "interrupt.resumed",
+        "superstep.committed"
+      ],
+      "description": "task.* 类事件需要合法 task_id；标记为变更类的还需要 reason"
+    },
+    "author": {
+      "type": "string",
+      "description": "写者角色，可带 :<agent-id> 后缀（如 verifier:opencode）"
+    },
+    "reason": { "type": "string", "description": "变更类事件必填：变更必须说明理由" },
+    "bus_version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "所属超步版本号，由 applier 统一盖章，调用方不必填写"
+    },
+    "task_id": { "type": "string", "pattern": "^t-[0-9]{4}$" },
+    "trace_id": { "type": ["string", "null"], "description": "层级视图与跨 CLI 排障：JSONL 已是天然 span 素材，补齐这三个字段即可接 OTel 后端" },
+    "span_id": { "type": ["string", "null"] },
+    "parent_span_id": { "type": ["string", "null"] }
+  },
+  "x-size-limit": "序列化后单行必须 < 4096 字节：事件只存引用，大内容放产物文件。这是「只追加、可安全并发读」的前提。",
+  "x-version-derivation": "当前总线版本 = 最后一条 superstep.committed 的 bus_version；无事件时为 0。刻意不落 bus-version.json —— 多一份状态文件就多一处可能与真相不一致的地方。"
+}

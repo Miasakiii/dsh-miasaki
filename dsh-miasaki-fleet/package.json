@@ -1,11 +1,21 @@
 {
   "name": "miasaki-fleet",
   "private": true,
-  "version": "0.16.0",
+  "version": "0.20.0",
   "description": "Miasaki 多 Agent CLI 编排线（文件总线）",
   "scripts": {
     "validate": "node workers/validate-bus.mjs",
     "validate:strict": "node workers/validate-bus.mjs --strict",
-    "pulse": "node workers/pulse/publish-pulse.mjs"
+    "pulse": "node workers/pulse/publish-pulse.mjs",
+    "test": "node tests/liveness.test.mjs && node tests/bus-contract.test.mjs && node tests/bus-apply.test.mjs && node tests/bus-integration.test.mjs && node tests/task-graph.test.mjs && node tests/capability-graph.test.mjs && node tests/verifier.test.mjs",
+    "apply": "node workers/bus/bus-apply.mjs",
+    "bus:version": "node workers/bus/bus-apply.mjs --current-version",
+    "graph:ready": "node workers/graph/task-ready.mjs",
+    "graph:dispatchable": "node workers/graph/task-ready.mjs --dispatchable",
+    "graph:groups": "node workers/graph/task-ready.mjs --groups",
+    "agent:pick": "node workers/graph/agent-pick.mjs",
+    "agent:gaps": "node workers/graph/agent-pick.mjs --gaps",
+    "verify:pick": "node workers/graph/verifier-pick.mjs",
+    "verify:brief": "node workers/graph/verifier-pick.mjs --brief"
   }
 }

@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tasks/<id>/verdict.json — 验证器结论（G4）",
+  "description": "独立验证者对被验证任务给出的结论。三条硬约束各对应一种真实失效：验证者必须署名（匿名验证既无法追责也无法判定异构）、verdict=reject 必须给出 findings（拒绝必须说明依据，否则只是噪声）、每条 finding 必须有 evidence（对抗验证的结论同样要有依据）。权威校验实现见 workers/lib/bus-contract.cjs 的 validateVerdict。",
+  "type": "object",
+  "required": ["task_id", "verifier", "verdict"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^t-[0-9]{4}$",
+      "description": "被验证的任务；必须与所在任务目录名一致"
+    },
+    "verifier": {
+      "type": "string",
+      "description": "验证者 agent id。必须与产出者不同（异构等级 none 即自验，禁止）"
+    },
+    "verifier_model": { "type": "string", "description": "验证者所用模型，用于异构性判定" },
+    "producer_model": { "type": "string", "description": "产出者所用模型，用于异构性判定" },
+    "verdict": {
+      "enum": ["pass", "reject"],
+      "description": "pass = 找不到反例；reject = 找到反例（此时 findings 不得为空）"
+    },
+    "findings": {
+      "type": "array",
+      "description": "发现清单。verdict=reject 时必须非空",
+      "items": {
+        "type": "object",
+        "required": ["severity", "claim", "evidence"],
+        "properties": {
+          "severity": { "enum": ["high", "medium", "low"] },
+          "claim": { "type": "string", "minLength": 1, "description": "一句可判断的陈述" },
+          "evidence": { "description": "可核对的依据（不限定形态，但必须存在）" }
+        }
+      }
+    },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "checked_at": { "type": "string", "description": "ISO-8601 UTC 时间戳" }
+  },
+  "x-heterogeneity": "异构等级（由弱到强）：none（同一 agent，禁止）< agent（不同 agent）< model（不同模型）< vendor（不同厂商）。当前 8 个活动 agent 的 manifest.model 全为 cli-default，「不同模型」一级无法判定，故以「agent → 厂商」静态映射（workers/lib/verifier.cjs 的 DEFAULT_VENDORS）作为不依赖 manifest 数据的异构依据。",
+  "x-task-brief": "验证任务书由 `node workers/graph/verifier-pick.mjs --brief <taskId> --producer <id>` 生成，内含对抗立场（目标是推翻而非确认）与独立契约（只看产出物与原始验收标准，不看执行者的推理过程）。"
+}
