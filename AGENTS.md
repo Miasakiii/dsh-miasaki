@@ -11,7 +11,7 @@
 - `dsh-miasaki-desktop/` — 桌面端线（Tauri 2 薄壳 + Win32 桌宠 + 三主题；`design/` 在其内）
 - `dsh-miasaki-fleet/` — 多 Agent CLI 编排线（agents/state/tasks/workers/fleet-monitor/shared/tests）
 - `dsh-miasaki-canvas/` — DSH web 画布插件线（fork dsh-synapse v0.4.1 改名 `@miasaki/dsh-canvas`，会话布 MVP M1–M4 已收官；`design/` 在其内）
-- `dsh-miasaki-sidebar/` — DSH web 轻量右侧边栏插件线（路线 D 无基座自研 `@miasaki/dsh-sidebar`：壳 / 审查 / 辅助对话 / 终端启动器；`design/` 在其内）
+- `dsh-miasaki-sidebar/` — DSH web 侧边栏插件线（`@miasaki/dsh-sidebar`：**接入官方右侧 Sidebar**，提供审查 / 终端两个 tab 类型；自研壳 2026-09-10 退役、**2026-09-11 代码删除**；`design/` 在其内）
 - `dsh-miasaki-ssh/` — DSH web SSH 插件线（`@miasaki/dsh-ssh`：会话头**第一行**视图入口，与「对话 / 会话布」同一胶囊的第三段；**画布页面内部**那组按钮旁也有一个 SSH（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器；**M1 实现中：store/runtime/路由/WS/前端/单测（28 例）已完成并已 link 安装，待重启验证真实连接；2026-09-10 入口由第二行 tab 栏迁到第一行并合成同一控件**；`design/` 在其内）
 - `dsh-miasaki-dual-model/` — DSH web 双模型插件线（`@miasaki/dsh-dual-model`：会话级「主模型 + 辅助模型」，任一支持图片即可发图，输入框右下角配置；**M1 实现完成，待实机验证**；含 `patches/dsh-api-session-controller/` 图片准入补丁；`design/` 在其内）
 - `dsh-miasaki-appearance/` — DSH web 外观插件线（`@miasaki/dsh-appearance`：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果；**M1 底座已实现，待重启 `dsh web` 实机验证**——走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject` 首帧注入，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约；M2–M4 依次接皮肤/壁纸、动效、会话效果；`design/` 在其内）
