@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 六线统一静态回归入口（L0 静态检查 + L1 单线单测）。
+// 七线统一静态回归入口（L0 静态检查 + L1 单线单测）。
 //
 // 只跑「无外部依赖、可在任意机器复现」的检查：语法、单测、总线校验、令牌漂移、
 // 运行时补丁离线自证。需要运行中的 DSH host 或桌面壳的实机项（L2 插件加载 /
@@ -7,9 +7,9 @@
 // dsh-miasaki-shared-docs/cross/smoke-test-matrix.md。
 //
 // 用法：
-//   node scripts/verify-all.mjs                      # 全部六线
+//   node scripts/verify-all.mjs                      # 全部七线
 //   node scripts/verify-all.mjs dual-model           # 只跑指定线
-//                     （sidebar / canvas / fleet / desktop / ssh / dual-model）
+//                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）
 //
 // 实现注记：子进程一律 stdio: 'inherit'，不做管道捕获——受限沙箱下捕获另一个
 // 程序的 stdio 会以 EPERM 失败，而 inherit 不会。因此本脚本以退出码判定成败，
@@ -22,7 +22,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model']
+const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance']
 
 /** Run one command, inheriting stdio; resolves to the exit code. */
 function run(cmd, args, cwd) {
@@ -85,6 +85,35 @@ function planFleet() {
   // 这类结论必须可在回归里复现。
   checks.push({ line: 'fleet', name: 'test capability-graph (G2 能力图)', cmd: process.execPath, args: [join(dir, 'tests/capability-graph.test.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'agent-pick --check (G2 能力图结构)', cmd: process.execPath, args: [join(dir, 'workers/graph/agent-pick.mjs'), '--check'], cwd: dir })
+  // 派单能力闸门接线（P0，2026-09-11）：纯文本断言，不 spawn PowerShell、不依赖 PS7，
+  // 保证任一环境都能跑。守护三件事：①闸门仍然存在；②「-Requires 显式覆盖」仍声明在
+  // param 中（否则 PowerShell 前缀解析会把 -Requires 误判为 -ParseOnly）；
+  // ③正则仍用行内空白类（.NET 的 \s 含换行，^\s* 会吃穿换行导致永不匹配）。
+  checks.push({
+    line: 'fleet',
+    name: 'dispatch 能力闸门接线 (G2 → 派单器)',
+    cmd: process.execPath,
+    args: [
+      '-e',
+      [
+        "const fs=require('fs'),p=require('path');",
+        "const s=fs.readFileSync(p.join(process.cwd(),'workers','dispatch','dispatch-task.ps1'),'utf8');",
+        "const need=[",
+        "['Test-CapabilityGate','function Test-CapabilityGate'],",
+        "['Resolve-RequiredCaps','function Resolve-RequiredCaps'],",
+        "['-Requires 声明','[string]$Requires'],",
+        "['派单分支闸门','能力闸门未通过，拒绝派单'],",
+        "['未声明即跳过','跳过能力闸门'],",
+        "['多行匹配','(?m)'],",
+        "['行内空白类','[^\\\\S\\\\r\\\\n]*']",
+        "];",
+        "const miss=need.filter(x=>!s.includes(x[1])).map(x=>x[0]);",
+        "if(miss.length){console.error('[dispatch-gate] 缺失：'+miss.join(' / '));process.exit(1)}",
+        "console.log('[dispatch-gate] 接线完整：'+need.length+' 项断言通过');",
+      ].join(''),
+    ],
+    cwd: dir,
+  })
   // G4：验证器选取与异构性判定（自验必须被拒；异构等级按厂商/模型判定）。
   checks.push({ line: 'fleet', name: 'test verifier (G4 异构验证)', cmd: process.execPath, args: [join(dir, 'tests/verifier.test.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'verifier-pick --check (G4 契约)', cmd: process.execPath, args: [join(dir, 'workers/graph/verifier-pick.mjs'), '--check'], cwd: dir })
@@ -111,6 +140,45 @@ function planDesktop() {
     name: 'patch verify (模型设置补丁可重建)',
     cmd: process.execPath,
     args: [join(dir, 'patches/dsh-client-ui-settings-models/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  // 会话头窄宽度溢出保护补丁的自证。同一契约：锚点唯一 → 由 baseline 重建 →
+  // 产物 SHA 与记录一致。同样纯离线，升级覆盖补丁后这一项仍应 PASS。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (会话头溢出保护补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-client-ui-conversation/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  // 「首 token 计时可恢复」两个补丁的自证（轨迹页计时面板 + 消息气泡 TTFT）。
+  // 与前两项同一契约之外，这两个补丁的 verify 还会把注入的恢复函数从**重建产物**里
+  // 抠出来编译并跑 fixture 行为断言，并做一次 ESM 语法校验 —— 因为它们注入的是代码
+  // 而不是 CSS。同样纯离线，升级覆盖后仍应 PASS。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (轨迹计时恢复补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-client-ui-trajectory/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (消息气泡计时恢复补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-client-ui-chat/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  // `cordis_inspect_query`(client) 永久挂起修复补丁的自证。同一契约之外，它还做两组
+  // **行为断言**：把重建产物里真实的 resolveClientQuery 与注入的超时块抠出来跑
+  // （拒绝必须被记录且不抢答；无人应答必须结算成带原因的 timeout），并对 baseline 原版
+  // 跑反例以证明断言有区分力；外加 node --check 的 ESM 语法校验。
+  // 与前几项同理——纯离线、不碰安装目录，DSH 升级覆盖补丁后仍应 PASS。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (cordis client 查询挂起修复补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-cordis-host-runner/patch.mjs'), 'verify'],
     cwd: dir,
   })
   // Rust 侧单测（pulse stale 语义 + 立绘回落链）。cargo 常不在 PATH，回落到
@@ -162,6 +230,20 @@ async function planDualModel() {
   })
 }
 
+async function planAppearance() {
+  const dir = join(ROOT, 'dsh-miasaki-appearance')
+  // 本线 M1 的 L0/L1：语法检查 + 四组纯逻辑单测（配置模型：归一化/合并/迁移/
+  // 首帧脚本/契约判定；围栏；持久化；client 半装载契约 —— 在无 `module` 的 VM 上下文里
+  // 跑 factory，钉死「module is not defined」那类整包加载失败）。都不碰网络与 DSH 运行时，
+  // 任意机器可复现；实机项（插件加载 / 设置栏出现 / 「关掉即原生」）见 smoke-test-matrix.md。
+  for (const entry of ['index.js', 'client.js', 'lib/config.js', 'lib/store.js', 'lib/fence.js']) {
+    checks.push({ line: 'appearance', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
+  }
+  for (const file of await testFiles(dir)) {
+    checks.push({ line: 'appearance', name: `test ${file.split(/[\\/]/).pop()}`, cmd: process.execPath, args: [file], cwd: dir })
+  }
+}
+
 /** 定位 cargo：优先 CARGO_HOME，其次 rustup 默认安装位置（PATH 里常没有）。 */function cargoBin() {
   const exe = process.platform === 'win32' ? 'cargo.exe' : 'cargo'
   const home = process.env.CARGO_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.cargo')
@@ -184,6 +266,7 @@ if (selected.includes('fleet')) planFleet()
 if (selected.includes('desktop')) planDesktop()
 if (selected.includes('ssh')) await planSsh()
 if (selected.includes('dual-model')) await planDualModel()
+if (selected.includes('appearance')) await planAppearance()
 
 console.log(`[verify-all] ${selected.join(' / ')} — ${checks.length} 项检查\n`)
 

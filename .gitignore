@@ -69,5 +69,6 @@ dsh-miasaki-fleet/tests/m3-acp/logs/
 # Edge/WebView2 测试 profile（--user-data-dir 残留，任意层级均忽略）
 .edge-test-profile
 .workbuddy/
+.workbuddy-ai/
 Thumbs.db
 Desktop.ini
