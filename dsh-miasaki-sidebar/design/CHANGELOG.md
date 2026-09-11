@@ -27,6 +27,14 @@
   - **第二阶段待办**：壳函数（`pushFrame` / `resolveFrame` / `drawerCloseDecision` / `measureChromeReserve` / `applySessionState` / tab 列表操作 / `Shell` / `EmptyState` / `TABS` / `TAB_BODIES`）与壳 CSS 仍作为**未调用的死代码**留在文件里，不再产生任何副作用；`test/drawer-gesture.test.js` 与 `client-tabs.test.js` 的持久化部分随之退役。
   - **验证**：`node --check` 通过；`sidebarRightTabs.register` / `sidebar.right.pane.tab` / `useTabInfo` 就位，`shell.overlay` / `sidebar-toggle` / `syncTitlebarButton` **清零**；44 项单测全绿（壳测试因死代码仍在而暂时保留）。
   - **待实机验证**：官方右栏「添加控件」→ 引导页出现「审查 / 终端」两个入口胶囊；打开后审查四视图与终端启动器正常；辅助对话仍缺席（M2）。
+- **实机验证发现并修复：官方右栏引导页整页渲染失败（同日）**。重启 host 后打开官方右栏，用户反馈「侧边栏怎么什么都没有」——右栏能打开，但**一片空白**，引导页里没有任何入口胶囊。
+  - **排查证据链**：① client `Slots.listSubTree` 的实时 occupants 显示 `sidebar.right.pane.tab` 槽内 `@miasaki/dsh-sidebar/review` 与 `/terminal` 两个 key 均 `active: true` ⇒ client 半 apply **确实执行**，两阶段注册没有被 waiting 拦住；② 读官方 `lib/client.js` 的 `SidebarRightTabRegistry.register()`——它在 `ids.has(id)` / kind 冲突时**抛错**，而 body 注册排在类型注册之后却仍存在，反证类型注册同样成功；③ 定位到 `GuideBody`/`EntryBox` 的取值形态是 **`entry.title()` / `entry.description?.()`**（函数调用），而本线 `guide` 条目传的是字符串 ⇒ 渲染抛 TypeError，React 放弃整棵引导页子树。
+  - **根因**：`sidebarRightTabs.register` 的 `guide` 条目契约抄错。官方自身写法见 `@deepseek-ai/dsh-client-ui-sidebar-files`：`guide: [{ order, title: () => …, description: () => … }]`——文本字段一律是**函数**。
+  - **修复**：新增模块级 `rightBarGuideEntry(title, description, order)` 集中构造该条目（两字段以函数暴露；`kind` 由官方 `refresh()` 从 `definition.kind` 注入，不重复传），注册处改为 `guide: [rightBarGuideEntry(...)]`。
+  - **防回归**：新增 `test/rightbar-guide.test.js`（4 项）——按本线既有手法从源码锚点抽取 `rightBarGuideEntry` 求值，断言两字段是函数、官方调用路径不抛错，并留一条「字符串形态必抛 TypeError」的对照用例证明断言有区分力，末尾再锁一条源码断言（注册处必须调用 `rightBarGuideEntry`）。
+  - **顺带修复**：`/sidebar/api/health` 的 `version` 由手抄常量改为读 `package.json`（`PLUGIN_VERSION = createRequire(import.meta.url)('./package.json').version`）。迁移到 0.6.0 时手抄值停在 `0.5.1-miasaki.1`，而 README 把该字段当作「host 是否加载了新 bundle」的判据——陈旧 host 会被误判为已更新。
+  - **验证**：`node --check` 双半通过；单测 **50 项**（48 通过 + 2 项受限环境自动跳过；新增 4 项全绿）。**待重启复验**：官方右栏引导页出现「审查 / 终端」两个胶囊，点开后审查四视图与终端启动器正常。
+  - **教训**：接入第三方扩展点时，契约要**读官方实现**（这里是 `entry.title()` 的调用形态）而不是照着字段名猜；「注册成功」与「渲染成功」是两条独立的链，只验证前者会把渲染期错误留到用户面前。
 
 ## 2026-09-06
 

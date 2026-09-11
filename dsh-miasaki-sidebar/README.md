@@ -26,6 +26,15 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 > 当前代码里这些壳函数作为**未调用的死代码**保留（不再产生任何副作用）；
 > `test/drawer-gesture.test.js` 与 `client-tabs.test.js` 的持久化部分因此仍能通过，
 > 但它们测的是死代码，第二阶段应随死代码一并退役。
+>
+> **2026-09-10 实机验证（重启 host 后）发现并修复**：首次打开官方右栏是**一片空白**，
+> 引导页没有任何入口胶囊。根因不是注册失败（`sidebar.right.pane.tab` 的两个正文都在册、
+> 均 active），而是 `sidebarRightTabs.register` 的 `guide` 条目把 `title` / `description`
+> 当**字符串**传了 —— 官方 GuideBody 是按**函数**读取的（`entry.title()` /
+> `entry.description?.()`），渲染时抛 TypeError，React 随即放弃整棵引导页子树。
+> 已修复为函数形态（模块级 `rightBarGuideEntry`），并由 `test/rightbar-guide.test.js` 锁死契约；
+> 同期把 `/sidebar/api/health` 的 `version` 改为直接读 `package.json`（迁移时手抄值停在
+> `0.5.1-miasaki.1`，会让陈旧 host 看起来是新的）。
 
 **M1 功能收口 + 审查改版 + 设计语言统一**（2026-09-09，v0.5.1-miasaki.1）：右栏壳 + 审查 tab + 终端启动器三项全部落地；
 审查 tab 按用户参考图改版为「视图下拉 + 目录分组」，标签栏改为浏览器式多标签。单测 46 项
@@ -74,12 +83,14 @@ dsh-miasaki-sidebar/
 ├── README.md
 ├── package.json            # @miasaki/dsh-sidebar（dsh.client web 声明）
 ├── cordis.patch.yml        # 插件身份（id: sidebar / 数据目录 / trustedHosts）
-├── index.js                # host 半：/sidebar/api 路由族（review + terminal 均已落地）
-├── client.js               # client 半：壳面板 + 审查 tab + 终端 tab + 双环境入口 + 推挤/空态/持久化
+├── index.js                # host 半：/sidebar/api 路由族（review + terminal + health）
+├── client.js               # client 半：官方右栏 tab 类型注册（审查 / 终端）+ 两个 tab 的正文实现
+│                           #   自研壳函数仍以未调用的死代码形式留存，待第二阶段清理
 ├── test/
 │   ├── review-data.test.js      # diff 解析器 / 文档同步检测 / checklists 持久化单测（4 项）
 │   ├── review-view.test.js      # 四视图解析器 + 真实临时 git 仓库集成（6 项，其中 2 项集成用例受限环境自动跳过）
 │   ├── client-tabs.test.js      # client 侧纯函数（持久化 v3 迁移 / 目录分组统计，源码抽取，10 项）
+│   ├── rightbar-guide.test.js   # 官方右栏 guide 条目契约：title / description 必须是函数（源码抽取，4 项）
 │   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
 │   ├── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单（10 项）
 │   └── drawer-gesture.test.js    # 抽屉右滑关闭判定（源码抽取，9 项）
@@ -127,13 +138,17 @@ dsh-miasaki-sidebar/
 ## 验证
 
 ```powershell
-# 本线单测（46 项：审查 4 + 审查视图 6 + client 纯函数 10 + 终端 7 + 路由 10 + 抽屉手势 9）
+# 本线单测（50 项：审查 4 + 审查视图 6 + client 纯函数 10 + 右栏 guide 契约 4 + 终端 7 + 路由 10 + 抽屉手势 9）
 node test/review-data.test.js
 node test/review-view.test.js     # 四视图解析器 + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过 2 项）
 node test/client-tabs.test.js     # 持久化 v3 迁移 / 目录分组统计（从 client.js 抽取纯函数求值）
+node test/rightbar-guide.test.js  # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
 node test/terminal-launcher.test.js
 node test/api-routing.test.js     # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、两道浏览器信任检查与视图白名单
 node test/drawer-gesture.test.js  # 抽屉右滑关闭判定（从 client.js 抽取纯函数求值）
+
+# 受限沙箱（禁止子进程管道 stdio）里 node --test 的多进程隔离会 spawn EPERM，
+# 改用同进程模式：node --test --test-isolation=none <逐个测试文件>
 
 # 四线统一静态回归（含本线）
 node ..\scripts\verify-all.mjs sidebar
@@ -141,7 +156,8 @@ node ..\scripts\verify-all.mjs sidebar
 
 改完 `index.js` / `client.js` 后**必须重启 `dsh web`**——本线以 `link:` 装入 profile，源码即时落盘，
 但 host 半与 client bundle 都在启动时载入内存，刷新/强刷页面均无效。`GET /sidebar/api/health` 的
-`version` 字段是判断 host 是否已加载新 bundle 的可靠信号（本次应为 `0.5.1-miasaki.1`）。
+`version` 字段是判断 host 是否已加载新 bundle 的可靠信号——它现在**直接读 `package.json`**（不再手抄，
+2026-09-10 修正），当前应为 `0.6.0-miasaki.0`。
 
 ## 规划来源
 

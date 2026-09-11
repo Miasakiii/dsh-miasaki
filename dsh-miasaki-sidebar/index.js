@@ -1,7 +1,15 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+
+// `package.json` is the single source of truth for the reported version. The
+// health route is the deployment contract for "did the host load the new
+// bundle?" (README §验证), and a hand-copied constant silently drifted at the
+// 0.6.0 migration: it kept answering 0.5.1-miasaki.1 while package.json was
+// already 0.6.0-miasaki.0, which made a stale host look current.
+const PLUGIN_VERSION = createRequire(import.meta.url)('./package.json').version
 
 const execFileP = (...args) => new Promise((resolve, reject) => {
   const [cmd, params, opts] = args
@@ -637,7 +645,7 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
       const path = new URL(req.url ?? '/', 'http://dsh.local').pathname
       if (path === '/sidebar/api/health') {
         await ready
-        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: '0.5.1-miasaki.1' })
+        return sendJson(res, 200, { ok: true, plugin: 'sidebar', version: PLUGIN_VERSION })
       }
       if (path === '/sidebar/api/review/status' && req.method === 'GET') {
         const params = new URL(req.url, 'http://dsh.local').searchParams

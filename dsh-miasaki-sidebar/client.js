@@ -278,6 +278,20 @@ window.__ModuleLoader__.load({
       if (frame !== null && frame.style.paddingRight !== '') frame.style.paddingRight = ''
     }
 
+    // 官方右栏引导页（「开始」标签页）按**函数**读取入口胶囊的文本字段：
+    // GuideBody/EntryBox 里的调用是 `entry.title()` 与 `entry.description?.()`
+    // （见 @deepseek-ai/dsh-client-ui-sidebar-right 的 lib/client.js）。
+    // 传字符串会在渲染引导页时抛 TypeError，React 随即放弃整棵子树 ——
+    // 右栏表现为**一片空白**（2026-09-10 实机现象，本线迁移后的默认打开页）。
+    // 集中在此构造，test/rightbar-guide.test.js 抽取本函数求值，锁死这条契约。
+    // 注：条目的 `kind` 由官方 refresh() 从 definition.kind 注入（`{...entry, kind}`），
+    // 不在此重复；`order` 只用于排序，必须是数字。
+    const rightBarGuideEntry = (title, description, order) => ({
+      title: () => title,
+      description: () => description,
+      order,
+    })
+
     module.exports.inject = ['slots', 'sessions', 'sidebarRightTabs']
     module.exports.apply = ctx => {
       // Idempotence guard: DSH HMR/page remount can re-run apply while the old
@@ -1240,11 +1254,12 @@ window.__ModuleLoader__.load({
         const disposers = []
         for (const tab of RIGHT_BAR_TABS) {
           // ① 类型声明：id 全局唯一，title 在 tab 打开时被捕获。
+          // guide 条目的 title / description 必须是**函数**（见 rightBarGuideEntry）。
           disposers.push(ctx.sidebarRightTabs.register({
             id: tab.id,
             kind: tab.kind,
             title: () => tab.title,
-            guide: [{ kind: tab.kind, title: tab.title, description: tab.description, order: tab.order }],
+            guide: [rightBarGuideEntry(tab.title, tab.description, tab.order)],
           }))
           // ② 正文：key 是**类型 id**（不是 kind）。
           disposers.push(ctx.slots.register({ name: 'sidebar.right.pane.tab', key: tab.id }, tab.Body))
