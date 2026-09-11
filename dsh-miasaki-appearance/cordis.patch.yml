@@ -1,0 +1,13 @@
+# @miasaki/dsh-appearance only extends the Web profile: it reuses the existing
+# DSH server rather than running a second application process.
+- insert:
+    # `name` is the npm package the loader imports; `id` is the service id.
+    - id: appearance
+      name: "@miasaki/dsh-appearance"
+      config:
+        # Appearance state (config.json) lives in its own directory, deliberately
+        # not shared with canvas / sidebar / ssh / dual-model.
+        dataDir: !!js dshHomePath('miasaki-appearance/')
+        # Extra authorities the /appearance API host check accepts (host or
+        # host:port); localhost and 127.0.0.1 are always allowed. Keep empty.
+        trustedHosts: []
