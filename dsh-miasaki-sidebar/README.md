@@ -1,6 +1,6 @@
 # @miasaki/dsh-sidebar
 
-DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献审查、终端、辅助对话三类实在工具。自研右栏壳已于 2026-09-10 退役，见下方状态说明。
+DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献审查、终端两类实在工具（辅助对话待 M2）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码已删除，不再留死代码）。
 
 - 路线 D（2026-09-06 拍板）：不安装 `dsh-better-sidebar` 基座，完全自研；与 canvas 线同构技术栈，零代码耦合；
 - 产品理念参考：Codex `/side` 侧边对话、GitHub Copilot 右栏范式、CHI'25 常显侧面板研究（详见设计文档 §2 调研来源）；
@@ -8,73 +8,57 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 
 ## 状态
 
-> ### ⚠️ 2026-09-10 架构变更：自研右栏壳退役，改为接入官方右栏
->
-> DSH `0.1.5-rc.1` 内置了官方右侧 Sidebar（分栏 / 全屏 / 浮窗 / 文件树 / 文档预览 / 模型交付文件），
-> 用户拍板「官方做了侧边栏就用官方的，不自己做了」。本线**壳层全部退役**：
-> 推挤（`padding-right` + CSS 变量）、`shell.overlay` 挂载、自研 tab 栏、空态选择页、
-> 抽屉手势与遮罩、桌面壳标题栏注入、**两处自研开关按钮**（会话头 actions 与标题栏）、
-> 按会话持久化 —— 全部移除或停用。
->
-> 审查与终端改为官方右栏的 **tab 类型**（`ctx.sidebarRightTabs.register` +
-> `sidebar.right.pane.tab` 正文），辅助对话待 M2 实现后再注册类型。
-> **打开入口**：官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊。
-> 设计见 [design/2026-09-10-migrate-to-official-rightbar.md](design/2026-09-10-migrate-to-official-rightbar.md)。
->
-> **本节以下、以及「组件蓝图」「目录结构」中凡涉及壳的描述**（右栏壳、推挤、标签栏、空态、
-> 抽屉、桌面壳让位、双环境入口、持久化 v2/v3）**均已失效**，待第二阶段清理时一并重写。
-> 当前代码里这些壳函数作为**未调用的死代码**保留（不再产生任何副作用）；
-> `test/drawer-gesture.test.js` 与 `client-tabs.test.js` 的持久化部分因此仍能通过，
-> 但它们测的是死代码，第二阶段应随死代码一并退役。
->
-> **2026-09-10 实机验证（重启 host 后）发现并修复**：首次打开官方右栏是**一片空白**，
-> 引导页没有任何入口胶囊。根因不是注册失败（`sidebar.right.pane.tab` 的两个正文都在册、
-> 均 active），而是 `sidebarRightTabs.register` 的 `guide` 条目把 `title` / `description`
-> 当**字符串**传了 —— 官方 GuideBody 是按**函数**读取的（`entry.title()` /
-> `entry.description?.()`），渲染时抛 TypeError，React 随即放弃整棵引导页子树。
-> 已修复为函数形态（模块级 `rightBarGuideEntry`），并由 `test/rightbar-guide.test.js` 锁死契约；
-> 同期把 `/sidebar/api/health` 的 `version` 改为直接读 `package.json`（迁移时手抄值停在
-> `0.5.1-miasaki.1`，会让陈旧 host 看起来是新的）。
+**当前形态：官方右栏的两个 tab 类型**（2026-09-11 第二阶段清理完成）
 
-**M1 功能收口 + 审查改版 + 设计语言统一**（2026-09-09，v0.5.1-miasaki.1）：右栏壳 + 审查 tab + 终端启动器三项全部落地；
-审查 tab 按用户参考图改版为「视图下拉 + 目录分组」，标签栏改为浏览器式多标签。单测 46 项
-（其中 2 项真实 git 集成用例在无法捕获子进程输出的受限环境自动跳过）、四线静态回归 8/8。
-**v0.5.0 改版已实机复验**（2026-09-09，重启 host 后，浏览器环境）：四视图切换与统计、目录分组折叠、
-多标签开/切/关与 keep-mounted、持久化 v2→v3 迁移（注入旧键实测）全部通过；
-点名往返（8→7→8 条未点名）与行级 diff 展开（README.md 恰为 +20 -7）同时抽查通过。
-**设计语言统一（v0.5.1）**：字体与几何对齐 DSH 原生——字体改走 `--dsw-font-*` shorthand 令牌
-（家族 `--dsw-font-family`、字重 500、等宽 `--ds-font-family-code`），圆角/控件高度/内边距归入 DSH 阶梯，
-列表行采用官方行范式（32px + 8px 圆角 + `6px 8px` 内边距），语义色与滚动条改走令牌，
-面板边框改官方详情列同款 `.5px + border-l3`；空态按视觉复审修正（隐藏空态标签栏、禁用卡改 `M2` 角标、
-空态顶部锚定）。详见 [CHANGELOG](design/CHANGELOG.md)。
+| 维度 | 事实 |
+|---|---|
+| 接入方式 | `ctx.sidebarRightTabs.register`（类型声明 + `guide` 入口胶囊）+ `ctx.slots.register({ name: 'sidebar.right.pane.tab', key })`（正文） |
+| 打开入口 | 官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊（审查 / 终端） |
+| 状态归属 | 面板开合 / 宽度 / 分栏 / 全屏 / 标签栏**全部由官方框架负责**，本线不介入 |
+| 自研持久化 | 只剩一处：审查视图（`miasaki-sidebar:review-view`，全局单值）。官方不持久化 tab 状态，且 `tabActions` 只有 openResource / openTab / close，**没有**「更新当前 tab 参数」通道，故视图选择自管 |
+| 窗口可见性 | 官方 `tab.visible` 与本插件记录的窗口可见性**相与**，隐藏时跳过 60s TTL 轮询 |
 
-- 壳：AppFrame padding 推挤（实测 center 1000→600px）、`shell.overlay` 挂载、空态标签选择页（Edge 范式）、双环境入口（桌面壳标题栏徽章左侧 / 浏览器会话头）、三主题令牌跟随；
-- 审查 tab：host `/sidebar/api/review/{status,diff,checklist}`（git CLI 只读、2000 条设界、自研 unified diff 解析、按 cwd 隔离的清单持久化）+ 收尾自检清单 UI（逐条点名 / 未点名红色警示 / 行级 diff 展开 / 60s TTL 刷新）。实测本仓 16 条改动全部渲染、点名与 diff 往返正常。
-- 终端启动器：host `/sidebar/api/terminal/{options,open}` + 终端 tab UI（cwd 回显与复制、终端类型单选、启动结果与重试）。见下节安全边界。
-- **审查改版 + 浏览器式标签页（2026-09-08，v0.5.0，设计 [`2026-09-08-sidebar-review-redesign-implementation.md`](design/2026-09-08-sidebar-review-redesign-implementation.md)）**：
-  - **四视图**：host `/sidebar/api/review/status?view=unstaged|staged|all|last`（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改；非法值 400，无参保持旧语义）。统计来自 `git diff --numstat -z` 与 `git show --numstat -z --format=`（rename 按**新路径**归并、二进制标 `bin`）；未跟踪文件由 host 读文件计数（200 个设界 + `truncated` 标记）；空仓库（无 HEAD）走 `noCommits` 降级而非 500。
-  - **审查 UI**：视图下拉（**切换即拉取**）+ 目录分组列表（组头**默认折叠**、组内 `+N -M` 合计）+ 类型图标 + 每文件 `+N -M` + 行级 diff 展开；**点名交互、未点名红描边、60s TTL、`visible` 门全部保留**。
-  - **标签栏浏览器化**：`tabs[]` 多实例（同类型可开多份，标题自动编号）、每标签独立 × 关闭、`⌄` 全部标签菜单、`＋` 新建标签（类型选择浮层）、空态 = 新标签页选择卡；非激活标签 **keep-mounted**（切回不丢状态、不重复拉取）。
-  - **持久化 v3**：`miasaki-sidebar:v3:<sessionId>` = `{open,width,tabs,active}`；v2（按会话单 tab）与 v1（全局）一次性迁移后删除。
-  - **顺带修复**：`git status --short` 的引号 / 八进制 UTF-8 路径此前原样透传给 diff 路由（`"a b.ts"` 当成文件名），现统一 `unquoteGitPath()` 还原；`/health` 的 version 与 `package.json` 对齐（此前 0.4.0 / 0.4.1 不一致）。
-- **右栏实现加固（2026-09-08，对照 dsh-tavern/better-sidebar 调研，见 `design/2026-09-08-tavern-sidebar-comparison.md`）**：
-  - **推挤锚点**改走官方语义锚点 → `closest('div[style*="grid-template-columns"]')`（探针实测：frame 自身无 `data-dsh-frame`/`data-pane`，`#root > [data-slot="root"] > div` 即 frame），特征查询保留兜底；**2026-09-10 DSH 0.1.5-rc.1 复验**：会话宿主从 root 级 `conversation` 槽迁到 root `main` keyed 槽（key = `conversation`），锚点选择器补为 `'[data-slot="main"], [data-slot="conversation"]'`——两条路径在 0.1.5 隔离实例上与特征查询**指向同一节点**，推挤精确压下 300px（1160→860→1160）；
-  - **推挤载体**改为 `<html>` 的 `--miasaki-sidebar-width` + 常驻 CSS 规则（React 重渲染不再丢推挤），inline `padding-right` 同值兜底；
-  - **host 围栏**由「仅 Host」补齐为三道：Host → `sec-fetch-site: cross-site` 拒绝 → `Origin` hostname 比对；
-  - **`visible` 性能门**：tab 组件接收 `visible`，窗口切后台时审查 tab 的 60s TTL 刷新跳过；
-  - **持久化按会话**：`miasaki-sidebar:v2:<sessionId>`（旧全局 `v1` 一次性迁移），切会话不闪关；
-  - **修复**：`#miasaki-titlebar` 存在但高度为 0 时，旧式 `: 32` 兜底会让面板顶部多出 32px 空白——已改为高度 0 即让位 0。**2026-09-09 L3 复验补正**：V4 标题栏是**零占位叠加层**（`themes/src/03-switcher.js` 明写 `#miasaki-titlebar{height:0}`、按钮组 `position:fixed`；`#root` 无 `margin-top`），因此让位在**桌面壳与浏览器两环境均为 0**（面板 `top:0`）；此前「桌面壳 32px」的描述源自未同步的 legacy `themes/runtime.js`。功能无影响——标题栏层叠 100000 > 面板 60，按钮始终可点（`elementFromPoint` 实测）。
-- **抽屉右滑关闭（2026-09-08 补齐，设计 §3.1）**：<768px 抽屉此前只有遮罩点击关闭，与设计「遮罩 + 右滑关闭」不符——补齐右滑手势：8px 轴锁定（垂直意图释放回标签页滚动、不 `preventDefault`）、位移门 `max(64px, 宽度 × 30%)` 或快滑门 `≥32px 且 ≥0.6px/ms`、拖动跟手 + 松手回弹/关闭；判定抽为纯函数 `drawerCloseDecision`，`test/drawer-gesture.test.js` 9 项覆盖；抽屉模式下推宽把手隐藏。
+### 迁移与清理时间线
+
+- **2026-09-10 迁移**：DSH `0.1.5-rc.1` 内置官方右侧 Sidebar（分栏 / 全屏 / 浮窗 / 文件树 / 文档预览 / 模型交付文件），
+  用户拍板「官方做了侧边栏就用官方的」。壳层（推挤 / `shell.overlay` 挂载 / 自研 tab 栏 / 空态选择页 /
+  抽屉手势与遮罩 / 桌面壳标题栏注入 / 两处自研开关 / 按会话持久化）全部停用。
+  设计见 [design/2026-09-10-migrate-to-official-rightbar.md](design/2026-09-10-migrate-to-official-rightbar.md)。
+- **2026-09-10 实机修复**：首次打开官方右栏是**一片空白**，引导页没有任何入口胶囊。根因不是注册失败
+  （两个 `sidebar.right.pane.tab` 正文都在册），而是 `sidebarRightTabs.register` 的 `guide` 条目把
+  `title` / `description` 当**字符串**传了 —— 官方 GuideBody 按**函数**读取（`entry.title()` /
+  `entry.description?.()`），渲染时抛 TypeError，React 随即放弃整棵引导页子树。
+  已修复为函数形态（模块级 `rightBarGuideEntry`），由 `test/rightbar-guide.test.js` 锁死契约；
+  同期把 `/sidebar/api/health` 的 `version` 改为直接读 `package.json`（手抄值会让陈旧 host 看起来是新的）。
+- **2026-09-11 第二阶段清理**：删除全部壳代码（`Shell` / `EmptyState` / `TABS` 等 237 行组件，以及推挤、抽屉、
+  壳常量与壳样式），退役 `test/drawer-gesture.test.js`（9 项）与 `test/client-tabs.test.js` 的持久化部分（7 项），
+  并把审查视图从「壳的 tabs 数组」迁到自管存储 —— 这**修复了一个迁移遗留缺陷**：
+  修复前 `setTabView` 写的是壳的 tabs 数组，而该数组在官方右栏下恒为空，**视图下拉点了没有反应**。
+
+### 历史（M1，2026-09-09，v0.5.1-miasaki.1）
+
+审查改版与设计语言统一均已完成实机复验，内容层沿用至今：
+
+- **审查改版**（v0.5.0）：视图下拉（**切换即拉取**）+ 目录分组列表（组头默认折叠、组内 `+N -M` 合计）
+  + 类型图标 + 行级 diff 展开；点名交互、未点名红描边、60s TTL、可见性门全部保留。
+- **设计语言统一**（v0.5.1）：字体与几何对齐 DSH 原生 —— 字体走 `--dsw-font-*` shorthand 令牌
+  （家族 `--dsw-font-family`、字重 500、等宽 `--ds-font-family-code`），圆角 / 控件高度 / 内边距归入 DSH 阶梯，
+  列表行采用官方行范式（32px + 8px 圆角 + `6px 8px` 内边距），语义色与滚动条走令牌，
+  面板边框改官方详情列同款 `.5px + border-l3`。详见 [CHANGELOG](design/CHANGELOG.md)。
+
+> 原壳层能力（推挤锚点 / 抽屉右滑关闭 / 桌面壳让位 / 持久化 v2→v3）的完整设计记录保留在
+> [CHANGELOG](design/CHANGELOG.md) 与 `design/2026-09-06-sidebar-roadmap-design.md` 中，**均已被官方右栏取代**，
+> 仅作历史存档，不再描述当前行为。
 
 ## 组件蓝图（M1–M3）
 
 | 组件 | 定位 | 里程碑 | 状态 |
 |---|---|---|---|
-| 右栏壳 | AppFrame padding 推挤 + shell.overlay 挂载 + 浏览器式标签栏（多实例 / 独立关闭 / ⌄ 列表 / ＋ 新建）+ 空态标签选择页 + 三主题令牌 + 桌面壳让位 | M1 / v0.5.0 | **已实机验证**（2026-09-06；v0.5.0 标签栏 2026-09-09 浏览器环境复验通过） |
-| 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 浏览器环境复验通过） |
-| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08：cwd 回显、类型探测与置灰、启动按钮渲染；启动动作本身仍以 host 路由 HTTP 用例覆盖） |
-| 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成 |
+| 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 复验通过）；2026-09-10 迁移为官方右栏 tab 类型 |
+| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08：cwd 回显、类型探测与置灰、启动按钮渲染；启动动作本身仍以 host 路由 HTTP 用例覆盖）；2026-09-10 迁移为官方右栏 tab 类型 |
+| 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成（待实现后再注册官方 tab 类型） |
 | 标题栏启动器组 | 外部程序跳转按钮（explorer / VS Code / VS Code Insiders 菜单，✓ 默认持久化）+ 终端展开按钮（底部内嵌终端面板：xterm + node-pty + WS 回放） | M3（用户拍板立项） | **设计定稿 2026-09-09**，见 [设计](design/2026-09-09-sidebar-launcher-design.md)；前置 spike：node-pty 编译（硬门）+ 底部推挤 + xterm 服务 |
+| ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉 / 桌面壳让位~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线） |
 
 ## 目录结构
 
@@ -85,21 +69,22 @@ dsh-miasaki-sidebar/
 ├── cordis.patch.yml        # 插件身份（id: sidebar / 数据目录 / trustedHosts）
 ├── index.js                # host 半：/sidebar/api 路由族（review + terminal + health）
 ├── client.js               # client 半：官方右栏 tab 类型注册（审查 / 终端）+ 两个 tab 的正文实现
-│                           #   自研壳函数仍以未调用的死代码形式留存，待第二阶段清理
+│                           #   壳层已于 2026-09-11 全部删除，不再留死代码
 ├── test/
 │   ├── review-data.test.js      # diff 解析器 / 文档同步检测 / checklists 持久化单测（4 项）
-│   ├── review-view.test.js      # 四视图解析器 + 真实临时 git 仓库集成（6 项，其中 2 项集成用例受限环境自动跳过）
-│   ├── client-tabs.test.js      # client 侧纯函数（持久化 v3 迁移 / 目录分组统计，源码抽取，10 项）
+│   ├── review-view.test.js      # host 半四视图解析器 + 真实临时 git 仓库集成（6 项，其中 2 项集成用例受限环境自动跳过）
+│   ├── review-grouping.test.js  # 审查列表目录分组与组内统计求和（源码抽取，3 项）
+│   ├── review-view-store.test.js # 审查视图持久化：默认值 / 非法回退 / 订阅通知 / 私有模式降级（源码抽取，6 项）
 │   ├── rightbar-guide.test.js   # 官方右栏 guide 条目契约：title / description 必须是函数（源码抽取，4 项）
 │   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
-│   ├── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单（10 项）
-│   └── drawer-gesture.test.js    # 抽屉右滑关闭判定（源码抽取，9 项）
+│   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单（10 项）
 └── design/
-    ├── 2026-09-06-sidebar-roadmap-design.md   # 路线 D 总设计（§3.1.1 spike 结论 + §3.1 入口定稿）
+    ├── 2026-09-06-sidebar-roadmap-design.md   # 路线 D 总设计（**§3 壳设计 / §3.2 tab 框架已被 2026-09-10 迁移取代**，§1 红线与 §4–§6 内容设计仍有效）
     ├── 2026-09-08-tavern-sidebar-comparison.md # 对照 dsh-tavern/better-sidebar 的实现调研
     ├── 2026-09-08-better-sidebar-compat-assessment.md # betterSidebar 兼容层评估（用户拍板项）
-    ├── 2026-09-08-sidebar-review-redesign-implementation.md # 审查改版 + 浏览器式标签页实施方案（v0.5.0）
+    ├── 2026-09-08-sidebar-review-redesign-implementation.md # 审查改版 + 浏览器式标签页实施方案（v0.5.0；标签栏部分随壳退役）
     ├── 2026-09-09-sidebar-launcher-design.md # 标题栏启动器组：外部程序跳转 + 终端展开（内嵌终端面板，M3 立项）
+    ├── 2026-09-10-migrate-to-official-rightbar.md # 迁移官方右栏：壳退役映射表 + 官方契约要点 + 丢失能力补偿（当前形态的设计依据）
     └── CHANGELOG.md                            # 本线变更记录
 ```
 
@@ -138,19 +123,19 @@ dsh-miasaki-sidebar/
 ## 验证
 
 ```powershell
-# 本线单测（50 项：审查 4 + 审查视图 6 + client 纯函数 10 + 右栏 guide 契约 4 + 终端 7 + 路由 10 + 抽屉手势 9）
+# 本线单测（40 项：审查 4 + 四视图 6 + 目录分组 3 + 视图持久化 6 + 右栏 guide 契约 4 + 终端 7 + 路由 10）
 node test/review-data.test.js
-node test/review-view.test.js     # 四视图解析器 + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过 2 项）
-node test/client-tabs.test.js     # 持久化 v3 迁移 / 目录分组统计（从 client.js 抽取纯函数求值）
-node test/rightbar-guide.test.js  # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
+node test/review-view.test.js        # host 半四视图解析器 + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过 2 项）
+node test/review-grouping.test.js    # 审查列表目录分组与组内统计求和（从 client.js 抽取纯函数求值）
+node test/review-view-store.test.js  # 审查视图持久化（抽取 client.js 的 reviewView，注入 mock localStorage）
+node test/rightbar-guide.test.js     # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
 node test/terminal-launcher.test.js
-node test/api-routing.test.js     # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、两道浏览器信任检查与视图白名单
-node test/drawer-gesture.test.js  # 抽屉右滑关闭判定（从 client.js 抽取纯函数求值）
+node test/api-routing.test.js        # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、浏览器信任三道与视图白名单
 
 # 受限沙箱（禁止子进程管道 stdio）里 node --test 的多进程隔离会 spawn EPERM，
 # 改用同进程模式：node --test --test-isolation=none <逐个测试文件>
 
-# 四线统一静态回归（含本线）
+# 统一静态回归（含本线）
 node ..\scripts\verify-all.mjs sidebar
 ```
 
@@ -161,7 +146,7 @@ node ..\scripts\verify-all.mjs sidebar
 
 ## 规划来源
 
-- [四线统一回归矩阵（跨线共享文档）](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
+- [统一回归矩阵（跨线共享文档）](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
 - [路线讨论与调研（跨线共享文档）](../dsh-miasaki-shared-docs/cross/sidebar-plan-2026-09-06.md)
 - [dsh-tavern 右侧边栏实现对比调研](design/2026-09-08-tavern-sidebar-comparison.md)（2026-09-08：tavern 右栏实为
   `dsh-better-sidebar` 基座 + 7 个注册 tab；本线据其结论落地官方锚点 / 围栏两道 / `visible` 性能门 / 会话级持久化，

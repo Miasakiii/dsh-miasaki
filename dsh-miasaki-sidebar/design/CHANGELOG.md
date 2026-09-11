@@ -2,6 +2,29 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-11
+
+- **第二阶段清理：壳代码删除 + 迁移遗留缺陷修复**。上一阶段（2026-09-10）只**停用**了壳，代码作为未调用的死代码留在文件里；本阶段按迁移设计 §3 的删除清单执行，并在清理过程中暴露并修复了一处**真实功能缺陷**。
+  - **删除**（`client.js` 988 → 756 行）：
+    - 壳组件 237 行：`cardIcon` / `TABS` / `tabMeta` / `tabLabel` / `EmptyState` / `TAB_BODIES` / `Shell`；
+    - 壳常量与函数：`STORAGE_PREFIX` / `LEGACY_PREFIX_V2` / `LEGACY_KEY_V1` / `WIDTH_MIN|MAX|DEFAULT` / `PUSH_MIN_VIEWPORT` / `DRAWER_MAX_VIEWPORT` / `DRAWER_SWIPE_AXIS_PX` / `FRAME_ANCHOR_SELECTOR` / `FRAME_FINGERPRINT` / `FRAME_FALLBACK_SELECTOR` / `resolveFrame` / `clampWidth` / `drawerCloseDecision`；
+    - 壳持久化：`normalizeTab` / `normalizePersisted` / `sessionStorageKey` / `loadPersisted` / `savePersisted` / `applySessionState` / `currentSessionId`；
+    - 壳推挤：`measureChromeReserve` / `pushWidth` / `pushFrame` / `pushClear` 及 `PUSH_VAR`；
+    - 壳 tab 操作：`mkTab` / `openTab` / `activateTab` / `closeTab` / `setTabView` / `useTabView`；
+    - 壳样式：`dsh-sidebar-toggle*` / `tb-sidebar` / 推挤常驻规则 / `scrim` / `panel*` / `tabs` / `tab*` / `newtab` / `panes` / `pane` / `empty*` / `card*` / `resize`。
+  - **store 精简**：`open` / `width` / `tabs` / `active` / `sessionId` / `viewport` / `dragging` / `drawerOffset` / `drawerDragging` / `chromeReserve` / `titlebarVisible` 全部移除，只留 `reviewCwd` 与 `pageVisible`。
+  - **修复（迁移遗留缺陷）**：`ReviewTab` 的视图此前经 `useTabView(tabId)` / `setTabView(tabId, view)` 读写**壳的 tabs 数组**，而该数组在官方右栏下恒为空（只有已退役的壳会填充它）——**视图下拉点了没有反应**，永远停在「未暂存」。改为模块级 `reviewView` 存储（`useSyncExternalStore` + `localStorage`，键 `miasaki-sidebar:review-view`，全局单值）。
+    - **为什么不用官方通道**：`SidebarRightTabActions` 只有 `openResource` / `openTab` / `close`，**没有**「更新当前 tab 参数」的方法；`navigation.params` 只在打开时写入，而 `openTab` 是「打开一个页面类型」而非原地更新。故视图状态只能自管，语义降级为「上次查看的视图」（官方 tab id 由框架生成且刷新即变，按 id 记录没有意义）。
+    - 抽取官方类型定义核对的过程记录：`lib/types/client/contract/slots.d.ts`（TabActions / TabNavigation）、`tab-info.d.ts`（TabHookContext）。
+  - **可见性门**：新增 `usePageVisible()`，与官方 `tab.visible` **相与**（窗口隐藏时审查 tab 跳过 60s TTL 轮询）；补 `visibilitychange` 监听（此前只有初值，切后台再回来不会更新）。
+  - **测试**：
+    - 删除 `test/drawer-gesture.test.js`（9 项，被测函数已随壳删除）；
+    - `test/client-tabs.test.js` 拆解：7 项持久化用例随壳退役，3 项分组统计迁至新的 `test/review-grouping.test.js`；
+    - 新增 `test/review-view-store.test.js`（6 项）：默认值 / 非法值回退 / 写入与订阅通知 / 全集往返 / localStorage 抛错降级 —— 这是上述缺陷修复的回归证明。
+  - **验证**：`node --check` 通过；单测 **40 项**（审查 4 + 四视图 6 + 分组 3 + 视图持久化 6 + guide 契约 4 + 终端 7 + 路由 10）；`verify-all.mjs sidebar` **9/9 PASS**。
+  - **实机待验**：重启 `dsh web` 后确认官方右栏「审查」tab 的视图下拉**切换即拉取**（修复前无反应）。
+  - **文档**：README 重写（失效的壳描述全部替换为当前形态 + 迁移/清理时间线 + 退役行标注）；`2026-09-06-sidebar-roadmap-design.md` 的 §3 / §3.2 标注已被迁移取代。
+
 ## 2026-09-10
 
 - **DSH 0.1.5-rc.1 兼容：推挤锚点补 0.1.2/0.1.5 双写**。官方 0.1.5 把 root 的子槽从 root 级 `conversation` 改为 keyed 的 `main`（key = `'conversation'`），会话宿主 DOM 相应从 `[data-slot="conversation"]` 变为 `[data-slot="main"]`。本线主锚点在 0.1.5 上匹配数为 0，仅靠特征查询兜底仍能工作，但语义锚点这一环已死。
