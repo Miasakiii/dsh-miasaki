@@ -88,9 +88,37 @@
     // 时机晚于我们,同特异性会反超)。
     ':root{--ms-titlebar-reserve:128px;}' +
     '#root header:has([data-conversation-header-corner]){padding-right:var(--ms-titlebar-reserve);}' +
+    // 展开(推挤)时**主动撤回**让位:收起态中栏延伸到窗口右缘,窗控会压住会话头右端的
+    // 展开按钮;而推挤展开时(`data-sidebar-right-panel="push"` + 官方 panel 上的
+    // `data-sidebar-right-open` —— panel 用 transform:translate(100%) 移出屏幕、并未卸载,
+    // 故该属性才是可靠的开合判据)窗控压的是**右栏**头部,中栏右边界已退到分栏线内,
+    // 会话头再留安全区就是白空。2026-09-10 实测:展开态 `⋯` 右边界距分栏线 144px
+    // (= 128 让位 + 官方 28 padding)。
+    //
+    // ⚠ 必须写成**覆写**,而不是"给上面那条加 :not() 门控":已经发布出去的壳二进制里嵌着
+    // 上面那条**无条件**规则(include_str! 编译期内嵌),源文件改了、页面上的旧规则也不会
+    // 消失;门控版在展开态"不匹配",等于没人去覆盖它,让位照旧生效(这就是上一版失效的
+    // 原因)。覆写靠特异性取胜:`#root:has([a][b]) header:has([c])` = (1,3,1) > 原规则 (1,1,1)。
+    // 28px 是官方 header 的 padding-right(`.wSkVaW_header{padding:10px 28px 0 20px}`),
+    // 官方若改需同步此处。
+    // 已知限制:浮窗模式(data-sidebar-right-float-host)下 panel 仍带 push+open,会被判为
+    // 已展开而撤回让位 —— 浮窗不占布局、中栏满宽,严格说仍应让位。浮窗是低频用法,
+    // 需要时再用 float-host 判据补上。
+    '#root:has([data-sidebar-right-panel="push"][data-sidebar-right-open]) header:has([data-conversation-header-corner]){padding-right:28px}' +
     '#root [data-conversation-header-corner]{margin-right:0;}' +
     '#root [data-sidebar-right-panel] [data-dockkit-strip-chrome]{' +
     'margin-right:calc(var(--ms-titlebar-reserve) - 6px);}' +
+    // ---------- 基线同心:会话头控件与窗控/右栏 chrome 落在同一条中心线 ----------
+    // 官方两处控件的垂直中心本来就不齐:会话头 titleRow = padding-top 10px + min-height
+    // 30px,28px 控件居中 ⇒ 中心 25px;而 dockkit strip(10px + 28px)与窗控组(top:11px +
+    // 26px)都是 24px。收起态多看 1px 偏差,展开态因为会话头里没有可比控件而看不出来。
+    // 2026-09-10 像素实测(用户截图逐控件切分):展开态全部控件 cy=19.5~20.0(齐);
+    // 收起态会话头控件 cy=21.5~22.0 而窗控 cy=17.5~18.0 —— 差的 4px 里 3px 来自
+    // canvas 切换器把 titleRow 撑高到 36px(已在该线收敛到 30px),余下这 1px 是官方
+    // 两处的固有差,在这里补齐。仅位移不改布局:top:-1px 不参与 flex 计算,控件仍在
+    // header 的 padding 内,不会被裁。
+    '#root [class*="_headerActions"],#root [class*="_headerUtilities"],' +
+    '#root [class*="_headerCorner"]{position:relative;top:-1px;}' +
     'html,body{height:100%;overflow:hidden;}' +
     'html,body{height:100%;overflow:hidden;}' +
     '#miasaki-switcher .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +

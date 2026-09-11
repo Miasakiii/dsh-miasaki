@@ -2,6 +2,292 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-10(深夜,续三) · `cordis_inspect_query`(client) 永久挂起:根因查明 + 本体补丁(第五例)
+
+依据:用户报告「`cordis_inspect_query` · client 这个工具好像总是卡住,看看什么原因」。
+
+### 一、结论
+
+不是「慢」,是**失败即永久挂起**:同一次会话里,查 client 平台不带 input 的目录查询**秒回**,
+带 input 的精确查询**挂了 18.6 分钟**直到用户中断。三重原因叠加:
+
+1. Host 侧 `CordisInspectRegistryService.resolveClientQuery` 只接受**成功**的页面应答——
+   `if (!resolution.ok) return { accepted: false }` 把错误应答**静默丢弃**,既不 settle 也不清理
+   pending;输出 schema 校验失败的 catch 分支同样丢弃。
+2. 浏览器侧 `ClientCordisInspectRegistry.query()` 对一次广播**只回一次**,不重试,回执也无人检查——
+   于是「客户端拒绝了这次查询」这个信息在链路上被彻底吞掉。
+3. `cordis_inspect_query` 未声明 `timeoutMs`,而 `dsh-tool-call-timeout-policy` 对未声明者直接
+   `return next()`——没有兜底 deadline。唯一结束路径只剩 `exec.signal` 被中断,也就是人来按 Esc。
+
+触发条件已精确到可预测:客户端 Service 目录只有 8 个 key(`layout` `locale` `sessions` `slots`
+`theme` `timer` `uiWorkspace` `workspaces`),查这 8 个以外的 key 会抛
+`no catalogued Service named "X"` → 必挂。而 `conversation.*` 是 **Slot** 命名空间,与 Service key
+形似,极易混淆——这就是「总是」踩到的原因。同一类错误在 **host 平台会立刻返回**,所以表象是
+「host 好好的,client 总卡」。
+
+### 二、实测(逐帧解压 127 个会话日志,13460 条工具结果)
+
+`cordis_inspect_query` 共 163 次调用,其中 client 查询 96 次。key 存在则秒回
+(`timer` 0s、`sessions` 1s、`Slots.listSubTree` 各种 root 0–4s),key 不存在则永久挂起:
+`conversation` 挂 **1116 秒**、`sessionLogDownload` 挂 **13420 / 3325 / 572 / 407 秒**——
+共 7 次真挂死,最长 **3 小时 43 分**,全部以 `Client inspect query … was cancelled` 收场。
+
+> 取证方法备记:DSH 会话日志是 append-only 的**多帧 zstd**,Node 的解压 API 只返回第一帧;
+> 需扫描帧魔数 `28 B5 2F FD` 逐帧解压。另:`tool/result` 事件的 callId 在
+> `data.message.source.callId`,不在 `data.callId`。
+
+### 三、修复:新增第五个本体补丁
+
+| 补丁 | 目标包 | 改动 |
+|---|---|---|
+| [`patches/dsh-cordis-host-runner/`](../patches/dsh-cordis-host-runner/README.md) | 官方 host 侧 Cordis runner(`lib/index.js`) | 4 条锚点编辑:失败应答记入 `pending.lastFailure`(仍不 settle,保住多标签页抢答语义)+ 每次查询挂 15s 兜底定时器,到期结算为**带真实拒绝原因**的 `timeout` 错误 + `finally` 清理定时器 |
+
+**不采用「第一个失败就 settle」**:多标签页会同时收到广播,某页没有该 provider 不代表别页也没有,
+先到先得只对**成功**应答成立。失败仍不抢答、只记录,由超时兜底收场——「永久挂起」退化为
+「15 秒后带准确原因的报错」,多页面语义原样保留。
+
+**本补丁与其他四个的差别**:它改的是 **host 侧 Node 包**(其余四个是浏览器 bundle),
+因此**生效必须重启 DSH host 进程**,刷新页面不够。
+
+### 四、自证与验收
+
+`verify` 四项全绿(比 CSS 类补丁多两道,因为注入的是代码):baseline 重建后 SHA 比对 +
+重建产物 `node --check` + **拒绝应答行为断言**(把重建产物里真实的 `resolveClientQuery` 抠出来用
+最小假 registry 跑,并对 baseline 原版跑反例以证明断言有区分力)+ **超时兜底行为断言**
+(注入假 `setTimeout` 手动触发,不真等 15 秒)。已接入 `verify-all.mjs desktop`
+(desktop 由 7 项增至 **8 项**,全 PASS)。安装目录已 apply:`58EF79A0…` → `8B81500A…`,
+留有 `index.js.dsh-bak` 备份可回退。
+
+用户需执行:**重启 DSH host 进程**(Node 已加载模块不会热更新;重启前查询仍会挂起)→ 复现原用例
+(`client/Service/listService` + 不存在的 key,如 `conversation`),预期 **15 秒内**返回
+`Error: … timed out after 15000ms … (the client refused it: no catalogued Service named "conversation")`。
+
+### 五、触摸点
+
+`patches/dsh-cordis-host-runner/`(新增 patch.mjs / rebuild-baseline.mjs / README.md /
+baseline/index.original.js)、`scripts/verify-all.mjs`(desktop +1 项)、`README.md`
+(补丁表「四处」→「五处」+ host/client 生效方式差异说明)、本文件。
+
+## 2026-09-10(深夜,续二) · 轨迹页「首 token 时间不可用」:根因查明 + 两个本体补丁(轨迹/聊天)
+
+依据:用户贴出轨迹页计时面板截图,三行值全是「首 token 时间不可用」,问「轨迹里计时不可用
+是怎么回事」。
+
+### 一、结论(先排除环境因素)
+
+三行不是三个故障 —— `ttft()` / `generationTime()` / `throughput()` 共用同一个前置条件
+`firstTokenTime`,三行同句只可能是这一个字段为 null(反证:`stepStartTime` 或用量若缺,
+它们会先报各自那句)。根因在官方客户端:`firstTokenTime` **只在实时流式 chunk**
+(`assistant/live-chunk`)折叠时写入,而该事件是浏览器端 session controller 合成的 transient
+事件、**从不落盘**;窗口重建(刷新 / 重开会话 / 切走再切回)后,已结束的步骤只剩 durable
+事件,而 `settleMessage()` 不恢复这个字段 → 永久 null。
+
+### 二、实测(数据一直都在)
+
+逐帧解压本会话日志:155 条事件里 `assistant/live-chunk` = **0 条**;23 条 `assistant/message`
+每条都带紧凑流 `data.stream`,用官方 `assistantStreamFirstTokenTime` 逐步算得出首 token 时间
+(1/1 = 6.70s,其余 0.69–1.49s,均值约 1.1s)。官方 host 侧统计投影 `dsh-session-stats` 走的
+正是这条路 —— 所以「统计」对话框里的平均 TTFT 一直正常,只有轨迹/气泡面板没做恢复。
+
+### 三、修复:新增两个本体补丁(本体例外第三、四例)
+
+| 补丁 | 目标包 | 改动 |
+|---|---|---|
+| [`patches/dsh-client-ui-trajectory/`](../patches/dsh-client-ui-trajectory/README.md) | 官方轨迹页 | 注入 `dshPatchedFirstTokenTime` + timing 回退 → 三行计时恢复 |
+| [`patches/dsh-client-ui-chat/`](../patches/dsh-client-ui-chat/README.md) | 官方聊天区 | 同一注入与回退 → 消息气泡 TTFT 与窗口口径兜底统计恢复 |
+
+各 2 条锚点编辑;实时值优先(流式过程行为不变);紧凑流里确实没有 token 时仍返回 null ——
+**不编造数字**。
+
+### 四、自证与验收
+
+`verify` 三层(比既有两个补丁多两道,因为注入的是代码而非 CSS):baseline 重建后 SHA 比对 +
+**从重建产物里抠出注入函数跑 8 条 fixture 行为断言** + 重建产物 `node --check`。已接入
+`verify-all.mjs desktop`(desktop 由 4 项增至 6 项)。安装目录已 apply:轨迹
+`73A878B4…` → `C3485ADF…`、chat `4F9CFFF8…` → `BE4C68D5…`,各自留有 `.dsh-bak` 备份可回退。
+
+用户需执行:刷新 DSH Web 页面 → 打开任一**已结束**步骤的计时面板(首 token 延迟 / 生成 /
+吞吐量应为数字)→ 悬停消息耗时面板(应出现「首 token 用时(TTFT)」,与轨迹页同一步一致)。
+
+### 五、触摸点
+
+`patches/dsh-client-ui-trajectory/`(新增 patch.mjs / rebuild-baseline.mjs / README.md /
+baseline/client.original.js)、`patches/dsh-client-ui-chat/`(同 4 文件)、`scripts/verify-all.mjs`
+(desktop +2 项)、`README.md`(补丁表「两处」→「四处」+ 基线与流程说明)、
+`design/trajectory-ttft-restore.md`(新增:归因链、方案对比、自证设计)、本文件。
+
+## 2026-09-10(深夜,续) · 展开右栏时让位安全区白空 144px
+
+依据:用户指出「左边的外部按钮和三点扩展按钮位置离展开的右侧边栏太远」。像素实测:展开态
+会话头最右控件 `⋯` 的右边界 x=**89**、右栏分栏线 x=**233** —— 中间**空 144px**,正是
+2026-09-10(晚) 那条让位规则 `padding-right:var(--ms-titlebar-reserve)`(128px) 加上官方
+header 自带 `padding-right:28px` 的残留。
+
+### 一、根因(让位无条件生效,而展开态并不需要)
+
+让位是给**桌面壳窗控**留安全区:收起态中栏延伸到窗口右缘,窗控(占距右缘 [8,116]px)会压住
+会话头右端的展开按钮。但**推挤展开时**中栏右边界已退到分栏线内、窗控压的是**右栏**头部,
+会话头不该再留那 128px。
+
+判据是关键:**官方右栏 panel 用 `transform:translate(100%)` 移出屏幕、并未卸载** —— 所以
+不能用"元素是否存在"判断开合;`data-sidebar-right-open`(与 `data-sidebar-right-panel="push"`
+挂在**同一元素**、条件挂载)才是可靠信号。
+
+### 二、修复(第一次尝试失效,第二次才对)
+
+❌ **门控方案(失效)** —— 给让位规则加
+`:not(:has([data-sidebar-right-panel="push"][data-sidebar-right-open]))` 门控,指望
+"展开态不覆盖 → 官方 28px 自然生效"。**实测无效**:用户回报「还是这样」,像素复测空隙仍是
+**144px**(`⋯` 右边界 105、分栏线 249)。原因:注入脚本是 `include_str!` **编译期内嵌**,
+**已经发布出去的壳二进制里那份无条件 128px 规则仍在页面上生效**;门控版在展开态"不匹配",
+等于**没人去覆盖它**。
+
+✅ **覆写方案(有效)** —— 主动写一条**特异性更高**的规则撤回让位:
+
+    #root:has([data-sidebar-right-panel="push"][data-sidebar-right-open])
+      header:has([data-conversation-header-corner]){padding-right:28px}
+
+`#root:has([a][b]) header:has([c])` = (1,3,1) > 原规则 (1,1,1)。28px 即官方 header 的
+padding-right(`.wSkVaW_header{padding:10px 28px 0 20px}`),官方若改需同步。canvas 线在
+页面级注入里放了**逐字同一条**(热更,刷新即生效),测试用同一条正则同时断言两处。
+
+> **教训**:撤销一条已经"发布"出去的 CSS 规则,**不能靠改原规则** —— 宿主的注入产物可能是
+> 编译期内嵌的,运行中那份不会跟着源文件变。要么覆写(特异性取胜),要么请用户重建宿主。
+> 这条同样写进了 canvas 线的 CHANGELOG。
+
+### 三、已知限制
+
+浮窗模式(`data-sidebar-right-float-host`)下 panel 仍带 `push`+`open`,会被判为"已展开"而
+撤销让位 —— 浮窗不占布局、中栏满宽,严格说仍应让位。浮窗是低频用法,留待需要时补
+float-host 判据。
+
+### 四、触摸点
+
+`themes/src/03-switcher.js`(本线)、`src-tauri/injected/theme-init.js`(重建产物)、
+canvas 线 `client.js` + `test/header-adaptive.test.js`、本文件。
+
+## 2026-09-10(深夜) · 会话头控件与窗控不在同一水平线(4px 偏差)
+
+依据:用户两张截图 +「展开右侧边栏是对齐的,收起时不在同一水平线」。对两张 PNG 逐控件做
+像素切分(连通列分组 + y 范围)量出垂直中心:
+
+| 状态 | 会话头侧控件 | 窗控组 |
+|---|---|---|
+| 收起(图一) | open-in-app 胶囊 cy=**21.5** / 日志菜单 **22.0** / 右栏展开钮 **22.0** | 徽章 **17.5** / 最小化 **18.0** / 最大化 **18.0** / 关闭 **18.0** |
+| 展开(图二) | 全屏 **20.0** / 收起 **20.0** | 徽章 **19.5** / 三键 **20.0** |
+
+即**展开态全部落在 19.5~20.0(齐),收起态分成 22 与 18 两组,相差 4px** —— 用户描述得到量化证实。
+
+### 一、根因(两段:3px + 1px)
+
+1. **3px 来自 titleRow 被撑高**:canvas 线的「对话/会话布」切换器 = `padding:3px×2 +
+   border:1px×2 + 按钮 28px` = **36px**,而官方 `titleRow` 的 `min-height` 只有 30px ——
+   被撑到 36px 后,行内**所有**控件(含官方的 open-in-app、日志菜单、右栏展开按钮)居中下移
+   (36−28)/2 = 4px;窗控是 `position:fixed`,不跟着动,于是分成两组。这一截由 canvas 线
+   收敛(总高 36 → 30px),本项目内不重复实现。
+2. **1px 是官方两处的固有差**:会话头 `padding-top:10px + min-height:30px`、28px 控件居中
+   ⇒ 中心 **25px**;而 dockkit strip(10px + 28px)与窗控组(`top:11px` + 26px)都是 **24px**。
+   展开态因为会话头侧没有可比控件(该行只有右栏自己的 chrome)而看不出来。
+
+### 二、修复(本线一处)
+
+`themes/src/03-switcher.js` 常驻 CSS 增一条,把会话头三个容器整体上移 1px:
+
+    #root [class*="_headerActions"],#root [class*="_headerUtilities"],
+    #root [class*="_headerCorner"]{position:relative;top:-1px;}
+
+选择器用 `[class*="_xxx"]` 子串锚点(hash 前缀随版本变,后缀稳定),与本线已有的
+`[class*="sessionLogButton"]` 同一套稳健做法。**只位移不改布局**:`top:-1px` 不参与 flex
+计算,控件仍在 header 的 padding 内,不会被裁。
+
+### 三、验收
+
+- canvas 侧:`node --check client.js` 通过,全量单测 **84 项全绿**(含新增的高度契约 1 项);
+- 本线:`build-init.mjs` 重建注入产物(68 KB,令牌校验通过);
+- `verify-all.mjs canvas desktop` **10/10 + 5/5**;
+- **用户待执行**:重启 `dsh web`(canvas 侧的 client bundle)+ 重启桌面壳(主题注入生效)。
+- **复验点**:收起态下 `⋯`、右栏展开钮与窗控三键落在同一水平线(预期全部 cy≈24)。
+
+### 四、触摸点
+
+`themes/src/03-switcher.js`、`src-tauri/injected/theme-init.js`(重建产物)、本文件。
+
+### 五、生效链路(本次踩到的坑,后续改动同理)
+
+> 附:那条 1px 基线补偿**已经生效** —— 走的是 canvas 的页面级注入(热更通道),用户刷新页面后
+> 实测左 `[📁⌄]` cy=21.5 / `⋯` 22.0、右 `⊙` 21.5 / `[ ]`·`□|` 22.0 / 窗控 22.0,全部落在
+> 21.5~22.0。本文件里的同源规则等下次重建壳时自然一致。
+
+`src-tauri/src/main.rs` 用 `include_str!("../injected/theme-init.js")` 把注入脚本**编译期内嵌**
+进 EXE —— 所以改 `themes/src/*` 并跑过 `build-init.mjs` 之后,**还必须重新构建壳再启动**,
+否则新规则只躺在源文件里。本次实测证据:壳(pid 26840,`dist/Miasaki.exe`)启动于 21:01、
+注入产物重建于 21:41、release 二进制却是 19:17 构建的 —— 用户随后量到的仍是未补偿的 1px,
+即"规则没进二进制"的直接证据。
+
+> 这条链路对 1px 级别的调整代价过高,而"会话头控件与右栏 dockkit chrome 差 1px"在**纯浏览器**
+> 下同样存在(右侧没有窗控做参照也一样差)。因此 canvas 线已在**页面级注入**里加了同源规则
+> (支持 client-hmr,刷新即生效)。**两处值必须一致** —— canvas 的
+> `test/header-adaptive.test.js` 会同时断言本文件里的 `top:-1px` 仍在,防止只改一处。
+> 本文件里的那条**保留**:它是"桌面壳让位"系列的正式归属,不依赖 canvas 插件是否加载。
+
+## 2026-09-10(晚,续) · 会话头窄宽度溢出保护:第二个本体补丁
+
+依据:用户报告「展开右侧边栏会挤压」+ 截图 —— 会话头里 canvas 的「对话/会话布」切换器被
+右侧图标按钮压住、会话标题消失。归因与方案见 canvas 线
+`design/2026-09-10-conversation-header-crowding-fix.md`。
+
+### 一、根因(官方会话头缺溢出保护)
+
+官方把会话头一行分成:titleCluster(`flex:1; min-width:0`,可被一路压到 0)、
+headerUtilities / headerCorner(均 `flex:none`,不收缩),而 titleCluster 内部的
+`headerActions` 同样是 `flex:none`。中栏被右栏推窄到「固定项之和」以下时,titleCluster
+被压到 0,其内部 flex:none 的 actions 无处安放 → **溢出**,并与同样从 x≈0 起画的
+utilities 重叠(DOM 靠后者在上层);标题被 `crumbs` 的 `overflow:hidden` 先裁没,是同一
+机制的自证。固定项合计 ≈411px(内边距 48 + 创造模式 95 + 后台任务 32 + canvas 切换器 116
++ gap 16 + utilities 84 + corner 20)⇒ 中栏窄于 ≈410px 必然重叠。现场佐证:用户拉宽
+窗口后重叠消失、标题回归。
+
+### 二、修复:新增 `patches/dsh-client-ui-conversation/`(本体例外第二例)
+
+一条 CSS 片段替换(锚点唯一,不唯一即报错,宁可失败不瞎改):
+
+    -.wSkVaW_headerActions{flex:none;align-items:center;gap:8px;display:flex}
+    +.wSkVaW_headerActions{flex:0 1 auto;min-width:0;align-items:center;gap:8px;display:flex;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+    +.wSkVaW_headerActions::-webkit-scrollbar{display:none}
+
+溢出从「压叠」退化为「可横向滚动」,控件始终可达。补丁规则 + baseline(官方原版 647,101 B,
+SHA `81314DFD…`)+ CLI(verify/status/apply/revert)+ `rebuild-baseline.mjs` 一并入库。
+
+> 与 settings-models 补丁的差别:**不存 patched 全文**(目标 632KB,再存一份不划算),
+> 产物以 `PATCHED_SHA256`(`D9A841DE…`)记录,verify 用「重建后 SHA 是否等于该常量」自证
+> —— SHA 相等即逐字节相等,锚点失配时仍会响亮报错。
+>
+> 代价:DSH 升级覆盖该包后需 `rebuild-baseline.mjs` 重建基线并重打(流程见补丁 README)。
+
+### 三、配套(canvas 线,同日)
+
+canvas 的 `ViewSwitch` 增加运行时自适应:`ResizeObserver` 观察 `closest('header')`
+(不能观察自身 —— 自身是 `flex:none`,被挤压时宽度不变,观察自身检测不到溢出),留给标题的
+余量不足时收成图标形态(≈116 → ≈64px),进入 120 / 退出 200 的滞回避免抖动,图标形态下
+`aria-label` / `title` 保留可访问名;新增 `test/header-adaptive.test.js` 4 项。
+**canvas 侧保住可用性,本补丁保证任何插件 / 任何窄窗口都不再压叠**,两者独立、任一单独生效
+都有明显改善。
+
+### 四、验收
+
+- `node patch.mjs verify` PASS(1 条编辑,产物 SHA 与记录一致);
+- `node patch.mjs apply` 成功(647,226 B,安装目录已 `patched`,备份 `client.js.dsh-bak` 已建);
+- `verify-all.mjs desktop` **5/5 通过**(新增该项离线自证);canvas 全量单测 83/83。
+- **用户待执行**:刷新页面即生效(host 启动早于本次写入,`client-hmr` 会热推 rebuilt 帧);
+  canvas 侧的自适应需重启 `dsh web`(client bundle 在启动时载入内存)。
+
+### 五、触摸点
+
+`patches/dsh-client-ui-conversation/{patch.mjs,rebuild-baseline.mjs,README.md,baseline/client.original.js}`(新)、
+`README.md`(补丁章节由「唯一一处」改「两处」+ 对照表)、
+`patches/dsh-client-ui-settings-models/README.md`(「唯一例外」表述改为并列)、
+`scripts/verify-all.mjs`(desktop 增第 5 项)、本文件。
+
 ## 2026-09-10(晚) · 窗控 × 官方右栏:右上角安全区让位(V4 让位规则重写)
 
 依据:用户升级到 DSH 0.1.5-rc.1 后的两张截图 —— 折叠态下官方「打开右侧边栏」按钮被窗控

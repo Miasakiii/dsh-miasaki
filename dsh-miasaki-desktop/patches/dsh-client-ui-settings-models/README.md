@@ -99,5 +99,7 @@ node ..\..\..\scripts\verify-all.mjs desktop
 ## 边界（勿越线）
 
 - 补丁只改 `dsh-client-ui-settings-models` 这一个包的 client 产物，**不动 DSH 源码、不动其他包**；
-- 这是本项目「不修改 DSH 本体」原则的**唯一例外**，且代价明确（升级覆盖、需重打）；
+- 与本项目另一个本体补丁（[`../dsh-client-ui-conversation`](../dsh-client-ui-conversation/README.md)，
+  会话头窄宽度溢出保护）同属「不修改 DSH 本体」原则的**例外**，代价同样明确（升级覆盖、需重打）；
+- 两个补丁各自独立：各自的锚点、baseline、CLI 与 `verify` 互不依赖，升级后分别重打即可；
 - 本目录不含任何宿主服务调用，改动全部发生在浏览器侧 UI 与 `settings.mutate` 写回路径上。

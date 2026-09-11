@@ -31,12 +31,22 @@ CDP target，属实机项；无 host 时会以 `CDP target not found` 失败。�
 
 ## DSH 运行时补丁（本体例外）
 
-`patches/` 存放**唯一**一处「修改 DSH 本体」的补丁——设置页模型能力增强（思考强度 +
-逐模型连通性测试）。它改写已安装包 `@deepseek-ai/dsh-client-ui-settings-models` 的
-编译产物，**DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件已入库，可重建/可校验/可回退。
+`patches/` 存放**五处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
+**DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件均已入库，可重建/可校验/可回退。
+
+| 补丁 | 目标包 | 做什么 |
+|---|---|---|
+| [`dsh-client-ui-settings-models`](patches/dsh-client-ui-settings-models/README.md) | 官方设置页 | 逐模型「思考强度」下拉 + 「测试连通性」按钮 |
+| [`dsh-client-ui-conversation`](patches/dsh-client-ui-conversation/README.md) | 官方会话头 | 窄宽度溢出保护：`headerActions` 改可收缩 + 横向可滚，消除右栏展开时的控件压叠 |
+| [`dsh-client-ui-trajectory`](patches/dsh-client-ui-trajectory/README.md) | 官方轨迹页 | 首 token 计时可恢复：实时 chunk 缺位时从 `assistant/message` 紧凑流恢复，修掉「首 token 时间不可用」 |
+| [`dsh-client-ui-chat`](patches/dsh-client-ui-chat/README.md) | 官方聊天区 | 同上，作用于消息气泡的「首 token 用时（TTFT）」与窗口口径兜底统计 |
+| [`dsh-cordis-host-runner`](patches/dsh-cordis-host-runner/README.md) | 官方 host 侧 Cordis runner | `cordis_inspect_query`(client) 永久挂起修复：记下页面的拒绝原因 + 15s 兜底超时，把「无限挂起」变成「带原因的报错」 |
+
+> 前四个作用于浏览器 bundle，改完**刷新页面**即生效；第五个作用于 **host 侧 Node 包**
+> （`lib/index.js`），改完必须**重启 DSH host 进程**才生效（Node 已加载的模块不会热更新）。
 
 ```powershell
-cd patches/dsh-client-ui-settings-models
+cd patches/<补丁目录>
 node patch.mjs verify       # 离线自证（已并入 verify-all）
 node patch.mjs status       # 检查安装目录状态
 node patch.mjs apply        # 备份 + 应用（幂等）
@@ -44,14 +54,21 @@ node patch.mjs revert       # 还原
 node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
 ```
 
-> **当前基线：DSH 0.1.5-rc.1**（2026-09-10 重打，原版 `A60FD863…` → 补丁版 `E602C1F1…`；
-> 0.1.2 的 7 个锚点在新版中全部唯一命中，未改动任何 `EDITS`）。
-> 下次升级的流程：`status` 报 `unknown` → `rebuild-baseline.mjs` 重建 → 按它打印的值
-> 更新 `patch.mjs` 的三个常量 → `verify` → `apply`。
+> **当前基线：DSH 0.1.5-rc.1**。settings-models 于 2026-09-10 重打（原版 `A60FD863…` →
+> 补丁版 `E602C1F1…`；0.1.2 的 7 个锚点在新版中全部唯一命中，未改动任何 `EDITS`）；
+> conversation 于 2026-09-10 新建（原版 `81314DFD…` → 产物 `D9A841DE…`，1 条锚点唯一命中）；
+> trajectory / chat 两个计时补丁同日新建（`73A878B4…` → `C3485ADF…`、`4F9CFFF8…` → `BE4C68D5…`，
+> 各 2 条锚点唯一命中）。**两个计时补丁要一起重打**才完整（同一个 `firstTokenTime` 的两处显示）。
+> cordis-host-runner 同日新建（原版 `58EF79A0…` → 产物 `8B81500A…`，4 条锚点唯一命中）——
+> 它是本目录里**唯一作用于 host 侧 Node 包**的补丁（其余四个都是浏览器 bundle）。
+> 下次升级的流程（五个补丁**各自独立**）：`status` 报 `unknown` → `rebuild-baseline.mjs` 重建 →
+> 按它打印的值更新 `patch.mjs` 的常量 → `verify` → `apply`。
 
-详见 [patches/dsh-client-ui-settings-models/README.md](patches/dsh-client-ui-settings-models/README.md)
-与[模型设置工具包设计](../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md)。
-除该补丁外，本线对 DSH 的一切改动都在令牌层，DSH 升级不受影响。
+详见五个补丁各自的 README，以及
+[模型设置工具包设计](../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md)、
+[会话头部挤压修复设计](../dsh-miasaki-canvas/design/2026-09-10-conversation-header-crowding-fix.md)
+与[首 token 计时恢复设计](design/trajectory-ttft-restore.md)。
+除这五个补丁外，本线对 DSH 的一切改动都在令牌层，DSH 升级不受影响。
 
 ## 三个主题
 
