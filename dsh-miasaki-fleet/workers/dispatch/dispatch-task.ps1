@@ -1,7 +1,9 @@
 # dispatch-task.ps1 — M3.5 派单器：按 agent 档案 spawn 本机 CLI 执行任务（§7.0 派单式执行）
-# 用法：pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-xxxx -Agent <id> [-Workspace <root>]
+# 用法：pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-xxxx -Agent <id> [-Workspace <root>] [-Requires <caps>]
+# 能力闸门（G2，2026-09-11）：派单前校验目标 agent 是否为能力图候选。需求能力取 -Requires，
+#   否则解析 brief 的 `requires:` 行；两者都缺省时跳过（零行为变更）。判定复用 workers/graph/agent-pick.mjs。
 # 验证模式：-CheckOnly（只跑预算预检）/-ParseOnly（只跑 usage 解析，打印将要写入的 usage.jsonl 行）
-# 退出码：0 成功；2 拒绝派单（开关未开/无模板）；3 CLI 执行失败；4 预算熔断拒绝
+# 退出码：0 成功；2 拒绝派单（开关未开/无模板/无能力候选/选择器不可用）；3 CLI 执行失败；4 预算熔断拒绝
 # 协议：status.json 由派单器代理写；stdout 存 logs/<task>-stdout.log；usage.jsonl 按 metering_source 解析；transcript.md 追加；tasks.jsonl 由 Commander 另写。
 # 记忆隔离：spawn worker 进程时注入 OPENVIKING_RECALL_PEER_SCOPE=actor（§12.2 OpenViking 记忆层），进程结束后恢复原值。
 # 运行环境：PowerShell 7+（脚本使用 ?? 运算符）；本机 PS7 路径 %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe（可能不在 PATH，where pwsh 找不到）。
@@ -10,6 +12,7 @@ param(
   [string]$TaskId,
   [string]$Agent,
   [string]$Workspace = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),  # 默认=fleet 根（脚本位于 workers/dispatch/）
+  [string]$Requires,   # G2 能力闸门：显式需求能力（逗号分隔）；缺省则从 brief 的 requires: 行解析
   [switch]$CheckOnly,
   [switch]$ParseOnly
 )
@@ -58,6 +61,63 @@ function Test-Budget([string]$AgentDir, $manifest) {
     Write-Host "[budget] 预检通过：当日 cost $('{0:N4}' -f $dayCost) / 预算 $budget"
   }
   return $true
+}
+
+# --- G2 能力闸门（P0 接线，2026-09-11）---------------------------------------
+# 依据 docs/agent-teams-collaboration-gap-2026-09-11.md §2.2 / §7：
+# 把 Commander 原本只能"手工查询"的 agent-pick 判定，变成派单前必过的闸门。
+# 动机（真实样本）：t-0003/t-0004 因 assignee 指向已归档 agent 而积压 24 天，
+# 期间没有任何机器判定会报出来——它只表现为两个任务永远躺在 queued 里。
+
+# 需求能力：优先 -Requires 显式传入，其次从 brief.md 解析 `requires:` 行，解析不到即跳过。
+function Resolve-RequiredCaps([string]$Brief) {
+  if (-not [string]::IsNullOrWhiteSpace($Requires)) { return $Requires.Trim() }
+  if ([string]::IsNullOrWhiteSpace($Brief)) { return '' }
+  # 注意：必须用 [^\S\r\n]*（行内空白）而非 \s* —— .NET 的 \s 含换行符，
+  # `^\s*` 会吃穿换行、锚定到下一行行首，导致永远匹配不到目标行（已实测踩坑）。
+  $m = [regex]::Match($Brief, '(?m)^[^\S\r\n]*(?:requires|需要能力)[^\S\r\n]*[:：][^\S\r\n]*(.+?)[^\S\r\n]*$')
+  if (-not $m.Success) { return '' }
+  $v = $m.Groups[1].Value.Trim()
+  if ($v -eq '' -or $v -match '^[（(\[<]') { return '' }   # 占位符（如 `requires: (待补)`）视为未声明
+  return $v
+}
+
+# 能力闸门本体：目标 agent 必须是能力图的可用候选之一。
+# 退出码语义（agent-pick.mjs）：0 有候选 / 1 无候选 / 2 环境错误。
+function Test-CapabilityGate([string]$Caps, [string]$AgentId) {
+  $picker = Join-Path (Split-Path $PSScriptRoot -Parent) 'graph\agent-pick.mjs'
+  if (-not (Test-Path $picker)) {
+    Write-Host '[capability] 选择器缺失，无法校验能力（拒绝派单，宁可拒绝也不放行）'
+    return $false
+  }
+  $raw = & node $picker --need $Caps --json 2>$null
+  $code = $LASTEXITCODE
+  if ($code -eq 0) {
+    $parsed = $null
+    try { $parsed = ($raw | Out-String).Trim() | ConvertFrom-Json } catch { $parsed = $null }
+    if ($null -eq $parsed) {
+      Write-Host '[capability] 选择器输出无法解析（拒绝派单）'
+      return $false
+    }
+    # 用 -contains（逐元素比较）而非字符串包含：避免子串误判
+    $ids = @($parsed.candidates | ForEach-Object { $_.agentId })
+    if ($ids -contains $AgentId) {
+      $hit = $parsed.candidates | Where-Object { $_.agentId -eq $AgentId } | Select-Object -First 1
+      Write-Host "[capability] 闸门通过：$AgentId 覆盖 $Caps（score=$($hit.score)，候选 $($ids.Count) 个）"
+      return $true
+    }
+    Write-Host "[capability] 拒绝派单：$AgentId 不在能力候选内（需要 $Caps；候选：$($ids -join ', ')）"
+    return $false
+  }
+  if ($code -eq 1) {
+    $missing = ''
+    try { $missing = (@(($raw | Out-String).Trim() | ConvertFrom-Json).missingCapabilities) -join ', ' } catch { }
+    if (-not $missing) { $missing = $Caps }
+    Write-Host "[capability] 拒绝派单：无活动 agent 提供 $missing（G2 能力断层；先补档案或改派，勿硬塞）"
+    return $false
+  }
+  Write-Host "[capability] 选择器出错（exit $code），拒绝派单"
+  return $false
 }
 
 # usage 解析器注册表：metering_source → 解析函数（输入 stdout 全文，输出 usage.jsonl 行对象或 $null）
@@ -146,7 +206,16 @@ if ($CheckOnly) {
   $manifest = Read-JsonFile (Join-Path $agentDir 'manifest.json')
   if (-not $manifest) { Write-Host "[budget] agent $Agent 无档案"; exit 2 }
   $ok = Test-Budget $agentDir $manifest
-  exit $(if ($ok) { 0 } else { 4 })
+  if (-not $ok) { exit 4 }
+  # 能力闸门也纳入预检：让 -CheckOnly 成为"能不能派"的完整判定
+  $briefText = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+  $reqCaps = Resolve-RequiredCaps $briefText
+  if ($reqCaps) {
+    if (-not (Test-CapabilityGate $reqCaps $Agent)) { exit 2 }
+  } else {
+    Write-Host '[capability] brief 未声明 requires（或为占位符），跳过能力闸门（零行为变更）'
+  }
+  exit 0
 }
 
 $manifest = Read-JsonFile (Join-Path $agentDir 'manifest.json')
@@ -155,6 +224,15 @@ $control = Read-JsonFile (Join-Path $agentDir 'control.json')
 if (-not $control -or $control.enabled -ne $true) { Write-Host "[dispatch] agent $Agent 开关未开启，拒绝派单（§7.0 派单许可）"; exit 2 }
 if ($manifest.preflight) { Write-Host "[dispatch] preflight 提示：$($manifest.preflight)" }
 if (-not (Test-Budget $agentDir $manifest)) { exit 4 }
+
+# 闸门 2：能力候选（G2 agent-pick）。brief 未声明 requires 时零行为变更。
+$briefForCaps = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+$reqCaps = Resolve-RequiredCaps $briefForCaps
+if ($reqCaps) {
+  if (-not (Test-CapabilityGate $reqCaps $Agent)) { Write-Host "[dispatch] 能力闸门未通过，拒绝派单"; exit 2 }
+} else {
+  Write-Host '[capability] brief 未声明 requires（或为占位符），跳过能力闸门（零行为变更）'
+}
 
 $brief = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -ErrorAction SilentlyContinue
 $context = Get-Content (Join-Path $Workspace "tasks\$TaskId\context.md") -Raw -ErrorAction SilentlyContinue

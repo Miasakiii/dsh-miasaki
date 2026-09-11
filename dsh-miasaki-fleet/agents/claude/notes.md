@@ -1,0 +1,10 @@
+- [t-0003] 交付物自查方案 = workers/audit/check-deliverable.mjs（C1–C6 检查，退出码 0/1/2，接在派单器 usage 落盘之后、终态之前）
+- [t-0004] shared/collective-memory.md 只读快照索引 15 行覆盖 5 节（建库 / runtime 选型 / 运维踩坑 / 未决事项 / 新方向）；源文档真实末次更新 2026-08-17（非简报所称 08-16）
+- [t-0004] ⚠️ 该文件 runtime 选型节「dsh-sdk 首选 + 自研薄壳兜底」已随 2026-08-17 方向修正废弃；未决事项 ①②③ 以旧 Cordis 悬浮窗为语境、疑与现行 fleet-monitor + pulse 形态脱节 —— 引用前须回源核对
+- 契约判定的唯一来源是 workers/lib/bus-contract.cjs（applier 写入与 validate-bus 巡检共用）；新增任何校验一律 import 复用，勿写第三份副本
+- headless 下 worker 无法落盘：Bash/Glob 报 EPERM uv_spawn（进程 spawn 失败，非权限弹窗；permission_denials=0）——产出只走 stdout，勿试写文件
+- result.json.status（completed|blocked|failed）与 status.json.state（idle|running|…）是两套词表，仅 blocked 同名，跨文件判定须显式映射
+- 派单器终态只写 idle/error（dispatch-task.ps1 L326），无法表达 blocked —— 自查与判定须据此容错
+- validate-bus.mjs L231 对缺失 result.json 静默 continue：台账标 done 却无交付物的任务，现无任何机器检查会报（C6 缺口）
+- §4.7 标题分隔符不统一（「数据来源 / 依据」vs「数据来源·依据」），匹配正则须归一；回归入口在仓库根 ../scripts/verify-all.mjs（fleet 内无 scripts/）
+- ⚠️ 口径待裁决：本文件暂按设计 §4.6「总量 ≤10 行」口径**压缩合并** t-0003/t-0004 要点；各任务完整要点见 tasks/<id>/result/result-<id>.md

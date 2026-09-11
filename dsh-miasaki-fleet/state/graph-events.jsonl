@@ -1,0 +1,6 @@
+{"ts":"2026-09-11T10:21:41.220Z","event":"superstep.committed","author":"applier","bus_version":1,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/tasks.jsonl"],"bytes":268}
+{"ts":"2026-09-11T10:22:17.309Z","event":"superstep.committed","author":"applier","bus_version":2,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/tasks.jsonl"],"bytes":429}
+{"ts":"2026-09-11T11:05:13.987Z","event":"task.completed","author":"commander","bus_version":3,"reason":"t-0003 派单交付并验收通过（解积压后首个真实 CLI 派单）","task_id":"t-0003"}
+{"ts":"2026-09-11T11:05:13.989Z","event":"superstep.committed","author":"applier","bus_version":3,"reason":"提交 3 个补丁","patch_count":3,"paths":["state/graph-events.jsonl","state/tasks.jsonl"],"bytes":1154}
+{"ts":"2026-09-11T11:12:59.997Z","event":"task.completed","author":"commander","bus_version":4,"reason":"t-0004 派单交付并验收通过（解积压两任务全部清空）","task_id":"t-0004"}
+{"ts":"2026-09-11T11:12:59.999Z","event":"superstep.committed","author":"applier","bus_version":4,"reason":"提交 3 个补丁","patch_count":3,"paths":["state/graph-events.jsonl","state/tasks.jsonl"],"bytes":1388}

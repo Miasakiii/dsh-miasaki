@@ -1,0 +1,56 @@
+{
+  "task_id": "t-0004",
+  "status": "completed",
+  "conclusion": "shared/collective-memory.md（33 行 / 5 个主题节）已产出 15 行只读快照索引（建库 1 / runtime 选型 5 / 运维踩坑 3 / 未决事项 4 / 新方向 2），每行「主题 | 要点」并对过期项加 ⚠️ 标记。两条时效结论须随索引一起传递：① runtime 选型节的「M3 首选 dsh-subagent-dsh-sdk + 自研薄壳兜底」已随 2026-08-17 方向修正（设计 §12 v0.11）整体失效，不标注会导致后续 context.md 复活已废弃路线；② 未决事项 ①②③（面板不可见 / 监控形态 / 开关拨动验证）以旧 Cordis 悬浮窗为语境，疑与现行 fleet-monitor + pulse v2 形态脱节，引用前须 Commander 复核。另经独立核对修正一处简报事实：该文档真实末次更新为 2026-08-17（含「新方向：扫描编排本机 agent CLI」整节），非简报所称 2026-08-16。",
+  "completeness": {
+    "done": [
+      "验收标准 1（§4.7 六段结构）：result-t-0004.md 即为六段",
+      "验收标准 2（覆盖全部主题节）：5/5 节覆盖，逐节行数 1/5/3/4/2",
+      "验收标准 3（每行一条要点、总计 ≤15 行）：恰 15 行，未超限",
+      "只读约束：全程仅用 Read，零写操作",
+      "索引与结论已输出至 stdout（派单器捕获），并代写落盘为 result-t-0004.md"
+    ],
+    "missing": []
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "shared/collective-memory.md",
+      "note": "本任务唯一研读对象：33 行 / 5 个主题节，逐行通读"
+    },
+    {
+      "type": "file",
+      "ref": "docs/multi-agent-cli-orchestrator-design.md",
+      "note": "§4.7 六段结构（L324-346）；§12 变更记录 v0.11（废弃自研 worker 与 dsh-sdk 常驻子进程路线）为过期判定依据；v0.15（fleet-monitor + pulse v2）为形态漂移判定依据"
+    },
+    {
+      "type": "task",
+      "ref": "t-0001",
+      "note": "runtime 选型要点那一节的来源任务（索引第 02–06 行的出处）"
+    },
+    {
+      "type": "task",
+      "ref": "t-0003",
+      "note": "同批解积压的姊妹任务，其遗留的能力断层议题与本任务同属「集体知识可用性」"
+    },
+    {
+      "type": "file",
+      "ref": "agents/claude/logs/t-0004-stdout.log",
+      "note": "本轮 worker stdout 原始证据（5 回合，exit 0，$0.2205）"
+    },
+    {
+      "type": "file",
+      "ref": "agents/claude/notes.md",
+      "note": "共享滚动产物（非任务专属）：t-0004 交付后由 Commander 按设计 §4.6「总量 ≤10 行」口径，把 t-0003+t-0004 要点压缩合并为 10 行（1808 字节 / 83b6bbab…）。列入 evidence 而非 artifacts：不可变指纹不适用于会持续滚动的共享追加文件"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0004/result/result-t-0004.md",
+      "bytes": 9628,
+      "sha256": "1bbfcb7f9e62565f726f56d08911383ac50d46b875522c928ea90afd0ac7a76b"
+    }
+  ],
+  "broadcast": "collective-memory.md 已到必须策展的临界点：① 第 2 节「M3 首选 dsh-subagent-dsh-sdk + 自研薄壳兜底」与设计 §12 v0.11 直接矛盾，作为「集体知识」被后续 context.md 引用会复活已废弃路线，建议删除或就地加 ⚠️已废弃；② 第 4 节未决事项 ①②③ 的语境（旧 Cordis 悬浮窗）已被 fleet-monitor + pulse v2 取代，建议结案归档而非继续挂未决；③ 该文件收录格式漂移——设计 §6.6 规定 `## <主题>（<task-id> 来源）` + 3-5 行要点，但「未决事项」为 6 条且无来源标注、「运维踩坑」亦无来源。另：该文件仍是 Commander 唯一写者、worker 只读的强约定，本任务全程未回写。"
+}

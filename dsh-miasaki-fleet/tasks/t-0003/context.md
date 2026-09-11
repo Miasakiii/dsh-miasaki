@@ -1,10 +1,11 @@
 # 上下文捆绑包：t-0003
 
 ## 背景
-- 双 worker 并行隔离验证轮（M3.5）：coder 与 analyst 同时各执行一个任务，互相不可见。
-- 子运行时 = 官方 examples/jsonrpc-agent 组合；本轮 llm 指向本地 mock 服务器。
-- 协议依据：docs/multi-agent-cli-orchestrator-design.md §4.7/§7。
+- M3.5 真实 CLI 派单：worker = claude（headless `claude -p {prompt} --output-format json`），单任务独占执行。
+- 交付方式 = **stdout 产出 + 派单器代写**：headless 下 worker 的 Bash/Write 被权限栈与进程 sandbox 拒绝（设计 §11.2 既定行为，实测 t-0006），故结论全部走 stdout，由派单器落盘。
+- 协议依据：docs/multi-agent-cli-orchestrator-design.md §4.7（交付物结构）/ §7.0（派单式执行与退出码）。
 
 ## 关键文档
-- docs/multi-agent-cli-orchestrator-design.md（§4.7 交付物结构）
-- workers/worker-cli/worker.mjs（worker 包装层实现）
+- docs/multi-agent-cli-orchestrator-design.md（§4.7 六段结构、§7.0 派单与退出码）
+- workers/lib/bus-contract.cjs（契约的唯一可执行定义：validateResult / validateEvent）
+- schemas/result.schema.json（G0 节点交付契约 result.json）

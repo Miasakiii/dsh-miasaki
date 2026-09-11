@@ -165,9 +165,80 @@ node workers/graph/verifier-pick.mjs --status t-0013  # 查看验证结论（含
 > **边界**：验证器目前是 Commander **可查询**的能力，派单流程尚未强制挂载
 > （高风险任务应挂而未挂时无告警）。
 
+### 派单能力闸门已接线（P0，2026-09-11）
+
+G2 判定层此前是「Commander 可查询、派单流程不强制」；现已接入派单器：
+
+| 项 | 内容 |
+|---|---|
+| 落点 | `workers/dispatch/dispatch-task.ps1` — `Resolve-RequiredCaps` + `Test-CapabilityGate` |
+| 触发 | brief 的 `requires: <caps>` 行（ASCII 形式；亦接受 `需要能力：`），或 `-Requires <caps>` 显式传入 |
+| 判定 | 复用 `workers/graph/agent-pick.mjs --json`（**不重复实现**，保持口径唯一） |
+| 行为 | 目标 agent 不在候选内 → **拒绝派单 exit 2**；无活动提供者 → 拒绝并点名能力断层 |
+| 零行为变更 | brief 未声明 `requires`（或为占位符）时**跳过闸门** —— 存量任务行为不变（全仓 `requires` 零声明时已实证） |
+| 预检 | 能力闸门同时纳入 `-CheckOnly`，使其成为「能不能派」的完整判定 |
+
+```bash
+pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0003 -Agent claude -CheckOnly
+#   [budget] 预检通过：当日 cost 0.0000 / 预算 2
+#   [capability] 闸门通过：claude 覆盖 coding（score=105，候选 3 个）
+```
+
+> **为什么需要它**：`t-0003`/`t-0004` 因 assignee 指向已归档 agent 而积压 24 天，
+> 期间**没有任何机器判定会报出来**——只表现为两个任务永远躺在 queued 里。
+> 完整对标与取舍见
+> [docs/agent-teams-collaboration-gap-2026-09-11.md](docs/agent-teams-collaboration-gap-2026-09-11.md)。
+>
+> **⚠️ 环境要求**：本脚本用 PS7 语法（`??`）。本机 harness 默认 `pwsh` 实为 **PS 5.1**，
+> 必须显式调用 `%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`（7.6.5）。
+>
+> **⚠️ 正则陷阱**：`Resolve-RequiredCaps` 用 `[^\S\r\n]*` 而非 `\s*`——
+> .NET 的 `\s` **含换行符**，`^\s*` 会吃穿换行锚定到下一行行首，导致永远匹配不到目标行（已实测踩坑）。
+
+### 首次真实派单闭环 + 首个 result.json（2026-09-11）
+
+闸门接线后，积压 24 天的 `t-0003` 作为**首个真实 CLI 派单试水**跑通全链路：
+
+| 项 | 事实 |
+|---|---|
+| 派单 | `claude -p {prompt} --output-format json`，24 回合，exit 0，**$0.40396**（in 86805 / out 11561 / cache-read 573696） |
+| 闸门 | 首次在**真实派单路径**（非 `-CheckOnly`）上生效：`claude 覆盖 coding（score=105，候选 3 个）` |
+| 交付物 | 按既定「派单器代写」协议落盘：`result-t-0003.md`（§4.7 六段）+ `agents/claude/notes.md`（10 行） |
+| **首个 `result.json`** | G0 节点交付契约**首次真实产出**；`validate-bus` 由 24 → **25 文件 0 错误** |
+| 总线 | `bus-apply` 唯一入口一次超步提交：2 条台账补丁 + `task.completed` 事件，版本 **2 → 3** |
+| 回归 | `verify-all fleet` **15/15 PASS**；pulse `today_cost=0.403959` 真实计量已入面板 |
+
+**第二个任务 `t-0004` 同法闭环（5 回合，$0.22051）**，产物为 `result-t-0004.md`（15 行索引覆盖
+`collective-memory.md` 5/5 主题节）+ 第二个 `result.json`（`validate-bus` → **26 文件 0 错误**），
+总线版本 **3 → 4**。至此 **`task-ready --dispatchable` → 可派：无，终态 9 个** ——
+**fleet 首次全部任务进入终态，24 天积压清零**；当日实测总成本 **$0.624467**。
+
+> **⚠️ 首个 G0 指纹契约边界（t-0004 撞出）**：`agents/claude/notes.md` 是**被多任务共享、且被设计为
+> 持续滚动**的追加文件，把它列进 `result.json` 的 `artifacts[]`（不可变产物指纹）后，
+> **每追加一次都会让所有历史任务的指纹失效** —— 真篡改会淹没在预期内的滚动噪声里。
+> 处置：把共享滚动文件从 `artifacts[]` **移到 `evidence[]`**（用 `note` 记载沿革），
+> `artifacts[]` 只留任务专属、内容稳定的产物。根治选项（notes 按任务分片 / 契约显式豁免）
+> 见 [docs/handover-2026-09-11.md](docs/handover-2026-09-11.md) §9.2，**待 Operator 裁决**。
+
+> **⚠️ 口径澄清（worker 实测，勿混为一谈）**：headless 下 worker 无法落盘，但两轮
+> `permission_denials` 均为 **0** —— 它们遇到的是 `Bash`/`Glob`/`Grep` 的
+> `EPERM: operation not permitted, uv_spawn …`（**进程 spawn 失败**），
+> 与 t-0006 的「**Write 被权限栈拒绝**」是两类现象。两者结论一致（交付物必须由派单器代写），
+> 但**引用证据时不可互相顶替**。
+
+> **worker 上报的 10 项问题**（t-0003 七项：§4.7 标题分隔符不一致、`validate-bus.mjs` L231 对缺失
+> `result.json` 静默放行、派单器无法表达 `blocked` 终态、`notes.md` 口径矛盾、`context.md` 漂移等；
+> t-0004 三项：shared 文档真实末次更新为 **2026-08-17** 非 08-16、措辞口径、`collective-memory`
+> 格式漂移与策展归属）
+> 见 [docs/handover-2026-09-11.md](docs/handover-2026-09-11.md) §8/§9，**语义决策待 Operator 裁决**。
+
 ## 统一回归
 
 本线的 F1 总线校验、F3 心跳判活与 G0–G2、G4 各阶段单测已并入仓库级统一回归入口：
+
+> **⚠️ 路径陷阱**：回归入口在**仓库根** `scripts/verify-all.mjs`，**本线内没有** `scripts/` 目录。
+> 从 fleet 根调用必须写 `../scripts/verify-all.mjs`；只写 `scripts/verify-all.mjs` 会得到
+> 「文件不存在」的误判（t-0003 的 worker 已踩过：它据此错误地断言「实际回归入口是 `npm test`」）。
 
 ```bash
 node ../scripts/verify-all.mjs fleet

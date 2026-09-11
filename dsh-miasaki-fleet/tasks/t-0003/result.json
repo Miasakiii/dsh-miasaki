@@ -1,0 +1,66 @@
+{
+  "task_id": "t-0003",
+  "status": "completed",
+  "conclusion": "交付物自查必须做成派单器侧可执行的跨文件一致性检查（新增 workers/audit/check-deliverable.mjs，C1–C6 六项，退出码 0/1/2），不能设计成 worker 自查：headless 下 worker 无法落盘交付物，「自己检查自己交的东西」在物理上不成立；且设计 §6.4 第 6 条已明示 Agent 自测易与实现共用盲点。接线点为 dispatch-task.ps1 usage 落盘之后、status 终态之前，自查失败不改 CLI 退出码（避免污染 §7.0 的 0/3/4 语义），改以 status.state=blocked + last_error 表达。",
+  "completeness": {
+    "done": [
+      "结论与方案（三层设计 + C1–C6 检查表 + C5 跨文件状态映射表 + 接线点 + 退出码）已交付",
+      "验收标准 1（§4.7 六段结构）：result-t-0003.md 即为六段",
+      "验收标准 2（四项覆盖）：C1 result 存在性 / C2 六段结构完整性 / C4 notes ≤10 行 / C5 status 终态字段，一一对应；另补 C3（result.json 契约复用 validateResult）与 C6（done ⇒ 交付物存在的反向存在性）",
+      "验收标准 3（可脚本化）：命令行形态、退出码语义、批量模式 --all --pending-done、接线位置均已给出",
+      "notes 待追加要点 10 行已产出（代写至 agents/claude/notes.md）"
+    ],
+    "missing": []
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "docs/multi-agent-cli-orchestrator-design.md",
+      "note": "§4.7 六段结构（L325-345）；§4.6 notes ≤10 行；§11.2 无人值守权限自动拒绝"
+    },
+    {
+      "type": "file",
+      "ref": "workers/lib/bus-contract.cjs",
+      "note": "validateResult L153-222 —— 契约的唯一可执行定义，方案直接复用不重写"
+    },
+    {
+      "type": "file",
+      "ref": "schemas/result.schema.json",
+      "note": "RESULT_STATUS = completed|blocked|failed；evidence[].type 枚举；artifacts[].sha256 必填"
+    },
+    {
+      "type": "file",
+      "ref": "workers/validate-bus.mjs",
+      "note": "L231 `if (!existsSync(rp)) continue` —— 缺失 result.json 被静默放行，C6 缺口来源"
+    },
+    {
+      "type": "file",
+      "ref": "workers/dispatch/dispatch-task.ps1",
+      "note": "L313-323 usage 落盘；L326 终态仅 idle/error，无 blocked 分支"
+    },
+    {
+      "type": "task",
+      "ref": "t-0006",
+      "note": "代写协议先例：permission_denials 实测，交付物由派单器代写"
+    },
+    {
+      "type": "file",
+      "ref": "agents/claude/logs/t-0003-stdout.log",
+      "note": "本轮 worker stdout 原始证据（24 回合，exit 0，$0.4040）"
+    },
+    {
+      "type": "file",
+      "ref": "agents/claude/notes.md",
+      "note": "共享滚动产物（非任务专属）：t-0003 交付时为其 10 行（1302 字节 / 34c2907a…）；2026-09-11 随 t-0004 按设计 §4.6 总量口径压缩合并为 1808 字节 / 83b6bbab…。因语义上会持续滚动，故列 evidence 而非 artifacts —— 不可变指纹不适用于共享追加文件（t-0004 首次实践时实测撞出此边界）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0003/result/result-t-0003.md",
+      "bytes": 10566,
+      "sha256": "d59330f5c0f9b00673bf903fd6af8c1d6bb769984f07687ea4d77ce77464391e"
+    }
+  ],
+  "broadcast": "「状态有终态、物证无校验」是本仓一类系统性缺陷：validate-bus.mjs L231 对缺失 result.json 静默 continue，因此台账标记 done+accepted 却从未产出交付物的任务，现有全部校验器都会放行（C6 缺口）。建议立通用不变式：任何被标记为终态的对象都必须有一条反向存在性检查（done ⇒ result.json；accepted ⇒ verdict.json；running ⇒ 心跳新鲜）。另：契约判定必须单点，新增任何校验一律 import bus-contract.cjs 复用，不得新增第三处副本。"
+}
