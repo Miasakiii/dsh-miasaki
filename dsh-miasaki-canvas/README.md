@@ -10,9 +10,11 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 
 ## 状态
 
-**MVP 全量完成（M1–M4）**（2026-09-05）：`@miasaki/dsh-canvas` v0.5.0-miasaki.1——合并内核（v5 元数据 + merge RPC + 执行流）、画布交互（多选/框选、拖拽并置手势、吸收标记、详情传递血缘）、`summary` 注入形式、发送失败重试，全部实机验收。已适配 DSH 0.1.2-rc.1。已知限制与后续待办见 [CHANGELOG](design/CHANGELOG.md)。
+**MVP 全量完成（M1–M4）**（2026-09-05）：`@miasaki/dsh-canvas` v0.5.0-miasaki.1（MVP 收官版本；当前包版本已至 **v0.5.0-miasaki.5**，后续增量见下）——合并内核（v5 元数据 + merge RPC + 执行流）、画布交互（多选/框选、拖拽并置手势、吸收标记、详情传递血缘）、`summary` 注入形式、发送失败重试，全部实机验收。已适配 DSH 0.1.2-rc.1。已知限制与后续待办见 [CHANGELOG](design/CHANGELOG.md)。
 
-侧边栏「会话」栏按血缘树状呈现（分支缩进于父线之下、按最近活动排序），树点与画布卡片共用会话线颜色，流式回复中的线带绿色脉冲「回复中」标识；侧边栏滚动位置在全量重渲染间保持（2026-09-05 修复滚动跳顶）。对话页顶部「对话/会话布」切换按钮**注册进 DSH 会话头 actions 官方插槽**（`conversation.session.header.actions`，与「后台任务」同一 flex 行渲染，2026-09-06 从悬浮/注入改为插槽方案）——由 DSH 布局驱动，结构上不可能叠压，随头部重渲染自动重挂；配色全部走 DSH 主题令牌（激活胶囊随主题品牌色：原版蓝/刻刻帝绯红/狂狂帝血绯）。
+侧边栏「会话」栏按血缘树状呈现（分支缩进于父线之下、按最近活动排序），树点与画布卡片共用会话线颜色，流式回复中的线带绿色脉冲「回复中」标识；侧边栏滚动位置在全量重渲染间保持（2026-09-05 修复滚动跳顶）。对话页顶部「对话/会话布」切换按钮**注册进 DSH 会话头 actions 官方插槽**（`conversation.session.header.actions`，与「后台任务」同一 flex 行渲染，2026-09-06 从悬浮/注入改为插槽方案）——由 DSH 布局驱动，随头部重渲染自动重挂；配色全部走 DSH 主题令牌（激活胶囊随主题品牌色：原版蓝/刻刻帝绯红/狂狂帝血绯）。
+
+**2026-09-10 补：插槽解决了「被重渲染挤掉」，但不解决「宽度不够」。** 官方会话头里 `headerActions` / `headerUtilities` / `headerCorner` 都是 `flex:none`，标题簇是 `flex:1; min-width:0` —— 中栏被右侧边栏推窄到固定项放不下时，actions 会**溢出并压叠**在 utilities 上（标题同时被裁没）。切换器为此加了**运行时自适应**：`ResizeObserver` 观察会话头，留给标题的余量不足时收成图标形态（≈116px → ≈64px，带滞回避免抖动）；平台层另有一个本体补丁把溢出从「压叠」改为「可横向滚动」兜底。归因与宽度预算见 [设计](design/2026-09-10-conversation-header-crowding-fix.md)，补丁见 [desktop/patches/dsh-client-ui-conversation](../dsh-miasaki-desktop/patches/dsh-client-ui-conversation/README.md)。
 
 **桌面端（无边框窗口）适配**（2026-09-06，v0.5.0-miasaki.2；2026-09-07 跟进桌面端标题栏 v4 改名）：桥接层 `client.js` 把两类父文档状态同步进画布 iframe——①桌面窗控按钮组（V4 `#miasaki-titlebar .tb-group`，V3 兜底 `.tb-capsule`）的右上占位宽度（`canvas:chrome` → `--canvas-chrome-reserve`，画布工具条与错误条整体左移让位，普通浏览器为 0 不受影响）；②主题品牌色（`canvas:theme` 除明暗外带 `--dsw-static-deepseek-450` → `--canvas-accent`，画布内所有强调色/激活胶囊/小地图/主按钮由它 color-mix 派生，三主题随动）。画布全部滚动容器统一 6px 主题化胶囊滚动条，默认隐藏、容器 hover/聚焦时显现（Firefox 走 `scrollbar-width/color` 常显兜底）；暗色下画布遮罩层同步深色，消除亮色壳暗色画布的亮边。
 
@@ -29,12 +31,12 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 # 安装到本机 DSH web profile（link 模式，改代码后重启 dsh web + 刷新页面）
 dsh plugin --profile web add link:C:\Users\Asakii\Desktop\dsh-miasaki\dsh-miasaki-canvas
 
-# 语法校验 + 全量测试（79 个用例）
+# 语法校验 + 全量测试（89 个用例）
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
 corepack pnpm test
 
-# 或走仓库级统一回归入口（三入口语法 + 6 个测试文件共 79 项）
+# 或走仓库级统一回归入口（三入口语法 + 8 个测试文件共 89 项）
 node ..\scripts\verify-all.mjs canvas
 ```
 
@@ -55,6 +57,7 @@ dsh-miasaki-canvas/
 ├── design/                     # 本线设计文档与变更记录
 │   ├── 2026-09-05-canvas-merge-design.md
 │   ├── 2026-09-05-m1-spike-findings.md
+│   ├── 2026-09-10-conversation-header-crowding-fix.md
 │   └── CHANGELOG.md
 └── README.md
 ```
@@ -74,3 +77,4 @@ dsh-miasaki-canvas/
 - **合并**：三层分离——DSH 事实层（fork 新会话 + 首条消息注入另一线内容）、投影层（`mergeFrom` 元数据 + 菱形 DAG 节点）、交互层（合并请求卡 + 拖拽手势）。
 - **红线**：不改系统提示/模型请求/工具 schema；插件不直接调模型；DSH 是唯一事实来源。
 - **数据隔离**：画布元数据存 `$DSH_HOME/miasaki-canvas/`，不与上游 dsh-synapse 的 `$DSH_HOME/synapse/` 共用。
+- **外部视图槽（2026-09-10）**：别的插件可以把入口长在画布页面自己的「对话 / 会话布」旁边，而本线**不认识任何具体视图** —— 通用通道是页面级注册表 `window.__DSH_CANVAS_VIEW_ITEMS__`（`{ id, label }`）+ `dsh-canvas:view-items` 事件；client 半在 iframe `load` / 浮层打开 / 注册表变化时下发 `canvas:views`，画布页面渲染按钮并在点击时广播 `canvas:view`，由**注册方自己**监听去切视图。首个使用者是 SSH 线。契约与红线见 [`test/external-views.test.js`](test/external-views.test.js)。

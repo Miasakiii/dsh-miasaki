@@ -27,6 +27,31 @@ window.__ModuleLoader__.load({
       ]
     }
 
+    // ---- 会话头部窄宽度自适应（2026-09-10）----------------------------------
+    // 官方会话头把一行分成 titleCluster（flex:1 + min-width:0，可被压到 0）与
+    // headerUtilities / headerCorner（都是 flex:none，不收缩）；而 titleCluster 内部
+    // 的 headerActions 又同样是 flex:none —— 中栏被右侧边栏推窄到放不下时，actions
+    // 无处安放、溢出并压在 utilities 上，标题也被裁没。
+    // 本切换器是 actions 里最宽的一项（≈116px），空间不足时降级为图标形态（≈64px）。
+    //
+    // 判据：自身左边界到 header 内容区左边的距离 = 留给标题的余量。
+    // 标题都快没了，就说明这一行已经挤不下完整形态。进入 / 退出用两个阈值形成滞回，
+    // 否则形态切换本身改变占宽，会把判定推来推去（抖动）。
+    const COMPACT_ENTER_PX = 120
+    const COMPACT_RELEASE_PX = 200
+    const compactDecision = ({ leftGap, compact, enter = COMPACT_ENTER_PX, release = COMPACT_RELEASE_PX }) =>
+      compact ? leftGap < release : leftGap < enter
+
+    /** 紧凑形态的「对话」图标（内联 SVG，跟随 currentColor 与主题令牌）。 */
+    const dialogGlyph = () => react.createElement('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+      react.createElement('path', { fill: 'currentColor', d: 'M2.5 3.75h11v6.5H7.4L4.25 13V10.25H2.5Z' }))
+    /** 紧凑形态的「会话布」图标：三节点连线，与画布品牌标记同构。 */
+    const mapGlyph = () => react.createElement('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+      react.createElement('path', { fill: 'none', stroke: 'currentColor', strokeWidth: 1.1, d: 'M4.6 5.2 10.7 6M4.9 6.4 6.7 10.4M11.3 7.6 8.5 10.8' }),
+      react.createElement('circle', { cx: 4, cy: 4.5, r: 1.7, fill: 'currentColor' }),
+      react.createElement('circle', { cx: 12, cy: 6, r: 1.7, fill: 'currentColor' }),
+      react.createElement('circle', { cx: 7, cy: 12, r: 1.7, fill: 'currentColor' }))
+
     module.exports.inject = ['sessions', 'workspaces', 'slots']
     module.exports.apply = ctx => {
       // 幂等守卫：DSH HMR/页面重挂可能重复 apply，旧实例的 DOM/监听还没被回收
@@ -44,7 +69,25 @@ window.__ModuleLoader__.load({
       // 切换按钮走 DSH 会话头 actions 插槽（官方槽渲染、与「后台任务」同一 flex 行，
       // 结构上不可能叠压），配色全部用 DSH 主题令牌（激活胶囊随主题品牌色：
       // 原版蓝 / 刻刻帝绯红 / 狂狂帝血绯）。
-      style.textContent = '.dsh-canvas-switch{display:flex;gap:2px;margin-left:2px;padding:3px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.92));backdrop-filter:blur(10px)}.dsh-canvas-switch button{height:28px;border:0;border-radius:999px;background:transparent;padding:0 11px;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}.dsh-canvas-switch button:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}.dsh-canvas-switch button.active{background:var(--dsw-static-deepseek-450,#111827);color:var(--dsw-static-neutral-bluish-00,#fff)}.dsh-canvas-switch button:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}.dsh-canvas-overlay{position:fixed;z-index:100;inset:0;background:#f5f7fa}.dsh-canvas-overlay.is-opening{visibility:hidden}.dsh-canvas-overlay[hidden]{display:none}.dsh-canvas-overlay iframe{display:block;width:100%;height:100%;border:0}body[data-ds-dark-theme] .dsh-canvas-overlay{background:#0f1115}'
+      style.textContent = '.dsh-canvas-switch{display:flex;align-items:center;gap:2px;margin-left:2px;padding:0 3px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:999px;background:var(--dsw-alias-bg-overlay,rgba(255,255,255,.92));backdrop-filter:blur(10px)}.dsh-canvas-switch button{height:28px;border:0;border-radius:999px;background:transparent;padding:0 11px;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}.dsh-canvas-switch button:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}.dsh-canvas-switch button.active{background:var(--dsw-static-deepseek-450,#111827);color:var(--dsw-static-neutral-bluish-00,#fff)}.dsh-canvas-switch button:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}.dsh-canvas-switch.is-compact button{width:28px;padding:0;justify-content:center;display:inline-flex;align-items:center}.dsh-canvas-switch.is-compact button svg{width:16px;height:16px;display:block}.dsh-canvas-overlay{position:fixed;z-index:100;inset:0;background:#f5f7fa}.dsh-canvas-overlay.is-opening{visibility:hidden}.dsh-canvas-overlay[hidden]{display:none}.dsh-canvas-overlay iframe{display:block;width:100%;height:100%;border:0}body[data-ds-dark-theme] .dsh-canvas-overlay{background:#0f1115}' +
+        // 会话头基线补偿:官方 titleRow(padding-top 10px + min-height 30px,28px 控件居中)
+        // 的中心是 25px,而右栏 dockkit chrome(10px + 28px)与桌面壳窗控(top:11px + 26px)
+        // 都是 24px —— 两者并排时差 1px(2026-09-10 像素实测:左 24.0 vs 右 23.0)。
+        // 这条把会话头三个容器整体上移 1px。只位移不改布局,不参与 flex 计算。
+        // ⚠ 与 desktop 线 themes/src/03-switcher.js 的同源规则**值必须一致**:那边走桌面壳
+        // 主题注入(include_str! 编译期内嵌,改了要重建壳才生效),这里是页面级注入、
+        // 支持 client-hmr 热更,刷新即生效 —— 两条通道写同一个值,改一处请同步另一处。
+        '#root [class*="_headerActions"],#root [class*="_headerUtilities"],#root [class*="_headerCorner"]{position:relative;top:-1px}' +
+        // 右栏以**推挤**方式展开时撤回桌面壳的让位:官方 panel 用 transform:translate(100%)
+        // 移出屏幕而非卸载,所以 `data-sidebar-right-open` 才是可靠的开合判据 —— 展开时中栏
+        // 右边界退到分栏线内,窗控压的是右栏头部,会话头再留 128px 安全区就是白空
+        // (2026-09-10 实测:展开态 `⋯` 右边界距分栏线 144px = 128 让位 + 官方 28 padding)。
+        // ⚠ 必须**覆写**,而不是给 desktop 那条让位规则加 :not() 门控 —— 已发布的壳二进制里
+        // 嵌着无条件的 128px 规则,源文件改了页面上的旧规则不会消失;门控版在展开态"不匹配",
+        // 等于没人覆盖它(上一版就是这么失效的)。这里靠特异性取胜:(1,3,1) > 原规则 (1,1,1)。
+        // 28px 即官方 header 的 padding-right,与 desktop 线 themes/src/03-switcher.js 的
+        // 同源规则**逐字一致**;此处是热更通道,刷新即生效。
+        '#root:has([data-sidebar-right-panel="push"][data-sidebar-right-open]) header:has([data-conversation-header-corner]){padding-right:28px}'
       document.head.append(style)
       const host = document.createElement('div')
       host.className = 'dsh-canvas-host'
@@ -58,19 +101,55 @@ window.__ModuleLoader__.load({
       }
       function ViewSwitch() {
         const [view, setView] = react.useState(switchViewStore.view)
+        const [compact, setCompact] = react.useState(false)
+        const rootRef = react.useRef(null)
+        const compactRef = react.useRef(false)
         react.useEffect(() => {
           switchViewStore.onChange = setView
           return () => { if (switchViewStore.onChange === setView) switchViewStore.onChange = null }
         }, [])
+        // 测量并（必要时）切换形态。幂等：判定不变就不 setState，因此可以在每次渲染后
+        // 与 ResizeObserver 回调里安全调用。必须在切换后重测 —— 形态本身改变占宽。
+        const measure = react.useCallback(() => {
+          const node = rootRef.current
+          if (node === null) return
+          const header = node.closest('header')
+          if (header === null) return
+          const paddingLeft = Number.parseFloat(window.getComputedStyle(header).paddingLeft) || 0
+          const leftGap = node.getBoundingClientRect().left - header.getBoundingClientRect().left - paddingLeft
+          const next = compactDecision({ leftGap, compact: compactRef.current })
+          if (next !== compactRef.current) {
+            compactRef.current = next
+            setCompact(next)
+          }
+        }, [])
+        react.useEffect(() => {
+          measure()
+          const node = rootRef.current
+          const header = node === null ? null : node.closest('header')
+          // 观察 header 而非自身：自身是 flex:none，被挤压时宽度不变，观察不到溢出。
+          if (header === null || typeof ResizeObserver !== 'function') return undefined
+          const observer = new ResizeObserver(() => measure())
+          observer.observe(header)
+          return () => observer.disconnect()
+        }, [measure])
+        // 每次渲染后校正一次（覆盖 header 宽度未变但同排其他控件变宽的情况）；
+        // 滞回阈值保证形态不会来回抖动，measure 幂等故不构成渲染循环。
+        react.useEffect(() => { measure() })
         const showingMap = view === 'map'
         const switchTo = next => () => {
           setSwitchView(next)
           if (next === 'map') open()
           else close()
         }
-        return react.createElement('div', { className: 'dsh-canvas-switch', role: 'group', 'aria-label': '视图切换' },
-          react.createElement('button', { type: 'button', className: showingMap ? '' : 'active', 'aria-pressed': String(!showingMap), onClick: switchTo('dialog') }, '对话'),
-          react.createElement('button', { type: 'button', className: showingMap ? 'active' : '', 'aria-pressed': String(showingMap), onClick: switchTo('map') }, '会话布'))
+        return react.createElement('div', {
+          ref: rootRef,
+          className: compact ? 'dsh-canvas-switch is-compact' : 'dsh-canvas-switch',
+          role: 'group',
+          'aria-label': '视图切换',
+        },
+          react.createElement('button', { type: 'button', className: showingMap ? '' : 'active', 'aria-pressed': String(!showingMap), title: '对话', 'aria-label': '对话', onClick: switchTo('dialog') }, compact ? dialogGlyph() : '对话'),
+          react.createElement('button', { type: 'button', className: showingMap ? 'active' : '', 'aria-pressed': String(showingMap), title: '会话布', 'aria-label': '会话布', onClick: switchTo('map') }, compact ? mapGlyph() : '会话布'))
       }
       // 注册到官方会话头 actions 插槽（与「后台任务」同 slot 并排渲染，DSH 布局驱动，
       // 主题令牌自动适配；退出插件生命周期时由 slots 机制统一回收）
@@ -91,6 +170,19 @@ window.__ModuleLoader__.load({
         setSwitchView('dialog')
       }
       const send = (type, payload) => { frame.contentWindow?.postMessage({ source: 'dsh-canvas', type, ...payload }, location.origin) }
+      // 外部视图槽（2026-09-10）：本包不认识任何具体视图，只把**页面级注册表**
+      // `window.__DSH_CANVAS_VIEW_ITEMS__`（第三方插件写进去的 `{ id, label }`）转给画布页面，
+      // 由画布在它自己的 `.view-switch`（「对话 / 会话布」）旁边多渲染一个按钮；
+      // 点击后画布广播 `canvas:view`，由**注册方自己**监听并处理 —— 本包不解释 id 的语义，
+      // 也不回调任何人（所以 canvas 与 ssh 之间没有代码耦合，只有一份页面级约定）。
+      const externalViews = () => {
+        const items = window.__DSH_CANVAS_VIEW_ITEMS__
+        if (!Array.isArray(items)) return []
+        return items
+          .filter(item => item !== null && typeof item === 'object' && typeof item.id === 'string' && typeof item.label === 'string')
+          .map(item => ({ id: item.id, label: item.label }))
+      }
+      const publishExternalViews = () => send('canvas:views', { items: externalViews() })
       let syncQueued = false
       let knownSessionIds = new Set()
       const liveUnsubscribers = new Map()
@@ -185,12 +277,14 @@ window.__ModuleLoader__.load({
         overlay.classList.add('is-opening')
         window.requestAnimationFrame(() => {
           send('canvas:map-opened')
+          publishExternalViews()
           syncCurrentSession()
         })
         mapOpenFallback = window.setTimeout(showMapOverlay, 300)
       }
       const onFrameLoad = () => {
         syncCurrentSession()
+        publishExternalViews()
         if (mapOpening) send('canvas:map-opened')
       }
       const onMessage = event => {
@@ -282,12 +376,15 @@ window.__ModuleLoader__.load({
       frame.addEventListener('load', onFrameLoad)
       window.addEventListener('message', onMessage)
       window.addEventListener('keydown', onKeyDown)
+      // 注册表变化（插件装/卸外部视图项）时就地下发一次，不等下一次开浮层。
+      window.addEventListener('dsh-canvas:view-items', publishExternalViews)
       ctx.effect(() => () => {
         // 复位幂等守卫：允许后续（HMR 完整回收后/插件重装）重新挂载一份
         window.__DSH_CANVAS_BOOTED__ = false
         frame.removeEventListener('load', onFrameLoad)
         window.removeEventListener('message', onMessage)
         window.removeEventListener('keydown', onKeyDown)
+        window.removeEventListener('dsh-canvas:view-items', publishExternalViews)
         themeObserver?.disconnect()
         unsubscribeSessions()
         unsubscribeWorkspaces()

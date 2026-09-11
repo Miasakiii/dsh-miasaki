@@ -2,6 +2,53 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-10
+
+- **外部视图槽：让别的插件把入口长在画布页面自己的「对话 / 会话布」旁边（同日新增）**：
+  - **起因**：SSH 线希望它的入口出现在**画布页面内部**那组切换按钮旁边。那组按钮属于画布自己的 iframe 文档（`/canvas/` 的 `topbar > .view-switch`），宿主 DOM 碰不到 —— 对方曾在浮层之上补整条工具条，被用户否掉（「只是让加一个 SSH 按钮，为什么会多出一整个上栏」）。
+  - **做法**（通用，不含任何具体视图知识）：① 插件把 `{ id, label }` 写进**页面级注册表** `window.__DSH_CANVAS_VIEW_ITEMS__` 并派发 `dsh-canvas:view-items`；② 本线 client 半把它转成 `canvas:views` 下发给画布页面（**iframe `load` / 浮层打开 / 注册表变化**三处都发，覆盖"插件晚于画布加载"）；③ 画布页面在 `.view-switch` 里多渲染一个按钮，点击广播 `canvas:view`；④ **注册方自己**监听那条广播去切视图 —— 本包不解释 id 的语义、也不回调任何人，所以两线之间没有代码耦合，只有一份页面级约定。
+  - **纪律**：只校验形状（`id` / `label` 都是字符串），不校验具体 id；收到 `canvas:views` 时守 `canReplaceView()` 再重渲染，不打断正在输入的用户；`app.js` / `client.js` 里**不得出现任何具体视图名**（连 "SSH" 字样都被测试锁死）。
+  - **测试**：新增 `test/external-views.test.js`（3 例）—— 下发时机与解绑、画布页面的渲染与广播接线、跨线红线（无具体视图名 / 不引用别的线）。
+  - 触摸点：`client.js`、`app.js`、`test/external-views.test.js`（新）、本文件、README。
+  - **实机复验点**：装了 SSH 插件时，画布页面「对话 / 会话布」旁多一个「SSH」按钮，点它关闭浮层并切到 SSH 视图；卸载 SSH 后该按钮消失（注册表变化即下发）。
+
+- **会话头部窄宽度自适应（展开右栏不再压叠）**：用户报告「展开右侧边栏会挤压」，截图显示「对话 / 会话布」切换器被右侧图标按钮压住、会话标题消失。归因、宽度预算与方案对比见 [设计](2026-09-10-conversation-header-crowding-fix.md)：
+  - **根因**（读官方 `dsh-client-ui-conversation` 的真实 CSS 得出）：会话头一行里 `headerUtilities` / `headerCorner` 是 `flex:none`（不收缩），`titleCluster` 是 `flex:1; min-width:0`（可被一路压到 0），而它内部的 `headerActions` 又是 `flex:none` —— 中栏被右栏推窄到放不下时，actions 无处安放、**溢出**并与同样从 x≈0 起画的 utilities 重叠（DOM 靠后者在上层）。标题被 `crumbs` 的 `overflow:hidden` 裁没、`…` 仍稳在最右，都是同一机制的自证。画布切换器（≈116px）是 actions 里最宽的一项，让坏点显著提前；固定项合计 ≈411px，即中栏窄于 ≈410px 必然重叠。
+  - **现场佐证**：用户把窗口拉宽后重叠消失、标题回归 —— 与「宽度不足」的归因一致。
+  - **修复（本线）**：`ViewSwitch` 增加运行时自适应。`ResizeObserver` 观察 **`node.closest('header')`**（**不能观察自身**：自身是 `flex:none`，被挤压时宽度不变，观察自身检测不到溢出），判据是「自身左边界到 header 内容区左边的距离 = 留给标题的余量」，余量不足时降级为**图标形态**（≈116px → ≈64px）；图标形态下按钮无可见文字，`aria-label` / `title` 是唯一可访问名，必须保留。
+  - **滞回**：进入 120px / 退出 200px。两种形态宽度差 ≈52px，滞回带必须大于它，否则形态切换自身改变的占宽会把判定推回去、来回抖动 —— 这条不变量已写成单测断言（`assert.ok(RELEASE - ENTER > 52)`）。
+  - **测试**：新增 `test/header-adaptive.test.js`（4 项）。按本线既有手法从源码锚点截取 `compactDecision` 与两个阈值后 `new Function` 求值，覆盖判定边界、滞回、观察对象与卸载清理、紧凑形态接线与 CSS；另有一条反向断言 `doesNotMatch(/observer\.observe\(node\)/)` 防止改回观察自身。锚点改名或挪位会**响亮失败**。
+  - **平台层兜底（desktop 线，同日）**：新增本体补丁 [`dsh-client-ui-conversation`](../dsh-miasaki-desktop/patches/dsh-client-ui-conversation/README.md) —— 把 `headerActions` 从 `flex:none` 改为 `flex:0 1 auto; min-width:0; overflow-x:auto`（+ 滚动条隐藏），溢出从「压叠」退化为「可横向滚动」。**canvas 侧保住可用性，补丁保证任何插件 / 任何窄窗口都不会再出现不可用状态**；两者独立，任一单独生效都有明显改善。
+  - **验证**：`node --check client.js` 通过；canvas 单测 4 项全绿；`verify-all.mjs canvas` 与 `desktop`（含新补丁 verify）全绿。**实机复验点**：右栏展开时切换器收成图标、标题至少可见；拉宽后自动恢复完整形态。
+  - 触摸点：`client.js`（本线为 link 安装，client bundle 在 host 启动时载入内存 —— **重启 `dsh web` 生效**）、`test/header-adaptive.test.js`（新）、本文件、README。
+
+- **切换器把会话头撑高、连带整行下移 4px（同日修复）**：用户报告「展开右侧边栏是对齐的，收起时不在同一水平线」。对用户两张截图逐控件做像素切分（连通列分组 + y 范围）量出垂直中心：展开态**全部**控件 19.5~20.0（齐）；收起态会话头控件 21.5~22.0 而桌面窗控 17.5~18.0 —— **差 4px**。
+  - **根因**：`.dsh-canvas-switch` = `padding:3px×2 + border:1px×2 + 按钮 28px` = **36px**，而官方 `titleRow` 的 `min-height` 只有 30px —— 被撑到 36px 后，行内**所有**控件（含官方 open-in-app、日志菜单、右栏展开按钮）居中后整体下移 (36−28)/2 = 4px；桌面窗控是 `position:fixed`，不跟着动，于是分成两组。
+  - **修复**：`padding:3px` → `padding:0 3px`（并补 `align-items:center`），总高 36 → **30px**，正好等于 titleRow 的 min-height，不再撑高。视觉上只是去掉胶囊上下各 3px 的内边距，内部 28px 按钮不变。
+  - **防回归**：`test/header-adaptive.test.js` 增一条契约断言 —— 胶囊上下 padding 必须为 0（`assert.doesNotMatch(/padding:3px/)`）。「控件总高 ≤ 30px」是与会话头行高绑定的**隐式契约**，靠注释守不住：它一旦被破坏，受害的是**同一行里别人的控件**（官方那三个也会一起偏）。
+  - **余下 1px**（官方 titleRow 中心 25px vs 窗控/dockkit chrome 的 24px）是官方两处的固有差，由 desktop 线在常驻 CSS 里补 `top:-1px`，本线不介入。
+  - **教训**：插件往官方行内塞控件时，**高度**和宽度一样会破坏宿主布局 —— 宽度不够是压叠（同日另一条），高度超标是把整行撑高、把别人的控件一起顶偏。
+
+- **余下 1px 基线差：改由页面级注入补齐（同日再修）**：上一处修复后实测会话头控件仍比右栏 chrome / 桌面窗控低 **1px**（新截图逐控件切分：左 `[📁⌄]` cy=**23.5**、`⋯` cy=**24.0**；右 `⊙` 22.5、`[ ]`/`□|` 23.0、窗控三键 23.0）。
+  - **性质**：这是**官方两处的固有差** —— 会话头 `titleRow`（`padding-top:10px + min-height:30px`，28px 控件居中）中心 **25px**；右栏 dockkit chrome（`10px + 28px`）与桌面壳窗控（`top:11px + 26px`）都是 **24px**。**它在纯浏览器里同样成立**（这张图的右侧并没有窗控做参照，一样差 1px），不是桌面壳专属。
+  - **落点选择**：desktop 线 `themes/src/03-switcher.js` 已有同源规则，但那条走**桌面壳主题注入**，而 `src-tauri/src/main.rs` 用 `include_str!("../injected/theme-init.js")` **编译期内嵌** —— 改了必须**重建壳**才生效（实测证据：壳 21:01 启动、注入产物 21:41 重建，规则没进去）。本线改为**页面级注入**：支持 client-hmr 热更，**刷新页面即生效**。
+  - **实现**：注入样式追加 `#root [class*="_headerActions"],#root [class*="_headerUtilities"],#root [class*="_headerCorner"]{position:relative;top:-1px}` —— `#root` 提权压过官方 CSS Module（对方注入更晚，同特异性会反超），`[class*="_xxx"]` 子串锚点对 hash 漂移稳健。只位移不改布局，不参与 flex 计算。
+  - **同源契约**：两处**值必须一致**，测试双向锁住（断言本线注入含该规则 + desktop 那条未被移除），两处注释互指。
+  - 另注：本线的 client 改动**不需要重启 `dsh web`** —— `dsh-client-modules` 的 client-hmr 每 500ms stat 一次 bundle，命中变化即经 SSE 推 rebuilt 帧。本次 4px 修复就是这样生效的（host 进程 21:01 启动、本线源码 21:40 才改，而实测已是修好后的 1px）。
+  - 触摸点：`client.js`、`test/header-adaptive.test.js`。
+
+- **展开右栏时让位安全区白空 144px（同日再修）**：用户指出「左边的外部按钮和三点扩展按钮位置离展开的右侧边栏太远」。像素实测：`⋯` 右边界 x=**89**、分栏线 x=**233** ⇒ **空 144px**，正是桌面壳让位规则 `padding-right:128px` 加官方 `padding-right:28px` 的残留。
+  - **根因**：desktop 线的让位规则（给桌面壳窗控留安全区）是**无条件**生效的。但官方右栏 panel 用 `transform:translate(100%)` 移出屏幕、**并未卸载**，所以 `data-sidebar-right-open`（与 `data-sidebar-right-panel="push"` 同元素、条件挂载）才是可靠的开合判据；**推挤展开时**中栏右边界已退到分栏线内、窗控压的是**右栏**头部，会话头再留 128px 就是白空。
+  - **修复（第一次尝试失效，第二次才对）**：
+    - ❌ **门控方案（失效）**：给让位规则加 `:not(:has([data-sidebar-right-panel="push"][data-sidebar-right-open]))` 门控，指望"展开态不覆盖 → 官方 28px 自然生效"。**实测无效** —— 用户回报「还是这样」，像素复测空隙仍是 **144px**（`⋯` 右边界 105、分栏线 249）。原因：desktop 的注入脚本是 `include_str!` **编译期内嵌**进壳二进制的，**已发布的那份无条件 128px 规则仍在页面上生效**；门控版在展开态"不匹配"，等于**没人去覆盖它**。
+    - ✅ **覆写方案（有效）**：主动写一条特异性更高的规则撤回让位 —— `#root:has([data-sidebar-right-panel="push"][data-sidebar-right-open]) header:has([data-conversation-header-corner]){padding-right:28px}`，`#root:has([a][b]) header:has([c])` = (1,3,1) > 原规则 (1,1,1)。28px 即官方 header 的 padding-right（官方若改需同步），两条通道**逐字一致**，测试用同一条正则同时断言两处。
+  - **教训**：**撤销一条已经"发布"出去的 CSS 规则，不能靠改原规则** —— 宿主的注入产物可能是编译期内嵌的，运行中那份不会跟着源文件变。要么覆写（特异性取胜），要么请用户重建宿主。同一个坑已记入 desktop 线 CHANGELOG。
+  - **已知限制**：浮窗模式（`data-sidebar-right-float-host`）下 panel 仍带 `push`+`open`，会被判为"已展开"而撤销让位 —— 浮窗不占布局、中栏满宽，严格说仍应让位。浮窗是低频用法，留待需要时用 float-host 判据补。
+  - **顺带确认上一轮已生效**：本次截图实测左侧 `[📁⌄]` cy=21.5、`⋯` cy=22.0，右侧 `⊙` 21.5、`[ ]`/`□|` 22.0、窗控三键 22.0 —— **全部落在 21.5~22.0**，1px 基线补偿已通过 client-hmr 生效。
+  - 触摸点：`client.js`、`test/header-adaptive.test.js`；desktop 线 `themes/src/03-switcher.js`（同源门控，重建壳后一致）。
+
+  > 历史脉络：2026-09-06 那次「叠压」是 **DOM 注入位置**不可控（注入 `.headerActions` 被重渲染挤掉），改走官方插槽注册后关闭；这一次是**官方插槽内部**在窄宽度下的溢出压叠 —— 层次更深，插件侧只能在自己控件的宽度上让路，根因修复需要本体补丁。
+
 ## 2026-09-07
 
 - **合并草稿失效标记（mergeStale，版本升至 `0.5.0-miasaki.5`，异常恢复）**：此前 `removeThread` 只清理 `absorbedBy` 反向引用，无人清理 `mergeFrom.sources` 正向引用——源线被删/会话在 DSH 侧消失后，草稿仍留在画布上、看起来可执行，直到点「执行合并」才在 `prepareMergeMessage` 里失败（晚失败，且用户已承诺手势）。修复四层：
