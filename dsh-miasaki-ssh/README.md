@@ -1,6 +1,6 @@
 # @miasaki/dsh-ssh
 
-DSH（DeepSeek Harness）web SSH 插件线：在**会话视图切换区**集成 SSH 入口，页面内交互式连接云服务器。
+DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切换胶囊**（与「对话 / 会话布」同一个胶囊、第三段「SSH」）集成入口，页面内交互式连接云服务器。
 
 - 全新自研（不 fork 上游），技术栈与 canvas / sidebar 同构；
 - 与 canvas、sidebar **零代码耦合**，仅共享 `dsh-miasaki-shared-docs/`；
@@ -8,13 +8,13 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话视图切换区**集成 
 
 ## 状态
 
-**M1 实现中，代码骨架已就绪**（2026-09-09）。存储层、运行时、host 路由与前端页面已完成并通过单测；待安装到 DSH web profile 后在浏览器验证真实连接。SPIKE S2 / S4 / S5 已实测通过。
+**M1 实现中，代码骨架已就绪**（2026-09-09）。存储层、运行时、host 路由与前端页面已完成并通过单测；待安装到 DSH web profile 后在浏览器验证真实连接。SPIKE S2 / S4 / S5 已实测通过。**2026-09-10 按用户反馈调整入口位置**：从官方 tab 栏（第二行，排在「会话用量」之后）迁到会话头第一行，与「对话 / 会话布」**合成为同一个胶囊**（三段：对话 \| 会话布 \| SSH）；并在**画布页面内部**那组「对话 / 会话布」旁也给出一个 SSH 按钮（走画布的外部视图槽）。
 
 设计要点速览（完整版见 [设计文档](design/2026-09-09-ssh-design.md)）：
 
 | 维度 | 决策 |
 |---|---|
-| 入口 | 注册 DSH 官方 `conversation.view` 插槽（id `ssh`，order 20）——会话 tab 栏出现「SSH」，与「对话 / 轨迹 / Token 监控」并列 |
+| 入口 | ① 会话头第一行的三段胶囊：注册官方 `conversation.session.header.actions` 槽（id `ssh-view-switch`，order 26），与 canvas 的「对话 / 会话布」**合成为同一个控件**（纯 CSS 覆盖，canvas 文件未改）；② **画布页面内部**那组「对话 / 会话布」旁的一个 SSH 按钮：走 canvas 提供的通用「外部视图槽」（页面级注册表 `window.__DSH_CANVAS_VIEW_ITEMS__` + `canvas:view` 广播，canvas 侧不认识 SSH）。页面本身由 `conversation.view`（id `ssh`，order 20）托管，该 tab 收起不再显示（2026-09-10 调整，见[设计文档 §5.5](design/2026-09-09-ssh-design.md)） |
 | 页面 | `/ssh/` iframe 内嵌在视图组件中（样式隔离；client bundle 无法 `require` 第三方包） |
 | SSH 实现 | **方案 A**：host 侧 `ssh2` + `ws`，前端 `@xterm/xterm` + `addon-fit` |
 | 终端桥 | `ctx.webServer.registerUpgrade('/ssh/ws')` —— DSH 官方 WebSocket 注册 API |
@@ -23,7 +23,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话视图切换区**集成 
 | 指纹 | known_hosts TOFU 首次确认 + 变更拒绝告警 |
 | 安全 | 三道浏览器围栏（Host / `sec-fetch-site` / Origin），**HTTP 与 WS upgrade 都过** |
 
-为什么不用 `header.actions` 手写按钮：DSH 已有官方视图 tab 机制，注册即得切换按钮、激活态、每会话记忆；canvas 手写 pill 的补丁史（幂等守卫 / 看门狗 / 叠压修复）不必重演。
+为什么页面仍走官方 `conversation.view`：注册即得页面宿主、激活态、每会话记忆与视图卸载语义（切走卸载 iframe、host 侧回放 scrollback），canvas 手写 pill 的补丁史（幂等守卫 / 重渲染看门狗 / 叠压修复）不必重演。入口按钮虽然落在第一行 actions 槽（位置诉求），**切换仍委托官方 tab 的 onClick** —— DSH 未对外暴露 View 切换 API（`selectView` 只在官方 header 组件的 inject face 里），委托点击是官方唯一通道，且「找不到 tab 就收手」：最坏退回「双入口」，不会没入口。
 
 ## 里程碑
 
@@ -55,10 +55,10 @@ dsh-miasaki-ssh/
 ├── lib/
 │   ├── store.js            # 纯数据层：连接库 / known_hosts / 三道围栏（可单测）
 │   └── runtime.js          # ssh2 运行时：TOFU / scrollback 环形缓冲 / WS 中继
-├── client.js               # client 半：conversation.view 注册 + iframe 视图
+├── client.js               # client 半：第一行入口按钮（actions 槽）+ conversation.view 注册 + iframe 视图
 ├── app.js                  # 前端（iframe 内）：xterm + 连接表单 + 连接列表
 ├── styles.css
-├── test/                   # 单测（store: 围栏/归一化/持久化 ↔ runtime: TOFU/错误分类 ↔ client: 工厂返回契约）
+├── test/                   # 单测（store: 围栏/归一化/持久化 ↔ runtime: TOFU/错误分类 ↔ client: 工厂返回契约 + 入口位置/切换通道/宽度判据）
 ├── design/
 │   ├── 2026-09-09-ssh-design.md
 │   └── CHANGELOG.md

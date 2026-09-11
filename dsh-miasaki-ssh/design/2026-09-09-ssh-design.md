@@ -227,6 +227,9 @@ dsh-miasaki-ssh/
 
 ### 5.1 注册 `conversation.view`
 
+> ⚠ 2026-09-10 调整：**页面**仍在此注册（下表实测数据全部继续有效），但**入口按钮**已迁到
+> 第一行 `conversation.session.header.actions` 槽，官方 tab 栏里那个 tab 被收起 —— 见 §5.5。
+
 ```js
 // client.js
 ctx.slots.inject('conversation.view', () => ctx.slots.register({
@@ -270,7 +273,9 @@ M1 处理：**接受该缺口**，用户开一个会话即可见。备用入口�
 ### 5.3 与 canvas 的关系
 
 - 两者零代码耦合，各自注册各自的视图 / 按钮；
-- canvas 保持现状（手写 pill 在第一行，SSH 在第二行 tab 栏），互不干扰；
+- ~~canvas 保持现状（手写 pill 在第一行，SSH 在第二行 tab 栏），互不干扰~~ → **2026-09-10 起**两者
+  都在第一行并排（canvas 胶囊 order 25，SSH 按钮 order 26），并在「会话布浮层开着时点 SSH」这一处
+  做单向避让（见 §5.5）；canvas 文件本身未做任何改动；
 - 若未来 canvas 迁移到 `conversation.view`，两者会在同一条 tab 栏里并列，无需改动 SSH。
 
 ### 5.4 视图切换会销毁 iframe（实测结论）
@@ -284,6 +289,155 @@ M1 处理：**接受该缺口**，用户开一个会话即可见。备用入口�
 - 因此 host 侧每个连接必须维护 **scrollback 环形缓冲**（建议保留最近 256KB 原始输出字节），attach 时先发 `replay` 再续流；
 - 全屏 TUI（vim / htop）回放原始字节可能出现画面错乱，行式 shell 输出回放效果良好；缓解手段：attach 后提示用户按 `Ctrl+L`，或（M2）在 host 侧维护最小屏幕快照；
 - 备选方案（M2 再评估）：把终端 iframe 常驻 `shell.overlay`，视图组件只切换显隐，从根上避免重建——代价是要自己处理浮层与 DSH 布局的让位（canvas 踩过叠压坑）。
+
+### 5.5 入口位置调整（2026-09-10，用户反馈）
+
+**反馈**：SSH 的入口按钮「应该和『对话 / 会话布』切换按钮在一起，而不是在会话用量后面」。
+
+**归因**（§2.2 已记录两套并行 UI）：canvas 的「对话 / 会话布」胶囊注册在
+`conversation.session.header.actions`（会话头**第一行**标题右侧，order 25）；SSH 走 `conversation.view`，
+被投影成官方 tab 栏的 tab，order 20 排在 token-monitor(15) 之后 —— 用户看到的正是**第二行**这个位置。
+
+**变更**：入口迁到第一行 actions 槽（`id: ssh-view-switch`，order 26，紧跟 canvas 的 25），
+渲染与 canvas 胶囊同款视觉的「SSH」按钮；`conversation.view` 注册**保持不变**（页面本身、host 侧保活、
+scrollback 回放全都不动），只是把官方 tab 栏里那一个 tab 收起（内联 `display:none`，卸载时复原）。
+
+**切换通道（能力边界，2026-09-10 源码核实）**：DSH **没有**对外暴露 View 切换 API ——
+`selectView` 只注入官方 `conversation.session.header` 组件（`dsh-client-ui-conversation/lib/client.js`
+16705–16713），而 `conversation.session.header.actions` 渲染时 owner props 是空对象 `{}`（同文件 15072）；
+客户端服务目录（Inspect `Service.listService`）里也没有 conversation 相关服务。官方唯一的切换路径就是
+tab 按钮自己的 onClick，因此本线**委托点击官方 tab 按钮**，并全程带守卫：
+
+| 情形 | 行为 |
+|---|---|
+| 找到 tab | `tab.click()` → 官方 `selectView('ssh')` → 激活视图、写入每会话偏好 |
+| 找不到 tab（官方结构变化 / 尚未渲染） | **什么都不做**（不抛错），也**不收起** tab —— 最坏退回「双入口」，而不是没入口 |
+
+**与 canvas 浮层的互斥**：「会话布」是 canvas 的全屏浮层（`position:fixed; inset:0; z-index:100`），
+它开着时切视图只会看到浮层。点「SSH」时先走 canvas 自己的「对话」按钮把它关掉（而不是直接改
+`overlay.hidden` —— 那样 canvas 胶囊的激活态会不同步）；canvas 不在场时选择器落空，跳过即可。
+
+**继承 canvas 的两条契约**（2026-09-10 那次拥挤修复的教训，同排控件共用一行就得守）：
+
+| 契约 | 取值 | 破坏后果 |
+|---|---|---|
+| 高度 | 胶囊总高 30px（`padding:0 3px` + 1px 边框×2 + 28px 按钮） | 撑高官方 `titleRow`（min-height:30px），同排**所有**控件整体位移 |
+| 宽度 | 完整形态 ≈56px；窄宽度降级为 28px 图标（判据与 canvas 同款：观察 `header` + `leftGap` 阈值 120/200 滞回） | 中栏窄时 actions 溢出压叠 utilities |
+
+**二次优化：合成为同一个控件（同日，用户第二次反馈「两个同款胶囊并排、中间一道缝，还是两组控件」）**
+
+改为**纯 CSS 合体** —— canvas 文件一行未改，跨线只发生在选择器层：
+
+| 规则 | 作用 |
+|---|---|
+| `.dsh-canvas-switch:has(+ .dsh-ssh-switch){border-right:0; 右上/右下圆角 0}` | 把 canvas 胶囊的右端打开 |
+| `.dsh-canvas-switch + .dsh-ssh-switch{margin-left:-8px; 左上/左下圆角 0}` | 负 margin 吃掉官方 `headerActions` 的 `gap:8px`；本段保留自己的左边框 ⇒ 中间那条竖线就是分段线 |
+| `.dsh-canvas-switch:has(+ .dsh-ssh-switch button.active) button[aria-label="对话"].active:not(:hover)` | 同一控件里不同时亮两段：停在 SSH 时「对话」段不再高亮（它此时的语义是「DSH 原生会话视图」） |
+| `body:has(.dsh-canvas-overlay:not([hidden])) .dsh-ssh-switch button.active:not(:hover)` | 「会话布」全屏浮层盖在上面时本段不亮，浮层一关立刻恢复 |
+
+**行为补齐**：canvas 的「对话」段只关它自己的浮层、管不了 DSH 的 View —— 停在 SSH 时点它屏幕上什么都不会变，
+合成一个控件之后那就是「点了没反应」。故本线捕获它的 click：若当前停在 SSH，顺带委托切回默认视图
+（官方 tab 栏里 order 最小的 view，`chat` order 0 恒为第一个）。**注意 `dismissCanvasOverlay()` 自己也会点这个按钮**，
+因此加了 `dismissing` 标志隔离那一下 —— 否则点「SSH」会先切 chat 再切 ssh，视图连换两次、iframe 卸载重建两次。
+
+**退化方向**：canvas 不在场、或未来有别的插件插在两者之间 ⇒ `+` / `:has()` 不匹配 ⇒ 本段退回完整胶囊
+（又变回两个胶囊），功能与安全都不受影响。
+
+**三次优化：会话布里也要留得住切换按钮（同日，用户第三次反馈「会话布页面没有按钮」）**
+
+canvas 的浮层是 `position:fixed; inset:0; z-index:100` —— 它一打开就把会话头连同这个切换器一起盖住，
+用户在画布上没有任何切换入口。
+
+**没有去跟层叠上下文斗**：要让 header 里的控件压过浮层，需要 header 到根之间**每个**祖先都没有创建
+层叠上下文（`transform` / `filter` / `isolation` / `z-index` / `contain` …），而这一点离线核不实 ——
+只能确认 `#root` 自身没有（`html,body,#root{height:100%;margin:0}`）。赌错的表现是「有时生效、
+有时不生效」，比不做更糟。
+
+改成**让浮层从会话头下沿开始**：`body .dsh-canvas-overlay{top:var(--dsh-ssh-header-h,76px)}` ——
+切换器留在原位、任何视图里都在，画布自适应（`/canvas/` 的 iframe 是 100% 高）。三个细节：
+
+| 细节 | 取值 / 理由 |
+|---|---|
+| 高度来源 | `measure()` 实测 `header.getBoundingClientRect().height` 写进变量 —— 官方 header 是 `min-height` 而非固定高，主题 / 字号 / 语言都会改它 |
+| 兜底 | `76px` = 官方 header 的 `min-height`；组件未挂载（空白会话 header 隐藏）时也不会算错 |
+| 特异性 | `body` 前缀把选择器抬到 (0,1,1) > canvas 的 (0,1,0)：否则谁先 apply 谁被后注入的覆盖，注入顺序一变就失效 |
+
+代价：会话布不再占满整个视口，顶部让出会话头的高度。
+
+**四次修正：露出的整条页面顶要盖住（同日，用户第四次反馈「怎么搞成这样了」+ 截图）**
+
+只让位不够：浮层让出的那 76px 露出的是**整条页面顶** —— 左侧栏的品牌行 / 工作区行也在里面，
+于是它跟画布自己的标题栏叠成两层，看着像两个应用摞在一起。
+
+修正：在浮层之上补一条**本线自己的工具条**把它盖住 —— `.dsh-ssh-canvas-bar`
+（`position:fixed; top:0; left:0; right:0; height:var(--dsh-ssh-header-h,76px); z-index:101`，
+不透明底色 + 底边框，右端放与 header 里同款、同行为的三段胶囊）。它挂在 `document.body` 下，
+与浮层**同处 body 的层叠上下文**，`101 > 100` 必然在上 —— 这一条不依赖任何祖先链，
+与「不去跟层叠上下文斗」是同一个原则。
+
+会话布视图下的三层：
+
+| 层 | 内容 |
+|---|---|
+| 0 – 76px | 本线工具条（三段胶囊靠右，左端留空背景） |
+| 76px 以下 | canvas 浮层 —— 它自己的标题栏、工具组、窗控完整保留 |
+| 再往下 | 被浮层盖住的 DSH 会话区（不可见） |
+
+三段行为**全部复用既有通道**（「对话」= 委托 canvas 的按钮关浮层、「SSH」= 委托官方 tab 切视图），
+所以 header 与工具条是**同一套逻辑的两处 UI**，没有第二份状态。用原生 DOM 而非 React：client 半
+只 `require` 得到 react、拿不到 react-dom，没有第二个挂载点。浮层可能晚于本插件 apply 才被创建，
+所以先盯 `document.body` 的 childList，拿到浮层后再盯它的 `hidden` 属性。
+
+**五次修正：工具条上胶囊的位置不写死（同日，用户第五次反馈的截图：胶囊被桌面壳窗控 − □ × 压住）**
+
+原先工具条用 `padding:0 28px`（照抄官方 header 的 padding-right），但桌面壳会给会话头**额外的窗控让位**
+（desktop 线主题注入给 header 的 128px 安全区），所以会话头里的胶囊本来就比 28px 靠左得多，
+工具条这颗却贴着右边 —— 正好撞进窗控里。
+
+修正：不猜、不抄常量，直接**跟随会话头里那颗胶囊的实测位置** —— `measure()` 每轮把
+`视口宽 − 会话头内胶囊.right` 写进 `--dsh-ssh-bar-right`，工具条用它当右内边距。于是三个环境
+（纯浏览器 / 桌面壳 / 右栏推挤展开）以及主题、字号、语言变化全都自动跟随，两处胶囊还逐像素对齐。
+
+**六次修正（同日第六次反馈：「只是让加一个 SSH 按钮，为什么会多出一整个上栏」）—— 前三次到五次的产物全部撤掉**
+
+**需求被重新校准**：用户从第三次起说的「会话布页面没有按钮」，指的是**画布页面内部那组
+「对话 / 会话布」按钮旁边缺一个 SSH**，不是"页面上没有任何入口"。我在浮层之上补整条工具条
+（四、五次修正）方向就错了 —— 用户要的是**一个按钮**，不是一条栏。三次到五次的所有产物
+（浮层让位、`--dsh-ssh-header-h`、`--dsh-ssh-bar-right`、整条 `.dsh-ssh-canvas-bar`）**全部移除**，
+画布浮层恢复全屏原样。
+
+**正确做法：画布提供一个通用的「外部视图槽」**。那组按钮在画布自己的 iframe 文档里
+（`/canvas/` 的 `topbar > .view-switch`），宿主 DOM 碰不到，所以必须由画布那侧渲染：
+
+```
+插件                        client 半（宿主）                 画布页面（iframe）
+ │ 写入 __DSH_CANVAS_VIEW_ITEMS__ + 派发 dsh-canvas:view-items
+ │──────────────────────────▶│ 转成 canvas:views（iframe 就绪 / 浮层打开 / 注册表变化）
+ │                            │─────────────────────────────────▶│ 在 .view-switch 里多渲染一个按钮
+ │                            │                                  │ 点击 → post canvas:view
+ │◀───────────────────────────┴──────────────────────────────────┘（同源广播，注册方自己监听）
+ │ 关浮层 + 切视图
+```
+
+要点：
+
+| 项 | 取值 / 理由 |
+|---|---|
+| 耦合方向 | canvas **不认识**任何具体视图（源码里连 "SSH" 字样都不该有，测试锁死）；插件知道"画布有外部视图槽"这一份页面级约定 |
+| 注册形状 | `{ id, label }`，两侧都只校验形状（字符串），不校验具体 id |
+| 下发时机 | iframe `load`、浮层打开、注册表变化 —— 三处都发，覆盖"插件晚于画布加载" |
+| 点击落点 | 画布广播 `canvas:view`，**注册方**自己监听取用（canvas 不回调任何人，故不需要互相持引用） |
+| 重渲染纪律 | 画布收到 `canvas:views` 时守 `canReplaceView()`，不打断正在输入的用户 |
+
+**未采纳的替代方案**：
+
+| 方案 | 否决理由 |
+|---|---|
+| 在浮层之上补整条工具条 / 让浮层让位（三～五次修正的做法） | 用户明确否掉：「为什么会多出一整个上栏」—— 要的是一个按钮，不是一条栏 |
+| 宿主 DOM 里覆盖一个按钮去对齐画布内部的按钮位置 | 那组按钮在 iframe 文档内，宿主读不到它的位置，只能猜；画布布局/缩放一变就错位 |
+| 让 canvas 胶囊容纳「SSH」项（三选一） | 同上一条：那是宿主 DOM 的胶囊（canvas 私有的浮层开关），与 iframe 内那组不是同一处 |
+| 改 DSH 本体把 tab 栏搬到第一行 | 本体补丁升级后需重打；且第一行宽度预算（canvas 实测固定项 ≈411px）放不下 4 个 tab |
+| 直接写 per-session View 偏好（`localStorage: dsh.conversation.<sessionId>`） | store 已在内存物化，写盘只在「会话首次绑定」时被读取；绕过 store 会造成状态不一致 |
 
 ---
 
