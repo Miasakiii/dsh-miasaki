@@ -34,9 +34,15 @@ function capture() {
 }
 
 // React stub：createElement 保留 children 便于断言；hooks 惰性化，组件可被调用一次。
+// stateQueue 非空时 useState 按序弹出初值（渲染冒烟测试用它把组件驱动到"配置已加载"
+// 的完整渲染路径——实机空白面板事故发生在该路径，state=null 路径走不到）。
 const react = {
+  stateQueue: null,
   createElement: (type, props, ...children) => ({ type, props, children }),
-  useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
+  useState(initial) {
+    if (this.stateQueue !== null && this.stateQueue.length > 0) return [this.stateQueue.shift(), () => {}]
+    return [typeof initial === 'function' ? initial() : initial, () => {}]
+  },
   useEffect: () => {},
 }
 const requireStub = name => {
@@ -119,4 +125,52 @@ test('与 Host 的通信走同源 JSON 路由，不用动态插件的 host.call'
   const code = source.slice(source.indexOf('window.__ModuleLoader__.load('))
   assert.match(code, /const API = '\/appearance\/api'/)
   assert.doesNotMatch(code, /host\.call/)
+})
+
+test('面板组件渲染冒烟：view 调用不抛错且产出元素（2026-09-12 实机空白面板的回归闸门）', () => {
+  // 实机事故：reactElementWallpaperPicker（factory 作用域）引用了组件内 useState 的
+  // `wallpapers` → 渲染期 ReferenceError → 整个外观面板空白。注册期契约测试抓不到
+  // （slots.inject 的回调不执行），必须真正调用组件函数。
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  assert.equal(typeof view, 'function')
+  const element = view()
+  assert.notEqual(element, null, '组件必须产出元素（崩了就是整个面板空白）')
+  assert.equal(typeof element, 'object')
+})
+
+test('面板渲染冒烟：state 就绪（含 v2 壁纸字段）时不抛错', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  // 把六个 useState 按序注入"配置已加载"形态（state / contract / themeFacts / error /
+  // busy / wallpapers）——组件会走进壁纸区块与三个 picker 的完整渲染路径。实机空白面板
+  // 的 ReferenceError（factory 作用域引用组件内 state）只有这条路径能抓到。
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'zafkiel', scheme: 'dark', accent: '', fontSize: 14 },
+        wallpaper: {
+          source: 'builtin:dusk', light: '', dark: '', blur: 0, scrim: 20,
+          fit: 'cover', focus: 'center', glass: 'frost', vignette: 0,
+          surface: { sidebar: 75, conversation: 70, composer: 80, overlay: 90 },
+        },
+        motion: { enabled: false, preset: 'fluid', scale: 1 },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 3,
+      persistent: true,
+    },
+    null, null, null, false, null,
+  ]
+  try {
+    const element = view()
+    assert.notEqual(element, null)
+  } finally {
+    react.stateQueue = null
+  }
 })

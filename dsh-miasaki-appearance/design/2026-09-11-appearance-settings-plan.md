@@ -488,6 +488,13 @@ settings 文档 ──▶ host index.js (ctx.settings.register) ──┬─▶ 
 | **皮肤层** | `overrideTokens(source, skin.tokens)` | 整套配色（刻刻帝/狂狂帝/纯净），值为 `{light, dark}` 双套 | 与插件同生共死 |
 | **参数层** | `overrideTokens(source, paramTokens)` | 壁纸遮罩、表面不透明度、强调色派生链、玻璃 | 改配置即重设 |
 
+> ⚠️ **2026-09-12 修正（M2 设计）**：上表机制不变，但 `skin.tokens` 的**内容**不是 73 个
+> `--dsw-static-*`，而是 **alias 层覆盖表**（A 类 67 个自动派生 + 少量显式）。
+> 原因是 `overrideTokens` 只能写 `body` inline style，而官方 alias 在 `:root`(html) 上已解析完成，
+> body 覆盖 static 无法回溯。另：static 色阶是明度中立的调色板（73 个只定义在 `:root` 一处），
+> **一套色阶天然服务两种明暗**，无需为皮肤另画次阵营。
+> 详见 [M2 设计](2026-09-12-appearance-m2-design.md) §1–§2。
+
 **为什么合成一层**：`overrideTokens` 一个 source 一层，同 source 再调=**替换整层**。
 所以皮肤与参数用**两个 source**（`@miasaki/dsh-appearance/skin` 与 `…/params`），
 互不踩踏、可分别回收。「纯净」= skin 层设为空（等价于移除）。
@@ -604,7 +611,7 @@ settings 文档 ──▶ host index.js (ctx.settings.register) ──┬─▶ 
 | # | 问题 | 为什么重要 | 状态 |
 |---|---|---|---|
 | 1 | 官方三立方是否读注册表 | 决定皮肤走 register 还是 overrideTokens | ✅ **已确证**：硬编码 `CUBES`，不读注册表 → 走 overrideTokens |
-| 2 | **`overrideTokens` 能否覆盖 `--dsw-static-*` 色阶** | **直接决定 D3 的工作量与可行性** | ✅ **源码已确证**（`dsh-client-ui-theme/lib/client.js:1364-1442`）：`validateOverrides` **只校验值的形状**（必须是 `{light,dark}` 字符串对，裸字符串会抛教学设计式错误），**对 token 名零白名单**；`composeActive` 按 `active.colorScheme` 取值合成；`ThemePresenter.apply`（`dsh-client-ui-layout/lib/client.js:466-481`）把每个 token 写成 `body.style.setProperty(name, value)` —— **inline style 压过 `body{--dsw-static-…}` 样式表**。→ **可覆盖，D3 成立**。⏳ 运行期实测进行中（探针 `probe-1`） |
+| 2 | **`overrideTokens` 能否覆盖 `--dsw-static-*` 色阶** | **直接决定 D3 的工作量与可行性** | ✅ **源码已确证**（`dsh-client-ui-theme/lib/client.js:1364-1442`）：`validateOverrides` **只校验值的形状**（必须是 `{light,dark}` 字符串对，裸字符串会抛教学设计式错误），**对 token 名零白名单**；`composeActive` 按 `active.colorScheme` 取值合成；`ThemePresenter.apply`（`dsh-client-ui-layout/lib/client.js:466-481`）把每个 token 写成 `body.style.setProperty(name, value)` —— **inline style 压过 `body{--dsw-static-…}` 样式表**。→ **可覆盖，D3 成立**。⏳ 运行期实测进行中（探针 `probe-1`）<br>⚠️ **2026-09-12 M2 设计修正**：「可覆盖」成立，但**覆盖 static 达不到换肤效果**——官方 alias 定义在 `:root`(html)，其 `var(--dsw-static-*)` 在 html 上已解析为字面色再继承，body 覆盖 static 无法回溯。→ **皮肤须下沉到 alias 层**，见 [M2 设计](2026-09-12-appearance-m2-design.md) §1.2 |
 | 3 | 0.1.5 是否仍要求 settings 命名空间白名单 | 决定是否需要打补丁 | ✅ **双重确证**：源码层面 `settingsController.describe()` 全量枚举无过滤；**实测**（本机探针）`settings.describe()` 返回 **15 个命名空间**，第三方 `browser-playwright` / `web-search-deepseek` / `llm-pi-ai` 与官方并列 → **零白名单，零补丁** |
 | 4 | `overrideTokens` 与我们的两个 source 的叠加顺序 | 决定皮肤层与参数层谁赢 | ✅ **源码已确证**：`composeActive` 按 `layer.seq` 升序合成、**后者赢 per-token**；同 source 再调 = 替换整层并**重新置顶**（旧 disposer 变 no-op）。→ 先注册 skin、后注册 params，则 **params 优先** |
 | 5 | client 半注入 `ctx.theme` / `ctx.settingsScope` 的写法与缺失时的降级 | 决定首版骨架 | ✅ **实测通过**：`ctx.get('settingsScope')` 可用，`bind({ namespace })` 返回 scope 对象，**读接口是 `getSnapshot()`** → `{ status:'ready', value, base, user, revision, writable:true, mode:'host' }`；scope 实例自有属性：`ctx, spec, mirror, persistence, schema, store, tail, writeGeneration, disposed, unsubscribe, pendingRevision`（`set`/`unset` 在原型上，首日实施时确认）。`theme` 同样可用（§9-2 实测） |

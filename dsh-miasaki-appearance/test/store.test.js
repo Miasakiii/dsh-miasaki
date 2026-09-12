@@ -34,7 +34,7 @@ test('save → load：往返一致且磁盘格式可读', async () => {
     const raw = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
     assert.equal(raw.enabled, true)
     assert.equal(raw.theme.skin, 'zafkiel')
-    assert.equal(raw.version, 1)
+    assert.equal(raw.version, 2) // M2 S5：CONFIG_VERSION v1 → v2
 
     assert.deepEqual(await store.load(), saved)
   })

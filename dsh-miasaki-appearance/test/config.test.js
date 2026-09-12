@@ -159,3 +159,138 @@ test('evaluateContract：探针缺失时不抛异常（只当作全缺）', () =
   assert.equal(verdict.ok, false)
   assert.ok(verdict.issues.length > 0)
 })
+
+// ---------------------------------------------------------------------------
+// M2 S4：buildBootStyle（皮肤首帧防闪色）与 skin-token-miss 契约
+const bbs = buildBootStyle
+const { buildSurfaceTokens } = await import('../lib/config.js')
+
+test('buildBootStyle：pure / 关闭 / 无表 → 空串（零影响硬契约）', () => {
+  const tokens = { '--dsw-static-neutral-bluish-950': { light: '#0c0b11', dark: '#0c0b11' } }
+  assert.equal(bbs({ enabled: true, theme: { skin: 'pure' } }, tokens), '')
+  assert.equal(bbs({ enabled: false, theme: { skin: 'zafkiel' } }, tokens), '')
+  assert.equal(bbs({ enabled: true, theme: { skin: 'zafkiel' } }, null), '')
+})
+
+test('buildBootStyle：非 pure 产出双段属性选择器 CSS，值来自 token 表', () => {
+  const tokens = {
+    '--dsw-static-neutral-bluish-950': { light: '#0c0b11', dark: '#0c0b11' },
+    '--dsw-alias-bg-base': { light: 'rgba(12, 11, 17, .8)', dark: 'rgba(12, 11, 17, .8)' },
+  }
+  const css = bbs({ enabled: true, theme: { skin: 'zafkiel' } }, tokens)
+  assert.match(css, /html\[data-mia-skin="zafkiel"\] body \{\n {2}--dsw-alias-bg-base: rgba\(12, 11, 17, \.8\);\n {2}--dsw-static-neutral-bluish-950: #0c0b11;\n\}/)
+  assert.match(css, /html\[data-mia-skin="zafkiel"\] body\[data-ds-dark-theme\] \{[\s\S]+#0c0b11/)
+  // 键按字典序稳定输出（可复算纪律）
+  assert.ok(css.indexOf('--dsw-alias-bg-base') < css.indexOf('--dsw-static-neutral-bluish-950'))
+})
+
+test('evaluateContract：skinSpot 全符 → 不告警；任一不符 → skin-token-miss 黄条', () => {
+  const ok = evaluateContract({
+    services: { theme: true, slots: true },
+    themeMethods: { getTheme: true, setTheme: true, setFontSize: true, overrideTokens: true },
+    anchors: { main: true },
+    tokens: { aliasBgBase: true, staticDeepseek500: true },
+    skinSpot: [{ name: '--dsw-static-neutral-bluish-950', expected: '#0c0b11', actual: '#0c0b11' }],
+  })
+  assert.equal(ok.ok, true)
+  const miss = evaluateContract({
+    services: { theme: true, slots: true },
+    themeMethods: { getTheme: true, setTheme: true, setFontSize: true, overrideTokens: true },
+    anchors: { main: true },
+    tokens: { aliasBgBase: true, staticDeepseek500: true },
+    skinSpot: [{ name: '--dsw-alias-bg-base', expected: 'rgba(12, 11, 17, .8)', actual: '#151517' }],
+  })
+  assert.equal(miss.ok, false)
+  assert.equal(miss.issues.some(i => i.code === 'skin-token-miss'), true)
+})
+
+// ---------------------------------------------------------------------------
+// M2 S5：壁纸层与玻璃档位
+test('sanitizeConfig：v2 壁纸字段收窄（非法回退默认，surface 逐旋钮钳制）', () => {
+  const safe = sanitizeConfig({
+    version: 2,
+    wallpaper: {
+      source: 'builtin:dusk', fit: 'stretch', focus: 'nowhere', glass: 'plasma',
+      scrim: 500, vignette: -3,
+      surface: { sidebar: 250, conversation: -5, composer: 'x', overlay: 50 },
+    },
+  })
+  assert.equal(safe.wallpaper.source, 'builtin:dusk')
+  assert.equal(safe.wallpaper.fit, 'cover')
+  assert.equal(safe.wallpaper.focus, 'center')
+  assert.equal(safe.wallpaper.glass, 'off')
+  assert.equal(safe.wallpaper.scrim, 100)
+  assert.equal(safe.wallpaper.vignette, 0)
+  assert.deepEqual(safe.wallpaper.surface, { sidebar: 100, conversation: 0, composer: 100, overlay: 50 })
+})
+
+test('migrateConfig：v1 → v2 抬版本（新增字段由 sanitize 补默认）', () => {
+  const migrated = migrateConfig({ version: 1, enabled: true, theme: { skin: 'zafkiel' } })
+  assert.equal(migrated.version, 2)
+  const safe = sanitizeConfig(migrated)
+  assert.equal(safe.enabled, true)
+  assert.equal(safe.theme.skin, 'zafkiel')
+  assert.deepEqual(safe.wallpaper.surface, { sidebar: 100, conversation: 100, composer: 100, overlay: 100 })
+})
+
+test('buildSurfaceTokens：全部 100 → null；降了的部分映射正确端点（dark 用深端、light 用浅端）', () => {
+  assert.equal(buildSurfaceTokens({ enabled: true, wallpaper: { source: 'builtin:aurora' } }), null)
+  const tokens = buildSurfaceTokens({
+    enabled: true,
+    wallpaper: { source: 'builtin:aurora', surface: { sidebar: 80, conversation: 60, composer: 100, overlay: 100 } },
+  })
+  assert.equal(Object.keys(tokens).length, 4)
+  assert.equal(tokens['--dsw-specific-sidebar-fill'].dark, 'color-mix(in srgb, var(--dsw-static-neutral-bluish-950) 80%, transparent)')
+  assert.equal(tokens['--dsw-specific-sidebar-fill'].light, 'color-mix(in srgb, var(--dsw-static-neutral-bluish-00) 80%, transparent)')
+  assert.equal(tokens['--dsw-alias-bg-layer-2'].light, 'color-mix(in srgb, var(--dsw-static-neutral-bluish-00) 60%, transparent)')
+  assert.equal('composer' in {}, false)
+  assert.equal(tokens['--dsw-alias-bg-module-platform'], undefined, 'composer=100 不输出')
+})
+
+test('buildBootStyle：壁纸伪元素多重背景（scrim → vignette → 图）与铺排', () => {
+  const css = buildBootStyle(
+    { enabled: true, wallpaper: { source: 'builtin:ember', scrim: 30, vignette: 40, fit: 'contain', focus: 'top' } },
+    null,
+    { ember: 'linear-gradient(145deg, #14100e, #d9b36a)' },
+  )
+  assert.match(css, /body::before \{/)
+  assert.match(css, /z-index: -1/)
+  assert.match(css, /linear-gradient\(rgba\(0, 0, 0, 0\.30\)[\s\S]+radial-gradient[\s\S]+linear-gradient\(145deg, #14100e, #d9b36a\)/)
+  assert.match(css, /background-size: contain; background-position: top; background-repeat: no-repeat/)
+  // tile 铺排
+  const tile = buildBootStyle({ enabled: true, wallpaper: { source: 'builtin:ember', fit: 'tile' } }, null, { ember: 'x' })
+  assert.match(tile, /background-size: auto; background-position: center; background-repeat: repeat/)
+  // 关总开关 → 全空
+  assert.equal(buildBootStyle({ wallpaper: { source: 'builtin:ember' } }, null, { ember: 'x' }), '')
+})
+
+test('buildBootStyle：玻璃档位产出三条 slot 实盒子规则；off 不产出', () => {
+  const css = buildBootStyle({ enabled: true, wallpaper: { glass: 'frost' } }, null, {})
+  assert.match(css, /html\[data-mia-glass="frost"\] \[data-slot="sidebar"\] > \*/)
+  assert.match(css, /html\[data-mia-glass="frost"\] \[data-slot="main\.conversation"\] > \*/)
+  assert.match(css, /backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
+  assert.equal(buildBootStyle({ enabled: true, wallpaper: { glass: 'off' } }, null, {}), '')
+})
+
+test('buildBootScript：glass 属性随配置写入、关闭时恒 off', () => {
+  const on = buildBootScript({ enabled: true, wallpaper: { glass: 'frost' } })
+  assert.match(on, /data-mia-glass', "frost"/)
+  const closed = buildBootScript({ enabled: false, wallpaper: { glass: 'frost' } })
+  assert.match(closed, /data-mia-glass', "off"/)
+  assert.notEqual(on, closed)
+})
+
+test('evaluateContract：glass 非 off 且锚点全未命中 → glass-anchor-miss', () => {
+  const base = {
+    services: { theme: true, slots: true },
+    themeMethods: { getTheme: true, setTheme: true, setFontSize: true, overrideTokens: true },
+    anchors: { main: true },
+    tokens: { aliasBgBase: true, staticDeepseek500: true },
+    glass: 'frost',
+    glassAnchors: { sidebar: false, mainConversation: false, rightbar: false },
+  }
+  const miss = evaluateContract(base)
+  assert.equal(miss.issues.some(i => i.code === 'glass-anchor-miss'), true)
+  const hit = evaluateContract({ ...base, glassAnchors: { sidebar: true, mainConversation: true, rightbar: false } })
+  assert.equal(hit.issues.some(i => i.code === 'glass-anchor-miss'), false)
+})

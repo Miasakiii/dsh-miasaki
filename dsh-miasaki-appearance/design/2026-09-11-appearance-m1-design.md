@@ -140,8 +140,13 @@ Host 侧 `evaluateContract(probe)` 判定：
 
 > **2026-09-11（晚）补充**：M1 首次实机启动失败 —— client 半 factory 用了 `module.exports`
 > 却没声明 `module`（装载器只注入 `require`），报 `module is not defined`，设置栏不出现。
-> 已修并新增 `test/client.test.js`（5 例）钉死该装载契约；当前基线为**单测 34 例全绿 /
+> 已修并新增 `test/client.test.js`（5 例）钉死该装载契约；当时基线为**单测 34 例全绿 /
 > `appearance` 9/9**。原因、修法与回归闸门见 [变更记录](CHANGELOG.md) 同日条目。
+>
+> **2026-09-12 补充**：M1 实机验证**六项全部通过**（过程修复两处实机 bug：路由前缀尾随
+> 斜杠致 API 全 404、`runtime.theme` apply 期快照致明暗/字号永 disabled；新增
+> `test/host.test.js` 4 例）→ 当前基线**单测 38 例全绿 / `appearance` 10/10**。
+> 逐项结论与根因见 [变更记录](CHANGELOG.md) 同日条目。
 
 ### 实机项（需重启 `dsh web` 后执行）
 

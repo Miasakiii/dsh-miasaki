@@ -16,12 +16,16 @@
     "lib/",
     "test/",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "scripts/",
+    "lib/skins/"
   ],
   "scripts": {
     "build": "node --check index.js && node --check client.js && node --check lib/config.js && node --check lib/store.js && node --check lib/fence.js",
     "prepare": "pnpm run build",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "derive": "node scripts/derive-skins.mjs",
+    "derive:check": "node scripts/derive-skins.mjs --check"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -6,8 +6,12 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 - **零第三方依赖**：host 半只用 Node 内建模块，配置自管 JSON —— 与本仓 canvas / sidebar / dual-model 三条线同一约定（理由见下）。
 - **关掉即原生**：总开关默认**关闭**，未配置时对页面零影响（只写两个 `data-*` 属性）；这是本线的硬契约与验收项。
 
-> 当前状态：**M1 底座已完成，待实机验证**（重启 `dsh web` 后设置里应出现「外观」栏）。
-> 皮肤 / 壁纸 / 动效 / 会话效果分别在 M2–M4 接入同一套管线。
+> 当前状态：**M2 已实现（S1–S6 全收官，2026-09-12）**——三皮肤（刻刻帝/狂狂帝，105 token
+> 编译表）+ 壁纸层（内置渐变/本地目录图源、玻璃四档、表面不透明度四旋钮）+ desktop 让位协议。
+> M1 已实机验证（六项全过）；M2 的皮肤/壁纸/玻璃链路已实机验证（绯红品牌、color-mix 表面、
+> backdrop-filter 均生效），**12 组视觉矩阵、帧率基线与桌面壳同页实机项（切换条双入口 /
+> aurora×壁纸）待用户验收**。设计见 [M2 设计](design/2026-09-12-appearance-m2-design.md)，
+> 变更详情见 [变更记录](design/CHANGELOG.md)。动效 / 会话效果分别在 M3–M4 接入同一套管线。
 
 ---
 
@@ -34,14 +38,14 @@ dsh-miasaki-appearance/
 │   ├── config.js          # 配置模型：默认值 / 收窄钳制 / 深合并 / 迁移 / 首帧脚本 / 契约判定
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 34 例纯逻辑单测（配置 / 围栏 / 持久化 / client 半装载契约）
+├── test/                  # 38 例纯逻辑单测（配置 / 围栏 / 持久化 / client 契约 / host 路由契约）
 ├── design/                # 规划设计 + M1 实施 + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
 
 ## 能力
 
-### M1（已完成）
+### M1（已实机验证，2026-09-12）
 
 | 能力 | 说明 |
 |---|---|
@@ -55,7 +59,9 @@ dsh-miasaki-appearance/
 
 ### 里程碑
 
-- **M2 主题 + 壁纸**：刻刻帝 / 狂狂帝皮肤下沉（复用 desktop 线既有色阶）、`overrideTokens` 参数层、壁纸层与图源、玻璃档位；
+- **M2 主题 + 壁纸**（[设计已定稿](design/2026-09-12-appearance-m2-design.md)）：刻刻帝 / 狂狂帝皮肤
+  **下沉到 alias 层**（不是直接喂 static 色阶，理由见设计 §1.2）、`overrideTokens` 双 source 参数层、
+  壁纸伪元素层与图源、玻璃档位、`desktop` 注入层让位；
 - **M3 动效**：CSS 动效层挂在 `[data-slot]` 稳定锚点上、三套预设、强度倍率、`prefers-reduced-motion` 强制降级；
 - **M4 会话效果**：消息密度与最大宽度、流式光标、代码块与引用样式、工具卡折叠、字体。
 
@@ -90,8 +96,8 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test test/*.test.js                             # 34 例
-node ../scripts/verify-all.mjs appearance              # 统一回归入口（9 项）
+node --test test/*.test.js                             # 60 例（6 个测试文件）
+node ../scripts/verify-all.mjs appearance              # 统一回归入口（12 项）
 ```
 
 `test/client.test.js` 是 client 半的**装载契约**闸门：DSH 的客户端装载器只把 `require`
@@ -107,4 +113,7 @@ factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条�
 
 - [规划设计与方向选型](design/2026-09-11-appearance-settings-plan.md) —— 官方契约取证、三个参考仓库的取舍、风险清单、M1–M5 路线、D1–D10 抉择、spike 结论；
 - [M1 实施](design/2026-09-11-appearance-m1-design.md) —— 分层、接口、契约自检与验收；
+- [M2 设计](design/2026-09-12-appearance-m2-design.md) —— 官方主题层取证（三层 token 与解析作用域）、
+  色阶清单 A/B/C 三类、双明暗协同、desktop 让位协议、壁纸层与玻璃档位、boot style 防闪色、
+  验收矩阵与 6 步实施顺序；
 - [变更记录](design/CHANGELOG.md)。

@@ -6,7 +6,7 @@
 // 判定与归一化一律由 Host 侧执行 —— 这样这一段可以直接被单测覆盖。
 
 /** 配置版本；结构不兼容变更时 +1，并在 migrateConfig 里补一条迁移分支。 */
-export const CONFIG_VERSION = 1
+export const CONFIG_VERSION = 2
 
 /** 皮肤白名单。M1 只有「纯净」；M2 下沉 desktop 线的刻刻帝 / 狂狂帝。 */
 export const SKINS = Object.freeze(['pure', 'zafkiel', 'kurkuriel'])
@@ -27,6 +27,19 @@ export const FONT_SIZE_MAX = 17
 /** 壁纸模糊档位边界（px）。 */
 export const BLUR_MIN = 0
 export const BLUR_MAX = 60
+
+/** 玻璃档位（M2 设计 §5.3）：off = 原生观感。 */
+export const GLASS_LEVELS = Object.freeze(['off', 'light', 'frost', 'mica'])
+
+/** 壁纸铺排方式。 */
+export const WALLPAPER_FITS = Object.freeze(['cover', 'contain', 'tile'])
+
+/** 壁纸焦点（background-position）。 */
+export const WALLPAPER_FOCUSES = Object.freeze(['center', 'top', 'bottom', 'left', 'right'])
+
+/** 表面不透明度旋钮范围（0–100，100 = 不透明）。 */
+export const SURFACE_MIN = 0
+export const SURFACE_MAX = 100
 
 /** 暗色遮罩强度边界（0–100）。 */
 export const SCRIM_MIN = 0
@@ -51,7 +64,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   version: CONFIG_VERSION,
   enabled: false,
   theme: Object.freeze({ skin: 'pure', scheme: 'system', accent: '', fontSize: 14 }),
-  wallpaper: Object.freeze({ source: '', blur: 0, scrim: 0 }),
+  wallpaper: Object.freeze({
+    source: '', light: '', dark: '', blur: 0, scrim: 0,
+    fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+    surface: Object.freeze({ sidebar: 100, conversation: 100, composer: 100, overlay: 100 }),
+  }),
   motion: Object.freeze({ enabled: false, preset: 'fluid', scale: 1 }),
   conversation: Object.freeze({ density: 'comfortable', maxWidth: 0 }),
 })
@@ -127,6 +144,8 @@ export function migrateConfig(raw) {
   const version = clampInt(source.version, 0, CONFIG_VERSION, 0)
   if (version >= CONFIG_VERSION) return source
   // v0（无 version 字段）→ v1：v1 引入前没有任何已发布字段，直接补齐版本号。
+  // v1 → v2：wallpaper 增量字段（light/dark/fit/focus/glass/vignette/surface）——
+  // 全部纯新增，sanitizeConfig 对缺失字段回退默认，这里只需抬版本号让 sanitize 补齐。
   return { ...source, version: CONFIG_VERSION }
 }
 
@@ -153,8 +172,20 @@ export function sanitizeConfig(raw) {
     },
     wallpaper: {
       source: toWallpaperSource(wallpaper.source),
+      light: toWallpaperSource(wallpaper.light),
+      dark: toWallpaperSource(wallpaper.dark),
       blur: clampInt(wallpaper.blur, BLUR_MIN, BLUR_MAX, DEFAULT_CONFIG.wallpaper.blur),
       scrim: clampInt(wallpaper.scrim, SCRIM_MIN, SCRIM_MAX, DEFAULT_CONFIG.wallpaper.scrim),
+      fit: pickEnum(wallpaper.fit, WALLPAPER_FITS, DEFAULT_CONFIG.wallpaper.fit),
+      focus: pickEnum(wallpaper.focus, WALLPAPER_FOCUSES, DEFAULT_CONFIG.wallpaper.focus),
+      glass: pickEnum(wallpaper.glass, GLASS_LEVELS, DEFAULT_CONFIG.wallpaper.glass),
+      vignette: clampInt(wallpaper.vignette, SCRIM_MIN, SCRIM_MAX, DEFAULT_CONFIG.wallpaper.vignette),
+      surface: {
+        sidebar: clampInt(asRecord(wallpaper.surface).sidebar, SURFACE_MIN, SURFACE_MAX, 100),
+        conversation: clampInt(asRecord(wallpaper.surface).conversation, SURFACE_MIN, SURFACE_MAX, 100),
+        composer: clampInt(asRecord(wallpaper.surface).composer, SURFACE_MIN, SURFACE_MAX, 100),
+        overlay: clampInt(asRecord(wallpaper.surface).overlay, SURFACE_MIN, SURFACE_MAX, 100),
+      },
     },
     motion: {
       enabled: toBoolean(motion.enabled, DEFAULT_CONFIG.motion.enabled),
@@ -178,11 +209,17 @@ export function sanitizeConfig(raw) {
 export function mergeConfig(current, patch) {
   const base = sanitizeConfig(current)
   const incoming = asRecord(patch)
+  // wallpaper.surface 必须逐旋钮合并：面板每次只发改动的那个旋钮，整块浅合并会把
+  // 未提交的旋钮重置回默认（100）——M2 S5 实机面板空白修复时一并发现。
+  const incomingWallpaper = asRecord(incoming.wallpaper)
+  const mergedSurface = incomingWallpaper.surface === undefined
+    ? base.wallpaper.surface
+    : { ...base.wallpaper.surface, ...asRecord(incomingWallpaper.surface) }
   return sanitizeConfig({
     ...base,
     ...incoming,
     theme: { ...base.theme, ...asRecord(incoming.theme) },
-    wallpaper: { ...base.wallpaper, ...asRecord(incoming.wallpaper) },
+    wallpaper: { ...base.wallpaper, ...incomingWallpaper, surface: mergedSurface },
     motion: { ...base.motion, ...asRecord(incoming.motion) },
     conversation: { ...base.conversation, ...asRecord(incoming.conversation) },
   })
@@ -216,20 +253,136 @@ export function buildBootScript(config) {
   const state = JSON.stringify(safe.enabled ? 'on' : 'off')
   const skin = JSON.stringify(safe.theme.skin)
   const scheme = JSON.stringify(safe.theme.scheme)
-  return `(() => { try { const r = document.documentElement; r.setAttribute('data-mia-appearance', ${state}); r.setAttribute('data-mia-skin', ${skin}); r.setAttribute('data-mia-scheme', ${scheme}) } catch (e) { /* 首帧注入不得抛错 */ } })()`
+  const glass = JSON.stringify(safe.enabled ? safe.wallpaper.glass : 'off')
+  // 壁纸标记：desktop 装饰层据此把自家光晕（#miasaki-aurora）降为透明，避免两层氛围打架。
+  const wallpaper = JSON.stringify(safe.enabled && safe.wallpaper.source !== '' ? 'on' : 'off')
+  return `(() => { try { const r = document.documentElement; r.setAttribute('data-mia-appearance', ${state}); r.setAttribute('data-mia-skin', ${skin}); r.setAttribute('data-mia-scheme', ${scheme}); r.setAttribute('data-mia-glass', ${glass}); r.setAttribute('data-mia-wallpaper', ${wallpaper}) } catch (e) { /* 首帧注入不得抛错 */ } })()`
 }
 
 /**
  * 首帧样式（head placement）。M1 返回空串（不注入 style 行）；
  * M2 皮肤下沉后由这里产出静态色阶，避免「先原生后外观」的闪色。
+ *
+ * 产出形态（M2 设计 §6.1）：按 `data-mia-skin` 属性选择器覆盖双明暗——
+ * 官方明暗由 `body[data-ds-dark-theme]` 属性驱动，CSS 选择器天然动态匹配，
+ * 首帧脚本不需要猜偏好。token 表与运行时 `overrideTokens` 消费同一份
+ * （`lib/skins/*.js`，host 半 import 后传入），两处值一致 → presenter 接管后无跳变。
+ * `{light,dark}` 同值对下两段内容相同，保留双段是对冲官方将来在 dark 段恢复 per-token 差异。
+ *
  * @param {object} config - 已归一化配置。
+ * @param {object|null} skinTokens - 皮肤 token 表（`lib/skins/<skin>.js` 的 tokens；
+ *   `{ "--x": {light, dark} }`）。pure 或未提供时返回空串。
  * @returns {string} CSS 文本；空串表示本次不注入。
  */
-export function buildBootStyle(config) {
+export function buildBootStyle(config, skinTokens, builtinWallpapers) {
   const safe = sanitizeConfig(config)
-  if (!safe.enabled || safe.theme.skin === 'pure') return ''
-  // M2：刻刻帝 / 狂狂帝的静态色阶在此展开（值来自 desktop 线 themes/*.css）。
-  return ''
+  if (!safe.enabled) return ''
+  const parts = []
+  const skinCss = buildSkinBootCss(safe, skinTokens)
+  if (skinCss !== '') parts.push(skinCss)
+  const wallpaperCss = buildWallpaperBootCss(safe, builtinWallpapers)
+  if (wallpaperCss !== '') parts.push(wallpaperCss)
+  const glassCss = buildGlassBootCss(safe)
+  if (glassCss !== '') parts.push(glassCss)
+  return parts.join('\n')
+}
+
+/** 皮肤段：双段属性选择器展开 token 表（M2 §6.1）。 */
+function buildSkinBootCss(safe, skinTokens) {
+  if (safe.theme.skin === 'pure' || skinTokens === null || skinTokens === undefined) return ''
+  const names = Object.keys(skinTokens).sort()
+  if (names.length === 0) return ''
+  const light = names.map(n => `  ${n}: ${skinTokens[n].light};`).join('\n')
+  const dark = names.map(n => `  ${n}: ${skinTokens[n].dark};`).join('\n')
+  const skin = JSON.stringify(safe.theme.skin)
+  return `html[data-mia-skin=${skin}] body {\n${light}\n}\nhtml[data-mia-skin=${skin}] body[data-ds-dark-theme] {\n${dark}\n}`
+}
+
+/** 双重背景的序：遮罩在最上、晕影次之、壁纸图最底。 */
+function wallpaperLayerCss(wallpaper, builtinWallpapers) {
+  const layers = []
+  if (wallpaper.scrim > 0) {
+    layers.push(`linear-gradient(rgba(0, 0, 0, ${(wallpaper.scrim / 100).toFixed(2)}), rgba(0, 0, 0, ${(wallpaper.scrim / 100).toFixed(2)}))`)
+  }
+  if (wallpaper.vignette > 0) {
+    layers.push(`radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, ${(wallpaper.vignette / 100).toFixed(2)}) 100%)`)
+  }
+  if (wallpaper.source !== '') {
+    const builtin = asRecord(builtinWallpapers)[wallpaper.source.slice('builtin:'.length)]
+    if (wallpaper.source.startsWith('builtin:')) {
+      // 内置壁纸是程序化 CSS 渐变（零资产）；未知 id 视为无效源，不注入（配置面已白名单）。
+      if (typeof builtin === 'string') layers.push(builtin)
+    } else {
+      layers.push(`url("${wallpaper.source.replace(/\\/g, '/').replace(/"/g, '%22')}")`)
+    }
+  }
+  if (layers.length === 0) return null
+  const repeat = wallpaper.fit === 'tile' ? 'repeat' : 'no-repeat'
+  const size = wallpaper.fit === 'tile' ? 'auto' : wallpaper.fit
+  return (
+    `body::before {\n` +
+    `  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;\n` +
+    `  background-image: ${layers.join(', ')};\n` +
+    `  background-size: ${size}; background-position: ${wallpaper.focus}; background-repeat: ${repeat};\n` +
+    `}`
+  )
+}
+
+function buildWallpaperBootCss(safe, builtinWallpapers) {
+  const css = wallpaperLayerCss(safe.wallpaper, builtinWallpapers)
+  return css === null ? '' : css
+}
+
+/** 玻璃段：三条 slot 实盒子规则（S1a 探针定稿的命中路径），composer/settings 降级纯 alpha。 */
+function buildGlassBootCss(safe) {
+  const glass = safe.wallpaper.glass
+  if (glass === 'off') return ''
+  const blur = { light: 'blur(8px)', frost: 'blur(20px) saturate(1.4)', mica: 'blur(40px) saturate(1.6)' }[glass]
+  if (blur === undefined) return ''
+  return (
+    `html[data-mia-glass=${JSON.stringify(glass)}] [data-slot="sidebar"] > *,\n` +
+    `html[data-mia-glass=${JSON.stringify(glass)}] [data-slot="main.conversation"] > *,\n` +
+    `html[data-mia-glass=${JSON.stringify(glass)}] [data-slot="rightbar"] > * {\n` +
+    `  backdrop-filter: ${blur};\n` +
+    `}`
+  )
+}
+
+/**
+ * params 层（client 半 overrideTokens 的 'appearance:params' source）的表面不透明度覆盖表。
+ * 表面旋钮（0–100）映射到 6 个半透明 alias（M2 设计 §5.4）；值用 color-mix 引用官方端点
+ * static —— 解析发生在 body（皮肤已覆盖），自动跟明暗、跟皮肤。100 = 不输出（保持原生）。
+ * @param {object} config - 已归一化配置。
+ * @returns {object|null} overrideTokens 可吃的表；全部 100 时返回 null（无需注册层）。
+ */
+export function buildSurfaceTokens(config) {
+  const safe = sanitizeConfig(config)
+  const { sidebar, conversation, composer, overlay } = safe.wallpaper.surface
+  // 官方 alias → static 端点（design-platform.css light/dark 两段的映射，S1b 复读实测）
+  const ENDPOINTS = {
+    '--dsw-specific-sidebar-fill': ['neutral-bluish-950', 'neutral-bluish-00'],
+    '--dsw-alias-bg-base': ['neutral-bluish-950', 'neutral-bluish-00'],
+    '--dsw-alias-bg-layer-1': ['neutral-bluish-900', 'neutral-bluish-00'],
+    '--dsw-alias-bg-layer-2': ['neutral-bluish-850', 'neutral-bluish-00'],
+    '--dsw-alias-bg-module-platform': ['neutral-bluish-900', 'neutral-bluish-00'],
+    '--dsw-alias-bg-overlay': ['neutral-bluish-850', 'neutral-bluish-00'],
+  }
+  const mix = (percent, endpoint) =>
+    `color-mix(in srgb, var(--dsw-static-${endpoint}) ${percent}%, transparent)`
+  const out = {}
+  const put = (name, percent) => {
+    if (percent >= 100) return
+    const [dark, light] = ENDPOINTS[name]
+    const p = Math.max(percent, 0).toFixed(0)
+    out[name] = { light: mix(p, light), dark: mix(p, dark) }
+  }
+  put('--dsw-specific-sidebar-fill', sidebar)
+  put('--dsw-alias-bg-base', conversation)
+  put('--dsw-alias-bg-layer-1', conversation)
+  put('--dsw-alias-bg-layer-2', conversation)
+  put('--dsw-alias-bg-module-platform', composer)
+  put('--dsw-alias-bg-overlay', overlay)
+  return Object.keys(out).length === 0 ? null : out
 }
 
 // ---------------------------------------------------------------------------
@@ -277,9 +430,54 @@ export function evaluateContract(probe) {
     issues.push({ level: 'warn', code: 'token-static-missing', message: '未能读到静态色阶（--dsw-static-deepseek-500）——皮肤色阶可能无法覆盖' })
   }
 
+  // M2 §8：皮肤生效抽查——client 上报若干代表 token 的期望值（来自 /skin 的表）与
+  // 实测 computed 值；不一致说明 override 层未生效（典型原因：client 半更新后未重启 host）。
+  const spot = Array.isArray(facts.skinSpot) ? facts.skinSpot : []
+  const spotMiss = spot.filter(s => asRecord(s).expected !== asRecord(s).actual)
+  if (spot.length > 0 && spotMiss.length > 0) {
+    issues.push({
+      level: 'warn',
+      code: 'skin-token-miss',
+      message: `皮肤可能未完全生效（${spotMiss.length}/${spot.length} 个抽查 token 不符，如 ${spotMiss[0].name}）——请重启 dsh web`,
+    })
+  }
+
+  // M2 §8：玻璃锚点命中——档位非 off 但锚点未命中时降级提示（S1a 探针定稿的三条路径，
+  // 任一命中即至少部分玻璃生效；全部未命中说明页面结构变了，玻璃已无效果）。
+  const glass = typeof facts.glass === 'string' ? facts.glass : 'off'
+  const glassAnchors = asRecord(facts.glassAnchors)
+  if (glass !== 'off') {
+    const hits = Object.values(glassAnchors).filter(Boolean).length
+    if (hits === 0) {
+      issues.push({
+        level: 'warn',
+        code: 'glass-anchor-miss',
+        message: '该容器不支持毛玻璃（锚点未命中），已降级为纯透明分层',
+      })
+    }
+  }
+
+  // M2 §8：让位协议的双向保险。desktop 在位（data-miasaki-theme）且本线皮肤接管中
+  // （appearance on + 皮肤非 pure）时，desktop 必须已置让位标记（data-miasaki-theme-yield）；
+  // 未让位 = 两个引擎同时写 token（唯一不可接受的冲突）→ error 级，面板禁用皮肤板块。
+  const skinNow = typeof facts.skin === 'string' ? facts.skin : 'pure'
+  const appearanceOn = documentFriendly(facts.mia)
   if (facts.desktopTheme === true) {
-    issues.push({ level: 'warn', code: 'desktop-theme-active', message: '检测到桌面壳主题引擎在位（html[data-miasaki-theme]）——按让位协议，本线主题板块先让位，避免两套主题互相覆盖' })
+    if (appearanceOn && skinNow !== 'pure' && facts.desktopYield !== true) {
+      issues.push({
+        level: 'error',
+        code: 'override-conflict',
+        message: '检测到桌面壳主题引擎未按协议让位（缺 data-miasaki-theme-yield 标记）——皮肤板块已停用，请更新桌面壳（appearance 线 S6 版本）',
+      })
+    } else if (appearanceOn !== true && facts.desktopYield !== true) {
+      issues.push({ level: 'warn', code: 'desktop-theme-active', message: '检测到桌面壳主题引擎在位（html[data-miasaki-theme]）——按让位协议，本线主题板块先让位，避免两套主题互相覆盖' })
+    }
   }
 
   return { ok: issues.length === 0, issues }
+}
+
+/** html 门控属性是否为 "on"（客户端 boot script 写入的只有 on/off 两值）。 */
+function documentFriendly(mia) {
+  return mia === 'on'
 }
