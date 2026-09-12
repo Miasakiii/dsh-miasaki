@@ -273,3 +273,19 @@ test('apply is idempotent and the effect resets the guard and the page', () => {
   exports.apply(ctx)
   assert.equal(ctx.registered.length, 4, 'apply after teardown must remount')
 })
+
+test('SSH 视图激活时隐藏官方「对话列宽」拖拽手柄（用户 2026-09-12 反馈）', () => {
+  const { descriptor, styles } = capture()
+  descriptor.factory(requireStub).apply(fakeCtx())
+  const css = styles[0].textContent
+  // 规则必须：① 用稳定的 data 属性锁定手柄（CSS-modules 哈希类不可依赖）；
+  // ② 以 iframe[title="SSH"] 的存在为条件（iframe 只在 SSH 视图激活时挂载，
+  //    切走即卸载 ⇒ 手柄自动恢复）；③ !important 压过官方样式表。
+  assert.match(css, /div\[data-phase\]:has\(iframe\[title="SSH"\]\) \[data-width-handle\]\{display:none!important\}/)
+  // tb-group（用户在用的窗控）与 #miasaki-switcher（主题球）必须保持可见：2026-09-12
+  // 曾误隐藏二者被用户退回——这两条「不许出现」的断言防再次犯同样的错。
+  assert.doesNotMatch(css, /#miasaki-titlebar\{display/)
+  assert.doesNotMatch(css, /#miasaki-switcher\{display/)
+  // 参照物：官方自己隐藏同一手柄的先例（composer overlay），确认属性名没有拼错
+  assert.doesNotMatch(css, /data-width-hanlde|data-widthhandles/)
+})

@@ -2,6 +2,98 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-12
+
+- **SSH 视图下隐藏官方「对话列宽」拖拽手柄**（用户实机反馈：「这个页面不需要可以调节对话框宽度」）。
+  - **取证**（`dsh-client-ui-conversation/lib/client.js` 14652/14722/14957）：官方 `WidthHandle`（`[data-width-handle]`，两侧各 40px 的 `col-resize` 隐形条）挂在会话根 body 上，`phase === "active"` 即渲染、**与激活视图无关**——SSH 页面上用户会拖到一条毫无意义的列宽手柄，拖动即改写全局 `dsh.conversation.contentWidth` 偏好并连带挤压 SSH iframe。官方自己已有 `:has([data-conversation-composer-overlay])` 隐藏同一手柄的先例。
+  - **实施**（`client.js` 既有样式注入追加一条规则）：`div[data-phase]:has(iframe[title="SSH"]) [data-width-handle]{display:none!important}`——以 iframe 挂载为条件（SSH 视图激活才挂载，切走即卸载 ⇒ 手柄自动恢复）；选择器全部用稳定 data 属性，不依赖 CSS-modules 哈希类；同一 style 元素、同一 effect 生命周期。
+  - **测试**：`test/client.test.js` 增 1 例（12 → 13）——断言规则存在于注入样式、属性名无拼写漂移；**教训：harness 里样式在 `apply(ctx)` 时才注入，只调 factory 断言不到**。`verify-all ssh` 仍 **12/12**。
+  - **运维**：host 进程改由本会话分离启动（`Start-Process` 隐藏窗口，日志 `%TEMP%\dsh-web-out/err.log`）——**若 host 再次消失，在用户自己的终端跑 `dsh web` 即可**（工具会话分离进程的生命周期不完全受控）。
+
+- **U1 实机首跑两处阻断性 bug 热修**（用户实机截图：工作区主体蒙灰、右侧整块空白、列表不渲染）。本地静态 harness + 浏览器实测复现并逐项验证修复：
+  - **`.hidden` 类名失配**：U1 重写 styles.css 时把 `.hidden{display:none!important}` 误改成 `[hidden]`（属性选择器），而 `#sheet-overlay` 初始态用的是 **class** `hidden` ⇒ 编辑抽屉浮层**从未隐藏**——灰层即遮罩 tint（`rgba(16,23,40,.21)`），右侧「空白块」即空的 sheet 面板（412px，右上 ✕ 就是 `#sheet-close`）。修复：`.hidden` 与 `[hidden]` 两条规则并存。
+  - **`mount()` 同步崩溃**：mount 尾部引用了骨架里已不存在的 `#font-value`（字号控件重写时从静态骨架移到了菜单内联行）⇒ TypeError 使 `refreshConnections/renderAll` 全部未执行（空态/横幅/主机列表全不渲染）。修复：字号 −/值/+ 改为**主机菜单内的内联行**（`hostMenuItems` 支持 `custom` 节点，`setFont` 对 `#font-value` 判空），mount 不再引用菜单内元素。
+  - 顺带修复 `icon('panel')`/`icon('copy')` 缺矩形形状（只有内部线条）。
+  - **验证**（本地 harness，浏览器实测）：浮层 `display:none`、空态/横幅/列表渲染、编辑抽屉开→字段齐全→用户名必填且为空→取消关闭→焦点归还 `#toggle-rail`；ssh 回归仍 **12/12**（60 例：client 12 → 13）。截图通道当日不可用（IAB quirk），以 DOM 断言代偿。
+
+- **U1 统一工作区实施**（[规划 §3/§4/§6/§7](2026-09-12-ssh-workspace-plan.md)；用户实机看过 U0 后反馈「界面和功能都不完善」，即按概念稿实施 U1；U2/U3 未动）。前端三件（app / styles / session）按概念稿重写，client.js 增主题桥接。
+  - **双栏工作区**（`app.js` + `styles.css` 全量重写）：
+    - 左侧主机导航（232px，容器 <720px 改模态抽屉、`inert` + 焦点陷阱 + Esc 归还焦点）：搜索（名称/`user@host:port`/分组联合）、分组归档（未分组垫底）、收藏星标（组内置顶）、存活状态点 + 文案；
+    - 右侧工作区：多主机**终端标签**（同主机只 attach；关闭查看 ≠ 断开，[仅关闭查看 / 断开并关闭] 二选一确认）+ 身份工具栏 + 状态横幅（connecting / waiting-fingerprint / transport / closed / error / mismatch 六态各有行动按钮）+ 单条状态栏（状态 / 信任 / cols×rows·字号）；
+    - 空态三态：无主机（新建引导）、未选中（最近连接 3 条 + 新建）、未连接选中（摘要 + [连接主机] [编辑配置]）；不再有整页连接库；
+    - 主机菜单「右键与更多同源」（plan §3.2）：打开终端 / 编辑 / 收藏 / 复制地址 / 信任记录 / 断开… / 删除…（删除活跃主机说明将断开的连接数）；
+    - 响应式断点 960 / 720 / 480 依据 **SSH 容器宽度**（container query），非窗口宽度；专注模式只收起本线导航。
+  - **编辑器抽屉**：右侧 412px sheet——字段校验（用户名必填、**不再默认提权 root**）、认证方式渐进显示私钥路径、活跃主机编辑提示「仅影响下一次连接」、服务端错误内联展示、[取消/保存/保存并连接]；凭据（密码/口令）、指纹确认（TOFU 与 mismatch 两态，mismatch 无「仍然继续」只有「忘记旧记录」）、断开确认、粘贴确认全部走同一 sheet 组件。
+  - **三主题桥接**（`client.js` ↔ `app.js`，plan §4.2）：
+    - client.js：读宿主**最终计算样式**（body 优先、根元素兜底）白名单令牌（`--dsw-alias-bg-base/layer-1/layer-2/overlay/border-l2/label-primary/label-secondary/interactive-bg-hover` + `--dsw-static-deepseek-450`）+ 明暗（`data-ds-dark-theme`，canvas 同款判据）+ 字体 → 快照 `{source:'dsh-ssh',type:'theme',version:1,revision,dark,tokens,typography}`；
+    - 双通道下发：同源 `postMessage(targetOrigin=location.origin)` + 页面级注册表 `window.__DSH_SSH_THEME__`（iframe 首帧同源直读，**不闪兜底色**，plan §4.2-9）；iframe 侧核验 `event.source===parent`、origin、字段白名单；
+    - 变化检测：html/body 属性 observer（class/style/data-ds-dark-theme）+ head 样式增删 + visibilitychange 补发；快照序列化去重，同快照不重发；主题切换不销毁 xterm、不断 SSH；
+    - iframe：`--ssh-*` 语义令牌 + `data-scheme` 亮暗；**半透明宿主色合成到实体底**（`compositeOver`）再进 xterm——桌面端 zafkiel/kurkuriel 的 `bg-base` 都是 rgba(.8/.93)，直接用会让终端透出壁纸；终端不透明硬契约；
+    - xterm 配色：背景/前景/光标/选区（accent+alpha）+ ANSI 16 色按明暗两套固定（语义红绿保留含义，不全部品牌红）；首帧兜底 = `prefers-color-scheme`；iframe 元素底色改宿主令牌（不再固定深色闪底）。
+  - **终端功能**（`session.js` 新 API + `app.js` 接线）：
+    - `applyTheme` / `setFontSize`（12–20px 夹紧，重 fit → PTY 跟随）/ `find` / `clearLocal`（只清本地显示，与远端 clear 严格区分）/ `input`（粘贴确认后的直写通道）/ `onResize` 回调；
+    - **查找零依赖**：`@xterm/addon-search` 对 xterm 6 只有 `0.17.0-beta` 线（registry 核实，无稳定兼容版），按规划「新增依赖须单独核验」标准**不引入**，改为缓冲区原生扫描（`translateToString` 逐行 + `term.select` 高亮 + `scrollToLine`，Enter/Shift+Enter 上下导航、n/m 计数）；已知边界：组合宽字符处 string index 与列号可能有偏差；
+    - **复制粘贴**：Ctrl+Shift+C 写选区、Ctrl+Shift+V 读剪贴板（捕获阶段拦截，不污染 shell 的 Ctrl+C/V）；多行或含控制字符（含 ESC）粘贴先 sheet 预览确认、不自动加回车（plan §6）；
+    - 布局偏好（字号/收起/专注）进 `localStorage`（非敏感，plan §8 允许）；秘密/终端输出仍不落盘。
+  - **store.js**：`favorite` 字段归一化（布尔强转）+ 默认分组 `default`→`未分组` + **username 不再默认 root**（空串，表单必填）——迁移安全（normalizeConnection 补默认值），`sanitizeConnection` 暴露 `favorite`。
+  - **测试（48 → 59 例）**：`test/app.test.js`（新 6 例）vm 加载 app.js 直取纯函数（分组过滤排序、粘贴守卫、rgba 合成、令牌回退、xterm 主题组合）；`test/session.test.js` 11 → 16 例（主题下发、字号夹紧+重 fit、缓冲查找导航换行、本地清屏、直写输入、onResize）；`test/store.test.js` 补 favorite/group/username 断言。跨 realm 教训再 +1：vm 返回对象 deepEqual 前必须浅拷贝。`node scripts/verify-all.mjs ssh` → **12/12**（语法 6 项 + 测试 6 文件 59 例）。七线全量：**ssh 12/12**；sidebar 9/10 的失败项（`terminal-hub.test.js` 两条）当时记为「并行会话中间态」，**2026-09-12 收官复核改判为受限沙箱环境假阴性**——`resolvePtyBin` 要捕获 `where.exe` 输出解析 shell 绝对路径，受限沙箱禁止管道捕获（`EPERM spawnSync where.exe`），用例在到达被测分支前即失败；判据与正确跑法见[回归矩阵 §1 的 ※※ 注记](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
+  - **误删回滚（同日）**：处理窗控/悬浮球反馈时曾把 `#miasaki-titlebar .tb-group`（titlebar v4 窗控）与 `#miasaki-switcher`（主题球）误判为"重复元素"做 SSH 作用域隐藏——二者正是用户在用的正主（壳为 `decorations(false)` 无边框，tb-group 即唯一窗控），已回滚并在 `test/client.test.js` 加 `doesNotMatch` 防回归断言。**真正根因在 desktop 线**：Tauri initialization_script 注入所有 frame，`themes/src/08-ready.js` 在 SSH/画布等 iframe 里重建了标题栏与主题球（页面右上的假窗控 + 右下角上面的假主题球）——已在 08-ready 加 `IS_TOP` 守卫（chrome 只在顶层 frame 构建，含 1s 自愈巡检），`gen-init` 重出产物，desktop 回归 8/8；壳为 `include_str!` 编译期打入，**需 MSVC 环境重编壳并重启**后生效。
+  - **待实机验收**（U0+U1 合并，验收矩阵 §10）：重启 `dsh web` —— ①三主题（pure 亮/暗、刻刻帝、狂狂帝）下页面与 xterm 同步换肤、无闪底；②主机导航/标签/抽屉/状态栏布局成立、窄容器（右栏展开）降级抽屉；③真实连接 → 输出、多主机切换 attach、关闭查看再恢复；④指纹确认/mismatch 忘记/重信闭环；⑤Ctrl+Shift+C/V、查找、字号、粘贴确认；⑥对比度抽验狂狂帝浅底。
+
+- **U0 可靠性闭环实施**（[工作区规划 §9](2026-09-12-ssh-workspace-plan.md) 首阶段；用户指示推进 SSH 方向，U0 按规划「先通过故障注入测试」门槛落地；U1–U3 未动）。
+  - **新模块 [`session.js`](../session.js)：查看器实例**（诊断「输出与清理风险」「活跃终端无法恢复」的实现载体）：
+    - 每个查看器独占一个 xterm + 一个 WS + 一组监听，`dispose()` 整体回收（term.dispose / socket 关闭并摘除处理器 / ResizeObserver 断开 / window resize 解绑 / 重附着定时器清除）；
+    - **二进制输出修复**：构造时即设 `socket.binaryType='arraybuffer'`，二进制帧以 `new Uint8Array(event.data)` 落入 xterm——此前 binaryType 缺省为 Blob，`new Uint8Array(Blob)` 得到空数组，**终端根本没有输出**；
+    - `onmessage` 不用 `instanceof ArrayBuffer` 判二进制（跨 realm 会失效，node:vm 测试踩中），按「非字符串即字节」处理；
+    - **viewer 通道有界重附着**：WS 短断后 4 次、0.8s×n 线性退避自动重附；任何服务端帧重置预算；SSH 自身 `closed` / `error` / `NO_CONNECTION` 置 `sshEnded`，不再重附着（重附着不可能复活已结束的 SSH）；
+    - **尺寸**：`ResizeObserver` 观察 holder + window resize 双路进 rAF 合帧 fit；出站 resize 限界 2–1000 列 × 2–500 行；
+    - 状态文案映射（附着中 / 连接中 / 等待指纹 / 已连接 / 会话已结束 / 失败 / 重附着 N/4）。
+  - **[`runtime.js`](../lib/runtime.js)**：
+    - **指纹时间预算统一**：`HANDSHAKE_BUDGET_MS = 60s` 同时作为 ssh2 `readyTimeout` 与确认窗口——此前确认窗 60s、握手超时 15s，用户确认时连接早已死掉；
+    - **确认 token 与连接实例 generation 绑定**：pending 项记录 `rc` 引用，`confirmFingerprint` 校验 `conns.get(connId) === item.rc && !disposed`——连接重发后的旧确认返回失效，绝不写新实例状态；
+    - **保存失败不再吞错**：`recordFingerprint` 抛错 ⇒ `verify(false)` + `FINGERPRINT_SAVE_FAILED`（此前 `.catch(() => {})` 后照样放行，没落盘的信任被当作已确认）；
+    - **pending 生命周期**：client error / close、`teardown`、`shutdown` 均经 `expirePendingFor` 清 token + `verify(false)`；
+    - **attach 契约**：viewer 绑定写 `ws.sshRc`；携带的初始尺寸夹紧后**立即 `setWindow` 进真实 PTY**；`onReady` 的 ready 帧补 `state:'connected'`（此前无 state 字段，前端误显示「等待连接」）；
+    - **输入归属**：新增 `currentViewer / viewerInput / viewerResize`——输入与尺寸按 `ws.sshRc` 实例路由而非 connId 查表，被替换代次的僵尸 viewer 收 `STALE_VIEWER` 并被关闭；`sendInput / resize`（按 id 查表）删除；
+    - **背压**：`push()` 发现 `ws.bufferedAmount > 8MB` 即淘汰该 viewer（1011 关闭），不无限堆积拖死连接；
+    - resize / attach 尺寸统一 `clampDim` 夹紧（负数 / 巨大值有界）。
+  - **[`index.js`](../index.js)**：WS 帧 256KB 上限（超限静默丢弃）；input/resize 改走 viewer 绑定路由；新增 `/ssh/session.js` 静态路由并在页面按序引入。
+  - **[`app.js`](../app.js)**：
+    - **恢复 attach**：已连接 / 连接中 / 待指纹主机的主动作是「打开终端」（只 attach，不发第二个 connect）；idle 才是「连接」，error/closed 是「重新连接」；顶栏「终端」按钮只在存在查看器实例时可用；
+    - **凭据对话框泛化**（`askSecret`）：密码必填、私钥口令选填（后端本就支持口令，前端从未给过输入框）；对话框关闭即清空输入框（秘密清理）；
+    - **取消按钮**：补 `type="button"` + 独立行为（返回连接库）——此前它默认 type=submit 且无处理器，**点「取消」等于提交保存**；
+    - **信任记录 UI**：连接库底部新增 known_hosts 列表（hostKey + 指纹 + 忘记按钮），闭合「指纹变更拒绝后无恢复路径」的死胡同（REST 早已存在，前端一直没入口）；
+    - 删除活跃主机时在 confirm 里说明将断开连接；指纹确认失败 / 过期在状态栏给可读文案。
+  - **[`styles.css`](../styles.css)**：终端高度链修复（`.term-holder` 去掉 `height:100%` 改 `flex:1 1 auto; min-height:0`，不再与工具栏叠加溢出）；信任记录 / 对话框提示样式。
+  - **测试（28 → 48 例）**：新增 [`test/session.test.js`](../test/session.test.js) 11 例——node:vm + 假 Terminal/WS/定时器/ResizeObserver 驱动故障注入（二进制落终端、dispose 后旧 socket 无串写、重附着预算与线性退避、sshEnded 不重附、NO_CONNECTION、等待指纹不封死重附、畸形控制帧、出站 resize 夹紧、rAF 合帧、dispose 全量回收）；[`test/runtime.test.js`](../test/runtime.test.js) 5 → 14 例（保存失败拒绝、跨代确认隔离、teardown/shutdown 清 pending、attach 尺寸进 PTY、viewer 夹紧、僵尸 viewer 拒绝、背压淘汰、onReady ready 帧契约；既有 TOFU 用例补 `conns.set` 适配 generation 绑定）；`RuntimeConn` 导出供测试构造真实实例。`node scripts/verify-all.mjs ssh` → **11/11**（语法检查 6 项，新增 session.js）。
+  - **待实机验证**（并入 M1 验收清单）：重启 `dsh web` 后——真实连接出终端输出（U0 前终端应是无输出的）、连上 → 切对话 → 切回 scrollback 回放且无串写、已连接主机一键回终端、WS 断网 4 次内自动重附、指纹确认 / 忘记 / 重新信任闭环、取消编辑不保存。
+
+- **工作区优化规划设计（设计提案，未写业务代码）**。用户诉求：「SSH 界面很简陋，要和本项目界面风格统一、适配三大主题，功能完备简洁合理、界面适配自然优雅」。
+  - **产出**：
+    - [`2026-09-12-ssh-workspace-plan.md`](2026-09-12-ssh-workspace-plan.md)（新）——诊断、信息架构、主题桥接、生命周期契约、分期 U0–U3、验收矩阵、源码索引、概念稿验证记录；
+    - [`preview/2026-09-12-ssh-workspace-concept.html`](preview/2026-09-12-ssh-workspace-concept.html)（新）——可交互概念稿，支持三主题 + 原生暗色、四档宽度、八种状态切换；
+    - `README.md`（文档表补两行）。
+  - **诊断（源码取证，非文档转述）**：
+    - 主题割裂：`styles.css:2–12` 固定蓝黑色板、`app.js:165–170` xterm 独立硬编码配色 ⇒ pure 亮色与狂狂帝下页面像外挂应用；
+    - 页面割裂：`app.js:237–310` 连接库 / 编辑器 / 终端三屏切换、`styles.css:66` 连接库限宽 720px ⇒ 大屏浪费且上下文丢失；
+    - **活跃终端不可恢复**：`app.js:77–79` 已连接时按钮被禁用、`mount()` 恒回连接库 ⇒ iframe 重建后连接还在但进不去；
+    - 关闭语义缺失：前端无断开 / 重连，`runtime.js:58–74` 重复 connect 会 teardown 旧连接；
+    - 输出链缺陷：`app.js:187–198` 未设 `binaryType` 却把二进制事件直接当 `Uint8Array` 处理；新终端未集中销毁旧 term / socket / resize 监听；
+    - 指纹闭环不足：`app.js:221–228` 用原生 `confirm`、重置信任无 UI、`runtime.js:181` 记录指纹失败被吞、`runtime.js:13` 的 60s 确认窗口与 `runtime.js:73` 的 15s 握手超时不协调；
+    - 尺寸处理不足：`app.js:182` 仅监听 window resize；`styles.css:112–127` 终端 `height:100%` 叠加工具栏高度。
+  - **方案要点**：可收起主机侧栏 + 多主机终端标签 + 单条状态栏；**保留现有会话头三段胶囊入口，不新增应用级上栏**（沿用 2026-09-10 第六次修正的结论）；主题以宿主最终计算样式为唯一源，白名单化后经同源 postMessage 下发 `--ssh-*` 与 xterm ANSI 色；区分「主机配置 / 运行连接 / 查看器」三种身份并明确关闭、断开、重连契约；响应式依据 SSH 容器实际宽度（960 / 720 / 480 断点）而非桌面窗口宽度。
+  - **三主题口径校正**：以现役 CSS 为准——刻刻帝 `#c23a2e` 暗色、狂狂帝 `#9e1b1b` 亮色（`kurkuriel.css:8` 为 `color-scheme: light`）；`design/themes.md` 的旧色阶表与现役实现存在漂移，不作为实施依据。
+  - **概念稿实测（第一轮，真实 Chromium）**：三主题渲染正常；内容宽 560px 时主机栏正确收起、无横向溢出；390px 抽屉宽 288px 且工作区 `inert`；信任面板 `role=dialog` + `aria-modal`、焦点正确移入。
+  - **概念稿实测（第二轮，无障碍与键盘）**：
+    - **axe-core 4.12.1 审计**：首轮 1 类严重违规（11 处对比度不足，最差 3.51:1）+ 3 处 `aria-label` 挂在无 role 的 `div` 上 + 2 处 `☆` 文本字符判为非文本。**修复后四套实装组合（原版亮色 / 原版暗色 / 刻刻帝 / 狂狂帝）全部 0 违规、0 待复核、39 通过。**
+    - 修复项：`.host-address` 4.36→ 调深 `--muted`；`.caption` 4.37、说明区序号 3.51、说明区正文 4.49、页脚 3.50 各自调深；**狂狂帝 `--warning` `#7f693a` on `#f3ecdd` 仅 4.48、`--muted` `#74685e` on `#e9e3dd` 仅 4.24**，分别调深至 `#7a6436` / `#6a5e54`；`.native-switch` / `#tabs` 补 `role="group"`、`#terminal` 补 `role="region"`；收藏标记改为 `aria-hidden` 的 SVG + `sr-only` 文本。
+    - **键盘实测**：连按 14 次 Tab 与 6 次 Shift+Tab 焦点均不逃逸面板；Esc 关闭面板 / 抽屉后 `inert` 复原且焦点归还触发元素。
+    - **修出一个真实缺陷**：关闭浮层的焦点回退守卫原以 `isConnected && !closest("[hidden]")` 判定，`document.body` 也满足该条件 → 触发器不可聚焦时焦点丢到 `body`。已改为排除 `body` 并回退到确定目标。该约束已写入设计文档 §7.1。
+    - **由此固化的实现约束**：`--muted` 类辅助文字与 `--warning`/`amber` 类语义色必须**逐主题**在其实际底色上校验 ≥ 4.5:1；狂狂帝浅底最易失守，与其「亮面为主」取向直接相关，不是偶发。
+    - **仍未覆盖**：真实宿主令牌继承、真实 xterm 尺寸同步与 `setWindow`、reduced-motion、浏览器 150% 缩放的字体渲染与滚动条占宽差异、触屏命中尺寸。150% 缩放对布局的影响已被窄宽度用例部分覆盖（容器查询只依赖宽度），其余留作实现阶段验收项。
+  - **待用户评审的三个取舍**：① 是否采用「主机侧栏 + 终端工作区」（对比整页连接库）；② 终端是否默认完全跟随主题（狂狂帝即亮终端）；③ 是否接受 U0+U1 为首个可发布范围（SFTP 留 U2）。
+  - **本轮不改**：`app.js` / `styles.css` / `client.js` / `lib/*` / `index.js` 与既有测试均未改动；概念稿只新增在 `design/` 下。
+
 ## 2026-09-10
 
 - **修复：client 半加载失败 `invalid plugin … received undefined`（`client.js` 工厂漏 `return module.exports`）**。

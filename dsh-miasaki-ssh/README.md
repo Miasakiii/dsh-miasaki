@@ -8,7 +8,28 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 
 ## 状态
 
-**M1 实现中，代码骨架已就绪**（2026-09-09）。存储层、运行时、host 路由与前端页面已完成并通过单测；待安装到 DSH web profile 后在浏览器验证真实连接。SPIKE S2 / S4 / S5 已实测通过。**2026-09-10 按用户反馈调整入口位置**：从官方 tab 栏（第二行，排在「会话用量」之后）迁到会话头第一行，与「对话 / 会话布」**合成为同一个胶囊**（三段：对话 \| 会话布 \| SSH）；并在**画布页面内部**那组「对话 / 会话布」旁也给出一个 SSH 按钮（走画布的外部视图槽）。
+**M1 代码完成**（2026-09-09 立项）：存储层、运行时、host 路由与前端页面已完成并通过单测；已 link 安装到 DSH web profile，待重启 host 后在浏览器验证真实连接。SPIKE S2 / S4 / S5 已实测通过。**2026-09-10 按用户反馈调整入口位置**：从官方 tab 栏（第二行，排在「会话用量」之后）迁到会话头第一行，与「对话 / 会话布」**合成为同一个胶囊**（三段：对话 \| 会话布 \| SSH）；并在**画布页面内部**那组「对话 / 会话布」旁也给出一个 SSH 按钮（走画布的外部视图槽）。
+
+**2026-09-12 U0 可靠性闭环完成**（[工作区优化规划](design/2026-09-12-ssh-workspace-plan.md) §9 首阶段，按「先通过故障注入测试」门槛验收）：
+
+- **二进制输出修复**：WS `binaryType='arraybuffer'`，二进制帧真正落进 xterm（此前 `event.data` 是 Blob，`new Uint8Array(Blob)` 得到空数组 ⇒ **终端无输出**）；
+- **查看器实例化**（新模块 `session.js`）：一个查看器独占一个 xterm + 一个 WS，整体可销毁，切换主机 / 重建 iframe 绝不跨代串写、不泄漏监听；
+- **恢复 attach**：已连接 / 连接中 / 待指纹主机的主动作是「打开终端」，只 attach、不发第二个 connect（此前按钮被禁用 ⇒ iframe 重建后连接还在却进不去）；
+- **生命周期契约**：viewer WS 短断有界重附着（4 次、线性退避）；SSH 自身关闭 / 报错则不重附着；输入与尺寸改走 **viewer 绑定路由**（`ws.sshRc` 实例绑定），被替换代次的僵尸 viewer 会被拒绝（`STALE_VIEWER`）；
+- **指纹闭环**：确认窗口与 ssh2 握手**同一套 60s 时间预算**；确认 token 与连接实例 generation 绑定（旧确认不影响新连接）；信任记录**保存失败即拒绝连接**（不再吞错）；
+- **凭据与表单**：私钥口令在连接时临时输入（后端本就支持）；秘密对话框关闭即清空输入；
+- **尺寸与健壮性**：attach 初始尺寸送真实 PTY、`ResizeObserver` 观察容器 + rAF 合帧、resize 限界（2–1000 × 2–500）、WS 帧上限 256KB、慢 viewer 背压淘汰（`bufferedAmount > 8MB` 断开）。
+
+**2026-09-12 U1 统一工作区完成**（规划 §3/§4/§6/§7 落地；界面与功能按概念稿 [`preview/2026-09-12-ssh-workspace-concept.html`](design/preview/2026-09-12-ssh-workspace-concept.html) 实施）：
+
+- **双栏工作区**：可收起主机导航（232px，208–288 语义随容器收窄）+ 多主机终端标签 + 单条状态栏；未选主机有空态（最近连接 / 新建主机），未连接主机有摘要页（连接 / 编辑入口）；
+- **主机导航**：名称 / `username@host:port` 联合搜索、分组归档、收藏（星标 + 组内置顶）、存活状态点；**右键与工具区「更多」菜单同源**（打开终端 / 编辑 / 收藏 / 复制地址 / 信任记录 / 断开 / 删除）；
+- **编辑器抽屉**：右侧 412px sheet，字段校验（用户名必填、**不再默认 root**）、认证方式渐进显示私钥路径、活跃主机编辑提示「仅影响下一次连接」、服务端错误内联展示，[取消 / 保存 / 保存并连接]；
+- **三主题桥接**：client.js 读取宿主**最终计算样式**（body 优先，白名单令牌）→ 同源 postMessage + 页面级注册表 `__DSH_SSH_THEME__`（iframe 首帧直读，不闪兜底色）→ `--ssh-*` 语义变量 + xterm 主题（背景 / 前景 / 光标 / 选区 / ANSI 16 色）；半透明宿主色合成到实体底再进终端；原生明暗兜底；主题切换不重建 SSH；
+- **终端功能**：多主机标签（同主机只 attach；关闭查看 ≠ 断开，断开需确认）、Ctrl+Shift+C/V 复制粘贴、缓冲区原生查找（**零新依赖**——addon-search 对 xterm 6 只有 beta 版，未核验不引入）、字号 12–20px、本地清屏、专注模式、多行 / 含控制字符粘贴先预览确认；
+- **响应式**：容器查询断点 960 / 720 / 480（依据 SSH 容器宽度而非窗口宽度），窄屏导航改模态抽屉（焦点陷阱 + Esc 归还焦点）。
+
+**待实机验证**（U0+U1 合并验收，见 [回归矩阵 §3](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)）：重启 `dsh web` 后按清单逐项过。U2（SFTP、同主机多 shell）、U3（跳板 / 转发）未动。
 
 设计要点速览（完整版见 [设计文档](design/2026-09-09-ssh-design.md)）：
 
@@ -29,9 +50,10 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 
 | 阶段 | 范围 | 状态 |
 |---|---|---|
-| **M1** | 纯终端 + 连接管理：`conversation.view` 入口、`/ssh/` 页面、密码/私钥/agent 三种认证、xterm 交互终端、known_hosts、三道围栏、连接保活 | **实现中**（store / runtime / 路由 / WS / 前端 / 单测已完成，待安装验证） |
-| M2 | 连接分组与颜色、多标签、断线重连、复制粘贴、主题跟随、SFTP、系统终端打开、空白会话备用入口 | 规划 |
-| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划 |
+| **M1** | 纯终端 + 连接管理：`conversation.view` 入口、`/ssh/` 页面、密码/私钥/agent 三种认证、xterm 交互终端、known_hosts、三道围栏、连接保活 | **代码完成，待实机验收** |
+| **U0+U1**（工作区规划） | U0 可靠性闭环（二进制输出 / 查看器实例 / 恢复 attach / 指纹闭环 / 输入归属）+ U1 统一工作区（主机导航 / 多标签 / 编辑抽屉 / 三主题桥接 / 复制粘贴 / 查找 / 字号 / 响应式） | **已实施，待实机验收** |
+| M2 | SFTP、系统终端打开、空白会话备用入口（多标签 / 断线重连 / 主题跟随 / 分组收藏已随 U1 交付） | 规划（并入 U2：SFTP、多 shell、工作区记忆） |
+| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划（对应 U3） |
 
 ## M1 前置 SPIKE
 
@@ -51,16 +73,22 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 dsh-miasaki-ssh/
 ├── package.json            # @miasaki/dsh-ssh（dsh.client web 声明）
 ├── cordis.patch.yml        # 插件身份（id: ssh / 数据目录 / trustedHosts）
-├── index.js                # host 半：路由族 + REST API + WS 桥
+├── index.js                # host 半：路由族 + REST API + WS 桥（帧上限 + viewer 路由）
 ├── lib/
 │   ├── store.js            # 纯数据层：连接库 / known_hosts / 三道围栏（可单测）
-│   └── runtime.js          # ssh2 运行时：TOFU / scrollback 环形缓冲 / WS 中继
+│   └── runtime.js          # ssh2 运行时：TOFU / generation 绑定 / scrollback 环形缓冲 / WS 中继
 ├── client.js               # client 半：第一行入口按钮（actions 槽）+ conversation.view 注册 + iframe 视图
-├── app.js                  # 前端（iframe 内）：xterm + 连接表单 + 连接列表
-├── styles.css
-├── test/                   # 单测（store: 围栏/归一化/持久化 ↔ runtime: TOFU/错误分类 ↔ client: 工厂返回契约 + 入口位置/切换通道/宽度判据）
+├── session.js              # 前端查看器实例：一个查看器独占 xterm + WS，整体可销毁（U0）+ 主题/字号/查找 API（U1）
+├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑抽屉 / 工具区 / 状态栏 / 主题应用
+├── styles.css              # 工作区布局 + --ssh-* 语义令牌（原生明暗兜底，宿主桥接覆盖）
+├── test/                   # 单测 60 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入 ↔
+│                           #   session: 二进制/销毁隔离/重附着/主题查找 ↔ app: 分组过滤/粘贴守卫/颜色合成 ↔
+│                           #   http: 路由 ↔ client: 工厂契约 + 主题桥接快照）
 ├── design/
 │   ├── 2026-09-09-ssh-design.md
+│   ├── 2026-09-12-ssh-workspace-plan.md        # 工作区优化规划设计（U0 已实施，U1–U3 待做）
+│   ├── preview/
+│   │   └── 2026-09-12-ssh-workspace-concept.html  # 可交互概念稿（三主题 / 四档宽度 / 八种状态）
 │   └── CHANGELOG.md
 └── README.md
 ```
@@ -70,6 +98,8 @@ dsh-miasaki-ssh/
 | 文档 | 内容 |
 |---|---|
 | [设计文档](design/2026-09-09-ssh-design.md) | 调研结论、技术选型、架构、数据模型、安全红线、里程碑、SPIKE 清单、风险 |
+| [工作区优化规划](design/2026-09-12-ssh-workspace-plan.md) | **规划与实施记录**：现状诊断、信息架构、三主题桥接、连接生命周期契约、分期 U0–U3、验收矩阵。**U0（可靠性闭环）+ U1（统一工作区）已实施（2026-09-12），U2/U3 未动** |
+| [工作区概念稿](design/preview/2026-09-12-ssh-workspace-concept.html) | 可交互概念稿：三主题 + 原生暗色、四档宽度、八种连接状态；仅本地演示 |
 | [CHANGELOG](design/CHANGELOG.md) | 本线变更记录 |
 
 ## 相关线

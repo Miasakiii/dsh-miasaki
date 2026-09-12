@@ -25,6 +25,7 @@ export const name = 'ssh'
 export const inject = ['webServer']
 
 const MAX_BODY_BYTES = 64 * 1024
+const MAX_WS_FRAME_BYTES = 256 * 1024 // input/resize frames are tiny; anything bigger is abuse
 const PAGE_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
 const WS_PING_INTERVAL_MS = 30_000
 
@@ -65,6 +66,7 @@ function page() {
 <div id="ssh-root"></div>
 <script src="/ssh/vendor/xterm.js"></script>
 <script src="/ssh/vendor/addon-fit.js"></script>
+<script src="/ssh/session.js"></script>
 <script src="/ssh/app.js"></script>
 </body></html>`
 }
@@ -90,6 +92,7 @@ export function apply(ctx, config) {
 
   // ------------------------------------------------------------- assets
   const appAsset = cachedAsset('./app.js')
+  const sessionAsset = cachedAsset('./session.js')
   const stylesAsset = cachedAsset('./styles.css')
   const xtermAsset = cachedAsset('./node_modules/@xterm/xterm/lib/xterm.js')
   const xtermCssAsset = cachedAsset('./node_modules/@xterm/xterm/css/xterm.css')
@@ -192,6 +195,7 @@ export function apply(ctx, config) {
   wss.on('connection', (ws) => {
     sockets.add(ws)
     ws.on('message', data => {
+      if (data.length > MAX_WS_FRAME_BYTES) return
       let msg
       try { msg = JSON.parse(String(data)) } catch { return }
       if (msg.type === 'attach') {
@@ -202,9 +206,9 @@ export function apply(ctx, config) {
           rows: Number.isSafeInteger(msg.rows) ? msg.rows : undefined,
         })
       } else if (msg.type === 'input' && typeof msg.data === 'string') {
-        runtime.sendInput(ws.connId, msg.data)
+        runtime.viewerInput(ws, msg.data)
       } else if (msg.type === 'resize') {
-        runtime.resize(ws.connId, Number.isSafeInteger(msg.cols) ? msg.cols : undefined, Number.isSafeInteger(msg.rows) ? msg.rows : undefined)
+        runtime.viewerResize(ws, Number.isSafeInteger(msg.cols) ? msg.cols : undefined, Number.isSafeInteger(msg.rows) ? msg.rows : undefined)
       } else if (msg.type === 'detach') {
         runtime.detach(ws)
       }
@@ -227,6 +231,7 @@ export function apply(ctx, config) {
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/ssh', handler: (_req, res) => { res.writeHead(302, { location: '/ssh/' }); res.end() } }), 'ssh: redirect')
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/ssh/', handler: (_req, res) => { sendHtml(res, page()) } }), 'ssh: page')
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/ssh/app.js', handler: asset(appAsset, 'text/javascript; charset=utf-8') }), 'ssh: app')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/ssh/session.js', handler: asset(sessionAsset, 'text/javascript; charset=utf-8') }), 'ssh: session')
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/ssh/styles.css', handler: asset(stylesAsset, 'text/css; charset=utf-8') }), 'ssh: styles')
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/ssh/vendor/xterm.js', handler: asset(xtermAsset, 'text/javascript; charset=utf-8') }), 'ssh: xterm')
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/ssh/vendor/xterm.css', handler: asset(xtermCssAsset, 'text/css; charset=utf-8') }), 'ssh: xterm css')

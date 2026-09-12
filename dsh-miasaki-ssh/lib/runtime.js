@@ -10,10 +10,23 @@ import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { hostKeyOf, fingerprintOf } from './store.js'
 
-const FINGERPRINT_TIMEOUT_MS = 60_000
+// One time budget shared by the ssh2 handshake (readyTimeout) and the
+// fingerprint confirm window: while hostVerifier is pending the handshake
+// clock keeps ticking, so the two windows MUST be the same or a user who
+// confirms at t=30s would confirm a connection that died at t=15s (plan §5.3).
+const HANDSHAKE_BUDGET_MS = 60_000
 const DEFAULT_COLS = 120
 const DEFAULT_ROWS = 32
+const MAX_COLS = 1000
+const MAX_ROWS = 500
+const MAX_WS_BUFFERED_BYTES = 8 * 1024 * 1024 // drop a viewer whose send buffer exceeds this
 const WINDOWS_AGENT_PIPE = '\\\\.\\pipe\\openssh-ssh-agent'
+
+function clampDim(value, min, max, fallback) {
+  const n = Number(value)
+  if (!Number.isSafeInteger(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
 
 /** Classify an ssh2/client error into a stable, machine-routable code. */
 export function classifyError(error) {
@@ -70,7 +83,7 @@ export class SshRuntime {
       host: record.host,
       port: record.port,
       username: record.username,
-      readyTimeout: 15_000,
+      readyTimeout: HANDSHAKE_BUDGET_MS,
     }
     if (record.auth.method === 'password') {
       if (typeof options.password !== 'string' || options.password.length === 0) {
@@ -113,11 +126,13 @@ export class SshRuntime {
     client.on('ready', () => this.onReady(rc))
     client.on('error', err => {
       if (rc.disposed) return
+      this.expirePendingFor(rc) // a dead handshake must not keep a live confirm token
       const info = classifyError(err)
       rc.answer(info.code, info.message)
     })
     client.on('close', () => {
       // reached when session ends or connection drops
+      this.expirePendingFor(rc)
       if (rc.stream) rc.stream = null
       if (rc.disposed) return
       if (rc.status === 'connected' || rc.status === 'connecting' || rc.status === 'waiting-fingerprint') {
@@ -143,20 +158,19 @@ export class SshRuntime {
       rc.fp = { token, fingerprint, host: rc.label }
       const item = {
         token,
+        rc, // generation binding: a confirm may only affect THIS RuntimeConn
         connId: rc.id,
         connKey: rc.connKey,
         fingerprint,
         verify,
         timer: setTimeout(() => {
           if (this.pending.get(token) !== item) return
-          this.pending.delete(token)
-          const conn = this.conns.get(rc.id)
-          if (conn === rc && rc.status === 'waiting-fingerprint') {
+          this.expirePendingFor(rc)
+          if (this.conns.get(rc.id) === rc && rc.status === 'waiting-fingerprint') {
             rc.status = 'error'
             rc.broadcast({ type: 'status', state: 'error', code: 'FINGERPRINT_TIMEOUT', message: '指纹确认超时，已断开' })
           }
-          verify(false)
-        }, FINGERPRINT_TIMEOUT_MS),
+        }, HANDSHAKE_BUDGET_MS),
       }
       this.pending.set(token, item)
       rc.broadcast({ type: 'status', state: 'waiting-fingerprint', token, fingerprint, host: rc.label })
@@ -171,22 +185,45 @@ export class SshRuntime {
     }
   }
 
+  /** Resolve every pending fingerprint belonging to rc: timer gone, verify(false). */
+  expirePendingFor(rc) {
+    for (const item of [...this.pending.values()]) {
+      if (item.rc !== rc) continue
+      this.pending.delete(item.token)
+      clearTimeout(item.timer)
+      rc.fp = null
+      try { item.verify(false) } catch { /* verify must not throw, but never let it break cleanup */ }
+    }
+  }
+
   async confirmFingerprint(token, accept) {
     const item = this.pending.get(token)
     if (item === undefined) return { ok: false, error: '确认请求已过期或不存在' }
     clearTimeout(item.timer)
     this.pending.delete(token)
-    const rc = this.conns.get(item.connId)
+    const rc = item.rc
+    // stale generation: the connection was re-initiated (or torn down) while
+    // the user was deciding — the answer must never touch the new instance
+    if (rc === undefined || rc.disposed || this.conns.get(item.connId) !== rc) {
+      try { item.verify(false) } catch { /* ignore */ }
+      return { ok: false, error: '该连接已重新发起，本次确认已失效' }
+    }
     if (accept) {
-      await this.store.recordFingerprint(item.connKey, item.fingerprint).catch(() => {})
-      item.verify(true)
-      if (rc && rc.status === 'waiting-fingerprint') rc.status = 'connecting'
-    } else {
-      item.verify(false)
-      if (rc) {
-        rc.status = 'error'
-        rc.answer('FINGERPRINT_REJECTED', '已拒绝该主机指纹，连接取消')
+      try {
+        await this.store.recordFingerprint(item.connKey, item.fingerprint)
+      } catch (error) {
+        // 保存失败绝不静默放行：没有落盘的信任不能当作已确认（plan §8）
+        try { item.verify(false) } catch { /* ignore */ }
+        rc.answer('FINGERPRINT_SAVE_FAILED', `信任记录保存失败：${error?.message ?? error}；本次连接未继续`)
+        return { ok: false, error: '信任记录保存失败' }
       }
+      item.verify(true)
+      if (rc.status === 'waiting-fingerprint') rc.status = 'connecting'
+      return { ok: true }
+    }
+    item.verify(false)
+    if (rc.status === 'waiting-fingerprint') {
+      rc.answer('FINGERPRINT_REJECTED', '已拒绝该主机指纹，连接取消')
     }
     return { ok: true }
   }
@@ -217,7 +254,7 @@ export class SshRuntime {
           }
         })
         // any early attached sockets immediately get scrollback
-        rc.broadcast({ type: 'ready', cols: rc.cols, rows: rc.rows })
+        rc.broadcast({ type: 'ready', state: 'connected', cols: rc.cols, rows: rc.rows })
         rc.flush()
       },
     )
@@ -231,9 +268,13 @@ export class SshRuntime {
       ws.send(JSON.stringify({ type: 'error', code: 'NO_CONNECTION', message: '连接不存在或已关闭' }))
       return
     }
+    // viewer binding: this socket may only drive the exact RuntimeConn it
+    // attached to — a replaced generation ignores its stale input/resize
+    ws.sshRc = rc
+    ws.sshStale = false
     if (!rc.sockets.has(ws)) rc.sockets.add(ws)
-    rc.cols = msg.cols ?? rc.cols ?? DEFAULT_COLS
-    rc.rows = msg.rows ?? rc.rows ?? DEFAULT_ROWS
+    if (msg.cols !== undefined) rc.cols = clampDim(msg.cols, 2, MAX_COLS, rc.cols)
+    if (msg.rows !== undefined) rc.rows = clampDim(msg.rows, 2, MAX_ROWS, rc.rows)
     ws.send(JSON.stringify({ type: 'ready', state: rc.status, cols: rc.cols, rows: rc.rows }))
     // re-state current status so a fresh viewer never misses a waiting/error
     if (rc.status === 'waiting-fingerprint' && rc.fp) {
@@ -241,25 +282,52 @@ export class SshRuntime {
     } else if (rc.status === 'error') {
       ws.send(JSON.stringify({ type: 'status', state: 'error', code: rc.lastErrorCode, message: rc.lastErrorMessage }))
     }
-    // replay scrollback for a stream that is already live
+    // a live stream takes the viewer's initial size into the real PTY;
+    // a replay of buffered output follows for both live and ended sessions
+    if (rc.stream && (msg.cols !== undefined || msg.rows !== undefined)) {
+      try { rc.stream.setWindow(rc.rows, rc.cols, undefined, undefined) } catch { /* stream gone */ }
+    }
     if (rc.stream) rc.flushTo(ws)
     else if (rc.sbChunks.length > 0) rc.flushTo(ws)
   }
 
-  sendInput(id, data) {
-    const rc = this.conns.get(id)
-    if (rc?.stream && typeof data === 'string') rc.stream.write(data)
+  // ------------------------------------------------------------------ viewer-bound input / resize
+  // Input and size changes are routed through the ws's viewer binding, never
+  // by connId lookup — otherwise a zombie viewer from a replaced generation
+  // would write into the new connection (plan §5.1 输入归属).
+
+  /** The RuntimeConn this viewer may still drive, or null (after notifying a stale one). */
+  currentViewer(ws) {
+    const rc = ws?.sshRc
+    if (rc === undefined || rc === null) return null
+    if (rc.disposed || this.conns.get(rc.id) !== rc) {
+      if (ws.sshStale !== true) {
+        ws.sshStale = true
+        try { ws.send(JSON.stringify({ type: 'error', code: 'STALE_VIEWER', message: '该连接已重新发起，请返回连接管理重新打开终端' })) } catch { /* gone */ }
+        try { ws.close() } catch { /* gone */ }
+      }
+      return null
+    }
+    return rc
   }
 
-  resize(id, cols, rows) {
-    const rc = this.conns.get(id)
-    if (!rc) return
-    rc.cols = cols ?? rc.cols
-    rc.rows = rows ?? rc.rows
-    if (rc.stream) rc.stream.setWindow(rc.rows, rc.cols, undefined, undefined)
+  viewerInput(ws, data) {
+    const rc = this.currentViewer(ws)
+    if (rc !== null && typeof data === 'string' && rc.stream) rc.stream.write(data)
+  }
+
+  viewerResize(ws, cols, rows) {
+    const rc = this.currentViewer(ws)
+    if (rc === null) return
+    if (cols !== undefined) rc.cols = clampDim(cols, 2, MAX_COLS, rc.cols)
+    if (rows !== undefined) rc.rows = clampDim(rows, 2, MAX_ROWS, rc.rows)
+    if (rc.stream) {
+      try { rc.stream.setWindow(rc.rows, rc.cols, undefined, undefined) } catch { /* stream gone */ }
+    }
   }
 
   detach(ws) {
+    ws.sshRc = null
     for (const rc of this.conns.values()) rc.sockets.delete(ws)
   }
 
@@ -274,6 +342,7 @@ export class SshRuntime {
   // ------------------------------------------------------------------ teardown
 
   teardown(rc) {
+    this.expirePendingFor(rc) // a discarded connection cannot keep a confirm window open
     try { rc.client && rc.client.end() } catch { /* ignore */ }
     try { rc.stream && rc.stream.end() } catch { /* ignore */ }
     rc.status = 'closed'
@@ -288,7 +357,10 @@ export class SshRuntime {
       rc.dispose()
     }
     this.conns.clear()
-    for (const item of this.pending.values()) clearTimeout(item.timer)
+    for (const item of this.pending.values()) {
+      clearTimeout(item.timer)
+      try { item.verify(false) } catch { /* ignore */ }
+    }
     this.pending.clear()
   }
 
@@ -309,7 +381,10 @@ export class SshRuntime {
   }
 }
 
-class RuntimeConn {
+// Exported for fault-injection tests (test/runtime.test.js): constructing a
+// real RuntimeConn without going through ssh2 lets tests drive attach / push /
+// viewer binding directly.
+export class RuntimeConn {
   constructor(runtime, id, record) {
     this.runtime = runtime
     this.id = id
@@ -345,8 +420,17 @@ class RuntimeConn {
     }
     if (this.sockets.size > 0) {
       const payload = u8
-      for (const ws of this.sockets) {
-        try { ws.send(payload) } catch { this.sockets.delete(ws) }
+      for (const ws of [...this.sockets]) {
+        try {
+          // backpressure: a viewer that stopped draining gets cut loose
+          // instead of buffering the PTY forever (plan §8 洪泛有界)
+          if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+            this.sockets.delete(ws)
+            try { ws.close(1011, 'viewer-too-slow') } catch { /* gone */ }
+            continue
+          }
+          ws.send(payload)
+        } catch { this.sockets.delete(ws) }
       }
     }
   }

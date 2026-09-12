@@ -72,7 +72,57 @@ window.__ModuleLoader__.load({
       '.dsh-canvas-switch + .dsh-ssh-switch{margin-left:-8px;border-top-left-radius:0;border-bottom-left-radius:0}' +
       // 同一个控件里不能同时亮两段：停在 SSH 视图时「对话」段不该再亮（它此时的语义是
       // 「DSH 原生会话视图」，而当前正停在 SSH 上）。:not(:hover) 让 hover 反馈照旧。
-      '.dsh-canvas-switch:has(+ .dsh-ssh-switch button.active) button[aria-label="对话"].active:not(:hover){background:transparent;color:var(--dsw-alias-label-secondary,#6b7280)}'
+      '.dsh-canvas-switch:has(+ .dsh-ssh-switch button.active) button[aria-label="对话"].active:not(:hover){background:transparent;color:var(--dsw-alias-label-secondary,#6b7280)}' +
+      // ---- SSH 视图下隐藏官方「对话列宽」拖拽手柄（2026-09-12 用户反馈）------
+      // WidthHandle（[data-width-handle]，col-resize 隐形条）挂在会话根 body 上、
+      // 只要 phase=active 就渲染，与激活视图无关 —— 用户会在 SSH 页面上拖到一条
+      // 毫无意义的列宽手柄。iframe 只在 SSH 视图激活时挂载 ⇒ :has() 天然跟随视图
+      // 切换（切回对话手柄自动恢复）。官方自己也有 :has([data-conversation-composer-
+      // overlay]) 隐藏同一手柄的先例，这是同一机制的第二个触发条件。
+      'div[data-phase]:has(iframe[title="SSH"]) [data-width-handle]{display:none!important}'
+
+    // ---- 主题桥接（U1，plan §4.2）------------------------------------------
+    // 宿主是唯一主题源：这里读宿主**最终计算样式**（body 优先、根元素兜底），白名单化后
+    // 经同源 postMessage 下发给 /ssh/ 的 iframe；iframe 侧换成自己的 --ssh-* 语义变量
+    // 与 xterm 主题。快照同时写进页面级注册表 `window.__DSH_SSH_THEME__`，iframe 首帧
+    // 可同源直读，避免「先闪兜底底色再切主题」。SSH 不调用 setTheme/overrideTokens，
+    // 也不另设皮肤选择器 —— appearance 皮肤落地后其最终样式自动被这里读到。
+    const THEME_TOKENS = [
+      ['bgBase', '--dsw-alias-bg-base'],
+      ['layer1', '--dsw-alias-bg-layer-1'],
+      ['layer2', '--dsw-alias-bg-layer-2'],
+      ['overlay', '--dsw-alias-bg-overlay'],
+      ['border', '--dsw-alias-border-l2'],
+      ['textPrimary', '--dsw-alias-label-primary'],
+      ['textSecondary', '--dsw-alias-label-secondary'],
+      ['hoverBg', '--dsw-alias-interactive-bg-hover'],
+      ['accent', '--dsw-static-deepseek-450'],
+    ]
+    function readThemeSnapshot() {
+      const dark = document.body?.hasAttribute?.('data-ds-dark-theme') === true
+        || document.documentElement?.hasAttribute?.('data-ds-dark-theme') === true
+      const readToken = name => {
+        for (const scope of [document.body, document.documentElement]) {
+          if (scope === null || scope === undefined) continue
+          try {
+            const value = getComputedStyle(scope).getPropertyValue(name).trim()
+            if (value !== '') return value
+          } catch { /* 父文档样式不可读（极少见） */ }
+        }
+        return ''
+      }
+      const tokens = {}
+      for (const [key, name] of THEME_TOKENS) {
+        const value = readToken(name)
+        if (value !== '') tokens[key] = value
+      }
+      let typography = null
+      try {
+        const style = getComputedStyle(document.body ?? document.documentElement)
+        typography = { fontFamily: style.fontFamily ?? '', fontSize: style.fontSize ?? '' }
+      } catch { /* 保持 iframe 兜底字体 */ }
+      return { dark, tokens, typography }
+    }
 
     module.exports.inject = ['slots']
 
@@ -283,17 +333,60 @@ window.__ModuleLoader__.load({
 
       /** SSH 页面本身：iframe 隔离，xterm 由 iframe 文档自己加载。 */
       function SshView() {
+        const frameRef = react.useRef(null)
+        react.useEffect(() => {
+          const frame = frameRef.current
+          if (frame === null) return undefined
+          let lastKey = ''
+          let revision = 0
+          const push = () => {
+            const win = frame.contentWindow
+            if (win === null) return
+            let snapshot
+            try { snapshot = readThemeSnapshot() } catch { return }
+            const key = JSON.stringify(snapshot)
+            if (key === lastKey) return // 同一快照不重发（去重，plan §4.2-7）
+            lastKey = key
+            revision += 1
+            try { window.__DSH_SSH_THEME__ = { source: 'dsh-ssh', type: 'theme', version: 1, revision, ...snapshot } } catch { /* 只读环境 */ }
+            try { win.postMessage({ source: 'dsh-ssh', type: 'theme', version: 1, revision, ...snapshot }, location.origin) } catch { /* iframe 刚卸载 */ }
+          }
+          // iframe 重载（切走视图再回来会卸载重建）后强制发一次：lastKey 清零。
+          const onLoad = () => { lastKey = ''; push() }
+          frame.addEventListener('load', onLoad)
+          // 变化检测兜底（plan §4.2-7）：html/body 的主题属性与 head 的样式元素增删，
+          // 不做全页高频扫描。appearance / 桌面主题切换最终都会落到这两处。
+          const observer = new MutationObserver(() => queueMicrotask(push))
+          if (document.documentElement !== null) {
+            observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-ds-dark-theme'] })
+          }
+          if (document.body !== null && document.body !== undefined) {
+            observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style', 'data-ds-dark-theme'] })
+          }
+          if (document.head !== null && document.head !== undefined) {
+            observer.observe(document.head, { childList: true })
+          }
+          const onVisibility = () => { if (document.visibilityState === 'visible') push() } // 重新显示补发
+          document.addEventListener('visibilitychange', onVisibility)
+          return () => {
+            frame.removeEventListener('load', onLoad)
+            observer.disconnect()
+            document.removeEventListener('visibilitychange', onVisibility)
+          }
+        }, [])
         return react.createElement('iframe', {
+          ref: frameRef,
           src: '/ssh/',
           title: 'SSH',
           // Fill the conversation view area; the iframe document owns all of
-          // its own styling (layout, theme, fonts).
+          // its own styling (layout, theme, fonts). 加载期露出宿主底色而不是
+          // 固定深色 —— 亮色主题下不再闪黑（plan §4.2-9）。
           style: {
             display: 'block',
             width: '100%',
             height: '100%',
             border: '0',
-            background: '#0b0e14',
+            background: 'var(--dsw-alias-bg-base, #f2f4f8)',
           },
         })
       }
@@ -336,6 +429,9 @@ window.__ModuleLoader__.load({
         style.remove()
       }, 'ssh: view')
     }
+
+    // 供契约测试（test/client.test.js）直读主题快照的取数逻辑。
+    module.exports.readThemeSnapshot = readThemeSnapshot
 
     return module.exports
   },

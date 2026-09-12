@@ -32,15 +32,22 @@ test('fingerprintOf returns OpenSSH SHA256 form over the buffer', () => {
 test('normalizeConnection defaults and rejects', () => {
   const record = normalizeConnection({ host: 'example.com', label: 'prod' })
   assert.equal(record.port, 22)
-  assert.equal(record.username, 'root')
+  assert.equal(record.username, '') // 不默认提权为 root（plan §3.3，编辑器表单必填）
+  assert.equal(record.group, '未分组')
+  assert.equal(record.favorite, false)
   assert.equal(record.auth.method, 'password')
-  assert.equal(record.port, 22)
 
   assert.throws(() => normalizeConnection({ host: '', label: 'x' }), InputError)
   assert.throws(() => normalizeConnection({ host: 'example.com', label: 'x', port: 70000 }))
   assert.throws(() => normalizeConnection({ host: 'example.com', label: 'x', auth: { method: 'key' } }), InputError)
   const keyed = normalizeConnection({ host: 'example.com', label: 'x', auth: { method: 'key', keyPath: 'C:\\Users\\me\\.ssh\\id_ed25519' } })
   assert.equal(keyed.auth.keyPath, 'C:\\Users\\me\\.ssh\\id_ed25519')
+
+  // favorite / group round-trip and coercion
+  const fav = normalizeConnection({ host: 'example.com', label: 'x', favorite: true, group: '  生产环境  ' })
+  assert.equal(fav.favorite, true)
+  assert.equal(fav.group, '生产环境')
+  assert.equal(normalizeConnection({ host: 'e.com', label: 'x', favorite: 'yes' }).favorite, false)
 })
 
 test('normalizeConnection never stores a password in a record', () => {
@@ -83,7 +90,7 @@ test('SshStore persists connections and fingerprints, then reloads', async () =>
     // list is sanitized (no secrets leak; there are none) and includes state
     const list = await store.listConnections()
     assert.equal(list.length, 1)
-    assert.deepEqual(Object.keys(list[0]).sort(), ['auth', 'createdAt', 'group', 'host', 'id', 'label', 'lastConnectedAt', 'port', 'updatedAt', 'username'].sort())
+    assert.deepEqual(Object.keys(list[0]).sort(), ['auth', 'createdAt', 'favorite', 'group', 'host', 'id', 'label', 'lastConnectedAt', 'port', 'updatedAt', 'username'].sort())
 
     // update
     await store.updateConnection(created.id, { host: '10.0.0.2' })
