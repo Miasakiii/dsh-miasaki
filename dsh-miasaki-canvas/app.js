@@ -1150,8 +1150,13 @@ function mergeDraftCard(card) {
   // blocked here instead of failing after the user clicks (early, not late).
   const stale = Array.isArray(card.merge.stale) ? card.merge.stale : []
   const busy = state.mergeBusyId === card.dshThreadId || stale.length > 0 ? 'disabled' : ''
+  // Status band in the card head: the plan body sits low and needs scrolling,
+  // so draft/busy/stale must be readable at a glance from the head itself.
+  const stateBadge = stale.length > 0 ? '<span class="merge-state-badge is-stale" title="来源线已被删除">已失效</span>'
+    : state.mergeBusyId === card.dshThreadId ? '<span class="merge-state-badge is-busy">执行中</span>'
+    : '<span class="merge-state-badge">待执行</span>'
   return `<article class="thread-card draft-card merge-draft-card" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:#7c3aed">
-    <div class="thread-card-head"><span class="merge-diamond" aria-hidden="true"></span><strong>合并请求（草稿）</strong></div>
+    <div class="thread-card-head"><span class="merge-diamond" aria-hidden="true"></span><strong>合并请求（草稿）</strong>${stateBadge}</div>
     <div class="thread-meta"><span>${escapeHtml(card.question)}</span></div>
     <div class="merge-plan">
       <p class="merge-plan-line"><span class="merge-plan-label">fork 源线</span>${forkSource === undefined ? '（来源已不在画布）' : escapeHtml(forkSource.title)}</p>
@@ -1392,7 +1397,12 @@ function renderCanvas() {
   state.mountedCardIds = new Set(visible)
   const mounted = cards.filter(card => visible.has(card.id))
   const inspector = state.inspectorCardId === null ? '' : renderCardInspector(state.canvasCardsById.get(state.inspectorCardId))
-  return `<section class="canvas-view"><div class="canvas-viewport"><div class="canvas-content" style="transform:translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})"><svg class="connectors">${canvasConnectors(cards)}</svg><div class="cards-layer">${mounted.map(card => conversationCard(card, graph)).join('')}${draftCard(cards)}</div></div></div>${multiSelectBar()}${mergeGestureBubble(cards)}${canvasMinimap(cards)}${inspector}</section>`
+  return `<section class="canvas-view"><div class="canvas-viewport"><div class="canvas-content" data-lod="${canvasLod()}" style="transform:translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})"><svg class="connectors">${canvasConnectors(cards)}</svg><div class="cards-layer">${mounted.map(card => conversationCard(card, graph)).join('')}${draftCard(cards)}</div></div></div>${multiSelectBar()}${mergeGestureBubble(cards)}${canvasMinimap(cards)}${inspector}</section>`
+}
+
+/** Content tier for the current zoom (see applyCanvasTransform / styles.css LOD). */
+function canvasLod() {
+  return state.zoom >= .8 ? 'full' : state.zoom >= .5 ? 'compact' : 'mini'
 }
 
 function isProcessMessage(message) {
@@ -1655,7 +1665,10 @@ function closeCardInspector({ animate = true } = {}) {
 
 function applyCanvasTransform() {
   const content = document.querySelector('.canvas-content')
-  if (content instanceof HTMLElement) content.style.transform = `translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})`
+  if (content instanceof HTMLElement) {
+    content.style.transform = `translate(${state.canvasCamera.x}px, ${state.canvasCamera.y}px) scale(${state.zoom})`
+    content.dataset.lod = canvasLod()
+  }
   updateMinimapViewport()
 }
 
@@ -1671,6 +1684,7 @@ function bindDragHandle(handle) {
     let stopped = false
     let frame = 0
     state.dragging = true
+    card.classList.add('is-dragging')
     // Coalesce pointermove updates to one DOM pass per animation frame so a
     // high report-rate pointer cannot queue a reflow per event.
     const apply = () => {
@@ -1699,6 +1713,7 @@ function bindDragHandle(handle) {
       apply()
       rememberCardPosition(cardId, position, aliases)
       state.dragging = false
+      card.classList.remove('is-dragging')
       deferCanvasRefresh(120)
       // 并置合并手势：拖放落点与他线卡片重叠时，弹「合并这两条线？」确认气泡。
       const collision = findMergeCollision(cardId, position)
@@ -1753,7 +1768,9 @@ function canvasViewport(target) {
 }
 
 function zoomCanvas(viewport, nextZoom, clientX, clientY) {
-  const zoom = Math.min(4, Math.max(.6, Math.round(nextZoom * 100) / 100))
+  // Floor 0.5 so the LOD "mini" tier (zoom < 0.5 renders head-only cards) is
+  // actually reachable — it pairs with the minimap for whole-canvas overview.
+  const zoom = Math.min(4, Math.max(.5, Math.round(nextZoom * 100) / 100))
   if (zoom === state.zoom) return
   const bounds = viewport.getBoundingClientRect()
   const localX = clientX - bounds.left

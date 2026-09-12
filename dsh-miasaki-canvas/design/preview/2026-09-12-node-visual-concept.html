@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话布 · 节点视觉精细化概念稿（2026-09-12）</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f7fa;
+    --surface: #ffffff;
+    --text: #1f2937;
+    --muted: #64748b;
+    --faint: #94a3b8;
+    --line: #e2e8f0;
+    --accent: #3478f6;
+    --thread-a: #3478f6;
+    --thread-b: #0f9d76;
+    --thread-c: #7c3aed;
+    --mono: "Cascadia Code", Consolas, "SF Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 24px 64px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 4px; }
+  .meta { color: var(--faint); font-size: 12px; margin: 0 0 28px; }
+
+  h2 {
+    font-size: 15px; font-weight: 600; margin: 40px 0 6px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  h2 .num { color: var(--faint); font-weight: 400; margin-right: 8px; font-family: var(--mono); font-size: 13px; }
+  .lead { color: var(--muted); font-size: 13px; margin: 10px 0 18px; }
+
+  .toggle {
+    position: sticky; top: 0; z-index: 20;
+    display: inline-flex; gap: 3px; padding: 3px;
+    margin: 0 0 24px; border: 1px solid #d1d5db; border-radius: 999px;
+    background: rgba(255,255,255,.94);
+  }
+  .toggle button {
+    min-height: 30px; padding: 0 16px; border: 0; border-radius: 999px;
+    background: transparent; color: var(--muted);
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .toggle button.active { background: var(--accent); color: #fff; }
+  .toggle button:not(.active):hover { background: #eef2f7; color: var(--text); }
+
+  .pane { display: none; }
+  .pane.on { display: block; }
+
+  /* ── 卡片：现状 ───────────────────────────────── */
+  .card-old {
+    position: relative; width: 310px; height: 276px;
+    display: grid; grid-template-rows: auto auto minmax(0,1fr) auto;
+    border: 1px solid #d8e0e8; border-radius: 7px; background: #fff;
+    box-shadow: 0 3px 11px rgba(33,48,67,.08);
+  }
+  .card-old .head { display: flex; align-items: center; gap: 8px; padding: 15px 12px 8px; }
+  .card-old .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--thread-a); }
+  .card-old .title { flex: 1; min-width: 0; font-size: 13px; font-weight: 720; color: #1f2937;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-old .meta-row { display: flex; gap: 7px; padding: 0 12px; color: #94a3b8; font-size: 10px; }
+  .card-old .body { margin: 10px 14px; font-size: 12px; line-height: 1.58; color: #526174; overflow: hidden; }
+  .card-old .body p { margin: 0 0 8px; }
+  .card-old footer { display: flex; justify-content: flex-end; gap: 4px; padding: 7px; border-top: 1px solid #edf0f3; }
+  .card-old footer span { padding: 4px 7px; color: #526174; font-size: 11px; }
+  .card-old .handle {
+    position: absolute; top: -8px; left: 50%; transform: translateX(-50%);
+    width: 28px; height: 15px; display: grid; place-items: center;
+    border: 1px solid #d8e0e8; border-radius: 4px; background: #fff;
+    color: #94a3b8; font-size: 11px; letter-spacing: 1.5px; line-height: 1;
+  }
+  .card-old .float-btn {
+    position: absolute; right: -12px; width: 24px; height: 24px;
+    display: grid; place-items: center; border: 1px solid #9ca3af;
+    border-radius: 50%; background: #fff; color: #111827; font-size: 11px;
+  }
+
+  /* ── 卡片：提案 ───────────────────────────────── */
+  .card-new {
+    position: relative; width: 310px; height: 276px;
+    display: grid; grid-template-rows: auto auto minmax(0,1fr) auto;
+    background: #fff;
+    border: 1px solid color-mix(in srgb, var(--thread-a) 14%, #d8e0e8);
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 6px 16px rgba(15,23,42,.06);
+  }
+  .card-new .head { display: flex; align-items: center; gap: 9px; padding: 16px 14px 10px; }
+  .card-new .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--thread-a); }
+  .card-new .title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: #172033;
+                     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-new .badge {
+    flex: none; display: inline-flex; align-items: center; height: 18px;
+    padding: 0 8px; border-radius: 999px; background: #eef4ff; color: #2563eb;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+  }
+  .card-new .meta-row { display: flex; align-items: center; gap: 8px; padding: 0 14px; color: #8a97a8; font-size: 11px; }
+  .card-new .meta-row .sep { color: #cbd5e1; }
+  .card-new .meta-row .pill {
+    margin-left: auto; display: inline-flex; align-items: center; height: 18px;
+    padding: 0 8px; border-radius: 999px; background: #eef4ff; color: #2563eb;
+    font-size: 11px; font-weight: 600;
+  }
+  .card-new .body { margin: 12px 14px; font-size: 12.5px; line-height: 1.65; color: #526174; overflow: hidden; }
+  .card-new .body p { margin: 0 0 8px; }
+  .card-new .body code {
+    padding: 1px 4px; border-radius: 5px; background: #eef2f5; color: #334155;
+    font-family: var(--mono); font-size: 11.5px;
+  }
+  .card-new footer { display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+                     padding: 9px 12px; border-top: 1px solid #f1f4f8; }
+  .card-new footer .act {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 26px; padding: 0 10px; border: 1px solid #e3e9f0; border-radius: 8px;
+    background: #fff; color: #526174; font-size: 11.5px; font-weight: 600;
+  }
+  .card-new footer .act.primary { border-color: #dbe7fb; background: #f4f8ff; color: #2563eb; }
+  .card-new .handle {
+    position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
+    width: 30px; height: 16px; display: grid; place-items: center;
+    border: 1px solid #dde5ee; border-radius: 6px; background: #fff;
+    color: #a3b0bf; font-size: 11px; letter-spacing: 1.5px; line-height: 1;
+    box-shadow: 0 1px 3px rgba(15,23,42,.05);
+  }
+  .card-new .port {
+    position: absolute; top: 50%; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--thread-a); opacity: .35;
+  }
+  .card-new .port.in { left: -4px; transform: translateY(-50%); }
+  .card-new .port.out { right: -4px; transform: translateY(-50%); }
+  .card-new .float-btn {
+    position: absolute; right: -13px; top: 50%; transform: translateY(-50%);
+    width: 26px; height: 26px; display: grid; place-items: center;
+    border: 1px solid #dbe7fb; border-radius: 50%; background: #fff;
+    color: #2563eb; font-size: 13px; font-weight: 600;
+    box-shadow: 0 2px 8px rgba(37,99,235,.14);
+  }
+
+  .duo { display: flex; flex-wrap: wrap; gap: 40px; align-items: flex-start; }
+  .duo > figure { margin: 0; }
+  .duo figcaption {
+    margin: 0 0 14px; font-size: 12px; font-weight: 600; color: var(--muted);
+    letter-spacing: .02em;
+  }
+  .duo figcaption b { color: var(--text); font-weight: 600; }
+
+  .annot { margin: 16px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); }
+  .annot li { padding: 3px 0 3px 14px; position: relative; }
+  .annot li::before { content: ""; position: absolute; left: 0; top: 11px; width: 5px; height: 5px;
+                      border-radius: 50%; background: #cbd5e1; }
+  .annot code { font-family: var(--mono); font-size: 11.5px; color: #475569; }
+
+  /* ── 图谱观感 ─────────────────────────────────── */
+  .stage {
+    position: relative; overflow: hidden;
+    height: 372px; border: 1px solid var(--line); border-radius: 14px;
+    background: #f5f7fa;
+  }
+  .stage.dark { background: #17191b; border-color: #2c3138; }
+  .world { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  .world svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+  .world .node { position: absolute; }
+
+  /* 图谱卡片（缩略形态，两套外观） */
+  .gnode {
+    width: 310px; height: 276px; display: grid;
+    grid-template-rows: auto auto minmax(0,1fr) auto; background: #fff;
+  }
+  .gnode .head { display: flex; align-items: center; gap: 9px; }
+  .gnode .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .gnode .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gnode .meta-row { display: flex; align-items: center; gap: 8px; }
+  .gnode .body { overflow: hidden; }
+  .gnode footer { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+
+  .before .gnode {
+    border: 1px solid #d8e0e8; border-radius: 7px;
+    box-shadow: 0 3px 11px rgba(33,48,67,.08);
+  }
+  .before .gnode .head { padding: 15px 12px 8px; }
+  .before .gnode .title { font-size: 13px; font-weight: 720; color: #1f2937; }
+  .before .gnode .meta-row { padding: 0 12px; color: #94a3b8; font-size: 10px; }
+  .before .gnode .body { margin: 10px 14px; font-size: 12px; line-height: 1.58; color: #526174; }
+  .before .gnode footer { padding: 7px; border-top: 1px solid #edf0f3; }
+  .before .gnode footer span { padding: 4px 7px; color: #526174; font-size: 11px; }
+  .before svg path { fill: none; stroke: #aebbc9; stroke-width: 1.5; }
+  .before svg path.active { stroke: var(--accent); }
+  .before svg path.merge { stroke: #8b5cf6; }
+
+  .after .gnode {
+    background: #fff;
+    border: 1px solid color-mix(in srgb, var(--nc) 14%, #d8e0e8);
+    border-radius: 16px;
+    box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 6px 16px rgba(15,23,42,.06);
+  }
+  .after .gnode .head { padding: 16px 14px 10px; }
+  .after .gnode .title { font-size: 14px; font-weight: 600; color: #172033; }
+  .after .gnode .meta-row { padding: 0 14px; color: #8a97a8; font-size: 11px; }
+  .after .gnode .body { margin: 12px 14px; font-size: 12.5px; line-height: 1.65; color: #526174; }
+  .after .gnode footer { padding: 9px 12px; border-top: 1px solid #f1f4f8; }
+  .after .gnode footer .act {
+    display: inline-flex; align-items: center; height: 26px; padding: 0 10px;
+    border: 1px solid #e3e9f0; border-radius: 8px; background: #fff;
+    color: #526174; font-size: 11.5px; font-weight: 600;
+  }
+  .after .gnode footer .act.primary { border-color: #dbe7fb; background: #f4f8ff; color: #2563eb; }
+  .after .gnode .port {
+    position: absolute; top: 50%; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--nc); opacity: .35;
+  }
+  .after .gnode .port.in { left: -4px; transform: translateY(-50%); }
+  .after .gnode .port.out { right: -4px; transform: translateY(-50%); }
+  .after svg path { fill: none; stroke: #c3cdd9; stroke-width: 2; stroke-linecap: round; }
+  .after svg path.active { stroke: var(--accent); stroke-width: 2.5; }
+  .after svg path.merge { stroke: #8b5cf6; }
+
+  .stage.dark.after svg path { stroke: #3a4048; }
+  .stage.dark.after svg path.active { stroke: var(--accent); }
+  .stage.dark.after .gnode { background: #1b2028; border-color: color-mix(in srgb, var(--nc) 22%, #2c3138); }
+  .stage.dark.after .gnode .title { color: #e7ecf3; }
+  .stage.dark.after .gnode .body { color: #a8b4c4; }
+  .stage.dark.after .gnode footer { border-top-color: #262c35; }
+  .stage.dark.after .gnode footer .act { background: #232932; border-color: #303845; color: #a8b4c4; }
+  .stage.dark.before .gnode { background: #1b1c1f; border-color: #2f333a; }
+  .stage.dark.before .gnode .title { color: #e7ecf3; }
+  .stage.dark.before .gnode .body { color: #a8b4c4; }
+
+  .stage-tag {
+    position: absolute; left: 14px; bottom: 12px; z-index: 5;
+    padding: 3px 9px; border-radius: 999px;
+    background: rgba(255,255,255,.86); border: 1px solid var(--line);
+    color: var(--muted); font-size: 11px; font-weight: 600;
+  }
+  .stage.dark .stage-tag { background: rgba(27,32,40,.9); border-color: #2c3138; color: #a8b4c4; }
+
+  /* ── 令牌表 ───────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin: 6px 0 0; }
+  th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; background: #fafbfd; }
+  td code { font-family: var(--mono); font-size: 11.5px; color: #334155; background: #f4f6f9;
+            padding: 1px 5px; border-radius: 5px; white-space: nowrap; }
+  td.was { color: var(--faint); }
+  td.now { color: #0f766e; font-weight: 600; }
+  .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+            border: 1px solid rgba(0,0,0,.08); vertical-align: -2px; margin-right: 6px; }
+
+  /* ── 计划 ─────────────────────────────────────── */
+  .steps { display: grid; gap: 12px; margin-top: 6px; }
+  .step {
+    display: grid; grid-template-columns: 52px minmax(0,1fr); gap: 14px;
+    padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff;
+  }
+  .step .tag {
+    align-self: start; display: grid; place-items: center; height: 26px; border-radius: 8px;
+    background: #eef4ff; color: #2563eb; font-family: var(--mono); font-size: 12px; font-weight: 600;
+  }
+  .step h3 { margin: 2px 0 4px; font-size: 13.5px; font-weight: 600; }
+  .step p { margin: 0; color: var(--muted); font-size: 12.5px; }
+  .step .files { margin-top: 6px; color: var(--faint); font-size: 11.5px; font-family: var(--mono); }
+
+  .note {
+    margin-top: 28px; padding: 14px 16px; border: 1px solid var(--line);
+    border-left: 3px solid #f59e0b; border-radius: 10px; background: #fffdf7;
+    color: #6b5a2e; font-size: 12.5px;
+  }
+  .note b { color: #92400e; }
+  footer.page { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line);
+                color: var(--faint); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>会话布 · 节点视觉精细化概念稿</h1>
+  <p class="sub">圆润化、信息层次与连线语义的表现层提案 —— 静态对照稿，用于评审，非真实运行界面。</p>
+  <p class="meta">2026-09-12 · <code style="font-family:var(--mono);font-size:11.5px">@miasaki/dsh-canvas</code> v0.5.0-miasaki.5 · 配套设计文档 <code style="font-family:var(--mono);font-size:11.5px">design/2026-09-12-canvas-visual-refinement.md</code></p>
+
+  <div class="toggle" role="tablist">
+    <button id="btn-before" class="active" type="button">现状</button>
+    <button id="btn-after" type="button">提案</button>
+  </div>
+
+  <!-- ═══ 1. 节点解剖 ═══ -->
+  <h2><span class="num">01</span>节点解剖（1:1）</h2>
+  <p class="lead">同一张会话卡在两种视觉语言下的对比。尺寸恒定 <code style="font-family:var(--mono);font-size:11.5px">310×276</code>，差异全部来自令牌。</p>
+
+  <div class="pane on" data-pane="before">
+    <div class="duo">
+      <figure>
+        <figcaption><b>现状</b> · 上游默认观感</figcaption>
+        <div class="card-old">
+          <div class="handle">...</div>
+          <div class="float-btn" style="top:calc(50% - 30px)">+</div>
+          <div class="float-btn" style="top:calc(50% + 4px)">⑂</div>
+          <div class="head"><span class="dot"></span><span class="title">如何把会话血缘渲染成 DAG？</span></div>
+          <div class="meta-row"><span>追问</span><span>·</span><span>第 2 轮</span></div>
+          <div class="body">
+            <p>画布血缘是 DAG，但 DSH 的内容继承是单线。合并节点需要双亲入边，而 fork 边沿用 <code>parentId</code> 链。</p>
+            <p>建议默认只连直接来源，传递血缘收进详情面板。</p>
+          </div>
+          <footer><span>对比</span><span>详情</span><span>继续</span></footer>
+        </div>
+        <ul class="annot">
+          <li>圆角 <code>7px</code>，边框与线身份无关</li>
+          <li>阴影单层 <code>0 3px 11px</code>，拖动无层级变化</li>
+          <li>meta <code>10px</code>，0.8 缩放下实际约 8px</li>
+          <li>4 个浮钮 <code>right:-12px</code>，密集时与邻卡粘连</li>
+          <li>连线 1.5px、无落点</li>
+        </ul>
+      </figure>
+    </div>
+  </div>
+
+  <div class="pane" data-pane="after">
+    <div class="duo">
+      <figure>
+        <figcaption><b>提案</b> · 令牌化后的观感</figcaption>
+        <div class="card-new">
+          <div class="handle">...</div>
+          <div class="port in"></div>
+          <div class="port out"></div>
+          <div class="float-btn">+</div>
+          <div class="head">
+            <span class="dot"></span>
+            <span class="title">如何把会话血缘渲染成 DAG？</span>
+            <span class="badge">追问</span>
+          </div>
+          <div class="meta-row"><span>第 2 轮</span><span class="sep">·</span><span>14:32</span><span class="pill">工具 3</span></div>
+          <div class="body">
+            <p>画布血缘是 DAG，但 DSH 的内容继承是单线。合并节点需要双亲入边，而 fork 边沿用 <code>parentId</code> 链。</p>
+            <p>建议默认只连直接来源，传递血缘收进详情面板。</p>
+          </div>
+          <footer>
+            <span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span>
+          </footer>
+        </div>
+        <ul class="annot">
+          <li>圆角 <code>16px</code>，内层按钮 <code>8px</code> —— 两档结构</li>
+          <li>边框混入线色 <code>color-mix(--thread-color 14%)</code></li>
+          <li>阴影三级：静置 / 悬停 / 拖动</li>
+          <li>字阶上调：标题 14px、meta 11px、正文 12.5px/1.65</li>
+          <li>卡外只留 1 个主操作（追问），其余进 footer</li>
+          <li>左右缘各一个 <code>6px</code> 端点，hover 时增强到 .8</li>
+        </ul>
+      </figure>
+    </div>
+  </div>
+
+  <!-- ═══ 2. 图谱观感 ═══ -->
+  <h2><span class="num">02</span>图谱观感（缩放到 0.63）</h2>
+  <p class="lead">同一张合并谱系（fork 分叉 → 双亲汇合）在两种语言下的整体观感。浅色与深色各一组。</p>
+
+  <div class="pane on" data-pane="before">
+    <div class="stage before" style="margin-bottom:16px">
+      <div class="world" data-world="before" style="transform:scale(.63)">
+        <svg width="1010" height="576">
+          <path d="M 330 298 C 366 298, 314 158, 350 158" class="active"></path>
+          <path d="M 330 298 C 366 298, 314 438, 350 438"></path>
+          <path d="M 660 158 C 696 158, 644 298, 680 298" class="active"></path>
+          <path d="M 660 438 C 696 438, 644 298, 680 298" class="merge"></path>
+        </svg>
+        <div class="node gnode" style="left:20px;top:160px;--nc:#3478f6">
+          <div class="head"><span class="dot" style="background:#3478f6"></span><span class="title">会话布 MVP 应该包含什么？</span></div>
+          <div class="meta-row"><span>DSH 会话</span><span>·</span><span>第 1 轮</span></div>
+          <div class="body"><p>需要可浏览、可分支、可合并的三层能力，合并产出真实 DSH 会话。</p></div>
+          <footer><span>对比</span><span>详情</span><span>继续</span></footer>
+        </div>
+        <div class="node gnode" style="left:360px;top:20px;--nc:#0f9d76">
+          <div class="head"><span class="dot" style="background:#0f9d76"></span><span class="title">合并的血缘怎么渲染？</span></div>
+          <div class="meta-row"><span>DSH 分支</span><span>·</span><span>第 1 轮</span></div>
+          <div class="body"><p>画布血缘是 DAG，DSH 内容继承是单线，需要分层表达。</p></div>
+          <footer><span>对比</span><span>详情</span><span>继续</span></footer>
+        </div>
+        <div class="node gnode" style="left:360px;top:300px;--nc:#d97706">
+          <div class="head"><span class="dot" style="background:#d97706"></span><span class="title">注入形式如何取舍？</span></div>
+          <div class="meta-row"><span>DSH 分支</span><span>·</span><span>第 1 轮</span></div>
+          <div class="body"><p>全文引用精确但开销大，摘要提炼省上下文但有信息损失。</p></div>
+          <footer><span>对比</span><span>详情</span><span>继续</span></footer>
+        </div>
+        <div class="node gnode" style="left:700px;top:160px;--nc:#7c3aed">
+          <div class="head"><span class="dot" style="background:#7c3aed"></span><span class="title">合并两条线的结论</span></div>
+          <div class="meta-row"><span>合并产物</span><span>·</span><span>第 1 轮</span></div>
+          <div class="body"><p>综合血缘表达与注入形式的取舍，给出统一方案。</p></div>
+          <footer><span>对比</span><span>详情</span><span>继续</span></footer>
+        </div>
+      </div>
+      <span class="stage-tag">现状 · 浅色</span>
+    </div>
+  </div>
+
+  <div class="pane" data-pane="after">
+    <div class="stage after" style="margin-bottom:16px">
+      <div class="world" style="transform:scale(.63)">
+        <svg width="1010" height="576">
+          <path d="M 330 298 C 366 298, 314 158, 350 158" class="active"></path>
+          <path d="M 330 298 C 366 298, 314 438, 350 438"></path>
+          <path d="M 660 158 C 696 158, 644 298, 680 298" class="active"></path>
+          <path d="M 660 438 C 696 438, 644 298, 680 298" class="merge"></path>
+        </svg>
+        <div class="node gnode" style="left:20px;top:160px;--nc:#3478f6">
+          <div class="port out"></div>
+          <div class="head"><span class="dot" style="background:#3478f6"></span><span class="title">会话布 MVP 应该包含什么？</span></div>
+          <div class="meta-row"><span>DSH 会话</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>需要可浏览、可分支、可合并的三层能力，合并产出真实 DSH 会话。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+        <div class="node gnode" style="left:360px;top:20px;--nc:#0f9d76">
+          <div class="port in"></div><div class="port out"></div>
+          <div class="head"><span class="dot" style="background:#0f9d76"></span><span class="title">合并的血缘怎么渲染？</span></div>
+          <div class="meta-row"><span>DSH 分支</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>画布血缘是 DAG，DSH 内容继承是单线，需要分层表达。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+        <div class="node gnode" style="left:360px;top:300px;--nc:#d97706">
+          <div class="port in"></div><div class="port out"></div>
+          <div class="head"><span class="dot" style="background:#d97706"></span><span class="title">注入形式如何取舍？</span></div>
+          <div class="meta-row"><span>DSH 分支</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>全文引用精确但开销大，摘要提炼省上下文但有信息损失。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+        <div class="node gnode" style="left:700px;top:160px;--nc:#7c3aed;border-color:#a78bfa">
+          <div class="port in"></div><div class="port in" style="top:34%"></div>
+          <div class="head"><span class="dot" style="background:#7c3aed"></span><span class="title">合并两条线的结论</span></div>
+          <div class="meta-row"><span>合并产物</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>综合血缘表达与注入形式的取舍，给出统一方案。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+      </div>
+      <span class="stage-tag">提案 · 浅色</span>
+    </div>
+
+    <div class="stage dark after">
+      <div class="world" style="transform:scale(.63)">
+        <svg width="1010" height="576">
+          <path d="M 330 298 C 366 298, 314 158, 350 158" class="active"></path>
+          <path d="M 330 298 C 366 298, 314 438, 350 438"></path>
+          <path d="M 660 158 C 696 158, 644 298, 680 298" class="active"></path>
+          <path d="M 660 438 C 696 438, 644 298, 680 298" class="merge"></path>
+        </svg>
+        <div class="node gnode" style="left:20px;top:160px;--nc:#3478f6">
+          <div class="port out"></div>
+          <div class="head"><span class="dot" style="background:#3478f6"></span><span class="title">会话布 MVP 应该包含什么？</span></div>
+          <div class="meta-row"><span>DSH 会话</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>需要可浏览、可分支、可合并的三层能力，合并产出真实 DSH 会话。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+        <div class="node gnode" style="left:360px;top:20px;--nc:#0f9d76">
+          <div class="port in"></div><div class="port out"></div>
+          <div class="head"><span class="dot" style="background:#0f9d76"></span><span class="title">合并的血缘怎么渲染？</span></div>
+          <div class="meta-row"><span>DSH 分支</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>画布血缘是 DAG，DSH 内容继承是单线，需要分层表达。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+        <div class="node gnode" style="left:360px;top:300px;--nc:#d97706">
+          <div class="port in"></div><div class="port out"></div>
+          <div class="head"><span class="dot" style="background:#d97706"></span><span class="title">注入形式如何取舍？</span></div>
+          <div class="meta-row"><span>DSH 分支</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>全文引用精确但开销大，摘要提炼省上下文但有信息损失。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+        <div class="node gnode" style="left:700px;top:160px;--nc:#7c3aed;border-color:#6d28d9">
+          <div class="port in"></div><div class="port in" style="top:34%"></div>
+          <div class="head"><span class="dot" style="background:#7c3aed"></span><span class="title">合并两条线的结论</span></div>
+          <div class="meta-row"><span>合并产物</span><span class="sep">·</span><span>第 1 轮</span></div>
+          <div class="body"><p>综合血缘表达与注入形式的取舍，给出统一方案。</p></div>
+          <footer><span class="act">对比</span><span class="act">详情</span><span class="act primary">继续追问</span></footer>
+        </div>
+      </div>
+      <span class="stage-tag">提案 · 深色（分层靠表面提亮，不靠阴影）</span>
+    </div>
+  </div>
+
+  <!-- ═══ 3. 令牌对照 ═══ -->
+  <h2><span class="num">03</span>令牌对照</h2>
+  <p class="lead">全部取值集中为令牌，替换现有约 30~40 处裸值。下表中的每一项都不涉及数据层。</p>
+  <table>
+    <thead>
+      <tr><th style="width:26%">令牌</th><th style="width:20%">现值</th><th style="width:24%">提案</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>--node-radius</code></td><td class="was">7px</td><td class="now">16px</td><td>卡片；内层按钮 8px，构成两档结构</td></tr>
+      <tr><td><code>--node-shadow-rest</code></td><td class="was">0 3px 11px .08</td><td class="now">0 1px 2px .04 + 0 6px 16px .06</td><td>静置：更轻、更"浮"</td></tr>
+      <tr><td><code>--node-shadow-hover</code></td><td class="was">0 8px 20px .13</td><td class="now">0 2px 4px .05 + 0 12px 28px .10</td><td>悬停</td></tr>
+      <tr><td><code>--node-shadow-drag</code></td><td class="was">（无）</td><td class="now">0 4px 8px .06 + 0 20px 44px .16</td><td>新增：拖动/选中态</td></tr>
+      <tr><td><code>--canvas-border</code></td><td class="was">#d8e0e8（裸值）</td><td class="now"><span class="swatch" style="background:#d8e0e8"></span>#d8e0e8 / 暗 #2c3138</td><td>提为令牌，供混色使用</td></tr>
+      <tr><td>卡片边框</td><td class="was">固定灰</td><td class="now">color-mix(--thread-color 14%, --canvas-border)</td><td>让每条线带自己的身份色</td></tr>
+      <tr><td><code>--edge-width</code></td><td class="was">1.5px</td><td class="now">2px（活动 2.5px）</td><td>圆线帽；活动路径靠粗细+颜色双通道</td></tr>
+      <tr><td><code>--edge-color</code></td><td class="was"><span class="swatch" style="background:#aebbc9"></span>#aebbc9</td><td class="now"><span class="swatch" style="background:#c3cdd9"></span>#c3cdd9</td><td>降对比，退到卡片之后</td></tr>
+      <tr><td>端点</td><td class="was">无</td><td class="now">6px 圆，opacity .35 → hover .8</td><td>把"线"变成"连接"</td></tr>
+      <tr><td>标题</td><td class="was">13px / 720</td><td class="now">14px / 600</td><td>字重需实机确认（见下方注记）</td></tr>
+      <tr><td>meta</td><td class="was">10px</td><td class="now">11px</td><td>10px 低于可读下限</td></tr>
+      <tr><td>正文</td><td class="was">12px / 1.58</td><td class="now">12.5px / 1.65</td><td>310px 宽卡上更透气</td></tr>
+      <tr><td><code>--motion-fast / base</code></td><td class="was">140 / 150 / 180ms 混用</td><td class="now">150ms / 180ms</td><td>统一节奏；仅 transform / opacity</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>待实机确认。</b> 字重 720 → 600 的前提是字体支持可变字重。若 DSH 主题字体在 Windows 上回退到非可变字体，浏览器会取最近档 700，此时 720 与 700 等价，改为 600 会<b>变细</b>。建议先对三主题（pure / zafkiel / kurkuriel）各截一张对比图再定；若偏细则回落 650。此项不阻塞其余改动。
+  </div>
+
+  <!-- ═══ 4. 计划 ═══ -->
+  <h2><span class="num">04</span>四阶段计划</h2>
+  <p class="lead">每阶段独立可验收；任一步中止都不产生半成品。全部为表现层改动。</p>
+  <div class="steps">
+    <div class="step">
+      <div class="tag">V1</div>
+      <div>
+        <h3>令牌化与圆润化</h3>
+        <p>建立令牌组，应用圆角 / 阴影 / 边框 / 字阶 / 间距。纯 CSS，零 DOM 变更。</p>
+        <div class="files">styles.css</div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="tag">V2</div>
+      <div>
+        <h3>连线语义与端点</h3>
+        <p>2px 圆头、活动线加粗、端点圆点、按缩放的内容分级（LOD）。<code style="font-family:var(--mono);font-size:11.5px">connectorPath</code> 算法保持不变。</p>
+        <div class="files">styles.css · app.js（conversationCard 增加端点 span）</div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="tag">V3</div>
+      <div>
+        <h3>状态徽标与信息层次</h3>
+        <p>统一徽标体系；合并草稿的 draft / pending / committed / failed 与失效态表达为卡头状态带。</p>
+        <div class="files">styles.css · app.js</div>
+      </div>
+    </div>
+    <div class="step">
+      <div class="tag">V4</div>
+      <div>
+        <h3>收口与动效统一</h3>
+        <p>小地图 / 多选条 / 手势气泡 / 检查器 / 空状态统一到令牌；动效收敛到 150ms 并尊重减少动效偏好。</p>
+        <div class="files">styles.css</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="page">
+    概念稿 · 静态对照，未接入真实数据。真实观感受主题令牌（<code style="font-family:var(--mono);font-size:11.5px">--canvas-accent</code> 派生链）、字体回退与缩放档位影响，实施后需以实机截图为准。
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var btnBefore = document.getElementById('btn-before');
+    var btnAfter = document.getElementById('btn-after');
+    var panes = document.querySelectorAll('.pane');
+
+    function show(which) {
+      panes.forEach(function (pane) {
+        pane.classList.toggle('on', pane.dataset.pane === which);
+      });
+      btnBefore.classList.toggle('active', which === 'before');
+      btnAfter.classList.toggle('active', which === 'after');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    btnBefore.addEventListener('click', function () { show('before'); });
+    btnAfter.addEventListener('click', function () { show('after'); });
+  })();
+</script>
+</body>
+</html>

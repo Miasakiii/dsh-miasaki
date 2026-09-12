@@ -10,7 +10,9 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 
 ## 状态
 
-**MVP 全量完成（M1–M4）**（2026-09-05）：`@miasaki/dsh-canvas` v0.5.0-miasaki.1（MVP 收官版本；当前包版本已至 **v0.5.0-miasaki.5**，后续增量见下）——合并内核（v5 元数据 + merge RPC + 执行流）、画布交互（多选/框选、拖拽并置手势、吸收标记、详情传递血缘）、`summary` 注入形式、发送失败重试，全部实机验收。已适配 DSH 0.1.2-rc.1。已知限制与后续待办见 [CHANGELOG](design/CHANGELOG.md)。
+**MVP 全量完成（M1–M4）**（2026-09-05）：`@miasaki/dsh-canvas` v0.5.0-miasaki.1（MVP 收官版本；当前包版本已至 **v0.5.0-miasaki.6**，后续增量见下）——合并内核（v5 元数据 + merge RPC + 执行流）、画布交互（多选/框选、拖拽并置手势、吸收标记、详情传递血缘）、`summary` 注入形式、发送失败重试，全部实机验收。已适配 DSH 0.1.2-rc.1。已知限制与后续待办见 [CHANGELOG](design/CHANGELOG.md)。
+
+**视觉与交互精细化 V1–V4 已实施**（2026-09-12，`v0.5.0-miasaki.6`）：按 [设计文档](design/2026-09-12-canvas-visual-refinement.md) 落地——令牌化（圆角两档 16/8px、三级阴影、`--canvas-border`/`--edge-*`/`--motion-*`）、边框混入会话线身份色、连线 2px 圆帽 + 卡片左右缘端点圆、字阶上调（全文件无 10px 以下字号）、缩放 LOD 三档（compact ≤0.8 收正文 / mini <0.5 只留卡头，配套缩放下限 0.6→0.5）、合并草稿卡卡头状态带（待执行/执行中/已失效）、动效统一 150ms 档 + `prefers-reduced-motion` 全局尊重。纯表现层：零 schema 变更、零新依赖、`CARD_*` 几何常量未动。待实机：三主题 × 明暗 × 三档缩放视觉走查、字重 720 是否可降（先截对比图）；待决议：操作按钮方案乙（卡外只留追问）。
 
 侧边栏「会话」栏按血缘树状呈现（分支缩进于父线之下、按最近活动排序），树点与画布卡片共用会话线颜色，流式回复中的线带绿色脉冲「回复中」标识；侧边栏滚动位置在全量重渲染间保持（2026-09-05 修复滚动跳顶）。对话页顶部「对话/会话布」切换按钮**注册进 DSH 会话头 actions 官方插槽**（`conversation.session.header.actions`，与「后台任务」同一 flex 行渲染，2026-09-06 从悬浮/注入改为插槽方案）——由 DSH 布局驱动，随头部重渲染自动重挂；配色全部走 DSH 主题令牌（激活胶囊随主题品牌色：原版蓝/刻刻帝绯红/狂狂帝血绯）。
 
@@ -58,6 +60,8 @@ dsh-miasaki-canvas/
 │   ├── 2026-09-05-canvas-merge-design.md
 │   ├── 2026-09-05-m1-spike-findings.md
 │   ├── 2026-09-10-conversation-header-crowding-fix.md
+│   ├── 2026-09-12-canvas-visual-refinement.md
+│   ├── preview/2026-09-12-node-visual-concept.html
 │   └── CHANGELOG.md
 └── README.md
 ```
@@ -68,6 +72,7 @@ dsh-miasaki-canvas/
 |---|---|
 | [设计文档](design/2026-09-05-canvas-merge-design.md) | 目标、边界红线、三层分离的合并设计、架构与里程碑 |
 | [M1 SPIKE 结论](design/2026-09-05-m1-spike-findings.md) | fork API、注入消息 API、link 安装闭环、首条消息携带；改名清单与 DSH 升级风险注记 |
+| [视觉精细化设计](design/2026-09-12-canvas-visual-refinement.md) | 节点圆润化与信息层次重构：参考仓库核查、现状盘点、令牌规范、四阶段计划（**V1–V4 已实施**）、红线；配套 [概念稿](design/preview/2026-09-12-node-visual-concept.html)（静态对照，非运行界面） |
 | [CHANGELOG](design/CHANGELOG.md) | 本线变更记录 |
 | [上游用户手册](docs/zh-CN/README.md) | 安装、启动、配置、使用、卸载和限制（安装命令以本文档为准） |
 

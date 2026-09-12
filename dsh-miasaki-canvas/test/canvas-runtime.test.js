@@ -101,8 +101,12 @@ test('keeps conversation highlighting separate from the exact selected card', as
   assert.match(connectors, /active-connector/)
   assert.match(cardClick, /state\.selectedCardId = cardId/)
   assert.match(selectThread, /state\.selectedCardId = null/)
-  assert.match(styles, /\.connectors path\.active-connector \{ stroke: var\(--canvas-accent\); \}/)
-  assert.match(styles, /\[data-theme="dark"\] \.connectors path\.active-connector \{ stroke: var\(--canvas-accent-ink\); \}/)
+  // 2026-09-12 visual refinement: the active edge also widens
+  // (--edge-width-active), so the assertion tracks the token form instead of
+  // the old single-declaration shape — the contract "active edge colors ride
+  // the accent token, never a raw hex" is what must not regress.
+  assert.match(styles, /\.connectors path\.active-connector \{[^}]*stroke: var\(--canvas-accent\)/)
+  assert.match(styles, /\[data-theme="dark"\] \.connectors path\.active-connector \{[^}]*stroke: var\(--canvas-accent-ink\)/)
   assert.doesNotMatch(styles, /\.thread-card\.active/)
 })
 

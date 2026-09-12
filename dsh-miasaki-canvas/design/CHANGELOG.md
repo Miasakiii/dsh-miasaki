@@ -2,6 +2,33 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-12（二）
+
+- **视觉与交互精细化 V1–V4 实施（版本升至 `0.5.0-miasaki.6`）**：按 [设计文档](2026-09-12-canvas-visual-refinement.md)（同日草案 v0.1，状态已更新为"已实施"）落地四阶段，全部纯表现层，**零 schema 变更、零新依赖、`CARD_WIDTH/HEIGHT/GAP_Y` 未动**：
+  - **V1 令牌化与圆润化**：新增令牌组——`--canvas-border`（亮 `#d8e0e8` / 暗 `#2c3138`）、`--node-radius: 16px`、`--btn-radius: 8px`、`--float-radius: 14px`、三级阴影 `--node-shadow-rest/-hover/-drag`（拖动态由 `bindDragHandle` 挂 `.is-dragging` 类触发）、`--edge-width/-width-active/-color`、`--motion-fast/-base/-ease`。卡片圆角 7→16px、内层按钮 8px 两档结构；边框混入 `--thread-color`（静置 14% / 悬停 28%），每条会话线在画布上带自己的身份色；暗色改走"表面提亮（`#1b1c1f`→`#1b2028`）+ 边框提亮"，不靠加重阴影；字阶上调（标题 13→14px、meta/徽标 10→11px、正文 12→12.5px/1.65），卡片头内边距与正文边距放宽；**字重保持 720 未动**（§6.4 待实机确认项：先截三主题对比图再定 600/650）。
+  - **V2 连线语义与端点**：连线 1.5px 裸值 → `var(--edge-width)` 2px + `stroke-linecap: round` + 降对比色（亮 `#c3cdd9` / 暗 `#3a4048`）；活动路径 2.5px；草稿虚线 `5 4`→`6 4`。**端点**用 `.thread-card::before/::after` 伪元素实现（出点右缘/入点左缘，6px 圆、常态 `.35`、hover/选中/拖动 `.8`、`pointer-events: none`）——比草案的卡内 span 更省，`conversationCard` 零 DOM 变更。**配套改动：`zoomCanvas` 下限 0.6→0.5**，否则 LOD `mini` 档（`zoom < 0.5`）永远不可达。
+  - **LOD 内容分级**：`applyCanvasTransform`（单一出口）按 zoom 写 `.canvas-content[data-lod]`（full ≥0.8 / compact 0.5–0.8 / mini <0.5）；compact 隐藏 footer、正文收 6 行 clamp（滚动容器临时变 clamp 盒，全文仍走检查器）；mini 只留卡头（色点+标题+徽标）、卡高 56px、隐藏浮钮与拖动手柄。几何常量、命中检测、`visibleCardIds` 判据全部未动。
+  - **V3 状态徽标与信息层次**：合并草稿卡卡头新增 `merge-state-badge` 状态带（待执行/执行中/已失效，状态点+文案，紫/品牌/红三语义色，含暗色）——此前失效与禁用信息在 plan 底部需滚动才见；与既有 `◆ 合并`（committed）、`重发合并请求`（failed）在卡头层级形成完整状态判读。四个既有徽标（工具数/合并/已被吸收/重发）统一为 999px 胶囊、11px、18px 高（类名未动，测试锚点契约保持）。
+  - **V4 收口**：检查器/动作按钮/fold 的过渡时长全部收敛到动效令牌（180/150/140ms → `--motion-base/--motion-fast`）；`prefers-reduced-motion: reduce` 从仅检查器扩展为**全局瞬时化**（脉冲动画停在可见终态）；浮层圆角统一（小地图 12px、多选条/手势气泡/合并面板 14px）；`tree-row i`、`brand::after` 两处遗留 10px 提到 11px，**全文件无 10px 以下字号**。
+  - **测试**：`canvas-runtime.test.js` 两条 active-connector 逐字断言按红线改为令牌形式（活动边现在带 `--edge-width-active`，"颜色走 accent 令牌"契约不变）。`node ..\scripts\verify-all.mjs canvas` 全绿（三入口语法 + 8 文件 89 项）。
+  - **未实施（待决议/待实机）**：①字重 720→600（先截三主题对比图，偏细回落 650）；②§6.6 操作按钮方案乙"卡外只留追问、其余进 footer"（未排进四阶段，需单独决议）。
+  - **实机复验点**：三主题 × 明暗 × 0.5/0.8/1.0 缩放的圆角/阴影/边框/线宽/端点/LOD 走查（设计文档 §10 的 18 张截图清单）；拖拽时第三级阴影浮现；合并草稿卡卡头状态带；0.5 缩放下 mini 卡头形态与框选/合并手势仍可用。
+  - 触摸点：`styles.css`、`app.js`（`canvasLod` / `applyCanvasTransform` / `zoomCanvas` 下限 / `bindDragHandle` / `mergeDraftCard`）、`test/canvas-runtime.test.js`、`package.json` 版本、本文件、README、设计文档。**画布 iframe 是独立文档：刷新页面即生效，无需重启 `dsh web`**（styles/app 由 `/canvas` 路由直出）。
+
+## 2026-09-12
+
+- **视觉与交互精细化设计（设计草案，未实施）**：用户提出「界面感觉可以优化一下，节点要美观高级圆润」，并给出两个外部仓库供参考。产出 [设计文档](2026-09-12-canvas-visual-refinement.md) 与 [概念稿](preview/2026-09-12-node-visual-concept.html)：
+  - **两个参考仓库的核查结论（静态源码审查，未克隆/未运行）**：
+    - [`chen-985211/cleancode`](https://github.com/chen-985211/cleancode)（`main` @ `d318af9`，MIT）是 Electron + React Flow 的本地开发工作台，**其连线语义是"终端启动依赖"**，不传递 stdout/结构化产物 —— 与会话 fork/merge 谱系不同构。**只借鉴表现层**：节点圆角 20px / 按钮 8px 的两档结构、语义化表面 token（亮 `#e8eaeb`+白 / 暗 `#17191b`+`#1b2028`）、阴影分层（拖动提升）、连接点常态 `.4` 悬停增强、边 2px 圆帽低对比 + 活动态加粗、反馈统一 150ms。
+    - [`fandc520/dsh-comfyui`](https://github.com/fandc520/dsh-comfyui)（`master` @ `b0a4e31`，MIT）是 DSH 驱动 ComfyUI 的**服务/工具集成插件**，非节点编辑器。**只借鉴任务状态呈现**：五态模型（`pending/in_progress/completed/failed/cancelled`）+ 活跃队列/历史分区 + 按状态显示的操作入口 + 运行记录与产物引用分离。
+    - **共同判断**："高级感"来自一致性（统一圆角档、语义 token、分层阴影、克制连接点、统一节奏），全部可在原生 CSS 内实现，**不需要任何新依赖**。
+  - **现状盘点（带行号证据）**：卡片圆角 7px、边框与线色无关、阴影仅"有/无"两态、meta 10px、连线 1.5px 无落点、4 个浮钮 `right:-12px`、无内容分级（LOD）。根因是上游默认观感，与功能完备度无关。
+  - **提案要点**：圆角 7→16px（内层按钮 8px 两档结构）；阴影三级（静置/悬停/拖动）+ 暗色改走"表面提亮"而非阴影；边框混入 `--thread-color` 14% 让每条线带身份；字阶上调（标题 14px、meta 11px、正文 12.5px/1.65）；连线 2px 圆帽 + 活动 2.5px + 卡片左右缘 6px 端点（"节点感"的关键项）；操作按钮三方案对比后推荐"卡外只留追问、其余进 footer"；LOD 三档（full/compact/mini）**只改 CSS 表现，不改 `CARD_HEIGHT` 常量**。
+  - **四阶段计划**：V1 令牌化与圆润化（纯 CSS）→ V2 连线语义与端点 → V3 状态徽标与信息层次 → V4 收口与动效统一。V5（任务/产物呈现适配）列为可选、需单独决议。
+  - **红线**：DSH 唯一事实源不变、零新依赖、`CARD_WIDTH/CARD_HEIGHT/CARD_GAP_Y` 不变、`--canvas-accent` 派生链与三主题兼容不破、语义色不挪用；既有测试锚点（connectors 颜色断言 / 胶囊高度契约 / 跨线红线）**不得为视觉改动放宽，只能改断令牌形式**。
+  - **待实机确认项**：字重 720 → 600 的前提是字体支持可变字重；非可变字体下浏览器取最近档 700，改 600 会变细 —— 先截三主题对比图再定，偏细则回落 650。此项不阻塞 V1 其余改动。
+  - 触摸点：`design/2026-09-12-canvas-visual-refinement.md`（新）、`design/preview/2026-09-12-node-visual-concept.html`（新）、本文件、`README.md`。**本线代码零改动，89 项测试未运行（无代码变更）。**
+
 ## 2026-09-10
 
 - **外部视图槽：让别的插件把入口长在画布页面自己的「对话 / 会话布」旁边（同日新增）**：

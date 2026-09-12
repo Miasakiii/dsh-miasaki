@@ -3,8 +3,22 @@
    brand token (--dsw-static-deepseek-450) via canvas:theme; every accent below
    derives from it, so brand themes (zafkiel/kurkuriel) recolor the whole map.
    The #3478f6 fallbacks only apply when the map is opened outside DSH. */
-:root { --canvas-accent: #3478f6; --canvas-accent-hover: color-mix(in srgb, var(--canvas-accent) 84%, #000); --canvas-accent-ink: var(--canvas-accent); --canvas-accent-soft: color-mix(in srgb, var(--canvas-accent) 9%, #fff); --canvas-scroll-thumb: rgba(100,116,139,.5); --canvas-chrome-reserve: 0px; }
-[data-theme="dark"] { --canvas-accent-ink: color-mix(in srgb, var(--canvas-accent) 62%, #fff); --canvas-accent-soft: color-mix(in srgb, var(--canvas-accent) 20%, #191b20); --canvas-scroll-thumb: rgba(230,232,235,.3); }
+:root { --canvas-accent: #3478f6; --canvas-accent-hover: color-mix(in srgb, var(--canvas-accent) 84%, #000); --canvas-accent-ink: var(--canvas-accent); --canvas-accent-soft: color-mix(in srgb, var(--canvas-accent) 9%, #fff); --canvas-scroll-thumb: rgba(100,116,139,.5); --canvas-chrome-reserve: 0px;
+  /* Visual refinement tokens (design/2026-09-12-canvas-visual-refinement.md):
+     two-radius structure (node 16 / button 8), three elevation shadows, edge
+     width/color, motion durations. No raw values downstream. */
+  --canvas-border: #d8e0e8; --node-radius: 16px; --btn-radius: 8px; --float-radius: 14px;
+  --node-shadow-rest: 0 1px 2px rgba(15,23,42,.04), 0 6px 16px rgba(15,23,42,.06);
+  --node-shadow-hover: 0 2px 4px rgba(15,23,42,.05), 0 12px 28px rgba(15,23,42,.10);
+  --node-shadow-drag: 0 4px 8px rgba(15,23,42,.06), 0 20px 44px rgba(15,23,42,.16);
+  --edge-width: 2px; --edge-width-active: 2.5px; --edge-color: #c3cdd9;
+  --motion-fast: 150ms; --motion-base: 180ms; --motion-ease: cubic-bezier(.23,1,.32,1); }
+[data-theme="dark"] { --canvas-accent-ink: color-mix(in srgb, var(--canvas-accent) 62%, #fff); --canvas-accent-soft: color-mix(in srgb, var(--canvas-accent) 20%, #191b20); --canvas-scroll-thumb: rgba(230,232,235,.3);
+  /* Dark depth comes from lifted surfaces + borders, not stronger shadows. */
+  --canvas-border: #2c3138; --edge-color: #3a4048;
+  --node-shadow-rest: 0 1px 2px rgba(0,0,0,.4), 0 6px 16px rgba(0,0,0,.5);
+  --node-shadow-hover: 0 2px 4px rgba(0,0,0,.45), 0 12px 28px rgba(0,0,0,.62);
+  --node-shadow-drag: 0 4px 8px rgba(0,0,0,.5), 0 20px 44px rgba(0,0,0,.72); }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; background: #f5f7fa; }
 button, select, textarea { font: inherit; }
@@ -20,7 +34,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .sidebar-brand-row { box-sizing: border-box; display: flex; align-items: center; gap: 8px; height: 60px; flex: none; margin-bottom: 8px; padding: 8px 0 8px 4px; overflow: hidden; }
 .brand { gap: 8px; min-width: 0; flex: 1; }
 .brand::before { width: 31px; height: 26px; flex: none; content: ''; background: center / contain no-repeat url('/canvas/deepseek-mark.svg'); }
-.brand::after { content: '非线性工作台'; flex: none; border-radius: 3px; background: #111827; padding: 2px 5px; color: #fff; font-size: 10px; font-weight: 400; line-height: 1; white-space: nowrap; }
+.brand::after { content: '非线性工作台'; flex: none; border-radius: 3px; background: #111827; padding: 2px 5px; color: #fff; font-size: 11px; font-weight: 400; line-height: 1; white-space: nowrap; }
 .brand-mark { display: none; }
 .brand strong { font-size: 20px; font-weight: 600; letter-spacing: 0; }
 .sidebar-toggle { display: inline-grid; width: 28px; height: 28px; min-height: 28px; flex: none; place-items: center; border: 0; border-radius: 50%; background: transparent; padding: 0; color: #6b7280; }
@@ -55,7 +69,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .tree-row:hover { background: #f3f4f6; }
 .tree-row.active { background: #e5e7eb; color: #111827; font-weight: 650; }
 .tree-row span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.tree-row i { margin-left: auto; flex: none; color: #94a3b8; font-size: 10px; font-style: normal; }
+.tree-row i { margin-left: auto; flex: none; color: #94a3b8; font-size: 11px; font-style: normal; }
 .tree-row i.tree-live { color: #059669; }
 .tree-row i.tree-merge { color: #7c3aed; font-size: 11px; }
 .tree-row.is-live .tree-dot { --tree-pulse: rgba(16,185,129,.45); background: #10b981; animation: tree-live-pulse 1.4s ease-in-out infinite; }
@@ -94,18 +108,26 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .canvas-viewport.is-panning .canvas-content { will-change: transform; }
 .canvas-content { position: absolute; inset: 0; transform-origin: 0 0; }
 .connectors { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.connectors path { fill: none; stroke: #aebbc9; stroke-width: 1.5; }
-.connectors path.active-connector { stroke: var(--canvas-accent); }
-.connectors .draft-connector { stroke: var(--canvas-accent); stroke-dasharray: 5 4; }
+.connectors path { fill: none; stroke: var(--edge-color); stroke-width: var(--edge-width); stroke-linecap: round; }
+.connectors path.active-connector { stroke: var(--canvas-accent); stroke-width: var(--edge-width-active); }
+.connectors .draft-connector { stroke: var(--canvas-accent); stroke-dasharray: 6 4; }
 .cards-layer { position: absolute; inset: 0; }
-.thread-card { position: absolute; display: grid; width: 310px; height: 276px; grid-template-rows: auto auto minmax(0, 1fr) auto; border: 1px solid #d8e0e8; border-radius: 7px; background: #fff; box-shadow: 0 3px 11px rgba(33,48,67,.08); overflow: visible; }
-.thread-card:hover { border-color: #9ca3af; box-shadow: 0 8px 20px rgba(33,48,67,.13); }
-.thread-card.selected { box-shadow: 0 0 0 2px rgba(17,24,39,.16), 0 8px 20px rgba(33,48,67,.13); }
-.node-handle { position: absolute; top: -8px; left: 50%; display: grid; width: 28px; height: 15px; min-height: 15px; place-items: center; transform: translateX(-50%); border: 1px solid #d8e0e8; border-radius: 4px; background: #fff; cursor: grab; padding: 0; }
+.thread-card { position: absolute; display: grid; width: 310px; height: 276px; grid-template-rows: auto auto minmax(0, 1fr) auto; border: 1px solid color-mix(in srgb, var(--thread-color, var(--canvas-accent)) 14%, var(--canvas-border)); border-radius: var(--node-radius); background: #fff; box-shadow: var(--node-shadow-rest); overflow: visible; }
+.thread-card:hover { border-color: color-mix(in srgb, var(--thread-color, var(--canvas-accent)) 28%, var(--canvas-border)); box-shadow: var(--node-shadow-hover); }
+.thread-card.selected { box-shadow: 0 0 0 2px rgba(17,24,39,.16), var(--node-shadow-drag); }
+.thread-card.is-dragging { box-shadow: var(--node-shadow-drag); z-index: 5; }
+/* Edge ports: a dot where each connector leaves (right) and enters (left) the
+   card, so lines feel anchored instead of growing out of thin air. Pure
+   decoration — pointer-events none, dragging still goes through .node-handle. */
+.thread-card::before, .thread-card::after { content: ''; position: absolute; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: var(--edge-color); opacity: .35; pointer-events: none; }
+.thread-card::before { right: -3px; }
+.thread-card::after { left: -3px; }
+.thread-card:hover::before, .thread-card:hover::after, .thread-card.selected::before, .thread-card.selected::after, .thread-card.is-dragging::before, .thread-card.is-dragging::after { opacity: .8; }
+.node-handle { position: absolute; top: -8px; left: 50%; display: grid; width: 28px; height: 15px; min-height: 15px; place-items: center; transform: translateX(-50%); border: 1px solid var(--canvas-border); border-radius: 6px; background: #fff; cursor: grab; padding: 0; }
 .node-handle::after { content: '...'; display: block; margin: -5px 0 0 2px; color: #94a3b8; font-size: 11px; letter-spacing: 1.5px; line-height: 1; }
-.thread-card-head { gap: 8px; min-width: 0; padding: 15px 12px 8px; }
+.thread-card-head { gap: 8px; min-width: 0; padding: 16px 14px 10px; }
 .thread-card-head .topic-dot { background: var(--thread-color); }
-.thread-title { min-width: 0; flex: 1; min-height: 22px; overflow: hidden; border: 0; background: transparent; padding: 0; color: #1f2937; font-size: 13px; font-weight: 720; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.thread-title { min-width: 0; flex: 1; min-height: 22px; overflow: hidden; border: 0; background: transparent; padding: 0; color: #1f2937; font-size: 14px; font-weight: 720; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .thread-title:hover { background: transparent; color: #111827; }
 .graph-continue-button, .graph-fold-button, .graph-branch-button { position: absolute; right: -12px; z-index: 4; display: grid; width: 24px; height: 24px; min-height: 24px; place-items: center; border-color: #9ca3af; border-radius: 50%; background: #fff; padding: 0; color: #111827; }
 .graph-continue-button, .graph-fold-button { top: 50%; transform: translateY(-50%); }
@@ -119,12 +141,12 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .selection-followup:hover { border-color: var(--canvas-accent-hover); background: var(--canvas-accent-hover); color: #fff; }
 .selection-followup svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.5; }
 .selection-followup[hidden] { display: none; }
-.thread-meta { gap: 7px; padding: 0 12px; color: #94a3b8; font-size: 10px; }
+.thread-meta { gap: 7px; padding: 0 12px; color: #94a3b8; font-size: 11px; }
 .thread-meta span + span::before { content: '·'; margin-right: 7px; }
-.thread-meta .card-process-count { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border-radius: 9px; background: var(--canvas-accent-soft); padding: 0 6px; color: var(--canvas-accent); font-size: 10px; font-weight: 650; white-space: nowrap; }
+.thread-meta .card-process-count { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border-radius: 999px; background: var(--canvas-accent-soft); padding: 0 7px; color: var(--canvas-accent); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .thread-meta .card-process-count::before { content: none; }
 .thread-meta .card-error-status { color: #b42318; font-weight: 650; }
-.thread-answer { min-width: 0; min-height: 0; margin: 10px 14px; overflow-x: hidden; overflow-y: auto; color: #526174; font-size: 12px; line-height: 1.58; overflow-wrap: anywhere; overscroll-behavior: contain; }
+.thread-answer { min-width: 0; min-height: 0; margin: 12px 14px; overflow-x: hidden; overflow-y: auto; color: #526174; font-size: 12.5px; line-height: 1.65; overflow-wrap: anywhere; overscroll-behavior: contain; }
 /* ── Unified scrollbars: 6px themed pills on every scroll container, invisible
    until the container is hovered/focused so cards no longer show permanent
    gray bars (Firefox: thin + scrollbar-color always-on as the fallback). ── */
@@ -142,7 +164,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .thread-answer pre { margin: 0 0 8px; max-width: 100%; overflow-x: auto; border: 1px solid #e0e7ee; border-radius: 4px; background: #fff; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .thread-answer pre code { background: transparent; padding: 0; }
 .thread-answer table { display: block; max-width: 100%; margin: 0 0 8px; overflow-x: auto; border-collapse: collapse; font-size: 11px; }
-.thread-answer th, .thread-answer td { border: 1px solid #d8e0e8; padding: 4px 6px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.thread-answer th, .thread-answer td { border: 1px solid var(--canvas-border); padding: 4px 6px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
 .thread-answer th { background: #f5f7fa; font-weight: 720; }
 .thread-answer-empty { color: #94a3b8; }
 .thread-answer-pending, .message-pending p { color: #374151; font-style: italic; }
@@ -153,7 +175,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .thread-card footer button:hover { background: #f3f4f6; color: #111827; border-radius: 6px; }
 .thread-card footer .compare-button { margin-right: auto; color: #374151; }
 .thread-card footer .compare-button.selected { background: #e5e7eb; color: #111827; }
-.card-inspector { position: absolute; z-index: 30; top: 0; right: 0; bottom: 0; display: flex; width: min(460px, calc(100% - 48px)); min-width: 360px; flex-direction: column; border-left: 1px solid #dbe3ec; background: #fff; opacity: 1; transform: translateX(0); transition: transform 180ms cubic-bezier(.23,1,.32,1), opacity 150ms ease-out; }
+.card-inspector { position: absolute; z-index: 30; top: 0; right: 0; bottom: 0; display: flex; width: min(460px, calc(100% - 48px)); min-width: 360px; flex-direction: column; border-left: 1px solid #dbe3ec; background: #fff; opacity: 1; transform: translateX(0); transition: transform var(--motion-base) var(--motion-ease), opacity var(--motion-fast) ease-out; }
 .card-inspector.is-opening, .card-inspector.is-closing { opacity: 0; transform: translateX(28px); }
 .card-inspector-head { display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 12px; align-items: start; padding: 18px 20px 12px; background: #fff; }
 .card-inspector-meta { display: flex; align-items: center; gap: 7px; color: #8390a0; font-size: 11px; }
@@ -177,7 +199,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .card-inspector-answer pre { max-width: 100%; margin: 0; overflow-x: auto; border: 1px solid #e0e7ee; border-radius: 6px; background: #f8fafc; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .card-inspector-answer pre code { background: transparent; padding: 0; }
 .card-inspector-answer table { display: block; max-width: 100%; margin: 0; overflow-x: auto; border-collapse: collapse; font-size: 12px; }
-.card-inspector-answer th, .card-inspector-answer td { border: 1px solid #d8e0e8; padding: 5px 8px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.card-inspector-answer th, .card-inspector-answer td { border: 1px solid var(--canvas-border); padding: 5px 8px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
 .card-inspector-answer th { background: #f5f7fa; font-weight: 720; }
 .card-inspector-pending { margin: 0; color: #7b8794; font-size: 13px; font-style: italic; }
 .card-inspector-error { margin: 0; border-left: 3px solid #d92d20; padding: 3px 0 3px 10px; color: #7a271a; font-size: 13px; line-height: 1.65; }
@@ -187,7 +209,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .card-inspector .process-records-fold { border-radius: 0; background: transparent; padding: 4px 0; }
 .card-inspector .process-records-fold:hover { background: transparent; }
 .card-inspector-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; padding: 11px 14px; border-top: 1px solid #e7edf3; background: #fff; }
-.card-inspector-actions button { display: inline-flex; min-height: 30px; align-items: center; gap: 4px; padding: 0 9px; font-size: 11px; font-weight: 600; transition: transform 140ms ease-out, border-color 150ms ease, background 150ms ease, color 150ms ease; }
+.card-inspector-actions button { display: inline-flex; min-height: 30px; align-items: center; gap: 4px; padding: 0 9px; font-size: 11px; font-weight: 600; transition: transform var(--motion-fast) ease-out, border-color var(--motion-fast) ease, background var(--motion-fast) ease, color var(--motion-fast) ease; }
 .card-inspector-actions button svg { width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.4; }
 .card-inspector-actions .primary { border-color: var(--canvas-accent); background: var(--canvas-accent); color: #fff; }
 .card-inspector-actions .primary:hover { border-color: var(--canvas-accent-hover); background: var(--canvas-accent-hover); }
@@ -258,14 +280,14 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .message-body pre { max-width: 100%; margin: 0; overflow-x: auto; border: 1px solid #e0e7ee; border-radius: 6px; background: #fff; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message-body pre code { background: transparent; padding: 0; font-size: 12px; }
 .message-body table { display: block; max-width: 100%; margin: 0; overflow-x: auto; border-collapse: collapse; font-size: 12px; }
-.message-body th, .message-body td { border: 1px solid #d8e0e8; padding: 5px 8px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.message-body th, .message-body td { border: 1px solid var(--canvas-border); padding: 5px 8px; text-align: left; overflow-wrap: anywhere; white-space: normal; }
 .message-body th { background: #f5f7fa; font-weight: 720; }
 .message-branch { display: inline-flex; align-items: center; gap: 4px; min-height: 22px; margin-left: auto; border: 0; border-radius: 5px; background: transparent; padding: 0 6px; color: #8a97a8; font-size: 11px; }
 .message-branch:hover { background: var(--canvas-accent-soft); color: var(--canvas-accent); }
 .message-branch svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .message-fold { display: grid; width: 24px; min-height: 24px; place-items: center; margin-left: 0; border: 0; border-radius: 50%; background: transparent; padding: 0; color: #94a3b8; }
 .message-fold:hover { background: var(--canvas-accent-soft) !important; color: var(--canvas-accent) !important; }
-.message-fold svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; transition: transform .15s ease; }
+.message-fold svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; transition: transform var(--motion-fast) ease; }
 .message-collapsible.expanded .message-fold svg { transform: rotate(90deg); }
 .message-summary { overflow: hidden; color: #64748b !important; text-overflow: ellipsis; white-space: nowrap; }
 .message-streaming { display: inline-flex; align-items: center; gap: 6px; color: #6b7280 !important; font-style: italic; }
@@ -304,7 +326,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .compare-notes p { margin: 0; padding: 11px 0; border-top: 1px solid #eef2f5; color: #475569; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
 @media (max-width: 760px) { .canvas-shell { --sidebar-width: 200px; --sidebar-half: 100px; } .canvas-shell.sidebar-collapsed { --sidebar-width: 56px; --sidebar-half: 28px; } .sidebar { padding: 6px 10px; } .detail-head { display: grid; gap: 12px; padding: 22px 18px 14px; } .detail-scroll { padding: 16px 18px 20px; } .message-composer { padding: 12px 18px 16px; } .message-user { max-width: 92%; } .compare-view { padding: 26px 18px; } .compare-columns { grid-template-columns: 1fr; } .topbar { padding: 0 10px; } .brand strong { display: none; } .card-inspector { top: auto; width: 100%; min-width: 0; max-height: 78%; border-top: 1px solid #dbe3ec; border-left: 0; } .card-inspector.is-opening, .card-inspector.is-closing { transform: translateY(24px); } }
 @media (max-width: 560px) { .canvas-shell { min-width: 0; grid-template-columns: 1fr; } .sidebar { display: none; } .topbar, .main-stage { grid-column: 1; } .view-switch { left: 50%; } .view-switch button { padding: 0 7px; } .top-actions > button { font-size: 11px; padding: 0 7px; } .thread-card { width: 280px; } }
-@media (prefers-reduced-motion: reduce) { .card-inspector { transition: opacity 120ms ease; } .card-inspector.is-opening, .card-inspector.is-closing { transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } .card-inspector.is-opening, .card-inspector.is-closing { transform: none; } }
 
 /* ── Dark theme: follows DSH's body[data-ds-dark-theme] via canvas:theme ── */
 [data-theme="dark"] { color-scheme: dark; }
@@ -318,13 +340,13 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .canvas-tabs button.active, [data-theme="dark"] .canvas-tabs button:hover { color: var(--canvas-accent-ink); border-bottom-color: var(--canvas-accent-ink); }
 [data-theme="dark"] .canvas-viewport { background: #0f1115; }
 [data-theme="dark"] .canvas-content { background: #0f1115; }
-[data-theme="dark"] .connectors path { stroke: #3a3f47; }
+[data-theme="dark"] .connectors path { stroke: var(--edge-color); }
 [data-theme="dark"] .connectors path.active-connector { stroke: var(--canvas-accent-ink); }
 [data-theme="dark"] .connectors .draft-connector { stroke: var(--canvas-accent-ink); }
-[data-theme="dark"] .thread-card { border-color: #2a2d33; background: #1b1c1f; box-shadow: 0 3px 11px rgba(0,0,0,.35); }
-[data-theme="dark"] .thread-card:hover { border-color: #4a4f57; box-shadow: 0 8px 20px rgba(0,0,0,.45); }
-[data-theme="dark"] .thread-card.selected { box-shadow: 0 0 0 2px color-mix(in srgb, var(--canvas-accent) 40%, transparent), 0 8px 20px rgba(0,0,0,.45); }
-[data-theme="dark"] .node-handle { border-color: #2a2d33; background: #1b1c1f; }
+[data-theme="dark"] .thread-card { border-color: color-mix(in srgb, var(--thread-color, var(--canvas-accent)) 18%, var(--canvas-border)); background: #1b2028; box-shadow: var(--node-shadow-rest); }
+[data-theme="dark"] .thread-card:hover { border-color: color-mix(in srgb, var(--thread-color, var(--canvas-accent)) 32%, var(--canvas-border)); box-shadow: var(--node-shadow-hover); }
+[data-theme="dark"] .thread-card.selected { box-shadow: 0 0 0 2px color-mix(in srgb, var(--canvas-accent) 40%, transparent), var(--node-shadow-drag); }
+[data-theme="dark"] .node-handle { border-color: var(--canvas-border); background: #1b2028; }
 [data-theme="dark"] .node-handle::after { color: #737a83; }
 [data-theme="dark"] .thread-title { color: #e6e8eb; }
 [data-theme="dark"] .thread-title:hover { color: #fff; }
@@ -473,10 +495,10 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .graph-merge-button:hover { border-color: #7c3aed; background: #f5f3ff; }
 .graph-merge-button:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; }
 .connectors .merge-connector { stroke: #8b5cf6; }
-.connectors .merge-connector-draft { stroke: #8b5cf6; stroke-dasharray: 5 4; }
+.connectors .merge-connector-draft { stroke: #8b5cf6; stroke-dasharray: 6 4; }
 .thread-card.is-merge-node { border-color: #a78bfa; box-shadow: 0 3px 11px rgba(124,58,237,.14); }
 .thread-card.is-merge-node .topic-dot { background: #7c3aed; }
-.thread-card .merge-badge { display: inline-flex; align-items: center; margin-left: auto; border-radius: 9px; background: #f5f3ff; padding: 0 6px; color: #7c3aed; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.thread-card .merge-badge { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border-radius: 999px; background: #f5f3ff; padding: 0 7px; color: #7c3aed; font-size: 11px; font-weight: 650; white-space: nowrap; }
 .thread-card.merge-draft-card { border: 1px dashed #a78bfa; background: #fdfcff; }
 .thread-card.merge-draft-card .merge-diamond { width: 11px; height: 11px; flex: none; background: #7c3aed; transform: rotate(45deg); border-radius: 2px; }
 .merge-plan { margin: 10px 14px; overflow-y: auto; border: 1px solid #ede9fe; border-radius: 6px; background: #faf8ff; padding: 8px 10px; font-size: 11px; line-height: 1.6; color: #4c1d95; }
@@ -490,8 +512,14 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .thread-card.merge-draft-card footer .merge-execute { border-color: #7c3aed; background: #7c3aed; color: #fff; }
 .thread-card.merge-draft-card footer button:hover { border-color: #6d28d9; }
 .thread-card.merge-draft-card footer button:disabled { opacity: .55; }
+/* Merge draft status band (V3): state readable from the card head, not only
+   from the plan body at the bottom. Dot + pill, merge-purple semantics. */
+.thread-card .merge-state-badge { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; min-height: 18px; border-radius: 999px; background: #f5f3ff; padding: 0 8px; color: #7c3aed; font-size: 11px; font-weight: 650; white-space: nowrap; }
+.thread-card .merge-state-badge::before { content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; background: currentColor; }
+.thread-card .merge-state-badge.is-busy { background: #ede9fe; color: #6d28d9; }
+.thread-card .merge-state-badge.is-stale { background: #fef2f2; color: #b91c1c; }
 .merge-panel { position: absolute; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(15,23,42,.32); }
-.merge-panel-body { display: grid; width: min(420px, calc(100vw - 48px)); gap: 10px; border: 1px solid #ddd6fe; border-radius: 10px; background: #fff; padding: 16px; box-shadow: 0 18px 48px rgba(49,26,110,.28); }
+.merge-panel-body { display: grid; width: min(420px, calc(100vw - 48px)); gap: 10px; border: 1px solid #ddd6fe; border-radius: var(--float-radius); background: #fff; padding: 16px; box-shadow: 0 18px 48px rgba(49,26,110,.28); }
 .merge-panel-head { display: flex; align-items: center; justify-content: space-between; color: #1e1b4b; font-size: 14px; }
 .merge-panel-head button { width: 24px; min-height: 24px; border-radius: 6px; background: transparent; color: #6b7280; font-size: 15px; }
 .merge-panel-head button:hover { background: #f3f4f6; color: #111827; }
@@ -510,6 +538,9 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .thread-card.is-merge-node { border-color: #6d28d9; }
 [data-theme="dark"] .thread-card .merge-badge { background: #2e1065; color: #c4b5fd; }
 [data-theme="dark"] .thread-card.merge-draft-card { border-color: #6d28d9; background: #221a33; }
+[data-theme="dark"] .thread-card .merge-state-badge { background: #2e1065; color: #c4b5fd; }
+[data-theme="dark"] .thread-card .merge-state-badge.is-busy { background: #4c1d95; color: #ddd6fe; }
+[data-theme="dark"] .thread-card .merge-state-badge.is-stale { background: #2b1a1c; color: #f0a3a3; }
 [data-theme="dark"] .merge-plan { border-color: #3b2a63; background: #251c3d; color: #ddd6fe; }
 [data-theme="dark"] .merge-plan-label { color: #c4b5fd; }
 [data-theme="dark"] .merge-plan-stale { border-top-color: #4c1d95; color: #fca5a5; }
@@ -523,18 +554,18 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 /* --- M3: multi-select, marquee, proximity-merge gesture, absorbed marker, lineage --- */
 .thread-card.multi-selected { border-color: var(--canvas-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--canvas-accent) 45%, transparent), 0 3px 11px rgba(33,48,67,.12); }
 .canvas-marquee { position: absolute; z-index: 30; border: 1px solid var(--canvas-accent); background: color-mix(in srgb, var(--canvas-accent) 12%, transparent); border-radius: 3px; pointer-events: none; }
-.multi-select-bar { position: absolute; left: 50%; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 10px; transform: translateX(-50%); border: 1px solid #d1d5db; border-radius: 10px; background: #fff; padding: 8px 14px; box-shadow: 0 8px 24px rgba(33,48,67,.18); font-size: 12px; color: #374151; white-space: nowrap; }
+.multi-select-bar { position: absolute; left: 50%; bottom: 18px; z-index: 60; display: flex; align-items: center; gap: 10px; transform: translateX(-50%); border: 1px solid #d1d5db; border-radius: var(--float-radius); background: #fff; padding: 8px 14px; box-shadow: 0 8px 24px rgba(33,48,67,.18); font-size: 12px; color: #374151; white-space: nowrap; }
 .multi-select-bar button { min-height: 28px; border-color: #d1d5db; border-radius: 6px; background: #fff; padding: 0 10px; color: #374151; font-size: 12px; font-weight: 650; }
 .multi-select-bar .primary { border-color: #7c3aed; background: #7c3aed; color: #fff; }
 .multi-select-bar .primary:hover { border-color: #6d28d9; background: #6d28d9; }
 .merge-gesture { position: absolute; inset: 0; z-index: 65; display: grid; place-items: center; background: rgba(15,23,42,.24); }
-.merge-gesture-body { display: grid; width: min(380px, calc(100vw - 64px)); gap: 8px; border: 1px solid #a78bfa; border-radius: 10px; background: #fff; padding: 16px; box-shadow: 0 18px 48px rgba(49,26,110,.3); }
+.merge-gesture-body { display: grid; width: min(380px, calc(100vw - 64px)); gap: 8px; border: 1px solid #a78bfa; border-radius: var(--float-radius); background: #fff; padding: 16px; box-shadow: 0 18px 48px rgba(49,26,110,.3); }
 .merge-gesture-body strong { color: #1e1b4b; font-size: 14px; }
 .merge-gesture-body p { margin: 0; color: #526174; font-size: 12px; line-height: 1.55; }
 .merge-gesture-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .merge-gesture-actions button { min-height: 30px; border-color: #d1d5db; border-radius: 6px; background: #fff; padding: 0 12px; color: #374151; font-size: 12px; font-weight: 650; }
 .merge-gesture-actions .primary { border-color: #7c3aed; background: #7c3aed; color: #fff; }
-.thread-card .absorbed-badge { display: inline-flex; align-items: center; margin-left: auto; border: 0; border-radius: 9px; background: transparent; padding: 0 6px; color: #9ca3af; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.thread-card .absorbed-badge { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border: 0; border-radius: 999px; background: transparent; padding: 0 7px; color: #9ca3af; font-size: 11px; font-weight: 650; white-space: nowrap; }
 .thread-card .absorbed-badge:hover { color: #7c3aed; background: #f5f3ff; }
 .thread-card .absorbed-badge:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; }
 .thread-card:has(.absorbed-badge) .merge-badge { margin-left: 0; }
@@ -556,13 +587,13 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .detail-lineage .detail-lineage-expand { border-style: dashed; color: #a78bfa; }
 
 /* --- M4: merge-send retry badge, summary form --- */
-.thread-meta .merge-retry { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border: 0; border-radius: 9px; background: #fff7ed; padding: 0 7px; color: #c2410c; font-size: 10px; font-weight: 650; white-space: nowrap; }
+.thread-meta .merge-retry { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border: 0; border-radius: 999px; background: #fff7ed; padding: 0 8px; color: #c2410c; font-size: 11px; font-weight: 650; white-space: nowrap; }
 .thread-meta .merge-retry:hover { background: #ffedd5; }
 .thread-meta .merge-retry::before { content: none; }
 [data-theme="dark"] .thread-meta .merge-retry { background: #431407; color: #fdba74; }
 
 /* --- Minimap: node overview + viewport outline, click/drag to navigate --- */
-.canvas-minimap { position: absolute; right: 16px; bottom: 16px; z-index: 55; border: 1px solid #cbd5e1; border-radius: 8px; background: rgba(255,255,255,.92); padding: 4px; box-shadow: 0 6px 20px rgba(33,48,67,.16); backdrop-filter: blur(6px); cursor: crosshair; user-select: none; }
+.canvas-minimap { position: absolute; right: 16px; bottom: 16px; z-index: 55; border: 1px solid var(--canvas-border); border-radius: 12px; background: rgba(255,255,255,.92); padding: 4px; box-shadow: 0 6px 20px rgba(33,48,67,.16); backdrop-filter: blur(6px); cursor: crosshair; user-select: none; }
 .canvas-minimap svg { display: block; }
 .minimap-card { fill: #94a3b8; rx: 1; }
 .minimap-card-merge { fill: #8b5cf6; }
@@ -575,3 +606,12 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .minimap-card-selected, [data-theme="dark"] .minimap-card-active { fill: var(--canvas-accent); }
 [data-theme="dark"] .minimap-viewport { fill: color-mix(in srgb, var(--canvas-accent) 12%, transparent); stroke: var(--canvas-accent); }
 .canvas-controls button.active { border-color: var(--canvas-accent); color: var(--canvas-accent); }
+
+/* --- V2: level of detail — zoom-driven content tiers. CSS-only: geometry
+   constants (CARD_WIDTH/HEIGHT/GAP_Y), hit-testing and visibleCardIds are
+   untouched; data-lod is written by applyCanvasTransform (single exit). --- */
+.canvas-content[data-lod="compact"] .thread-card footer { display: none; }
+.canvas-content[data-lod="compact"] .thread-answer { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; }
+.canvas-content[data-lod="mini"] .thread-card { height: 56px; grid-template-rows: auto; align-items: center; }
+.canvas-content[data-lod="mini"] .thread-card-head { align-items: center; padding: 0 12px; }
+.canvas-content[data-lod="mini"] .thread-meta, .canvas-content[data-lod="mini"] .thread-answer, .canvas-content[data-lod="mini"] .thread-card footer, .canvas-content[data-lod="mini"] .node-handle, .canvas-content[data-lod="mini"] .graph-continue-button, .canvas-content[data-lod="mini"] .graph-fold-button, .canvas-content[data-lod="mini"] .graph-branch-button, .canvas-content[data-lod="mini"] .graph-merge-button { display: none; }
