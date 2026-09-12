@@ -2,6 +2,27 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-12 · 依赖安全：sharp 升级 0.35.4（修复 libheif 高危漏洞）
+
+- **来源**：GitHub dependabot alert #2（severity **high**，`GHSA-rgj7-g3m4-5g8c`）——
+  `sharp < 0.35.4` 受 libheif 两个漏洞影响（`GHSA-g89c-p67h-r497` / `GHSA-2jg2-4ch7-h545`），
+  清单为 `dsh-miasaki-desktop/package-lock.json`。
+- **处置**：采纳 dependabot PR #1 的改动——`sharp` 0.35.3 → **0.35.4**、`@img/sharp-*` 平台包
+  0.35.3 → 0.35.4、`@img/sharp-libvips-*` 1.3.2 → 1.3.3，`package.json` 下限 `^0.35.3` → `^0.35.4`。
+  **逐条目审计**（node 解析两版 lock 逐包比对）：46 个包条目数量一致、无增删，28 处差异
+  全部落在 sharp 家族，其余依赖与 `lockfileVersion` 零变动——确认采纳无副作用。
+- **附带修正**：`pnpm-lock.yaml` 的 importer `specifier` 由 `^0.35.3` 同步为 `^0.35.4`
+  （其解析版本本就已是 0.35.4），使两套锁文件与 `package.json` 自洽，
+  `pnpm install --frozen-lockfile` 不再判定锁文件过期。
+- **验证**：`verify-all desktop` **8/8**（`build-init` 实际经 sharp 处理 whale / kurumi 图集，
+  78 KB 产物令牌校验通过）。GitHub 侧 alert 已转 `fixed`（`fixed_at` 2026-09-12T14:32:03Z），无 open alert。
+- **背景**：sharp 仅用于**构建链脚本**（`cut-frames` / `inverse-states` / `make-icons` /
+  `make-inverse-sheet` / `build-init`），不进运行时；本地 `node_modules` 此前已解析到 0.35.4，
+  本次修的是**锁文件记录**（npm 侧此前仍锁 0.35.3，dependabot 读的正是它）。
+  **遗留观察**：本线同时存在 `package-lock.json` 与 `pnpm-lock.yaml` 两套锁文件，dependabot 只读前者，
+  建议后续统一（另行决议，本次未动）。
+- 触摸点：`package.json`、`package-lock.json`、`pnpm-lock.yaml`、本文件。**无需重编壳**（依赖不进运行时）。
+
 ## 2026-09-12 · 桌宠 v3 M2 真实工作状态（**官方契约为主信号,DOM 降级兜底**）
 
 按 [`pet-v3-roadmap.md`](pet-v3-roadmap.md) M2 执行,含 M0 探针(跑完即删)。**官方契约通道
