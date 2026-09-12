@@ -107,6 +107,7 @@ extern "system" {
     pub(crate) fn GetWindowRect(h: isize, r: *mut Rect) -> i32;
     pub(crate) fn GetSystemMetrics(idx: i32) -> i32;
     pub(crate) fn SetTimer(h: isize, id: usize, ms: u32, cb: usize) -> usize;
+    pub(crate) fn KillTimer(h: isize, id: usize) -> i32;
     pub(crate) fn PostQuitMessage(c: i32);
     pub(crate) fn EnumDisplayMonitors(
         hdc: isize,
@@ -138,6 +139,7 @@ pub(crate) const WS_EX_TOPMOST: u32 = 0x0000_0008;
 pub(crate) const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 pub(crate) const CS_HREDRAW: u32 = 0x0002;
 pub(crate) const CS_VREDRAW: u32 = 0x0001;
+pub(crate) const CS_DBLCLKS: u32 = 0x0008;
 pub(crate) const GWLP_USERDATA: i32 = -21;
 pub(crate) const SW_SHOW: i32 = 5;
 pub(crate) const SW_HIDE: i32 = 0;

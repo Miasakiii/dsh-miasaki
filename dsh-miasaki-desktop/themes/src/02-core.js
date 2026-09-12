@@ -14,7 +14,7 @@
   function computeDiag() {
     var d = '0.0.0.0.0.0.0.0.0.0.0.0'
     try {
-      var len = (STYLES[current] || '').length
+      var len = styleFor(current).length
       var headOk = document.head ? 1 : 0
       var attached = styleEl && styleEl.parentNode !== null ? 1 : 0
       var sw = document.getElementById('miasaki-switcher') ? 1 : 0
@@ -50,16 +50,27 @@
         }
         var actPart = '&act=' + CUR_ACT
         var waitPart = CUR_WAIT ? '&wait=1' : '&wait=0'
-        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + '&diag=' + DIAG_CACHE)
+        // M2(v3):官方契约六态通道（dsh-pet-panel 上报 window.__miasakiPetPanel）。
+        // 5s 内有心跳才合并进 hash（pet=/pettool=/petts=）；本函数是 hash 单写者，
+        // pet-panel 只更新全局对象不写 hash。通道静默 → 不带 pet 字段 → Rust 走 DOM 兜底。
+        var petPart = ''
+        try {
+          var pp = window.__miasakiPetPanel
+          if (pp && pp.ts && now - pp.ts < 5000) {
+            petPart = '&pet=' + pp.state + '&pettool=' + encodeURIComponent(pp.tool || '') + '&petts=' + pp.ts
+          }
+        } catch (e) { /* ignore */ }
+        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + petPart + '&diag=' + DIAG_CACHE)
       }
     } catch (e) { /* ignore */ }
   }
 
-  function notifyPet() {
+  function notifyPet(forTheme) {
     try {
+      var targetTheme = forTheme || current
       if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
         window.__TAURI__.core.invoke('set_pet_mode', {
-          mode: PET_MODES[current] || 'whale'
+          mode: PET_MODES[targetTheme] || 'whale'
         }).catch(function () {})
       }
     } catch (e) { /* 非 Tauri 环境（普通浏览器）忽略 */ }
@@ -107,10 +118,19 @@
 
   function setAttr(t) {
     var el = document.documentElement
-    if (el) el.setAttribute('data-miasaki-theme', t)
+    if (el) {
+      el.setAttribute('data-miasaki-theme', t)
+      // M2 S6 让位协议的双向保险标记：让位时置位，appearance 线据此判定
+      // 「desktop 是否按协议让位」（§8 override-conflict——桌面壳在位却未让位才冲突）。
+      if (appearanceYield()) el.setAttribute('data-miasaki-theme-yield', 'skin')
+      else el.removeAttribute('data-miasaki-theme-yield')
+    }
   }
 
   function syncDark() {
+    // 让位：明暗所有权归官方 presenter（overrideTokens 注册会触发它的全量 apply），
+    // desktop 的 FORCE_DARK 锁定停用；此前锁定的属性由 presenter 的下一次 apply 修正。
+    if (appearanceYield()) return
     if (!document.body) return
     var want = FORCE_DARK[current]
     if (current === 'pure') {
@@ -133,6 +153,7 @@
   function startObserver() {
     if (observer || !document.body) return
     observer = new MutationObserver(function (muts) {
+      if (appearanceYield()) return
       var want = FORCE_DARK[current]
       if (current === 'pure') {
         if (BRIGHT === 'dark') want = true
@@ -150,12 +171,30 @@
     })
   }
 
+  // M2 S6：appearance 门控属性（data-mia-appearance / data-mia-skin）的观察者——
+  // 与上面的明暗 observer 职责不同。appearance 的 boot script 写属性可能晚于本 init
+  // script 的首次判定（时序补偿，M2 §4.1 设计约束 2），必须监听翻转时机：
+  // 让位发生 → 重跑 apply(current)（styleFor 按新状态只注入 deco + 置 yield 标记）；
+  // 让位解除（用户关总开关）→ 同样重跑，恢复 skin 注入与明暗锁定，无需刷新页面。
+  var yieldObserver = null
+  function recomputeYield() {
+    try { apply(current) } catch (e) { /* 巡检兜底 */ }
+  }
+  function startYieldObserver() {
+    if (yieldObserver || !document.documentElement) return
+    yieldObserver = new MutationObserver(function () { recomputeYield() })
+    yieldObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-mia-appearance', 'data-mia-skin', 'data-mia-wallpaper']
+    })
+  }
+
   function apply(t) {
     if (ORDER.indexOf(t) < 0) t = 'pure'
     current = t
     setAttr(t)
     ensureStyle()
-    if (styleEl) styleEl.textContent = STYLES[t] || ''
+    if (styleEl) styleEl.textContent = styleFor(t)
     syncDark()
     try { localStorage.setItem(KEY, t) } catch (e) { /* ignore */ }
     // 核心同步优先:桌宠 hash 通道 / 切换条图标 / 标题栏 —— 装饰层失败不得阻断

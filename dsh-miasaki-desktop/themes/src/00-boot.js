@@ -76,6 +76,23 @@
   })
 
   var STYLES = (typeof window.__MIASAKI_STYLES__ === 'object' && window.__MIASAKI_STYLES__) || {}
+  // M2 S6 让位协议（appearance M2 设计 §4.1）：appearance 线接管主题时（总开关 on 且皮肤非
+  // pure），desktop **停注入 skin 配色层**并停明暗锁定——装饰层与 --ms-* 恒保留。
+  // 判定属性由 appearance 的 boot script 写在 <html> 上。
+  function appearanceYield() {
+    try {
+      var root = document.documentElement
+      return root.getAttribute('data-mia-appearance') === 'on' && (root.getAttribute('data-mia-skin') || 'pure') !== 'pure'
+    } catch (e) { return false }
+  }
+  // 非 pure 主题样式为 {skin, deco} 两层；让位只注入 deco，否则 deco + skin
+  // （级联等价于拆分前；让位期配色由 appearance 线的 static 覆盖接管）。
+  function styleFor(t) {
+    var s = STYLES[t]
+    if (!s) return ''
+    if (typeof s === 'string') return s
+    return appearanceYield() ? (s.deco || '') : (s.deco || '') + (s.skin || '')
+  }
   var KEY = 'miasaki.theme'
   var ORDER = ['pure', 'zafkiel', 'kurkuriel']
   var META = {

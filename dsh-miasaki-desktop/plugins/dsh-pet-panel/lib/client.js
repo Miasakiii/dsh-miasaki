@@ -6,8 +6,9 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
 
-		/** Required services: the slot registry is the only hard dependency. */
-		const inject = ["slots", "remote.session", "workspaces"];
+		/** Required services: slots + 会话双通道。uiSession（审批等待）/ sessions（运行状态）
+		 *  均受 cordis inject 白名单保护——未声明的属性访问直接抛错（探针实证 2026-09-12）。 */
+		const inject = ["slots", "remote.session", "workspaces", "sessions", "uiSession"];
 
 		//#region hash 命令通道
 		/**
@@ -171,6 +172,85 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * M2 桌宠六态上报（官方契约通道，2026-09-12，pet-v3-roadmap.md M2）：
+		 * 读官方 ClientSessions（当前选中会话的 SessionSnapshot：running/lastAgentError）
+		 * 与 UiSession.pendingInteractions（审批等待），合成六态
+		 * idle/thinking/waiting/error/done 写 window.__miasakiPetPanel；
+		 * 由桌面端注入运行时（themes/src/02-core.js syncHash）合并进 URL hash
+		 * （pet=/pettool=/petts=）——hash 单写者仍是注入运行时，本插件不直接写 hash。
+		 * 心跳 1.5s；官方通道 5s 无心跳时注入运行时自动回落 DOM 扫描兜底。
+		 * M2.3 会话口径：只读 list.current（当前选中会话），subagent 会话不入选。
+		 * 安全：只读官方快照，绝不调用 answer()（决策权归 M3 且仅在用户显式点击时）。
+		 */
+		const PET_PANEL_KEY = "__miasakiPetPanel";
+		const PET_HB_MS = 1500;
+		const DONE_HOLD_MS = 10000; // done 庆祝期：气泡常驻 10s 后回 idle（roadmap M2.1）
+		const petPanel = { ts: 0, state: "idle", tool: "" };
+		window[PET_PANEL_KEY] = petPanel;
+
+		function startPetStateReporter(ctx) {
+			let lastRunning = false;
+			let doneHoldUntil = 0;
+			const tick = () => {
+				// —— 审批等待（优先级最高）：pendingInteractions 中的 approval 项 ——
+				let approvalTool = null;
+				try {
+					const pi = ctx.uiSession && ctx.uiSession.pendingInteractions;
+					if (pi) {
+						let snap = null;
+						if (typeof pi.get === "function") snap = pi.get();
+						else if (typeof pi.getSnapshot === "function") snap = pi.getSnapshot();
+						if (snap && typeof snap.values === "function") {
+							for (const it of snap.values()) {
+								if (it && it.kind === "approval") { approvalTool = it.toolName || ""; break; }
+							}
+						}
+					}
+				} catch (e) { /* 官方 API 缺失 → 注入运行时 DOM 兜底 */ }
+				// —— 运行状态：当前选中会话（list row 自带 running;探针实证 2026-09-12）——
+				// sessions.get() 仅对 materialize 过的会话返回 SessionFace,依赖它会漏报;
+				// lastAgentError 只在 materialized Session 上有,尽力读、读不到则不报 error 态。
+				let running = false;
+				let agentError = null;
+				try {
+					const ls = ctx.sessions.list.getSnapshot();
+					const id = ls.current;
+					const row = id !== undefined ? ls.byId[id] : null;
+					if (row) {
+						// M2.3 会话口径:subagent 会话不计入主态
+						const isSubagent = !!(row.projectionValues && row.projectionValues.subagent);
+						if (!isSubagent) {
+							running = !!row.running;
+							try {
+								if (typeof ctx.sessions.get === "function") {
+									const f = ctx.sessions.get(id);
+									const s = f && typeof f.getSnapshot === "function" ? f.getSnapshot() : null;
+									if (s) agentError = s.lastAgentError ?? null;
+								}
+							} catch (e2) { /* 未 materialize → 无 error 信号 */ }
+						}
+					}
+				} catch (e) { /* ignore */ }
+				// —— 六态合成：waiting > error > done(边沿,10s) > thinking > idle ——
+				const now = Date.now();
+				let state;
+				if (approvalTool !== null) state = "waiting";
+				else if (agentError) state = "error";
+				else if (lastRunning && !running && now >= doneHoldUntil) { state = "done"; doneHoldUntil = now + DONE_HOLD_MS; }
+				else if (now < doneHoldUntil && !running) state = "done";
+				else if (running) state = "thinking";
+				else state = "idle";
+				if (running) doneHoldUntil = 0;
+				lastRunning = running;
+				petPanel.ts = now;
+				petPanel.state = state;
+				petPanel.tool = approvalTool ?? "";
+			};
+			tick();
+			return setInterval(tick, PET_HB_MS);
+		}
+
+		/**
 		 * Client plugin body: register the settings section.
 		 */
 		function apply(ctx) {
@@ -187,6 +267,11 @@ window.__ModuleLoader__.load({
 				order: 26,
 				label: "桌宠",
 			}, PetPanel));
+			// M2:官方契约六态上报（心跳 interval 由 cordis effect 生命周期管理）
+			ctx.effect(() => {
+				const timer = startPetStateReporter(ctx);
+				return () => clearInterval(timer);
+			}, "dsh-pet-panel: pet state reporter");
 		}
 
 		exports.apply = apply;

@@ -1,0 +1,62 @@
+/* ============================================================
+ * zafkiel deco — 装饰层（M2 S2 自 zafkiel.css 拆分，2026-09-12）
+ * 内容：--ms-*（切换条/标题栏/关闭弹窗自有配色，跟随主题换色）+
+ *       ::selection / 光晕 / caret / 标题字族 / 水印。
+ * 恒注入：桌面壳专属视觉与自有命名空间，不随让位协议停用
+ * （appearance M2 设计 §4.2——让位只影响"配色与明暗"两件事）。
+ * ============================================================ */
+
+/* —— 切换条 —— */
+html[data-miasaki-theme="zafkiel"],
+html[data-miasaki-theme="zafkiel"] body {
+  --ms-panel: #1e1a27;
+  --ms-text: #e4def0;
+  --ms-accent: #d9b36a;
+  --ms-border: #3a3243;
+  --ms-hover: #2a2434;
+  --ms-glyph: #c23a2e;
+  --ms-glow: rgba(217, 179, 106, .35);
+  --ms-danger: #c23a2e;
+}
+
+html[data-miasaki-theme="zafkiel"] ::selection {
+  background: #c23a2e;
+  color: #faf7fc;
+}
+html[data-miasaki-theme="zafkiel"] #miasaki-aurora .aur-a {
+  opacity: .55;
+  background: radial-gradient(circle, rgba(194, 58, 46, .5), transparent 68%);
+}
+html[data-miasaki-theme="zafkiel"] #miasaki-aurora .aur-b {
+  opacity: .4;
+  background: radial-gradient(circle, rgba(217, 179, 106, .42), transparent 70%);
+}
+html[data-miasaki-theme="zafkiel"] #miasaki-aurora .aur-c {
+  opacity: .3;
+  background: radial-gradient(circle, rgba(124, 112, 137, .5), transparent 70%);
+}
+html[data-miasaki-theme="zafkiel"] input,
+html[data-miasaki-theme="zafkiel"] textarea,
+html[data-miasaki-theme="zafkiel"] [contenteditable] {
+  caret-color: #d9b36a;
+}
+html[data-miasaki-theme="zafkiel"] h1,
+html[data-miasaki-theme="zafkiel"] h2,
+html[data-miasaki-theme="zafkiel"] h3 {
+  font-family: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, "Times New Roman", serif;
+  letter-spacing: .02em;
+}
+html[data-miasaki-theme="zafkiel"] #miasaki-watermark {
+  position: fixed;
+  right: -110px;
+  bottom: -110px;
+  width: 460px;
+  height: 460px;
+  opacity: .1;
+  pointer-events: none;
+  z-index: 0;
+}
+html[data-miasaki-theme="zafkiel"] #miasaki-watermark svg {
+  width: 100%;
+  height: 100%;
+}

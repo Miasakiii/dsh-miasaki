@@ -420,56 +420,95 @@ fn start_launch_sequence(app: &AppHandle) {
 
 /* ---------------- hash 命令/状态通道（33ms 轮询，跟手拖窗） ---------------- */
 
-fn parse_fragment(
-    fragment: &str,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<bool>,
-    Option<(i32, i32)>,
-    bool,
-    i64,
-) {
-    let mut theme = None;
-    let mut int = None;
-    let mut cmd = None;
-    let mut act = None;
-    let mut wait = None;
-    let mut move_xy = None;
-    let mut move_reset = false;
-    let mut seq: i64 = -1;
+/// hash 片段解析结果。M2(v3) 新增官方契约三字段：pet=<六态> / pettool=<工具名> / petts=<心跳 ms>。
+struct FragmentParts {
+    theme: Option<String>,
+    int: Option<String>,
+    cmd: Option<String>,
+    act: Option<String>,
+    wait: Option<bool>,
+    pet: Option<String>,
+    pet_tool: Option<String>,
+    pet_ts: Option<i64>,
+    move_xy: Option<(i32, i32)>,
+    move_reset: bool,
+    seq: i64,
+}
+
+/// percent-decode（encodeURIComponent 产物；'+' 不转空格——encode 不产生 '+'）。
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hi = (b[i + 1] as char).to_digit(16);
+            let lo = (b[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn parse_fragment(fragment: &str) -> FragmentParts {
+    let mut p = FragmentParts {
+        theme: None,
+        int: None,
+        cmd: None,
+        act: None,
+        wait: None,
+        pet: None,
+        pet_tool: None,
+        pet_ts: None,
+        move_xy: None,
+        move_reset: false,
+        seq: -1,
+    };
     for part in fragment.split('&') {
         if let Some(v) = part.strip_prefix("miasaki-theme=") {
-            theme = Some(v.to_string());
+            p.theme = Some(v.to_string());
         }
         if let Some(v) = part.strip_prefix("int=") {
-            int = Some(v.to_string());
+            p.int = Some(v.to_string());
         }
         if let Some(v) = part.strip_prefix("cmd=") {
-            cmd = Some(v.to_string());
+            p.cmd = Some(v.to_string());
         }
         if let Some(v) = part.strip_prefix("act=") {
-            act = Some(v.to_string());
+            p.act = Some(v.to_string());
         }
         if let Some(v) = part.strip_prefix("wait=") {
-            wait = Some(v == "1");
+            p.wait = Some(v == "1");
+        }
+        if let Some(v) = part.strip_prefix("pet=") {
+            p.pet = Some(v.to_string());
+        }
+        if let Some(v) = part.strip_prefix("pettool=") {
+            p.pet_tool = Some(percent_decode(v));
+        }
+        if let Some(v) = part.strip_prefix("petts=") {
+            p.pet_ts = v.parse().ok();
         }
         if let Some(v) = part.strip_prefix("seq=") {
-            seq = v.parse().unwrap_or(-1);
+            p.seq = v.parse().unwrap_or(-1);
         }
         if let Some(v) = part.strip_prefix("move=") {
             if v == "reset" {
-                move_reset = true;
+                p.move_reset = true;
             } else if let Some((a, b)) = v.split_once(',') {
                 if let (Ok(x), Ok(y)) = (a.parse::<i32>(), b.parse::<i32>()) {
-                    move_xy = Some((x, y));
+                    p.move_xy = Some((x, y));
                 }
             }
         }
     }
-    (theme, int, cmd, act, wait, move_xy, move_reset, seq)
+    p
 }
 
 fn pet_mode_for(theme: &str) -> &'static str {
@@ -708,7 +747,7 @@ fn start_hash_watchdog(app: &AppHandle) {
                 continue;
             }
             last_fragment = fragment.to_string();
-            let (theme, int, cmd, act, wait, move_xy, move_reset, seq) = parse_fragment(fragment);
+            let parts = parse_fragment(fragment);
             // 诊断位落盘：hash diag（含侧栏宽/收起判定）变化时写一行日志，
             // 导出诊断可见 → 标题栏/侧栏问题可远程定位（1.5s 同步一次，变化才写，不刷屏）
             if let Some(p) = fragment.split("&diag=").nth(1) {
@@ -719,7 +758,7 @@ fn start_hash_watchdog(app: &AppHandle) {
                 }
             }
             let pet = app.state::<pet_native::NativePet>();
-            if let Some(t) = theme {
+            if let Some(t) = parts.theme {
                 let mode = pet_mode_for(&t);
                 pet.set_mode(mode);
                 // 主题偏好落盘：DSH 页每次 syncHash 都携带当前主题 → 启动画面据此注入
@@ -731,20 +770,25 @@ fn start_hash_watchdog(app: &AppHandle) {
                     }
                 }
             }
-            if let Some(i) = int {
+            if let Some(i) = parts.int {
                 pet.set_intensity(&i);
             }
-            // v2026-08-30:总指挥活动状态/审批等待
-            if let Some(a) = act {
+            // v2026-08-30:总指挥活动状态/审批等待（M2 后为 DOM 兜底源,官方通道静默时生效）
+            if let Some(a) = parts.act {
                 pet.set_activity(&a);
             }
-            if let Some(w) = wait {
+            if let Some(w) = parts.wait {
                 pet.set_waiting_approval(w);
             }
-            if move_reset {
+            // M2(v3):官方契约六态通道（pet=/pettool=/petts=）;petts 同值 = 页面未更新,
+            // set_official_state 内部去重（不刷新心跳）→ 通道静默 5s 后 compose 自动回落 DOM 兜底
+            if let (Some(st), Some(ts)) = (parts.pet.as_deref(), parts.pet_ts) {
+                pet.set_official_state(ts, st, parts.pet_tool.as_deref().unwrap_or(""));
+            }
+            if parts.move_reset {
                 last_move = (0, 0);
             }
-            if let Some((dx, dy)) = move_xy {
+            if let Some((dx, dy)) = parts.move_xy {
                 // 拖窗期间提速轮询保证跟手；松开后 HASH_DRAG_HOLD_MS 内回落基准间隔
                 drag_until = Instant::now() + Duration::from_millis(HASH_DRAG_HOLD_MS);
                 let apply = (dx - last_move.0, dy - last_move.1);
@@ -755,9 +799,9 @@ fn start_hash_watchdog(app: &AppHandle) {
                     }
                 }
             }
-            if let Some(c) = cmd {
-                if seq > last_seq {
-                    last_seq = seq;
+            if let Some(c) = parts.cmd {
+                if parts.seq > last_seq {
+                    last_seq = parts.seq;
                     app_log_line(&format!("[{}] hash-cmd {c}\n", chrono_now()));
                     match c.as_str() {
                         "hide" => {

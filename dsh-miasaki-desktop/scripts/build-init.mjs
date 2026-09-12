@@ -22,15 +22,29 @@ for (const pet of ['whale', 'kurumi']) {
 
 const styles = {}
 for (const t of THEMES) {
-  const p = join(root, 'themes', `${t}.css`)
-  if (!existsSync(p)) {
-    console.error(`[build-init] 缺少主题文件: ${p}`)
-    process.exit(1)
+  // M2 S2 起，非 pure 主题拆为 skin（配色，让位协议下可停注入）+ deco（装饰，恒注入）。
+  // pure 语义是"不覆盖任何 token"，无 skin 层。
+  if (t === 'pure') {
+    const p = join(root, 'themes', `${t}.css`)
+    if (!existsSync(p)) {
+      console.error(`[build-init] 缺少主题文件: ${p}`)
+      process.exit(1)
+    }
+    styles[t] = { skin: '', deco: readFileSync(p, 'utf8') }
+    continue
   }
-  styles[t] = readFileSync(p, 'utf8')
+  const skinPath = join(root, 'themes', `${t}.skin.css`)
+  const decoPath = join(root, 'themes', `${t}.deco.css`)
+  for (const p of [skinPath, decoPath]) {
+    if (!existsSync(p)) {
+      console.error(`[build-init] 缺少主题文件: ${p}`)
+      process.exit(1)
+    }
+  }
+  styles[t] = { skin: readFileSync(skinPath, 'utf8'), deco: readFileSync(decoPath, 'utf8') }
 }
 
-// 令牌完备性校验
+// 令牌完备性校验（只作用于配色层 *.skin.css——deco 不含色阶）
 const surfacePath = join(root, 'design', 'token-surface.txt')
 if (!existsSync(surfacePath)) {
   console.error('[build-init] 缺少 design/token-surface.txt，无法执行令牌完备性校验')
@@ -43,7 +57,7 @@ const surface = readFileSync(surfacePath, 'utf8')
   .filter((n) => !EXCLUDED.has(n))
 
 for (const t of ['zafkiel', 'kurkuriel']) {
-  const css = styles[t]
+  const css = styles[t].skin
   const missing = surface.filter((n) => !css.includes(`${n}:`))
   if (missing.length > 0) {
     console.error(`[build-init] ${t}.css 缺少令牌定义 (${missing.length}):`)

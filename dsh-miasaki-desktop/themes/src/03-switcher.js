@@ -252,6 +252,28 @@
       if (opt) {
         var target = opt.getAttribute('data-theme')
         switcher.classList.remove('open')
+        // M2 S6 双入口：让位时本地 apply 已停用（styleFor 只出 deco），换肤改为写
+        // 外观线配置；成功后自行同步 <html> 门控属性（与 appearance client 半 save()
+        // 的同步逻辑同源、幂等）——appearance 的 yieldObserver 感知翻转；切回 pure
+        // 会解除让位，desktop 自动恢复注入。桌宠人格随目标主题联动。
+        if (appearanceYield()) {
+          try {
+            fetch('/appearance/api/state').then(function (s) { return s.json() }).then(function (st) {
+              return fetch('/appearance/api/config', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ patch: { theme: { skin: target } }, expectedRevision: st.revision })
+              })
+            }).then(function (res) {
+              if (!res.ok) return
+              var root = document.documentElement
+              root.setAttribute('data-mia-appearance', 'on')
+              root.setAttribute('data-mia-skin', target)
+              try { notifyPet(target) } catch (e2) { /* 桌宠联动失败不阻断 */ }
+            }).catch(function () {})
+          } catch (e) { /* fetch 不可用（本地页）时静默 */ }
+          return
+        }
         if (target !== current) runOverlay(target)
         return
       }

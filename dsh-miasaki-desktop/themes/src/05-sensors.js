@@ -118,30 +118,40 @@
         CUR_INT = tier
       }
     }
-    // act 防抖(2 次连续一致才生效,防流式指示闪烁)
-    var act = scanActivity()
-    if (act === _actPending) {
-      _actPendingN++
-    } else {
-      _actPending = act
-      _actPendingN = 1
-    }
-    if (_actPendingN >= PET_ACT_CONFIRM_N && _actPending !== CUR_ACT) {
-      CUR_ACT = _actPending
-    }
-    // wait:出现立即上报;消失 2 次确认（随 heavy 轮次走，确认窗口由 2×1.5s 变 2×3s）
-    if (heavy) {
-      var wait = scanApproval()
-      if (wait) {
-        CUR_WAIT = true
-        _waitPending = false
-        _waitPendingN = 0
+    // M2(v3) DOM 兜底开关：官方契约通道（dsh-pet-panel → __miasakiPetPanel）5s 内
+    // 有心跳时**完全关闭** act/wait 扫描（roadmap M2.2:不是双源并存，防姿态抖动）；
+    // 通道静默（无插件 / 非桌面端 / 插件崩溃）→ 回落 DOM 扫描。
+    var officialAlive = false
+    try {
+      var pp = window.__miasakiPetPanel
+      officialAlive = !!(pp && pp.ts && Date.now() - pp.ts < 5000)
+    } catch (e) { /* ignore */ }
+    if (!officialAlive) {
+      // act 防抖(2 次连续一致才生效,防流式指示闪烁)
+      var act = scanActivity()
+      if (act === _actPending) {
+        _actPendingN++
       } else {
-        if (_waitPending) _waitPendingN++
-        else { _waitPending = true; _waitPendingN = 1 }
-        if (_waitPendingN >= PET_WAIT_CONFIRM_N_OFF) {
-          CUR_WAIT = false
+        _actPending = act
+        _actPendingN = 1
+      }
+      if (_actPendingN >= PET_ACT_CONFIRM_N && _actPending !== CUR_ACT) {
+        CUR_ACT = _actPending
+      }
+      // wait:出现立即上报;消失 2 次确认（随 heavy 轮次走，确认窗口由 2×1.5s 变 2×3s）
+      if (heavy) {
+        var wait = scanApproval()
+        if (wait) {
+          CUR_WAIT = true
           _waitPending = false
+          _waitPendingN = 0
+        } else {
+          if (_waitPending) _waitPendingN++
+          else { _waitPending = true; _waitPendingN = 1 }
+          if (_waitPendingN >= PET_WAIT_CONFIRM_N_OFF) {
+            CUR_WAIT = false
+            _waitPending = false
+          }
         }
       }
     }

@@ -72,6 +72,13 @@
       '<div class="aur-blob aur-a"></div><div class="aur-blob aur-b"></div>' +
       '<div class="aur-blob aur-c"></div>'
     document.body.appendChild(a)
+    // M2 S6：外观线壁纸启用时桌面光晕降为透明——两层氛围不打架（appearance M2 §5.1）。
+    // 壁纸关闭（属性翻转触发 apply → updateAurora 重建）时恢复 deco CSS 的原生透明度。
+    try {
+      if (document.documentElement.getAttribute('data-mia-wallpaper') === 'on') {
+        a.style.opacity = '0'
+      }
+    } catch (e) { /* ignore */ }
   }
 
   function updateAurora() {

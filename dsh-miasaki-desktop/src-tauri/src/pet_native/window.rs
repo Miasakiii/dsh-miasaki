@@ -7,7 +7,7 @@ use super::ffi::*;
 use super::image::*;
 use super::model::*;
 use super::persist::*;
-use super::PetShared;
+use super::{PetShared, PetState};
 pub(crate) struct PetWin {
     hwnd: isize,
     dot_hwnd: isize,
@@ -18,10 +18,15 @@ pub(crate) struct PetWin {
     frame_idx: usize,
     anim_ms: u64,
     last_tick: std::time::Instant,
-    hop_until: Option<std::time::Instant>,
-    hop_hold_until: Option<std::time::Instant>, // 落地过渡:跳完末帧定格(v2)
-    wave_until: Option<std::time::Instant>, // 双击挥手(v2)
-    ambient: Option<Ambient>, // 环境编排(v2)
+    /// M1.1(v3):一次性/环境动作统一槽位——到期即清,状态姿态(waiting/fleet_alert)在
+    /// 行选择链中优先于它(pick_state_row)。旧 hop_until 无复位路径的卡死缺陷就此铲除。
+    action: Option<ActionSlot>,
+    /// M1.3:单击去抖挂起中(UP 已落、250ms 内待判定是否双击)
+    click_pending: bool,
+    /// M1.3:双击序列的第二次 WM_LBUTTONUP 待吞(防「挥一次+跳一次」)
+    swallow_next_up: bool,
+    /// M2:Done 庆祝已播(一次性 review,不循环;state 离开 Done 后复位)
+    done_celebrated: bool,
     next_ambient: std::time::Instant,
     bubble: Option<(usize, std::time::Instant)>,
     press_pt: (i32, i32),
@@ -29,7 +34,6 @@ pub(crate) struct PetWin {
     pos: (i32, i32),
     /// 主窗口当前实际显示状态（与 shared.hide 同步；show/hide 切换由 compose 单线程执行）。
     shown: bool,
-    wander: Option<Wander>,
     next_quote: std::time::Instant,
     next_wander: std::time::Instant,
     // 持久 GDI 表面:创建一次,终身复用(消除高频 CreateDIBSection,防 gdi32full 崩溃)
@@ -86,12 +90,78 @@ impl PetWin {
                     }
                 }
                 self.shown = !want_hide;
+                // M1.4:显隐切换同步圆点(want_hide=true 时 dot 即将可见,必须先定位到当前 pos)
+                draw_dot(self.dot_hwnd, self.pos);
                 pet_log_line(&format!(
                     "[native-pet] {} (hide persisted)\n",
                     if want_hide { "hidden" } else { "shown" }
                 ));
                 save_pet_pos(self.pos, want_hide);
                 dirty = true;
+            }
+        }
+
+        // —— M2(v3):六态合成(官方契约优先,DOM 兜底,fleet 叠加) ——
+        // 优先级:Waiting > FleetBlocked > Error > Done > Thinking > Idle(roadmap M2.1,
+        // 继承 M1.2「审批 > 告警」次序)。官方通道(pet= hash,白名单归一化)5s 内有心跳
+        // 才采信;静默回落 DOM 扫描(activity/waiting_approval,来自 act=/wait= 字段)。
+        // fleet_running(有任务在跑)不改六态,只影响 eff 立绘与 BUSY 气泡(沿用 X2 语义)。
+        let (state, fleet_running) = {
+            let s = self.shared.lock().unwrap();
+            let fresh = s
+                .official_at
+                .map(|t| now.duration_since(t) < std::time::Duration::from_millis(OFFICIAL_FRESH_MS))
+                .unwrap_or(false);
+            let mut st = if fresh {
+                s.official_state.unwrap_or(PetState::Idle)
+            } else if s.waiting_approval {
+                PetState::Waiting
+            } else if s.activity == "busy" {
+                PetState::Thinking
+            } else {
+                PetState::Idle
+            };
+            if st != PetState::Waiting && s.fleet_alert {
+                st = PetState::FleetBlocked; // M1.2 次序:审批 > 告警
+            }
+            (st, s.fleet_running)
+        };
+        // Done 庆祝:一次性 review 槽 + 常驻「完成了」气泡(10s,由 JS 侧 doneHold 归 idle 收尾)
+        if state == PetState::Done && !self.done_celebrated {
+            self.done_celebrated = true;
+            self.action = Some(ActionSlot {
+                action: Action::Ambient { row: "review".to_string() },
+                started: now,
+                duration: std::time::Duration::from_millis(DONE_REVIEW_MS),
+            });
+            self.frame_idx = 0;
+            self.last_tick = now - std::time::Duration::from_secs(10);
+            dirty = true;
+        } else if state != PetState::Done {
+            self.done_celebrated = false;
+        }
+
+        // —— M1.1(v3):动作槽统一到期清理(先于一切触发门与行选择) ——
+        // 到期即清;Jump 先转 JumpHold 落地定格。旧实现的 hop_until 只有写入没有复位,
+        // 单击一次后每帧重挂 hold → 永久 jump 并遮蔽审批/告警姿态(D1/D3)。
+        if let Some(slot) = self.action.take() {
+            if slot.expired(now) {
+                match slot.action {
+                    Action::Jump => {
+                        self.action = Some(ActionSlot {
+                            action: Action::JumpHold,
+                            started: now,
+                            duration: std::time::Duration::from_millis(HOP_HOLD_MS),
+                        });
+                    }
+                    Action::Wander { .. } => {
+                        // M1.4:散步自然结束同步圆点,隐藏后恢复入口不脱节
+                        draw_dot(self.dot_hwnd, self.pos);
+                    }
+                    _ => {}
+                }
+            } else {
+                self.action = Some(slot);
             }
         }
 
@@ -106,38 +176,39 @@ impl PetWin {
             self.last_tick = now - std::time::Duration::from_secs(10); // 立即触发重绘
             dirty = true;
         }
-        if self.wander.is_none() && self.hop_until.is_none() && self.hop_hold_until.is_none()
-            && self.ambient.is_none() && now >= self.next_wander
-        {
+        if self.action.is_none() && now >= self.next_wander {
             // v2026-08-30:waiting 期间禁止散步(强制桌宠站定在审批气泡旁)
-            // X2:fleet 指示期间同样站定(running/alert 姿态可读，不被散步打断)
-            let (is_kurumi, is_waiting) = {
+            // X2:fleet 指示期间同样站定;M2(v3):非 Idle 六态(工作/告警/出错/庆祝)全部站定
+            let (is_kurumi, fleet_running) = {
                 let s = self.shared.lock().unwrap();
-                (s.mode == "kurumi", s.waiting_approval || s.fleet_running || s.fleet_alert)
+                (s.mode == "kurumi", s.fleet_running)
             };
-            if is_kurumi && !is_waiting {
+            let blocked = state != PetState::Idle || fleet_running;
+            if is_kurumi && !blocked {
                 let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
-                self.wander = Some(Wander {
-                    until: now + std::time::Duration::from_millis(rand_range(1100, 2400)),
-                    dx: dir,
+                self.action = Some(ActionSlot {
+                    action: Action::Wander { dx: dir },
+                    started: now,
+                    duration: std::time::Duration::from_millis(rand_range(1100, 2400)),
                 });
                 dirty = true;
             }
             self.next_wander = now + std::time::Duration::from_millis(rand_range(45000, 120000));
         }
         // —— v2 环境编排：idle 基线低频随机小动作(手势打断见 wnd_proc) ——
-        if self.ambient.is_none() && self.hop_until.is_none() && self.hop_hold_until.is_none()
-            && self.wave_until.is_none() && self.wander.is_none() && now >= self.next_ambient
-        {
+        if self.action.is_none() && now >= self.next_ambient {
             let idle_intensity = {
                 let s = self.shared.lock().unwrap();
                 s.intensity == "idle"
             };
-            if idle_intensity && self.bubble.is_none() {
+            // M2(v3):非 Idle 六态(含 fleet_running)不开小动作(触发必能播,不挂空槽)
+            let blocked = state != PetState::Idle || fleet_running;
+            if idle_intensity && !blocked && self.bubble.is_none() {
                 let row = pick_ambient_row();
-                self.ambient = Some(Ambient {
-                    row,
-                    until: now + std::time::Duration::from_millis(
+                self.action = Some(ActionSlot {
+                    action: Action::Ambient { row },
+                    started: now,
+                    duration: std::time::Duration::from_millis(
                         rand_range(AMBIENT_PLAY_MIN_MS, AMBIENT_PLAY_MIN_MS + AMBIENT_PLAY_VAR_MS),
                     ),
                 });
@@ -152,56 +223,66 @@ impl PetWin {
         if now.duration_since(self.last_tick).as_millis() >= self.anim_ms as u128 {
             self.last_tick = now;
             // —— wander 滑步修正(v2):位移与 run 帧同步(每帧 9px),步频一致 ——
-            if let Some(w) = &mut self.wander {
-                self.pos.0 += w.dx * WANDER_PX_PER_FRAME;
+            // (自然到期由 compose 前段统一清理处理;此处只处理撞墙中断)
+            let wander_dx = match &self.action {
+                Some(s) => match s.action {
+                    Action::Wander { dx } => Some(dx),
+                    _ => None,
+                },
+                None => None,
+            };
+            if let Some(dx) = wander_dx {
+                self.pos.0 += dx * WANDER_PX_PER_FRAME;
                 let (sw, _) = screen_size();
                 if self.pos.0 <= 0 {
                     self.pos.0 = 0;
-                    self.wander = None;
+                    self.action = None;
                 } else if self.pos.0 >= sw - WIN_W {
                     self.pos.0 = sw - WIN_W;
-                    self.wander = None;
-                } else if now >= w.until {
-                    self.wander = None;
+                    self.action = None;
+                }
+                if self.action.is_none() {
+                    // M1.4:散步撞墙中断同步圆点(本段结尾统一置 dirty,present 会应用新 pos)
+                    draw_dot(self.dot_hwnd, self.pos);
                 }
             }
             // 清空画布只在帧更新时进行,避免 33ms 心跳把中间帧清成空白
             for p in self.buf.iter_mut() {
                 *p = 0;
             }
-            let (mode, intensity, activity, waiting, fleet_running, fleet_alert) = {
+            let (mode, intensity, fleet_running) = {
                 let s = self.shared.lock().unwrap();
-                (s.mode.clone(), s.intensity.clone(), s.activity.clone(), s.waiting_approval, s.fleet_running, s.fleet_alert)
+                (s.mode.clone(), s.intensity.clone(), s.fleet_running)
             };
-            // —— 状态映射优先级（X2）：fleet_alert > waiting > fleet_running > busy > DOM intensity ——
-            // fleet_alert → kurumi failed 行 + NEED_APPROVE 常驻气泡（去面板处理）
-            // waiting 强制 work 立绘/kurumi wait 行 + 常驻审批气泡
-            // fleet_running → work 立绘 + BUSY 常驻气泡（kurumi 保持 idle 行，不原地跑步）
-            // busy 等效 work(已切 work/intensity)
-            // idle 退回 intensity(原逻辑)
-            let eff_intensity = if waiting || fleet_running {
-                "work"
-            } else if activity == "busy" {
-                if intensity == "idle" { "work" } else { intensity.as_str() }
-            } else {
-                intensity.as_str()
+            // —— M2(v3):六态 → whale/inverse 三态立绘映射 ——
+            // Waiting/Error/Done/FleetBlocked → work 立绘(会话有事发生);
+            // Thinking → 沿用推理强度(intensity=idle 时升 work);Idle → intensity(fleet_running 例外升 work)
+            let eff_intensity = match state {
+                PetState::Waiting | PetState::Error | PetState::Done | PetState::FleetBlocked => "work",
+                PetState::Thinking => {
+                    if intensity == "idle" { "work" } else { intensity.as_str() }
+                }
+                PetState::Idle => {
+                    if fleet_running { "work" } else { intensity.as_str() }
+                }
             };
-            // 状态气泡（常驻，不参与 3s 过期）：alert > waiting > running 优先级替换
+            // 状态气泡（常驻，不参与 3s 过期）：六态直接映射
             {
-                let want = if fleet_alert {
-                    Some(BUBBLE_NEED_APPROVE)
-                } else if waiting {
-                    Some(BUBBLE_WAITING)
-                } else if fleet_running {
-                    Some(BUBBLE_BUSY)
-                } else {
-                    None
+                let want = match state {
+                    PetState::FleetBlocked => Some(BUBBLE_NEED_APPROVE),
+                    PetState::Waiting => Some(BUBBLE_WAITING),
+                    PetState::Error => Some(BUBBLE_ERROR),
+                    PetState::Done => Some(BUBBLE_DONE),
+                    PetState::Thinking => Some(BUBBLE_BUSY),
+                    PetState::Idle => {
+                        if fleet_running { Some(BUBBLE_BUSY) } else { None }
+                    }
                 };
-                let is_status = matches!(self.bubble, Some((idx, _)) if idx == BUBBLE_BUSY || idx == BUBBLE_WAITING || idx == BUBBLE_NEED_APPROVE);
+                let is_status = matches!(self.bubble, Some((idx, _)) if matches!(idx, BUBBLE_BUSY | BUBBLE_WAITING | BUBBLE_NEED_APPROVE | BUBBLE_ERROR | BUBBLE_DONE));
                 match (want, self.bubble.clone()) {
                     (Some(w), Some((cur, _))) if cur == w => {}
                     (Some(w), _) => self.bubble = Some((w, std::time::Instant::now())),
-                    (None, Some((cur, _))) if is_status && [BUBBLE_BUSY, BUBBLE_WAITING, BUBBLE_NEED_APPROVE].contains(&cur) => {
+                    (None, Some((cur, _))) if is_status && matches!(cur, BUBBLE_BUSY | BUBBLE_WAITING | BUBBLE_NEED_APPROVE | BUBBLE_ERROR | BUBBLE_DONE) => {
                         self.bubble = None
                     }
                     _ => {}
@@ -248,57 +329,9 @@ impl PetWin {
                     }
                 }
             } else {
-                // v2 优先序:hop → hopHold(落地) → wander → ambient → wave → focus(wait) → idle
-                // v2026-08-30:waiting 强制选 wait 行(并锁定 wait_hold_until 防止 ambient 打断)
-                let row = if let Some(until) = self.hop_until {
-                    if now < until {
-                        "jump".to_string()
-                    } else {
-                        // 落地过渡:跳完末帧定格 HOP_HOLD_MS 再回 idle,消除硬切
-                        if self.hop_hold_until.is_none() {
-                            self.hop_hold_until =
-                                Some(now + std::time::Duration::from_millis(HOP_HOLD_MS));
-                        }
-                        "jump".to_string()
-                    }
-                } else if let Some(until) = self.hop_hold_until {
-                    if now < until {
-                        "jump".to_string()
-                    } else {
-                        self.hop_hold_until = None;
-                        if waiting { "wait".to_string() } else { "idle".to_string() }
-                    }
-                } else if self.wander.is_some() {
-                    // 散步:播放 run 行帧(双向移动共用);waiting 期间不允许散步
-                    if waiting { "wait".to_string() } else { "run".to_string() }
-                } else if let Some(a) = &self.ambient {
-                    if now >= a.until {
-                        self.ambient = None;
-                        if waiting { "wait".to_string() } else { "idle".to_string() }
-                    } else {
-                        a.row.clone()
-                    }
-                } else if let Some(until) = self.wave_until {
-                    if now < until {
-                        "wave".to_string()
-                    } else {
-                        self.wave_until = None;
-                        if waiting { "wait".to_string() } else { "idle".to_string() }
-                    }
-                } else if waiting {
-                    // 等待审批:播 wait 行(偶发语义,起伏大但语义对)
-                    "wait".to_string()
-                } else if fleet_alert {
-                    // X2:fleet 告警(blocked/error):播 failed 行(缺行由 kurumi_row 回退链兜底)
-                    "failed".to_string()
-                } else if eff_intensity == "idle" {
-                    "idle".to_string()
-                } else {
-                    // 思考中/busy=静默守候(同 idle 姿态;ambient 仅在 idle 强度触发,自动安静)。
-                    // wait 行留给审批等待(waiting 分支)——曾用 wait 行表示思考,
-                    // 其帧组起伏较大 + 慢放 → 真机观感「一直跳动」(2026-08-22 用户反馈修正)。
-                    "idle".to_string()
-                };
+                // M2(v3) 行选择:六态(pick_state_row,优先级 Waiting > FleetBlocked > Error
+                // > Done > Thinking > Idle,单测钉死)压制动作槽;Idle 时槽可播。
+                let row = pick_state_row(state, self.action.as_ref());
                 let fps = match row.as_str() {
                     "run" | "runRight" | "runLeft" => 10,
                     "jump" => 11,
@@ -312,13 +345,10 @@ impl PetWin {
                     // 返回实际命中行名(旧代码回退后仍用请求行名重查 → 查不到 → 空白,现修复)
                     match self.frames.kurumi_row(&row) {
                         Some((l, row_key)) => {
-                            // 落地定格窗口:锁定 jump 末帧,不推进
-                            let holding_jump = row == "jump"
-                                && self.hop_until.is_none()
-                                && match self.hop_hold_until {
-                                    Some(hu) => now < hu,
-                                    None => false,
-                                };
+                            // 落地定格窗口:JumpHold 槽期间锁定 jump 末帧,不推进
+                            // (Ambient 恰好抽中 jump 行时 kind 不是 JumpHold,照常推进)
+                            let holding_jump =
+                                matches!(&self.action, Some(s) if matches!(s.action, Action::JumpHold));
                             let idx = if holding_jump {
                                 l.len() - 1
                             } else {
@@ -336,13 +366,8 @@ impl PetWin {
                     let ptr = self.frames.kurumi.get(&row_key).map(|l| l as *const Vec<Image>);
                     if let Some(ptr) = ptr {
                         let list = unsafe { &*ptr };
-                        // v2 呼吸 bob:基线(idle/wait)且无行动状态时 ±2px 上下呼吸
-                        let calm = (row == "idle" || row == "wait")
-                            && self.hop_until.is_none()
-                            && self.hop_hold_until.is_none()
-                            && self.wave_until.is_none()
-                            && self.ambient.is_none()
-                            && self.wander.is_none();
+                        // v2 呼吸 bob:基线(idle/wait)且无动作槽时 ±2px 上下呼吸
+                        let calm = (row == "idle" || row == "wait") && self.action.is_none();
                         let bob = if calm {
                             let phase = (std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
@@ -367,7 +392,7 @@ impl PetWin {
         // 气泡:超时检查每 tick;绘制只在帧更新后(避免每 33ms 图像合成)
         // v2026-08-30:状态帧(BUBBLE_BUSY/WAITING/NEED_APPROVE)不参与 3s 过期,常驻
         if let Some((idx, t0)) = self.bubble.clone() {
-            let is_status = idx == BUBBLE_BUSY || idx == BUBBLE_WAITING || idx == BUBBLE_NEED_APPROVE;
+            let is_status = matches!(idx, BUBBLE_BUSY | BUBBLE_WAITING | BUBBLE_NEED_APPROVE | BUBBLE_ERROR | BUBBLE_DONE);
             if !is_status && now.duration_since(t0).as_secs() > 3 {
                 self.bubble = None;
                 dirty = true;
@@ -551,11 +576,14 @@ impl PetWin {
         }
     }
 
+    /// M1.3(v3):单击「撸一下」——jump + 气泡,不抢焦点;动作槽到期即清,不再有卡死路径。
+    /// 审批/告警/busy 时本槽会被 pick_state_row 压住(状态优先),但槽照常登记。
     fn do_hop(&mut self) {
-        self.hop_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(900));
-        self.hop_hold_until = None;
-        self.wave_until = None;
-        self.ambient = None; // 手势打断环境编排
+        self.action = Some(ActionSlot {
+            action: Action::Jump,
+            started: std::time::Instant::now(),
+            duration: std::time::Duration::from_millis(HOP_MS),
+        });
         self.frame_idx = 0;
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
         let idx = {
@@ -565,10 +593,14 @@ impl PetWin {
         self.bubble = Some((idx, std::time::Instant::now()));
     }
 
-    /// v2 双击挥手:播 wave 行(约 500ms 内容,余量 1300ms 收尾),任何指针事件可打断
+    /// v2 双击挥手:播 wave 行(约 500ms 内容,余量 1300ms 收尾)。
+    /// M1.3:窗口类注册 CS_DBLCLKS 后此路径才真正可达(此前是死代码)。
     fn do_wave(&mut self) {
-        self.wave_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(WAVE_MS));
-        self.ambient = None;
+        self.action = Some(ActionSlot {
+            action: Action::Wave,
+            started: std::time::Instant::now(),
+            duration: std::time::Duration::from_millis(WAVE_MS),
+        });
         self.frame_idx = 0;
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
     }
@@ -578,6 +610,21 @@ impl PetWin {
         self.app
             .get_webview_window("main")
             .map(|w| !w.is_visible().unwrap_or(true) || w.is_minimized().unwrap_or(false))
+            .unwrap_or(false)
+    }
+
+    /// M2(v3):有效「等待审批」= DOM 兜底 waiting_approval 或官方契约 Waiting
+    /// (5s 心跳内)。单击/双击唤起主窗口的判定依据(M1.3 语义)。
+    fn effective_waiting(&self) -> bool {
+        self.shared
+            .lock()
+            .map(|s| {
+                let fresh = s
+                    .official_at
+                    .map(|t| t.elapsed() < std::time::Duration::from_millis(OFFICIAL_FRESH_MS))
+                    .unwrap_or(false);
+                s.waiting_approval || (fresh && s.official_state == Some(PetState::Waiting))
+            })
             .unwrap_or(false)
     }
 
@@ -647,21 +694,43 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
     }
     match msg {
         WM_CREATE => {
-            SetTimer(hwnd, 1, 33, 0);
+            SetTimer(hwnd, IDT_COMPOSE, 33, 0);
             0
         }
         WM_TIMER => {
-            (*pet).compose();
-            0
+            if wp == IDT_SINGLE_CLICK {
+                // M1.3:单击去抖到期 → 确认是单击(非双击) → 撸一下(不抢焦点)
+                KillTimer(hwnd, IDT_SINGLE_CLICK);
+                if (*pet).click_pending {
+                    (*pet).click_pending = false;
+                    (*pet).do_hop();
+                }
+                0
+            } else {
+                (*pet).compose();
+                0
+            }
         }
         WM_LBUTTONDOWN => {
+            // M1.3:新按压序列开始——清去抖与吞 UP 标记(第二击的 DOWN 若成双击,由 DBLCLK 接管)
+            KillTimer(hwnd, IDT_SINGLE_CLICK);
+            (*pet).click_pending = false;
+            (*pet).swallow_next_up = false;
             let mut p = Point { x: 0, y: 0 };
             GetCursorPos(&mut p);
             (*pet).press_pt = (p.x, p.y);
             (*pet).dragged = false;
-            // v2:指针按下即打断环境编排/挥手(拖拽与动作互斥)
-            (*pet).ambient = None;
-            (*pet).wave_until = None;
+            // v2:指针按下即打断环境编排/挥手/散步(拖拽与动作互斥);跳跃保留不打折反馈
+            let interrupt = matches!(
+                &(*pet).action,
+                Some(s) if matches!(
+                    s.action,
+                    Action::Ambient { .. } | Action::Wave | Action::Wander { .. }
+                )
+            );
+            if interrupt {
+                (*pet).action = None;
+            }
             0
         }
         WM_MOUSEMOVE => {
@@ -684,24 +753,40 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             0
         }
         WM_LBUTTONUP => {
+            // M1.3:双击序列的第二次 UP 直接吞掉(DBLCLK 已处理,防「挥一次+跳一次」)
+            if (*pet).swallow_next_up {
+                (*pet).swallow_next_up = false;
+                return 0;
+            }
             if !(*pet).dragged {
-                // v2026-08-30:waiting 中点击桌宠 = 唤起主窗口去批准(跳过 hop,免破坏等待观感)
-                let waiting = (*pet).shared.lock().map(|s| s.waiting_approval).unwrap_or(false);
-                if waiting {
+                // M1.3 单击语义:等待审批或主窗口不可见 → 立即唤起主窗口(保留有用语义);
+                // 否则 → 去抖 250ms 判定是否双击,到期执行「撸一下」——不再无条件抢焦点(D5)
+                let wake = (*pet).effective_waiting() || (*pet).main_needs_wake();
+                if wake {
+                    KillTimer(hwnd, IDT_SINGLE_CLICK);
+                    (*pet).click_pending = false;
                     (*pet).focus_main();
                 } else {
-                    (*pet).do_hop();
-                    (*pet).focus_main(); // 点击桌宠 → 唤起/聚焦主窗口
+                    SetTimer(hwnd, IDT_SINGLE_CLICK, SINGLE_CLICK_DEBOUNCE_MS, 0);
+                    (*pet).click_pending = true;
                 }
             } else {
                 let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
                 save_pet_pos((*pet).pos, hide);
+                // M1.4:拖动结束同步圆点(隐藏后恢复入口与桌宠位置不脱节,D6)
+                draw_dot((*pet).dot_hwnd, (*pet).pos);
             }
             0
         }
         WM_LBUTTONDBLCLK => {
-            // v2 决策1:主窗最小化/隐藏 → 唤起;否则 → 挥手(修复 wave 行从未触发的漂移)
-            if (*pet).main_needs_wake() {
+            // M1.3/D4:窗口类已注册 CS_DBLCLKS,此路径才真正可达(此前双击的第二击
+            // 只会再走一次 WM_LBUTTONUP → 再跳一次)。取消挂起的单击去抖;
+            // 审批等待或主窗不可见 → 唤起;否则挥手。
+            KillTimer(hwnd, IDT_SINGLE_CLICK);
+            (*pet).click_pending = false;
+            (*pet).swallow_next_up = true;
+            let wake = (*pet).effective_waiting() || (*pet).main_needs_wake();
+            if wake {
                 (*pet).focus_main();
             } else {
                 (*pet).do_wave();
@@ -864,17 +949,16 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             frame_idx: 0,
             anim_ms: 125,
             last_tick: std::time::Instant::now() - std::time::Duration::from_secs(10),
-            hop_until: None,
-            hop_hold_until: None,
-            wave_until: None,
-            ambient: None,
+            action: None,
+            click_pending: false,
+            swallow_next_up: false,
+            done_celebrated: false,
             next_ambient: std::time::Instant::now() + std::time::Duration::from_millis(AMBIENT_FIRST_DELAY_MS),
             bubble: None,
             press_pt: (0, 0),
             dragged: false,
             pos: (x, y),
             shown: !restore_hide,
-            wander: None,
             next_quote: std::time::Instant::now() + std::time::Duration::from_secs(12),
             next_wander: std::time::Instant::now() + std::time::Duration::from_secs(8),
             present_dc: 0,
@@ -889,7 +973,8 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
 
         let cls = wide("MiasakiPetWin");
         let wc = WndClassW {
-            style: CS_HREDRAW | CS_VREDRAW,
+            // M1.3/D4:必须注册 CS_DBLCLKS,WM_LBUTTONDBLCLK 才会送达(缺它双击挥手一直是死代码)
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfn: Some(wnd_proc),
             cb_cls_extra: 0,
             cb_wnd_extra: std::mem::size_of::<isize>() as i32,
@@ -927,7 +1012,7 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         SetWindowLongPtrW(dot_hwnd, GWLP_USERDATA, pet_ptr as isize);
         // 关键:WM_CREATE 期间 USERDATA 尚未设置,wnd_proc 的 SetTimer 不会执行;
         // 在此(USERDATA 就位后)显式启动 33ms 动画定时器
-        SetTimer(hwnd, 1, 33, 0);
+        SetTimer(hwnd, IDT_COMPOSE, 33, 0);
 
         // 持久 GDI 表面(创建一次,终身复用;避免高频 CreateDIBSection 触发 gdi32full 崩溃)
         // D3:失败不致命 → present() 低频重试重建（surface_fail_streak 路径）

@@ -1,5 +1,6 @@
 // diff-tokens.mjs — DSH 令牌面漂移报告（D4，只告警不阻塞）
-// 对比 design/token-surface.txt × themes/{zafkiel,kurkuriel}.css：
+// 对比 design/token-surface.txt × themes/{zafkiel,kurkuriel}.skin.css（M2 S2 起
+// 配色在 *.skin.css，装饰在 *.deco.css 且不含色阶）：
 //   缺失 = surface 有而 css 无（build-init 已强制失败，此处复述定位行）
 //   死覆盖 = css 定义了 surface 之外的 --dsw-*/--dsh-*/--dsl-* 令牌（rc.x 失效残留，无害但需定期清理）
 // 用法：node scripts/diff-tokens.mjs
@@ -16,7 +17,7 @@ const surface = new Set(
 const tokenRe = /(--(?:dsw|dsh|dsl)[\w-]*)\s*:/g
 let deadTotal = 0
 for (const t of ['zafkiel', 'kurkuriel']) {
-  const p = join(root, 'themes', `${t}.css`)
+  const p = join(root, 'themes', `${t}.skin.css`)
   if (!existsSync(p)) { console.error(`[diff-tokens] 缺少 ${p}`); process.exit(2) }
   const css = readFileSync(p, 'utf8')
   const missing = [...surface].filter((n) => !css.includes(`${n}:`))

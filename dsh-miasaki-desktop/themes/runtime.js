@@ -23,6 +23,13 @@
   })
 
   var STYLES = (typeof window.__MIASAKI_STYLES__ === 'object' && window.__MIASAKI_STYLES__) || {}
+  // M2 S2：非 pure 主题样式拆为 {skin, deco}；注入文本恒为 deco + skin（级联等价于拆分前）。
+  function styleFor(t) {
+    var s = STYLES[t]
+    if (!s) return ''
+    if (typeof s === 'string') return s
+    return (s.deco || '') + (s.skin || '')
+  }
   var KEY = 'miasaki.theme'
   var ORDER = ['pure', 'zafkiel', 'kurkuriel']
   var META = {
@@ -129,7 +136,7 @@
       if (history.replaceState) {
         var d = '0.0.0.0.0.0.0.0.0.0.0.0'
         try {
-          var len = (STYLES[current] || '').length
+          var len = styleFor(current).length
           var headOk = document.head ? 1 : 0
           var attached = styleEl && styleEl.parentNode !== null ? 1 : 0
           var sw = document.getElementById('miasaki-switcher') ? 1 : 0
@@ -258,7 +265,7 @@
     current = t
     setAttr(t)
     ensureStyle()
-    if (styleEl) styleEl.textContent = STYLES[t] || ''
+    if (styleEl) styleEl.textContent = styleFor(t)
     syncDark()
     try { localStorage.setItem(KEY, t) } catch (e) { /* ignore */ }
     // 核心同步优先:桌宠 hash 通道 / 切换条图标 / 标题栏 —— 装饰层失败不得阻断
@@ -1048,7 +1055,7 @@
   function onReady() {
     setAttr(current)
     ensureStyle()
-    if (styleEl) styleEl.textContent = STYLES[current] || ''
+    if (styleEl) styleEl.textContent = styleFor(current)
     syncDark()
     startObserver()
     try { localStorage.setItem(KEY, current) } catch (e) { /* ignore */ }
@@ -1082,8 +1089,8 @@
       if (baseEl && baseEl.textContent !== SWITCHER_CSS) {
         baseEl.textContent = SWITCHER_CSS
       }
-      if (styleEl && styleEl.textContent !== (STYLES[current] || '')) {
-        styleEl.textContent = STYLES[current] || ''
+      if (styleEl && styleEl.textContent !== styleFor(current)) {
+        styleEl.textContent = styleFor(current)
       }
       syncDark()
       if (!IS_LOCAL) syncTitlebarGeometry()

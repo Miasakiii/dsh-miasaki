@@ -100,7 +100,24 @@ try {
 
   // ---------- 1. 首次加载（默认 pure） ----------
   await cdp('Page.navigate', { url: TARGET })
-  await sleep(5000)
+  await sleep(2000)
+  // M2 S6：本脚本验证 desktop 的**独立**行为——先把 appearance 线总开关关掉（幂等；
+  // appearance 未安装时 fetch 404，静默忽略）。裸 API 写入不会唤醒 client 半，
+  // 所以关完**再导航一次**，让 boot script 首帧就写到 data-mia-appearance=off。
+  await evaluate(`(function(){
+    try {
+      fetch('/appearance/api/state').then(function (s) { return s.json() }).then(function (st) {
+        return fetch('/appearance/api/config', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ patch: { enabled: false }, expectedRevision: st.revision })
+        })
+      }).catch(function () {})
+    } catch (e) {}
+    return true
+  })()`)
+  await sleep(1200)
+  await cdp('Page.navigate', { url: TARGET })
+  await sleep(3000)
   let state = JSON.parse(await evaluate(`JSON.stringify({
     attr: document.documentElement.getAttribute('data-miasaki-theme'),
     bodyDark: document.body.hasAttribute('data-ds-dark-theme'),
@@ -156,6 +173,32 @@ try {
   // ---------- 4. 持久化 ----------
   const persisted = await evaluate(`localStorage.getItem('miasaki.theme')`)
   check('主题持久化到 localStorage', persisted === 'kurkuriel', String(persisted))
+
+  // ---------- 4.5 M2 S6 让位协议往返（模拟 appearance 线的 <html> 门控属性） ----------
+  // 前 22 项已证「appearance 未安装时 desktop 行为逐字节不变」；这里手动写门控属性验证协议：
+  // 让位（skin 停注入 + yield 标记 + 明暗锁定停用）→ 解除（skin 回注 + 标记移除），全程无需刷新。
+  await evaluate(`document.documentElement.setAttribute('data-mia-appearance','on'); document.documentElement.setAttribute('data-mia-skin','zafkiel'); true`)
+  await sleep(1500)
+  let yieldState = JSON.parse(await evaluate(`JSON.stringify({
+    mark: document.documentElement.getAttribute('data-miasaki-theme-yield'),
+    layer: (document.getElementById('miasaki-theme-layer') || { textContent: '' }).textContent,
+    attr: document.documentElement.getAttribute('data-miasaki-theme')
+  })`))
+  check('让位: yield 标记已置位', yieldState.mark === 'skin', String(yieldState.mark))
+  check('让位: skin 配色停注入（style 层只剩 deco）',
+    yieldState.layer.includes('--dsw-static-neutral-bluish-950') === false,
+    `layerLen=${yieldState.layer.length}`)
+  check('让位: data-miasaki-theme 保留（装饰层与切换条仍依赖）', yieldState.attr === 'kurkuriel', String(yieldState.attr))
+
+  await evaluate(`document.documentElement.setAttribute('data-mia-appearance','off'); true`)
+  await sleep(1500)
+  yieldState = JSON.parse(await evaluate(`JSON.stringify({
+    mark: document.documentElement.getAttribute('data-miasaki-theme-yield'),
+    layer: (document.getElementById('miasaki-theme-layer') || { textContent: '' }).textContent
+  })`))
+  check('解除: skin 配色回注 + 标记移除',
+    yieldState.mark === null && yieldState.layer.includes('--dsw-static-neutral-bluish-950') === true,
+    `mark=${yieldState.mark} layerLen=${yieldState.layer.length}`)
 
   // ---------- 5. 切回 pure ----------
   await evaluate(`document.querySelector('#miasaki-switcher .ms-opt[data-theme="pure"]').click(); true`)

@@ -22,7 +22,7 @@ node ../scripts/verify-all.mjs desktop   # gen-init + tokens:diff + patch verify
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
 CDP target，属实机项；无 host 时会以 `CDP target not found` 失败。实机冒烟清单
 （启动恢复 / 窗口 / 桌宠 / pulse 联动）见
-[四线统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3–§4。
+[七线统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3–§4。
 
 > **沙箱注意**：无头 Edge 需要创建命名管道，在受限文件沙箱（`workspace-write`）下必然
 > 以 `CDP target not found` 失败——用 `danger-full-access` 重跑**同一条命令**即可
@@ -93,18 +93,24 @@ node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
 
 - 图集兼容 Codex 宠物 V1/V2 格式（8 列 192×208，自动探测每行非空帧）；kurumi 已切全 9 行语义帧
   （idle/runRight/runLeft/wave/jump/failed/wait/run/review），whale idle 为帧序列（idle.gif 拆分 6 帧）
-- 交互：**拖动**移动 / **单击**跳跃+气泡（主窗口最小化/隐藏时单击为**唤起主窗口**）/ **双击**挥手
-  （主窗口最小化/隐藏时双击为**唤起主窗口**）/ **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
-- 自主动作（环境编排）：静止时低频随机小动作（挥手/检查/等待，偶发跳跃——表演 1.2~2.2s、休息 8~18s、
-  首次 5.5s 延迟；指针按下即打断）；思考强度上升时转「守候」姿态（wait 行慢放，不再原地跑步）
-- **工作动态 + 权限申请提示**（v2026-08-30）：桌宠反映**总指挥（主会话）** 的活动状态——
-  注入层 `themes/runtime.js` 周期扫描 DSH 页面 DOM（"停止生成"按钮 → busy；
-  dialog/modal 内同时存在"允许"+"拒绝"类按钮 → 等待审批），经 URL hash `act=` / `wait=`
-  字段回传，Rust `compose` 按 **waiting > busy > intensity** 优先级映射立绘/姿态：
-  waiting 强制 kurumi `wait` 行 / whale·inverse `work` 立绘 + **常驻"等待审批"气泡**；
-  waiting 中**单击桌宠 = 唤起主窗口**（跳过 hop 动画）。选择器集中在 `runtime.js` 顶部
-   常量区，校准方式：console 跑 `__miasakiProbe()` 看候选按钮文本。agent 员工状态
-   后续归 `dsh-miasaki-fleet/fleet-monitor/` 工作面板，不进桌宠。
+- 交互（v3 M1，2026-09-12 重排）：**拖动**移动 / **单击**「撸一下」跳跃+气泡（**不抢焦点**；等待审批或
+  主窗口最小化/隐藏时单击为**唤起主窗口**）/ **双击**挥手（250ms 去抖与单击区分；等待审批或主窗口
+  最小化/隐藏时双击为**唤起主窗口**）/ **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
+- 自主动作（环境编排）：静止且空闲时低频随机小动作（挥手/检查/等待，偶发跳跃——表演 1.2~2.2s、
+  休息 8~18s、首次 5.5s 延迟；指针按下即打断）；等待审批 / fleet 指示 / busy 工作态期间
+  散步与小动作**停触发**（工作姿态可读，不被环境动作打断）
+- **工作动态 + 权限申请提示**（v3 M2 2026-09-12 重做）：桌宠反映**当前选中会话** 的六态
+  `idle / thinking / waiting / error / done / fleet-blocked`——**主信号 = DSH 官方契约**：
+  `dsh-pet-panel` 插件读官方 `ctx.sessions`（当前会话 `running`）+ `ctx.uiSession.pendingInteractions`
+  （审批等待，含工具名），1.5s 心跳写 `window.__miasakiPetPanel`，由注入运行时 `syncHash`
+  合并进 URL hash `pet=/pettool=/petts=`（单写者定律不变）。Rust `compose` 合成六态并按
+  **Waiting(审批) > FleetBlocked(告警) > Error > Done > Thinking(静默守候) > Idle** 优先级
+  映射立绘/气泡（`pick_state_row` 单测钉死）：waiting 强制 kurumi `wait` 行 /
+  whale·inverse `work` 立绘 + **常驻"等待审批"气泡**；done 播 review 庆祝一次（气泡 10s）；
+  error/告警播 `failed` 行；waiting 中**单击/双击桌宠 = 唤起主窗口**。**DOM 扫描仅为兜底**：
+  官方通道 5s 无心跳（非桌面端 / 插件缺失 / 崩溃）才启用 `act=/wait=` 扫描（选择器
+  `themes/src/05-sensors.js` 顶部常量区，校准 `__miasakiProbe()`）。agent 员工状态
+  后续归 `dsh-miasaki-fleet/fleet-monitor/` 工作面板，不进桌宠。
 - **Fleet 指示器（v2026-09-04，可选联动）**：设环境变量 `MIASAKI_FLEET_PULSE`
   指向 `dsh-miasaki-fleet/state/fleet-pulse.json`（由 fleet 侧
   `node workers/pulse/publish-pulse.mjs` 发布，契约见

@@ -33,8 +33,8 @@ Miasaki.exe (Tauri 2, 单进程)
 | 启动健康标记 = bootstrap.json(v1),temp+rename 原子写 | 启动阶段落盘(bootstrap/spawn/waiting/up),失败可诊断;损坏删除重建默认(不猜不静默)。设计见 bootstrap-reliability.md |
 | 重试 = BOOTSTRAP_GEN 代际计数(+1 后旧序列自行退出) | spawn 失败后旧循环不再 spawn,原「重试」按钮形同虚设;换代后新序列完整重跑 |
 | 桌宠缩放 = 预乘空间双线性采样(2026-08-30) | 非整数最近邻(208→270 ×1.298)把单点杂色撕成锯齿簇,540→270 隔行丢像素破坏抗锯齿;双线性在预乘空间下数学正确且 ULW 兼容 |
-| 桌宠状态源 = DOM 扫描 + 优先级映射(2026-08-30) | 总指挥活动/审批状态只能从 DSH 主页面 DOM 取(无 IPC,无 fleet 文件总线);等待审批在 kurumi 复用既有 `wait` 行(偶发语义对)+ 常驻气泡 |
-| 桌宠状态扫描 = 节奏分级 + 零强制布局(2026-09-08) | 原实现每轮对每个 button 求 `offsetParent`(强制布局)、且每轮重算含 `elementFromPoint`/`getComputedStyle` 的 diag;长会话+流式输出下实测每 1.5s 出现 15~47ms 主线程尖峰,表现为输入发涩/发送无响应。改为 activity 每轮、effort/approval 每 2 轮、hidden 时每 4 轮,diag 按 10s 节流重算 |
+| 桌宠状态源 = 官方契约为主 + DOM 兜底(v3 M2 2026-09-12) | `dsh-pet-panel` 读官方 `ctx.sessions`/`ctx.uiSession.pendingInteractions`(inject 白名单实证),hash `pet=` 上报;DOM 扫描仅通道死亡时兜底。单写者:注入运行时 syncHash 合并 pet 字段,pet-panel 只写全局对象 |
+| 桌宠状态扫描(DOM 兜底) = 节奏分级 + 零强制布局(2026-09-08) | 原实现每轮对每个 button 求 `offsetParent`(强制布局)、且每轮重算含 `elementFromPoint`/`getComputedStyle` 的 diag;长会话+流式输出下实测每 1.5s 出现 15~47ms 主线程尖峰,表现为输入发涩/发送无响应。改为 activity 每轮、effort/approval 每 2 轮、hidden 时每 4 轮,diag 按 10s 节流重算 |
 
 ## 3. 数据流
 
@@ -56,29 +56,28 @@ tb-drag pointerdown → 记录起点;pointermove → move=累计物理增量(×d
 ### 3.3 思考强度
 页面 DOM 变异计数(MutationObserver,忽略注入层自身)每 2.5s 分级 idle/work/deep → hash `int=` → set_intensity。
 
-### 3.4 桌宠状态源(2026-08-30;节奏分级 2026-09-08)
+### 3.4 桌宠状态源(v3 M2 2026-09-12 重做:官方契约为主,DOM 兜底)
 ```
-DSH 主页面 DOM(总指挥会话)
-  │  runtime.js petEvalIntensity(PET_TIER_MS=1.5s 一轮,三级节奏):
-  │    scanActivity()   → "停止生成"按钮? → act=busy              每轮(只查 button + 文本匹配)
-  │    scanApproval()   → dialog/modal 内"允许"+"拒绝"成对? → wait=1  每 2 轮(3s,重量级全量查询)
-  │    scanEffort()     → 模型选择器推理等级 → int=idle/work/deep     每 2 轮(3s,重量级全量查询)
-  │    (document.hidden 时整体降到每 4 轮/6s)
-  │  act 翻转需 2 次连续确认(防抖);wait 出现即时上报/消失 2 次确认(确认窗口 2×3s)
-  ▼  URL hash 扩展:#miasaki-theme=X&int=Y&act=Z&wait=0|1&diag=…
-     (diag 段含 getBoundingClientRect/elementFromPoint/getComputedStyle 等强制布局调用,
-      按 DIAG_MIN_INTERVAL_MS=10s 节流重算 + 缓存;主题切换/启动首帧 force 立即重算)
-main.rs parse_fragment + start_hash_watchdog
-  ▼  pet.set_intensity / set_activity / set_waiting_approval
-pet_native.rs compose 优先级映射:
-  waiting=true  → kurumi `wait` 行 / whale·inverse `work` 立绘
-                  + 常驻"等待审批"气泡(状态帧跳 3s 过期)
-                  + 禁 ambient/wander + 单击桌宠=唤起主窗
-  activity=busy → eff_intensity=work(whale·inverse work 立绘;kurumi 静默守候)
-  idle          → 回退到 intensity(DOM 推理等级)
+主信号 —— DSH 官方契约(dsh-pet-panel 插件,inject sessions/uiSession):
+  ctx.sessions.list.getSnapshot()   → { ids, byId, current, ... } row.running(当前选中会话)
+  ctx.uiSession.pendingInteractions → ReadonlyMap<SessionId, PendingApproval>(toolName/reason)
+  合成六态 idle/thinking/waiting/error/done(subagent 会话不计入;running true→false 边沿=done)
+    │ 每 1.5s 心跳写 window.__miasakiPetPanel = { ts, state, tool }
+    ▼
+注入运行时 02-core.js syncHash(hash 单写者):心跳 5s 内 → 追加 pet=<态>&pettool=<工具名>&petts=<ms>
+  官方通道静默 → 不带 pet 字段;05-sensors.js 同步关闭 act/wait DOM 扫描(不是双源并存)
+兜底信号 —— DOM 扫描(通道死亡时,themes/src/05-sensors.js):
+  scanActivity()("停止生成"按钮→busy) / scanApproval()(dialog 内允许+拒绝成对→wait=1)
+main.rs parse_fragment(结构体) + start_hash_watchdog
+  ▼  pet.set_official_state(ts, state, tool) / set_activity / set_waiting_approval
+compose 六态合成(pet_native.rs PetState):
+  官方(5s 心跳内,白名单归一化) > DOM 兜底(waiting/busy) > fleet 叠加(告警;Waiting>FleetBlocked)
+  行选择 pick_state_row:Waiting(wait 行) > FleetBlocked/Error(failed) > Done(review 一次)
+    > Thinking(idle 静默守候) > Idle(动作槽)
+  气泡:waiting→等待审批 / error→出错了 / done→完成了(10s) / thinking·fleet_running→忙碌中
 ```
-**校准**:`__miasakiProbe()`(window 全局)dump 当前候选按钮文本,Operator 按 DSH
-实际版本调整 `runtime.js` 顶部的 `ACT_BTN_TEXT`/`APPROVE_TEXT`/`DENY_TEXT`/
+**DOM 兜底校准**:`__miasakiProbe()`(window 全局)dump 当前候选按钮文本,Operator 按 DSH
+实际版本调整 `themes/src/05-sensors.js` 顶部的 `ACT_BTN_TEXT`/`APPROVE_TEXT`/`DENY_TEXT`/
 `APPROVE_CONTAINER_SEL` 常量。agent 员工状态归 `dsh-miasaki-fleet/fleet-monitor/`
 工作面板,不在桌宠内展示。
 

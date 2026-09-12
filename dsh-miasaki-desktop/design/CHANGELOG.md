@@ -2,6 +2,230 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-12 · 桌宠 v3 M2 真实工作状态（**官方契约为主信号,DOM 降级兜底**）
+
+按 [`pet-v3-roadmap.md`](pet-v3-roadmap.md) M2 执行,含 M0 探针(跑完即删)。**官方契约通道
+实机探针全部实证**(临时探针插件 + pet-panel 调试段,验证后已删净):
+
+- **M0 探针结论**(S2/S4):
+  - `ctx.uiSession.pendingInteractions` 可达:形状 `ReadonlyMap<SessionId, PendingApproval>`,
+    同步读 `getSnapshot()`、订阅 `subscribe()`;条目含 `toolName`/`reason`/`answer()`。
+    **cordis ctx 属性访问受 inject 白名单保护**——'uiSession' 不声明在 inject 里直接抛
+    `cannot get property "uiSession" without inject`(实证)。
+  - `ctx.sessions.list.getSnapshot()` 形状 `{ids, byId(普通对象), current, phase,
+    subagentsByParent, jobsBySession, currentAddress}`,**row 自带 `running`**;
+    `sessions.get()` 仅对 materialize 过的会话返回 SessionFace(否则 null)→ running 必须从
+    list row 读。
+  - S4:`PendingApproval.answer('allowed-once')` 链路可达(钩子就绪;真实审批端到端
+    留桌面壳验收)。
+- **M2.1 六态模型**:Rust `PetState`(Idle/Thinking/Waiting/Error/Done/FleetBlocked,
+  `pet_native.rs`)成为行选择唯一口径,替换 activity+waiting 松散组合。compose 六态合成:
+  **官方契约(5s 心跳内) > DOM 扫描兜底(通道静默时) > fleet 叠加**(M1.2 次序保留:
+  Waiting > FleetBlocked)。
+- **M2.2 信号通道**:hash 新增 `pet=<六态>`/`pettool=<工具名>`/`petts=<心跳 ms>`
+  (`main.rs` parse_fragment 结构体化 + percent_decode);心跳 1.5s,同 petts 去重,
+  白名单外归一化回 idle(防篡改)。**hash 单写者仍是注入运行时**:pet-panel 只更新
+  `window.__miasakiPetPanel`,`themes/src/02-core.js` syncHash 合并进 hash;
+  `themes/src/05-sensors.js` 按心跳探活,**官方通道活着时完全关闭 act/wait DOM 扫描**
+  (roadmap:不是双源并存),通道静默自动回落。
+- **M2.3 会话口径**:只读 `list.current`;`projectionValues.subagent` 非空的会话不计入主态。
+- **Done 庆祝**:`running` true→false 边沿 → 一次性 review 槽(DONE_REVIEW_MS 1.5s,不循环)
+  + 「完成了」气泡(JS 侧 doneHold 10s 后归 idle 收尾)。
+- **气泡精灵表 20→22 帧**(`gen-bubbles.ps1` +「出错了」+「完成了」;`BUBBLE_ERROR`=20/
+  `BUBBLE_DONE`=21),六态→气泡映射进 compose 状态段。
+- **交互一致性**:`pick_state_row` 签名改六态(单测 5 项);单击/双击唤起判定改
+  `effective_waiting()`(DOM waiting_approval 或官方 Waiting 5s 内)。
+- whale/inverse 三态立绘:Waiting/Error/Done/FleetBlocked → work;Thinking → intensity
+  (idle 升 work);Idle → intensity(fleet_running 例外升 work)。
+
+验证:`cargo check` 零警告;**MSVC `cargo test` 10/10**(新增 Done 让位槽用例);浏览器实机
+探针(S2 事实全实证、心跳 state=idle 正确);探针代码已从 pet-panel 删净。
+**待桌面壳实机验收**:发消息 → ≤1.5s thinking;完成 → done → idle;审批 → waiting+工具名;
+hash `pet=` 字段落盘;`pet.log` 出现 `official state ->` 行。
+
+## 2026-09-12 · 让位协议落地（M2 S6，appearance 线接管主题时本壳停注配色）
+
+S2 已把主题拆为 `*.skin.css`（配色）/ `*.deco.css`（装饰）两层；本轮接入让位判定——
+appearance 线（DSH web 外观插件）接管主题时，桌面壳**停注入配色并交还明暗所有权**，
+装饰层与窗口能力恒保留。设计依据
+[`../dsh-miasaki-appearance/design/2026-09-12-appearance-m2-design.md`](../../dsh-miasaki-appearance/design/2026-09-12-appearance-m2-design.md) §4。
+
+- **判定**：`appearanceYield()` = `html[data-mia-appearance="on"]` 且 `data-mia-skin ≠ pure`
+  （两属性由 appearance 的 boot script 写在 `<html>` 上）。默认不让位——appearance 未安装 /
+  未启用 / 纯净皮肤时，本壳行为与之前**逐字节一致**（零回归）。
+- **`themes/src/00-boot.js`**：`styleFor(t)` 按让位挑层——让位只注入 deco，否则 deco + skin。
+- **`themes/src/02-core.js`**：
+  - `syncDark()` 让位时 return（`FORCE_DARK` 锁定停用，明暗归官方 presenter；残留锁定由
+    presenter 的全量 apply 修正）；
+  - `setAttr()` 置 **`data-miasaki-theme-yield="skin"`** 双向保险标记——appearance 线据此判定
+    「桌面壳在位却未让位」的唯一不可接受冲突（`override-conflict`）；未让位时移除标记；
+  - 新增 `yieldObserver`（监听 `<html>` 的 `data-mia-appearance` / `-skin` / `-wallpaper`）：
+    appearance 属性翻转即 `apply(current)` 重跑——**让位与恢复都无需刷新页面**（时序补偿：
+    appearance 的 boot script 晚于本 init script 的首次判定，§4.1 设计约束 2）。
+- **`themes/src/03-switcher.js`**：切换条**第二入口**——让位态点皮肤不再本地 `apply`，改为
+  `GET /appearance/api/state` + `POST /appearance/api/config`（带 expectedRevision），成功后
+  自行同步 `<html>` 门控属性（与 appearance client 半 save() 同源幂等）；桌宠人格随目标
+  主题联动（`notifyPet(forTheme)` 增参数）。切回 pure 即解除让位，本壳自动恢复注入。
+- **`themes/src/04-deco.js`**：`buildAurora()` 在 `data-mia-wallpaper="on"` 时把光晕层
+  `opacity: 0`——壁纸与桌面光晕两层氛围不打架（appearance M2 §5.1）；壁纸关闭后经
+  `updateAurora()` 重建恢复。
+- **`themes/src/08-ready.js`**：`onReady()` 挂 `startYieldObserver()`。
+- **`scripts/verify-themes.mjs`**：新增 **§4.5 让位往返 4 项**自动化（模拟 appearance 门控
+  属性 → 断言 skin 停注入 + yield 标记 + `data-miasaki-theme` 保留 → 解除后 skin 回注 +
+  标记移除）；setup 增「先经 appearance API 关总开关并二次导航」（本脚本验证 desktop 独立
+  行为，需 appearance 处于 off 基线——裸 API 写入不唤醒其 client 半，必须让首帧重读）。
+  首轮跑出的 12 项 FAIL 正是让位协议真实工作的证据（appearance 残留 enabled 配置下本壳
+  正确让位，测试前提失效），非回归。
+
+验证：`verify-themes` **22/22**（含让位往返）；`verify-all desktop` **8/8**。
+**实机项**（桌面壳 + appearance 插件同页）：切换条双入口换肤、aurora × 壁纸叠加、
+关总开关即时恢复接管——见 `dsh-miasaki-shared-docs/cross/smoke-test-matrix.md` §3.5/§4。
+
+## 2026-09-12 · 桌宠 v3 M1 状态机修复（**纯代码,零素材,零依赖**）
+
+按 [`pet-v3-roadmap.md`](pet-v3-roadmap.md) M1 执行,铲除四个确定性缺陷(D1/D3/D4/D5/D6),
+对应 §3 M1 验收 + §8 回归用例 1-3/6:
+
+- **D1 根治 · 单一动作槽**(M1.1):`hop_until`/`hop_hold_until`/`wave_until`/`ambient`/`wander`
+  五个独立 `Option` 统一为 `ActionSlot { action, started, duration }`(`model.rs`)。
+  旧 `hop_until` 只有写入没有复位路径——单击一次后 compose 的 hop 分支恒真,每帧重挂 hold,
+  **永久 `jump`**,且 `wander`/`ambient` 触发门以 `hop_until.is_none()` 为前提、行选择链把
+  waiting/fleet_alert 排在 hop 之后 → 「动作太少」「不反映工作状态」两症状同一根因。
+  新 compose **每轮先「到期即清」再行选择**(Jump 到期自动转 `JumpHold` 落地定格,保留 v2 无硬切观感),
+  「忘记清理」一类缺陷从结构上不再可能。
+- **D3 修复 · 优先级重排**(M1.2):行选择收进纯函数 `pick_state_row`,新优先级
+  **waiting(审批) > fleet_alert > busy(静默守候) > 手势/环境动作 > idle**——审批与告警姿态
+  不再被单击手势遮蔽(刚点过桌宠也 ≤2s 切审批姿态)。busy 工作态站定:散步/ambient 触发门
+  同步排除 busy(触发必能播,不挂空槽)。4 个单测钉死优先级表(`model.rs::tests`)。
+- **D4 修复 · 双击挥手可达**(M1.3):窗口类补注册 `CS_DBLCLKS`(`ffi.rs` 新常量)——此前
+  `WM_LBUTTONDBLCLK` 永不到达,`do_wave` 是死代码,双击只会「再跳一次」。
+- **D5 修复 · 单击不抢焦点**(M1.3):单击改为「撸一下」(jump+气泡,不 `focus_main`);
+  **等待审批或主窗口最小化/隐藏**时单击/双击仍立即唤起主窗口。单击与双击去抖区分:
+  `WM_LBUTTONUP` 后 `SetTimer` 250ms(`IDT_SINGLE_CLICK`)判定是否第二击,双击序列的
+  第二次 UP 被吞(防「跳一次+挥一次」);新按压序列(DOWN)取消挂起去抖,拖动不受影响。
+- **D6 修复 · 圆点跟随**(M1.4):圆点位置在四处同步——拖动结束、散步结束(自然到期/撞墙)、
+  显隐切换、位置重置(原有)——隐藏态恢复入口不再与桌宠位置脱节。
+- 行为变更三点:① 单击不再唤起主窗口(除审批等待/主窗不可见);② busy 时散步与环境小动作停触发;
+  ③ 双击 = 挥手一次(不再是跳两次)。另:`Wander`/`Ambient` 旧结构删除,`HOP_MS`/
+  `SINGLE_CLICK_DEBOUNCE_MS`/`IDT_COMPOSE`/`IDT_SINGLE_CLICK` 常量化(`config.rs`),
+  `ffi.rs` 补 `KillTimer` 声明。
+
+验证:`cargo check --bin miasaki --tests` 零警告;**MSVC 环境 `cargo test` 9/9**
+(新增 4 项:优先级抢占 ×2、动作行映射、槽到期;既有 5 项不回归)。
+实机验收待用户:roadmap §3 M1 验收 ①-⑤(单击 1.5s 回基线 / 连点 20 次不卡 / 审批 ≤2s 抢占 /
+双击挥手 / `pet.log` 无新增 `ULW failed`)。
+
+## 2026-09-12 · 主题 CSS 拆分 skin/deco（M2 S2，**零行为变更**）
+
+为 appearance 线 M2 的「desktop 注入层让位协议」做前置拆分（设计见
+[`../dsh-miasaki-appearance/design/2026-09-12-appearance-m2-design.md`](../../dsh-miasaki-appearance/design/2026-09-12-appearance-m2-design.md)
+§4）：非 pure 主题一分为二——
+
+- **`themes/{zafkiel,kurkuriel}.skin.css`（配色层）**：73 个 `--dsw-static-*` 色阶 + 品牌 alias
+  重定向 + 杂项/JSON 树/代码高亮令牌 + 6 个半透明 alias（面板半透明化）。让位协议落地后
+  （appearance 线 S6）外观线接管主题时**本层停注入**。
+- **`themes/{zafkiel,kurkuriel}.deco.css`（装饰层）**：`--ms-*`（切换条/标题栏/关闭弹窗自有
+  配色）+ `::selection` / 光晕 / caret / 标题字族 / 水印。**恒注入**——桌面壳专属视觉与
+  自有命名空间，与 DSH 主题无耦合。
+- 原 `themes/{zafkiel,kurkuriel}.css` 删除（拆分前内容 = deco + skin 级联等价，
+  无同选择器同属性冲突）；`pure.css` 语义不变（不覆盖任何 token，无 skin 层）。
+
+配套同步：
+
+- `scripts/build-init.mjs`：产物改为 `__MIASAKI_STYLES__[t] = { skin, deco }`；**令牌完备性
+  校验只作用于 `*.skin.css`**（deco 不含色阶）。
+- `scripts/diff-tokens.mjs`：只扫 `*.skin.css`（缺失 0 / 死覆盖 0，与拆分前一致）。
+- `themes/src/00-boot.js` 新增 `styleFor(t)`（deco + skin 恒拼接，级联等价于拆分前；
+  让位判定在 appearance S6 接入时改为按判定挑选层）；`02-core.js` / `08-ready.js` /
+  legacy `runtime.js` 的全部 `STYLES[t]` 消费点改走 `styleFor`。
+- `scripts/verify-themes.mjs` **无改动**：端到端断言的是注入后的运行时行为，结构变化透明。
+
+验证：`build-init` 重建通过（73 KB，令牌校验过）；`verify-themes` 18/18
+（首轮 22/24 的两个 FAIL 为测试环境残留——上轮 headless Edge 进程未死透 + 测试 profile
+复用导致首载读到 zafkiel，清理 `.edge-test-profile` 与残留进程后全绿；非拆分引入）；
+`verify-all desktop` **8/8**（含 cargo test 10 例：pulse stale 语义 + 立绘回落链）。
+
+## 2026-09-12 · 桌宠 v3 专项规划设计（**仅设计，代码零改动**）
+
+依据:用户反馈「桌宠立绘不准确、动作太少、不能反应工作状态、不能快捷审查提权」,并新增诉求
+「边缘状态」(扒屏幕边缘露头 / 爬窗口边缘)。本轮只做调研与设计,产出
+[`pet-v3-roadmap.md`](pet-v3-roadmap.md)。
+
+### 一、关键结论:四项抱怨中三项的主因是代码缺陷,不是素材不足
+
+**同一处缺陷同时造成「动作太少」与「不反映工作状态」两个症状。**
+
+1. **`hop_until` 泄漏(确定性缺陷)**:`src-tauri/src/pet_native/window.rs:555` 由 `do_hop` 写入,
+   全仓唯一复位点是构造处的 `:867`,运行期无任何清理路径。于是 `compose` 的行选择链
+   `:253` 分支恒真,每轮重新挂上 `hop_hold_until`(`:258-262`)→ **单击一次后桌宠永久播 `jump`**。
+2. **连带禁掉散步与环境编排**:`:109`(wander 门)与 `:129`(ambient 门)都以 `hop_until.is_none()`
+   为前提 → 单击一次后 ambient / wander **永不再触发**。这是「动作太少」的直接主因。
+3. **连带遮蔽状态姿态**:行选择链把 `waiting`(`:288`)与 `fleet_alert`(`:291`)排在 `hop`(`:253`)
+   **之后** → 审批与告警姿态永远轮不到。这是「不能反应工作状态」的直接主因。
+4. **双击挥手是死代码**:窗口类 `style: CS_HREDRAW | CS_VREDRAW`(`:892`)未注册 `CS_DBLCLKS`,
+   `WM_LBUTTONDBLCLK` 处理器(`:702`)**永不可达**;双击的第二击只会再走一次 `WM_LBUTTONUP`
+   (`:686`)。→ `TODO.md` P2「桌宠双击 = 唤起/聚焦主窗口(已实现,待用户验证)」应修正为「待修」。
+5. 另两处交互缺陷:单击无条件 `focus_main()`(`:694`);隐藏后恢复用的圆点不跟随拖动
+   (`:67`/`:698`/`:952`)。
+
+### 二、状态信号源错位(非崩溃,但语义错误)
+
+现役实现是整页 DOM 扫描(`themes/src/05-sensors.js:67-98`),不绑定任何会话。官方已提供权威契约,
+本项目此前未使用:`SessionSnapshot.running` / `lastAgentError` / `queue` / `subagent`
+(`@deepseek-ai/dsh-api-session-controller` 的 `client/contract/snapshot.d.ts:71-94`);
+`ctx.uiSession.pendingInteractions` + `registerPendingInteraction`
+(`@deepseek-ai/dsh-client-ui-session` 的 `client/index.d.ts:96,117`);`PendingApproval` 与
+`ApprovalDecision = 'allowed-once' | 'rejected'`(`@deepseek-ai/dsh-client-ui-approval` 的
+`client/contract/slots.d.ts`,该包 README 明确「transient decisions only」,持久策略归 Host);
+审查跳转 `ctx.sidebarRight.openTab(kind)` / `toggleExpanded()`
+(`@deepseek-ai/dsh-client-ui-sidebar-right` 的 `client/service.d.ts`)。
+
+### 三、边缘 / 多屏 / DPI 现状
+
+- 可复用基础:`pet_native/persist.rs:52-78`(`monitor_workspaces`)与 `:82-93`(`pos_visible`)。
+- **主屏钳制**:`pet_native/ffi.rs:181-183` 的 `screen_size()` 取 `SM_CXSCREEN/CYSCREEN`,
+  被 `window.rs:157-163` 用于 wander 边界 → **副屏不可达,会被拉回主屏**。
+- **DPI**:`window.rs:855` 一次性声明 per-monitor-v2,全仓无 `WM_DPICHANGED` 处理 →
+  混合 DPI 跨屏拖动会坐标/尺寸错。
+- **M4.1 必测坑**:缩边(peek)状态下窗口中心点落在工作区外,现行 `pos_visible` 会判「不可见」
+  → 重启后把桌宠拉回默认坐标(即「桌宠丢了」回归)。
+
+### 四、一处「看着像 bug 但不是」的项(记录以免误改)
+
+`window.rs:529` / `:785` 的 `BlendFn { blend_op: 1, … }`:按 Win32 规范 `BlendOp` 应为
+`AC_SRC_OVER`(`0x00`,`wingdi.h:4821`),此处传 `1` 属**规范偏差**。但
+`%LOCALAPPDATA%\miasaki\pet.log` 中 `ULW failed` 出现 **0 次**,首帧 `buf_nonzero=26419`、
+`first compose done` 正常 → **本机实际渲染成功,本轮不动它**;未来若改必须加日志断言。
+
+### 五、素材侧事实(与「立绘不准确」相关)
+
+- `ui/pets/frames.json`:kurumi 9 行 57 帧已切全;**`runRight` / `runLeft` 已切但运行时未使用**
+  (只用 `run`,`window.rs:273`)。
+- **语义错配**:`r7` 行(名为 `run`)实为「坐姿用电脑」画面,却被当作「散步」播放。
+- **inverse 不是滤镜**:三张独立原图经 `scripts/inverse-states.mjs:159-174` 生成;
+  README 中「同狂三图集 + CSS 反转滤镜」表述与实现不符,且原图
+  `ui/pets/inverse/raw/blue-idle.png` 与 `blue-deep.png` 的**金钟眼左右已互换**。
+
+### 六、参考仓库评估(PC2005-cloud/dsh-pet)
+
+固定提交 `814b0e4`(2026-09-11 10:44:24Z),经 GitHub API + README 核实(未拉源码)。架构为
+DSH web 插件 + Electron 透明局部窗 + VP9-Alpha `.webm` 素材。**已有**:会话事件驱动的档位化
+工作状态(思考/工作/整理/等待/成功/出错)+ 常驻气泡、权重化动画调度、多宠物实例、多屏 DPI 处理。
+**未证明**:宠物内直接审批(仅有窗口失焦的系统 toast 通知)、检测并攀爬其他应用窗口边缘
+(其边缘能力止于屏幕/工作区边界)。许可:代码 MIT,但**动画/提示词/源视频禁止商用,二创须署名**。
+→ 只借鉴机制(档位化状态、权重调度、交叉淡入、多屏 DPI 经验、降级开关),**不引入其素材、不换架构**。
+
+### 七、方案里程碑
+
+M0 探针(S1–S4)→ **M1 状态机修复**(一次性动作统一为带到期时间的槽位;优先级改为
+「审批 > 告警 > 工作 > 用户手势 > 散步 > 环境」;补 `CS_DBLCLKS` + 单击/双击去抖;圆点跟随)
+→ M2 官方契约六态(idle/thinking/waiting/error/fleet-blocked/done,DOM 扫描降为兜底)
+→ M3 审批闭环与审查跳转 → M4 边缘(先屏幕边缘,后本应用主窗口,第三方窗口降为可选)
+→ M5 素材与立绘。**M1 是一切前置**:不修 `hop_until`,后续新增的动作与状态姿态都会被 `jump` 吃掉。
+
+红线:桌宠**永不自动决策**审批,只允许 `allowed-once` / `rejected`,不写持久策略,不触碰 OS UAC;
+零新依赖;33ms 主路径零新增分配;不新增 GDI 对象(考虑到 `TODO.md` P0 仍有未收敛的偶发挂起)。
+
 ## 2026-09-10(深夜,续三) · `cordis_inspect_query`(client) 永久挂起:根因查明 + 本体补丁(第五例)
 
 依据:用户报告「`cordis_inspect_query` · client 这个工具好像总是卡住,看看什么原因」。

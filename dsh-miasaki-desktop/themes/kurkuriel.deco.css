@@ -1,0 +1,62 @@
+/* ============================================================
+ * kurkuriel deco — 装饰层（M2 S2 自 kurkuriel.css 拆分，2026-09-12）
+ * 内容：--ms-*（切换条/标题栏/关闭弹窗自有配色，跟随主题换色）+
+ *       ::selection / 光晕 / caret / 标题字族 / 水印。
+ * 恒注入：桌面壳专属视觉与自有命名空间，不随让位协议停用
+ * （appearance M2 设计 §4.2——让位只影响"配色与明暗"两件事）。
+ * ============================================================ */
+
+/* —— 切换条 —— */
+html[data-miasaki-theme="kurkuriel"],
+html[data-miasaki-theme="kurkuriel"] body {
+  --ms-panel: #ffffff;
+  --ms-text: #241f22;
+  --ms-accent: #9e1b1b;
+  --ms-border: #c4bbb3;
+  --ms-hover: #e9e4df;
+  --ms-glyph: #8f1616;
+  --ms-glow: rgba(158, 27, 27, .3);
+  --ms-danger: #9e1b1b;
+}
+
+html[data-miasaki-theme="kurkuriel"] ::selection {
+  background: #9e1b1b;
+  color: #f8f5f2;
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-a {
+  opacity: .5;
+  background: radial-gradient(circle, rgba(158, 27, 27, .32), transparent 68%);
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-b {
+  opacity: .38;
+  background: radial-gradient(circle, rgba(94, 101, 114, .3), transparent 70%);
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-c {
+  opacity: .28;
+  background: radial-gradient(circle, rgba(184, 154, 92, .35), transparent 70%);
+}
+html[data-miasaki-theme="kurkuriel"] input,
+html[data-miasaki-theme="kurkuriel"] textarea,
+html[data-miasaki-theme="kurkuriel"] [contenteditable] {
+  caret-color: #9e1b1b;
+}
+html[data-miasaki-theme="kurkuriel"] h1,
+html[data-miasaki-theme="kurkuriel"] h2,
+html[data-miasaki-theme="kurkuriel"] h3 {
+  font-family: "Arial Narrow", "Segoe UI", "Microsoft YaHei", sans-serif;
+  letter-spacing: .01em;
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-watermark {
+  position: fixed;
+  left: -90px;
+  top: -90px;
+  width: 420px;
+  height: 420px;
+  opacity: .1;
+  pointer-events: none;
+  z-index: 0;
+}
+html[data-miasaki-theme="kurkuriel"] #miasaki-watermark svg {
+  width: 100%;
+  height: 100%;
+}

@@ -1,6 +1,11 @@
 /* ============================================================
- * kurkuriel — 狂狂帝「白夜逆钟」
- * 原创设计：骨白基底 · 血绯（交互）· 枪铁（装饰）· 十二星座母题
+ * kurkuriel skin — 配色层（M2 S2 自 kurkuriel.css 拆分，2026-09-12）
+ * 内容：73 个 --dsw-static-* 色阶 + 品牌 alias 重定向 + 杂项/JSON 树/
+ *       代码高亮令牌 + 6 个半透明 alias（面板半透明化）。
+ * 让位协议（appearance M2 §4）：外观线接管主题（data-mia-appearance="on"
+ * 且 data-mia-skin ≠ pure）时**本文件停注入**，配色由外观线的 alias
+ * 覆盖表接管；装饰层（kurkuriel.deco.css）恒注入。
+ * 令牌完备性校验（build-init × design/token-surface.txt）作用于本文件。
  * ============================================================ */
 
 html[data-miasaki-theme="kurkuriel"],
@@ -125,25 +130,11 @@ html[data-miasaki-theme="kurkuriel"] body {
   --shiki-token-punctuation: #6a6159;
   --shiki-token-string: #3e6b47;
   --shiki-token-string-expression: #46734f;
-
-  /* —— 切换条 —— */
-  --ms-panel: #ffffff;
-  --ms-text: #241f22;
-  --ms-accent: #9e1b1b;
-  --ms-border: #c4bbb3;
-  --ms-hover: #e9e4df;
-  --ms-glyph: #8f1616;
-  --ms-glow: rgba(158, 27, 27, .3);
-  --ms-danger: #9e1b1b;
 }
 
-/* —— 装饰层 —— */
-html[data-miasaki-theme="kurkuriel"] ::selection {
-  background: #9e1b1b;
-  color: #f8f5f2;
-}
-/* 面板半透明化：Mica 材质 + 光晕层透出，白夜逆钟的冷寂氛围；
- * 亮主题 alpha 高于暗主题：系统暗色下 Mica 偏暗，抬 alpha 防骨白纸面偏灰 */
+/* 面板半透明化（配色部分）：Mica 材质 + 光晕层透出，白夜逆钟的冷寂氛围；
+ * 亮主题 alpha 高于暗主题：系统暗色下 Mica 偏暗，抬 alpha 防骨白纸面偏灰。
+ * 让位后由外观线壁纸的「表面不透明度」参数层接管（M2 设计 §5.4）。 */
 html[data-miasaki-theme="kurkuriel"] body {
   --dsw-alias-bg-base: rgba(247, 244, 241, .93);
   --dsw-specific-sidebar-fill: rgba(252, 250, 248, .93);
@@ -151,41 +142,4 @@ html[data-miasaki-theme="kurkuriel"] body {
   --dsw-alias-bg-layer-2: rgba(255, 255, 255, .96);
   --dsw-alias-bg-module-platform: rgba(252, 250, 248, .94);
   --dsw-alias-bg-overlay: rgba(255, 255, 255, .97);
-}
-html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-a {
-  opacity: .5;
-  background: radial-gradient(circle, rgba(158, 27, 27, .32), transparent 68%);
-}
-html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-b {
-  opacity: .38;
-  background: radial-gradient(circle, rgba(94, 101, 114, .3), transparent 70%);
-}
-html[data-miasaki-theme="kurkuriel"] #miasaki-aurora .aur-c {
-  opacity: .28;
-  background: radial-gradient(circle, rgba(184, 154, 92, .35), transparent 70%);
-}
-html[data-miasaki-theme="kurkuriel"] input,
-html[data-miasaki-theme="kurkuriel"] textarea,
-html[data-miasaki-theme="kurkuriel"] [contenteditable] {
-  caret-color: #9e1b1b;
-}
-html[data-miasaki-theme="kurkuriel"] h1,
-html[data-miasaki-theme="kurkuriel"] h2,
-html[data-miasaki-theme="kurkuriel"] h3 {
-  font-family: "Arial Narrow", "Segoe UI", "Microsoft YaHei", sans-serif;
-  letter-spacing: .01em;
-}
-html[data-miasaki-theme="kurkuriel"] #miasaki-watermark {
-  position: fixed;
-  left: -90px;
-  top: -90px;
-  width: 420px;
-  height: 420px;
-  opacity: .1;
-  pointer-events: none;
-  z-index: 0;
-}
-html[data-miasaki-theme="kurkuriel"] #miasaki-watermark svg {
-  width: 100%;
-  height: 100%;
 }

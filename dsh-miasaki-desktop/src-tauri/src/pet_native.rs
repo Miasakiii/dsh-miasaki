@@ -16,20 +16,40 @@ pub(crate) mod persist;
 #[path = "pet_native/window.rs"]
 pub(crate) mod window;
 
+/// M2(v3):桌宠六态（pet-v3-roadmap.md M2.1）。官方契约通道（hash pet= 字段，白名单归一化）
+/// 优先；DOM 扫描（act=/wait=）兜底；fleet 脉冲叠加 FleetBlocked。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PetState {
+    Idle,
+    Thinking,
+    Waiting,
+    Error,
+    Done,
+    FleetBlocked,
+}
+
 pub struct PetShared {
     pub mode: String,
     pub intensity: String,
     pub hide: bool,
     /// 面板「位置重置」请求：窗口线程 compose 消费后清 false。
     pub pending_reset: bool,
-    /// 总指挥活动状态(v2026-08-30):"busy" = 生成中,"idle" = 等待
+    /// 总指挥活动状态(v2026-08-30):"busy" = 生成中,"idle" = 等待（DOM 兜底源,M2 后仅官方通道静默时生效）
     pub activity: String,
-    /// 总指挥等待 Operator 审批工具调用(优先级最高)
+    /// 总指挥等待 Operator 审批工具调用（DOM 兜底源）
     pub waiting_approval: bool,
     /// X2 fleet 指示：有任务 running（或 waiting_approval>0）
     pub fleet_running: bool,
     /// X2 fleet 指示：blocked+error>0（最高优先级，与 waiting_approval 并列展示）
     pub fleet_alert: bool,
+    /// M2:官方契约上报态（白名单归一化后）；None = 从未收到
+    pub official_state: Option<PetState>,
+    /// M2:等待审批时的工具名（M3 气泡用；M2 仅透传存储）
+    pub official_tool: String,
+    /// M2:最后一次官方心跳的 petts（hash 值，同值 = 页面未更新 = 非新心跳）
+    pub official_ts: i64,
+    /// M2:最后一次官方心跳到达时刻（compose 内 5s 新鲜度判定）
+    pub official_at: Option<std::time::Instant>,
 }
 
 pub struct NativePet {
@@ -49,6 +69,10 @@ impl NativePet {
             waiting_approval: false,
             fleet_running: false,
             fleet_alert: false,
+            official_state: None,
+            official_tool: String::new(),
+            official_ts: 0,
+            official_at: None,
         }));
         let frames = image::load_frames();
         let s2 = shared.clone();
@@ -108,6 +132,35 @@ impl NativePet {
                 s.fleet_running = running;
                 s.fleet_alert = alert;
             }
+        }
+    }
+
+    /// M2(v3):官方契约六态上报（main.rs watchdog 解析 hash pet=/pettool=/petts=）。
+    /// 同 petts 视为页面未更新（非新心跳,不刷新 official_at）；白名单外一律归一化为
+    /// idle（防篡改,roadmap M2.2）。新鲜度判定（5s）在 compose/查询点进行。
+    pub fn set_official_state(&self, ts: i64, state: &str, tool: &str) {
+        if let Ok(mut s) = self.shared.lock() {
+            if s.official_ts == ts {
+                return;
+            }
+            s.official_ts = ts;
+            s.official_at = Some(std::time::Instant::now());
+            let norm = match state {
+                "thinking" => PetState::Thinking,
+                "waiting" => PetState::Waiting,
+                "error" => PetState::Error,
+                "done" => PetState::Done,
+                _ => PetState::Idle,
+            };
+            if s.official_state != Some(norm) {
+                window::pet_log_line(&format!(
+                    "[native-pet] official state -> {norm:?} tool={tool}\n"
+                ));
+            }
+            s.official_state = Some(norm);
+            let mut t = tool.to_string();
+            t.truncate(80);
+            s.official_tool = t;
         }
     }
 
