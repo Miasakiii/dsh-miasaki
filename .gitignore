@@ -26,6 +26,14 @@ dsh-miasaki-desktop/src-tauri/src/assets.rs
 .zcode/
 _bailian_test/
 _mimo_test/
+# OpenClaw / 外部 agent 框架的 workspace 与状态（2026-09-12 出现在根目录，不属于七线任何一线）
+.cluster/
+.openclaw/
+HEARTBEAT.md
+IDENTITY.md
+SOUL.md
+TOOLS.md
+USER.md
 
 # ---- 外部素材参考（半成品/压缩包，不入库）----
 hatch-pet-kurumi-main/

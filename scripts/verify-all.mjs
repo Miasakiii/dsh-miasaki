@@ -202,7 +202,7 @@ async function planSsh() {
   // 单测不碰真实 SSH 连接（store 围栏/归一化、runtime 的 TOFU 与错误分类、
   // http 路由、client 工厂返回契约），因此可在无 sshd 的机器上复现；
   // 真实连接验收仍是实机项，见 smoke-test-matrix.md。
-  for (const entry of ['index.js', 'client.js', 'app.js', 'lib/store.js', 'lib/runtime.js']) {
+  for (const entry of ['index.js', 'client.js', 'app.js', 'session.js', 'lib/store.js', 'lib/runtime.js']) {
     checks.push({ line: 'ssh', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
   for (const file of await testFiles(dir)) {
@@ -242,6 +242,8 @@ async function planAppearance() {
   for (const file of await testFiles(dir)) {
     checks.push({ line: 'appearance', name: `test ${file.split(/[\\/]/).pop()}`, cmd: process.execPath, args: [file], cwd: dir })
   }
+  // M2 S3：皮肤表可复算闸门（产物与 skin.css 重算 diff，防手改/过期）
+  checks.push({ line: 'appearance', name: 'derive-skins --check', cmd: process.execPath, args: ['scripts/derive-skins.mjs', '--check'], cwd: dir })
 }
 
 /** 定位 cargo：优先 CARGO_HOME，其次 rustup 默认安装位置（PATH 里常没有）。 */function cargoBin() {

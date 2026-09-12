@@ -69,7 +69,7 @@ npm run validate / validate:strict / pulse
 node workers/bus/bus-apply.mjs --current-version       # 查当前总线版本
 node workers/bus/bus-apply.mjs --patch p.json --check  # 只校验不写入
 node workers/bus/bus-apply.mjs --patch p.json          # 提交一个超步
-npm test                                               # 本线全部单测（71 项）
+npm test                                               # 本线全部单测（108 项：F3 判活 7 / G0 契约与总线 51 / G1 图与就绪度 13 / G2 能力图 17 / G4 验证者 20）
 ```
 
 > **写入纪律（G0 起）**：总线文件（`state/*.jsonl`、`agents/*/capability.json`、

@@ -8,15 +8,15 @@
 
 本仓 `dsh-miasaki/` 单一 git 仓承载七条互不耦合的线 + 共享参考，各居其位：
 
-- `dsh-miasaki-desktop/` — 桌面端线（Tauri 2 薄壳 + Win32 桌宠 + 三主题；`design/` 在其内）
+- `dsh-miasaki-desktop/` — 桌面端线（Tauri 2 薄壳 + Win32 桌宠 + 三主题；`design/` 在其内）。**2026-09-12 桌宠 v3 M2「真实工作状态」落地**（官方契约为主信号、DOM 降级兜底；Rust 六态 `PetState` 为行选择唯一口径；主题 CSS 拆 `*.skin.css` / `*.deco.css` 供外观线消费）
 - `dsh-miasaki-fleet/` — 多 Agent CLI 编排线（agents/state/tasks/workers/fleet-monitor/shared/tests）
-- `dsh-miasaki-canvas/` — DSH web 画布插件线（fork dsh-synapse v0.4.1 改名 `@miasaki/dsh-canvas`，会话布 MVP M1–M4 已收官；`design/` 在其内）
-- `dsh-miasaki-sidebar/` — DSH web 侧边栏插件线（`@miasaki/dsh-sidebar`：**接入官方右侧 Sidebar**，提供审查 / 终端两个 tab 类型；自研壳 2026-09-10 退役、**2026-09-11 代码删除**；`design/` 在其内）
-- `dsh-miasaki-ssh/` — DSH web SSH 插件线（`@miasaki/dsh-ssh`：会话头**第一行**视图入口，与「对话 / 会话布」同一胶囊的第三段；**画布页面内部**那组按钮旁也有一个 SSH（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器；**M1 实现中：store/runtime/路由/WS/前端/单测（28 例）已完成并已 link 安装，待重启验证真实连接；2026-09-10 入口由第二行 tab 栏迁到第一行并合成同一控件**；`design/` 在其内）
+- `dsh-miasaki-canvas/` — DSH web 画布插件线（fork dsh-synapse v0.4.1 改名 `@miasaki/dsh-canvas`，会话布 MVP M1–M4 已收官；**2026-09-12 视觉与交互精细化 V1–V4 落地（v0.5.0-miasaki.6）**：令牌化圆润化 / 连线端点 / LOD 三档 / 状态徽标，纯表现层零 schema 变更；`design/` 在其内）
+- `dsh-miasaki-sidebar/` — DSH web 侧边栏插件线（`@miasaki/dsh-sidebar`：**接入官方右侧 Sidebar**，提供审查 / 终端两个 tab 类型；自研壳 2026-09-10 退役、**2026-09-11 代码删除**；**2026-09-12 内嵌终端两形态落地（v0.8.1-miasaki.0：底部面板 + 右栏 tab 是同一 pty 会话的两个 viewer，自持 node-pty 路线 B），待实机验证**；`design/` 在其内）
+- `dsh-miasaki-ssh/` — DSH web SSH 插件线（`@miasaki/dsh-ssh`：会话头**第一行**视图入口，与「对话 / 会话布」同一胶囊的第三段；**画布页面内部**那组按钮旁也有一个 SSH（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器；**M1 代码完成，已 link 安装，待重启验证真实连接；2026-09-12 工作区规划 U0 可靠性闭环 + U1 统一工作区（主机侧栏 / 多标签 / 编辑抽屉 / 三主题桥接 / 复制粘贴查找字号 / 响应式）均已实施，单测 60 例，待实机验收；U2（SFTP/多 shell）U3（跳板/转发）未动**；`design/` 在其内）
 - `dsh-miasaki-dual-model/` — DSH web 双模型插件线（`@miasaki/dsh-dual-model`：会话级「主模型 + 辅助模型」，任一支持图片即可发图，输入框右下角配置；**M1 实现完成，待实机验证**；含 `patches/dsh-api-session-controller/` 图片准入补丁；`design/` 在其内）
-- `dsh-miasaki-appearance/` — DSH web 外观插件线（`@miasaki/dsh-appearance`：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果；**M1 底座已实现，待重启 `dsh web` 实机验证**——走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject` 首帧注入，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约；M2–M4 依次接皮肤/壁纸、动效、会话效果；`design/` 在其内）
-- `dsh-miasaki-shared-docs/` — 跨线共享参考（`cross/` 跨线设计、`dsh-platform/` DSH 平台调研）
-- 根级 `_refs/ vendor/ dist/ .vs/ .workbuddy/ .workbuddy-ai/ .learnings/ .monkeycode/ .freebuff/` 均已 ignore，外部/归档/构建产物，不属于任何一线。
+- `dsh-miasaki-appearance/` — DSH web 外观插件线（`@miasaki/dsh-appearance`：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果；**M2 已收官（2026-09-12）：皮肤层（105 token 表 + 首帧防闪色）/ 壁纸与玻璃档位（配置 v2、程序化渐变 + 本地图源）/ 桌面壳让位协议全部落地并实机验证**——走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject` 首帧注入，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约；M3–M4 依次接动效、会话效果；`design/` 在其内）
+- `dsh-miasaki-shared-docs/` — 跨线共享参考（`cross/` 跨线设计、`dsh-platform/` DSH 平台调研、仓库级评审报告 `repo-review-*.md`）
+- 根级 `_refs/ vendor/ dist/ .vs/ .workbuddy/ .workbuddy-ai/ .learnings/ .monkeycode/ .freebuff/ .cluster/ .openclaw/` 均已 ignore，外部/归档/构建产物，不属于任何一线；根级 `HEARTBEAT.md / IDENTITY.md / SOUL.md / TOOLS.md / USER.md` 为外部 agent 工具（OpenClaw）的 workspace 模板，同样 ignore。
 
 七条线代码零耦合，仅共享 `dsh-miasaki-shared-docs/`。仓库内被 git 追踪的文件可写 `../dsh-miasaki-shared-docs/…` 形式的相对引用（同仓内，clone 后不断）。
 
