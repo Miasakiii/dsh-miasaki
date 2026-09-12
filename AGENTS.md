@@ -47,6 +47,12 @@
 
 - **桌宠预设维护材料唯一住处**：`dsh-miasaki-desktop/preset-sources/`（`*.persona.txt` + `*.preset.yml` +
   `apply-presets.ps1` 同居；改人设源文件后重跑脚本同步 `%USERPROFILE%\.dsh\.agent-presets\`）。
+- **desktop 线包管理准则：npm 唯一**（2026-09-12 用户拍板）：`dsh-miasaki-desktop/` **自身依赖**只走 npm，
+  `package-lock.json` 是**唯一锁文件**；`pnpm-lock.yaml` 已 `git rm` 删除并在根 `.gitignore` 挡回，**不要**在
+  desktop 目录跑 `pnpm install`。根因教训：历史上两套锁文件各自漂移（pnpm 侧早已解析到 sharp 0.35.4、
+  npm 侧仍锁 0.35.3），而 dependabot 只读 `package-lock.json` ⇒ 高危漏洞告警长期挂着。
+  **注意区分**：各 README/CHANGELOG 里大量出现的「profile 目录 `pnpm install`」指的是 **DSH 宿主 profile**
+  的 `file:` 插件依赖安装（宿主生态既定方式），与本线自身依赖无关，不受此准则约束。
 - **DSH 本体补丁唯一住处**：`dsh-miasaki-desktop/patches/<包名>/`（补丁规则 `patch.mjs` + `baseline/` 原始与产物
   + README 写清升级后重打流程）。**禁止**只在 `vendor/`（不入库）留补丁产物；新增/修改补丁后必须
   `node patch.mjs verify` 自证，并同步 `verify-all.mjs` 与设计文档。

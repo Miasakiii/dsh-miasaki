@@ -7,11 +7,17 @@
 ## 快速开始
 
 ```bash
-npm install                 # 安装 @tauri-apps/cli
+npm install                 # 安装 @tauri-apps/cli（本线以 npm 为准，见下方「包管理准则」）
 npm run gen-init            # 内联主题 → src-tauri/injected/theme-init.js（含令牌完备性校验）
 npm run tauri dev           # 开发运行
 npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/release/）
 ```
+
+> **包管理准则（2026-09-12 决议）**：本线自身依赖统一走 **npm**，`package-lock.json` 是**唯一锁文件**；
+> `pnpm-lock.yaml` 已删除并在根 `.gitignore` 挡回。**成因**：历史上两套锁文件各自漂移——pnpm 侧早已解析到
+> sharp 0.35.4，npm 侧仍锁 0.35.3，而 dependabot 只读 npm 侧，于是高危漏洞告警长期挂着。
+> **注意区分**：文中多处提到的「profile 目录 `pnpm install`」指的是 **DSH profile 宿主侧**的
+> `file:` 插件依赖安装（那是宿主生态的既定方式），与本线自身依赖无关，不受此决议影响。
 
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 

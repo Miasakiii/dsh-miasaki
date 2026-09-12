@@ -6,6 +6,12 @@ node_modules/
 .npm-cache-tmp/
 .pnpm-store/
 
+# ---- desktop 线包管理准则：npm 唯一（2026-09-12 决议）----
+# 历史上 npm/pnpm 两套锁文件各自漂移：pnpm 侧已解析 sharp 0.35.4 而 npm 侧仍锁 0.35.3，
+# dependabot 只读 package-lock.json ⇒ 高危告警长期挂着。pnpm-lock.yaml 已删除，此处挡回防再犯。
+# （注意：DSH profile 目录用 pnpm 是其宿主生态的既定方式，与本条无关。）
+dsh-miasaki-desktop/pnpm-lock.yaml
+
 # ---- 官方仓库克隆与本地备份（含嵌套 .git，禁止入库）----
 vendor/
 _refs/

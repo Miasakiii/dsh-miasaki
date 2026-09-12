@@ -19,9 +19,20 @@
 - **背景**：sharp 仅用于**构建链脚本**（`cut-frames` / `inverse-states` / `make-icons` /
   `make-inverse-sheet` / `build-init`），不进运行时；本地 `node_modules` 此前已解析到 0.35.4，
   本次修的是**锁文件记录**（npm 侧此前仍锁 0.35.3，dependabot 读的正是它）。
-  **遗留观察**：本线同时存在 `package-lock.json` 与 `pnpm-lock.yaml` 两套锁文件，dependabot 只读前者，
-  建议后续统一（另行决议，本次未动）。
-- 触摸点：`package.json`、`package-lock.json`、`pnpm-lock.yaml`、本文件。**无需重编壳**（依赖不进运行时）。
+- **决议与收口（同日，用户拍板「以 npm 为准则」）**：本线自身依赖统一走 **npm**，
+  `package-lock.json` 为**唯一锁文件**——`pnpm-lock.yaml` **已 `git rm` 删除**，并在根 `.gitignore`
+  加条目挡回（防再次生成后误提交）。**成因回顾**：正是两套锁文件各自漂移，才造成「pnpm 侧早已是
+  0.35.4、npm 侧仍锁 0.35.3」的分裂，而 dependabot 只读 npm 侧 ⇒ 高危告警长期挂着。
+  **注意区分**：本 README/CHANGELOG 多处提到的「profile 目录 `pnpm install`」指的是 **DSH profile
+  宿主侧** `file:` 插件依赖的安装方式（宿主生态既定），与本线自身依赖无关，不受此决议影响。
+- **一致性校验**（删锁文件前做的最后核验）：`package-lock.json` 与 `package.json` 的
+  dependencies / devDependencies / 包名版本**逐字段一致**，三个声明依赖（sharp / ws / @tauri-apps/cli）
+  均有 lock 条目且带 `resolved` + `integrity`（`lockfileVersion` 3）⇒ `npm ci` 前置检查可通过。
+- **待用户执行**：本地 `node_modules` 目前仍是 **pnpm 结构**（存在 `.pnpm/`）。依赖不进运行时、
+  不影响壳，故非阻塞；但建议在普通终端执行 `Remove-Item -Recurse -Force node_modules; npm install`
+  使其与 npm 锁文件对齐（受限沙箱内 npm 缓存写入被拒，无法代跑）。
+- 触摸点：`package.json`、`package-lock.json`、`pnpm-lock.yaml`（**已删除**）、`README.md`（新增包管理准则段）、
+  根 `.gitignore`、本文件。**无需重编壳**（依赖不进运行时）。
 
 ## 2026-09-12 · 桌宠 v3 M2 真实工作状态（**官方契约为主信号,DOM 降级兜底**）
 
