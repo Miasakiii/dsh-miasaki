@@ -57,6 +57,24 @@ test('parseUnifiedDiff: new file, binary, no-newline marker', () => {
   assert.deepEqual(noNl.hunks[0].lines.map(l => [l.t, l.s]), [['del', 'end'], ['add', 'end2']])
 })
 
+test('parseUnifiedDiff: hunk headers keep the whole @@ line including the function hint', () => {
+  // git 在第二个 @@ 之后附带「所在函数」提示串——这是窄栏里唯一的导航上下文，
+  // 2026-09-12 起解析器保留整行供渲染（此前只取行号，尾串被丢弃）。
+  const file = parseUnifiedDiff([
+    'diff --git a/src/app.js b/src/app.js',
+    '--- a/src/app.js',
+    '+++ b/src/app.js',
+    '@@ -12,7 +12,9 @@ export function apply(ctx) {',
+    ' const a = 1',
+    '-const b = 2',
+    '+const b = 20',
+  ].join('\n'))
+  assert.equal(file.hunks[0].header, '@@ -12,7 +12,9 @@ export function apply(ctx) {')
+  assert.equal(file.hunks[0].oldStart, 12)
+  assert.equal(file.hunks[0].newStart, 12)
+  assert.equal(file.hunks[0].lines.length, 3)
+})
+
 test('verifyDocSync: code change without doc change flags all missing docs', () => {
   // Only a code file changed → both README and CHANGELOG are missing
   const findings = verifyDocSync([{ xy: 'M ', path: 'dsh-miasaki-sidebar\\client.js' }])

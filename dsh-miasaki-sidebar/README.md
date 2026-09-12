@@ -5,6 +5,11 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 - 路线 D（2026-09-06 拍板）：不安装 `dsh-better-sidebar` 基座，完全自研；与 canvas 线同构技术栈，零代码耦合；
 - 产品理念参考：Codex `/side` 侧边对话、GitHub Copilot 右栏范式、CHI'25 常显侧面板研究（详见设计文档 §2 调研来源）；
 - 红线沿用 canvas：不改系统提示/模型请求/工具 schema；DSH 原生会话是唯一事实来源；插件不直接调模型。
+- **当前待办：P0/P1 + P2 内嵌终端已落地（2026-09-12，待重启 `dsh web` 实机验证）** —— 审查 tab 数据一致性
+  修复 + diff 阅读器重做（v0.7.0）；**内嵌终端两形态**（v0.8.0：底部面板 + 右栏 tab 共享同一 pty 会话，
+  node-pty 路线 B 已过 T2 spike）；点名交互重排待实机确认。
+  见 [优化规划](design/2026-09-12-rightbar-optimization-plan.md) §6 拍板记录 与
+  [界面示意](design/2026-09-12-rightbar-mockup.html)。
 
 ## 状态
 
@@ -54,10 +59,11 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 
 | 组件 | 定位 | 里程碑 | 状态 |
 |---|---|---|---|
-| 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 复验通过）；2026-09-10 迁移为官方右栏 tab 类型 |
-| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08：cwd 回显、类型探测与置灰、启动按钮渲染；启动动作本身仍以 host 路由 HTTP 用例覆盖）；2026-09-10 迁移为官方右栏 tab 类型 |
+| 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff（v0.7.0 重做：双行号 / hunk 头 / 换行默认开 / 上下文档位 / 变更跳转 / 分段渲染；详情基线随视图，主点击展开、点名移行首） | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 复验通过）；2026-09-10 迁移为官方右栏 tab 类型；**v0.7.0 P0/P1 重做待实机验证**（2026-09-12） |
+| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08）；v0.8.0 起收进终端 tab 的「外部系统终端」折叠区 |
+| 内嵌终端（两形态） | **底部面板 + 右栏 tab 共享同一 pty 会话**（node-pty 路线 B + WS + xterm；单实例保活 + 重连回放 + restart 语义；标题栏终端按钮 + Ctrl+`） | M3 / v0.8.0 | **已实现待实机验证**（2026-09-12 拍板两形态并存，见优化规划 §6；T2 spike 通过：预编译命中 + resize 生效） |
 | 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成（待实现后再注册官方 tab 类型） |
-| 标题栏启动器组 | 外部程序跳转按钮（explorer / VS Code / VS Code Insiders 菜单，✓ 默认持久化）+ 终端展开按钮（底部内嵌终端面板：xterm + node-pty + WS 回放） | M3（用户拍板立项） | **设计定稿 2026-09-09**，见 [设计](design/2026-09-09-sidebar-launcher-design.md)；前置 spike：node-pty 编译（硬门）+ 底部推挤 + xterm 服务 |
+| 标题栏启动器组 | ~~底部内嵌终端面板（xterm + node-pty + WS 回放）~~ → **已按 2026-09-12 拍板落地为「内嵌终端两形态」**（见上）；外部程序跳转按钮（explorer / VS Code 菜单）仍为未实现残留 | M3（已部分落地） | 终端部分 = **v0.8.0 已实现**；外部跳转按钮未实现（前提已随壳退役重建，待另立项） |
 | ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉 / 桌面壳让位~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线） |
 
 ## 目录结构
@@ -65,19 +71,24 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 ```
 dsh-miasaki-sidebar/
 ├── README.md
-├── package.json            # @miasaki/dsh-sidebar（dsh.client web 声明）
+├── package.json            # @miasaki/dsh-sidebar（dsh.client web 声明；依赖 node-pty / ws / @xterm）
+├── pnpm-workspace.yaml     # pnpm ≥11 构建批准：node-pty 显式免构建（预编译命中，T2 实测）
 ├── cordis.patch.yml        # 插件身份（id: sidebar / 数据目录 / trustedHosts）
 ├── index.js                # host 半：/sidebar/api 路由族（review + terminal + health）
+│                           #   + /sidebar/ws/terminal（内嵌终端 WS，一次性 token + 三道围栏）
+│                           #   + /sidebar/asset/terminal/*（xterm UMD 静态 serve）
 ├── client.js               # client 半：官方右栏 tab 类型注册（审查 / 终端）+ 两个 tab 的正文实现
+│                           #   + 内嵌终端（TerminalView / 底部面板 / 标题栏按钮 / Ctrl+`）
 │                           #   壳层已于 2026-09-11 全部删除，不再留死代码
 ├── test/
-│   ├── review-data.test.js      # diff 解析器 / 文档同步检测 / checklists 持久化单测（4 项）
-│   ├── review-view.test.js      # host 半四视图解析器 + 真实临时 git 仓库集成（6 项，其中 2 项集成用例受限环境自动跳过）
+│   ├── review-data.test.js      # diff 解析器（含 hunk header）/ 文档同步检测 / checklists 持久化单测（5 项）
+│   ├── review-view.test.js      # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（10 项）
 │   ├── review-grouping.test.js  # 审查列表目录分组与组内统计求和（源码抽取，3 项）
 │   ├── review-view-store.test.js # 审查视图持久化：默认值 / 非法回退 / 订阅通知 / 私有模式降级（源码抽取，6 项）
 │   ├── rightbar-guide.test.js   # 官方右栏 guide 条目契约：title / description 必须是函数（源码抽取，4 项）
 │   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
-│   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单（10 项）
+│   ├── terminal-hub.test.js     # 内嵌终端 host 半：PTY 枚举纪律 / 回放环 / 一次性 token / 围栏 / 单会话语义（fake pty 注入，7 项）
+│   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单 / diff 新契约（12 项）
 └── design/
     ├── 2026-09-06-sidebar-roadmap-design.md   # 路线 D 总设计（**§3 壳设计 / §3.2 tab 框架已被 2026-09-10 迁移取代**，§1 红线与 §4–§6 内容设计仍有效）
     ├── 2026-09-08-tavern-sidebar-comparison.md # 对照 dsh-tavern/better-sidebar 的实现调研
@@ -85,6 +96,8 @@ dsh-miasaki-sidebar/
     ├── 2026-09-08-sidebar-review-redesign-implementation.md # 审查改版 + 浏览器式标签页实施方案（v0.5.0；标签栏部分随壳退役）
     ├── 2026-09-09-sidebar-launcher-design.md # 标题栏启动器组：外部程序跳转 + 终端展开（内嵌终端面板，M3 立项）
     ├── 2026-09-10-migrate-to-official-rightbar.md # 迁移官方右栏：壳退役映射表 + 官方契约要点 + 丢失能力补偿（当前形态的设计依据）
+    ├── 2026-09-12-rightbar-optimization-plan.md  # **优化规划设计（2026-09-12，未写代码）**：审查基线不一致缺陷 + diff 阅读器重做 + 终端改判右栏内嵌 + 宿主自带 PTY 栈核查 + spike T1–T6
+    ├── 2026-09-12-rightbar-mockup.html           # 上述设计的界面示意（现状 vs 建议，浏览器打开）
     └── CHANGELOG.md                            # 本线变更记录
 ```
 
@@ -120,20 +133,41 @@ dsh-miasaki-sidebar/
 三道都是 DNS-rebinding / 跨站纵深防御，**不是鉴权**；`test/api-routing.test.js` 走真实 HTTP 覆盖
 （跨站标记、外部 Origin、`null` Origin 均 403，同源 Origin 与无 Origin 正常 200）。
 
+## 内嵌终端（v0.8.0）与 WS 安全边界
+
+终端 tab 主体与底部面板（Ctrl+` / 桌面壳标题栏按钮）是**同一个 pty 会话**的两个 viewer：
+node-pty@1.2.0-beta.15（路线 B，T2 实测预编译命中 + resize 生效）→ WS 帧协议
+（attach/input/resize → ready/replay/output/status/error）→ xterm 5 UMD 懒加载（host 路由 serve）。
+单实例纪律沿用旧 §4.3：pty 只在 [重启] / 换 shell / 移动工作区时重启；viewer 全部消失**不杀会话**；
+重连凭 1MB 回放环补齐。spawn 纪律在启动器四条之上再加一条（T2 教训）：**conpty 拒绝裸名，
+spawn 前必须 `where` 解析绝对路径**（`resolvePtyBin`，仍是查 PATH 不执行）。
+
+WS（`/sidebar/ws/terminal`）不享受浏览器同源保护（xterm 官方安全指南），在 HTTP 三道围栏之上
+**再加一道一次性 token**：客户端先 `POST /sidebar/api/terminal/token`（走三道围栏）签发，
+upgrade 时校验并用完即废（60s TTL，`createTokenGate`）。输出洪泛有背压保护：
+socket `bufferedAmount` 超 8MB 丢帧（终端输出有损可接受），不无限占内存。
+`node-pty` / `ws` 均为**惰性加载**——依赖缺失时只降级内嵌终端（资产 404 + 无 WS 注册），
+审查 tab 与外部启动器不受影响。
+
 ## 验证
 
 ```powershell
-# 本线单测（40 项：审查 4 + 四视图 6 + 目录分组 3 + 视图持久化 6 + 右栏 guide 契约 4 + 终端 7 + 路由 10）
+# 本线单测（54 项：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
+#            右栏 guide 契约 4 + 终端 7 + 内嵌终端 hub 7 + 路由 12）
 node test/review-data.test.js
-node test/review-view.test.js        # host 半四视图解析器 + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过 2 项）
+node test/review-view.test.js        # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过）
 node test/review-grouping.test.js    # 审查列表目录分组与组内统计求和（从 client.js 抽取纯函数求值）
 node test/review-view-store.test.js  # 审查视图持久化（抽取 client.js 的 reviewView，注入 mock localStorage）
 node test/rightbar-guide.test.js     # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
 node test/terminal-launcher.test.js
-node test/api-routing.test.js        # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、浏览器信任三道与视图白名单
+node test/terminal-hub.test.js       # 内嵌终端 host 半（fake pty 注入，不需要真实 shell）
+node test/api-routing.test.js        # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、浏览器信任三道、视图白名单与 /review/diff 新契约
 
 # 受限沙箱（禁止子进程管道 stdio）里 node --test 的多进程隔离会 spawn EPERM，
 # 改用同进程模式：node --test --test-isolation=none <逐个测试文件>
+# 另注：terminal-hub.test.js 在受限沙箱下另有两条假阴性——ensureSession 链路里的
+# resolvePtyBin 要捕获 `where.exe` 输出解析 shell 绝对路径，捕获即 EPERM（报「未安装或
+# 找不到 powershell.exe」）。须在**普通终端**跑；判据与正确跑法见回归矩阵 §1 的 ※※ 注记。
 
 # 统一静态回归（含本线）
 node ..\scripts\verify-all.mjs sidebar
@@ -142,7 +176,7 @@ node ..\scripts\verify-all.mjs sidebar
 改完 `index.js` / `client.js` 后**必须重启 `dsh web`**——本线以 `link:` 装入 profile，源码即时落盘，
 但 host 半与 client bundle 都在启动时载入内存，刷新/强刷页面均无效。`GET /sidebar/api/health` 的
 `version` 字段是判断 host 是否已加载新 bundle 的可靠信号——它现在**直接读 `package.json`**（不再手抄，
-2026-09-10 修正），当前应为 `0.6.0-miasaki.0`。
+2026-09-10 修正），当前应为 `0.8.1-miasaki.0`。
 
 ## 规划来源
 

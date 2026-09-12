@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -67,6 +67,30 @@ function trustedHostSet(config) {
   return new Set(['localhost', '127.0.0.1', ...[...(config?.trustedHosts ?? [])].map(host => String(host).trim().toLowerCase()).filter(Boolean)])
 }
 
+/**
+ * The three-layer browser-trust fence, shared by the HTTP routes and the WS
+ * upgrade (2026-09-12: extracted so /sidebar/ws/terminal runs the exact same
+ * checks). Layers: ① Host must be loopback or a configured trustedHosts entry;
+ * ② the browser's own `sec-fetch-site: cross-site` verdict is refused; ③ a
+ * present Origin must name our hostname (hostname, not authority — some
+ * Chromium builds strip a non-default loopback port; `null` = opaque, refused).
+ * These are DNS-rebinding / cross-site defense in depth, NOT authentication —
+ * the embedded terminal adds a one-shot token on top (WS enjoys no same-origin
+ * protection of its own, xterm.js security guide).
+ */
+export function fenceRequest(headers, trusted) {
+  const hostname = (typeof headers.host === 'string' ? headers.host : '').replace(/:\d+$/, '').toLowerCase()
+  if (!trusted.has(hostname)) return { ok: false, status: 403, error: '不被信任的 Host' }
+  if (headers['sec-fetch-site'] === 'cross-site') return { ok: false, status: 403, error: '跨站请求被拒绝' }
+  const origin = headers.origin
+  if (typeof origin === 'string' && origin !== '') {
+    let originHostname = null
+    try { originHostname = new URL(origin).hostname.toLowerCase() } catch { originHostname = null }
+    if (originHostname === null || originHostname !== hostname) return { ok: false, status: 403, error: '跨站来源被拒绝' }
+  }
+  return { ok: true }
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(body))
@@ -106,25 +130,67 @@ async function runGit(cwd, args, { ignoreExit } = {}) {
   }
 }
 
-/** One reviewed working tree: branch, short HEAD, and `git status --short --untracked-files=all` entries (XY + path). */
-async function diffForFile(cwd, rel, cached) {
-  // staged diff is always the simple case
-  if (cached) return runGit(cwd, ['diff', '--cached', '--', rel])
-  // untracked files produce no output from `git diff HEAD`; use --no-index to
-  // render the full file as additions (the review tab treats new files as
-  // "all added").
+/** Baseline label returned with every diff response (design 2026-09-12 §3.1): the UI says out loud WHICH comparison a diff represents. */
+export const REVIEW_BASELINES = {
+  unstaged: 'index', // working tree vs index
+  staged: 'HEAD', // index vs HEAD
+  all: 'HEAD', // working tree vs HEAD (index when the repo has no commit yet)
+  last: 'HEAD^', // the HEAD commit vs its parent
+}
+
+/** Context window for `-U`: bounded so a hostile value cannot ask git for an unbounded diff. null keeps git's default (3). */
+export function normalizeDiffContext(raw) {
+  if (raw === null || raw === undefined) return null
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0 || n > 64) throw new InputError('context 必须是 0–64 的整数')
+  return n
+}
+
+/** `--no-index` render of an untracked file: the whole file as additions. */
+async function noIndexDiff(cwd, rel, context) {
+  const abs = join(cwd, rel)
+  const uArg = context === null ? [] : [`-U${context}`]
+  // `git diff --no-index` exits 1 when files differ (not an error for us);
+  // capture stdout from both the success and error paths.
+  const noIndex = await runGit(cwd, ['diff', '--no-index', ...uArg, NULL_DEVICE, abs]).catch(error => {
+    return typeof error?.stdout === 'string' ? error.stdout : ''
+  })
+  // strip the /dev/null header line to keep the parser happy
+  return noIndex.replace(new RegExp('^diff --git a/' + NULL_DEVICE.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') + ' b/[^\\n]+\\n'), '')
+}
+
+/**
+ * Line-level diff for one file under one review view (design 2026-09-12 §3.1).
+ * Replaces the pre-0.7 `diffForFile(cwd, rel, cached)`: the detail request
+ * carries the view the LIST was computed with, so the two baselines can never
+ * diverge — the old code always diffed working-tree-vs-HEAD, which made staged
+ * entries show unrelated content and committed files under `last` show "no
+ * changes".
+ * `from` is the pre-rename path: handed to git alongside the new path, because
+ * rename detection pairs a delete with an add only when BOTH paths are in the
+ * pathspec — limiting the spec to the new path renders a rename as a
+ * from-scratch add whose numbers then disagree with the list's numstat.
+ * Returns { text, baseline } so the caller can echo the true baseline back
+ * (the no-commit fallback under `all` really is the index, not HEAD).
+ */
+export async function diffForView(cwd, rel, { view = 'all', from = null, context = null } = {}) {
+  if (!REVIEW_VIEWS.includes(view)) throw new InputError(`未知的审查视图：${String(view).slice(0, 20)}`)
+  const ctx = normalizeDiffContext(context)
+  const uArg = ctx === null ? [] : [`-U${ctx}`]
+  const paths = typeof from === 'string' && from !== '' && from !== rel ? [from, rel] : [rel]
+  if (view === 'staged') return { text: await runGit(cwd, ['diff', '--cached', ...uArg, '--', ...paths]), baseline: REVIEW_BASELINES.staged }
+  if (view === 'last') return { text: await runGit(cwd, ['show', '--format=', ...uArg, 'HEAD', '--', ...paths]), baseline: REVIEW_BASELINES.last }
+  // Working-tree views: untracked files produce no output from `git diff`;
+  // use --no-index to render the full file as additions (the review tab
+  // treats new files as "all added").
   const isTracked = await runGit(cwd, ['ls-files', '--error-unmatch', rel]).then(() => true, () => false)
-  if (!isTracked) {
-    const abs = join(cwd, rel)
-    // `git diff --no-index` exits 1 when files differ (not an error for us);
-    // capture stdout from both the success and error paths.
-    const noIndex = await runGit(cwd, ['diff', '--no-index', NULL_DEVICE, abs]).catch(error => {
-      return typeof error?.stdout === 'string' ? error.stdout : ''
-    })
-    // strip the /dev/null header line to keep the parser happy
-    return noIndex.replace(new RegExp('^diff --git a/' + NULL_DEVICE.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') + ' b/[^\\n]+\\n'), '')
-  }
-  return runGit(cwd, ['diff', 'HEAD', '--', rel])
+  if (!isTracked) return { text: await noIndexDiff(cwd, rel, ctx), baseline: REVIEW_BASELINES[view] }
+  if (view === 'unstaged') return { text: await runGit(cwd, ['diff', ...uArg, '--', ...paths]), baseline: REVIEW_BASELINES.unstaged }
+  // `all` with no commit yet has no HEAD to compare against — fall back to
+  // the index baseline, matching what reviewStatus's numstat does here.
+  const hasHead = (await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '')).trim() !== ''
+  const baseline = hasHead ? REVIEW_BASELINES.all : 'index'
+  return { text: await runGit(cwd, ['diff', hasHead ? 'HEAD' : '--cached', ...uArg, '--', ...paths]), baseline }
 }
 
 /**
@@ -156,10 +222,12 @@ export function unquoteGitPath(raw) {
 }
 
 /**
- * `git status --short` rows → [{ xy, path }]. A rename prints `R  old -> new`
- * (the target wins) and every path is unquoted — the pre-v0.5 inline version
- * kept the surrounding quotes, so a path with a space was sent to the diff
- * route verbatim as `"a b.ts"`.
+ * `git status --short` rows → [{ xy, path, from }]. A rename prints
+ * `R  old -> new` (the target wins) and every path is unquoted — the pre-v0.5
+ * inline version kept the surrounding quotes, so a path with a space was sent
+ * to the diff route verbatim as `"a b.ts"`. `from` keeps the pre-rename path
+ * so the detail diff can pair both sides (2026-09-12 §3.1); non-renames carry
+ * null.
  */
 export function parseStatusRows(text) {
   return text.split('\n')
@@ -167,7 +235,12 @@ export function parseStatusRows(text) {
     .map(line => {
       const raw = line.slice(3)
       const arrow = raw.indexOf(' -> ')
-      return { xy: line.slice(0, 2), path: unquoteGitPath(arrow === -1 ? raw : raw.slice(arrow + 4)) }
+      if (arrow === -1) return { xy: line.slice(0, 2), path: unquoteGitPath(raw), from: null }
+      return {
+        xy: line.slice(0, 2),
+        path: unquoteGitPath(raw.slice(arrow + 4)),
+        from: unquoteGitPath(raw.slice(0, arrow)),
+      }
     })
 }
 
@@ -283,6 +356,10 @@ export async function reviewStatus(cwd, { view = 'all', logger } = {}) {
         add: stat?.add ?? null,
         del: stat?.del ?? null,
         binary: stat?.binary ?? false,
+        // The commit this row was read from: the client echoes it into the
+        // detail request so a HEAD advance between list and detail forces a
+        // refetch instead of showing the old commit's diff.
+        revision: head,
       }
     })
     return { view, branch, head, entries, truncated: named.length > STATUS_MAX_ENTRIES, total: named.length }
@@ -314,6 +391,10 @@ export async function reviewStatus(cwd, { view = 'all', logger } = {}) {
     const stat = stats.get(row.path) ?? untrackedStats.get(row.path)
     return {
       path: row.path,
+      // Staged renames keep their old path so the detail diff can pair both
+      // sides (working-tree views never show rename rows — an unstaged rename
+      // surfaces as two entries: the tracked deletion and the untracked file).
+      ...(row.from !== null ? { from: row.from } : {}),
       xy: row.xy,
       add: stat?.add ?? null,
       del: stat?.del ?? null,
@@ -340,7 +421,10 @@ export async function reviewStatus(cwd, { view = 'all', logger } = {}) {
  * render are exactly these three line kinds plus hunk boundaries.
  */
 export function parseUnifiedDiff(text) {
-  const lines = text.split('\n')
+  // git 的输出每行都以 \n 结尾，split 出来的最后一个 '' 是换行 artifact 而
+  // 不是 diff 行——把它当上下文会多出一行假行号（a:0）的空行。真实的结尾空
+  // 上下文行不受影响：'\n\n' 剥掉一个换行后仍留下一个 ''。
+  const lines = text.endsWith('\n') ? text.slice(0, -1).split('\n') : text.split('\n')
   const file = { path: null, hunks: [], truncated: false, binary: false }
   let hunk = null
   let oldNo = 0
@@ -366,7 +450,10 @@ export function parseUnifiedDiff(text) {
     if (hunkHead !== null) {
       oldNo = Number(hunkHead[1])
       newNo = Number(hunkHead[3])
-      hunk = { oldStart: oldNo, newStart: newNo, lines: [] }
+      // Whole header line kept (not just the numbers): the trailing string
+      // after the second @@ is git's enclosing-function hint, part of what
+      // makes a hunk header readable in a narrow panel.
+      hunk = { oldStart: oldNo, newStart: newNo, header: line, lines: [] }
       file.hunks.push(hunk)
       continue
     }
@@ -521,6 +608,203 @@ export async function launchTerminal({ shellId, cwd, logger }) {
   })
 }
 
+// --- Embedded terminal (design 2026-09-12 §4; route B — decision §6) --------
+// In-panel PTY terminal: node-pty under the same argv/enum discipline as the
+// launcher above, one shared session (bottom panel and right-bar tab are two
+// viewers of the SAME terminal — move between them without losing state),
+// scrollback replay for re-attach, and a one-shot token gate on the WS.
+
+/** PTY-capable shells. wt.exe is a window CONTAINER, not a stream shell — never enters this table (launcher §6.1 discipline). */
+export const PTY_SHELLS = [
+  { id: 'pwsh', label: 'PowerShell 7', bin: 'pwsh.exe', platform: 'win32', args: ['-NoLogo'] },
+  { id: 'powershell', label: 'Windows PowerShell', bin: 'powershell.exe', platform: 'win32', args: ['-NoLogo'] },
+  { id: 'cmd', label: '命令提示符', bin: 'cmd.exe', platform: 'win32', args: [] },
+  { id: 'bash', label: 'bash', bin: 'bash', platform: 'linux', args: [] },
+  { id: 'zsh', label: 'zsh', bin: 'zsh', platform: 'darwin', args: [] },
+]
+
+export function ptyShellsForPlatform(platform = process.platform) {
+  return PTY_SHELLS.filter(shell => shell.platform === platform)
+}
+
+/**
+ * Resolve a shell to its ABSOLUTE path via where/which. T2 spike (2026-09-12):
+ * conpty's dll path refuses bare names with `Error: File not found:` — the
+ * host's own dsh-subprocess-local relies on its callers resolving first. PATH
+ * lookup, never execution (launcher §6.1 discipline 4).
+ */
+export async function resolvePtyBin(shell) {
+  const [probeBin, probeArgs] = process.platform === 'win32'
+    ? ['where.exe', [shell.bin]]
+    : ['/usr/bin/which', [shell.bin]]
+  try {
+    const { stdout } = await execFileP(probeBin, probeArgs, { timeout: 4000, windowsHide: true })
+    const first = stdout.split('\n').map(l => l.trim()).find(l => l !== '')
+    if (first) return first
+  } catch { /* fall through */ }
+  throw new NotFoundError(`未安装或找不到 ${shell.bin}`)
+}
+
+/** Cap for client-supplied pty dimensions — valid range, not a hint. */
+export function clampPtySize(value, min, max, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, Math.round(n)))
+}
+
+/** Replay buffer: append-only string chunks capped at byte length, oldest dropped whole. */
+export class ScrollbackRing {
+  constructor(capBytes) {
+    this.capBytes = capBytes
+    this.chunks = []
+    this.bytes = 0
+    this.dropped = false
+  }
+
+  push(text) {
+    this.chunks.push(text)
+    this.bytes += Buffer.byteLength(text)
+    while (this.bytes > this.capBytes && this.chunks.length > 1) {
+      this.bytes -= Buffer.byteLength(this.chunks[0])
+      this.chunks.shift()
+      this.dropped = true
+    }
+  }
+
+  read() {
+    return this.chunks.join('')
+  }
+}
+
+/**
+ * One embedded terminal session, many viewers. `node-pty` and `ws` are BOTH
+ * loaded lazily: they are native/copy-sensitive deps, and a load failure must
+ * degrade to "embedded terminal unavailable" — never take the whole plugin
+ * (review tab still works) down with it.
+ */
+export class TerminalHub {
+  constructor({ replayBytes = 1024 * 1024, viewers = new Set(), logger = console } = {}) {
+    this.replayBytes = replayBytes
+    this.viewers = viewers // websocket set; broadcast fan-out for pty output
+    this.logger = logger
+    this.session = null
+    this._pty = null // lazy require('node-pty')
+  }
+
+  _loadPty() {
+    if (this._pty !== null) return this._pty
+    try {
+      this._pty = createRequire(import.meta.url)('node-pty')
+      return this._pty
+    } catch (error) {
+      throw new Error(`内嵌终端依赖加载失败（node-pty）：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  status() {
+    const s = this.session
+    if (s === null) return { state: 'idle' }
+    return { state: s.exited ? 'exited' : 'running', shell: s.shell, bin: s.bin, cwd: s.cwd, pid: s.pid, exitCode: s.exitCode }
+  }
+
+  /**
+   * Single-session semantics (launcher design §4.3, kept): a running session
+   * is NEVER respawned with new parameters — a cwd change shows a hint in the
+   * UI instead of killing a live process. Exceptions: an exited session always
+   * respawns, and `restart: true` (user-invoked: shell change, [重启] button)
+   * kills the live session first.
+   */
+  async ensureSession({ shell, cwd, cols, rows, restart = false }) {
+    const s = this.session
+    if (s !== null && !s.exited) {
+      if (!restart) return { session: s, spawned: false }
+      s.pty.kill()
+      this.session = null
+    }
+    const shellDef = ptyShellsForPlatform().find(entry => entry.id === shell)
+    if (shellDef === undefined) throw new InputError(`未知的终端类型：${String(shell).slice(0, 40)}`)
+    const bin = await resolvePtyBin(shellDef)
+    await assertDirectory(cwd)
+    const pty = this._loadPty().spawn(bin, shellDef.args, {
+      name: 'xterm-256color',
+      cols: clampPtySize(cols, 16, 500, 80),
+      rows: clampPtySize(rows, 4, 300, 24),
+      cwd,
+    })
+    const session = {
+      shell: shellDef.id, bin, cwd, pid: pty.pid,
+      ring: new ScrollbackRing(this.replayBytes),
+      pty, exited: false, exitCode: null,
+    }
+    pty.onData(data => {
+      session.ring.push(data)
+      this.broadcast({ type: 'output', data })
+    })
+    pty.onExit(({ exitCode }) => {
+      session.exited = true
+      session.exitCode = exitCode
+      this.broadcast({ type: 'status', state: 'exited', code: exitCode })
+    })
+    this.session = session
+    this.logger?.info?.(`sidebar:terminal pty spawn ${bin} (pid ${pty.pid}) cwd ${cwd}`)
+    return { session, spawned: true }
+  }
+
+  /** Fan out to every viewer; a backed-up socket drops the frame (T6: flood protection — terminal output is lossy by design). */
+  broadcast(frame) {
+    const text = JSON.stringify(frame)
+    for (const ws of this.viewers) {
+      try {
+        if (ws.bufferedAmount > 8 * 1024 * 1024) continue
+        ws.send(text)
+      } catch { /* closed sockets are reaped by their own close handler */ }
+    }
+  }
+
+  write(data) {
+    const s = this.session
+    if (s !== null && !s.exited) s.pty.write(data)
+  }
+
+  resize(cols, rows) {
+    const s = this.session
+    if (s !== null && !s.exited) s.pty.resize(clampPtySize(cols, 16, 500, 80), clampPtySize(rows, 4, 300, 24))
+  }
+
+  kill() {
+    const s = this.session
+    if (s !== null && !s.exited) {
+      try { s.pty.kill() } catch (error) { this.logger?.warn?.(`sidebar:terminal kill: ${error instanceof Error ? error.message : String(error)}`) }
+    }
+  }
+
+  dispose() {
+    this.kill()
+    this.session = null
+  }
+}
+
+const TERMINAL_TOKEN_TTL_MS = 60_000
+
+/** One-shot connection tokens for the terminal WS (HTTP side signs, WS side consumes, never reusable). */
+export function createTokenGate({ ttlMs = TERMINAL_TOKEN_TTL_MS } = {}) {
+  const pending = new Map()
+  return {
+    issue() {
+      const now = Date.now()
+      for (const [token, exp] of pending) if (exp <= now) pending.delete(token)
+      const token = randomBytes(32).toString('hex')
+      pending.set(token, now + ttlMs)
+      return token
+    },
+    consume(token) {
+      const exp = typeof token === 'string' ? pending.get(token) : undefined
+      pending.delete(token)
+      return exp !== undefined && Date.now() <= exp
+    },
+  }
+}
+
 /** Checklist store: one JSON per workspace (cwd hash → filename), notes keyed by file path plus two hand-checked flags. */
 export class ChecklistStore {
   constructor(dir) {
@@ -609,27 +893,18 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
     logger?.warn?.(new Error(`sidebar: data directory unavailable (${error instanceof Error ? error.message : String(error)})`))
   })
   const trusted = trustedHostSet({ trustedHosts })
-  return async (req, res) => {
+  // Embedded-terminal state lives with the API surface: the HTTP routes sign
+  // tokens and read hub status, the WS upgrade (registered in apply()) drives
+  // the hub. Attached to the handler function so apply() can reach both
+  // without changing createApi's call shape (tests use it as a bare handler).
+  const hub = new TerminalHub({ logger })
+  const tokens = createTokenGate()
+  const handler = async (req, res) => {
     try {
-      const hostname = (typeof req.headers.host === 'string' ? req.headers.host : '').replace(/:\d+$/, '').toLowerCase()
-      if (!trusted.has(hostname)) return sendJson(res, 403, { error: '不被信任的 Host' })
-      // Browser-trust fence, layers 2 and 3 (layer 1 is the Host check above;
-      // mirrors better-sidebar's trust-fence.ts, MIT, and the DSH /api fence).
-      // `sec-fetch-site: cross-site` is the browser's own verdict that another
-      // site initiated the request — it never belongs to this UI. `Origin`,
-      // when present, must name our hostname: compare hostname, not authority,
-      // because some Chromium builds serialize a loopback Origin without its
-      // non-default port (comparing host:port would reject every legitimate
-      // request). The literal `null` (sandboxed iframe / file:) fails the URL
-      // parse and is refused as an opaque origin. An absent Origin is fine —
-      // the Host fence already bound the request.
-      if (req.headers['sec-fetch-site'] === 'cross-site') return sendJson(res, 403, { error: '跨站请求被拒绝' })
-      const origin = req.headers.origin
-      if (typeof origin === 'string' && origin !== '') {
-        let originHostname = null
-        try { originHostname = new URL(origin).hostname.toLowerCase() } catch { originHostname = null }
-        if (originHostname === null || originHostname !== hostname) return sendJson(res, 403, { error: '跨站来源被拒绝' })
-      }
+      // Browser-trust fence, layers 1–3 (see fenceRequest above; the WS upgrade
+      // runs the same function before any socket is handed to the hub).
+      const fence = fenceRequest(req.headers, trusted)
+      if (!fence.ok) return sendJson(res, fence.status, { error: fence.error })
       // Browser CORS preflight (OPTIONS): the DSH /api prefix does not emit
       // CORS headers, so the sidebar API answers its own.
       if (req.method === 'OPTIONS') {
@@ -662,9 +937,17 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
         const cwd = resolveWorkdir(body.cwd)
         const rel = typeof body.path === 'string' ? body.path.trim() : ''
         if (rel === '' || rel.includes('..') || /^([A-Za-z]:)?[/\\]/.test(rel)) throw new InputError('文件路径必须是仓库内相对路径')
-        const cached = body.cached === true
-        const text = await diffForFile(cwd, rel, cached)
-        return sendJson(res, 200, { diff: parseUnifiedDiff(text) })
+        // The view the LIST was computed with decides the detail baseline
+        // (design 2026-09-12 §3.1). Missing view keeps pre-0.7 behaviour
+        // (working tree vs HEAD) for any older client still calling.
+        const view = body.view === undefined || body.view === null || body.view === '' ? 'all' : body.view
+        if (typeof view !== 'string' || !REVIEW_VIEWS.includes(view)) throw new InputError(`未知的审查视图：${String(view).slice(0, 20)}`)
+        // Optional pre-rename path, same constraints as `path`.
+        const from = typeof body.from === 'string' ? body.from.trim() : ''
+        if (from !== '' && (from.includes('..') || /^([A-Za-z]:)?[/\\]/.test(from))) throw new InputError('from 必须是仓库内相对路径')
+        const context = normalizeDiffContext(body.context)
+        const { text, baseline } = await diffForView(cwd, rel, { view, from: from === '' ? null : from, context })
+        return sendJson(res, 200, { diff: parseUnifiedDiff(text), baseline, view })
       }
       if (path === '/sidebar/api/review/checklist' && req.method === 'GET') {
         const cwd = resolveWorkdir(new URL(req.url, 'http://dsh.local').searchParams.get('cwd'))
@@ -687,6 +970,14 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
         const result = await launchTerminal({ shellId, cwd, logger })
         return sendJson(res, 200, result)
       }
+      // One-shot WS token for the embedded terminal (design §4.4): signed over
+      // the fenced HTTP surface, consumed once at upgrade, 60s TTL.
+      if (path === '/sidebar/api/terminal/token' && req.method === 'POST') {
+        return sendJson(res, 200, { token: tokens.issue(), ttlMs: TERMINAL_TOKEN_TTL_MS })
+      }
+      if (path === '/sidebar/api/terminal/session' && req.method === 'GET') {
+        return sendJson(res, 200, { session: hub.status() })
+      }
       return sendJson(res, 404, { error: '接口不存在' })
     } catch (error) {
       if (error instanceof InputError) return sendJson(res, 400, { error: error.message })
@@ -695,12 +986,133 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
       return sendJson(res, 500, { error: 'sidebar 数据暂时不可用' })
     }
   }
+  handler.hub = hub
+  handler.tokens = tokens
+  handler.trusted = trusted
+  return handler
 }
 
 /** Mount the sidebar host half on the existing DSH Web Server. */
 export function apply(ctx, config) {
   const api = createApi({ dataFile: config?.dataFile, trustedHosts: config?.trustedHosts ?? [], logger: ctx.logger })
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/sidebar/api', handler: api }), 'sidebar: api')
+  wireEmbeddedTerminal(ctx, api)
+}
+
+/** Serve a dependency-resolved static file once, then from an in-memory cache (ssh line's shape). */
+function cachedAsset(url, contentType) {
+  let cache = null
+  return async (_req, res) => {
+    if (cache === null) {
+      try { cache = await readFile(new URL(url, import.meta.url)) } catch { cache = false }
+    }
+    if (cache === false) return sendJson(res, 404, { error: '静态资源缺失（依赖未随插件安装）' })
+    res.writeHead(200, { 'content-type': contentType, 'cache-control': 'no-store' })
+    res.end(cache)
+  }
+}
+
+/**
+ * Embedded terminal wiring: xterm assets + the `/sidebar/ws/terminal` upgrade.
+ * `ws` loads lazily — if the dependency did not survive the install/copy, the
+ * plugin logs a warning and keeps every other feature (the review tab must
+ * never die with the terminal), matching the hub's lazy node-pty load.
+ */
+function wireEmbeddedTerminal(ctx, api) {
+  const xtermAsset = cachedAsset('./node_modules/@xterm/xterm/lib/xterm.js', 'text/javascript; charset=utf-8')
+  const xtermCssAsset = cachedAsset('./node_modules/@xterm/xterm/css/xterm.css', 'text/css; charset=utf-8')
+  const fitAsset = cachedAsset('./node_modules/@xterm/addon-fit/lib/addon-fit.js', 'text/javascript; charset=utf-8')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/sidebar/asset/terminal/xterm.js', handler: xtermAsset }), 'sidebar: xterm asset')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/sidebar/asset/terminal/xterm.css', handler: xtermCssAsset }), 'sidebar: xterm css asset')
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: '/sidebar/asset/terminal/addon-fit.js', handler: fitAsset }), 'sidebar: xterm fit asset')
+
+  let WebSocketServer
+  try {
+    WebSocketServer = createRequire(import.meta.url)('ws').WebSocketServer
+  } catch (error) {
+    ctx.logger?.warn?.(`sidebar: embedded terminal disabled — ws dependency unavailable (${error instanceof Error ? error.message : String(error)})`)
+    return
+  }
+
+  const MAX_WS_FRAME_BYTES = 256 * 1024 // input/resize frames are tiny; anything bigger is abuse
+  const wss = new WebSocketServer({ noServer: true })
+  const hub = api.hub
+
+  wss.on('connection', (ws, req) => {
+    hub.viewers.add(ws)
+    ws.on('message', data => {
+      if (data.length > MAX_WS_FRAME_BYTES) return
+      let msg
+      try { msg = JSON.parse(String(data)) } catch { return }
+      if (msg.type === 'attach') {
+        // attach: { shell, cwd, cols, rows } — spawn or re-attach, then replay.
+        const cols = clampPtySize(msg.cols, 16, 500, 80)
+        const rows = clampPtySize(msg.rows, 4, 300, 24)
+        Promise.resolve()
+          .then(() => ensureAttached(ws, msg, cols, rows))
+          .catch(error => {
+            const message = error instanceof InputError || error instanceof NotFoundError
+              ? error.message
+              : `内嵌终端启动失败：${error instanceof Error ? error.message : String(error)}`
+            try { ws.send(JSON.stringify({ type: 'error', code: 'SPAWN_FAILED', message })) } catch { /* closed */ }
+          })
+      } else if (msg.type === 'input' && typeof msg.data === 'string') {
+        hub.write(msg.data)
+      } else if (msg.type === 'resize') {
+        hub.resize(msg.cols, msg.rows)
+      }
+      // `detach` needs no frame: the pty outlives viewers by design (§4.3) and
+      // socket close already removes the viewer. Hiding the panel or the tab
+      // simply closes the socket.
+    })
+    const drop = () => { hub.viewers.delete(ws) }
+    ws.on('close', drop)
+    ws.on('error', drop)
+  })
+
+  async function ensureAttached(ws, msg, cols, rows) {
+    const cwd = resolveWorkdir(msg.cwd)
+    const { session, spawned } = await hub.ensureSession({
+      shell: typeof msg.shell === 'string' ? msg.shell : '',
+      cwd,
+      cols,
+      rows,
+      restart: msg.restart === true,
+    })
+    const ready = { type: 'ready', shell: session.shell, bin: session.bin, pid: session.pid, cwd: session.cwd, spawned }
+    try { ws.send(JSON.stringify(ready)) } catch { return }
+    const replay = session.ring.read()
+    if (replay !== '') {
+      try { ws.send(JSON.stringify({ type: 'replay', data: replay })) } catch { return }
+    }
+    if (session.exited) {
+      try { ws.send(JSON.stringify({ type: 'status', state: 'exited', code: session.exitCode })) } catch { /* closed */ }
+    }
+  }
+
+  const pingTimer = setInterval(() => {
+    for (const ws of hub.viewers) { try { ws.ping() } catch { hub.viewers.delete(ws) } }
+  }, 30_000)
+
+  // WS upgrade gate: browser-trust fence, then the one-shot token, then the socket.
+  ctx.effect(() => ctx.webServer.registerUpgrade({
+    path: '/sidebar/ws/terminal',
+    handler: (req, socket, head) => {
+      const fence = fenceRequest(req.headers, api.trusted)
+      if (!fence.ok) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return }
+      let token = null
+      try { token = new URL(req.url ?? '/', 'http://dsh.local').searchParams.get('token') } catch { token = null }
+      if (!api.tokens.consume(token)) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return }
+      wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req))
+    },
+  }), 'sidebar: terminal websocket')
+
+  ctx.effect(() => () => {
+    clearInterval(pingTimer)
+    for (const ws of hub.viewers) { try { ws.terminate() } catch { /* noop */ } }
+    hub.viewers.clear()
+    hub.dispose()
+  }, 'sidebar: terminal lifecycle')
 }
 
 function throwConfig(key) {

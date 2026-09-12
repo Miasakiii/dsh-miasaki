@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>右侧边栏优化设计示意 — 审查与终端</title>
+<style>
+  :root{
+    --bg:#f6f6f5; --panel:#ffffff; --line:rgba(0,0,0,.12); --line-soft:rgba(0,0,0,.07);
+    --ink:#1f1f1e; --ink2:#5d5d5a; --ink3:#8f8f8b;
+    --add-bg:#eaf3de; --add-ink:#27500a; --add-line:#97c459;
+    --del-bg:#fcebeb; --del-ink:#791f1f; --del-line:#f09595;
+    --warn:#8a5a00; --warn-bg:#faeeda;
+    --ok:#0f6e56; --ok-bg:#e1f5ee;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.65}
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 28px 72px}
+  h1{font-size:22px;font-weight:600;margin:0 0 8px}
+  .sub{color:var(--ink2);font-size:13px;margin:0 0 4px}
+  h2{font-size:16px;font-weight:600;margin:40px 0 6px;padding-top:20px;border-top:1px solid var(--line-soft)}
+  h2:first-of-type{border-top:none;padding-top:0}
+  h3{font-size:13px;font-weight:600;margin:22px 0 10px;color:var(--ink2)}
+  p{margin:8px 0}
+  .lead{color:var(--ink2)}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:22px;align-items:start}
+  .col-label{font-size:12px;font-weight:600;letter-spacing:.02em;margin:0 0 8px;color:var(--ink2);display:flex;align-items:center;gap:8px}
+  .tag{font-size:11px;padding:1px 7px;border-radius:99px;font-weight:600}
+  .tag.now{background:#f1efe8;color:#5f5e5a}
+  .tag.next{background:var(--ok-bg);color:var(--ok)}
+  .pane{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .pane-head{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--line-soft);font-size:12px}
+  .chip{background:#f1efe8;border-radius:6px;padding:2px 8px;color:var(--ink2)}
+  .spacer{margin-left:auto}
+  .btn{font-size:11px;border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 7px;color:var(--ink2)}
+  .body{padding:10px 12px}
+  .row{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;font-size:12px}
+  .row + .row{margin-top:2px}
+  .row.sel{background:#f4f4f2}
+  .dir{color:var(--ink2);font-size:11px;font-family:var(--mono);margin:10px 0 4px;display:flex;gap:6px;align-items:center}
+  .dir:first-child{margin-top:0}
+  .fname{font-family:var(--mono);font-size:11.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .stat{font-family:var(--mono);font-size:11px;margin-left:auto;white-space:nowrap}
+  .add{color:var(--add-ink)} .del{color:var(--del-ink)}
+  .mark{width:14px;height:14px;border:1px solid var(--line);border-radius:4px;flex:none}
+  .mark.on{background:var(--ok-bg);border-color:#5dcaa5;position:relative}
+  .mark.on::after{content:"";position:absolute;left:3.5px;top:1px;width:4px;height:7px;border-right:1.6px solid var(--ok);border-bottom:1.6px solid var(--ok);transform:rotate(40deg)}
+  .unnamed{border:1px solid var(--del-line);background:#fffafa}
+  .badge{font-size:11px;padding:1px 7px;border-radius:99px;background:var(--warn-bg);color:var(--warn);font-weight:600}
+  .empty{font-size:12px;color:var(--ink3);padding:14px 6px;text-align:center}
+  .err{font-size:12px;color:var(--del-ink);background:var(--del-bg);border-radius:6px;padding:8px 10px}
+  .diff{border-top:1px solid var(--line-soft);margin-top:8px}
+  .fh{display:flex;align-items:center;gap:8px;padding:7px 10px;background:#fafaf9;border-bottom:1px solid var(--line-soft);font-size:11px}
+  .fh .p{font-family:var(--mono);color:var(--ink);font-weight:600}
+  .hunk{font-family:var(--mono);font-size:10.5px;color:var(--ink3);background:#f7f7f5;padding:4px 10px}
+  .dl{display:flex;font-family:var(--mono);font-size:11px;line-height:1.75;white-space:pre-wrap;word-break:break-all}
+  .dl .ln{flex:none;width:34px;text-align:right;padding-right:7px;color:var(--ink3);user-select:none;font-size:10.5px}
+  .dl .sg{flex:none;width:12px;color:var(--ink3)}
+  .dl .cd{flex:1;padding-right:8px}
+  .dl.add{background:var(--add-bg);color:var(--add-ink)}
+  .dl.del{background:var(--del-bg);color:var(--del-ink)}
+  .dl.ctx{color:var(--ink2)}
+  .fold{font-size:11px;color:var(--ink3);background:#f7f7f5;padding:4px 10px;font-family:var(--mono)}
+  .fold b{color:var(--ink2);font-weight:600}
+  .dfoot{display:flex;gap:6px;align-items:center;padding:7px 10px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--ink2)}
+  .term{background:#fbfbfa;font-family:var(--mono);font-size:11px;line-height:1.7;padding:10px 12px;color:var(--ink2)}
+  .term .pr{color:var(--ok)}
+  .term .cur{background:var(--ink);color:#fff;padding:0 1px}
+  .termbar{display:flex;align-items:center;gap:8px;padding:7px 10px;border-top:1px solid var(--line-soft);font-size:11px;color:var(--ink3)}
+  .launch{padding:12px}
+  .lbl{font-size:11px;color:var(--ink3);margin-bottom:4px}
+  .cwd{font-family:var(--mono);font-size:11px;background:#f7f7f5;border:1px solid var(--line-soft);border-radius:6px;padding:5px 8px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .radio{display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 6px;border-radius:6px}
+  .radio.off{color:var(--ink3)}
+  .dot{width:12px;height:12px;border:1px solid var(--line);border-radius:50%;flex:none}
+  .dot.on{border-color:var(--ok);box-shadow:inset 0 0 0 3px #fff,inset 0 0 0 12px var(--ok)}
+  .go{margin-top:10px;width:100%;text-align:center;font-size:12px;font-weight:600;background:#1f1f1e;color:#fff;border-radius:7px;padding:7px}
+  .note{font-size:12px;color:var(--ink2);background:#fff;border:1px solid var(--line-soft);border-left:2px solid var(--ink3);border-radius:6px;padding:9px 12px;margin:12px 0}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin:10px 0}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  th{font-weight:600;color:var(--ink2);font-size:12px}
+  code{font-family:var(--mono);font-size:11.5px;background:#f1efe8;border-radius:4px;padding:1px 5px}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:12px}
+  .step{background:#fff;border:1px solid var(--line);border-radius:9px;padding:12px 14px}
+  .step .n{font-size:11px;font-weight:600;color:var(--ink3);letter-spacing:.04em}
+  .step .t{font-size:13px;font-weight:600;margin:4px 0 4px}
+  .step .d{font-size:12px;color:var(--ink2)}
+  .p0{border-left:2px solid var(--del-line)} .p1{border-left:2px solid #ef9f27} .p2{border-left:2px solid #5dcaa5} .p3{border-left:2px solid var(--line)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>右侧边栏优化设计示意</h1>
+  <p class="sub">@miasaki/dsh-sidebar · 官方右栏「审查 / 终端」两个 tab · 2026-09-12 设计提案（未写代码）</p>
+  <p class="lead">核心判断：审查看不到改动代码是<strong>数据问题</strong>（列表与详情基线不一致），不是渲染问题；终端不是内置的是<strong>M1 既定形态</strong>，而宿主已自带 PTY 栈，旧设计里的编译硬门已不存在。</p>
+
+  <h2>一、审查 tab：现状与建议</h2>
+
+  <div class="grid2">
+    <div>
+      <p class="col-label"><span class="tag now">现状</span> 列表按视图取数，详情固定 diff HEAD</p>
+      <div class="pane">
+        <div class="pane-head"><span class="chip">未暂存 ▾</span><span class="badge">3 条未点名</span><span class="spacer"></span><span class="btn">刷新</span></div>
+        <div class="body">
+          <div class="dir"><span>▸</span> dsh-miasaki-sidebar/</div>
+          <div class="dir"><span>▾</span> design/<span class="stat"><span class="add">+12</span> <span class="del">−4</span></span></div>
+          <div class="row sel unnamed"><span class="fname">plan.md</span><span class="stat"><span class="add">+12</span> <span class="del">−4</span></span><span class="btn">−</span></div>
+          <div class="diff">
+            <div class="fh"><span class="p">plan.md</span><span class="spacer"></span><span class="stat"><span class="add">+12</span> <span class="del">−4</span></span></div>
+            <div class="dl ctx"><span class="ln"> </span><span class="sg"> </span><span class="cd">无行级变更</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="note"><strong>已确证的缺陷。</strong>列表用「索引 vs HEAD」，详情用「工作树 vs HEAD」——内容与 <code>+N −M</code> 对不上；已提交且工作树干净的文件（「上一轮更改」视图）必然显示「无行级变更」。另外：切视图不重取（effect 只依赖 <code>path</code>）、重命名文件不传旧路径、请求失败被静默吞掉。</div>
+      <div class="note">行点击 = <strong>点名</strong>，展开 diff 是旁边一个独立小 <code>+</code>。审查语境下主操作位给错了对象。</div>
+    </div>
+
+    <div>
+      <p class="col-label"><span class="tag next">建议</span> 基线随视图 + 可读的行级 diff</p>
+      <div class="pane">
+        <div class="pane-head"><span class="chip">未暂存 ▾</span><span class="chip">main · 3f2a91c</span><span class="badge">3 未点名</span><span class="spacer"></span><span class="btn">过滤</span><span class="btn">刷新</span></div>
+        <div class="body">
+          <div class="dir"><span>▾</span> design/ <span class="stat">12 files <span class="add">+340</span> <span class="del">−120</span></span></div>
+          <div class="row sel"><span class="mark on"></span><span class="fname">plan.md</span><span class="stat"><span class="add">+12</span> <span class="del">−4</span></span></div>
+          <div class="row"><span class="mark"></span><span class="fname">CHANGELOG.md</span><span class="stat"><span class="add">+8</span> <span class="del">−0</span></span></div>
+          <div class="diff">
+            <div class="fh"><span class="p">design/plan.md</span><span class="chip">对比：索引</span><span class="spacer"></span><span class="stat"><span class="add">+12</span> <span class="del">−4</span></span><span class="btn">预览</span><span class="btn">分栏</span></div>
+            <div class="hunk">@@ -120,7 +120,9 @@ export function apply(ctx) {</div>
+            <div class="dl ctx"><span class="ln">120</span><span class="ln">120</span><span class="sg"> </span><span class="cd">const api = createApi({</span></div>
+            <div class="dl del"><span class="ln">121</span><span class="ln"> </span><span class="sg">−</span><span class="cd">const old = legacy()</span></div>
+            <div class="dl add"><span class="ln"> </span><span class="ln">121</span><span class="sg">+</span><span class="cd">const next = modern()</span></div>
+            <div class="dl ctx"><span class="ln">122</span><span class="ln">122</span><span class="sg"> </span><span class="cd">  trustFence: true,</span></div>
+            <div class="fold">⋯ 折叠 14 行上下文　<b>[展开 +5]</b></div>
+            <div class="dl add"><span class="ln"> </span><span class="ln">137</span><span class="sg">+</span><span class="cd">  baseline,</span></div>
+            <div class="dfoot"><span class="btn">上一处</span><span class="btn">下一处</span><span class="spacer"></span><span class="chip">换行 开</span><span class="chip">折叠未变更</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="note">解析器<strong>已经</strong>产出 hunk 起始行号与每行新旧行号，只是 UI 没消费。<code>baseline</code> 由宿主回传并显示在文件头，从根上消除「数字对不上」。</div>
+    </div>
+  </div>
+
+  <h3>diff 阅读器的三个关键取舍</h3>
+  <table>
+    <tr><th style="width:150px">项</th><th>决定</th><th>理由</th></tr>
+    <tr><td>换行</td><td>面板宽 &lt; 560px 时<strong>默认开</strong>，可关</td><td>400px 面板等宽字体约 40 字符宽，长行横向滚动是窄栏第一可读性瓶颈</td></tr>
+    <tr><td>上下文扩展</td><td>以 <code>context=N</code> 重取（<code>git diff -U&lt;N&gt;</code>）</td><td>不在本地补行，避免与所选基线漂移</td></tr>
+    <tr><td>大文件</td><td>单文件 &gt; 2000 行只渲染可视 hunk 窗口</td><td>现上限 20000 行全部进 DOM，展开即卡</td></tr>
+  </table>
+
+  <h2>二、终端 tab：现状与建议</h2>
+
+  <div class="grid2">
+    <div>
+      <p class="col-label"><span class="tag now">现状</span> 外部启动器（无 PTY、无 I/O）</p>
+      <div class="pane">
+        <div class="pane-head"><span class="chip">终端</span></div>
+        <div class="launch">
+          <div class="lbl">工作目录</div>
+          <div class="cwd">C:\Users\Asakii\Desktop\dsh-miasaki</div>
+          <div class="lbl" style="margin-top:12px">终端类型</div>
+          <div class="radio"><span class="dot on"></span>Windows Terminal</div>
+          <div class="radio"><span class="dot"></span>PowerShell 7</div>
+          <div class="radio off"><span class="dot"></span>cmd（未安装）</div>
+          <div class="go">打开系统终端</div>
+        </div>
+      </div>
+      <div class="note">host 以 <code>detached + stdio:ignore</code> 拉起系统终端后即撒手。这是 M1 的既定形态，不是缺陷；但 M3 内嵌方案一直未落地。</div>
+    </div>
+
+    <div>
+      <p class="col-label"><span class="tag next">建议</span> 右栏内嵌交互式终端</p>
+      <div class="pane">
+        <div class="pane-head"><span class="chip">终端</span><span class="chip">pwsh · 运行中</span><span class="spacer"></span><span class="btn">浮窗</span><span class="btn">分栏</span></div>
+        <div class="term">
+          <div><span class="pr">PS C:\Users\Asakii\Desktop\dsh-miasaki&gt;</span> git status --short</div>
+          <div> M dsh-miasaki-sidebar/client.js</div>
+          <div> M dsh-miasaki-sidebar/index.js</div>
+          <div><span class="pr">PS C:\Users\Asakii\Desktop\dsh-miasaki&gt;</span> <span class="cur"> </span></div>
+        </div>
+        <div class="termbar">会话工作区已切换 — [在新工作区重启终端]</div>
+      </div>
+      <div class="note">tab 的 chip 标题走官方 <code>sidebar.right.pane.tab.title</code> 槽（官方注释原文举例就是「a terminal named after its shell」）。<code>tab.signal</code> 只在记录消失或插件卸载时 abort，<strong>隐藏与切会话都不 abort</strong> —— pty 可跨隐藏保活。</div>
+    </div>
+  </div>
+
+  <h3>形态为什么从「底部面板」改判为「右栏内嵌」</h3>
+  <table>
+    <tr><th style="width:130px">维度</th><th>旧设计（底部面板）</th><th>右栏内嵌</th></tr>
+    <tr><td>入口前提</td><td>标题栏按钮注入 —— <strong>已随壳退役作废</strong></td><td>官方 tab 类型，已有</td></tr>
+    <tr><td>分栏 / 浮窗</td><td>需自研推挤 + 高度变量 + spike</td><td>官方 <code>split()</code> / <code>float()</code> 白拿</td></tr>
+    <tr><td>与审查并排</td><td>需自研布局</td><td>官方分栏，天然成立</td></tr>
+    <tr><td>对对话区</td><td>全宽横贯，压扁正文</td><td>只在右栏内，不侵占</td></tr>
+  </table>
+
+  <h3>宿主已自带的 PTY 栈（0.1.5-rc.1 实测）</h3>
+  <table>
+    <tr><th style="width:250px">包</th><th>提供</th></tr>
+    <tr><td><code>dsh-subprocess</code></td><td><code>ctx.subprocess.spawnTerminal(spec)</code> → 句柄（pid / output / write / 信号 / terminate）<strong>不需要 Agent</strong></td></tr>
+    <tr><td><code>dsh-subprocess-local</code></td><td>本地实现，依赖 <code>node-pty@1.2.0-beta.15</code></td></tr>
+    <tr><td><code>dsh-terminal</code></td><td><code>ctx.terminals</code>：owner 作用域 PTY 注册表（<strong>要求 Agent 句柄，本插件不可用</strong>）</td></tr>
+  </table>
+  <div class="note"><strong>关键发现：</strong><code>node-pty</code> 已随宿主安装，且带 <code>prebuilds/win32-x64/</code>（<code>conpty.node</code>、<code>OpenConsole.exe</code>、<code>conpty.dll</code>）。其安装脚本是 <code>node scripts/prebuild.js || node-gyp rebuild</code>，预编译命中即跳过编译 —— 旧设计里「Windows 需 VS Build Tools 编译」这道硬门<strong>不成立</strong>。</div>
+  <div class="note"><strong>唯一真缺口：</strong>官方 <code>SubprocessTerminalHandle</code> <strong>没有 resize</strong>（<code>rows/cols</code> 只在 spawn 时读取）；而 <code>node-pty</code> 的 <code>IPty</code> 有 <code>resize(cols, rows)</code>。这就是「用官方 seam」与「自持 pty」两条路线的取舍点。</div>
+
+  <h2>三、落地顺序</h2>
+  <div class="steps">
+    <div class="step p0"><div class="n">P0</div><div class="t">数据一致性</div><div class="d">详情基线随视图、重命名支持、effect 依赖、错误可见化。属缺陷修复，优先级最高。</div></div>
+    <div class="step p1"><div class="n">P1</div><div class="t">diff 阅读器</div><div class="d">行号 / hunk 头 / 换行默认开 / 上下文扩展 / 变更跳转 / 虚拟化 / 主点击展开 / 点名移位。</div></div>
+    <div class="step p2"><div class="n">P2</div><div class="t">内嵌终端</div><div class="d">先 spike 官方 seam（无 resize），不可接受再转自持 node-pty + WS + xterm。</div></div>
+    <div class="step p3"><div class="n">P3</div><div class="t">联动深化</div><div class="d">从 diff 行跳官方预览定位、分栏并排、整仓单次 diff。</div></div>
+  </div>
+
+  <h2>四、需要你拍板的三件事</h2>
+  <table>
+    <tr><th style="width:130px">决策</th><th>选项</th></tr>
+    <tr><td>终端形态</td><td>确认从「底部面板」改判为「右栏内嵌」？（旧设计前提已失效，且官方已白给分栏 / 浮窗）</td></tr>
+    <tr><td>终端路线</td><td>A 官方 <code>spawnTerminal</code>（零依赖、无 resize）优先 spike，还是直接走 B 自持 <code>node-pty</code>（能力全、新增原生依赖）？</td></tr>
+    <tr><td>点名交互</td><td>接受「主点击 = 展开 diff，点名移到行首独立标记」？会改变既有肌肉记忆。</td></tr>
+  </table>
+
+</div>
+</body>
+</html>

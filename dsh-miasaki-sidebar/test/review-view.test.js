@@ -6,9 +6,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   GIT_BIN,
+  REVIEW_BASELINES,
+  diffForView,
+  normalizeDiffContext,
   parseNameStatusZ,
   parseNumstatZ,
   parseStatusRows,
+  parseUnifiedDiff,
   reviewStatus,
   unquoteGitPath,
 } from '../index.js'
@@ -40,12 +44,26 @@ test('parseStatusRows: xy codes, rename target wins, quoted paths unquoted', () 
     '',
   ].join('\n'))
   assert.deepEqual(rows, [
-    { xy: ' M', path: 'a.ts' },
-    { xy: 'M ', path: 'b.txt' },
-    { xy: '??', path: 'untracked new.ts' },
-    { xy: 'R ', path: 'moved renamed.txt' },
-    { xy: ' M', path: 'old name.txt' },
+    { xy: ' M', path: 'a.ts', from: null },
+    { xy: 'M ', path: 'b.txt', from: null },
+    { xy: '??', path: 'untracked new.ts', from: null },
+    { xy: 'R ', path: 'moved renamed.txt', from: 'moved.txt' },
+    { xy: ' M', path: 'old name.txt', from: null },
   ])
+})
+
+test('normalizeDiffContext: bounds the -U window (null keeps the git default)', () => {
+  assert.equal(normalizeDiffContext(null), null)
+  assert.equal(normalizeDiffContext(undefined), null)
+  assert.equal(normalizeDiffContext(0), 0)
+  assert.equal(normalizeDiffContext('12'), 12)
+  for (const bad of [65, -1, 1.5, 'abc', {}]) {
+    assert.throws(() => normalizeDiffContext(bad), /0–64/, `应拒绝非法 context：${String(bad)}`)
+  }
+})
+
+test('REVIEW_BASELINES: the view → baseline label mapping the UI spells out', () => {
+  assert.deepEqual(REVIEW_BASELINES, { unstaged: 'index', staged: 'HEAD', all: 'HEAD', last: 'HEAD^' })
 })
 
 test('parseNumstatZ: plain, binary and rename records key on the new path', () => {
@@ -169,6 +187,7 @@ test('reviewStatus: the four views partition a real working tree', { skip: skipI
     )
     assert.equal(last.entries.every(entry => entry.code === 'A'), true, 'root commit 全部是新增')
     assert.equal(byPath(last.entries).get('first.ts').add, 3)
+    assert.equal(last.entries.every(entry => entry.revision === last.head), true, 'last 条目携带所在提交，详情据此感知 HEAD 前进')
 
     // --- 第二次提交：rename / 删除 / 修改都要在 last 视图里正确归并 ---
     git('add', '-A')
@@ -180,6 +199,83 @@ test('reviewStatus: the four views partition a real working tree', { skip: skipI
     assert.equal(last2Map.get('first.ts')?.code, 'M')
     assert.equal(last2Map.get('img.png')?.binary, true)
     assert.equal(last2Map.get('untracked new.ts')?.code, 'A')
+    assert.notEqual(last2.head, last.head, 'HEAD 前进后 revision 必须变化——否则详情不会重取')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('diffForView: the detail baseline follows the view, not always HEAD', { skip: skipIntegration }, async () => {
+  const { dir, git } = await makeRepo()
+  try {
+    await writeFile(join(dir, 'app.ts'), 'one\ntwo\nthree\n')
+    git('add', '-A')
+    git('commit', '-q', '-m', 'root')
+
+    // 制造「索引 ≠ 工作树」的分层状态：暂存一份修改，工作树再追加一行。
+    await writeFile(join(dir, 'app.ts'), 'one\nTWO\nTHREE\nfour\nFIVE staged\n')
+    git('add', 'app.ts')
+    await writeFile(join(dir, 'app.ts'), 'one\nTWO\nTHREE\nfour\nFIVE staged\nSIX worktree\n')
+    const changedLines = text => parseUnifiedDiff(text).hunks.flatMap(h => h.lines).filter(l => l.t !== 'ctx').map(l => l.s)
+
+    const staged = await diffForView(dir, 'app.ts', { view: 'staged' })
+    assert.equal(staged.baseline, 'HEAD')
+    assert.equal(changedLines(staged.text).includes('FIVE staged'), true)
+    assert.equal(changedLines(staged.text).includes('SIX worktree'), false, '已暂存详情不得混入未暂存改动（缺陷修复前混入的是工作树 vs HEAD）')
+
+    const unstaged = await diffForView(dir, 'app.ts', { view: 'unstaged' })
+    assert.equal(unstaged.baseline, 'index')
+    assert.equal(changedLines(unstaged.text).includes('SIX worktree'), true)
+    assert.equal(changedLines(unstaged.text).includes('FIVE staged'), false, '未暂存详情不得混入已暂存改动')
+
+    const all = await diffForView(dir, 'app.ts', { view: 'all' })
+    assert.equal(all.baseline, 'HEAD')
+    assert.equal(changedLines(all.text).includes('FIVE staged'), true, '全部分支更改 = 工作树 vs HEAD，两层都要在')
+    assert.equal(changedLines(all.text).includes('SIX worktree'), true)
+
+    git('add', '-A')
+    git('commit', '-q', '-m', 'second')
+    const last = await diffForView(dir, 'app.ts', { view: 'last' })
+    assert.equal(last.baseline, 'HEAD^')
+    assert.equal(changedLines(last.text).includes('FIVE staged'), true, '上一轮更改 = HEAD 提交本身（git show）')
+    assert.equal(changedLines(last.text).includes('SIX worktree'), true)
+
+    // --- rename：from 与新路径一起进 pathspec，旧路径侧才有内容 ---
+    git('mv', 'app.ts', 'renamed.ts')
+    // R100 的纯 rename 只有 rename from/to 头、没有 ---/+++ 内容行；再改一
+    // 行让相似度低于 100%，rename diff 才携带旧路径侧的实际内容。
+    await writeFile(join(dir, 'renamed.ts'), 'one\nTWO\nTHREE\nfour\nFIVE staged\nSIX worktree\nSEVEN\n')
+    git('add', '-A')
+    const rename = await diffForView(dir, 'renamed.ts', { view: 'staged', from: 'app.ts' })
+    assert.equal(rename.text.includes('--- a/app.ts'), true, '带 from 的 rename diff 必须包含旧路径侧（修复前旧路径不参与，重命名常显示为空）')
+    // 对照：pathspec 不含旧路径时配对不成立，同一文件被渲染成全新增——
+    // 这正是「重命名文件的详情与列表对不上」的机理。
+    const noFrom = await diffForView(dir, 'renamed.ts', { view: 'staged' })
+    assert.equal(noFrom.text.includes('--- a/app.ts'), false)
+
+    // --- context：-U0 收紧上下文，行数必须少于默认 ---
+    await writeFile(join(dir, 'renamed.ts'), 'one\nTWO\nthree\nfour\nFIVE staged\nSIX worktree\n')
+    const wide = parseUnifiedDiff((await diffForView(dir, 'renamed.ts', { view: 'unstaged' })).text)
+    const tight = parseUnifiedDiff((await diffForView(dir, 'renamed.ts', { view: 'unstaged', context: 0 })).text)
+    const sum = parsed => parsed.hunks.reduce((n, h) => n + h.lines.length, 0)
+    assert.equal(sum(wide) > sum(tight), true, 'context=0 的 diff 行数必须少于默认 -U3')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('diffForView: a repo with no commit degrades honestly (index baseline, untracked via --no-index)', { skip: skipIntegration }, async () => {
+  const { dir, git } = await makeRepo()
+  try {
+    await writeFile(join(dir, 'new.ts'), '1\n2\n')
+    git('add', '-A')
+    const all = await diffForView(dir, 'new.ts', { view: 'all' })
+    assert.equal(all.baseline, 'index', '无 HEAD 时 all 的详情基线如实标注为索引（列表 numstat 的兜底同款）')
+    assert.equal(parseUnifiedDiff(all.text).hunks[0].lines.every(l => l.t === 'add'), true)
+
+    git('reset', '-q')
+    const untracked = await diffForView(dir, 'new.ts', { view: 'all' })
+    assert.equal(parseUnifiedDiff(untracked.text).hunks[0].lines.length, 2, '未跟踪文件经 --no-index 渲染为全增')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

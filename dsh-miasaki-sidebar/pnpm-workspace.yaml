@@ -1,0 +1,8 @@
+# @miasaki/dsh-sidebar — pnpm workspace settings (pnpm ≥ 11).
+#
+# node-pty 的 install script（prebuild.js || node-gyp rebuild）在预编译命中时
+# 本就不需要执行——T2 实测（2026-09-12）：跳过脚本后从 prebuilds/win32-x64/
+# 直接加载成功，spawn + resize 全通过。显式标记 never-built 让 pnpm install
+# 确定性通过（exit 0），无 node-gyp 步骤（与 ssh 线的 ssh2 同款处理）。
+allowBuilds:
+  node-pty: false

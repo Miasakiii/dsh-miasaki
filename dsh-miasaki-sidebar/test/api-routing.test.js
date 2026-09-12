@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import http from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { createApi, resolveWorkdir } from '../index.js'
+import { GIT_BIN, createApi, resolveWorkdir } from '../index.js'
 
 // 回归对象（2026-09-08 修复）：`resolveWorkdir()` 原先先 `resolve(raw)` 再判
 // `isAbsolute`——resolve 之后恒为真，于是「cwd 必须绝对路径」这条约束在真实
@@ -13,6 +14,13 @@ import { createApi, resolveWorkdir } from '../index.js'
 // 因此测试必须走真实 HTTP 路由，而不只是测被它调用的辅助函数。
 
 const silent = { warn() {}, error() {}, info() {}, debug() {} }
+
+// 与 review-view.test.js 同款判据：受限沙箱禁止捕获子进程输出时，git 集成
+// 用例跳过而不是误报失败（git 存在但捕获被禁正是该场景）。
+const canCaptureGit = () => {
+  const probe = spawnSync(GIT_BIN, ['--version'], { encoding: 'utf8', windowsHide: true })
+  return probe.status === 0 && probe.error === undefined
+}
 
 /** 起一个只挂 sidebar API 的真实 HTTP server（随机端口，127.0.0.1）。 */
 async function startApi(options = {}) {
@@ -231,5 +239,86 @@ test('browser-trust fence: a cross-site request or a foreign Origin is refused',
     assert.equal(plain.status, 200)
   } finally {
     await api.close()
+  }
+})
+
+// 2026-09-12：/review/diff 契约换新（view 决定基线 + from/context 参数）。
+// 守卫必须走真实 HTTP——这些都是「请求在路由层就该死掉」的用例，单测辅助
+// 函数证明不了路由真的执行了校验。
+test('POST /review/diff: view whitelist, path guards and context bounds all reject with 400', async () => {
+  const api = await startApi()
+  try {
+    const call = body => request(api.port, {
+      method: 'POST',
+      path: '/sidebar/api/review/diff',
+      body: { cwd: tmpdir(), ...body },
+    })
+
+    const badView = await call({ path: 'a.ts', view: 'bogus' })
+    assert.equal(badView.status, 400)
+    assert.match(badView.json.error, /未知的审查视图/)
+
+    const absPath = await call({ path: 'C:\\abs\\x.ts' })
+    assert.equal(absPath.status, 400)
+    assert.match(absPath.json.error, /相对路径/)
+
+    assert.equal((await call({ path: '../x.ts' })).status, 400)
+
+    const badFrom = await call({ path: 'a.ts', from: 'C:\\abs\\old.ts' })
+    assert.equal(badFrom.status, 400)
+    assert.match(badFrom.json.error, /from/)
+
+    const badContext = await call({ path: 'a.ts', context: 65 })
+    assert.equal(badContext.status, 400)
+    assert.match(badContext.json.error, /0–64/)
+
+    // 非 git 目录：`--no-index` 本就不需要仓库，与列表端「git 失败降级空
+    // 数据」同语义——200 空 hunks，绝不 500。
+    const notGit = await call({ path: 'a.ts' })
+    assert.equal(notGit.status, 200, notGit.text)
+    assert.deepEqual(notGit.json.diff.hunks, [])
+  } finally {
+    await api.close()
+  }
+})
+
+test('POST /review/diff: a real repo answers 200 echoing view + baseline', { skip: canCaptureGit() ? false : '无法捕获 git 子进程输出，跳过集成用例' }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sidebar-api-repo-'))
+  try {
+    const git = (...args) => {
+      const result = spawnSync(GIT_BIN, args, { cwd: dir, encoding: 'utf8', windowsHide: true })
+      if (result.status !== 0) throw new Error(`git ${args.join(' ')} 失败：${result.stderr || result.stdout}`)
+    }
+    git('init', '-q')
+    git('config', 'user.email', 'routing-test@local')
+    git('config', 'user.name', 'routing-test')
+    git('config', 'core.autocrlf', 'false')
+    await writeFile(join(dir, 'a.ts'), 'one\n')
+    git('add', '-A')
+    git('commit', '-q', '-m', 'root')
+
+    const api = await startApi()
+    try {
+      const res = await request(api.port, {
+        method: 'POST',
+        path: '/sidebar/api/review/diff',
+        body: { cwd: dir, path: 'a.ts', view: 'unstaged' },
+      })
+      assert.equal(res.status, 200, res.text)
+      assert.equal(res.json.view, 'unstaged', 'view 必须回显')
+      assert.equal(res.json.baseline, 'index', '响应必须带 baseline——UI 据此标注「对比：索引」')
+      assert.deepEqual(res.json.diff.hunks, [], '干净工作树在该基线下没有行级变更')
+
+      const bogus = await request(api.port, {
+        method: 'POST',
+        path: '/sidebar/api/review/diff',
+        body: { cwd: dir, path: 'a.ts', view: 'bogus' },
+      })
+      assert.equal(bogus.status, 400, '真实仓库里白名单仍然生效')
+    } finally {
+      await api.close()
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
   }
 })

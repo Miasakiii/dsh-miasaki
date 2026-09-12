@@ -2,6 +2,154 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-12
+
+- **v0.8.1-miasaki.0：v0.8.0 首轮实机反馈两修复**（用户实测：右栏终端 tab 空白 + 标题栏两按钮顺序）。
+  - **终端空白根因 = React 18 契约违例**：`terminalClient.snapshot` 的 getter 每次**构造新对象**，
+    `useSyncExternalStore` 的 getSnapshot 引用永不稳定 → 无限重渲染 → React 抛错卸载整个 tab 子树
+    （表现为整 tab 空白；审查 tab 的 store 返回稳定值所以无恙）。修为 `_snapshot` 只在 `emit()` 时重建，
+    getter 返回缓存引用。教训入库：**本插件给 `useSyncExternalStore` 的快照必须返回稳定引用**——
+    reviewView（字符串）与 store（固定对象）是既有正例，新 store 一律走 emit 时重建模式。
+  - **标题栏按钮顺序交换**（用户要求：侧边栏按钮在左、终端按钮在右）：实测另一注入方（侧栏开关）
+    在本按钮之后、同样插到 brand 前面，把终端按钮挤左成 `[终端][侧边栏][brand]`。改为**终端按钮始终
+    紧贴 brand** + MutationObserver 常驻重排（其他注入方插入后把它放回 brand 紧前；ensure 内
+    「顺序已对不动 DOM」守卫防 observer 自激）→ 稳定 `[侧边栏][终端][brand]`。注入成功后不再
+    disconnect observer（改为常驻轻量监听），`--ms-titlebar-reserve: 156px` 仍只在首次注入时设置。
+  - 触摸点：`client.js`（terminalClient.snapshot / titlebarButton.ensure+watch）、`package.json`
+    （0.8.1-miasaki.0，health 版本可区分修复前后 bundle）、本文件。**重启 `dsh web` 生效**。
+
+- **v0.8.0-miasaki.0：P2 内嵌终端落地——拍板「底部面板 + 右栏 tab 两形态并存」**。用户以参考图
+  （标题栏终端按钮带下拉、「切换终端 Ctrl+`」）拍板 §6.①②：**两个形态都要**；路线随之收敛为
+  **B（自持 node-pty）**——底部面板宽度随窗口变化，路线 A 的「无 resize」硬伤在底部形态下不可缓解，
+  T1（官方 seam spike）跳过，T2 仍是立项门。
+  - **T2 spike 通过（路线 B 立项门）**：`node-pty@1.2.0-beta.15` 装入插件（pnpm 11 忽略 install script
+    也无碍），从**插件自己的安装上下文**经 prebuilds/win32-x64 直接加载成功（零编译）；`resize(100,30)`
+    实测生效（PowerShell `$Host.UI.RawUI.WindowSize.Width` 回读 100）。**新纪律：conpty 的 dll 路径
+    拒绝裸名**（`spawn('powershell.exe')` 报 `File not found:`），spawn 前必须 `where` 解析绝对路径
+    （`resolvePtyBin`，仍是查 PATH 不执行，启动器纪律 4 延续）。`pnpm-workspace.yaml` 显式
+    `allowBuilds: { node-pty: false }`（对齐 ssh 线的 ssh2 处理，install 确定性通过）。
+  - **形态与共享模型**：底部面板与右栏终端 tab 是**同一个 pty 会话**的两个 viewer——切换容器 =
+    detach 旧 attach 新、1MB 回放环补齐，会话状态不丢（VS Code 同款「移位」）。**每个 viewer 一条
+    独立 WS**（共享单连接会让 replay 被写进所有 xterm——设计中途纠正）。单实例纪律沿用旧 §4.3：
+    运行中会话绝不因新 attach 参数重启；[重启] / 换 shell / 移动工作区走 `restart: true` 帧显式重启；
+    viewer 全部消失**不杀会话**；重连固定 1.5s 退避凭回放补齐。
+  - **host 半**（`index.js`）：`PTY_SHELLS`（pwsh/powershell/cmd + darwin/linux 预留，wt 是容器不进表）、
+    `TerminalHub`（单会话 + `ScrollbackRing` 回放环 + viewer 广播 + `bufferedAmount > 8MB` 丢帧的
+    洪泛保护 T6）、`createTokenGate`（一次性 token，60s TTL 用完即废）、`clampPtySize`、
+    `fenceRequest`（三道围栏从 HTTP handler 抽成 HTTP/WS 共用）。路由：`POST /sidebar/api/terminal/token`
+    （签发）、`GET /sidebar/api/terminal/session`（状态）、`/sidebar/asset/terminal/{xterm.js,xterm.css,addon-fit.js}`
+    （xterm 5 UMD 懒加载 serve，T4）、`registerUpgrade('/sidebar/ws/terminal')`（围栏 → token →
+    `wss.handleUpgrade`，ssh 线已验证的接线形状）。**node-pty 与 ws 均惰性加载**——依赖缺失只降级
+    内嵌终端（资产 404 + 无 WS），审查 tab 与外部启动器不受影响。
+  - **client 半**（`client.js`）：`terminalClient` 控制器（资产懒加载、xterm 主题实时读 `--dsw-*` 令牌
+    ——T5 三主题正确、per-viewer WS、断线重连、`restart` 语义）；`TerminalView` React 组件（右栏 tab 主体）；
+    终端 tab 内嵌化（工作目录 + shell 胶囊 + 内嵌主体 + 状态条「已退出 [重启] / 会话工作区已变更
+    [移到当前工作区]」+ **[在底部打开 ↧]**；原外部启动器收进 `details` 折叠区完整保留）；**底部面板**
+    （命令式 DOM：拖拽高度 180–80vh、状态条、[重启][关闭]；**推挤能力检测**——命中
+    `#root>[data-slot="root"]>div` 则 `--miasaki-terminal-height` 让位生效，失败自动纯浮层）；**标题栏
+    终端按钮**（桌面壳 `#miasaki-titlebar .tb-group` 注入「终端+▾」按钮，MutationObserver 等待挂载点，
+    主点击切底部面板、▾ 菜单含新窗口启动器，注入成功同步 `--ms-titlebar-reserve: 156px` 让位）；
+    **Ctrl+`** 全局快捷键（capture 拦截，xterm 聚焦时同样生效）。
+  - **测试 47 → 54 项全绿**：新增 `test/terminal-hub.test.js`（7 项，fake pty 注入不需要真实 shell）：
+    PTY 枚举纪律（wt 不入表）/ clampPtySize / ScrollbackRing 截断与单块保留 / token 一次性 + TTL /
+    fenceRequest 三道 / 单会话语义（运行中忽略新参数、restart kill 重 spawn、exit 后 respawn、
+    write/resize 对退出会话 no-op）/ 洪泛丢帧。
+  - 依赖变化：`node-pty@1.2.0-beta.15`（精确锁版本，与宿主同版本预编译已验）、`ws@^8.21.3`、
+    `@xterm/xterm@5.5.0`、`@xterm/addon-fit@0.10.0`（均为终端功能依赖，审查功能零依赖不变）。
+  - 触摸点：`index.js`（fenceRequest 抽取 + PTY 段 + token/session 路由 + apply 的 WS/资产接线）、
+    `client.js`（terminalClient / bottomPanel / titlebarButton / TerminalView / TerminalTab 内嵌化 /
+    样式两块 / Ctrl+` / lifecycle 清理）、`package.json` + `pnpm-workspace.yaml`、README（待办 / 蓝图 /
+    目录 / 内嵌终端与 WS 安全段 / 验证计数）、本文件。**生效条件：重启 `dsh web`**；health 返回
+    `0.8.0-miasaki.0` 即已加载。
+  - **实机验收清单**（静态回归覆盖不到的）：右栏 tab 内嵌终端起 pwsh/powershell 可交互；`vim`/`git log`
+    等 TUI 重排正确（resize 跟手）；底部面板与右栏 tab 之间移位后回放补齐、会话不丢；viewer 全关后
+    pty 保活（后台进程继续跑）；`yes` 洪泛不卡 UI；三主题配色正确；桌面壳标题栏按钮出现且让位正确、
+    web 环境 Ctrl+` 生效；依赖拷贝经 link 安装后原生模块可加载（T2 是插件目录实测，profile 拷贝
+    语义待实机确认——health 正常但终端报「依赖加载失败」即此环节问题）。
+
+- **v0.7.0-miasaki.0：P0 数据一致性修复 + P1 diff 阅读器重做落地**（按上午的优化规划提案实现；
+  §6 三项拍板中 ①②（终端形态 / 路线）涉及 P2 立项**本次不做**，③（点名交互重排）按提案建议方向实现，
+  待用户实机确认——点名钮与主点击已解耦，不接受时可低成本回退）。
+  - **P0：详情基线随视图（缺陷修复）**。`diffForFile(cwd, rel, cached)` 退役，新增导出
+    `diffForView(cwd, rel, { view, from, context })` → `{ text, baseline }`：`unstaged` → `git diff`
+    （工作树 vs 索引）、`staged` → `git diff --cached`、`all` → `git diff HEAD`（无 HEAD 时**回退索引基线**并
+    如实标注，与列表 numstat 的兜底一致）、`last` → `git show --format= HEAD`。基线映射导出为
+    `REVIEW_BASELINES`（unstaged=index / staged=HEAD / all=HEAD / last=HEAD^），响应新增 `baseline` 与
+    `view` 回显，UI 在文件头显示「对比：索引 / HEAD / HEAD^」。
+  - **P0：重命名有内容**。`parseStatusRows` 保留 rename 的旧路径（`from`，非 rename 恒 null），
+    `reviewStatus` 工作区条目透传 `from`、`last` 条目新增 `revision`（所在提交，HEAD 前进即触发详情重取）；
+    详情请求带 `from` 时旧路径与新路径一起进 pathspec——git 的 rename 配对要求两侧都在候选集，只给新路径
+    会把 rename 渲染成全新增（这正是列表与详情对不上的机理之一，测试含正反对照）。
+  - **P0：切视图 / 刷新 / 切会话必重取 + 错误可见化**。`DiffViewer` 入参从 `{ path }` 改为
+    `{ entry, view, refreshTick }`，effect 依赖扩展为 `[path, view, entry.from, entry.revision, refreshTick,
+    context, cwd]`；`fetchSidebar` 把 4xx/5xx 回包的 `{ error }` 解析成可读文案；列表与详情失败不再静默——
+    区分「host 不可达（fetch 网络层 TypeError）」与「host 报错（附原文案）」两种态。
+  - **P1：diff 阅读器重做**。双行号槽（`line.a` / `line.b`，右对齐、不可选中，空槽占位保证内容列对齐）；
+    hunk 头渲染整行（含 git 的所在函数尾串，解析器新增 `hunk.header`）；**换行默认开**（`pre-wrap` +
+    悬挂网格，面板可切回横向滚动）；上下文档位 `±3 / 10 / 25 / 64`（`context` 参数整档重取 `-U<N>`，
+    **不在本地补行**）；`[↑] [↓]` 在 hunk 间滚动跳转并高亮当前；单文件超 2000 行分段渲染（「显示更多」
+    按档放量，hunk 不截半行）；diff 行点击 = 复制 `path:line`（可直接喂给对话）；文件头 sticky
+    （路径 + 统计 + 基线标签 + 工具钮）。语法高亮**不做**（引第三方高亮库违反零依赖纪律）。
+  - **P1：交互重排（提案 §3.3）**。文件行主点击 = 展开 / 收起 diff（**手风琴，同时只开一个**）；点名降位为
+    行首独立标记钮（✓ 绿色 / 未点名红描边提示与计数不变）；原行尾独立展开钮移除。行级「在官方预览打开」
+    **暂不做**——`dsh-resource://file/session/<id>/…` 的会话身份字段名待实测（提案 §2.2），归入 P3。
+  - **顺带修复（渲染器配套暴露）**：`parseUnifiedDiff` 此前把 `git diff` 结尾换行 split 出的空串当一行
+    空上下文——旧行渲染下不可见，双行号 UI 下会显示一行假行号（`a:0`）的空行；现在剥掉结尾换行 artifact
+    （真实的结尾空上下文行不受影响）。
+  - **契约变化**：`POST /sidebar/api/review/diff` body 从 `{ cwd, path, cached? }` 改为
+    `{ cwd, path, view?, from?, context? }`（`view` 走 `REVIEW_VIEWS` 白名单，缺省 `all` 兼容旧客户端；
+    `context` 经 `normalizeDiffContext` 限 0–64 整数，`from` 与 `path` 同等相对路径约束），响应
+    `{ diff, baseline, view }`。`GET /review/status` 形状不变，entries 增补 `from` / `revision`。
+  - **测试 40 → 47 项全绿**：review-data 5（+hunk header）、review-view 10（+`normalizeDiffContext`、
+    `REVIEW_BASELINES`、`diffForView` 真实 git 仓库集成 ×2：基线分离 / rename 正反对照 / context 收紧 /
+    无 HEAD 降级）、api-routing 12（+/review/diff 400 守卫族、真实仓库 200 回显 view+baseline）。
+  - 触摸点：`index.js`（diffForView / REVIEW_BASELINES / normalizeDiffContext / parseStatusRows /
+    parseUnifiedDiff / reviewStatus / diff 路由）、`client.js`（fetchSidebar 错误解析 / ReviewTab 交互与
+    汇总徽标 / DiffViewer 重做 / 样式块）、`package.json`（0.7.0-miasaki.0）、README（待办 / 蓝图 / 验证计数）、
+    本文件。**生效条件：重启 `dsh web`**（host 半与 client bundle 都在启动时载入内存）；
+    `GET /sidebar/api/health` 返回 `0.7.0-miasaki.0` 即已加载。
+  - **未做（记为待办）**：P2 右栏内嵌终端（待拍板 §6.①②，含 spike T1–T6）；信息架构过滤框与分支显示
+    （提案 §3.4，P2）；行级「在官方预览打开」（P3）。
+
+- **右侧边栏优化规划设计（用户提出「审查简陋、看不到改动代码；终端不是内置的」）**。产出设计提案
+  [`2026-09-12-rightbar-optimization-plan.md`](2026-09-12-rightbar-optimization-plan.md) 与界面示意
+  [`2026-09-12-rightbar-mockup.html`](2026-09-12-rightbar-mockup.html)，**未写代码**。核查结论按「已确证 / 待实测」分级：
+  - **审查「看不到改动代码」是数据问题，不是渲染问题（已确证）**：列表按所选视图取数（`client.js:423`），
+    详情却固定 `git diff HEAD`——客户端只发 `{ path }`（`client.js:569-572`），宿主只认 `body.cached`
+    （`index.js:665`），其余一律 `diffForFile(cwd, rel, false)` → `git diff HEAD -- <path>`（`index.js:110-128`）。
+    后果：`staged` 视图详情给的是工作树对 HEAD（完全不是暂存内容）；`last` 视图里已提交且工作树干净的文件
+    必然显示「无行级变更」。同源缺陷：详情 effect 只依赖 `[path]`（`client.js:576`）→ **切视图不重取**；
+    列表带 `from` 但详情不传 → **重命名文件无内容**；列表请求失败静默（`client.js:433`）→ 用户看到
+    「无改动」而非「host 不可达」。
+  - **行级 diff 数据够用，是渲染丢掉了（已确证）**：`parseUnifiedDiff` 已产出 `hunk.oldStart/newStart` 与
+    每行 `{t,a,b,s}`（`index.js:342-381`），而 `DiffViewer` 只渲染 `line.s`（`client.js:583-587`）——
+    无行号、无 hunk 头、无换行开关（400px 面板等宽约 40 字符宽，长行必须横滚）、无虚拟化
+    （单文件 20000 行全部进 DOM）。
+  - **主操作位给错对象（已确证）**：文件行主点击 = 点名（`client.js:538-543`），展开 diff 是旁边独立小 `+`
+    （`client.js:548-554`）。审查语境下主点击应是「看变更」。
+  - **关键发现：宿主已自带 PTY 栈，旧设计的编译硬门不成立（本机 0.1.5-rc.1 实测）**。宿主
+    `node_modules` 内已有 `@deepseek-ai/dsh-terminal`（`ctx.terminals`，owner 作用域）、
+    `@deepseek-ai/dsh-subprocess`（`ctx.subprocess.spawnTerminal`）、`dsh-subprocess-local`（依赖
+    `node-pty@1.2.0-beta.15` + `koffi`）、`dsh-terminal-bash`。其中 **`node-pty` 已带
+    `prebuilds/win32-x64/`（`conpty.node` / `OpenConsole.exe` / `conpty.dll`）**，安装脚本
+    `node scripts/prebuild.js || node-gyp rebuild` 在预编译命中时**跳过 node-gyp** ——
+    `2026-09-09-sidebar-launcher-design.md` §6 的 **S1 硬门（Windows 需 VS Build Tools 编译）不成立**。
+    另：`spawnTerminal` **不需要 Agent**（与 `ctx.terminals.spawn(owner: Agent, …)` 不同），而 0.1.5 已移除
+    `ctx.agent`，故 owner 作用域那条路对本插件不可用。
+  - **唯一真缺口：官方 handle 无 resize（已确证）**。`SubprocessTerminalHandle` 无 `resize`，
+    `dsh-subprocess-local` 只在 spawn 时读 `rows/cols`（`lib/index.js:1035-1036`）；而 `node-pty` 的 `IPty`
+    有 `resize(columns, rows)`（`typings/node-pty.d.ts:166`）与 `handleFlowControl`。这是「用官方 seam」与
+    「自持 pty」两条路线的取舍点。
+  - **终端形态改判建议**：旧设计的底部面板方案前提（标题栏按钮注入 + `--ms-titlebar-reserve` 量测）已随
+    2026-09-10 壳退役作废；右栏内嵌所需的分栏 / 浮窗由官方 `ctx.sidebarRight.split()/float()` 白给，
+    且官方 `sidebar.right.pane.tab.title` 槽的注释原文就以「a terminal named after its shell」举例。
+    → 建议改判为**右栏内嵌**；旧设计 §4.3 生命周期与 §4.4 帧协议、shell 枚举纪律继续沿用。
+  - **待用户拍板三项**：① 终端形态是否改判为右栏内嵌；② 终端路线 A（官方 seam，零依赖无 resize）优先
+    spike 还是直接 B（自持 node-pty）；③ 是否接受「主点击 = 展开 diff，点名移到行首」的交互重排。
+  - **新增 spike 清单 T1–T6**（官方 seam 冒烟 / node-pty 预编译命中 + resize / WS 路由共存 / xterm 懒加载 /
+    三主题配色 / 输出洪泛），**T1、T2 为立项门**。
+  - 文档同步：README 目录结构补两份新文档；组件蓝图的「标题栏启动器组」行标注形态已被本提案取代。
+
 ## 2026-09-11
 
 - **第二阶段清理：壳代码删除 + 迁移遗留缺陷修复**。上一阶段（2026-09-10）只**停用**了壳，代码作为未调用的死代码留在文件里；本阶段按迁移设计 §3 的删除清单执行，并在清理过程中暴露并修复了一处**真实功能缺陷**。
@@ -378,3 +526,7 @@
   - **pty 生命周期 = 单实例 + 面板收起保活 + 重连回放**（1MB 环形缓冲）；会话切换**不自动重启**（防误杀运行中任务），仅提示条；内嵌 shell 用新 `PTY_SHELLS`（wt.exe 是容器、不入表）；
   - **底座推挤**：`--miasaki-terminal-height` 变量与侧栏 `padding-right` 并存、**无 1280px 下限**（高度推挤与宽度吃紧无关）；SPIKE S3 若不吸收则降级浮层；
   - **立项门（SPIKE 清单 §6）**：S1 node-pty Windows 编译（硬门——降级 = 终端按钮打开系统终端，功能语义不变）/ S3 底部推挤 / S5 xterm 服务 / S2·S4 低风险（SSH 线已证 API 可用）。**未写代码**，README 组件蓝图与目录结构已同步。
+
+## 2026-09-12（晚）
+
+- **标题栏终端按钮调到 tb-group 最左**（用户第二次交换要求：「终端按钮要放左边」）。第一次拍板的「紧贴 brand」实测与右栏开关的注入位置冲突（两者都插 brand 紧前、开关落在终端右侧），改为 `ensure()` 把 `#miasaki-tb-terminal` 置于 `.tb-group` 首位（`insertBefore(btn, group.firstElementChild)`，顺序已对不动 DOM 防 observer 自激）；其它注入方都往 brand 紧前插，天然落在终端之后。`terminal-launcher` 测试无顺序断言，11/11 通过。
