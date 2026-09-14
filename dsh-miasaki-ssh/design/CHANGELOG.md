@@ -2,6 +2,19 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-14
+
+- **Agent 化规划提案**（[2026-09-14-ssh-agent-driven-plan.md](2026-09-14-ssh-agent-driven-plan.md)，v0.2 待评审，**未实施业务代码**）。用户诉求：「SSH 线希望是 Agent 驱动的，集成 Agent 能力」。本轮先做平台事实核查再出方案，核心结论与依据：
+  - **立场：做「Agent 的 SSH 手」，不做「SSH 里的 Agent」。** DSH 已有完整 agent 循环（对话视图 / 审批 UI / 工具卡 / 会话日志 / 压缩 / 子代理），SSH 自造内嵌对话会重复实现全部四件并带来双份会话状态；正确形态是 SSH 当**能力提供方**，页面当**观察窗**。
+  - **五条设计判断**：J1 不做第二个 Agent；J2 人的交互式 PTY 与 Agent 的 exec 通道**物理分离**（`client.shell()` vs 同 Client 下 `client.exec()`，避免污染屏幕 / 被人打断 / 冲掉 256KiB 回放环）；J3 凭据永不归 Agent（主机级 `agentAccess: none|readonly|full`，**默认 `none`**）；J4 审批走官方 seam 且**诚实声明命令正则不是安全边界**；J5 可见性即安全（Agent 活动时间线，事件不写 PTY）。
+  - **平台事实**（0.1.5-rc.1 安装产物源码 + 随包中文 README）：`ctx.tools.register(defineTool({...}))` 注册即进系统提示词、`restrict` 按 agent 收窄、`guard` 单调拒绝不可翻案、五段执行流水线；`ctx.approval.request({agent,toolName,callId?,reason?,signal?})` 返回 `allowed-once|rejected|cancelled|unavailable`，**三条硬约束**——`allowed-once` 是唯一授权 / 请求需 open turn / **请求不携带工具参数**（命令细节只能进 `reason` 或靠 `callId` 关联工具卡），审计 `approval/asked|decided` 自动落会话日志；`tool.call.toolview` 可让 `ssh_exec` 在对话流有专属卡片；`dsh-web-app/cordis.patch.yml:252` 已挂 `ui-approval`。
+  - **否决一条看似对口的路线**：`ctx.terminals` 的 `TerminalBackend` 契约是全 UNIX 进程模型（`pid` / `targetPgid` / `TerminalSignal`），且 `TerminalSpawnRequest` **只有 `{type,name?,cwd?}`、没有主机标识** ⇒ SSH 塞进去三处语义打架，不走该路线（留 S5 对照实验）。
+  - **平面归属判据**（引自 `dsh-web-app/cordis.patch.yml:351–484` 原文）：`tools`(:460) / `approval`(:224) / `subagent`(:328) 均在 `dsh-base` = **Host 平面**，故 profile bundle 行的本插件可 inject 并注册进全局层；代价是**每个会话固定多付 schema token** ⇒ 推演出「工具少而正交」+「总开关默认 `off`（不注册即不进 schema）」。
+  - **能力四层与分期**：A0 上下文桥（零平台依赖，最便宜）→ A1 工具面（`ssh_hosts` / `ssh_exec` / `ssh_session_read` 三个 + exec 通道 + 输出双上限 + spill 对齐）→ A2 治理闭环（主机授权 / 命令分级 L0–L2 / 审批四分支 / 执行台账 `exec-audit.jsonl` 不记输出）→ B 协作面（活动时间线 + 对话流卡片）→ C 自主面（子代理，独立评审）→ D 接管模式（Agent 驱动人的 PTY，默认关闭）。
+  - **8 项 SPIKE**，其中 **S1（bundle 行能否 inject `tools` 且对会话内 agent 可见）** 与 **S4（同 Client 上 `shell()` 与 `exec()` 并存是否稳定）** 为命门：前者决定「Agent 有没有手」，后者决定「手干不干净」。
+  - **本文档定位**：本轮只产出方案文件，**不等于批准业务改造**；「切换到 Agent 模式只允许产出方案文件」同 plan §11 既有约定。方案内所有标「⚠ 推断」的结论必须经 SPIKE 验证后才能当事实使用。
+  - **同步**：`README.md` 文档表新增本方案条目、里程碑 M3 行指向本方案。
+
 ## 2026-09-12
 
 - **SSH 视图下隐藏官方「对话列宽」拖拽手柄**（用户实机反馈：「这个页面不需要可以调节对话框宽度」）。

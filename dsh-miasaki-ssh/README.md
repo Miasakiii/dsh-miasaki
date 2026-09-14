@@ -53,7 +53,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 | **M1** | 纯终端 + 连接管理：`conversation.view` 入口、`/ssh/` 页面、密码/私钥/agent 三种认证、xterm 交互终端、known_hosts、三道围栏、连接保活 | **代码完成，待实机验收** |
 | **U0+U1**（工作区规划） | U0 可靠性闭环（二进制输出 / 查看器实例 / 恢复 attach / 指纹闭环 / 输入归属）+ U1 统一工作区（主机导航 / 多标签 / 编辑抽屉 / 三主题桥接 / 复制粘贴 / 查找 / 字号 / 响应式） | **已实施，待实机验收** |
 | M2 | SFTP、系统终端打开、空白会话备用入口（多标签 / 断线重连 / 主题跟随 / 分组收藏已随 U1 交付） | 规划（并入 U2：SFTP、多 shell、工作区记忆） |
-| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划（对应 U3） |
+| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划（对应 U3）；**细化方案见 [Agent 化规划](design/2026-09-14-ssh-agent-driven-plan.md)（2026-09-14，待评审：A0 上下文桥 → A1 工具面 → A2 治理闭环 → B 协作面，总开关默认 `off`）** |
 
 ## M1 前置 SPIKE
 
@@ -100,6 +100,7 @@ dsh-miasaki-ssh/
 | [设计文档](design/2026-09-09-ssh-design.md) | 调研结论、技术选型、架构、数据模型、安全红线、里程碑、SPIKE 清单、风险 |
 | [工作区优化规划](design/2026-09-12-ssh-workspace-plan.md) | **规划与实施记录**：现状诊断、信息架构、三主题桥接、连接生命周期契约、分期 U0–U3、验收矩阵。**U0（可靠性闭环）+ U1（统一工作区）已实施（2026-09-12），U2/U3 未动** |
 | [工作区概念稿](design/preview/2026-09-12-ssh-workspace-concept.html) | 可交互概念稿：三主题 + 原生暗色、四档宽度、八种连接状态；仅本地演示 |
+| [**Agent 化规划**](design/2026-09-14-ssh-agent-driven-plan.md) | **能力分层与实施规划（2026-09-14，待评审）**：平台事实核查（`ctx.tools` / `ctx.approval` / `ctx.subagents` / `ctx.terminals` / `tool.call.toolview` / host-preset 平面判据）、五条核心设计判断、四层能力（上下文桥 / 工具面 / 治理面 / 协作面）、工具清单、授权与命令分级、SPIKE 清单、验收矩阵、待评审取舍 |
 | [CHANGELOG](design/CHANGELOG.md) | 本线变更记录 |
 
 ## 相关线
