@@ -30,6 +30,10 @@ dsh-miasaki-desktop/src-tauri/src/assets.rs
 .freebuff/
 .commandcode/
 .zcode/
+# opencode CLI 在项目根写的配置（2026-09-14 出现在根目录，15 字节空 mcp，非本项目产物）
+.opencode/
+# mcporter（MCP 工具）在根级写的配置目录（2026-09-14 出现，非本项目产物）
+/config/
 _bailian_test/
 _mimo_test/
 # OpenClaw / 外部 agent 框架的 workspace 与状态（2026-09-12 出现在根目录，不属于七线任何一线）
@@ -40,6 +44,10 @@ IDENTITY.md
 SOUL.md
 TOOLS.md
 USER.md
+# 外部 agent 框架的会话目录（box-agent 建的 `日期-哈希` 目录，2026-09-13/14 出现在根目录）
+# 会话内产物（一次性报告、CI 草稿、探针脚本）不属于七线任何一线；
+# 其中确有存留价值的内容已归档：CI 工作流 → .github/workflows/，仓库评审 → dsh-miasaki-shared-docs/
+/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*/
 
 # ---- 外部素材参考（半成品/压缩包，不入库）----
 hatch-pet-kurumi-main/
