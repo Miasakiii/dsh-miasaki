@@ -1,0 +1,23 @@
+# ── 换行符纪律：本仓禁止任何 EOL 转换 ────────────────────────────────────────
+#
+# 本仓有大量检查做「逐字节比对」，工作区文件必须与入库字节完全一致：
+#   · desktop 的 5 个 patch verify：由 baseline 原始文件重建 → 与记录的产物 SHA-256 比对
+#   · dual-model 的 patch verify：同上（图片准入补丁）
+#   · appearance 的 derive-skins --check：重算 105 token 表 → 与 lib/skins/*.js 逐字节比对
+#   · sidebar 的 rightbar-guide 等测试：对源码文本做断言
+#
+# 因此这里用 `-text` 声明：**对所有文件禁用换行符转换**。gitattributes 的 per-path
+# 规则优先于 core.autocrlf，所以无论开发者本机 core.autocrlf 取 true 还是 false，
+# checkout 出来的字节都相同 —— 这是「回归结果可复现」的前提。
+#
+# 背景（2026-09-14）：CI 首次运行（run #1）暴露此问题。windows-latest 的 Git for Windows
+# 默认 core.autocrlf=true，仓库当时没有 .gitattributes，checkout 遂把 LF 文件转成 CRLF，
+# 导致 8 项检查失败（desktop 3/8、dual-model 9/10、appearance 11/12、sidebar 9/10）：
+#   [desktop]    5× patch verify (可重建)              → exit 1
+#   [dual-model] patch verify (图片准入补丁可重建)      → exit 1
+#   [appearance] derive-skins --check → 产物与重算不一致（lib/skins/*.js 过期或被手改）
+#   [sidebar]    test rightbar-guide.test.js           → exit 1
+# 本地因 core.autocrlf=false 而全部通过 —— 同一 commit 两套结果，正是缺少本文件所致。
+#
+# 注：`-text` 只禁用 EOL 转换，不影响 diff / merge（那是 `-diff` 的语义）。
+* -text
