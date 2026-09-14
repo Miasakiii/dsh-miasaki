@@ -38,6 +38,13 @@ dsh-miasaki/
 
 > 七线全部纳入统一回归；需要重启 host 或真机的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）不在此脚本内。
 
+**CI 已接入（2026-09-14）**：`.github/workflows/verify-all.yml` 在 `windows-latest` 上跑同一套回归
+（push `main`/`master` + 任意 PR + 手动触发），使质量保证不再只依赖"维护者记得在本机跑一次"。
+runner 自带 MSVC，因此本地 Git Bash 下 `cargo test` 的 `link.exe` 环境假阴性在 CI 中变成真信号。
+CI 先装**三条有依赖的线**再跑闸门：sidebar 与 ssh 用 `pnpm install --frozen-lockfile`、
+desktop 用 `npm ci --omit=dev`；canvas / fleet / dual-model / appearance 已核实零依赖、无需安装。
+（依赖缺失的实测后果、Node 22.19.0 与 pnpm 11 的版本取舍、45 分钟超时的理由，均写在该文件头部注释里。）
+
 ```bash
 node scripts/verify-all.mjs               # 七线全量（L0 静态检查 + L1 单线单测）
 node scripts/verify-all.mjs appearance    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）

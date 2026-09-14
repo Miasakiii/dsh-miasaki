@@ -1,0 +1,146 @@
+# dsh-miasaki 统一回归 CI
+#
+# 落地评审报告 P0-1（无 CI）+ A2（把 desktop 的 cargo test 环境假阴性变成真信号）。
+# 在 windows-latest 上跑 `node scripts/verify-all.mjs`（七线 L0 静态检查 + L1 单线单测）。
+#
+# ── 与 2026-09-13 草稿的差异（2026-09-14 审查修正，均已实测验证）────────────────
+#
+# 草稿的核心判断「七线中唯 ssh 有运行时依赖，其余六线零依赖」是错的，据此只装了
+# ssh 依赖，会导致 CI 首次运行即有两条线必然失败。实际的依赖分布（读各线
+# package.json 核实）：
+#
+#   sidebar   4 个：@xterm/addon-fit @xterm/xterm node-pty ws        ← 草稿漏装
+#   ssh       4 个：@xterm/addon-fit @xterm/xterm ssh2 ws            ← 草稿装了
+#   desktop   3 个：sharp ws（+ devDep @tauri-apps/cli）             ← 草稿漏装
+#   canvas / fleet / dual-model / appearance：确认零依赖，无需安装
+#
+# 漏装的后果已用「干净副本（git ls-files 全量复制、无 node_modules/target）」
+# 复现：
+#   · desktop  `verify-all.mjs:133` → `scripts/build-init.mjs:6 import sharp`
+#              → ERR_MODULE_NOT_FOUND: Cannot find package 'sharp'（必然红）
+#   · ssh      无依赖实测 10/12（http.test.js / runtime.test.js 因顶层 import ssh2、ws 失败）
+#              装入依赖后实测 12/12  → 证明依赖安装是该项通过的必要条件
+#   · sidebar  node-pty / ws 为惰性加载（index.js:680-684 注释），但
+#              terminal-hub.test.js:115,176 两个用例需要真实 pty 会话，缺依赖时不可靠
+#
+# 因此本版安装三条线的依赖。desktop 用 `npm ci --omit=dev`：verify-all 的 desktop 项
+# 只需 sharp（build-init）与 cargo，不需要 @tauri-apps/cli（devDep，体积大），跳过它
+# 可显著缩短安装时间。
+#
+# ── 为什么是 windows-latest ──────────────────────────────────────────────────
+#   1. 本项目是 Windows 专属（Tauri 桌面壳 + Win32 桌宠），只在 Windows 上有意义。
+#   2. windows-latest 自带 MSVC（VS 2022 Build Tools），因此 desktop 的 `cargo test`
+#      不会遇到本地 Git Bash 里 GNU /usr/bin/link.exe 遮蔽 MSVC 链接器的假阴性
+#      （见 AGENTS.md「工作区卫生」与 README §统一回归 的 link.exe 注记）。
+#      → CI 中 desktop 应稳定为 8/8，而非本地常见的 7/8※。
+#
+# ── 版本取舍 ────────────────────────────────────────────────────────────────
+#   · Node 22.19.0：各线 package.json 的 engines 下限即 ">=22.19.0"，CI 跑下限
+#     是在验证「声明的最低门槛真的可用」——这是本地（v24.15.0）覆盖不到的一层。
+#     注意：22 与 24 是不同 major，行为不保证一致；若首跑因版本差异出现失败，
+#     把此处改成 '24.15.0' 对齐本地基线即可（两者都在 LTS 线上）。
+#   · pnpm 11：与维护 lockfile 的本地版本（11.22.0）对齐，消除版本变量。
+#     两条线的 lockfile 均为 lockfileVersion 9.0，pnpm 11 原生兼容；
+#     --frozen-lockfile 保证锁文件与 package.json 不一致时直接失败而非静默改写。
+#
+# ── 其他 ────────────────────────────────────────────────────────────────────
+#   · verify-all.mjs 的 cargoBin() 在 CARGO_HOME / ~/.cargo 下找 cargo，找不到就
+#     「跳过」desktop 的 Rust 单测（不报失败）。要让 cargo test 真正纳入回归，
+#     CI 必须装好 Rust；windows-latest 默认已带 rustup，此处显式声明 stable 以防漂移。
+#   · Cargo.lock 已入库（src-tauri/Cargo.lock），故缓存 key 的 hashFiles 有效。
+#   · fleet 的 validate-bus --strict 依赖 state/fleet-pulse.json，而该文件被
+#     .gitignore 排除、干净 checkout 中不存在——但 verify-all 内 publish-pulse
+#     排在 validate-bus --strict 之前，会先把它生成出来。已在干净副本实测 fleet 15/15。
+#   · timeout 45 分钟：首次冷启动要全量编译 Tauri 应用（tauri/wry/webview2 等），
+#     30 分钟偏紧。命中缓存后后续运行会大幅缩短。
+
+name: verify-all
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch: # 允许手动触发
+
+# 同一分支/PR 的旧运行自动取消，省 Windows runner 额度（较贵）
+concurrency:
+  group: verify-all-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify-all:
+    name: 七线统一回归 (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      # 启用 pnpm 供 sidebar / ssh 两条线安装依赖（它们的锁文件是 pnpm-lock.yaml）。
+      # 版本与本地维护 lockfile 的 pnpm 对齐；不引入根 workspace，符合评审「明确不做」。
+      - name: 启用 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+
+      # 确保 Rust stable + MSVC 目标就位（windows-latest 通常已带，显式声明以防漂移）。
+      # 这一步让 verify-all 的 cargoBin() 能定位到 cargo，从而把 desktop 的
+      # Rust 单测（pulse stale 语义 + 立绘回落链）真实纳入回归。
+      - name: 安装 Rust 工具链 (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      # Rust 编译缓存：src-tauri 首次编译较慢，缓存 target/ 与 registry 大幅提速。
+      - name: 缓存 Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dsh-miasaki-desktop/src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('dsh-miasaki-desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # 以下三步安装三条有依赖的线。缺任何一步，对应线的检查项必然失败
+      # （依赖缺失的实测后果见文件头「与草稿的差异」）。
+      # 注：各线的 prepare script = `pnpm run build`（node --check），会随 install
+      # 自动执行——语法错误会在安装阶段就暴露，这是有意的提前失败。
+
+      - name: 安装 sidebar 线依赖
+        working-directory: dsh-miasaki-sidebar
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装 ssh 线依赖
+        working-directory: dsh-miasaki-ssh
+        run: pnpm install --frozen-lockfile
+
+      # desktop 只需生产依赖：verify-all 的 desktop 项跑 build-init（要 sharp）、
+      # patch verify ×5（纯 Node）、cargo test（要 Rust），都用不到 @tauri-apps/cli。
+      # npm 是该线唯一包管理器（2026-09-12 决议，见 AGENTS.md），锁文件为 package-lock.json。
+      - name: 安装 desktop 线依赖
+        working-directory: dsh-miasaki-desktop
+        run: npm ci --omit=dev
+
+      # 唯一质量闸门：七线统一回归。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
+      - name: 运行 verify-all（七线 L0 + L1）
+        run: node scripts/verify-all.mjs
+
+      # 说明：以下实机项不在本 CI 内（需运行中的 DSH host 或桌面壳），
+      # 清单见 dsh-miasaki-shared-docs/cross/smoke-test-matrix.md（L2 插件加载 /
+      # L3 桌面壳冒烟 / L4 跨线联动）。CI 只保证「无外部依赖、可复现」的 L0/L1。
+      #
+      # 已知的本地/CI 行为差异（预期，不是缺陷）：
+      # sidebar 的 test/terminal-hub.test.js 在受限沙箱的本地环境会因
+      # `where.exe` 输出捕获被禁（EPERM）而假阴性 9/10；CI runner 无此限制，
+      # 应稳定为 10/10。见 README §统一回归 的 ※ 注记。
