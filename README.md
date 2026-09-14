@@ -45,6 +45,11 @@ CI 先装**三条有依赖的线**再跑闸门：sidebar 与 ssh 用 `pnpm insta
 desktop 用 `npm ci --omit=dev`；canvas / fleet / dual-model / appearance 已核实零依赖、无需安装。
 （依赖缺失的实测后果、Node 22.19.0 与 pnpm 11 的版本取舍、45 分钟超时的理由，均写在该文件头部注释里。）
 
+> **EOL 纪律（2026-09-14 起）**：仓库用 `.gitattributes`（`* -text`）禁止一切换行符转换。本仓多项检查做
+> **逐字节比对**（desktop/dual-model 的 `patch verify` 比 SHA、appearance 的 `derive-skins --check` 重算 token 表），
+> CI 首跑正是因 `windows-latest` 默认 `core.autocrlf=true` 把 LF 转成 CRLF 而失败 8 项。
+> `-text` 规则优先于本机 `core.autocrlf`，因此任何机器 checkout 出的字节都一致 —— 编辑文件时请勿引入 CRLF。
+
 ```bash
 node scripts/verify-all.mjs               # 七线全量（L0 静态检查 + L1 单线单测）
 node scripts/verify-all.mjs appearance    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）

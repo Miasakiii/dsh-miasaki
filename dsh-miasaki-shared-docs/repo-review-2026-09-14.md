@@ -43,7 +43,7 @@
 
 | # | 项 | 现状证据 | 成本 |
 |---|---|---|---|
-| A1 | ~~**CI 未落地**~~ → **已落地（2026-09-14 13:0x）** | 新建 `.github/workflows/verify-all.yml`（修正版，9 步）。审查发现 09-13 草稿有致命缺陷：其「唯 ssh 有依赖」的判断错误，漏装 desktop 的 `sharp`（实测 `ERR_MODULE_NOT_FOUND`）与 sidebar 的 4 个依赖；另修正 Node 版本表述、pnpm 版本对齐 11、超时 30→45 分钟。详见该文件头部注释 | 已完成 |
+| A1 | ~~**CI 未落地**~~ → **已落地并全绿（2026-09-14）** | 新建 `.github/workflows/verify-all.yml`（修正版）。审查发现 09-13 草稿有致命缺陷：其「唯 ssh 有依赖」的判断错误，漏装 desktop 的 `sharp`（实测 `ERR_MODULE_NOT_FOUND`）与 sidebar 的 4 个依赖；另修正 Node 版本表述、pnpm 对齐 11、超时 30→45 分钟。**首跑（run #1）失败 8 项**，根因是缺 `.gitattributes` 导致 CRLF 污染（见文末附录）；加 `.gitattributes` 后 **run #2 = 78/78 全 PASS**（sidebar 10/10、canvas 11/11、fleet 15/15、desktop 8/8、ssh 12/12、dual-model 10/10、appearance 12/12） | 已完成 |
 | A2 | **无 lint/format 自动化** | `.editorconfig`/`eslint.config.*`/`.prettierrc*`/`biome.json` 全不存在 `[实测]` | 低 |
 | A3 | **无统一工作区根** | 根 `package.json`、`pnpm-workspace.yaml` 均不存在 `[实测]`（sidebar/ssh 各有自己的 workspace 文件） | 低，但需守住"不引 workspace"的既有决议 |
 | A4 | **加载路径无自动化覆盖** | 五个 Web 插件中仅 appearance 有 client 半装载契约测试；唯一真实线上故障（`module is not defined`）恰在此层 `[线报]` | 中（假 `ctx` 调 `apply()` 断言路由/插槽/inject，可完全离线） |
@@ -223,6 +223,45 @@
 | `2026-09-14-dc825d4f/` | 本会话目录（box-agent 任务骨架） | 与上一条统一策略 |
 
 对照 AGENTS.md「工作区卫生」与「收尾自检清单」第 1 条（每条 `M/??` 都必须能点名）——**这 4 条目前属于"无法点名"的欠账**。
+
+---
+
+## 附录：CI 首跑复盘 —— 8 项失败全部源于缺 `.gitattributes`
+
+CI 接入后首跑（run #1，sha `7102f80`）失败，8 个失败项**全是逐字节 / 文本比对类**检查：
+
+```
+[desktop]    5× patch verify (可重建)            → exit 1      （desktop 3/8：gen-init / tokens:diff / cargo test 通过）
+[dual-model] patch verify (图片准入补丁可重建)    → exit 1      （dual-model 9/10）
+[appearance] derive-skins --check                → exit 1      （appearance 11/12；报「产物与重算不一致」）
+[sidebar]    test rightbar-guide.test.js         → exit 1      （sidebar 9/10）
+```
+
+**根因**：仓库当时没有 `.gitattributes`，而 `windows-latest` 的 Git for Windows 默认 `core.autocrlf=true`
+⇒ checkout 时把 LF 文件全文转成 CRLF ⇒ 「由 baseline 重建后比 SHA」「重算 token 表逐字节比对」
+「源码文本断言」全线失效。本地因 `core.autocrlf=false` 而 77/78 —— **同一个 commit 两套结果**。
+
+**对照实验**（单文件 `dsh-miasaki-appearance/lib/skins/zafkiel.js`，433 行；临时摘除 `.gitattributes` 复现 CI 场景）：
+
+| 条件 | `git check-attr text` | checkout 后 CRLF 字节 | `derive-skins --check` |
+|---|---|---|---|
+| 无 `.gitattributes` + `autocrlf=true`（= CI） | `unspecified` | **433** | FAIL「zafkiel: 产物与重算不一致」——**与 CI 日志逐字一致** |
+| 有 `.gitattributes`（`autocrlf` 仍为 true） | `unset` | **0** | PASS（两皮肤一致，exit=0） |
+
+**修复**：新增 `.gitattributes`，内容为 `* -text` —— 对所有文件禁用 EOL 转换。gitattributes 的 per-path
+规则**优先于** `core.autocrlf`，故 checkout 出的字节与入库字节恒等，与本机配置无关；`-text` 只禁用
+EOL 转换，不影响 diff / merge。修复后 run #2（sha `0f529b6`）**78/78 全 PASS**。
+
+**两条被这次首跑验证的既有判断**：
+1. sidebar 的 `terminal-hub.test.js` 9/10 确系**受限沙箱的环境假阴性**（`where.exe` 输出捕获被禁）——
+   CI runner 无此限制，实测 **10/10**；且 CI 上失败的是另一个文件（`rightbar-guide.test.js`，CRLF 所致），
+   进一步印证两者根因不同。
+2. 依赖安装步骤是必需的：三条线的安装步骤在两次运行中均成功，未安装时 ssh 实测 10/12、desktop 的
+   `gen-init` 必然 `ERR_MODULE_NOT_FOUND`。
+
+**遗留（低优先）**：CI 有一条无害 warning —— `actions/checkout@v4`、`actions/setup-node@v4`、
+`actions/cache@v4`、`pnpm/action-setup@v4` 仍以 Node 20 为目标，被 runner 强制跑在 Node 24 上。
+待官方发布对应大版本后升级即可，不影响结果。
 
 ---
 
