@@ -2,7 +2,179 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-16（第十二批：U2.1 多 shell + U2.3 工作区记忆 + U2.4 精确恢复）
+
+- **U2 主体落地**（按 [U2 规划](2026-09-15-ssh-u2-plan.md) §6 顺序：U2.1 → U2.3 → U2.4，U2.2 SFTP 留待下一阶段用真实主机补验）。交接文档（变更清单/基线对照/回滚演练/风险表）：[实施验收包](2026-09-16-ssh-u2-implementation-report.md)。
+  - **U2.1 身份分层 + 多 shell**：`lib/runtime.js` 重写为三层身份（`connId → runtimeId → shellId`）—— `conns` 改按 `runtimeId` 键控 + `byProfile` 映射，`ShellChannel` 承载独立 stream/尺寸/回放环/viewer 集合/写入所有权；shell 结束 ≠ 连接结束；同 runtime 上限 8（决策 1）。**安全前置**：WS attach 帧必须持 `POST /ssh/api/attach` 签发的一次性 30s 票据（消费即废、重放/过期/teardown 全拒 `TICKET_INVALID`），落实规划 §8「不得把运行连接 ID 当授权证明」。**写入所有权（决策 2）**：单写多读 + 显式接管（`shell.takeover`，原 owner 即时转只读收 `write.revoked`）；非 owner 的 input/resize 一律拒收 —— 「最后一个 resize 获胜」连同初始 attach 尺寸一并堵死。**协议**：WS 全帧 `v:2`，旧帧拒收并提示刷新（`VERSION_MISMATCH`，方案 §3.3 不做双栈）。前端 `state.tabs` 结构化为 `[{connId, shellSeq, title, live}]`，标签栏「+」= 新建 shell 标签（tabstrip 与主机菜单双入口）；关闭对话框区分「仅关闭查看 / 关闭此 shell（连接保留）/ 断开整个连接」。
+  - **U2.3 工作区记忆（决策 4）**：拆两张据 —— 偏好（字号/rail 折叠/专注）→ `localStorage['dsh-ssh:prefs']` **v2**（增 version 字段，读取兼容 v1）；工作区快照（标签集合 + 激活项 + 抽屉状态）→ `sessionStorage['dsh-ssh:workspace']` **v1**，统一 `sessionStore` 封装全 try/catch。恢复语义 = **恢复标签形状，绝不自动连接/输凭据**：刷新后激活标签仅在 host 侧连接仍存活时重挂 attach，失效 connId 静默丢弃 + 提示；快照损坏/版本不认/无痕模式一律回默认不白屏。**修复**：原 `PREFS_KEY` 与 `LAST_TAB_KEY` 同为掩码字面量 `'***'`（上一会话脱敏写入事故）导致两据同键互相覆盖 —— 本轮重写为真实键名后消除。
+  - **U2.4 精确恢复（决策 6 → 方案 A）**：官方 `@xterm/addon-serialize` **0.14.0 精确锁定**（探针 B 已证兼容 xterm 6.0.0）；session.js 输出空闲 1.5s 采集序列化快照上报 host（每 shell 内存态封顶 128KiB、scrollback 500 行，不落盘）；附着恢复三路判定 = 快照帧优先（reset 后重放）/ 回放兜底（刷新后）/ 重附着丢弃整段回放（防翻倍）；addon 缺失/加载失败静默降级为回放恢复（删包即单独退出 U2.4，不动 U2.1/U2.3）。
+  - **验证**：单测 **85 → 110 例**（runtime 22 / session 32 / http 7 全部重写适配 v2 契约，app 16 / client 25 / store 8 无回归），`verify-all ssh` **12/12**；端到端探针 `u21-verify-runtime.mjs`（真 sshd × 本线 SshRuntime）**9/9** —— 探针 A 基线的 P1–P4 判据在改造后真实链路全部复现（4 shell 隔离 / 尺寸按 channel 精确对应 / 输出隔离 / shell 退出其余存活），另证写权与票据生命周期；**回滚演练实际执行**（基线恢复 85/85 绿 → U2 还原 110/110 绿）。**待实机验收**：vim/top 刷新恢复逐行一致（§4.4.3）、双窗口写权互斥、8 shell RSS、三主题回归。
+  - **偏离登记**：决策 5 的「app.js 纯搬迁拆分」本轮未执行（改造以补丁叠加，避免搬迁与逻辑混在一个 diff），列入 U2.2 前置工单；风险表与交接文档均已登记。
+
+## 2026-09-15（第十一批：抽屉窗控让位修复）
+
+- **实机反馈修复：抽屉标题栏的 × 与桌面壳窗控组叠在同一块像素上**（用户截图报告，本线首个「壳窗控让位」缺口）。
+  - **取证（截图逐像素量测，非推断）**：桌面壳窗控组（`#miasaki-titlebar .tb-group`，fixed `top:11px / right:8px`）中心 y≈23；抽屉 `.sheet-head` 的 `.icon-btn`（30×30）中心 y≈32、距右缘 35px（= 20px padding + 15px 半宽）⇒ 两者水平错位 14px、垂直错位 9px，**叠在一起**（放大图上就是"两个 ✕"），抽屉那颗被 z-index 100000 的窗控压住点不到。根因：`.topbar` 早已消费 `--ssh-chrome-reserve`（D2），而**抽屉从来没让位**。
+  - **修法：垂直让位，而不是把 × 往左推**。`app.js` 新增三个函数：`computeChromeClearance()`（纯函数）、`measureChromeClearance()`（读父文档）、`syncChromeClearance()`（写变量）。口径 = 用**父视口坐标**下的窗控组矩形与 `window.frameElement` 矩形相减，得「本 iframe 内需要让开的顶部高度」（窗控下沿 − iframe 顶 + 8px 呼吸），写进 `--ssh-chrome-clearance`；`styles.css` 的 `.sheet` 消费它（`margin-top` + `height: calc(100% − …)`）。iframe 本就在窗控下方时（会话视图里 iframe 从会话头下开始）差值为负 → 归零 ⇒ 两种挂载形态（浮层 / 会话视图）**一套算法、无分支**。窗口尺寸变化用 rAF 合并的 resize 重测（会话视图下 iframe 右缘会随中栏宽度动）。
+  - **为什么不水平让位**：① 会话头第一行的入口胶囊（窄窗口紧凑态 `>_`）也在这一行，往左让位会撞上它；② 窄窗口里会把 × 推到抽屉中间、标题栏右侧空出一大片，读感更差。垂直让位一次避开两者（探针图里可见：修复后顶部灰带同时露出 `>_` 与窗控）。
+  - **兜底与零副作用**：量不到窗控组（浏览器 / 跨源）但宿主下发了 `reserve` 时，退回水平让位（`--ssh-chrome-avoid-right` → `.sheet-head` 的 `padding-right`）；两者皆为 0 时抽屉照旧顶格满高。顶层窗口（直接打开 `/ssh/`）与跨源抛错都静默降级为"不让位"，不冒泡。
+  - **验证**：单测 **82 → 85 例**（新增 3 例：让位量纯函数边界 / 量测与两条兜底分支 / 样式契约），全套 85/85 通过（app 16 + client 25 + http 3 + runtime 14 + session 19 + store 8）。另有一次性探针（`headless Chrome × 桌面壳几何复刻`，含真实 `styles.css` 与抽屉 DOM）出前后对照图 —— 修复前两个 ✕ 叠在一起；修复后抽屉下移 45px、`sheet` 贴右缘且 `close` 距右缘 20px，× 与窗控垂直分离 41px。探针文件与截图**用完即删**，不入库。
+  - **影响面与回滚**：只动 `app.js`（新增测量函数与 resize 重测，未改既有消息协议）与 `styles.css`（`.sheet` / `.sheet-head` / `.sheet-head h2` 三条规则）；`--ssh-chrome-reserve` 通道、顶栏行为、`client.js` 全未触碰。回滚 = 撤掉新函数与两条 CSS 规则，抽屉回到顶格。
+  - **生效方式**：`app.js` / `styles.css` 走 `index.js` 的 `cachedAsset`（进程内一次性缓存）⇒ **必须重启 `dsh web`**，浏览器强刷不够。
+
+## 2026-09-15（第十批：U2.0 SPIKE 验收）
+
+- **U2.0 SPIKE 验收：批内不通过 → 补做探针后四项命门全部回答**（[U2 规划](2026-09-15-ssh-u2-plan.md) 新增 **§12 验收记录**）。批内 SPIKE 归档 `_refs/scripts-archive/ssh-u2-spikes/`（charter + S2/S3/S4），本轮**独立复核**并补做 `_refs/scripts-archive/ssh-u2-verify/`（探针 A/B/C，判据自证非空）。
+  - **批内判定**：**S1**（SFTP 能力与基准）**受阻待放行**（脚本骨架在会话临时区 `.openclaw/tmp/d0/spike-s1-sftp.mjs`、判据已书面化、护栏拦截未跑；实施者已论证它**不阻塞** —— SFTP 走 ssh2 原生能力、无新依赖，S1 只剩性能基线）；**S2**（多 shell）**判据未覆盖问题** —— 用两个 `new RuntimeConn()` 对象代替"一个 ssh2 Client 上的两个 channel"，用例 5 验证的还是脚本里**自写的 `resizeTo` 函数**（并自注"此处无 stream"），全程无 Client/channel、`stream` 恒为 null，用例 2/6/7 属同义反复；**S4**（精确恢复）**验错对象** —— 从未加载 `@xterm/addon-serialize`，用的是探针页自写的 `serializeBuffer`（逐 cell dump 成 JSON），`mismatches: 0`/"ratio: 1" 是"自己 dump 自己 restore"的**必然结果**；**S3**（工作区记忆）方法有效（原型明确标注非生产代码）但落点与 §10 决策 4 冲突（全塞 localStorage 一张据）。**形态定性：D1「探针可达 ≠ 用户可达」的同族 —— 「验证的是自己构造的对象，不是真实链路」。**
+  - **补做探针（全部通过）**：**A**（真 ssh2 Client × 真假 sshd，7/7）—— 同一 Client 连开 **4 个 shell channel**；四者各设尺寸 → 服务端记录到**精确对应**的 `window-change`（132×33/140×35/148×37/156×39，4 个不同 channel）；只往 ch2 写标记则**只有 ch2 收到回显**；**服务端让 ch2 退出 → ch2 关闭、其余 3 个继续 PONG**（shell 结束 ≠ 连接结束）；ch4 注入 **32MiB** 期间 ch1 的 PING 往返**稳定 20ms**（空载 21ms）；`client.sftp()` 与 4 个 shell **并存**。**B**（npm `addon-serialize@0.14.0` 原样产物 × 本线 xterm **6.0.0**，4/4）—— UMD 加载 + 构造 + `loadAddon` **零异常**（元数据虽无 peer 声明但**实测兼容**）；普通缓冲区 43 行 → serialize **834 字节** → 回放**逐行一致**；alt-screen TUI 24 行 → **1760 字节** → 一致且 `buffer.active.type === 'alternate'`。**C**（真 GUI，4/4）—— 浮层 iframe 的 sessionStorage **刷新后保留**、**新标签页不可见**（`probe`/`overlayMemory` 均为 null）⇒ 决策 4 落地前提成立。
+  - **四问的答案**：S-U2-1 **可行**（尺寸/输出/生命周期隔离精确）／S-U2-2 **可行**（本机回环下大流量零退化；广域网带宽竞争待 U2.2 用真实主机复验）／S-U2-3 **兼容** ⇒ §4.4 方案 A 可用、**U2.4 从"可选"升级为"有实现路径"**（体积随 scrollback 线性增长，落地需配滚动上限或分区 serialize）／S-U2-4 **成立**。**判定：Go —— U2 可以开工**，按 §6 顺序 U2.1 先行。
+  - **一处更正（验收方自纠）**：实施者的交付其实**完整** —— 工作区规划新增 **§14《U2.0 SPIKE 决策建议书》**（四项结论 + 三个实施前提 + 待办 + 事故记录）与 `design/preview/2026-09-15-ssh-u2-spike-report.html`；§12.3.1 给出"**结论方向一致、判据路径不同**"的交叉口径（S2/S3/S4 均 GO 的方向被本次复核独立证实；分歧只在判据路径与两处落点：记忆存哪、恢复用自研还是官方 addon）。本轮否定的是**判据强度**，不是交付完整性。
+  - **副带发现（已修复）**：验收中查出本线 `node_modules` 于 **21:04**（批内 SPIKE 时段）被污染 —— 混入 `eslint`/`@babel`/`@esbuild` 等**不属于本线**的依赖树，且 `ssh2` 包**本体丢失**（随包 `SFTP.md` 也没了）⇒ `require('ssh2')` 直接 MODULE_NOT_FOUND、`verify-all ssh` 一度不可跑。确认 `pnpm-lock.yaml`（9/9 未变）与 `package.json` 干净后，**删除 `node_modules` 再 `pnpm install`** 恢复（`verify-all ssh` 回到 **12/12**）。**教训**：pnpm 的 `--frozen-lockfile` 与 `--force` 都报 "Already up to date" —— 它只校验链接与 lockfile 一致，**不校验包内文件完整性**，包被掏空时察觉不到；SPIKE 临时试用依赖（如 charter 提到的 node-ssh 候选）应装在会话临时区，别动本线 `node_modules`。
+
+## 2026-09-15（第九批：工作区 U2 规划）
+
+- **工作区 U2「效率补齐」规划设计（v0.1 待评审，本轮只产出方案文件、未实施业务代码）**（新文件 [2026-09-15-ssh-u2-plan.md](2026-09-15-ssh-u2-plan.md)）。范围 = 工作区优化规划 §9 的 U2 四项：**同主机多 shell / SFTP / 工作区记忆 / 精确终端恢复**。
+  - **现状取证（代码事实，非推断）**：`lib/runtime.js:52` 的 `conns: Map<connId, RuntimeConn>` ⇒ **profile id = runtime id = viewer 绑定键**三者合一；`RuntimeConn` 只有一条 `stream`（`runtime.js:236/391`）且 shell 关闭即 `dispose()` 整个连接（`248-255`）；回放环与尺寸都是**连接级**（`393-394`/`405-406`）⇒ 多 shell 不是"多几个标签按钮"而是**身份分层**问题（与规划 §5.1 判断一致）。
+  - **核心设计：三层身份 + 短期附着票据**（落实规划 §8 硬要求"不得把运行连接 ID 本身当作授权证明"）——`connId → runtimeId → shellId`；附着走 `POST /ssh/api/attach` 签发**一次性 30s 票据**（与既有指纹确认 token 同构：随机 + generation 绑定 + teardown 联动失效）；**写入所有权 = 单写多读 + 显式接管**（落实 §5.3"不能最后一个 resize 获胜"）；同主机仍限一运行连接，多 shell 是同一 ssh2 Client 上的多 channel。
+  - **SFTP 通道选型**：在"复用 `/ssh/ws` 发帧 / **REST 流式 HTTP** / 独立 WS 端点"三者中取 **REST 流式**（大文件天然流式 + 浏览器原生下载与 `<input type=file>` 上传）；**关键安全决策：host 端不做任何本机文件系统读写**（上传 = 浏览器 File → HTTP → 远端；下载 = 远端 → HTTP → 浏览器落盘）⇒ 规避"远程内容写入本机任意路径"，也不需要 host 临时目录；配套 `realpath` 规范化、拒绝 NUL/换行/超长、符号链接默认不跟随、覆盖与删除二次确认、并发 2 + 仅空目录可删（**无递归删除**）、内存审计环（不记内容）。ssh2 1.17.0 随包 `SFTP.md` 确认能力齐备 ⇒ **零新依赖**。
+  - **工作区记忆落点（拆两张据）**：偏好（字号 / rail 宽度与折叠 / 专注）继续 `localStorage`（跨标签页共享）；**工作区快照进 `sessionStorage`**（按标签页隔离，避免两个窗口互踩同一"现场"）；恢复的是**标签形状而非连接**（不自动建连、不自动填凭据，符合 §5.2）；损坏数据一律降级回默认、不白屏。
+  - **精确恢复被降级为可选项**：D0–D4 已证明常驻 iframe 让"切走切回"零损失 ⇒ 该需求只剩"页面刷新 / 换浏览器"两个场景。平台事实：`@xterm/addon-serialize` 稳定版 `0.14.0` **无 peer 声明**（元数据无法证明兼容本线 xterm **6.0.0**），beta 线声明需 `^6.1.0-beta.304` ⇒ 必须 SPIKE 实测；不过则记为已知边界或走自研快照。
+  - **分期**：**U2.0 SPIKE**（4 项，其中 S-U2-1/2 建议与 Agent 化规划的 S4 合并成一次探针）→ **U2.1** 身份分层 + 多 shell（含 `app.js` 纯搬迁拆分，它已 1731 行）→ **U2.2** SFTP → **U2.3** 工作区记忆 → **U2.4** 精确恢复（可选）。理由：U2.1 是其余三项的地基（没有票据与分层，SFTP 就没有安全授权面）。
+  - **待决策 7 项**见方案 §10：多 shell 上限 / 写入所有权模型 / 上传上限 / 记忆落点 / `app.js` 拆分 / U2.4 取舍 / 与 A1 的共享边界（路径规范化与审计环是否抽公共模块）。
+  - **决策记录（2026-09-15 用户逐条拍板 7 项，方案 **v1.0 已定稿**，见 §10）**：① **工作区记忆拆两张据** —— 偏好（字号 / rail 宽度与折叠 / 专注）继续 `localStorage` 跨标签页共享，工作区快照（标签集合与激活项 / 抽屉状态 / 每主机最近 SFTP 路径）进 `sessionStorage` 按标签页隔离，**不新增 host 侧写盘面**；② **`app.js` 先做纯搬迁拆分**（不改行为，只挪文件 + 补模块边界测试）并作为 U2.1 的第一步。**7 项全部已定**（多 shell 上限 8 / 单写多读+显式接管 / 上传 512MiB / 记忆拆两张据 / `app.js` 先纯搬迁拆分 / U2.4 待 S-U2-3 实测再定 / 抽 `lib/paths.js` + `lib/audit.js` 与 A1 共用）⇒ **方案定稿，无待定项**。**尚未开工**：首个动作建议为 U2.0 的四项 SPIKE（S-U2-1/2 与 Agent 化规划尚未做的 S4 合并成一次探针）。
+  - 文档同步：`README.md` 文档表与目录结构新增本方案、里程碑 M2 行更新为"规划已出"。
+
+## 2026-09-15（第八批：D4 实机验收）
+
+- **D4 实机验收：6 项门槛全 PASS（`allPassed=true`）**（[全屏浮层方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 **§20 验收记录**）。**独立重跑运行态**（真 Edge × 真实 GUI × 真实鼠标/键盘 × 本地假 sshd 真协议），**尾项①与②都取运行态证据**、不采信静态断言；驱动归档 `_refs/scripts-archive/ssh-d4-accept/run-d4-accept.mjs`（约 4 分钟可复现，结果 `d4-accept-result.json` + `shots/`）。
+  - **尾项①（核心判据）**：真实连接流程逐帧采集横幅 —— 可见态 `hidden:false / display:flex / childCount:3`（图标 + 文案 + 「核对指纹」按钮）→ **连接完成后 `hidden:true / display:none / childCount:0`**（旧实现只设 `hidden`，3 个节点会留在 DOM）。补充验证**清空后仍能重建**：断开连接后横幅再现且 `childCount:4`（「编辑主机」/「重新连接」）⇒ 清空逻辑没把功能弄坏。
+  - **尾项③**：过渡区间落位实测 —— 1280 → rail 232（全宽）/ 860 → rail 208（紧凑档 721–960）/ 600 → 抽屉 / **500 → 抽屉且 `.tools .optional` 可见（480 档未触发）** / **480 → 抽屉且 `.tools .optional` 隐藏（480 档命中）**；五档**零横向溢出**（首尾档与三个过渡档一次跑齐）。
+  - **尾项②运行态**：30 次开关浮层 → **零 JS 异常**、iframe 未重载（window 标记存活）、远端**零 resize 帧**。静态侧：`observer.observe(header, { childList: true, subtree: true })`（`attributes`/`attributeFilter` 整组已移除）、`aria-selected` 产品码只剩一条说明注释、`data-width-handle` 全仓 grep 零命中。
+  - **D3-F1 实机复核**：注入样式（2674 字符）**零 `width-handle`** ⇒ host 已加载删除后的 client.js。
+  - **例数校正（第二次同类笔误）**：第七批写的「单测 65/65」是沿用旧基线的笔误，实测 **82 例**（app 13 + client 25 + http 3 + runtime 14 + session 19 + store 8），`verify-all ssh` **12/12**；已在第七批与 §19 两处就地校正。教训：**例数必须现跑现抄**。
+  - **判定：D4 完全达标** —— 三项尾项全部闭环且经运行态复核。
+
+## 2026-09-15（第七批：D4 尾项清理）
+
+- **D3 验收三项尾项一次清掉：探针 10/10、单测 82/82（验收时实测校正，实施记录原写 65/65 为沿用旧基线的笔误）、verify-all 12/12 全绿**（[全屏浮层方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 §18 尾项闭环记录）：
+  - **尾项① renderBanner 隐藏时清空横幅内容**（§16.4-3 顺延项）：`renderBanner()` 入口在 `banner.hidden = true` 后追加 `banner.replaceChildren()`——隐藏态 = 空容器，不再残留上次的图标/文案/按钮节点（含 onclick 闭包引用）；显示态由 `bannerNode()` 完整重建。验证：单测新例三段行为闭环（显示 3 节点 → 隐藏 children=0/text='' → 重建 3 节点）+ 探针 P2 运行态同判据实测。
+  - **尾项② sync() 移除 aria-selected 观察**（§17 已知风险②）：三件套删除后该属性已无消费者，`observer.observe(header, { childList: true, subtree: true })`（attributes/attributeFilter 整组移除，childList 监听保留，激活态同步语义不变）；全局检索 aria-selected 产品码零残留（仅 D4 说明注释）；运行态探针 P3 属性翻转 + 开关循环零异常、激活态稳定。
+  - **尾项③ 三过渡区间（860/600/500）复验**：无代码变更。**口径说明**：860/600/500 是视口宽度 px（D3 验收的过渡区间档位），非毫秒——按 D3 验收记录口径执行。探针 P4 实测：860 → narrow（rail 208px）、600 → drawer（收起）、500 → drawer（480 紧凑未触发），加 1280/480 首尾档对照，全部零横向溢出、零遮挡、零异常；零损失回归（30 开关）同步过。
+- **验证**：探针 10/10（尾项①运行态 + 尾项②运行态 + 尾项③过渡 5 项 + 零异常 + 零损失 + 连接）；数据 `_refs/scripts-archive/ssh-d0-spike/d4-result.json`（含可复现 run-d4.mjs）。
+- **影响面与回滚**：三项修复互相独立可单独 revert——尾项①只影响状态横幅渲染路径（旧行为无功能损害）、尾项②只影响入口激活态同步的触发面（childList 语义不变）、尾项③无代码变更。
+
+## 2026-09-15（第六批：D3 实机验收）
+
+- **D3 实机验收：功能门槛全过，1 项清理残留（D3-F1）**（[全屏浮层方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 **§18 验收记录**）。**独立重跑用户可达路径**（真 Edge × 真实 GUI × 真实鼠标/键盘事件（走 hit-test）× 本地假 sshd 真协议），不依赖 §17 的实施者探针；驱动归档 `_refs/scripts-archive/ssh-d3-accept/run-d3-accept.mjs`（约 4 分钟可复现，结果 `d3-accept-result.json` + `shots/`）。
+  - **7 项通过**：① **四档宽度按视口语义落位**（D3 门槛本尊）——1280 → rail 232px（全宽）/ **960 → rail 208px（恰好在断点值上落紧凑档**，正是本轮修的"等于断点值错位一档"）/ 720 与 480 → rail `display:none` + 抽屉关闭钮在场；**四档零横向溢出**、顶栏四档稳定；② 三主题 × 1280/480 两档：零溢出 + 顶栏三段 + reserve 消费 `padding-right: 164px`；③ **A0 文案**：真实点「送往对话 → 送出最近 40 行」→ 状态栏「已复制 99 字符——**点左上「对话」退出后粘贴（Ctrl+V）即可**，首行已标注来源主机。」，剪贴板实读首行 `[SSH d3-accept-local · tester@127.0.0.1:2231] 这是终端的最近输出：`；④ 官方 tab 栏**无 SSH**（回退视图已删）；⑤ 会话态下官方 `[data-width-handle]` 两个 `display:block` ⇒ 本线未再隐藏它；⑥ 回退视图面零残留（`.dsh-ssh-view=0` / `.dsh-ssh-bar=0`）；⑦ 真实连接链路（A0 前置）。
+  - **唯一未达标（D3-F1，零行为影响）**：`client.js:71` 仍注入 `div[data-phase]:has(iframe[title="SSH"]) [data-width-handle]{display:none!important}`（+ L64–70 注释）。**死代码论证**：规则前提是"SSH iframe 挂在 `div[data-phase]` 内"＝回退视图的 DOM 形态；§17.2 已把 view 注册与 `SshView` 整体删除（全仓零命中），浮层形态下 iframe 在 `body > .dsh-ssh-host > .dsh-ssh-overlay` 内 ⇒ `:has()` **永不命中**；实测反证 = 官方手柄 `display:block`。与 §8 C 组「`grep` 应无命中」的判据冲突（§17.2 把它列为"保留"）⇒ 属**判据与实施的口径分歧**。修法：删 L64–71 + 补一条"注入样式不含 width-handle"的断言；**无需为它单独重启 host**（不参与运行时行为，下次重启自然生效）。
+  - **判定：完全达标** —— 唯一的未达标项 D3-F1 已于同日按用户定向「现在就删」闭环（见下条）。
+  - **本轮未覆盖**：三过渡区间（860/600/500，§17 探针覆盖过）；`sync()` 的 MutationObserver 仍观察 `aria-selected`（§17.6 已记为无害冗余）；`renderBanner` 隐藏时未清空内容（§16.4-3）。
+  - **D3-F1 闭环（用户定向「现在就删」）**：删掉 `client.js` 那条死规则与旧注释（新注释只说明「为何删除」，**不含 `width-handle` 字面量** ⇒ 全局 grep 零命中）；两条把它锁成「保留」的旧断言同步改写 —— D3 清理断言 → 「死规则零残留」、2026-09-12 那条 → 「官方列宽手柄不再被本线触碰」；另新增一条回归断言（注入样式表零 `width-handle` + **相邻规则链完整性**四条：合体胶囊 / 浮层 / `is-closed` 隐藏策略 / launcher —— 删的是拼接链中间一环，拼错会静默丢掉后续样式）。单测 80 → **81 例**、`verify-all ssh` **12/12**。**无需为它重启 host**（不参与运行时行为，下次重启自然生效）⇒ **D3 完全达标**。
+  - **验收期间的一次自纠**：首轮 P1/三主题判据误用 `b.text`（不存在的属性）读段身份 ⇒ 误报 FAIL；段身份实测走 `btn.dataset.seg`（产品侧 §17 保留完好）。同 §16 的 `innerText` 教训一类：**探针也要自证**。
+
+## 2026-09-15（第二批，D3）
+
+- **D3 清理与回归一次完成：探针 11/11、单测 80/80、verify-all 12/12 全绿**（[全屏浮层方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 §17 实施记录）。对照 §16.4 四张核对清单：
+  - **D-3 判空修复 × 6**：`byId(state.selection/activeTab)` 在主机被删后返回 undefined，所有 `conn === null` 判空失效——renderIdentity（原始发现）/emptyStateNodes/renderStatusbar（探针 P4 实测逮到的第三处）/renderBanner/renderBody/banner 编辑闭包统一 `?? null` 归一化；单测新增「删选中主机不抛错且归空态」回归 + 探针 P4 行为闭环。
+  - **删 conversation.view 与 tab 委托三件套**（client.js 净 -6.6KB）：view 注册块、SshView 组件、ownTab/hideOwnTab/restoreTabs/viewIsSsh/selectSsh、selectDefaultView/onDialogClick/bind/unbindDialogButton/dismissing、sync() 内相关调用、文件头注释重写；保留 dismissCanvasOverlay（互斥仍用）与 :has() 手柄隐藏规则。注册面三项 → 两项。全局搜索零残留。
+  - **A0 文案**：「切到「对话」粘贴」→「点左上「对话」退出后粘贴」，全局旧文案零命中。
+  - **响应式四档重校准**：`@container`（中栏宽）→ `@media`（视口语义）且断点改含端点的 960/720/480——原 959/719/479 在典型宽度恰好等于断点值时错位一档（首轮探针实测暴露：960 落全宽档、720 落窄档）；`.workbench` container-type 一并移除。四档 + 三过渡区间实测落位正确、零溢出零遮挡。
+- **测试基建同步**：client.test.js 三条 D1 回退期断言改写为 D3 清理断言（doesNotMatch 零残留 + 注册面数量 2/4）、宽度手柄保留断言保留；探针 widthProbe 判据修正（iframe 上下文直查本档 document，不套宿主选择器）。
+- **D3 收工看板**：[design/preview/2026-09-15-ssh-d3-review-board.html](preview/2026-09-15-ssh-d3-review-board.html)（Müller-Brockmann：任务台账 / D-3 同病排查表 / 删除清单 / 四档实测 / 回归总表 / 风险回滚 / 交接）。
+- **可选项顺延**：renderBanner 隐藏时清空横幅内容（无害项，D4 顺手）。
+
+## 2026-09-15（第一批，D2）
+
+- **D2 页面顶栏实施：探针六项全过**（[全屏浮层方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 §15 实施记录）。**client.js**：删 D1 临时退出条；新增顶栏消息协议 `onOverlayMessage`——`ssh:close`（关浮层 + 焦点归还最后触发者）/ `ssh:view view:'canvas'`（关自己 + 委托点击 canvas 胶囊「会话布」段，canvas 不在场静默收手）；安全：消息必须来自浮层 iframe 本体（`source === frame.contentWindow`）且带 `overlayToken`（随机、随 chrome 消息下发、宿主严格校验）；`openOverlayFrom(el)` 记录归焦目标（入口/launcher/画布广播三触发点）；卸载解绑。**app.js**：chrome 消息扩展（token 存 overlayState、reserve 写 `--ssh-chrome-reserve`）；`isOverlayMode()` + `buildTopbar`——浮层模式下自绘「对话｜会话布｜SSH」三段胶囊（SSH 段 active + aria-current），**回退视图不渲染顶栏**。**styles.css**：.topbar 用 --ssh-* 令牌（三主题自动跟随）+ 右内边距消费窗控让位；#ssh-root 改纵向 flex（顶栏 40px 固定 + 工作区 flex:1）。
+- **实测**（真浏览器 × 真 client.js × 真 app.js 顶栏）：①顶栏渲染（三按钮、SSH aria-current="page"）；②「对话」退出消息闭环（关闭 + 记忆归 0 + launcher 重开）；③「会话布」无 canvas 时静默收手零异常；④宿主文档无顶栏；⑤30 开关零损失回归（session 同实例、零 resize 帧）；⑥静态回归 client 21/21 + 其余 34 例 + verify-all ssh 12/12。数据：`_refs/scripts-archive/ssh-d0-spike/d2-result.json`。
+- **过程记录**：探针桩 slots.inject 由纯 push 改为 cordis 同名替换语义（dispose+重 apply 后旧代闭包失效问题）；桩补属性选择器与节点 click()；两处单测场景流程修正。均属测试基建，非产品缺陷。
+- **偏差**：A0 文案（2.9）顺延 D3——与响应式重校准、四档宽度验收同批执行更连贯。
+- **D2 收工看板**：[design/preview/2026-09-15-ssh-d2-review-board.html](preview/2026-09-15-ssh-d2-review-board.html)（Müller-Brockmann：任务台账 / 实测记录 / 异常处置 / 风险回滚 / 复盘与 D3 建议）。
+
+## 2026-09-15（第三批：验收发现项修复 + D2 语义边界收口）
+
+- **D-1 / D-2 修复 + hero 态「会话布」诚实降级**（用户定向：两条一起修 / hero 态不渲染该段）。
+  - **D-1「保存并连接」从不连接**（`app.js`）：意图标记改走**闭包变量**（`let saveAndConnect` → `submit` 里 `const alsoConnect = saveAndConnect` → `if (alsoConnect === true) void connectFlow(connection)`）。原写法把标记挂在按钮 run 的 `event` 上，那颗 `event` 解析到全局 `window.event`（click 事件），而 `dispatchEvent(new Event('submit'))` 让 submit 处理器拿到的是**新事件对象** ⇒ 标记永远读不到。
+  - **D-2 状态栏 / 横幅不追平**（`session.js`）：`handleControl` 现在把**每一帧带 `state` 的宿主帧**（`ready` 与 `status`）规范化成 `{ type: 'status', state, … }` **统一前置转发一次**给 `onFrame`，各分支只负责文案。此前只有 `waiting-fingerprint` 那一支调过 `onFrame`，`ready` / `status:connected` 只写状态栏文本 ⇒ app 侧 `state.live` / `state.frameState` 停在 `idle` / `waiting-fingerprint`，随后任何 `renderAll()` 都把「已连接」覆盖回「未连接」、把指纹横幅留在屏幕上。
+  - **hero 态「会话布」死按钮**（`client.js` + `app.js`）：宿主在 chrome 消息里新增 `canvasAvailable`（判据 = 宿主文档里 `.dsh-canvas-switch` 是否存在，即 canvas 胶囊在不在场），并且**每次打开浮层都重发**（浮层打开期间用户无法切会话 ⇒ 打开时刻的取值就是整个可见期的取值）；浮层侧 `applyChrome()` 消费该字段，值变化时**幂等重建**顶栏（`buildTopbar` 先移除旧顶栏），hero 态只渲染「对话｜SSH」两段。默认（未收到字段）仍是三段 —— **不擅自替别人减入口**；查询异常时保守为 `true`。`btn.dataset.seg` 让段身份可断言。
+  - **测试 72 → 79 例**：`session.test.js` +2（`ready` 帧必须喂 `onFrame`；`status:connected` 帧同样；并把 waiting-fingerprint 那条补上"只转发一次"的断言）；`client.test.js` +3（chrome 消息下发 `canvasAvailable=false`（桩里无胶囊）/ `true`（塞入胶囊节点）/ 每次打开浮层都重发）；`app.test.js` +2（顶栏段数随 `canvasAvailable` 双向变化且重建不叠加、D-1 形态护栏：源码里不得再出现把意图挂到事件对象上的写法）。桩侧扩展：iframe 的 `postMessage` 记录完整 chrome 消息序列、节点 `id` setter 自动登记进 `getElementById` 索引。
+  - **静态回归 `verify-all ssh` 12/12**（单测 79 例）。
+  - **实机复验（重启 host 后）全绿**：本轮改动落在 `app.js` / `session.js` / `client.js`，而 `index.js` 的 `cachedAsset` 是**进程内一次性缓存** ⇒ 必须**重启 `dsh web`** 才生效（浏览器强刷不够）；按纪律未擅自重启正在服务用户界面的 host，由用户重启桌面壳（新 host 15:06:23 起）后重跑验收 → **`D2_ACCEPT_DONE allPassed=true`（24 项门槛全 PASS、0 FAIL）**。修复的直接证据：**A3** hero 态顶栏两段 `segs: ["dialog","ssh"]`；**A3b** 会话态三段回归（降级可逆）；**A6a** hero 态不渲染「会话布」且零异常；**A9b** 键盘序列随段数同步（`对话→SSH`）；**P16a** 点「保存并连接」后凭据框被拉起（`sheetTitle: "连接密码 · d2-accept-local"`；修复前是"主机落库但零 TCP、无凭据框"）；**P16b** 真协议全链路 + `tcpDelta=1`；**P16c** 状态栏「已连接」且横幅 `hidden:true / display:none`（修复前是「未连接」+ 常驻横幅）；**B2** 关闭期间零 resize 帧、单 shell、真实键盘输入送达远端。
+  - **一条探针判据教训（方法论）**：判"横幅还在不在"**不能读 `innerText`** —— 按规范，元素"不被渲染"时 `innerText` 会退回 `textContent`，于是**已隐藏的横幅会被误判成残留**（本轮 P16c 因此假阴性一次）。正确判据是 `hidden` 属性 + `getComputedStyle().display === 'none'`。与 D1「探针可达 ≠ 用户可达」同属"判据本身也会骗人"这一类。
+  - **附带观察（未修）**：① `renderBanner()` 只设 `banner.hidden = true`、不清内容 ⇒ DOM 里仍留着上次的按钮节点（视觉与交互均已不可达，无害）；② **D-3（新发现，真异常）**：验收收尾清理（REST 删除主机）时捕获 `TypeError: Cannot read properties of undefined (reading 'group')` @ `renderIdentity`（`renderAll` 调用链）—— 根因是 `app.js:909` 的 `const conn = state.selection !== null ? byId(state.selection) : null`：主机被删除后 `state.selection` 仍指向旧 id，`byId()` 返回 **undefined**（不是 null），于是 `app.js:912` 的 `conn === null || !conn.group` 短路失效。用户的触发路径相同（在 UI 里删除当前选中的主机）。一行修法：`byId(state.selection) ?? null`。**处置（用户定向 2026-09-15）：并入 D3 与「删 conversation.view + tab 委托三件套 / A0 文案 / 响应式重校准」同批改，只重启一次 host、一次性复验。**
+
+## 2026-09-15（第二批）
+
+- **D2 实机验收：真实 GUI 20 项门槛全过，收获 2 项非 D2 的移交发现**（[全屏浮层方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 **§16 实机验收记录**）。与 §15 探针的本质区别：本轮跑的是**真实 DSH GUI**（真宿主 + `link:` 安装的真插件 + 真会话 + 真桌面壳注入），每条门槛都从**用户能点的元素**出发、用 `Input.dispatchMouseEvent`（走 hit-test）与真实键盘/文本输入触发，并接一台本地假 sshd（`ssh2.Server`，真协议 + 密码 + TOFU + PTY/`window-change`）作真远端端点——D1「单向门」教训的直接落地。
+  - **通过的关键项**：A1/A1b 两条入口真实点击开浮层；A2 五点 hit-test 全落浮层（官方 UI 不可达）；A3 顶栏三按钮 + SSH `aria-current="page"` + **宿主文档零顶栏**；A4 两态下工具区控件都不在顶栏；A5 退出 + **焦点归还 launcher**；A6b/A6c **双向互斥**（SSH↔画布，含画布外部视图槽按钮）；A7a 普通浏览器 `padding-right` 退回 14px 基数；A9a `Esc` 不关闭；A9b **键盘 Shift+Tab 反向可达「对话」且 focus-visible 为 solid 2px**；B1a/B1b 记忆语义；**B2 真协议端点零损失**（关闭期间远端零 resize 帧、重开 iframe 未重载、30 次开关零帧且 SSH 侧 `shell` 恒为 1、真实键盘输入送达远端）；C1 三主题真实切换；**C2 三主题顶栏一致且 `padding-right = 14 + 150`（壳窗控 reserve）**；C3 壳内入口与窗控同排不叠压。静态回归 `verify-all ssh` **12/12**。
+  - **发现项 D-1（阻断级，U1 遗留）**：「保存并连接」**从不发起连接**——主机落库但远端零 TCP 连接、无凭据框。根因 `app.js:554` 的 `event.saveAndConnect` 写在全局 `window.event` 上，而 `dispatchEvent(new Event('submit'))` 让处理器拿到的是新事件对象 ⇒ `app.js:543` 的 `connectFlow` 永不被调用。
+  - **发现项 D-2（体验级，U0 遗留）**：指纹确认后**状态栏与横幅不追平**（host 已 `connected`、xterm 已挂载，界面仍「未连接」+「核对指纹」横幅，≥6s 不自恢复，刷新后正常）。根因 `session.js:106-108` 的 `ready` 帧只走 `onStatus` 文案、**从不喂给 `onFrame`** ⇒ app 侧 `state.live`/`state.frameState` 停在旧值，被后续 `renderAll()` 覆盖回去。
+  - **待议一条（D2 语义边界，未改代码）**：hero 态没有会话头 ⇒ canvas 无胶囊 ⇒ 顶栏「会话布」必然失效（静默收手、零异常）。候选：hero 态不渲染该段 / canvas 线补 `shell.overlay` launcher / 记为已知边界，**待定向**。
+  - **通道与纪律**：`dsh web` 的激活 token 每进程随机只存内存 ⇒ 验收用 credentials 的持久签名 secret **离线签发本机合法会话 cookie**（不打印、不落盘、仅内存）；三主题由注入 desktop 真产物 `theme-init.js` 复刻；**未改任何产品代码**，用户数据（连接库 / known_hosts）由脚本 `finally` 恢复为空库原状。驱动与证据归档 `_refs/scripts-archive/ssh-d2-accept/`（`node run-accept.mjs` 可复现 + `accept-result.json` + `shots/*.png`）。
+
+## 2026-09-14（第三批）
+
+- **D1 浮层骨架实施：四项门槛实测全过**（[全屏浮层方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 §13 实施记录）。client.js 新增浮层宿主（body 级 `.dsh-ssh-host` → `.dsh-ssh-overlay`（fixed/inset:0/z:100/**is-closed=visibility+pointer-events**，D0 §12 维持的偏离）→ 常驻 iframe）+ **懒加载**（首开才赋 src + 加载态占位 + 3s 兑底）+ **开关记忆**（`dsh-ssh:overlay-open` sessionStorage，§5.9：apply 末尾记忆为真自动恢复、open/close 各写一次、卸载不清除）+ chrome-reserve 量法下发（canvas syncChrome 同款）+ 主题桥迁移到浮层 iframe（load 补发 + 去重）；入口按钮与画布广播改线为「关画布 → 开浮层」；卸载整树回收宿主。app.js 新增 lastTab sessionStorage 记忆（openHost 写 / 关标签清 / **mount 尾部重挂 attach**——「刷新恢复」门槛的页面半边）。**conversation.view 与 tab 委托三件套保留作回退**（D3 才删）。
+- **实测**（真浏览器 × 真实 client.js × 真实 host 栈）：①真实 openOverlay 路径（记忆=1 → dispose+重 apply）浮层现于 DOM、iframe src 真实赋 `/ssh/`；②浮层 iframe 里真实 UI 走完密码 + TOFU + 已连接；③30 次开关 session 同实例、零 resize 帧、内容保留；④Page.reload 后记忆 1 → 浮层自动重开 → lastTab 重挂 → 状态栏「已连接」。数据：`_refs/scripts-archive/ssh-d0-spike/d1-result.json`。
+- **测试**：`test/client.test.js` 重写为浮层契约（**16 例**：宿主/初始态/懒加载/占位/visibility 策略与不得 display:none/记忆双路径/入口 onClick/画布广播/chrome-reserve/主题桥去重/回退保留/幂等回收/手柄/胶囊），verify-all ssh **12/12**。
+- **D1 启动看板**：[design/preview/2026-09-14-ssh-d1-kickoff-board.html](preview/2026-09-14-ssh-d1-kickoff-board.html)（Müller-Brockmann 瑞士网格：章程 / D0–D4 排期 / 13 条任务台账 / 风险登记册 / 异常预案 / 收尾复核 / 交接说明）。
+- **D1 验收：发现并修复「单向门」（阻断级；用户实机截图确认）**。**判定：D1 首版不通过。** 现象：点一次 SSH 按钮进浮层后**没有任何办法回到会话界面**——浮层 `inset:0` 盖住会话头（入口按钮不可达）、浮层内只有 loading + iframe、**`closeOverlay` 全仓零调用点**、iframe 侧无关闭消息、`Esc` 明确不接管、而 `sessionStorage` 记忆=1 使 `apply` 末尾自动重开 ⇒ **刷新也被困**，唯一出路是关标签页 / 应用。
+  - **为什么上面那条"四项门槛全过"没拦住**：① **探针的可达性 ≠ 用户的可达性**——探针页能**直接操作 DOM / 调内部函数**关闭浮层，所以"关闭"在探针里可达，而产品代码里没有任何用户可达路径；② **门槛与分期自相矛盾**——§7 的 D1 门槛写「点「对话」退出」，但那颗「对话」按钮本身是 **D2 的交付物**（浮层内自绘顶栏）；③ **单测没兜住**——那几条断言测的是**源码文本**（CSS 字符串、`onClick` 字面量），没有一条测"能不能真的退出来"。
+  - **修复**（最小，不抢 D2 的活）：① `client.js` 加一条 38px **临时退出条** `.dsh-ssh-bar`（`.dsh-ssh-exit` 按钮「← 对话」→ `closeOverlay()`），浮层改 `display:flex;flex-direction:column`、iframe 由 `height:100%` 改 `flex:1 1 auto;min-height:0` 让出这条高度（**D2 顶栏落地时整条删除**，代码内已注明）；② `test/client.test.js` DOM 桩补 `.dsh-ssh-bar` / `.dsh-ssh-exit` 子树，并**新增一条行为闭环断言**（记忆=1 → apply 自动恢复浮层 → 点退出控件 → 回 `is-closed` 且记忆写回 `0`）；③ `verify-all ssh` **12/12**（client 16 → **17 例**）。
+  - **方法论教训（写给后续所有门槛验收）**：**探针能调到内部函数，不等于用户能触达该路径。** 门槛写"点 X 应 Y"时，验收必须**从用户可达的入口出发**（找到真实可点的元素并触发它），而不是在探针里直接操作状态。§13 表格「点「对话」退出」一行的判定口径已改记为「**函数级可达**」，与「用户级可达」区分；§13.1 为完整验收记录。
+- **D1.1 无会话头时的常驻入口（`shell.overlay`）：已实施**（[方案](2026-09-14-ssh-fullscreen-overlay-plan.md) §14 设计 + §14.9 实施记录）。触发：用户首屏观察「新对话是不是也应该加个 SSH 入口」—— 正是 §1/§3 诊断的 **D2「无会话即无入口」**（hero 态没有会话头 ⇒ 入口不存在 ⇒ 必须先发一条消息才能用 SSH）。
+  - **用户首选的 `sidebar.panellist` 被技术否决**：那一行的点击是官方写死的 `selectPanel(id)`（`ui-sidebar` 的 `PanelRow`），而 `ctx.layout.selectPanel` 对未注册的 main key **直接抛错** ⇒ 图标画得出来但**点了没反应**。要用它必须同时注册 `main` 的 key `ssh`，那等于**转路线乙**（放弃全屏 + 吃 F4 + 面板切换导致 iframe 重建），用户已明确不转。
+  - **改用 `shell.overlay`**：现场查询契约 —— `list` / `root` / `replaceRisk: none` / `ownerProps: []` / standardProps 含 `useSessions` / 当前仅 `usage-stats-overlay` 一个占用者；官方 catalog 原文 "The layer itself is **click-through** — entries opt back into pointer events"。设计要点：判据走 `useSessions(state => state.current)`（**有会话即不渲染** ⇒ 与会话头胶囊绝不双入口，验收用 `querySelectorAll('.dsh-ssh-launcher').length === 0` 锁死）；位置在**右上角、窗控左侧**（与有会话时胶囊的位置保持连续，复用 D0 实测的真实壳 reserve=150px，写成宿主 CSS 变量 `--dsh-ssh-chrome-reserve`）；点击与胶囊**同一条路径**（`dismissCanvasOverlay()` → `openOverlay()`，零新逻辑）；注册用自有 id `ssh-launcher` + `order: 40`。
+  - **官方明示的坑已入风险表（高）**：`overlayLayer > *` 会拿到 `pointer-events: auto` ⇒ 容器若铺满就**挡住整个应用**。方案：容器 `inset:0` + `pointer-events:none`，只有按钮自己 opt-in；验收第 5 条用 `elementFromPoint` 实测"hero 态下输入框仍可点"。
+  - 附**四条入口的覆盖关系**（有会话=会话头胶囊 / hero=`shell.overlay` / 画布内=外部视图槽 / 浮层内=临时退出条）、改动清单（`client.js` + `test/client.test.js` +3 例）与 7 条验收门槛。
+  - **实施完成（同日）**：回归 `verify-all ssh` **12/12**，client 16 → **20 例**（+3 条 D1.1 + 同步两条既有计数断言：注册数 2→3、两次 apply 4→6）。实施中三个**"照抄就会踩"**的点已记入方案 §14.9：① **launcher 不得复用 `.dsh-ssh-switch` 类名** —— `ownHeader()` 拿它当会话头锚点，共用会让回退期的 tab 三件套（`hideOwnTab`/`viewIsSsh`/`selectSsh`）集体失灵，改用独立类 `.dsh-ssh-launcher`、视觉并列写一份；② 容器 `pointer-events:none` **必须带 `!important`** —— 官方 `overlayLayer>*{pointer-events:auto}` 与本条特异性相同、注入顺序不定，容器一旦被设回 `auto` 就**挡住整个应用**；③ **`syncChrome()` 必须在 `apply` 期间主动调一次** —— 原先只挂 iframe 的 `load` 监听，而 iframe 是懒加载的 ⇒ reserve 变量永不设置 ⇒ 桌面壳里 launcher 退回 `0px` 被窗控压住。另：组件按 React 规则拆两层（外层判 `useSessions` 有无、内层无条件调 hook；缺 prop 则整层不渲染，不回退成 DOM 探测）。
+  - **实机验证发现判据写错（当日修正）**：首版判据 `state.current === undefined`，结果**真实首屏上入口不出现**。根因 —— 进入首屏时工作区**已建好一个 blank session**，`state.current` 有值；而"会话头不渲染"看的是 `main.conversation` 绑定的 sessionId（`undefined`），**两者语义不同**。**诊断路径**：先查 `shell.overlay` 的 occupants，见 `ssh-launcher` **已注册且 active** ⇒ 一步排除注册问题、锁定渲染判据（比在代码里猜快得多）。修正为「`current === undefined` **或** `byId[current].blank === true`」，用官方字段 `SessionSummary.blank`；并把不确定情形统一为**显示**（状态缺失 / 摘要未就绪 ⇒ true）—— **没有入口比短暂双入口更糟**。测试补三条边界（非空白不渲染 / 空白渲染 / 未就绪与缺失保守显示）。回归仍 **12/12**（client 20 例）。
+  - **位置**：`conversation.hero.agentPreset`（模式选择器）与 `conversation.hero.workspace` 都是 **`single` 槽 + `registration: []` + `replaceRisk: shadows-shipped-ui` + 已被官方占用** ⇒ 注册会**顶掉控件本身**，不能用；要"贴着模式选择器"只能用 `shell.overlay` + 测量定位（脆弱，未采纳）。落点仍是**右上角、窗控左侧**。
+  - **视觉对齐（实机反馈后优化，同日）**：用户评"不好看"，两处都是首版问题 —— ① **太重**：带边框 + 实底 + 模糊的 `999px` 胶囊，混在一排线性图标与圆形头像里读作异物 ⇒ 改为**与窗控同一视觉语言**（无底无框、hover 才显淡底、同款 `7px` 小圆角）；② **没对齐**：首版写死 `top:14px`，而窗控组是 `top:5px`，低了 9px ⇒ **不再写死**，由 `syncChrome()` 量窗控组的 `top` 与 `height` 写成 `--dsh-ssh-chrome-top` / `--dsh-ssh-chrome-height`（带限界防呆，量不到退回 `5` / `28`），卸载时三个变量一并清理。回归仍 **12/12**（client 20 例）。
+
+## 2026-09-14（第二批）
+
+- **全屏浮层方案 D0 SPIKE 实测：五项全过，D1 获准开工**（[方案](2026-09-14-ssh-fullscreen-overlay-plan.md) 新增 §12 实测记录）。实测通道：**headless Edge（原生 CDP）+ 探针宿主页（复刻路线丁浮层结构）+ 真实 `index.js`/`SshStore`/`SshRuntime`/真实 `app.js`/`session.js`/`xterm` 原样 import（零改动）+ `ssh2.Server` 假远端**（真协议、密码认证、TOFU 指纹确认走真实 UI）；判据端点是假 sshd 的 `window-change` 事件＝resize 帧到达「真实 PTY 语义端点」的权威记录：
+  - **①visibility:hidden 关闭态**：关闭瞬间 0 帧；隐藏期改视口 → 1 帧且是新视口的正确值（163×45→119×38）；恢复 → 1 帧回正确值；重开 0 帧（xterm 去重生效）——**全程零退化帧**。
+  - **②30 次开关零损失**：iframe 从未重载、session 同一实例、回放环全保留（含关闭期间 4 次推送）、开关后输入回显正常、周期内零 resize 帧、单 shell 连接、状态栏恒「已连接」。
+  - **③窗控 reserve**：普通浏览器 0；注入真 `theme-init.js` 后窗控实测（left:1311/w:97）→ canvas 同款量法 reserve=111px。
+  - **④双浮层互斥**：画布浮层开时头部按钮 hit-test 不可达 ⇒「天然互斥」成立；委托关画布→开 SSH 通；强制双开时 SSH（DOM 后者）在上。
+  - **⑤IS_TOP 守卫**：desktop 线真产物 `theme-init.js` 注入 SSH iframe → 无标题栏/无主题球（closeDialog/aurora 按既有设计存在），`data-miasaki-theme` 照常下发。
+  - **设计前提修正（§12.3）**：**display:none 的 2×2 灾难在本版 Chromium 未复现**——display:none 的 iframe 渲染管线暂停，RO/rAF 不跑，误 fit 无从发生。但不回退到 display:none：①依赖浏览器实现细节不可依赖；②关闭期间不绘制新输出；③visibility 是规范行为。丁方案不变；验收矩阵 B-3 修正为「零**退化** resize 帧」（隐藏期改视口发出正确尺寸帧是期望行为）。
+- **修复：TOFU 首连死锁（探针逮到的阻断级缺陷）**。`buildSkeleton` 把 `#status-text` 嵌在 `#status-pill` 内部，而 `renderStatusbar()` 每次 `pill.replaceChildren(dot, span)` 把它从 DOM 抹掉 → 每个 WS 状态帧进 `handleSessionStatus` 就在 `$('#status-text').textContent` 上抛 TypeError → `waiting-fingerprint` 的 `onFrame` 永不执行 → **指纹确认 banner 永不出现，首连永远卡死**。修复：`#status-text` 移为 statusbar 直接子节点（pill 只留 dot），`renderStatusbar` 改为只换 dot 类名与文本、不重建节点。此缺陷意味看现工作树的「M1 真实连接」从未真正跑通首连链路（此前实机验收停在 U1 两个更早的阻断 bug 上，未覆盖到 TOFU 环节）。探针顺带确认：预置 connections.json 的 id 必须 UUID 形状（官方 connect 路由正则 `[0-9a-f-]+`，非 UUID id 在 connect 时 404「接口不存在」）。
+- **测试**：`test/app.test.js` 新增骨架幂等回归（vm 桩驱动 buildSkeleton + 两次 renderStatusbar，断言 `#status-text` 存活且状态更新）60 → **63 例**全绿；`verify-all ssh` **12/12**。
+- **探针归档**：四件套 + 结果数据在 `_refs/scripts-archive/ssh-d0-spike/`（`node run-d0.mjs` 可复现，约 90 秒）。
+
 ## 2026-09-14
+
+- **全屏浮层规划（路线丁，已定向）**（[2026-09-14-ssh-fullscreen-overlay-plan.md](2026-09-14-ssh-fullscreen-overlay-plan.md)，v1.0 待评审，**未实施业务代码**）。用户在同一议题下逐轮定向：「不能通过顶栏的这个按钮切换吗」→「那我现在的会话布实现形式是什么样的」→ **「全屏，走丁方案」**。本轮先讲清会话布的真实实现，再出丁方案设计：
+  - **澄清一条关键误解（用户问「顶栏胶囊不能注册过去吗」）**：**不能注册**——官方胶囊是注册在 `conversation.session.header.actions` 的 React 组件，绑死在会话头 DOM 上；**只能重画**。会话布正是这么做的：它 `inset:0` 的浮层**把官方顶栏一起盖住**，所以画布页面在自己的 topbar 里**重画**了一组 `.view-switch`（用户看到的「对话｜会话布｜SSH」里，前两个是画布画的，第三个是本线经**外部视图槽**塞进去的）。
+  - **会话布实现形式（三层）**：① 浮层本体 = `document.body` 上的 `.dsh-canvas-overlay`（`fixed`/`inset:0`/`z-index:100`）+ 常驻 iframe `/canvas/`（只切显隐，**从不卸载**）；② 入口 = 会话头 actions 槽的 `ViewSwitch` 组件；③ 页面内顶栏 = 画布页面自绘。
+  - **定丁（照会话布同构）的四条理由**：**顶栏胶囊保留**（页面内重画）／**切会话不消失**（与会话 DOM 无关，无需 observer 纠偏）／**切走切回终端零损失**（iframe 常驻，连 256KiB 回放都不需要）／**「委托点击官方 tab」整套 hack 全删**，且只依赖唯一稳定槽 `conversation.session.header.actions`，**不碰 `main` slot、不碰左栏**。附带：「第二行 tab 不存在」从"要修的问题"变成"自然结果"。
+  - **头号技术风险（本方案唯一可能写坏远端 PTY 的点）**：canvas 关闭浮层用 `[hidden]{display:none}`，对画布无碍（它的困扰只是 `scrollTop` 被夹回 0，源码里有注释），**但对 xterm 是灾难**——iframe 尺寸塌成 0 ⇒ `session.js` 的 `ResizeObserver` 触发 fit ⇒ 按 U0 的 resize 限界算出 **2×2** 并**真的写进远端 PTY**，正在跑的 `vim`/`top` 画面直接乱掉。**必须偏离 canvas**：关闭态改用 `visibility:hidden; pointer-events:none`（元素仍在布局中，尺寸恒等于视口，且 `visibility` 变化**不触发** `ResizeObserver`），并在 `session.js` 的 fit 路径加可见性门控，打开后补一次去重 fit——三层保险，D0 首项实测。
+  - 其余四项关键问题与对策：**桌面壳窗控 reserve**（抄 canvas 的 `syncChrome()` → `--ssh-chrome-reserve`；并复验 desktop 线 2026-09-12 的 `IS_TOP` 守卫在本线 iframe 内生效）／**双浮层互斥**（任一浮层打开都盖住会话头 ⇒ 另一颗入口点不到，**天然互斥**，只需正向关对方）／**响应式重校准**（容器宽度语义从中栏变为视口，959/719/479 断点需重跑）／**焦点与退出路径**（用户当场定向：**`Esc` 不关闭浮层**——终端聚焦时必须留给远端程序，故不做"仅顶栏聚焦时拦截"的折中）。
+  - **由「`Esc` 不接管」推出一条硬约束**：官方顶栏被浮层盖住 + `Esc` 不接管 ⇒ **退出浮层的唯一路径是浮层顶栏的「对话」按钮**，它必须始终可见、键盘可达、focus-visible 清晰，且不因任何窄宽度断点被折进菜单（已单列进验收矩阵 A 组）。
+  - **用户当场定的一项界面约束**：浮层顶栏**只放三个切换按钮，不堆工具**（「别把顶栏堆长了」）——查找 / 字号 / 专注 / 送往对话全部留在**终端工具区原位**。
+  - **用户第二轮定向（同日）**：① **SSH 与会话布不同屏**（两浮层互斥，接受全屏方案的固有代价）；② **浮层开关状态要记忆**，选 **`sessionStorage`**（刷新恢复浮层 / 关标签页即忘 / 多标签页互不干扰）——排除 `localStorage` 的理由：它会让**每次打开 DSH 都自动弹进全屏 SSH**（含新开标签页），想先跟 Agent 说话时反成打扰。
+  - **规划外补查的一条事实（风险表据此划掉一项）**：扫遍官方所有 client 包的文档/窗口级 `keydown`，**DSH 没有全局快捷键监听**——仅有三处（`ui-conversation:15429` 上下文用量气泡 / `ui-chat:3424` 回合用量气泡 / `ui-attachment:481` 图片灯箱）全是"气泡打开时才注册"的 Escape 关闭。加上 iframe 天然隔离键盘事件，**浮层不会抢终端的键**。
+  - **新增一条与 Agent 化规划的交叉待议项**（规划 §9 风险表 + §11-5）：A1 落地后 Agent 会经 `ssh_exec` 自行在远端执行命令，而浮层**默认关闭** ⇒ 用户看不见，与该规划核心原则 **J5「可见性即安全」** 有张力。倾向"对话流工具卡（`tool.call.toolview`，该规划 §16 已核实可用）+ 浮层内活动面板"为主，**不建议**"Agent 一动就自动弹浮层"；**不影响本方案实施**，但应在 A1 开工前定。
+  - **改动面**：`client.js`（新增浮层宿主与 open/close，**删** `conversation.view` 注册 + `ownTab`/`hideOwnTab`/`restoreTabs`/`viewIsSsh`/`selectSsh`/`selectDefaultView`/`onDialogClick`/`dismissing`/列宽手柄规则；**留**合体胶囊 CSS 与外部视图槽消费）、`app.js`（新增顶栏三按钮 + chrome reserve + A0 文案）、`styles.css`、`session.js`（fit 门控）、`test/`；**`index.js` 与 host 侧零改动**。
+  - **分期 D0–D4**（D0 五项 SPIKE → D1 浮层骨架（先留 `conversation.view` 作回退）→ D2 页面顶栏 → D3 清理与回归 → D4 可选 Esc/记忆/动效），另附 A/B/C 三组验收矩阵与风险表。
+  - 文档同步：`README.md` 文档表新增本方案条目。
+
+- **独立模块化规划提案**（[2026-09-14-ssh-global-panel-plan.md](2026-09-14-ssh-global-panel-plan.md)，v0.1 待评审，**未实施业务代码**）。用户诉求：「我希望的是像会话布那样的独立页面，不是切换会话 SSH 就没了，当成一个独立的功能模块」。本轮先做平台取证再出方案：
+  - **诊断：不是 bug，是作用域错配。** 主机连接库（`~/.dsh/ssh/`）、SSH 连接 host 侧全局保活、多主机标签——**三者本就是全局的**，却注册进了 session scope 的 `conversation.view`。三条根因：D1 作用域错配 / D2 **空会话（hero）态下该槽整个不渲染 ⇒ 没有会话就进不去 SSH** / D3 视图选择与记忆均 per-session ⇒ 必须「记住 SSH 在哪个会话里」。
+  - **参照物解剖（会话布为什么切会话不消失）**：`dsh-miasaki-canvas/client.js:94-95` 把浮层 `document.body.append()`，`position:fixed;z-index:100;inset:0`，**完全在 React / 会话 DOM 之外**；iframe `/canvas/` 常驻只切 `hidden` ⇒ 状态零损失。**关键推论：用户说的「像会话布那样」技术实质是「会话之外的常驻宿主」，不必连全屏浮层一起搬**（canvas 为此付过幂等守卫/重渲染看门狗/叠压修复的补丁史）。
+  - **官方正解已在本机具备（0.1.5-rc.1 逐行取证）**：`main` 是 **root scope 的 keyed slot**，官方注释原文 "The root-scoped main slot selects the Conversation or a **global panel**… other keys receive **no Session binding**"（`dsh-client-ui-layout/lib/client.js:95-96`、`532-535`）；注册走 `ctx.slots.inject('main', () => ctx.slots.register({name:'main', key:'ssh'}, Panel))`（官方 example 见 `dsh-cordis-client-runner/lib/client.js:3399`）；`keyDomain` 已占用者仅 `conversation`，`replaceRisk: shadows-shipped-ui` ⇒ 用自有 key 是**新增一格**而非替换。
+  - **左栏入口**：官方有 `nav[aria-label="全局面板"]`（中文词典原文），位于「新建会话」下方、会话列表上方（`dsh-client-ui-sidebar/lib/client.js:271-282`）；行 = 自绘 glyph + 官方 label，owner props `{size, active}`；契约条目 `occupants: []` ⇒ **SSH 将是 DSH 第一个全局面板占用者**，该区域现在因 `panels.length > 0` 不成立而完全不渲染。
+  - **⚠️ 官方硬约束 F4（本轮最重要的负面结论）**：`dsh-client-ui-workspace/lib/client.js:61-64` 的 `openSession()` **强制 `ctx.layout.selectPanel(null)`**（点左栏会话 / 切换工作区 / fork 均经此），故「在 SSH 页面里切会话、画面保持不动」**在官方通道下做不到**——这是「点会话＝看那个会话」的既定语义，第三方无法覆盖。R2 因此拆成两半：**状态零损失能做到（G2 常驻承载），画面不消失做不到**。
+  - **方案与建议**：A 现状 view tab ／ **B 全局面板（推荐骨架）** ／ C body 级常驻浮层；推荐 **B 为骨架 + 吸收 C 的唯一优点（宿主常驻）**，即「全局面板 + 常驻承载 + 左栏常驻入口」。R2 给出三条出路：**B1 接受官方语义（推荐）** ／ B2 全屏浮层（与「切会话去看对话」的意图互斥，不建议） ／ **B3 = B1 + 可选钉住小窗**（走官方 `shell.overlay` 槽）。
+  - **分期 G0–G4**：G0 六项 SPIKE（**命门是 ② 面板高度契约**——`centerCol` 为 flex column，`height:100%` 有歧义，需实测 `flex:1 1 auto; min-height:0`）→ G1 形态迁移（同时**删掉「委托点击官方 tab」整套绕过逻辑与合成胶囊 CSS**，因为官方终于给了切换 API）→ G2 常驻承载（切走切回零损失）→ G3 全局语义收尾 → G4 可选钉住小窗。
+  - **附带收益**：迁移后不再需要「委托点击官方 tab 按钮」这一唯一通道 hack（含幂等守卫、关画布浮层、`dsh-canvas-switch` 合成选择器系列），并顺带修掉 D2 的「无会话进不去 SSH」。
+  - **实测通道受限说明**：本会话浏览器工具对 `127.0.0.1` / `localhost` 直接阻断，G0 未实测；建议通道为 `cordis_define` + `cordis_run` 的动态 Cordis 探针（Client 半边在真实 GUI 内跑，探针用完即删），次选本线已有的本地静态 harness 做法。
+  - **待决策四项**（拍板后实施）：①R2 走 B1/B2/B3；②会话头入口是否完全撤出；③画布内入口去留；④G2 是否紧随 G1。
+  - 文档同步：`README.md` 文档表新增本方案条目。
 
 - **Agent 化规划提案**（[2026-09-14-ssh-agent-driven-plan.md](2026-09-14-ssh-agent-driven-plan.md)，v0.2 待评审，**未实施业务代码**）。用户诉求：「SSH 线希望是 Agent 驱动的，集成 Agent 能力」。本轮先做平台事实核查再出方案，核心结论与依据：
   - **立场：做「Agent 的 SSH 手」，不做「SSH 里的 Agent」。** DSH 已有完整 agent 循环（对话视图 / 审批 UI / 工具卡 / 会话日志 / 压缩 / 子代理），SSH 自造内嵌对话会重复实现全部四件并带来双份会话状态；正确形态是 SSH 当**能力提供方**，页面当**观察窗**。
@@ -14,6 +186,23 @@
   - **8 项 SPIKE**，其中 **S1（bundle 行能否 inject `tools` 且对会话内 agent 可见）** 与 **S4（同 Client 上 `shell()` 与 `exec()` 并存是否稳定）** 为命门：前者决定「Agent 有没有手」，后者决定「手干不干净」。
   - **本文档定位**：本轮只产出方案文件，**不等于批准业务改造**；「切换到 Agent 模式只允许产出方案文件」同 plan §11 既有约定。方案内所有标「⚠ 推断」的结论必须经 SPIKE 验证后才能当事实使用。
   - **同步**：`README.md` 文档表新增本方案条目、里程碑 M3 行指向本方案。
+
+- **方案评审通过 + SPIKE S1–S3 实测（2026-09-14，同日）**。用户拍板四项决策（D1 做「Agent 的 SSH 手」不做「SSH 里的 Agent」/ D2 总开关默认 `off` / D3 确认发生在对话页 / D4 允许对 key/agent 主机隐式建连），方案从「待评审」转为「已定稿」。随即用**动态 Cordis 探针**（Host 半边）在**本进程内**实测三条命门假设，**探针已按纪律删除**（`cordis_undefine`，不留残留工具）：
+  - **S1 ✅ 通过**：`ctx.get('tools')` 可达；`harness.defineTool` + `harness.registerTool(ctx, tool)` 注册成功，工具**立即出现在该 agent 的 `Tool.listTools` 与模型 `<functions>` 中**，schema 正确投影 ⇒「注册 → 进提示词 → 对 agent 可见」链路成立。
+  - **S2 ✅ 通过**：真实模型调用中 `exec.agent` **被填充**（`agentPresent: true`，`agentId` = 会话 id）、`exec.callId` / `exec.rootCallId` 存在、`exec.signal` / `deferContext` / `concludeTurn` 均为可用成员。
+  - **S3 ⚠ 部分通过（负面但重要）**：`ctx.approval` 服务可达、`request()` 是函数、**open-turn 前提满足**（未抛「no turn is open」），但决策结果为 **`unavailable`**——`approval/request` 是 scope-filtered waterfall，**本进程没有应答者接手，官方审批 UI 未出现**。失败关闭方向正确，但对 A2 意味着官方审批 seam 当前用不上。
+  - **回退通道已确认**：`ctx.userQuestions.ask({ questions: [{ id, header, question, detail, options }], agent, signal })`——官方提问 seam，**`detail` 能携带完整命令**（正好补上「审批请求不携带参数」的缺口）、UI 在对话页（`ui-user-questions`）、且 `ask_user_question` 工具在该会话正常工作即为可用性佐证。**A2 因此改用 userQuestions**，官方 `approval/asked|decided` 审计对由本线执行台账替代。
+  - **仍未实测**：S4（同 Client 上 `shell()` 与 `exec()` 并存）——需要一台真实可连的 SSH 主机，是 A1 开工前的最后一道门槛。
+  - 文档同步：方案新增 **§16 SPIKE 实测记录**（复现步骤 / 结果表 / 边界与不可外推之处）；§13 改为「决策记录」（已定四项 + 待定三项）；§7.3 重写为方案 A（userQuestions，推荐）/ 方案 B（approval，留作 seam 修复后升级）；§4 J4、§9 A2、§11 SPIKE 表、§12 验收矩阵 B 组随之更新。
+
+- **A0 上下文桥实施**（[Agent 化规划](2026-09-14-ssh-agent-driven-plan.md) §8.2，四项决策拍板后的首个交付）。定位：把终端现场送进对话，**不触碰 host 侧、不注册任何模型工具**。
+  - **通道选定（一个负面结论）**：SSH 页面 ↔ 对话页之间**没有**「插入任意文本」的公开 API——`dsh-client-ui-reference` 的对外注册面只有一个 slash source，服务 `@` 补全的**固定候选领域**（文件 / 文件夹 / 会话）；且 slot 树中**不存在 `input.trigger` 槽**（`Slots.listSubTree` 实测 `available: false`）。因此按规划 §8.2 **路径 1（剪贴板 + 引导）** 落地，§8.2 的路径 2 在文档里标为不可行。
+  - **`session.js` 新增 `snapshot(lines = 40)`**：只读缓冲区快照。语义经测试修正过一次——**先跳过末尾连续空行，再从最后一个非空行往前取 N 行**；初版是「取最后 N 行再裁掉尾部空行」，当末尾空白行数 ≥ N 时整段落空（`snapshot(2)` 返回空串），被新增单测逮住。行内 `translateToString(true)` 逐字 trimRight，中间空行原样保留（终端输出里的空行有语义）。**不向 socket 写任何字节**（单测断言）。
+  - **`app.js` 新增**：纯函数 `formatSshContext(conn, body, { intro })`（首行 `[SSH web-01 · ops@host:22]` 标注来源；空正文产出空串，绝不产出只有主机名的空消息）、`SEND_INTENTS` 三种意图（选区原样送 / 「这是终端的最近输出：」/「帮我看下这段终端输出有什么问题：」）、`sendToChat` + `sendMenuItems`、工具区 `#btn-send` 按钮、**终端右键菜单**（与按钮同一份菜单，沿用 `hostMenuItems` 的「同源」约定）、`send` 图标。
+  - **隐私边界**：全程只读终端 + 写剪贴板；复制后状态栏明确提示字符数与「切到对话粘贴」，**不自动发送、不自动追加回车、不碰 SSH 连接、不向远端发任何字节**。
+  - **测试**：ssh 60 → **63 例**（`session.test.js` +1：尾部裁剪 / 越界兜底 / 空缓冲 / 全空行 / 只读断言 / 销毁后为空；`app.test.js` +2：来源标记与引导语格式、intents 措辞）。`node scripts/verify-all.mjs ssh` → **12/12 PASS**。
+  - **沙箱提示（环境假阴性）**：`node --test test/*.test.js`（多文件）在本会话受限沙箱下报 `spawn EPERM`——test runner 为每个测试文件 spawn 子进程并**管道捕获输出**，命中沙箱的命名管道边界，**不是代码缺陷**；改用 `node --test-isolation=none --test test/*.test.js`（单进程）或 `verify-all.mjs ssh` 均全绿。与 smoke-test-matrix 已记录的 sidebar `where.exe` EPERM 同源。
+  - **待实机验证**：`index.js` 的 `cachedAsset` 对静态资源做**进程内一次性缓存**，改了 `app.js` / `session.js` **必须重启 `dsh web`** 才生效（浏览器强刷不够）。
 
 ## 2026-09-12
 

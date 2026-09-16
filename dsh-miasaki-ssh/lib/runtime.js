@@ -1,10 +1,17 @@
-// Runtime layer for @miasaki/dsh-ssh.
+// Runtime layer for @miasaki/dsh-ssh — U2.1 三层身份（design/2026-09-15-ssh-u2-plan.md §3/§4.1）
 //
-// Owns one ssh2 Client per managed connection, verifies host keys with
-// fingerprint TOFU (first-seen => ask user, mismatch => refuse), keeps a
-// bounded binary-safe scrollback ring per connection, and relays terminal
-// output to every attached browser WebSocket. No HTTP knowledge here: the
-// WebServer layer builds frames and hands them to these methods.
+// connId（profile，持久，store.js）
+//   └─ runtimeId（一次 SSH 连接实例 = 一个 ssh2 Client，rt-<uuid>，含 generation 语义）
+//        ├─ shellId #1（ShellChannel：stream + 尺寸 + 独立回放环 + viewer 集合 + 写入所有权）
+//        ├─ shellId #2 …（上限 MAX_SHELLS_PER_RUNTIME）
+//        └─（U2.2 预留）sftp：惰性 SFTPWrapper，连接级共享
+//
+// 安全前置（工作区规划 §8）：运行实例 id 不作授权证明 —— 浏览器先经
+// POST /ssh/api/attach 换取一次性短期附着票据，WS attach 帧消费之。
+// 票据过期 / 重放 / runtime teardown 一律拒绝（TICKET_INVALID）。
+//
+// U0 契约保持：输入/尺寸按 ws 绑定路由（绝不按 connId 查表）；慢 viewer 背压淘汰；
+// 秘密只存在于调用链；TOFU 指纹确认与 generation 绑定不变。
 import { Client } from 'ssh2'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -21,6 +28,13 @@ const MAX_COLS = 1000
 const MAX_ROWS = 500
 const MAX_WS_BUFFERED_BYTES = 8 * 1024 * 1024 // drop a viewer whose send buffer exceeds this
 const WINDOWS_AGENT_PIPE = '\\\\.\\pipe\\openssh-ssh-agent'
+
+// U2 决策 1（2026-09-15 拍板）：同 runtime shell 上限 8，超出拒绝并给可读提示。
+export const MAX_SHELLS_PER_RUNTIME = 8
+// 附着票据 TTL：只够建立 WS，不够复用（方案 §3.2）。
+export const ATTACH_TICKET_TTL_MS = 30_000
+// 每连接（runtime）回放总预算（方案 §4.1.4）：shell 间先到先得 + LRU 头裁剪。
+export const DEFAULT_SCROLLBACK_BYTES_PER_RUNTIME = 1024 * 1024
 
 function clampDim(value, min, max, fallback) {
   const n = Number(value)
@@ -45,26 +59,75 @@ export function classifyError(error) {
 }
 
 export class SshRuntime {
-  constructor(store, { scrollbackBytes = 256 * 1024, agentSupported = true } = {}) {
+  constructor(store, {
+    scrollbackBytes = 256 * 1024,
+    scrollbackBytesPerRuntime = DEFAULT_SCROLLBACK_BYTES_PER_RUNTIME,
+    agentSupported = true,
+    now = Date.now,
+  } = {}) {
     this.store = store
-    this.scrollbackBytes = scrollbackBytes
+    this.scrollbackBytes = scrollbackBytes           // 每 shell 回放上限
+    this.scrollbackBytesPerRuntime = scrollbackBytesPerRuntime // 每 runtime 总预算
     this.agentSupported = agentSupported
-    this.conns = new Map() // connId -> RuntimeConn
-    this.pending = new Map() // fingerprint token -> PendingFingerprint
+    this.now = now
+    this.conns = new Map()      // runtimeId -> RuntimeConn
+    this.byProfile = new Map()  // connId -> runtimeId（同主机仍限一运行连接）
+    this.pending = new Map()    // fingerprint token -> PendingFingerprint
+    this.tickets = new Map()    // attach ticket -> { connId, expiresAt, timer }
   }
 
   async init() {
     await this.store.ready
   }
 
+  // ------------------------------------------------------------------ attach tickets（方案 §3.2）
+  /** 签发一次性附着票据。TTL 短，消费即作废；teardown 全部作废。 */
+  issueAttachTicket(connId, { ttlMs = ATTACH_TICKET_TTL_MS } = {}) {
+    const ticket = randomUUID()
+    const expiresAt = this.now() + ttlMs
+    const timer = setTimeout(() => this.tickets.delete(ticket), ttlMs + 1000)
+    this.tickets.set(ticket, { connId, expiresAt, timer })
+    return { ticket, expiresAt }
+  }
+
+  /** 消费票据：一次性。过期/重放/未知 ⇒ null。 */
+  consumeTicket(ticket) {
+    if (typeof ticket !== 'string' || ticket.length === 0) return null
+    const item = this.tickets.get(ticket)
+    if (item === undefined) return null
+    clearTimeout(item.timer)
+    this.tickets.delete(ticket)
+    if (this.now() > item.expiresAt) return null
+    return item
+  }
+
+  /** runtime teardown 时作废其名下全部票据（与 expirePendingFor 同构）。 */
+  expireTicketsFor(connId) {
+    for (const [ticket, item] of [...this.tickets.entries()]) {
+      if (item.connId !== connId) continue
+      clearTimeout(item.timer)
+      this.tickets.delete(ticket)
+    }
+  }
+
+  // ------------------------------------------------------------------ state
   listState() {
     const out = []
-    for (const rc of this.conns.values()) out.push({ id: rc.id, state: rc.status, label: rc.label })
+    for (const rc of this.conns.values()) {
+      out.push({
+        id: rc.connId,           // profile id：REST 对外名字不变
+        runtimeId: rc.id,
+        state: rc.status,
+        label: rc.label,
+        shells: shellSummaries(rc),
+      })
+    }
     return out
   }
 
   isConnected(id) {
-    return this.conns.get(id)?.status === 'connected'
+    const runtimeId = this.byProfile.get(id)
+    return runtimeId !== undefined && this.conns.get(runtimeId)?.status === 'connected'
   }
 
   // ------------------------------------------------------------------ connect
@@ -72,11 +135,17 @@ export class SshRuntime {
     const record = await this.store.getConnection(id)
     if (record === null) return { error: 'NOT_FOUND' }
 
-    const existing = this.conns.get(id)
-    if (existing !== undefined) this.teardown(existing)
+    const existingRuntimeId = this.byProfile.get(id)
+    if (existingRuntimeId !== undefined) {
+      const existing = this.conns.get(existingRuntimeId)
+      if (existing !== undefined) this.teardown(existing)
+      // conns 以 runtimeId 键控：重连的替身是另一个键，旧实例必须显式移除
+      this.conns.delete(existingRuntimeId)
+    }
 
     const rc = new RuntimeConn(this, id, record)
-    this.conns.set(id, rc)
+    this.conns.set(rc.id, rc)
+    this.byProfile.set(id, rc.id)
 
     // password/key material flows only from the caller (one-time), never stored
     const cfg = {
@@ -133,7 +202,7 @@ export class SshRuntime {
     client.on('close', () => {
       // reached when session ends or connection drops
       this.expirePendingFor(rc)
-      if (rc.stream) rc.stream = null
+      for (const sh of rc.shells.values()) sh.stream = null
       if (rc.disposed) return
       if (rc.status === 'connected' || rc.status === 'connecting' || rc.status === 'waiting-fingerprint') {
         rc.status = 'closed'
@@ -159,7 +228,7 @@ export class SshRuntime {
       const item = {
         token,
         rc, // generation binding: a confirm may only affect THIS RuntimeConn
-        connId: rc.id,
+        connId: rc.connId,
         connKey: rc.connKey,
         fingerprint,
         verify,
@@ -203,8 +272,9 @@ export class SshRuntime {
     this.pending.delete(token)
     const rc = item.rc
     // stale generation: the connection was re-initiated (or torn down) while
-    // the user was deciding — the answer must never touch the new instance
-    if (rc === undefined || rc.disposed || this.conns.get(item.connId) !== rc) {
+    // the user was deciding — the answer must never touch the new instance.
+    // conns 以 runtimeId 键控：重连后的新实例是新 runtimeId ⇒ 查不到旧 rc 即失效。
+    if (rc === undefined || rc.disposed || this.conns.get(rc.id) !== rc) {
       try { item.verify(false) } catch { /* ignore */ }
       return { ok: false, error: '该连接已重新发起，本次确认已失效' }
     }
@@ -231,70 +301,173 @@ export class SshRuntime {
   onReady(rc) {
     if (rc.disposed) return
     rc.status = 'connected'
-    void this.store.touchConnected(rc.id).catch(() => {})
-    rc.broadcast({ type: 'status', state: 'connected' })
+    void this.store.touchConnected(rc.connId).catch(() => {})
+    // 连接就绪即开第一个 shell（默认 shell），其余由 viewer 显式 shell.open（方案 §4.1.3）
+    this.openShell(rc, { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }, (err, shell) => {
+      if (rc.disposed) return
+      if (err) {
+        rc.status = 'error'
+        rc.answer('SHELL_FAILED', `无法打开 shell: ${err.message}`)
+        return
+      }
+      rc.broadcast({ type: 'ready', state: 'connected', runtimeId: rc.id, shells: shellSummaries(rc) })
+    })
+  }
+
+  // ------------------------------------------------------------------ shell channels（方案 §4.1）
+  /** 在 runtime 的 ssh2 Client 上新开一个 shell channel；回调 (err, ShellChannel)。 */
+  openShell(rc, { cols, rows } = {}, cb) {
+    if (rc.disposed || rc.status !== 'connected' || rc.client === null) {
+      cb(new Error('连接未就绪'))
+      return
+    }
+    if (rc.shells.size >= MAX_SHELLS_PER_RUNTIME) {
+      const err = new Error(`每个连接最多 ${MAX_SHELLS_PER_RUNTIME} 个 shell`)
+      err.code = 'SHELL_LIMIT'
+      cb(err)
+      return
+    }
+    const seq = rc.shellSeq + 1
     rc.client.shell(
-      { term: 'xterm-256color', cols: rc.cols, rows: rc.rows },
+      { term: 'xterm-256color', cols: clampDim(cols, 2, MAX_COLS, DEFAULT_COLS), rows: clampDim(rows, 2, MAX_ROWS, DEFAULT_ROWS) },
       (err, stream) => {
         if (rc.disposed) return
-        if (err) {
-          rc.status = 'error'
-          rc.answer('SHELL_FAILED', `无法打开 shell: ${err.message}`)
-          return
-        }
-        rc.stream = stream
-        stream.on('data', chunk => rc.push(chunk))
-        stream.stderr.on('data', chunk => rc.push(Buffer.from(`\x1b[91m${chunk.toString('utf8')}\x1b[0m`)))
-        stream.on('close', () => {
-          rc.stream = null
-          if (!rc.disposed) {
-            rc.status = 'closed'
-            rc.broadcast({ type: 'status', state: 'closed' })
-            rc.dispose()
-          }
+        if (err) { cb(err); return }
+        const shell = new ShellChannel(rc, seq, {
+          cols: clampDim(cols, 2, MAX_COLS, DEFAULT_COLS),
+          rows: clampDim(rows, 2, MAX_ROWS, DEFAULT_ROWS),
+          title: shellTitle(rc, seq),
         })
-        // any early attached sockets immediately get scrollback
-        rc.broadcast({ type: 'ready', state: 'connected', cols: rc.cols, rows: rc.rows })
-        rc.flush()
+        rc.shellSeq = seq
+        rc.shells.set(shell.id, shell)
+        shell.stream = stream
+        stream.on('data', chunk => this.pushTo(shell, chunk))
+        stream.stderr.on('data', chunk => this.pushTo(shell, Buffer.from(`\x1b[91m${chunk.toString('utf8')}\x1b[0m`)))
+        // shell 结束 ≠ 连接结束（探针 A P4 基线）：仅关闭该 channel，
+        // 标签保留为「会话已结束」，用户可在同一 runtime 重开 shell（方案 §4.1.5）
+        stream.on('close', () => {
+          shell.stream = null
+          if (shell.ended) return
+          shell.ended = true
+          shell.writeOwner = null
+          shell.broadcast({ type: 'shell.closed', shellId: shell.id, reason: 'exit' })
+        })
+        cb(null, shell)
       },
     )
   }
 
-  // ------------------------------------------------------------------ frames
-
-  attach(ws, msg) {
-    const rc = this.conns.get(msg.connId)
-    if (rc === undefined) {
-      ws.send(JSON.stringify({ type: 'error', code: 'NO_CONNECTION', message: '连接不存在或已关闭' }))
+  /** viewer 请求新 shell：建好即把请求者切过去（写权归请求者）。 */
+  openShellForViewer(ws, { cols, rows } = {}) {
+    const rc = this.currentViewer(ws)
+    if (rc === null) return
+    if (rc.status !== 'connected') {
+      ws.send(JSON.stringify({ type: 'error', code: 'NOT_CONNECTED', message: '连接未就绪，不能新建 shell' }))
       return
     }
-    // viewer binding: this socket may only drive the exact RuntimeConn it
-    // attached to — a replaced generation ignores its stale input/resize
-    ws.sshRc = rc
-    ws.sshStale = false
-    if (!rc.sockets.has(ws)) rc.sockets.add(ws)
-    if (msg.cols !== undefined) rc.cols = clampDim(msg.cols, 2, MAX_COLS, rc.cols)
-    if (msg.rows !== undefined) rc.rows = clampDim(msg.rows, 2, MAX_ROWS, rc.rows)
-    ws.send(JSON.stringify({ type: 'ready', state: rc.status, cols: rc.cols, rows: rc.rows }))
-    // re-state current status so a fresh viewer never misses a waiting/error
-    if (rc.status === 'waiting-fingerprint' && rc.fp) {
-      ws.send(JSON.stringify({ type: 'status', state: 'waiting-fingerprint', token: rc.fp.token, fingerprint: rc.fp.fingerprint, host: rc.fp.host }))
-    } else if (rc.status === 'error') {
-      ws.send(JSON.stringify({ type: 'status', state: 'error', code: rc.lastErrorCode, message: rc.lastErrorMessage }))
-    }
-    // a live stream takes the viewer's initial size into the real PTY;
-    // a replay of buffered output follows for both live and ended sessions
-    if (rc.stream && (msg.cols !== undefined || msg.rows !== undefined)) {
-      try { rc.stream.setWindow(rc.rows, rc.cols, undefined, undefined) } catch { /* stream gone */ }
-    }
-    if (rc.stream) rc.flushTo(ws)
-    else if (rc.sbChunks.length > 0) rc.flushTo(ws)
+    this.openShell(rc, { cols, rows }, (err, shell) => {
+      if (err) {
+        ws.send(JSON.stringify({ type: 'error', code: err.code ?? 'SHELL_FAILED', message: err.message }))
+        return
+      }
+      // 请求者从旧 shell 解绑（写权释放），绑到新 shell
+      this.unbindShell(ws)
+      this.bindShell(ws, shell)
+      ws.send(JSON.stringify({ type: 'shell.opened', shellId: shell.id, title: shell.title, mode: ws.mode }))
+      this.replayTo(ws, shell)
+    })
   }
 
-  // ------------------------------------------------------------------ viewer-bound input / resize
-  // Input and size changes are routed through the ws's viewer binding, never
-  // by connId lookup — otherwise a zombie viewer from a replaced generation
-  // would write into the new connection (plan §5.1 输入归属).
+  /** 关闭一个 shell channel（viewer 请求，owner-only；远端 exit 走 stream close 分支）。 */
+  closeShellByViewer(ws, shellId) {
+    const shell = this.currentShell(ws)
+    if (shell === null) return
+    if (shellId !== ws.shellId) {
+      ws.send(JSON.stringify({ type: 'error', code: 'STALE_SHELL', message: '该 shell 不属于当前查看器' }))
+      return
+    }
+    if (shell.writeOwner !== ws) {
+      ws.send(JSON.stringify({ type: 'error', code: 'NOT_WRITE_OWNER', message: '只有写入方可关闭该 shell' }))
+      return
+    }
+    shell.ended = true
+    shell.writeOwner = null
+    try { shell.stream?.end() } catch { /* gone */ }
+    shell.broadcast({ type: 'shell.closed', shellId: shell.id, reason: 'closed-by-viewer' })
+  }
+
+  // ------------------------------------------------------------------ scrollback（每 shell 独立环 + runtime 总预算，方案 §4.1.4）
+  pushTo(shell, chunk) {
+    const u8 = chunk instanceof Uint8Array ? chunk : Buffer.from(String(chunk))
+    shell.sbChunks.push(u8)
+    shell.sbLen += u8.length
+    while (shell.sbLen > this.scrollbackBytes && shell.sbChunks.length > 1) {
+      const dropped = shell.sbChunks.shift()
+      shell.sbLen -= dropped.length
+    }
+    this.trimRuntimeBudget(shell)
+    if (shell.viewers.size > 0) {
+      for (const ws of [...shell.viewers]) {
+        try {
+          // backpressure: a viewer that stopped draining gets cut loose
+          // instead of buffering the PTY forever（plan §8 洪泛有界）——按 shell 判定
+          if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+            this.unbindShell(ws)
+            try { ws.close(1011, 'viewer-too-slow') } catch { /* gone */ }
+            continue
+          }
+          ws.send(u8)
+        } catch { this.unbindShell(ws) }
+      }
+    }
+  }
+
+  /** runtime 总预算超限时，从最久未查看的 shell 环头部裁剪（不拒绝新 shell）。 */
+  trimRuntimeBudget(exclude) {
+    let total = 0
+    for (const sh of exclude.rc.shells.values()) total += sh.sbLen
+    if (total <= this.scrollbackBytesPerRuntime) return
+    // LRU：lastViewedAt 最小者先裁（可裁到零；回放变短但实时输出不丢），
+    // 全部裁光仍超限时才裁 exclude 自己。
+    for (const sh of [...exclude.rc.shells.values()].sort((a, b) => a.lastViewedAt - b.lastViewedAt)) {
+      while (total > this.scrollbackBytesPerRuntime && sh.sbChunks.length > 0) {
+        const dropped = sh.sbChunks.shift()
+        sh.sbLen -= dropped.length
+        total -= dropped.length
+      }
+      if (total <= this.scrollbackBytesPerRuntime) break
+    }
+  }
+
+  // ------------------------------------------------------------------ viewer binding（v2：ws ↔ (runtime, shell) 双绑定）
+  bindShell(ws, shell) {
+    ws.shellId = shell.id
+    ws.mode = 'read'
+    shell.viewers.add(ws)
+    shell.lastViewedAt = this.now()
+    // 写入所有权（决策 2：单写多读 + 显式接管）：空位即得写权
+    if (shell.writeOwner === null && !shell.ended) {
+      shell.writeOwner = ws
+      ws.mode = 'write'
+    }
+  }
+
+  unbindShell(ws) {
+    const rc = ws.sshRc
+    if (rc !== undefined && rc !== null) {
+      const shell = rc.shells.get(ws.shellId)
+      if (shell !== undefined) {
+        shell.viewers.delete(ws)
+        if (shell.writeOwner === ws) {
+          shell.writeOwner = null
+          // 写权空出：告知同 shell 其余只读 viewer（可接管）
+          shell.broadcast({ type: 'write.open', shellId: shell.id })
+        }
+      }
+    }
+    ws.shellId = null
+    ws.mode = 'read'
+  }
 
   /** The RuntimeConn this viewer may still drive, or null (after notifying a stale one). */
   currentViewer(ws) {
@@ -311,31 +484,163 @@ export class SshRuntime {
     return rc
   }
 
-  viewerInput(ws, data) {
+  /**
+   * 绑定校验集中口（方案 §8 风险表）：viewer 必须仍附着、且其 shellId 绑定仍在。
+   * 僵尸 viewer / 错 shellId 一律在此被拒 —— 输入/尺寸/关闭/接管四条路径都过它。
+   */
+  currentShell(ws) {
     const rc = this.currentViewer(ws)
-    if (rc !== null && typeof data === 'string' && rc.stream) rc.stream.write(data)
+    if (rc === null) return null
+    const shell = rc.shells.get(ws.shellId)
+    if (shell === undefined || shell.viewers.has(ws) !== true) {
+      if (ws.sshStale !== true) {
+        ws.sshStale = true
+        try { ws.send(JSON.stringify({ type: 'error', code: 'STALE_SHELL', message: 'shell 已关闭或绑定失效，请重新打开该标签' })) } catch { /* gone */ }
+      }
+      return null
+    }
+    shell.lastViewedAt = this.now()
+    return shell
   }
 
-  viewerResize(ws, cols, rows) {
-    const rc = this.currentViewer(ws)
-    if (rc === null) return
-    if (cols !== undefined) rc.cols = clampDim(cols, 2, MAX_COLS, rc.cols)
-    if (rows !== undefined) rc.rows = clampDim(rows, 2, MAX_ROWS, rc.rows)
-    if (rc.stream) {
-      try { rc.stream.setWindow(rc.rows, rc.cols, undefined, undefined) } catch { /* stream gone */ }
+  attach(ws, msg) {
+    const ticketItem = this.consumeTicket(msg.ticket)
+    // shellSeq 由 index.js 从帧里透传（Number 或 undefined）
+    if (ticketItem === null) {
+      ws.send(JSON.stringify({ type: 'error', code: 'TICKET_INVALID', message: '附着票据无效、过期或已被使用；请刷新页面重试' }))
+      try { ws.close() } catch { /* gone */ }
+      return
+    }
+    const runtimeId = this.byProfile.get(ticketItem.connId)
+    const rc = runtimeId !== undefined ? this.conns.get(runtimeId) : undefined
+    if (rc === undefined) {
+      ws.send(JSON.stringify({ type: 'error', code: 'NO_CONNECTION', message: '连接不存在或已关闭' }))
+      try { ws.close() } catch { /* gone */ }
+      return
+    }
+    // viewer binding: this socket may only drive the exact (runtime, shell) it attached to
+    ws.sshRc = rc
+    ws.sshStale = false
+    if (!rc.sockets.has(ws)) rc.sockets.add(ws)
+
+    let shell = null
+    if (typeof msg.shellId === 'string' && msg.shellId.length > 0) shell = rc.shells.get(msg.shellId) ?? null
+    // 刷新恢复路径：前端只有 shellSeq（workspace 快照），按 seq 解析
+    if (shell === null && Number.isInteger(msg.shellSeq)) {
+      for (const sh of rc.shells.values()) if (sh.seq === msg.shellSeq) { shell = sh; break }
+    }
+    if (shell === null) shell = rc.primaryShell()
+    if (shell !== null) this.bindShell(ws, shell)
+
+    ws.send(JSON.stringify({
+      type: 'ready',
+      runtimeId: rc.id,
+      shellId: shell?.id ?? null,
+      mode: ws.mode,
+      state: rc.status,
+      shells: shellSummaries(rc),
+    }))
+    // re-state current status so a fresh viewer never misses a waiting/error
+    if (rc.status === 'waiting-fingerprint' && rc.fp) {
+      ws.send(JSON.stringify({ type: 'status', state: 'waiting-fingerprint', token: rc.fp.token, fingerprint: rc.fp.fingerprint, host: rc.fp.host }))
+    } else if (rc.status === 'error') {
+      ws.send(JSON.stringify({ type: 'status', state: 'error', code: rc.lastErrorCode, message: rc.lastErrorMessage }))
+    }
+    // a live stream takes the viewer's initial size into the real PTY;
+    // a replay of buffered output follows for both live and ended sessions
+    if (shell !== null) {
+      // 初始尺寸只在成为写入 owner 时才进 PTY：否则第二个 viewer 一 attach
+      // 就会覆盖 owner 的尺寸（「最后一个 resize 获胜」的回潮，决策 2 禁止）。
+      if (ws.mode === 'write' && shell.stream && (msg.cols !== undefined || msg.rows !== undefined)) {
+        shell.cols = clampDim(msg.cols, 2, MAX_COLS, shell.cols)
+        shell.rows = clampDim(msg.rows, 2, MAX_ROWS, shell.rows)
+        try { shell.stream.setWindow(shell.rows, shell.cols, undefined, undefined) } catch { /* stream gone */ }
+      }
+      this.replayTo(ws, shell)
+      // U2.4：附着即补发最近一次屏幕快照（精确恢复的 host 侧半边）
+      if (shell.snapshotData !== null) {
+        try { ws.send(JSON.stringify({ type: 'snapshot', shellId: shell.id, data: shell.snapshotData })) } catch { /* gone */ }
+      }
     }
   }
 
+  replayTo(ws, shell) {
+    if (shell.sbChunks.length === 0) return
+    try { ws.send(Buffer.concat(shell.sbChunks)) } catch { /* client gone */ }
+  }
+
+  // ------------------------------------------------------------------ viewer-bound input / resize / ownership
+  // Input and size changes are routed through the ws's (runtime, shell) binding, never
+  // by connId lookup — otherwise a zombie viewer from a replaced generation
+  // would write into the new connection（plan §5.1 输入归属 / §8 多 shell 串写风险）。
+
+  viewerInput(ws, shellId, data) {
+    const shell = this.currentShell(ws)
+    if (shell === null || typeof data !== 'string') return
+    if (shellId !== ws.shellId) return // 绑定不符：忽略（currentShell 已对僵尸发过 STALE_SHELL）
+    if (shell.writeOwner !== ws) {
+      // 只读 viewer 的按键不进 PTY；一次性提示由 write.state 帧与 UI 常驻表达
+      return
+    }
+    if (shell.stream) shell.stream.write(data)
+  }
+
+  viewerResize(ws, shellId, cols, rows) {
+    const shell = this.currentShell(ws)
+    if (shell === null) return
+    if (shellId !== ws.shellId) return
+    // 非 owner 的 resize 被拒绝 —— 不再「最后一个 resize 获胜」（决策 2 / 方案 §5.3）
+    if (shell.writeOwner !== ws) return
+    if (cols !== undefined) shell.cols = clampDim(cols, 2, MAX_COLS, shell.cols)
+    if (rows !== undefined) shell.rows = clampDim(rows, 2, MAX_ROWS, shell.rows)
+    if (shell.stream) {
+      try { shell.stream.setWindow(shell.rows, shell.cols, undefined, undefined) } catch { /* stream gone */ }
+    }
+  }
+
+  /** 显式接管写入权（决策 2）：原 owner 立即转只读并收到 write.revoked。 */
+  takeoverShell(ws, shellId) {
+    const shell = this.currentShell(ws)
+    if (shell === null) return
+    if (shellId !== ws.shellId) return
+    if (shell.ended) {
+      ws.send(JSON.stringify({ type: 'error', code: 'SHELL_ENDED', message: '该 shell 已结束，无法接管' }))
+      return
+    }
+    const prev = shell.writeOwner
+    if (prev === ws) return
+    if (prev !== null) {
+      prev.mode = 'read'
+      try { prev.send(JSON.stringify({ type: 'write.revoked', shellId: shell.id })) } catch { /* gone */ }
+    }
+    shell.writeOwner = ws
+    ws.mode = 'write'
+    ws.send(JSON.stringify({ type: 'write.granted', shellId: shell.id }))
+  }
+
+  /** U2.4：viewer 上报屏幕快照（字符串，封顶 MAX_SNAPSHOT_BYTES，host 内存态不落盘）。 */
+  storeSnapshot(ws, shellId, data) {
+    const shell = this.currentShell(ws)
+    if (shell === null || shellId !== ws.shellId) return
+    if (typeof data !== 'string' || data.length === 0) return
+    if (data.length > MAX_SNAPSHOT_BYTES) return
+    shell.snapshotData = data
+  }
+
   detach(ws) {
+    const rc = ws.sshRc
+    if (rc !== undefined && rc !== null) rc.sockets.delete(ws)
+    this.unbindShell(ws)
     ws.sshRc = null
-    for (const rc of this.conns.values()) rc.sockets.delete(ws)
   }
 
   async disconnect(id) {
-    const rc = this.conns.get(id)
+    const runtimeId = this.byProfile.get(id)
+    const rc = runtimeId !== undefined ? this.conns.get(runtimeId) : undefined
     if (rc === undefined) return { ok: false }
     this.teardown(rc)
-    this.conns.delete(id)
+    this.conns.delete(rc.id)
+    if (this.byProfile.get(id) === rc.id) this.byProfile.delete(id)
     return { ok: true }
   }
 
@@ -343,11 +648,15 @@ export class SshRuntime {
 
   teardown(rc) {
     this.expirePendingFor(rc) // a discarded connection cannot keep a confirm window open
+    this.expireTicketsFor(rc.connId)
     try { rc.client && rc.client.end() } catch { /* ignore */ }
-    try { rc.stream && rc.stream.end() } catch { /* ignore */ }
+    for (const sh of rc.shells.values()) {
+      try { sh.stream && sh.stream.end() } catch { /* ignore */ }
+    }
     rc.status = 'closed'
     rc.broadcast({ type: 'status', state: 'closed', code: 'DISCARDED' })
     rc.dispose()
+    if (this.byProfile.get(rc.connId) === rc.id) this.byProfile.delete(rc.connId)
   }
 
   async shutdown() {
@@ -357,11 +666,14 @@ export class SshRuntime {
       rc.dispose()
     }
     this.conns.clear()
+    this.byProfile.clear()
     for (const item of this.pending.values()) {
       clearTimeout(item.timer)
       try { item.verify(false) } catch { /* ignore */ }
     }
     this.pending.clear()
+    for (const item of this.tickets.values()) clearTimeout(item.timer)
+    this.tickets.clear()
   }
 
   // Accepts either a raw Error (classified here) or an already-classified
@@ -376,24 +688,41 @@ export class SshRuntime {
 
   currentStatus() {
     const out = []
-    for (const rc of this.conns.values()) out.push({ id: rc.id, state: rc.status })
+    for (const rc of this.conns.values()) out.push({ id: rc.connId, state: rc.status })
     return out
   }
+}
+
+// U2.4 快照上限：单 shell 屏幕快照（serialize 串）的 host 侧内存封顶。
+export const MAX_SNAPSHOT_BYTES = 128 * 1024
+
+function shellTitle(rc, seq) {
+  return seq === 1 ? rc.label : `${rc.label} #${seq}`
+}
+
+function shellSummaries(rc) {
+  return [...rc.shells.values()].map(sh => ({
+    shellId: sh.id,
+    title: sh.title,
+    state: sh.ended ? 'ended' : 'live',
+    cols: sh.cols,
+    rows: sh.rows,
+  }))
 }
 
 // Exported for fault-injection tests (test/runtime.test.js): constructing a
 // real RuntimeConn without going through ssh2 lets tests drive attach / push /
 // viewer binding directly.
 export class RuntimeConn {
-  constructor(runtime, id, record) {
+  constructor(runtime, connId, record, { runtimeId = `rt-${randomUUID()}` } = {}) {
     this.runtime = runtime
-    this.id = id
+    this.id = runtimeId       // runtimeId：内部实例标识（含 generation 语义）
+    this.connId = connId      // profile id：对外名字（REST/路由不变）
     this.client = null
-    this.stream = null
     this.cols = DEFAULT_COLS
     this.rows = DEFAULT_ROWS
     this.status = 'connecting'
-    this.sockets = new Set()
+    this.sockets = new Set()  // 附着到本 runtime 的全部 viewer（含未绑 shell 的状态观察者）
     this.disposed = false
     this.connKey = null
     this.fpToken = null
@@ -401,38 +730,23 @@ export class RuntimeConn {
     this.lastErrorCode = null
     this.lastErrorMessage = null
 
-    // scrollback ring (binary-safe)
-    this.sbChunks = []
-    this.sbLen = 0
+    // 三层身份：一个连接多个 shell，各自独立的 stream / 尺寸 / 回放环 / 写入权
+    this.shells = new Map()   // shellId -> ShellChannel
+    this.shellSeq = 0
 
     this.host = record.host
     this.label = record.label
   }
 
-  push(chunk) {
-    const u8 = chunk instanceof Uint8Array ? chunk : Buffer.from(String(chunk))
-    // ring with a head slot that is only trimmed when at least two chunks exist
-    this.sbChunks.push(u8)
-    this.sbLen += u8.length
-    while (this.sbLen > this.runtime.scrollbackBytes && this.sbChunks.length > 1) {
-      const dropped = this.sbChunks.shift()
-      this.sbLen -= dropped.length
-    }
-    if (this.sockets.size > 0) {
-      const payload = u8
-      for (const ws of [...this.sockets]) {
-        try {
-          // backpressure: a viewer that stopped draining gets cut loose
-          // instead of buffering the PTY forever (plan §8 洪泛有界)
-          if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
-            this.sockets.delete(ws)
-            try { ws.close(1011, 'viewer-too-slow') } catch { /* gone */ }
-            continue
-          }
-          ws.send(payload)
-        } catch { this.sockets.delete(ws) }
-      }
-    }
+  /** 第一个未结束的 shell；全部结束则回最后一个（供回放）。 */
+  primaryShell() {
+    for (const sh of this.shells.values()) if (!sh.ended) return sh
+    return [...this.shells.values()].at(-1) ?? null
+  }
+
+  /** 兼容旧测试/旧调用面的最小外壳：默认 shell 的流。 */
+  get stream() {
+    return this.primaryShell()?.stream ?? null
   }
 
   broadcast(json) {
@@ -443,24 +757,43 @@ export class RuntimeConn {
     }
   }
 
-  flush() {
-    if (this.sockets.size === 0) return
-    const payload = Buffer.concat(this.sbChunks)
-    for (const ws of this.sockets) {
-      try { ws.send(payload) } catch { this.sockets.delete(ws) }
-    }
-  }
-
-  flushTo(ws) {
-    if (this.sbChunks.length === 0) return
-    try { ws.send(Buffer.concat(this.sbChunks)) } catch { /* client gone */ }
-  }
-
   answer(code, message) {
     this.status = 'error'
     this.lastErrorCode = code
     this.lastErrorMessage = message
     this.broadcast({ type: 'status', state: 'error', code, message })
+  }
+
+  dispose() { this.disposed = true }
+}
+
+/** 一个 shell channel：独立 stream / 尺寸 / 回放环 / viewer 集合 / 写入所有权（方案 §4.1.1）。 */
+export class ShellChannel {
+  constructor(rc, seq, { cols, rows, title }) {
+    this.rc = rc
+    this.id = `sh-${seq}`     // runtime 内唯一（seq 单调递增）；跨 runtime 不冲突（绑定按 rc 归属）
+    this.seq = seq
+    this.stream = null
+    this.cols = cols
+    this.rows = rows
+    this.title = title
+    this.ended = false
+    this.createdAt = Date.now()
+    this.lastViewedAt = this.createdAt
+    this.viewers = new Set()  // 附着到本 shell 的 viewer（ws）
+    this.writeOwner = null    // 写入所有权：同一时刻至多一个 ws
+    this.sbChunks = []
+    this.sbLen = 0
+    this.snapshotData = null  // U2.4：最近一次屏幕快照（serialize 串，内存态）
+    this.disposed = false
+  }
+
+  broadcast(json) {
+    if (this.viewers.size === 0) return
+    const payload = JSON.stringify(json)
+    for (const ws of this.viewers) {
+      try { ws.send(payload) } catch { this.viewers.delete(ws) }
+    }
   }
 
   dispose() { this.disposed = true }

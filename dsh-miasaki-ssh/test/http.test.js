@@ -150,3 +150,58 @@ test('WS upgrade: fence blocks foreign host, then ok client can talk', async () 
     ws.close()
   })
 })
+
+// ---- U2.1：v2 协议与附着票据的 HTTP/WS 层行为（方案 §3.2/§3.3）----
+
+test('U2.1: POST /ssh/api/attach 对未知连接 404 / 非法 connId 400', async () => {
+  await withServer(async ({ port }) => {
+    const res = await rawRequest(port, '/ssh/api/attach', { method: 'POST', body: JSON.stringify({ connId: '11111111-1111-1111-1111-111111111111' }) })
+    assert.equal(res.status, 404)
+    const bad = await rawRequest(port, '/ssh/api/attach', { method: 'POST', body: JSON.stringify({ connId: 'not-a-uuid!' }) })
+    assert.equal(bad.status, 400)
+  })
+})
+
+test('U2.1: 旧帧（无 v:2）被拒并提示刷新（不做双栈）', async () => {
+  await withServer(async ({ port }) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ssh/ws`, [], { headers: HOST_HEADER })
+    const received = await new Promise(resolve => {
+      const timer = setTimeout(() => resolve(null), 3000)
+      ws.on('message', data => { clearTimeout(timer); resolve(String(data)) })
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'attach', connId: 'whatever' }))
+      ws.onerror = () => { clearTimeout(timer); resolve(null) }
+    })
+    assert.ok(received !== null, 'expected a control frame, got nothing')
+    const parsed = JSON.parse(received)
+    assert.equal(parsed.type, 'error')
+    assert.equal(parsed.code, 'VERSION_MISMATCH')
+    assert.match(parsed.message, /刷新/)
+    ws.close()
+  })
+})
+
+test('U2.1: v2 帧带无效票据被拒（TICKET_INVALID）', async () => {
+  await withServer(async ({ port }) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ssh/ws`, [], { headers: HOST_HEADER })
+    const received = await new Promise(resolve => {
+      const timer = setTimeout(() => resolve(null), 3000)
+      ws.on('message', data => { clearTimeout(timer); resolve(String(data)) })
+      ws.onopen = () => ws.send(JSON.stringify({ v: 2, type: 'attach', ticket: 'bogus-ticket' }))
+      ws.onerror = () => { clearTimeout(timer); resolve(null) }
+    })
+    assert.ok(received !== null)
+    const parsed = JSON.parse(received)
+    assert.equal(parsed.type, 'error')
+    assert.equal(parsed.code, 'TICKET_INVALID')
+    ws.close()
+  })
+})
+
+test('U2.4: addon-serialize 静态资产随包可用（官方 0.14.0）', async () => {
+  await withServer(async ({ port }) => {
+    const res = await fetch(`http://127.0.0.1:${port}/ssh/vendor/addon-serialize.js`, { headers: HOST_HEADER })
+    assert.equal(res.status, 200)
+    const text = await res.text()
+    assert.match(text, /SerializeAddon|addon-serialize/)
+  })
+})

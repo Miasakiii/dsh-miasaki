@@ -76,13 +76,55 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
 
 /* ---------------------------------------------------------------- workbench */
 #ssh-root { height: 100%; }
-.workbench {
-  height: 100%;
+
+/* ---------------------------------------------------------------- 顶栏（D2，浮层模式专属）
+ * 路线丁：浮层盖住会话头 ⇒ SSH 页面自绘「对话｜会话布｜SSH」三段胶囊。
+ * 视觉语言与宿主侧入口同源（999px 圆角 / 28px 高 / 令牌配色 / 同高契约：上下 padding 0）。
+ * 右内边距消费 --ssh-chrome-reserve（client.js 从桌面壳窗控实测下发，D0 ③）；
+ * 普通浏览器 / 回退视图该变量缺省为 0，无多余留白。
+ */
+.topbar {
+  flex: none;
+  height: 40px;
   display: flex;
+  align-items: center;
+  padding: 0 14px;
+  padding-right: calc(14px + var(--ssh-chrome-reserve, 0px));
+  background: var(--ssh-rail);
+  border-bottom: 1px solid var(--ssh-border);
+}
+.topbar-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 3px;
+  border: 1px solid var(--ssh-border);
+  border-radius: 999px;
+  background: var(--ssh-surface);
+}
+.topbar-btn {
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0 11px;
+  color: var(--ssh-muted);
+  font: 600 12px Inter, system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.topbar-btn:hover { background: var(--ssh-hover); color: var(--ssh-text); }
+.topbar-btn.active { background: var(--ssh-accent); color: var(--ssh-on-accent); }
+.topbar-btn:focus-visible { outline: 2px solid var(--ssh-accent); outline-offset: 2px; }
+
+/* 顶栏（.topbar，浮层模式）+ 工作区：纵向 flex，顶栏固定高、工作区取余。 */
+#ssh-root { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.workbench {
+  flex: 1 1 auto;
   min-height: 0;
+  display: flex;
   overflow: hidden;
   position: relative;
-  container-type: inline-size;
   isolation: isolate;
 }
 
@@ -204,6 +246,18 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
 .state-banner span { flex: 1; min-width: 0; }
 .state-banner .text-btn { white-space: nowrap; background: transparent; color: inherit; border-color: currentColor; padding: 4px 8px; min-height: 0; }
 
+/* U2.1 写入所有权：只读条（决策 2）。可写时隐藏；接管按钮提交 shell.takeover。 */
+.write-bar {
+  margin: 12px 16px 0; padding: 8px 12px; flex: none;
+  border: 1px solid color-mix(in srgb, var(--ssh-warn) 30%, transparent);
+  border-radius: 8px; font-size: 12px; line-height: 1.6;
+  display: flex; align-items: center; gap: 9px;
+  color: var(--ssh-warn); background: var(--ssh-warn-bg);
+}
+.write-bar .write-text { flex: 1; min-width: 0; }
+.write-bar .text-btn { white-space: nowrap; background: transparent; color: inherit; border-color: currentColor; padding: 4px 8px; min-height: 0; }
+.write-bar[hidden] { display: none; }
+
 /* terminal area: xterm lives in #term-holder; flex 链保证取剩余高度 */
 .term-holder { flex: 1 1 auto; min-height: 0; min-width: 0; padding: 10px 14px 12px; overflow: hidden; }
 
@@ -243,16 +297,20 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
 .font-controls { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px; color: var(--ssh-muted); }
 .font-controls .icon-btn { width: 28px; height: 28px; }
 
-/* rail 收起 / 专注模式：<720px 时导航改为抽屉 */
+/* rail 收起 / 专注模式 + 响应式四档（D3 重校准，方案 §16.4-2）：
+ * 浮层（路线丁）时代 SSH 页面的容器宽度恒等视口（fixed inset:0 的 iframe），
+ * 原来挂在 .workbench 上的 container 查询在浮层形态下永不变档 —— 容器语义
+ * 从「中栏宽」改回「视口宽」（@media），断点值改为含端点的 960 / 720 / 480（典型宽度 1280/960/720/480 逐档落位）。
+ * 回退视图（conversation.view）已随 D3 删除，中栏 ≠ 视口的场景不复存在。 */
 .drawer-scrim { display: none; border: 0; padding: 0; background: transparent; }
 .workbench.rail-hidden .host-rail { display: none; }
 .workbench .rail-close { display: none; }
 
-@container (max-width: 959px) and (min-width: 720px) {
+@media (max-width: 960px) and (min-width: 721px) {
   .host-rail { width: 208px; flex-basis: 208px; }
   .toolbar { padding: 7px 12px; }
 }
-@container (max-width: 719px) {
+@media (max-width: 720px) {
   .host-rail { display: none; }
   .workbench.drawer-open .host-rail { display: flex !important; position: absolute; inset: 0 auto 0 0; width: min(288px, 86%); z-index: 16; box-shadow: 8px 0 25px rgba(16, 23, 40, 0.09); }
   .workbench.drawer-open .drawer-scrim { display: block; position: absolute; inset: 0; z-index: 15; width: 100%; height: 100%; background: rgba(17, 24, 39, 0.23); }
@@ -263,7 +321,7 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
   .state-banner { margin: 10px 10px 0; }
   .term-holder { padding: 8px 10px 10px; }
 }
-@container (max-width: 479px) {
+@media (max-width: 480px) {
   .tools .optional { display: none; }
   .env-chip { display: none; }
   .identity-sub { max-width: 200px; }
@@ -281,13 +339,26 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
   background: rgba(16, 23, 40, 0.21);
   display: flex; justify-content: flex-end;
 }
+/* 抽屉整体下移到桌面壳窗控带之下：窗控组（主题徽记 + 最小化/最大化/关闭）是 fixed
+   右上角的**零占位浮层**，压在页面之上；抽屉标题栏的 × 正好落在它上面（实机反馈：
+   两个 ✕ 中心只差 14×9px，抽屉那颗被压住点不到）。让位量由 app.js 用窗控组与 iframe
+   的父视口矩形实测下发；浏览器里、或 iframe 本就在窗控下方时该变量为 0，抽屉照旧顶格满高。 */
 .sheet {
-  width: min(412px, 100%); height: 100%;
+  width: min(412px, 100%); height: calc(100% - var(--ssh-chrome-clearance, 0px));
+  margin-top: var(--ssh-chrome-clearance, 0px);
   background: var(--ssh-surface); color: var(--ssh-text); border-left: 1px solid var(--ssh-border);
   display: flex; flex-direction: column; box-shadow: -8px 0 35px rgba(16, 23, 40, 0.05); min-height: 0;
 }
-.sheet-head { padding: 18px 20px 14px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--ssh-border); flex: none; }
-.sheet-head h2 { font-size: 16px; margin: 0; flex: 1; font-weight: 600; }
+/* 让位兜底：量不到窗控组、但宿主下发了 reserve 时改成水平让开（--ssh-chrome-avoid-right），
+   量到窗控时该变量为 0、这里就是原始的 20px。 */
+.sheet-head {
+  padding: 18px 20px 14px; padding-right: calc(20px + var(--ssh-chrome-avoid-right, 0px));
+  display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--ssh-border); flex: none;
+}
+.sheet-head h2 {
+  font-size: 16px; margin: 0; flex: 1; font-weight: 600;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .sheet-body { padding: 18px 20px; overflow-y: auto; flex: 1; min-height: 0; }
 .sheet-body p { font-size: 12px; line-height: 1.85; color: var(--ssh-muted); margin: 0 0 14px; }
 .sheet-body .notice { background: var(--ssh-raised); padding: 11px 12px; border-radius: 8px; line-height: 1.8; font-size: 12px; color: var(--ssh-muted); }

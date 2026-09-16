@@ -17,8 +17,8 @@ const state = {
   live: new Map(),        // connId → runtime state string
   trustMap: new Map(),    // hostKey → { fingerprint, algo, firstSeenAt }
   selection: null,        // rail 选中的主机 id
-  tabs: [],               // 已打开查看器的主机 id（有序）
-  activeTab: null,        // 当前标签的主机 id
+  tabs: [],               // U2.1：结构化标签 [{ connId, shellSeq, title, live }]（有序）
+  activeTab: null,        // 激活标签在 tabs 中的下标；无激活为 null
   session: null,          // 查看器实例（一次只有一个活跃查看器）
   railHidden: false,
   drawerOpen: false,
@@ -34,6 +34,78 @@ const state = {
 }
 
 const PREFS_KEY = 'dsh-ssh:prefs'
+// 工作区记忆两张据（U2 决策 4，方案 §4.3.2）：
+//   偏好（字号 / rail 折叠 / 专注）→ localStorage（跨标签页共享）—— PREFS_KEY，v2；
+//   工作区快照（标签集合与激活项 / 抽屉状态）→ sessionStorage（按标签页隔离，
+//   刷新保留、关标签页即忘）—— WORKSPACE_KEY，v1。
+// 两者都带 version + 全 try/catch：解析失败 / 版本不认 / 无痕模式一律回默认，绝不白屏。
+const PREFS_VERSION = 2
+const WORKSPACE_KEY = 'dsh-ssh:workspace'
+const WORKSPACE_VERSION = 1
+
+/** 统一 sessionStorage 安全读写（决策 4 的落地封装；无痕模式抛错一律吞掉）。 */
+const sessionStore = {
+  get(key) {
+    try { return window.sessionStorage.getItem(key) } catch { return null }
+  },
+  set(key, value) {
+    try { window.sessionStorage.setItem(key, value); return true } catch { return false }
+  },
+  remove(key) {
+    try { window.sessionStorage.removeItem(key) } catch { /* 无痕模式等：不可用则刷新后回到空态 */ }
+  },
+}
+
+/** U2.3：读工作区快照。损坏 / 版本不认 ⇒ null（调用方回默认）。 */
+function readWorkspace() {
+  const raw = sessionStore.get(WORKSPACE_KEY)
+  if (raw === null) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || parsed.version !== WORKSPACE_VERSION) return null
+    return parsed
+  } catch { return null }
+}
+
+/** U2.3：写工作区快照。写失败（配额/隐私模式）静默 —— 记忆是增强，不是依赖。 */
+function saveWorkspace() {
+  const snap = {
+    version: WORKSPACE_VERSION,
+    savedAt: new Date().toISOString(),
+    tabs: state.tabs.map(tab => ({
+      connId: tab.connId,
+      shellSeq: tab.shellSeq,
+      title: tab.title ?? null,
+    })),
+    activeTab: Number.isInteger(state.activeTab) ? state.activeTab : null,
+    drawerOpen: state.drawerOpen === true,
+  }
+  return sessionStore.set(WORKSPACE_KEY, JSON.stringify(snap))
+}
+
+function rememberLastTab(connId) {
+  // 兼容旧调用面：语义 = 把激活标签指到该主机的（首个）标签；null 清空激活项。
+  if (connId === null) {
+    const ws = readWorkspace()
+    if (ws !== null) {
+      ws.activeTab = null
+      sessionStore.set(WORKSPACE_KEY, JSON.stringify(ws))
+    }
+    return
+  }
+  const idx = state.tabs.findIndex(tab => tab.connId === connId)
+  if (idx === -1) return
+  const ws = readWorkspace() ?? { version: WORKSPACE_VERSION, tabs: [], activeTab: null, drawerOpen: false }
+  ws.activeTab = idx
+  sessionStore.set(WORKSPACE_KEY, JSON.stringify(ws))
+}
+
+function readLastTab() {
+  const ws = readWorkspace()
+  if (ws === null) return null
+  const tab = Array.isArray(ws.tabs) ? ws.tabs[ws.activeTab] : undefined
+  return tab?.connId ?? null
+}
 
 // ------------------------------------------------------------------ api
 async function api(path, options = {}) {
@@ -69,6 +141,7 @@ const ICON_PATHS = {
   plus: 'M12 5v14M5 12h14',
   panel: 'M9 4v16',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  send: 'M5 12h13m-5-6 6 6-6 6',
   focus: 'M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5',
   close: 'm6 6 12 12M6 18 18 6',
   shield: 'M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z',
@@ -230,14 +303,181 @@ function initialTheme() {
   return { dark, tokens: {}, typography: null }
 }
 
+// ---- 顶栏（D2，浮层模式专属）------------------------------------------
+// 浮层（路线丁）盖住会话头 ⇒ SSH 页面必须自绘「对话｜会话布｜SSH」顶栏，否则
+// 用户被困（D1 单向门教训）。仅在浮层模式下渲染：判定 = 嵌在 iframe 里（
+// window.parent !== window）且能从 parent 拿到浮层标记。回退视图（conversation.
+// view）里 parent 同样存在但没有浮层标记 ⇒ 不渲染（回退期里官方 tab 栏就是切换器）。
+// 「对话」「会话布」两颗按钮的行为落在宿主侧（client.js 的 onOverlayMessage）：
+// 消息带 overlayToken（由 chrome 消息下发，宿主校验防伪）。顶栏消费
+// --ssh-chrome-reserve 给桌面壳窗控让位（D0 ③ 实测过的量法，client.js 下发）。
 function setupThemeListener() {
   window.addEventListener('message', event => {
     if (event.source !== window.parent) return
     if (event.origin !== window.location.origin) return
     const data = event.data
-    if (data === null || typeof data !== 'object' || data.source !== 'dsh-ssh' || data.type !== 'theme' || data.version !== 1) return
-    applyThemeSnapshot(data)
+    if (data === null || typeof data !== 'object' || data.source !== 'dsh-ssh') return
+    if (data.type === 'theme' && data.version === 1) {
+      applyThemeSnapshot(data)
+      return
+    }
+    // chrome 消息（D2）：桌面壳窗控让位量 + 顶栏消息令牌（宿主校验用）+ 会话布段可用性。
+    if (data.type === 'chrome' && data.version === 1) {
+      applyChrome(data)
+      return
+    }
   })
+}
+
+/**
+ * 应用宿主 chrome 消息。`canvasAvailable` 是 D2 的语义边界收口（§16.3）：hero 态没有
+ * 会话头 ⇒ canvas 没有胶囊可委托 ⇒ 顶栏那一段若照常渲染就是一颗必然无效的按钮。
+ * 宿主把事实下发过来，浮层据此决定渲不渲染该段（默认渲染：没收到字段时不擅自减入口）。
+ */
+function applyChrome(data) {
+  overlayState.token = typeof data.overlayToken === 'string' && data.overlayToken.length > 0 ? data.overlayToken : null
+  const reserve = Number.isFinite(data.reserve) ? Math.max(0, Math.round(data.reserve)) : 0
+  overlayState.reserve = reserve
+  try { document.documentElement.style.setProperty('--ssh-chrome-reserve', reserve + 'px') } catch { /* 只读环境 */ }
+  // 抽屉让位的兜底口径跟着宿主的实测值走（量不到窗控组时用水平让位顶上，见 syncChromeClearance）。
+  syncChromeClearance()
+  const available = data.canvasAvailable !== false
+  if (available !== overlayState.canvasAvailable) {
+    overlayState.canvasAvailable = available
+    const root = document.getElementById('ssh-root')
+    // 只在真的变化时重建；顶栏自身无状态，重建比增删节点更不容易留下半截结构。
+    if (root !== null && document.getElementById('ssh-topbar') !== null) buildTopbar(root)
+  }
+}
+
+const overlayState = { token: null, current: 'ssh', canvasAvailable: true, reserve: 0 }
+
+// ---- 桌面壳窗控让位（实机反馈修复）------------------------------------------
+// 桌面壳的窗控组（`#miasaki-titlebar .tb-group`：主题徽记 + 最小化/最大化/关闭）是
+// **fixed 右上角的零占位浮层**，压在页面之上。SSH 页面在壳里跑在 iframe 内，右上角那
+// 片像素恰好是「新建主机」等抽屉标题栏的位置 ⇒ 抽屉的 × 关闭按钮与窗控组叠在同一块
+// 像素上（实机截图实测：两者中心只差 14×9px，× 被窗控压住、点不到）。
+//
+// 让位口径取**抽屉整体下移到窗控下沿之下**，而不是把 × 往左推：
+// ① 会话头第一行的入口胶囊（窄窗口下的紧凑态 `>_`）也在这一行，往左让位会撞上它；
+// ② 窄窗口里往左让位会把 × 推到抽屉中间，标题栏右侧空出一大片，读感更差；
+// ③ 浏览器里量不到窗控（clearance = 0），抽屉照旧顶格，零副作用。
+//
+// 坐标系：窗控组与 iframe 的矩形都取**父视口**坐标，两者相减即得「本 iframe 内需要让开
+// 的顶部高度」。iframe 本就在窗控下方时（会话视图里 iframe 从会话头下开始）差值为负，
+// 归零 —— 不需要为两种挂载形态写分支。
+const CHROME_GAP_PX = 8 // 窗控下沿再留一段呼吸，避免「贴着」的读感
+
+/** 纯函数：父视口坐标下的窗控组矩形 + iframe 矩形 → 本 iframe 顶部让位量（px）；量不到返回 null。 */
+function computeChromeClearance(capsuleRect, frameRect) {
+  if (capsuleRect === null || capsuleRect === undefined) return null
+  if (!(capsuleRect.width > 0) || !(capsuleRect.height > 0)) return null
+  const bottom = Number(capsuleRect.bottom)
+  if (!Number.isFinite(bottom)) return null
+  const frameTop = frameRect !== null && frameRect !== undefined && Number.isFinite(frameRect.top)
+    ? Number(frameRect.top)
+    : 0
+  const overlap = bottom - frameTop
+  if (overlap <= 0) return 0 // 窗控整条都在 iframe 之上：不挡任何东西，别凭空下移抽屉
+  return Math.ceil(overlap + CHROME_GAP_PX)
+}
+
+/** 从父文档量窗控组（同源才可读）；顶层窗口 / 无窗控组 / 跨源一律 null。 */
+function measureChromeClearance() {
+  try {
+    if (window.parent === window) return null
+    const doc = window.parent !== null && window.parent !== undefined ? window.parent.document : null
+    // `.tb-capsule` 是 v3 旧类名，一并查：主题版本落后时让位不至于静默失效。
+    const capsule = doc?.querySelector?.('#miasaki-titlebar .tb-group') ??
+      doc?.querySelector?.('#miasaki-titlebar .tb-capsule') ?? null
+    if (capsule === null || typeof capsule.getBoundingClientRect !== 'function') return null
+    const frame = window.frameElement ?? null
+    const frameRect = frame !== null && typeof frame.getBoundingClientRect === 'function'
+      ? frame.getBoundingClientRect()
+      : null
+    return computeChromeClearance(capsule.getBoundingClientRect(), frameRect)
+  } catch { return null } // 跨源 iframe / 宿主文档不可读
+}
+
+/**
+ * 写让位变量。量到窗控 → 抽屉顶部下移（`--ssh-chrome-clearance`）；量不到窗控组但宿主
+ * 下发了 reserve（浮层模式下 client.js 从同一元素实测）→ 退回水平让位
+ * （`--ssh-chrome-avoid-right`）。两条路都不会让 × 压在窗控上面。
+ */
+function syncChromeClearance() {
+  const measured = measureChromeClearance()
+  const clearance = measured ?? 0
+  const avoidRight = measured === null ? overlayState.reserve : 0
+  try {
+    const style = document.documentElement.style
+    style.setProperty('--ssh-chrome-clearance', clearance + 'px')
+    style.setProperty('--ssh-chrome-avoid-right', avoidRight + 'px')
+  } catch { /* 只读环境 */ }
+}
+
+// 窗口尺寸变化会同时改 iframe 在父视口里的位置（会话视图下中栏宽度变了，右缘跟着动），
+// 让位量必须重测；用 rAF 合并连续的 resize 事件。
+let chromeClearanceFrame = 0
+function scheduleChromeClearance() {
+  if (chromeClearanceFrame !== 0) return
+  const schedule = typeof requestAnimationFrame === 'function'
+    ? requestAnimationFrame
+    : callback => setTimeout(callback, 16)
+  chromeClearanceFrame = schedule(() => {
+    chromeClearanceFrame = 0
+    syncChromeClearance()
+  })
+}
+function isOverlayMode() {
+  try {
+    if (window.parent === window) return false
+    const marker = window.parent?.document?.querySelector?.('.dsh-ssh-host .dsh-ssh-overlay')
+    return marker !== null && marker !== undefined
+  } catch { return false }
+}
+function postToHost(message) {
+  try {
+    if (overlayState.token === null) return
+    window.parent.postMessage({ source: 'dsh-ssh', overlayToken: overlayState.token, ...message }, window.location.origin)
+  } catch { /* 宿主不可达：顶栏按钮静默无效（不抛错） */ }
+}
+function sendOverlayClose() { postToHost({ type: 'ssh:close' }) }
+function sendOverlayCanvas() { postToHost({ type: 'ssh:view', view: 'canvas' }) }
+
+/** 顶栏 DOM：三段胶囊（与宿主侧入口同视觉语言：999px 圆角、28px 高、令牌配色）。 */
+function buildTopbar(root) {
+  const previous = document.getElementById('ssh-topbar')
+  if (previous !== null) previous.remove() // 幂等：重建（canvasAvailable 变化时）不留半截结构
+  const bar = document.createElement('header')
+  bar.className = 'topbar'
+  bar.id = 'ssh-topbar'
+  const group = document.createElement('div')
+  group.className = 'topbar-switch'
+  group.setAttribute('role', 'group')
+  group.setAttribute('aria-label', '视图切换')
+  const buttons = [
+    { id: 'dialog', label: '对话', title: '退出 SSH，回到会话', run: sendOverlayClose },
+    // 「会话布」只在宿主确认 canvas 入口在场时才渲染（hero 态没有会话头 ⇒ 没有胶囊可委托）。
+    ...(overlayState.canvasAvailable === true
+      ? [{ id: 'canvas', label: '会话布', title: '切换到会话布', run: sendOverlayCanvas }]
+      : []),
+    { id: 'ssh', label: 'SSH', title: 'SSH（当前）', run: null },
+  ]
+  for (const item of buttons) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = `topbar-btn${item.id === 'ssh' ? ' active' : ''}`
+    btn.dataset.seg = item.id
+    btn.textContent = item.label
+    btn.title = item.title
+    btn.setAttribute('aria-label', item.label)
+    if (item.id === 'ssh') btn.setAttribute('aria-current', 'page')
+    if (item.run !== null) btn.addEventListener('click', item.run)
+    group.appendChild(btn)
+  }
+  bar.appendChild(group)
+  root.prepend(bar)
+  return bar
 }
 
 // ------------------------------------------------------------------ view model（纯函数，vm 测试覆盖）
@@ -274,6 +514,29 @@ function looksSuspiciousPaste(text) {
   if (/[\r\n]/.test(text)) return true
   // 控制字符（Tab 之外，含 ESC）都先预览确认——与 plan §6「含控制字符粘贴先预览」一致
   return /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)
+}
+
+/**
+ * 「送往对话」的消息格式（A0）：首行标注来源主机，其后是正文。
+ * 纯函数（vm 测试覆盖）——A0 走剪贴板通道，这个字符串就是它唯一的产物：
+ * 用户把它粘进对话，Agent 由此知道内容来自哪台机器（plan §8.2「主机上下文」）。
+ */
+function formatSshContext(conn, body, options = {}) {
+  const text = String(body ?? '').replace(/\s+$/, '')
+  if (text.length === 0) return ''
+  const address = conn === null || conn === undefined
+    ? '未知主机'
+    : `${conn.label} · ${conn.username}@${conn.host}:${conn.port}`
+  const head = `[SSH ${address}]`
+  const intro = typeof options.intro === 'string' ? options.intro.trim() : ''
+  return intro.length > 0 ? `${head} ${intro}\n${text}` : `${head}\n${text}`
+}
+
+/** 三种送出意图（plan §8.2）：正文之外要不要再给 Agent 一句引导语。 */
+const SEND_INTENTS = {
+  selection: '',
+  recent: '这是终端的最近输出：',
+  error: '帮我看下这段终端输出有什么问题：',
 }
 
 // ------------------------------------------------------------------ live state
@@ -314,7 +577,13 @@ function loadPrefs() {
 
 function savePrefs() {
   try {
-    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ fontSize: state.prefs.fontSize, railHidden: state.railHidden, focus: state.focusMode }))
+    // prefs v2（方案 §4.3.2）：与 v1 的差别只有 version 字段，读取端两者兼容
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({
+      version: PREFS_VERSION,
+      fontSize: state.prefs.fontSize,
+      railHidden: state.railHidden,
+      focus: state.focusMode,
+    }))
   } catch { /* noop */ }
 }
 
@@ -416,9 +685,16 @@ function openEditor(conn = null) {
     fieldNode('认证方式', method), keyField, fieldNode('分组', group),
     notice, error,
   )
+  // 「保存并连接」的意图必须走**闭包变量**：早期版本把标记挂在按钮 run 的那个 `event`
+  // 对象上，而它解析到全局 `window.event`（click 事件），下面
+  // `dispatchEvent(new Event('submit'))` 又让 submit 处理器拿到**新的事件对象**
+  // ⇒ 标记永远读不到，connectFlow 从未被调用（"保存并连接"实际只保存）。D-1。
+  let saveAndConnect = false
   const submit = event => {
     event.preventDefault()
     if (!form.reportValidity()) return
+    const alsoConnect = saveAndConnect
+    saveAndConnect = false
     const body = {
       label: name.value.trim() || host.value.trim() || '未命名主机',
       host: host.value.trim(),
@@ -438,7 +714,7 @@ function openEditor(conn = null) {
         await refreshConnections()
         state.selection = connection.id
         renderAll()
-        if (event.saveAndConnect === true) void connectFlow(connection)
+        if (alsoConnect === true) void connectFlow(connection)
       } catch (err) {
         error.textContent = err.message
         error.hidden = false
@@ -449,7 +725,7 @@ function openEditor(conn = null) {
   form.addEventListener('submit', submit)
   const actions = [
     { label: '取消', run: () => closeSheet() },
-    { label: '保存并连接', primary: true, run: () => { event.saveAndConnect = true; form.dispatchEvent(new window.Event('submit', { cancelable: true })) } },
+    { label: '保存并连接', primary: true, run: () => { saveAndConnect = true; form.dispatchEvent(new window.Event('submit', { cancelable: true })) } },
   ]
   openSheet(editing ? '编辑主机' : '新建主机', [form], actions)
   if (editing) { /* 表单值已填 */ }
@@ -587,20 +863,36 @@ async function connectFlow(conn) {
   openHost(conn.id)
 }
 
-function openHost(id) {
+function openHost(id, { shellSeq = null } = {}) {
   const conn = byId(id)
   if (conn === undefined) return
   state.selection = id
   state.pendingError = null
   state.frameState = null
   state.transport = false
-  if (!state.tabs.includes(id)) state.tabs.push(id)
-  state.activeTab = id
+  // U2.1 标签结构化（方案 §4.1.3）：tab = { connId, shellSeq, title, live }。
+  // shellSeq 为 null 表示「用默认（首个）shell」，数字表示恢复/打开指定 shell。
+  let tab = state.tabs.find(item => item.connId === id)
+  if (tab === undefined) {
+    tab = { connId: id, shellSeq: shellSeq ?? 1, title: null, live: true }
+    state.tabs.push(tab)
+  } else if (shellSeq !== null) {
+    tab.shellSeq = shellSeq
+  }
+  state.activeTab = state.tabs.indexOf(tab)
+  saveWorkspace()
   renderAll()
-  mountSession(conn)
+  mountSession(conn, tab)
 }
 
-function mountSession(conn) {
+/** 激活第 index 个标签（同主机多 shell 的每个标签都能回到自己的 shell）。 */
+function openHostAt(index) {
+  const tab = state.tabs[index]
+  if (tab === undefined) return
+  openHost(tab.connId, { shellSeq: tab.shellSeq })
+}
+
+function mountSession(conn, tab) {
   destroySession()
   if (window.SshTermSession === undefined) {
     state.pendingError = { message: '终端模块加载失败，请刷新页面重试。' }
@@ -611,12 +903,14 @@ function mountSession(conn) {
   holder.replaceChildren()
   state.session = window.SshTermSession.create({
     conn,
+    shellSeq: tab?.shellSeq ?? null,
     holder,
     theme: state.xtermTheme ?? undefined,
     fontSize: state.prefs.fontSize,
     onStatus: (kind, text) => handleSessionStatus(kind, text),
     onFrame: msg => handleSessionFrame(conn, msg),
     onResize: size => { $('#size-text').textContent = `${size.cols}×${size.rows}` },
+    onModeChange: mode => handleModeChange(mode),
   })
   setupTerminalExtras(conn)
 }
@@ -649,6 +943,8 @@ function handleSessionFrame(conn, msg) {
     } else if (msg.state === 'closed') {
       state.live.set(conn.id, 'closed')
       state.frameState = { state: 'closed' }
+      const tab = activeTabObj()
+      if (tab !== null) { tab.live = false; saveWorkspace() }
       void refreshConnections().then(renderAll)
     } else if (msg.state === 'error') {
       state.live.set(conn.id, 'error')
@@ -663,10 +959,63 @@ function handleSessionFrame(conn, msg) {
     state.frameState = msg.code === 'NO_CONNECTION'
       ? { state: 'closed', message: msg.message }
       : { state: 'error', code: msg.code, message: msg.message }
+  } else if (msg.type === 'shell.opened') {
+    // 新 shell：标签集合追加一项并激活（方案 §4.1.3）
+    const m = /#(\d+)$/.exec(String(msg.title ?? ''))
+    const shellSeq = m !== null ? Number(m[1]) : 1
+    let tab = state.tabs.find(item => item.connId === conn.id && item.shellSeq === shellSeq)
+    if (tab === undefined) {
+      tab = { connId: conn.id, shellSeq, title: msg.title ?? null, live: true }
+      state.tabs.push(tab)
+    } else {
+      tab.title = msg.title ?? tab.title
+      tab.live = true
+    }
+    state.activeTab = state.tabs.indexOf(tab)
+    saveWorkspace()
+  } else if (msg.type === 'shell.closed') {
+    // shell 结束 ≠ 连接结束：标签保留为「会话已结束」，不自动重连（方案 §4.1.5）
+    const tab = activeTabObj()
+    if (tab !== null) { tab.live = false; saveWorkspace() }
+    state.frameState = { state: 'closed', message: '该 shell 已结束；其他标签不受影响，可新建 shell 或关闭标签。' }
+  } else if (msg.type === 'write.open') {
+    // 写权空出：当前 viewer 若处于只读态，提示可接管（不自动接管）
+    if (state.session !== null && state.session.isWriteOwner() !== true) {
+      setStatusNote('写入权已空出，可从只读条点「接管写入」。')
+    }
   }
   renderBanner()
   renderRail()
   renderTabs()
+  renderWriteBar()
+}
+
+/** 当前激活标签对象（结构化 tabs 的下标寻址）。 */
+function activeTabObj() {
+  return Number.isInteger(state.activeTab) ? state.tabs[state.activeTab] ?? null : null
+}
+
+/** U2.1 写入所有权 UI：只读条 + 接管按钮（决策 2）。 */
+function handleModeChange(mode) {
+  renderWriteBar()
+  if (mode === 'read') setStatusNote('只读模式：输入已停用，点「接管写入」获得控制权。')
+}
+
+function renderWriteBar() {
+  const bar = $('#write-bar')
+  if (bar === null) return
+  const writable = state.session !== null && state.session.isWriteOwner() === true
+  bar.hidden = writable
+  if (writable) return
+  const take = bar.querySelector('#write-take')
+  if (take !== null) {
+    take.onclick = () => {
+      if (state.session !== null) {
+        state.session.takeover()
+        setStatusNote('已请求接管写入。')
+      }
+    }
+  }
 }
 
 function setBannerFromMessage(message, kind) {
@@ -682,6 +1031,7 @@ function renderAll() {
   renderBanner()
   renderStatusbar()
   renderBody()
+  renderWriteBar()
   syncRailMode()
 }
 
@@ -751,29 +1101,35 @@ function selectHost(id) {
 function renderTabs() {
   const tabs = $('#tabs')
   tabs.replaceChildren()
-  for (const id of state.tabs) {
-    const conn = byId(id)
-    if (conn === undefined) continue
-    const live = liveOf(id)
-    const wrap = el('div', `terminal-tab${id === state.activeTab ? ' active' : ''}`)
+  state.tabs.forEach((tab, index) => {
+    const conn = byId(tab.connId)
+    if (conn === undefined) return
+    const live = liveOf(tab.connId)
+    const multi = state.tabs.filter(item => item.connId === tab.connId).length > 1
+    const label = tab.title ?? (multi && tab.shellSeq !== null && tab.shellSeq > 1 ? `${conn.label} #${tab.shellSeq}` : conn.label)
+    const wrap = el('div', `terminal-tab${index === state.activeTab ? ' active' : ''}`)
     const select = el('button', 'tab-select')
     select.type = 'button'
-    select.setAttribute('aria-pressed', String(id === state.activeTab))
-    const dotClass = live === 'connected' ? ' connected' : live === 'error' ? ' error' : live === 'idle' || live === 'closed' ? '' : ' warning'
-    select.append(el('i', `dot${dotClass}`), el('span', 'tab-label', conn.label))
-    select.onclick = () => openHost(id)
+    select.setAttribute('aria-pressed', String(index === state.activeTab))
+    const dotClass = !tab.live ? '' : live === 'connected' ? ' connected' : live === 'error' ? ' error' : live === 'idle' || live === 'closed' ? '' : ' warning'
+    select.append(el('i', `dot${dotClass}`), el('span', 'tab-label', label))
+    select.title = tab.live ? `${conn.username}@${conn.host}:${conn.port} · ${stateText(live)}` : '会话已结束'
+    select.onclick = () => openHostAt(index)
     const close = el('button', 'tab-close', '×')
     close.type = 'button'
-    close.title = `关闭 ${conn.label} 的查看`
-    close.setAttribute('aria-label', `关闭 ${conn.label} 的查看`)
-    close.onclick = () => closeTabDialog(id)
+    close.title = `关闭 ${label} 的查看`
+    close.setAttribute('aria-label', `关闭 ${label} 的查看`)
+    close.onclick = () => closeTabDialog(index)
     wrap.append(select, close)
     tabs.appendChild(wrap)
-  }
+  })
 }
 
 function renderIdentity() {
-  const conn = state.selection !== null ? byId(state.selection) : null
+  // D-3（方案 §16.4-1）：删除选中的主机后 state.selection 仍指向已不存在的 id，
+  // byId 返回 undefined —— `conn === null` 判空失效，912 行读 conn.group 抛 TypeError。
+  // 归一化为 null：selection 失效等同「未选中」。
+  const conn = state.selection !== null ? (byId(state.selection) ?? null) : null
   $('#identity-name').textContent = conn?.label ?? 'SSH 工作区'
   $('#identity-env').textContent = conn?.group ?? ''
   $('#identity-env').hidden = conn === null || !conn.group || conn.group === '未分组'
@@ -782,6 +1138,7 @@ function renderIdentity() {
     : `${conn.username}@${conn.host}:${conn.port} · ${{ password: '密码认证', key: '私钥认证', agent: 'SSH agent' }[conn.auth?.method] ?? conn.auth?.method}`
   const live = conn !== null && isLive(liveOf(conn.id))
   $('#btn-search').disabled = !live
+  $('#btn-send').disabled = !live
   $('#btn-focus').disabled = false
   $('#btn-more').disabled = conn === null
 }
@@ -801,17 +1158,22 @@ function bannerNode(kind, message, actions) {
 
 function renderBanner() {
   const banner = $('#state-banner')
+  // D4 尾项①（§16.4-3 顺延项）：隐藏时清空内容 —— 旧实现只设 hidden，上一次的
+  // 图标 / 文案 / 按钮节点会留在 DOM（含 onclick 闭包引用）。先清再定，隐藏态 =
+  // 空容器；显示态由 bannerNode() 完整重建，二者互不干扰。
   banner.hidden = true
+  banner.replaceChildren()
   const frame = state.frameState
   if (frame === null || frame.state === undefined) {
     if (state.pendingError !== null) {
       bannerNode('error', `连接失败：${state.pendingError.message}`, [
-        { label: '编辑主机', run: () => { const conn = byId(state.selection); if (conn !== null) openEditor(conn) } },
+        { label: '编辑主机', run: () => { const conn = byId(state.selection) ?? null; if (conn !== null) openEditor(conn) } },
       ])
     }
     return
   }
-  const conn = state.activeTab !== null ? byId(state.activeTab) : null
+  const activeTabItem = activeTabObj()
+  const conn = activeTabItem !== null ? (byId(activeTabItem.connId) ?? null) : null
   switch (frame.state) {
     case 'connecting':
       bannerNode('warning', '正在建立 SSH 连接，终端就绪前不接受输入。', [
@@ -848,13 +1210,17 @@ function renderBanner() {
 }
 
 function renderStatusbar() {
-  const conn = state.activeTab !== null ? byId(state.activeTab) : (state.selection !== null ? byId(state.selection) : null)
+  // D-3 同病：activeTab/selection 指向已删主机时 byId 返回 undefined，归一化 null。
+  const activeTabItem0 = activeTabObj()
+  const activeConn = activeTabItem0 !== null ? (byId(activeTabItem0.connId) ?? null) : null
+  const conn = activeConn !== null ? activeConn : (state.selection !== null ? (byId(state.selection) ?? null) : null)
   const live = conn !== null ? liveOf(conn.id) : 'idle'
   const pill = $('#status-pill')
-  pill.replaceChildren(
-    el('i', `dot${live === 'connected' ? ' connected' : live === 'error' ? ' error' : isLive(live) ? ' warning' : ''}`),
-    el('span', '', stateText(live)),
-  )
+  // 只换 dot 类名与文本，不重建节点 —— #status-text 是 buildSkeleton 的静态节点
+  const dot = pill.querySelector('.dot')
+  if (dot !== null) dot.className = `dot${live === 'connected' ? ' connected' : live === 'error' ? ' error' : isLive(live) ? ' warning' : ''}`
+  const text = $('#status-text')
+  if (text !== null) text.textContent = stateText(live)
   const trust = $('#trust-status')
   if (conn === null) {
     trust.hidden = true
@@ -872,7 +1238,8 @@ function renderStatusbar() {
 }
 
 function renderBody() {
-  const conn = state.activeTab !== null ? byId(state.activeTab) : null
+  const activeTabItem = activeTabObj()
+  const conn = activeTabItem !== null ? (byId(activeTabItem.connId) ?? null) : null
   const showTerm = conn !== null && state.session !== null
   $('#term-holder').hidden = !showTerm
   const empty = $('#empty-space')
@@ -896,7 +1263,9 @@ function emptyStateNodes() {
     nodes.push(actions)
     return nodes
   }
-  if (state.selection === null) {
+  // D-3 同病：selection 指向已删除的主机时 byId 返回 undefined，回退到「选择一台主机」空态
+  const selectedConn = state.selection !== null ? (byId(state.selection) ?? null) : null
+  if (selectedConn === null) {
     const iconWrap = el('div', 'empty-icon')
     iconWrap.appendChild(icon('terminal'))
     nodes.push(iconWrap, el('h2', '', '选择一台主机'))
@@ -917,7 +1286,7 @@ function emptyStateNodes() {
     nodes.push(recent, actions)
     return nodes
   }
-  const conn = byId(state.selection)
+  const conn = selectedConn
   const iconWrap = el('div', 'empty-icon')
   iconWrap.appendChild(icon('server'))
   nodes.push(iconWrap, el('h2', '', conn.label))
@@ -936,34 +1305,61 @@ function emptyStateNodes() {
 }
 
 // ------------------------------------------------------------------ 标签 / 断开
-function closeTabDialog(id) {
-  const conn = byId(id)
-  if (conn === undefined) return
+function closeTabDialog(index) {
+  const tab = state.tabs[index]
+  if (tab === undefined) return
+  const conn = byId(tab.connId)
+  if (conn === undefined) {
+    state.tabs.splice(index, 1)
+    if (state.activeTab === index) { state.activeTab = null; destroySession() }
+    else if (state.activeTab !== null && state.activeTab > index) state.activeTab -= 1
+    saveWorkspace()
+    renderAll()
+    return
+  }
   const remove = disconnect => {
     closeSheet()
-    state.tabs = state.tabs.filter(tab => tab !== id)
-    if (state.activeTab === id) {
-      state.activeTab = state.tabs.at(-1) ?? null
+    const wasActive = state.activeTab === index
+    state.tabs.splice(index, 1)
+    if (wasActive) {
+      state.activeTab = null
       destroySession()
       state.frameState = null
-      if (state.activeTab !== null) {
-        openHost(state.activeTab)
+      const next = state.tabs[Math.min(index, state.tabs.length - 1)]
+      if (next !== undefined) {
+        openHost(next.connId, { shellSeq: next.shellSeq })
         return
       }
-      state.selection = state.tabs.length > 0 ? state.selection : state.selection
+    } else if (state.activeTab !== null && state.activeTab > index) {
+      state.activeTab -= 1
     }
-    if (disconnect === true) void disconnectHost(id)
+    saveWorkspace()
+    if (disconnect === true) void disconnectHost(tab.connId)
     renderAll()
   }
+  const sameHostLeft = state.tabs.some((item, i) => i !== index && item.connId === tab.connId)
   const nodes = [
     el('p', '', `${conn.label} · ${conn.username}@${conn.host}:${conn.port}`),
-    el('p', 'notice', '默认仅关闭当前查看。连接继续保留，可从主机列表再次打开；如需结束远程 shell，请选择断开并关闭。'),
+    el('p', 'notice', sameHostLeft
+      ? '该主机还有其他 shell 标签。「断开整个连接」会结束全部 shell；只想结束这个 shell 请选「关闭此 shell」（连接保留）。'
+      : '默认仅关闭当前查看。连接继续保留，可从主机列表再次打开；如需结束远程 shell，请选择断开并关闭。'),
   ]
-  openSheet('关闭终端查看', nodes, [
+  const actions = [
     { label: '取消', run: () => closeSheet() },
-    { label: '断开并关闭', danger: true, run: () => remove(true) },
+    { label: '断开整个连接', danger: true, run: () => remove(true) },
     { label: '仅关闭查看', primary: true, run: () => remove(false) },
-  ])
+  ]
+  // 关此 shell：仅当该标签就是当前挂载会话且本查看器是写入 owner（服务端同口径校验）
+  if (state.activeTab === index && state.session !== null && state.session.connId === tab.connId && state.session.isWriteOwner() === true && tab.live !== false) {
+    actions.splice(2, 0, {
+      label: '关闭此 shell（连接保留）',
+      run: () => {
+        try { state.session.closeShell() } catch { /* gone */ }
+        remove(false)
+      },
+    })
+  }
+  openSheet('关闭终端查看', nodes, actions)
 }
 
 async function disconnectHost(id) {
@@ -983,6 +1379,9 @@ function hostMenuItems(conn) {
     items.push({ icon: 'terminal', label: '打开终端', run: () => openHost(conn.id) })
   } else {
     items.push({ icon: 'terminal', label: '连接主机', run: () => { void connectFlow(conn) } })
+  }
+  if (live) {
+    items.push({ icon: 'plus', label: '新建 shell 标签', run: () => openNewShellTab(conn.id) })
   }
   items.push({ icon: 'edit', label: '编辑主机', run: () => openEditor(conn) })
   items.push({
@@ -1038,9 +1437,18 @@ function hostMenuItems(conn) {
     void (async () => {
       try {
         await api(`/ssh/api/connections/${encodeURIComponent(conn.id)}`, { method: 'DELETE' })
-        state.tabs = state.tabs.filter(tab => tab !== conn.id)
-        if (state.activeTab === conn.id) { state.activeTab = state.tabs.at(-1) ?? null; destroySession() }
-        if (state.selection === conn.id) state.selection = state.activeTab
+        const removedAt = state.tabs.map((tab, i) => (tab.connId === conn.id ? i : -1)).filter(i => i >= 0)
+        state.tabs = state.tabs.filter(tab => tab.connId !== conn.id)
+        if (state.activeTab !== null && removedAt.includes(state.activeTab)) {
+          state.activeTab = state.tabs.length > 0 ? Math.min(state.activeTab, state.tabs.length - 1) : null
+          destroySession()
+        } else if (state.activeTab !== null) {
+          state.activeTab -= removedAt.filter(i => i < state.activeTab).length
+        }
+        if (state.selection === conn.id) {
+          state.selection = state.activeTab !== null ? state.tabs[state.activeTab]?.connId ?? null : null
+        }
+        saveWorkspace()
         await refreshConnections()
         await refreshTrust()
         renderAll()
@@ -1048,6 +1456,24 @@ function hostMenuItems(conn) {
     })()
   } })
   return items
+}
+
+/** U2.1：在同一 SSH 连接上新开一个 shell channel，并把当前查看器切过去（方案 §4.1.3）。 */
+function openNewShellTab(connId) {
+  const session = state.session
+  const conn = byId(connId)
+  if (conn === undefined) return
+  if (session === null || session.connId !== connId) {
+    openHost(connId)
+    setStatusNote('已打开该主机；再从菜单选「新建 shell 标签」即可在同连接开第二个 shell。')
+    return
+  }
+  if (isLive(liveOf(connId)) !== true) {
+    setStatusNote('该主机当前没有活跃连接。')
+    return
+  }
+  session.openShell()
+  setStatusNote('正在新建 shell…')
 }
 
 let menuCleanup = null
@@ -1176,6 +1602,14 @@ function setupTerminalExtras(conn) {
   if (termTextarea !== null && termTextarea !== undefined) {
     termTextarea.addEventListener('paste', onPaste, false)
   }
+  // 右键：终端现场的「送往对话」入口（A0）。无终端时交还浏览器默认菜单。
+  const onContextMenu = event => {
+    const conn = state.selection !== null ? (byId(state.selection) ?? null) : null
+    if (conn === null || state.session === null || state.session === undefined) return
+    event.preventDefault()
+    openMenuAt({ right: event.clientX, bottom: event.clientY, left: event.clientX, top: event.clientY }, sendMenuItems(conn))
+  }
+  holder.addEventListener('contextmenu', onContextMenu)
 }
 
 function pasteWithGuard(conn, text) {
@@ -1193,6 +1627,44 @@ function pasteWithGuard(conn, text) {
     { label: '取消', run: () => closeSheet() },
     { label: '粘贴', primary: true, run: () => { closeSheet(); state.session?.input(text) } },
   ])
+}
+
+// ------------------------------------------------------------------ 送往对话（A0）
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true } catch { return false }
+}
+
+/**
+ * 把终端现场整理成消息并放进剪贴板（A0 走剪贴板通道，plan §8.2 路径 1）。
+ * intent: 'selection' 取选区 | 'recent' 取最近 40 行 | 'error' 取最近 60 行 + 引导语。
+ * 只读终端，不向远端发送任何字节。
+ */
+async function sendToChat(conn, intent) {
+  const session = state.session
+  if (conn === null || conn === undefined || session === null || session === undefined) {
+    setStatusNote('先打开一个终端，再送往对话。')
+    return
+  }
+  const body = intent === 'selection'
+    ? (session.term.getSelection() ?? '')
+    : session.snapshot(intent === 'error' ? 60 : 40)
+  const text = formatSshContext(conn, body, { intro: SEND_INTENTS[intent] ?? '' })
+  if (text.length === 0) {
+    setStatusNote(intent === 'selection' ? '先在终端里选中要送出的内容。' : '终端还没有可送出的输出。')
+    return
+  }
+  if (!(await copyText(text))) { setStatusNote('剪贴板不可用：请检查浏览器权限后重试。'); return }
+  setStatusNote(`已复制 ${text.length} 字符——点左上「对话」退出后粘贴（Ctrl+V）即可，首行已标注来源主机。`)
+}
+
+/** 工具区按钮与终端右键共用同一份菜单（沿用 hostMenuItems 的「同源」约定）。 */
+function sendMenuItems(conn) {
+  return [
+    { icon: 'copy', label: '送出选中内容', run: () => { void sendToChat(conn, 'selection') } },
+    { icon: 'send', label: '送出最近 40 行', run: () => { void sendToChat(conn, 'recent') } },
+    { icon: 'info', label: '让 Agent 看这个错误', run: () => { void sendToChat(conn, 'error') } },
+  ]
 }
 
 function setStatusNote(text) {
@@ -1307,10 +1779,17 @@ function buildSkeleton(root) {
   tabs.setAttribute('aria-label', '已打开的终端')
   const openHosts = el('button', 'icon-btn')
   openHosts.type = 'button'
-  openHosts.title = '打开主机导航'
-  openHosts.setAttribute('aria-label', '打开主机导航')
+  openHosts.title = '已连接主机：新建 shell 标签；否则打开主机导航'
+  openHosts.setAttribute('aria-label', openHosts.title)
   openHosts.appendChild(icon('plus'))
-  openHosts.onclick = () => toggleRail()
+  openHosts.onclick = () => {
+    const conn = state.selection !== null ? (byId(state.selection) ?? null) : null
+    if (conn !== null && isLive(liveOf(conn.id)) && state.session !== null && state.session.connId === conn.id) {
+      openNewShellTab(conn.id)
+      return
+    }
+    toggleRail()
+  }
   tabstrip.append(tabs, openHosts)
 
   const toolbar = el('div', 'toolbar')
@@ -1357,13 +1836,27 @@ function buildSkeleton(root) {
   moreBtn.disabled = true
   moreBtn.appendChild(icon('more'))
   moreBtn.onclick = () => {
-    const conn = state.selection !== null ? byId(state.selection) : null
+    const conn = state.selection !== null ? (byId(state.selection) ?? null) : null
     if (conn === null) return
     const rect = moreBtn.getBoundingClientRect()
     openMenuAt(rect, hostMenuItems(conn))
     moreBtn.setAttribute('aria-expanded', 'true')
   }
-  tools.append(searchBtn, focusBtn, divider, moreBtn)
+  const sendBtn = el('button', 'icon-btn optional')
+  sendBtn.type = 'button'
+  sendBtn.id = 'btn-send'
+  sendBtn.title = '把终端内容送往对话'
+  sendBtn.setAttribute('aria-haspopup', 'true')
+  sendBtn.setAttribute('aria-expanded', 'false')
+  sendBtn.disabled = true
+  sendBtn.appendChild(icon('send'))
+  sendBtn.onclick = () => {
+    const conn = state.selection !== null ? (byId(state.selection) ?? null) : null
+    if (conn === null) return
+    openMenuAt(sendBtn.getBoundingClientRect(), sendMenuItems(conn))
+    sendBtn.setAttribute('aria-expanded', 'true')
+  }
+  tools.append(searchBtn, sendBtn, focusBtn, divider, moreBtn)
   toolbar.append(toggleRailBtn, identity, tools)
 
   const searchLine = el('div', 'search-line')
@@ -1389,6 +1882,16 @@ function buildSkeleton(root) {
   banner.hidden = true
   banner.setAttribute('aria-live', 'polite')
 
+  // U2.1 写入所有权：只读条（决策 2）。可写时隐藏；接管按钮经 session.takeover()。
+  const writeBar = el('div', 'write-bar')
+  writeBar.id = 'write-bar'
+  writeBar.hidden = true
+  const writeText = el('span', 'write-text', '只读：另一个窗口正在此终端输入。')
+  const writeTake = el('button', 'text-btn', '接管写入')
+  writeTake.type = 'button'
+  writeTake.id = 'write-take'
+  writeBar.append(writeText, writeTake)
+
   const holder = el('div', 'term-holder')
   holder.id = 'term-holder'
   holder.setAttribute('role', 'region')
@@ -1400,15 +1903,19 @@ function buildSkeleton(root) {
   const statusbar = el('footer', 'statusbar')
   const pill = el('span', 'status-pill')
   pill.id = 'status-pill'
-  const statusText = el('span', '', '')
+  pill.appendChild(el('i', 'dot', ''))
+  const statusText = el('span', 'status-text', '')
   statusText.id = 'status-text'
-  pill.appendChild(statusText)
+  // ⚠ #status-text 必须是 statusbar 的直接子节点、且 renderStatusbar 只改内容不重建节点：
+  // 它曾被嵌进 pill 内部，renderStatusbar 的 replaceChildren 每次把它从 DOM 抹掉，
+  // handleSessionStatus 在 $('#status-text').textContent 上抛 TypeError —— waiting-
+  // fingerprint 的 onFrame 永不执行，TOFU 首连的确认 UI 不可达（D0 探针实测逮住）。
   const trustStatus = el('button', 'trust-btn', '')
   trustStatus.type = 'button'
   trustStatus.id = 'trust-status'
   const sizeText = el('span', 'status-end', '')
   sizeText.id = 'size-text'
-  statusbar.append(pill, trustStatus, sizeText)
+  statusbar.append(pill, statusText, trustStatus, sizeText)
 
   const moreMenu = el('div', 'more-menu')
   moreMenu.id = 'more-menu'
@@ -1416,7 +1923,7 @@ function buildSkeleton(root) {
   moreMenu.setAttribute('role', 'group')
   moreMenu.setAttribute('aria-label', '主机与终端操作')
 
-  main.append(tabstrip, toolbar, searchLine, banner, holder, emptySpace, statusbar, moreMenu)
+  main.append(tabstrip, toolbar, searchLine, banner, writeBar, holder, emptySpace, statusbar, moreMenu)
   const scrim = el('button', 'drawer-scrim')
   scrim.type = 'button'
   scrim.id = 'drawer-scrim'
@@ -1490,6 +1997,13 @@ async function mount() {
   applyThemeSnapshot(initialTheme())
   setupThemeListener()
   buildSkeleton(root)
+  // 桌面壳窗控让位：抽屉标题栏的 × 不能与窗控组叠在一起（见 syncChromeClearance 注释）。
+  // 先量一次（顶层窗口量不到就是 0），窗口尺寸变化时重测 —— 会话视图下 iframe 的右缘会动。
+  syncChromeClearance()
+  window.addEventListener('resize', scheduleChromeClearance)
+  // 浮层模式（路线丁）专属：自绘顶栏（对话｜会话布｜SSH）。回退视图里不渲染 ——
+  // 回退期的切换器是官方 tab 栏 + 会话头胶囊（D1 契约），双顶栏只会让人迷惑。
+  if (isOverlayMode()) buildTopbar(root)
   bindGlobalKeys()
   if (state.focusMode || state.railHidden) syncRailMode()
 
@@ -1500,6 +2014,37 @@ async function mount() {
   }
   await refreshTrust()
   renderAll()
+
+  // 刷新恢复（U2.3 决策 4 / 方案 §4.3.3）：恢复标签**形状**与激活项，绝不自动建立
+  // SSH 连接 —— 用户点标签才走既有 attach 路径（host 侧连接保活则无损回到终端）。
+  // 恢复失败（connId 已被删除）⇒ 该标签静默丢弃 + 一条提示；快照损坏 ⇒ 回空态。
+  const ws = readWorkspace()
+  if (ws !== null && Array.isArray(ws.tabs) && ws.tabs.length > 0) {
+    const known = new Set(state.connections.map(item => item.id))
+    const restored = []
+    let lost = 0
+    for (const item of ws.tabs) {
+      if (item !== null && typeof item.connId === 'string' && known.has(item.connId)) {
+        restored.push({ connId: item.connId, shellSeq: Number.isInteger(item.shellSeq) ? item.shellSeq : 1, title: item.title ?? null, live: true })
+      } else {
+        lost += 1
+      }
+    }
+    state.tabs = restored
+    const wantActive = Number.isInteger(ws.activeTab) ? ws.activeTab : null
+    state.activeTab = wantActive !== null && wantActive >= 0 && wantActive < restored.length ? wantActive : null
+    if (lost > 0) setStatusNote(`有 ${lost} 个标签无法恢复（主机已删除）。`)
+  } else {
+    // 兼容：无工作区快照时退回旧的「只记一个标签」路径
+    const lastTab = readLastTab()
+    if (lastTab !== null && state.connections.some(item => item.id === lastTab)) openHost(lastTab)
+  }
+  const activeItem = state.activeTab !== null ? state.tabs[state.activeTab] : null
+  if (activeItem !== undefined && activeItem !== null && isLive(liveOf(activeItem.connId))) {
+    try { openHost(activeItem.connId, { shellSeq: activeItem.shellSeq }) } catch { /* 恢复失败不阻塞 mount */ }
+  } else {
+    renderAll()
+  }
 }
 
 window.addEventListener('DOMContentLoaded', () => { void mount() })

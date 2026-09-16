@@ -1,25 +1,14 @@
 // Client half of @miasaki/dsh-ssh.
 //
-// 一条会话里其实有两套并行的「视图切换」UI（2026-09-09 SPIKE 结论）：
-//   1. 官方 tab 栏 —— `conversation.view` 注册项投影成 `role="tablist"`，在会话头**第二行**；
-//   2. canvas 的「对话 / 会话布」胶囊 —— 注册在 `conversation.session.header.actions`，
-//      在会话头**第一行**标题右侧（与「后台任务」同一 flex 行）。
+// 路线丁（全屏浮层，方案 2026-09-14-ssh-fullscreen-overlay-plan.md）：SSH 是**会话之外的
+// 全屏功能模块** —— body 级宿主 + 常驻 iframe + visibility 隐藏 + sessionStorage 开关记忆。
+// 入口有三处：① 会话头胶囊（conversation.session.header.actions，order 26，与 canvas
+// 胶囊合成一体）；② hero 态 launcher（shell.overlay，order 40，方案 §14）；③ 画布页
+// 外部视图槽按钮（canvas:view 广播）。
 //
-// 用户 2026-09-10 反馈：SSH 作为一个视图，入口却在第二行 tab 栏里排在「会话用量」
-// 后面，位置不对；它应该和「对话 / 会话布」那组切换按钮在一起。故本文件：
-//   - 入口迁到 `conversation.session.header.actions`（order 26，紧跟 canvas 的 25），
-//     并用纯 CSS 把两个胶囊**合成为同一个控件**：一个胶囊里的「对话 | 会话布 | SSH」
-//     三段（canvas 文件一行未改，canvas 不在场时本段退回完整胶囊）；
-//   - `conversation.view` 注册**保持不变**（页面 / 保活 / scrollback 回放全部不动），
-//     只是把官方 tab 栏里那个 tab 收起，避免同一入口在第二行重复出现。
-//
-// 切换方式：DSH 没有对外暴露 View 切换 API —— `selectView` 只存在于官方
-// `conversation.session.header` 的 inject face（`lib/client.js` 16705–16713），而
-// `conversation.session.header.actions` 渲染时 owner props 是空对象 `{}`
-// （同文件 15072），第三方插件拿不到 store 也拿不到 selectView。官方唯一的切换路径
-// 就是 tab 按钮自己的 onClick，所以这里**委托点击官方 tab 按钮**，并全程带守卫：
-// 找不到 tab 时点击静默无效、绝不抛错，也不影响 tab 栏（此时收手不隐藏，用户照旧
-// 能从第二行进入）。
+// 2026-09-15 D3 清理：`conversation.view` 注册与官方 tab 委托三件套
+// （ownTab/hideOwnTab/restoreTabs/viewIsSsh/selectSsh）**整体删除** —— 浮层已成为唯一
+// 形态，tab 委托是回退期产物；主题桥、chrome-reserve、消息协议由浮层 iframe 承接。
 window.__ModuleLoader__.load({
   id: '@miasaki/dsh-ssh',
   factory: (require) => {
@@ -73,13 +62,40 @@ window.__ModuleLoader__.load({
       // 同一个控件里不能同时亮两段：停在 SSH 视图时「对话」段不该再亮（它此时的语义是
       // 「DSH 原生会话视图」，而当前正停在 SSH 上）。:not(:hover) 让 hover 反馈照旧。
       '.dsh-canvas-switch:has(+ .dsh-ssh-switch button.active) button[aria-label="对话"].active:not(:hover){background:transparent;color:var(--dsw-alias-label-secondary,#6b7280)}' +
-      // ---- SSH 视图下隐藏官方「对话列宽」拖拽手柄（2026-09-12 用户反馈）------
-      // WidthHandle（[data-width-handle]，col-resize 隐形条）挂在会话根 body 上、
-      // 只要 phase=active 就渲染，与激活视图无关 —— 用户会在 SSH 页面上拖到一条
-      // 毫无意义的列宽手柄。iframe 只在 SSH 视图激活时挂载 ⇒ :has() 天然跟随视图
-      // 切换（切回对话手柄自动恢复）。官方自己也有 :has([data-conversation-composer-
-      // overlay]) 隐藏同一手柄的先例，这是同一机制的第二个触发条件。
-      'div[data-phase]:has(iframe[title="SSH"]) [data-width-handle]{display:none!important}'
+      // （2026-09-15 D3-F1）这里原有「SSH 视图下隐藏官方对话列宽拖拽手柄」的 :has() 覆盖规则，
+      // 它依赖回退视图的 DOM 形态 —— 当年 SSH 是以 conversation.view 挂载的，iframe 落在
+      // div[data-phase] 内，规则才可能命中。回退视图随 D3 整体删除后该选择器**永不命中**，
+      // 属死代码；而浮层形态本身就是全屏覆盖，官方手柄无需再被本线隐藏 —— 故整条删除。
+      // 反证：实机验收在会话态读到官方手柄 display:block（方案 §18 C4c）。
+      // ---- 全屏浮层（路线丁 D1）----------------------------------------
+      // 与 canvas 同构：body 级宿主 + fixed inset:0 + z-index:100 + 常驻 iframe。
+      // **唯一偏离 canvas**（D0 §12 实测后维持）：关闭态用 visibility:hidden +
+      // pointer-events:none，不用 display:none —— 元素仍在布局中，尺寸恒等视口，
+      // RO 不误触发，隐藏期间输出照收、重开即原样。懒加载：iframe 首开才赋 src。
+      '.dsh-ssh-overlay{position:fixed;z-index:100;inset:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-base,#f5f7fa)}' +
+      'body[data-ds-dark-theme] .dsh-ssh-overlay{background:#0f1115}' +
+      '.dsh-ssh-overlay.is-closed{visibility:hidden;pointer-events:none}' +
+      // flex:1 而非 height:100% —— 顶部那条 .dsh-ssh-bar 占固定高度，iframe 取剩余高度。
+      '.dsh-ssh-overlay iframe{display:block;width:100%;flex:1 1 auto;min-height:0;border:0;background:transparent}' +
+      '.dsh-ssh-overlay .dsh-ssh-loading{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--dsw-alias-label-secondary,#6b7280);font:500 13px Inter,system-ui,sans-serif}' +
+      // ---- D1.1 无会话头时的常驻入口（shell.overlay，方案 §14）----------------
+      // 类名**故意不复用** `.dsh-ssh-switch`：`ownHeader()` 拿 `.dsh-ssh-switch` 当会话头
+      // 锚点（`document.querySelector('.dsh-ssh-switch').closest('header')`），若 launcher
+      // 同用一个类，querySelector 可能先命中浮层里这颗，锚点随即失效、tab 三件套全哑。
+      // 视觉并列写一份（同令牌、同圆角、同 28px），不共享类名。
+      //
+      // `pointer-events:none` 必须带 !important：官方 overlayLayer 的规则是
+      // `.xxx_overlayLayer>*{pointer-events:auto}`（特异性同为 (0,1,0)），谁后注入谁赢，
+      // 顺序不由我们决定。容器一旦被设回 auto，`inset:0` 就**挡住整个应用**——
+      // 这是官方 catalog 明示的坑（"entries opt back into pointer events"）。
+      '.dsh-ssh-launcher{position:absolute;inset:0;pointer-events:none!important}' +
+      // 与桌面壳窗控**同一视觉语言**：无底、无框、hover 才显淡底、同款小圆角；
+      // top/height 由 syncChrome 从窗控组**实测**（见下），不写死。
+      // 首版是带底带框的 999px 胶囊 + 写死 top:14px —— 实测混在一排线性图标与圆形
+      // 头像里太重、不协调，而且比窗控组（top:5px）低 9px，根本没对齐。
+      '.dsh-ssh-launcher button{position:absolute;top:var(--dsh-ssh-chrome-top,5px);right:calc(var(--dsh-ssh-chrome-reserve,0px) + 16px);pointer-events:auto;height:var(--dsh-ssh-chrome-height,28px);padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}' +
+      '.dsh-ssh-launcher button:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}' +
+      '.dsh-ssh-launcher button:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}'
 
     // ---- 主题桥接（U1，plan §4.2）------------------------------------------
     // 宿主是唯一主题源：这里读宿主**最终计算样式**（body 优先、根元素兜底），白名单化后
@@ -137,55 +153,143 @@ window.__ModuleLoader__.load({
       style.textContent = SWITCH_CSS
       document.head.append(style)
 
-      // ---- 官方 tab 栏桥接（唯一的切换通道，见文件头注释）---------------------
-      // 查询范围限定在**会话头**里：自己的按钮就挂在会话头 actions 槽内，用它当锚点。
-      // 页面上别处也可能有 `role="tablist"`（设置面板等），全局查会误伤。
-      const ownHeader = () => {
-        const anchor = document.querySelector('.dsh-ssh-switch')
-        return anchor === null ? null : anchor.closest('header')
+      // ---- 全屏浮层（路线丁 D1：宿主 + 常驻 iframe + 懒加载 + 开关记忆）----
+      // 与 canvas 同构（body 级宿主，浮层在会话 DOM 之外，切会话不消失）；唯一
+      // 偏离是关闭态用 visibility 而非 display（D0 §12 实测后维持，理由见方案
+      // §12.3：visibility 是规范行为，尺寸恒等视口；display:none 靠的是渲染暂停
+      // 这种实现细节）。开关状态记 sessionStorage（用户意图，非插件生命周期）。
+      const OVERLAY_STORE_KEY = 'dsh-ssh:overlay-open'
+      const readOverlayMemory = () => {
+        try { return window.sessionStorage.getItem(OVERLAY_STORE_KEY) === '1' } catch { return false }
       }
-      const tabButtons = () => {
-        const header = ownHeader()
-        return Array.from((header === null ? document : header).querySelectorAll('[role="tablist"] [role="tab"]'))
+      const writeOverlayMemory = open => {
+        try { window.sessionStorage.setItem(OVERLAY_STORE_KEY, open ? '1' : '0') } catch { /* 无痕模式：记忆不可用则刷新后回到关闭态 */ }
       }
-      /** 本插件注册的那个 tab：官方把 registration 的 label 渲染为 tab 文本。 */
-      const ownTab = () => {
-        for (const tab of tabButtons()) {
-          if ((tab.textContent ?? '').trim() === VIEW_LABEL) return tab
+      const host = document.createElement('div')
+      host.className = 'dsh-ssh-host'
+      host.innerHTML =
+        '<section class="dsh-ssh-overlay is-closed">' +
+        '<span class="dsh-ssh-loading" hidden>正在加载终端…</span>' +
+        '<iframe title="SSH"></iframe>' +
+        '</section>'
+      document.body.append(host)
+      const overlay = host.querySelector('.dsh-ssh-overlay')
+      const frame = host.querySelector('iframe')
+      const loading = host.querySelector('.dsh-ssh-loading')
+      // ---- 顶栏消息协议（D2）----------------------------------------------
+      // 浮层里的 SSH 页面自绘顶栏（app.js 侧），它的「对话」「会话布」两颗按钮的
+      // 行为落在宿主侧：① `ssh:close` —— 关浮层，并把焦点还给入口（最后一次触发
+      // open 的那颗；找不到就还 body，绝不把焦点丢进 iframe）；② `ssh:view` ——
+      // 关自己 + 委托点击 canvas 胶囊的「会话布」段（关浮层的同时让 canvas 的
+      // 胶囊激活态同步复位，直接改 overlay.hidden 会让它状态不一致 —— 与既有
+      // dismissCanvasOverlay 同一条纪律）。消息带 token 防伪（值随机、不进任何日志）。
+      const overlayMsgToken = Math.random().toString(36).slice(2)
+      const lastOpener = { el: null }
+      const openOverlayFrom = el => { lastOpener.el = el ?? null; return openOverlay() }
+      const onOverlayMessage = event => {
+        if (event.origin !== location.origin) return
+        if (event.source !== frame.contentWindow) return
+        const data = event.data
+        if (data === null || typeof data !== 'object') return
+        if (data.source !== 'dsh-ssh' || data.overlayToken !== overlayMsgToken) return
+        if (data.type === 'ssh:close') {
+          closeOverlay()
+          const target = lastOpener.el !== null && lastOpener.el.isConnected ? lastOpener.el : document.body
+          try { target.focus({ preventScroll: true }) } catch { /* 不可聚焦则还 body */ }
+        } else if (data.type === 'ssh:view' && data.view === 'canvas') {
+          closeOverlay()
+          // canvas 不在场时 querySelector 落空 → 静默收手（降级：只关自己，不报错）。
+          const back = document.querySelector('.dsh-canvas-switch button[aria-label="会话布"]')
+          if (back !== null) back.click()
         }
-        return null
       }
-      // 收起第二行那个 tab：入口已经在第一行，同一入口出现两次只会让人以为点错了。
-      // 这是对官方 UI 的覆盖，所以做成「能收才收」：找不到 tab（结构变了 / 尚未渲染）
-      // 就什么都不做 —— 最坏情况退回「双入口」，而不是没入口。
-      const hiddenTabs = new Set()
-      const hideOwnTab = () => {
-        const tab = ownTab()
-        if (tab === null || tab.style.display === 'none') return
-        tab.style.display = 'none'
-        hiddenTabs.add(tab)
-      }
-      // 卸载时复原：插件被停用 / 重装后，官方 tab 栏回到原样。
-      const restoreTabs = () => {
-        for (const tab of hiddenTabs) tab.style.display = ''
-        hiddenTabs.clear()
-      }
-      /** 当前是否停在 SSH 视图 —— 官方把激活态写在 `aria-selected` 上。 */
-      const viewIsSsh = () => {
-        const tab = ownTab()
-        return tab !== null && tab.getAttribute('aria-selected') === 'true'
-      }
-      /** 切到 SSH 视图：委托官方 tab 按钮的 onClick（就是 selectView 的唯一入口）。 */
-      const selectSsh = () => {
-        const tab = ownTab()
-        if (tab === null) return false
-        tab.click()
+      window.addEventListener('message', onOverlayMessage)
+      // iframe 懒加载：首开才赋 src；不碰 SSH 的用户零带宽开销（§5.8）。
+      let frameBooted = false
+      // 打开流程：首次赋 src（加载态占位防白）→ 解除关闭态。close 与 open 都幂等。
+      const openOverlay = () => {
+        if (!frameBooted) {
+          frameBooted = true
+          loading.hidden = false
+          frame.src = '/ssh/'
+          const markReady = () => { loading.hidden = true }
+          frame.addEventListener('load', markReady, { once: true })
+          // 加载异常时限兑底：3s 后无论如何撤掉加载态（iframe 内容自己会渲染空态）。
+          window.setTimeout(markReady, 3000)
+        } else {
+          // 重开补一次主题快照（去重逻辑在 push 里）：关闭期间宿主可能换过主题。
+          pushThemeSnapshot()
+        }
+        // 每次打开都重发一次 chrome 消息：浮层打开期间用户无法切换会话，
+        // 所以"这一刻的 canvas 可用性"就是顶栏整个可见期的取值（§16.3 的诚实降级）。
+        syncChrome()
+        overlay.classList.remove('is-closed')
+        writeOverlayMemory(true)
         return true
       }
-      // 下面 dismissCanvasOverlay() 会**自己**去点 canvas 的「对话」按钮：那一下不是用户点的，
-      // 不能连锁触发「切回默认视图」（见 onDialogClick）—— 否则点「SSH」会先切 chat、再切 ssh，
-      // 视图连着换两次（iframe 也卸载重建两次，画面白闪一下）。
-      let dismissing = false
+      const closeOverlay = () => {
+        overlay.classList.add('is-closed')
+        writeOverlayMemory(false)
+        return false
+      }
+      const overlayIsOpen = () => !overlay.classList.contains('is-closed')
+
+      // ---- 桌面壳窗控 reserve（照抄 canvas syncChrome 量法，D0 ③ 已实测）--
+      // 两个消费者：① 浮层内 iframe 走 postMessage（iframe 侧的 `--ssh-chrome-reserve`）；
+      // ② 宿主里的 launcher 走宿主 CSS 变量 —— 它不在 iframe 内，收不到 postMessage。
+      // 按钮组宽度与 right 偏移固定、不随窗口尺寸变化（canvas 同款判据），故量一次即可；
+      // 但**必须在 apply 期间主动调一次**：下面的 load 监听只在 iframe 加载时才跑，
+      // 而 iframe 是懒加载的（用户没开过浮层就永远不加载），靠它设变量会漏。
+      const syncChrome = () => {
+        let reserve = 0
+        let chromeTop = 5
+        let chromeHeight = 28
+        try {
+          const capsule = document.querySelector('#miasaki-titlebar .tb-group') ??
+            document.querySelector('#miasaki-titlebar .tb-capsule')
+          if (capsule instanceof HTMLElement) {
+            const rect = capsule.getBoundingClientRect()
+            if (rect.width > 0) {
+              reserve = Math.ceil(window.innerWidth - rect.left + 6)
+              // launcher 的**垂直对齐**：与窗控组同顶同高。量不到就退回默认 5 / 28
+              // （普通浏览器没有窗控，这两个值不影响任何人）。限界防呆：窗控量出的
+              // 高度不该超出 20–44，超了说明量错了，宁可退回默认也不跟着摆歪。
+              const top = Number.parseFloat(window.getComputedStyle(capsule).top)
+              if (Number.isFinite(top) && top >= 0 && top <= 40) chromeTop = Math.round(top)
+              if (rect.height >= 20 && rect.height <= 44) chromeHeight = Math.round(rect.height)
+            }
+          }
+        } catch { /* 无父文档场景兑底 0 */ }
+        // 顶栏「会话布」段的可用性（D2 语义边界）：canvas 只注册在会话头 actions 槽
+        // ⇒ hero 态（无会话头）没有任何胶囊可供委托，顶栏那一段必然是死按钮。
+        // 与其让用户点了没反应，不如让浮层**不渲染**它 —— 宿主把事实随 chrome 消息下发。
+        // 判据失败时保守显示（宁可多一颗按钮，也别让别人把入口判丢）。
+        let canvasAvailable = true
+        try { canvasAvailable = document.querySelector('.dsh-canvas-switch') !== null } catch { /* 查询失败：保守显示 */ }
+        try {
+          const root = document.documentElement.style
+          root.setProperty('--dsh-ssh-chrome-reserve', reserve + 'px')
+          root.setProperty('--dsh-ssh-chrome-top', chromeTop + 'px')
+          root.setProperty('--dsh-ssh-chrome-height', chromeHeight + 'px')
+        } catch { /* 只读环境 */ }
+        try { frame.contentWindow?.postMessage({ source: 'dsh-ssh', type: 'chrome', version: 1, reserve, canvasAvailable, overlayToken: overlayMsgToken }, location.origin) } catch { /* iframe 刚卸载 */ }
+      }
+
+      // ---- 主题桥（浮层与 view 两个 iframe 共用；快照去重逻辑同 U1）-------
+      let themeLastKey = ''
+      let themeRevision = 0
+      const pushThemeSnapshot = () => {
+        let snapshot
+        try { snapshot = readThemeSnapshot() } catch { return }
+        const key = JSON.stringify(snapshot)
+        if (key === themeLastKey) return // 同一快照不重发（去重，plan §4.2-7）
+        themeLastKey = key
+        themeRevision += 1
+        try { window.__DSH_SSH_THEME__ = { source: 'dsh-ssh', type: 'theme', version: 1, revision: themeRevision, ...snapshot } } catch { /* 只读环境 */ }
+        try { frame.contentWindow?.postMessage({ source: 'dsh-ssh', type: 'theme', version: 1, revision: themeRevision, ...snapshot }, location.origin) } catch { /* iframe 刚卸载 */ }
+      }
+      frame.addEventListener('load', () => { themeLastKey = ''; pushThemeSnapshot(); syncChrome() })
+
       // 「会话布」是 canvas 的全屏浮层（z-index 100、盖住整个 frame）：它开着时切视图
       // 只会看到浮层。这里先走 canvas 自己的「对话」按钮把它关掉 —— 用它的按钮而不是
       // 直接 `overlay.hidden = true`，是为了让 canvas 的胶囊激活态同步复位（直接改
@@ -195,42 +299,8 @@ window.__ModuleLoader__.load({
         if (overlay === null || overlay.hidden) return
         const back = document.querySelector('.dsh-canvas-switch button[aria-label="对话"]')
         if (back === null) return
-        dismissing = true
         back.click()
-        dismissing = false
       }
-      /** 回到「对话」：官方 tab 栏里 order 最小的 view（chat 恒为第一个非 SSH tab）。 */
-      const selectDefaultView = () => {
-        for (const tab of tabButtons()) {
-          if ((tab.textContent ?? '').trim() === VIEW_LABEL) continue
-          if (tab.getAttribute('aria-selected') === 'true') return false
-          tab.click()
-          return true
-        }
-        return false
-      }
-      // canvas 的「对话」段只管关掉它自己的浮层，管不了 DSH 的 View —— 停在 SSH 视图时
-      // 点它，屏幕上什么都不会变。合成一个控件之后那就是「点了没反应」，所以在这里补上：
-      // 捕获它的点击，若当前停在 SSH 就同时切回默认视图（委托同一个官方 tab 通道）。
-      // canvas 重渲染会重建这个按钮，所以绑定挂在 sync() 里按引用去重、卸载时解绑。
-      let dialogButton = null
-      const onDialogClick = () => {
-        if (dismissing) return
-        if (viewIsSsh()) selectDefaultView()
-      }
-      const bindDialogButton = () => {
-        const button = document.querySelector('.dsh-canvas-switch button[aria-label="对话"]')
-        if (button === dialogButton) return
-        if (dialogButton !== null) dialogButton.removeEventListener('click', onDialogClick)
-        dialogButton = button
-        if (button !== null) button.addEventListener('click', onDialogClick)
-      }
-      const unbindDialogButton = () => {
-        if (dialogButton === null) return
-        dialogButton.removeEventListener('click', onDialogClick)
-        dialogButton = null
-      }
-
       // ---- 在「会话布」页面里也给出 SSH 入口（2026-09-10 第六次反馈）---------
       // 用户要的是「会话布页面里那组切换按钮旁边多一个 SSH」，**不是**页面顶上多一条栏
       // —— 上一版曾在浮层之上补整条工具条，被否掉了（「为什么会多出一整个上栏」）。
@@ -254,8 +324,10 @@ window.__ModuleLoader__.load({
         if (event.origin !== location.origin) return
         const data = event.data
         if (data?.source !== 'dsh-canvas' || data.type !== 'canvas:view' || data.id !== VIEW_ITEM.id) return
+        // 画布里的 SSH 按钮：关画布浮层（保持它的胶囊激活态同步）→ 开 SSH 浮层。
+        // 无入口元素可还焦（消息源在 iframe 里），记 null ⇒ 关闭时焦点还 body。
         dismissCanvasOverlay()
-        selectSsh()
+        openOverlayFrom(null)
       }
       window.addEventListener('message', onCanvasView)
       publishCanvasViews()
@@ -284,19 +356,19 @@ window.__ModuleLoader__.load({
           }
         }, [])
         react.useEffect(() => {
-          // 每次 header 子树变化都校正一次：既同步激活态（切会话 / 点 tab 会重建 tab 栏），
-          // 也把重建出来的 tab 重新收起（内联 display 只跟着元素走）。
+          // 每次 header 子树变化都校正一次：同步激活态（浮层开关状态驱动）。
+          // D4 尾项②（§17 已知风险②）：三件套删除后 aria-selected 已无消费者，
+          // attributeFilter 里的 aria-selected 移除 —— 只留 childList 监听。
+          // 其余监听项（header 子树结构变化 ⇒ 激活态同步）不受影响。
           const sync = () => {
-            hideOwnTab()
-            setActive(viewIsSsh())
-            bindDialogButton()
+            setActive(overlayIsOpen())
           }
           sync()
           const node = rootRef.current
           const header = node === null ? null : node.closest('header')
           if (header === null) return undefined
           const observer = new MutationObserver(sync)
-          observer.observe(header, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-selected'] })
+          observer.observe(header, { childList: true, subtree: true })
           // 观察 header 而非自身：自身是 flex:none，被挤压时宽度不变，观察不到溢出。
           let resize = null
           if (typeof ResizeObserver === 'function') {
@@ -305,15 +377,14 @@ window.__ModuleLoader__.load({
           }
           return () => {
             observer.disconnect()
-            unbindDialogButton()
             if (resize !== null) resize.disconnect()
           }
         }, [measure])
         // 每次渲染后校正一次（覆盖 header 宽度未变但同排其他控件变宽的情况）。
         react.useEffect(() => { measure() })
-        const onClick = () => {
+        const onClick = event => {
           dismissCanvasOverlay()
-          selectSsh()
+          openOverlayFrom(event?.currentTarget ?? null)
         }
         return react.createElement('div', {
           ref: rootRef,
@@ -331,77 +402,55 @@ window.__ModuleLoader__.load({
           }, compact ? terminalGlyph() : VIEW_LABEL))
       }
 
-      /** SSH 页面本身：iframe 隔离，xterm 由 iframe 文档自己加载。 */
-      function SshView() {
-        const frameRef = react.useRef(null)
-        react.useEffect(() => {
-          const frame = frameRef.current
-          if (frame === null) return undefined
-          let lastKey = ''
-          let revision = 0
-          const push = () => {
-            const win = frame.contentWindow
-            if (win === null) return
-            let snapshot
-            try { snapshot = readThemeSnapshot() } catch { return }
-            const key = JSON.stringify(snapshot)
-            if (key === lastKey) return // 同一快照不重发（去重，plan §4.2-7）
-            lastKey = key
-            revision += 1
-            try { window.__DSH_SSH_THEME__ = { source: 'dsh-ssh', type: 'theme', version: 1, revision, ...snapshot } } catch { /* 只读环境 */ }
-            try { win.postMessage({ source: 'dsh-ssh', type: 'theme', version: 1, revision, ...snapshot }, location.origin) } catch { /* iframe 刚卸载 */ }
-          }
-          // iframe 重载（切走视图再回来会卸载重建）后强制发一次：lastKey 清零。
-          const onLoad = () => { lastKey = ''; push() }
-          frame.addEventListener('load', onLoad)
-          // 变化检测兜底（plan §4.2-7）：html/body 的主题属性与 head 的样式元素增删，
-          // 不做全页高频扫描。appearance / 桌面主题切换最终都会落到这两处。
-          const observer = new MutationObserver(() => queueMicrotask(push))
-          if (document.documentElement !== null) {
-            observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-ds-dark-theme'] })
-          }
-          if (document.body !== null && document.body !== undefined) {
-            observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style', 'data-ds-dark-theme'] })
-          }
-          if (document.head !== null && document.head !== undefined) {
-            observer.observe(document.head, { childList: true })
-          }
-          const onVisibility = () => { if (document.visibilityState === 'visible') push() } // 重新显示补发
-          document.addEventListener('visibilitychange', onVisibility)
-          return () => {
-            frame.removeEventListener('load', onLoad)
-            observer.disconnect()
-            document.removeEventListener('visibilitychange', onVisibility)
-          }
-        }, [])
-        return react.createElement('iframe', {
-          ref: frameRef,
-          src: '/ssh/',
-          title: 'SSH',
-          // Fill the conversation view area; the iframe document owns all of
-          // its own styling (layout, theme, fonts). 加载期露出宿主底色而不是
-          // 固定深色 —— 亮色主题下不再闪黑（plan §4.2-9）。
-          style: {
-            display: 'block',
-            width: '100%',
-            height: '100%',
-            border: '0',
-            background: 'var(--dsw-alias-bg-base, #f2f4f8)',
-          },
-        })
+      /**
+       * D1.1 无会话头时的常驻入口（方案 §14）：注册到 `shell.overlay`（frame 级浮层）。
+       *
+       * 判据 —— 为什么「没有当前会话」等于「没有入口」：DSH 在 sessionId 为 undefined 时
+       * **根本不渲染会话头**（`ConversationRoot`：`sessionId === void 0 ? null :
+       * renderSlot('conversation.session.header', …)`），而本线的胶囊入口正注册在那个槽里
+       * ⇒ hero 态（首屏）没有 SSH 入口。这里顶上。
+       *
+       * **有会话就 `return null`** —— 结构性杜绝双入口（验收用
+       * `document.querySelectorAll('.dsh-ssh-launcher').length === 0` 锁死）。
+       * 判据走 `useSessions` 这个官方 standard prop（`shell.overlay` 契约里已声明），
+       * **不要改成 DOM 探测**。
+       */
+      function SshLauncher(props) {
+        const useSessions = props.useSessions
+        // React 规则：hook 不能条件调用 ⇒ 该 prop 缺失时整体不渲染（安全降级，
+        // 不是回退到 DOM 探测）。官方将来若调整 standard props，最坏是少一个入口。
+        if (typeof useSessions !== 'function') return null
+        return react.createElement(LauncherButton, { useSessions })
       }
 
-      // 页面注册：机制不变（DSH 托管激活态与每会话记忆；切走会卸载重建，故 host 侧
-      // 保留 scrollback 并在 attach 时回放）。入口按钮只是**另一个**触发点。
-      ctx.slots.inject(
-        'conversation.view',
-        () => ctx.slots.register({
-          name: 'conversation.view',
-          id: 'ssh',
-          order: 20,
-          label: () => VIEW_LABEL,
-        }, SshView),
-      )
+      /** 读会话状态的那半边：hook 在这里**无条件**调用。 */
+      function LauncherButton(props) {
+        // ⚠ 判据不能只看 `state.current`（D1.1 首版就是这么写错的：实机首屏上入口不出现）：
+        // 进入首屏时工作区**已经建好一个 blank session**，`current` 是有值的，但会话头
+        // 照样不渲染 —— `ConversationRoot` 看的是 `main.conversation` 绑定的 sessionId，
+        // 那里是 undefined。两者语义不同：这里要问的是「会话头会不会出现」，
+        // 所以**空白会话也必须算 hero**。官方字段 `SessionSummary.blank`
+        // （`client-ui-workspace/lib/types/client/tree.d.ts`："The provisional blank session"）。
+        // 判据不确定时一律返回 true（显示）：**没有入口比短暂双入口更糟**。
+        const hero = props.useSessions(state => {
+          if (state === null || state === undefined) return true
+          const current = state.current
+          if (current === undefined) return true
+          const byId = state.byId
+          const summary = byId === null || byId === undefined ? undefined : byId[current]
+          if (summary === undefined) return true // 摘要未就绪：保守显示
+          return summary.blank === true
+        })
+        if (!hero) return null
+        // 视觉与入口胶囊同款（同令牌 / 同圆角 / 同 28px），只显示文字 —— 与胶囊非紧凑态一致。
+        return react.createElement('div', { className: 'dsh-ssh-launcher' },
+          react.createElement('button', {
+            type: 'button',
+            title: VIEW_LABEL,
+            'aria-label': VIEW_LABEL,
+            onClick: event => { dismissCanvasOverlay(); openOverlayFrom(event?.currentTarget ?? null) },
+          }, VIEW_LABEL))
+      }
 
       // 入口注册到官方会话头 actions 插槽：与「对话 / 会话布」(order 25) 同一 flex 行，
       // order 26 即紧随其后。注册项 / 监听 / 样式都归当前 fiber，卸载时由 slots 与
@@ -415,19 +464,51 @@ window.__ModuleLoader__.load({
         }, SshSwitch),
       )
 
+      // D1.1 无会话头时的常驻入口（方案 §14）。`shell.overlay` 是 frame 级浮层
+      // （root scope / list / replaceRisk none）：官方 catalog 明示「a fresh id is added
+      // beside the shipped entries」——当前占用者只有 `usage-stats-overlay`，用自有 id
+      // 不碰它；order 40 排在它之后。层本身 click-through，条目自己 opt-in 指针事件
+      // （容器已在 CSS 里 `pointer-events:none!important`）。
+      ctx.slots.inject(
+        'shell.overlay',
+        () => ctx.slots.register({
+          name: 'shell.overlay',
+          id: 'ssh-launcher',
+          order: 40,
+        }, SshLauncher),
+      )
+
+      // reserve 量一次并写进宿主 CSS 变量（launcher 的定位消费它）。**必须在 apply 期间调**：
+      // iframe 是懒加载的，只挂在它的 load 监听上会漏（详见 syncChrome 上方注释）。
+      syncChrome()
+
       // Reset the idempotence guard and every page-level side effect when the fiber
       // is torn down (HMR full recycle / plugin reinstall), so the next apply can
       // mount again with a clean page.
       ctx.effect(() => () => {
         window.__DSH_SSH_BOOTED__ = false
-        restoreTabs()
-        unbindDialogButton()
         window.removeEventListener('message', onCanvasView)
+        window.removeEventListener('message', onOverlayMessage)
         const index = canvasViewItems.indexOf(VIEW_ITEM)
         if (index >= 0) canvasViewItems.splice(index, 1)
         window.dispatchEvent(new CustomEvent('dsh-canvas:view-items', { detail: { items: canvasViewItems.slice() } }))
+        // launcher 的 reserve 变量归本 fiber（§14.4）：不清掉会在 documentElement 上留痕。
+        try {
+          const root = document.documentElement.style
+          root.removeProperty('--dsh-ssh-chrome-reserve')
+          root.removeProperty('--dsh-ssh-chrome-top')
+          root.removeProperty('--dsh-ssh-chrome-height')
+        } catch { /* 只读环境 */ }
+        // 浮层宿主整树回收（含 iframe / 加载态 / 监听）；开关记忆不清除 ——
+        // 它是用户意图而非插件生命周期状态（§5.9）。插件重装后记忆态若为真，
+        // 下次 apply 会在下面自动恢复浮层。
+        host.remove()
         style.remove()
       }, 'ssh: view')
+
+      // 开关记忆恢复（§5.9）：apply 期间读一次；为真则走与入口相同的 open 路径。
+      // open 容忍「入口/宿主未就绪」——它只碰自建宿主 DOM，无需等待官方 UI。
+      if (readOverlayMemory()) openOverlay()
     }
 
     // 供契约测试（test/client.test.js）直读主题快照的取数逻辑。

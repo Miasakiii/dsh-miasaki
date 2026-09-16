@@ -94,3 +94,388 @@ test('composeXtermTheme yields a full 16-color palette and solid cursor', () => 
   assert.match(light.green, /^#[0-9a-f]/i)
   assert.notEqual(dark.red, dark.green)
 })
+
+test('formatSshContext stamps the source host and honours the intro (A0)', () => {
+  const conn = { label: 'web-01', host: 'web.example.com', port: 22, username: 'ops' }
+  // 无引导语：首行只有来源标记
+  assert.equal(
+    context.formatSshContext(conn, 'systemctl status nginx'),
+    '[SSH web-01 · ops@web.example.com:22]\nsystemctl status nginx',
+  )
+  // 有引导语：来源与引导语同一行
+  assert.equal(
+    context.formatSshContext(conn, 'boom', { intro: '帮我看下：' }),
+    '[SSH web-01 · ops@web.example.com:22] 帮我看下：\nboom',
+  )
+  // 空白引导语等同于没有（不让首行多出一个悬空空格）
+  assert.equal(
+    context.formatSshContext(conn, 'x', { intro: '   ' }),
+    '[SSH web-01 · ops@web.example.com:22]\nx',
+  )
+  // 尾部空白被裁掉
+  assert.equal(context.formatSshContext(conn, 'line\n\n  '), '[SSH web-01 · ops@web.example.com:22]\nline')
+  // 空正文 → 空串：调用方据此提示「没有可送出的内容」，绝不产出只有主机名的空消息
+  assert.equal(context.formatSshContext(conn, ''), '')
+  assert.equal(context.formatSshContext(conn, '   '), '')
+  assert.equal(context.formatSshContext(conn, undefined), '')
+  // 无主机对象时不崩溃
+  assert.equal(context.formatSshContext(null, 'x'), '[SSH 未知主机]\nx')
+})
+
+test('SEND_INTENTS: every A0 intent is a stable, reviewable string', () => {
+  // app.js 顶层的 `const` 是全局词法绑定，不会挂到 context 对象上（与 function 声明不同），
+  // 所以在同一个 context 里求值取它。
+  const intents = vm.runInContext('SEND_INTENTS', context)
+  assert.equal(intents.selection, '') // 选区原样送，不替用户加话
+  assert.match(intents.recent, /最近输出/)
+  assert.match(intents.error, /问题/)
+})
+
+// ---- D0 探针逮到的真实缺陷回归（2026-09-14）：#status-text 被 renderStatusbar 抹掉
+// → 每个状态帧 handleSessionStatus 抛 TypeError → TOFU 首连的确认 UI 不可达。
+// buildSkeleton 是 DOM 构建函数，vm 里用最小 document 桩驱动它走完挂载路径。
+test('buildSkeleton keeps #status-text alive across renderStatusbar calls (D0 regression)', () => {
+  // 最小 DOM 桩：id 索引 + append/replaceChildren/querySelector 足够覆盖骨架路径
+  const byId = new Map()
+  const node = tag => {
+    const n = {
+      tagName: String(tag ?? 'div').toUpperCase(), children: [], hidden: false,
+      className: '', id: '', textContent: '', type: '', value: '', title: '',
+      attributes: new Map(), handlers: new Map(), style: {},
+      setAttribute(k, v) { this.attributes.set(k, String(v)) },
+      getAttribute(k) { return this.attributes.get(k) ?? null },
+      appendChild(c) { this.children.push(c); return c },
+      append(...cs) { for (const c of cs) { if (c) this.children.push(c) } },
+      replaceChildren(...cs) { this.children = [...cs] },
+      addEventListener(k, fn) { this.handlers.set(k, fn) },
+      querySelector(sel) { return this.children.find(c => sel.endsWith(c.id) && c.id !== '') ?? null },
+      querySelectorAll() { return [] },
+    }
+    return n
+  }
+  const doc = {
+    body: node('body'),
+    createElement: tag => node(tag),
+    createElementNS: (_ns, tag) => node(tag),
+    getElementById: id => byId.get(id) ?? null,
+    querySelector: () => null,
+    addEventListener() {},
+  }
+  // el() 会给节点赋 id —— 拦截一下：用 Proxy 太重，直接在 buildSkeleton 后扫树登记 id。
+  const registerIds = n => { if (n.id) byId.set(n.id, n); for (const c of n.children) registerIds(c) }
+  const ctx2 = vm.createContext({
+    window: { addEventListener() {} },
+    document: doc,
+    __doc: doc,
+  })
+  const src2 = source + `
+;globalThis.__buildSkeleton = buildSkeleton
+;globalThis.__renderStatusbar = renderStatusbar
+;globalThis.__el = el
+;globalThis.__state = state`
+  // 把 document 替换成可追踪的桩再执行（原始 source 已在主 context 执行过，这里重新跑一份）
+  const fresh = ctx2
+  vm.runInContext(src2, fresh, { filename: 'app.js' })
+  vm.runInContext('buildSkeleton(__doc.body)', fresh)
+  registerIds(doc.body)
+  assert.equal(doc.getElementById('status-text') !== null, true, '#status-text must exist after buildSkeleton')
+  // renderStatusbar 依赖 $()（document.querySelector）——桩里 querySelector 返回 null 会让它早退，
+  // 所以补一个按 id 查找的实现，验证两次调用后 #status-text 仍在且状态文本被更新。
+  doc.querySelector = sel => sel.startsWith('#') ? (byId.get(sel.slice(1)) ?? null) : null
+  vm.runInContext('renderStatusbar()', fresh)
+  vm.runInContext('renderStatusbar()', fresh)
+  const st = doc.getElementById('status-text')
+  assert.notEqual(st, null, '#status-text must survive renderStatusbar (bug: it was inside #status-pill and got wiped)')
+  assert.equal(st.textContent, '未连接')
+})
+
+// ---- D-3 回归（2026-09-15 实机验收发现）：删掉当前选中的主机后，
+// byId(state.selection) 返回 undefined，renderIdentity 读 conn.group 抛 TypeError。
+// 修法：归一化 null（selection 失效 = 未选中），emptyStateNodes 同病一并修。
+test('D-3 删选中主机后 renderIdentity / emptyStateNodes 不抛错且归空态', () => {
+  const byId = new Map()
+  const node = tag => {
+    const n = {
+      tagName: String(tag ?? 'div').toUpperCase(), children: [], hidden: false,
+      className: '', id: '', textContent: '', type: '', value: '', title: '',
+      attributes: new Map(), handlers: new Map(), style: {}, disabled: false,
+      setAttribute(k, v) { this.attributes.set(k, String(v)) },
+      getAttribute(k) { return this.attributes.get(k) ?? null },
+      appendChild(c) { this.children.push(c); return c },
+      append(...cs) { for (const c of cs) { if (c) this.children.push(c) } },
+      replaceChildren(...cs) { this.children = [...cs] },
+      addEventListener(k, fn) { this.handlers.set(k, fn) },
+      querySelector(sel) { return this.children.find(c => sel.endsWith(c.id) && c.id !== '') ?? null },
+      querySelectorAll() { return [] },
+    }
+    return n
+  }
+  const doc = {
+    body: node('body'),
+    createElement: tag => node(tag),
+    createElementNS: (_ns, tag) => node(tag),
+    getElementById: id => byId.get(id) ?? null,
+    querySelector: () => null,
+    addEventListener() {},
+  }
+  const registerIds = n => { if (n.id) byId.set(n.id, n); for (const c of n.children) registerIds(c) }
+  const fresh = vm.createContext({
+    window: { addEventListener() {} },
+    document: doc,
+    __doc: doc,
+  })
+  vm.runInContext(source + `
+;globalThis.__renderIdentity = renderIdentity
+;globalThis.__emptyStateNodes = emptyStateNodes
+;globalThis.__state = state
+;globalThis.__trustOf = trustOf
+;globalThis.__icon = icon`, fresh, { filename: 'app.js' })
+  vm.runInContext('buildSkeleton(__doc.body)', fresh)
+  registerIds(doc.body)
+  doc.querySelector = sel => sel.startsWith('#') ? (byId.get(sel.slice(1)) ?? null) : null
+  // 造两台主机并选中其中一台，再「删掉」被选中的那台（连接库里移除，selection 仍指向旧 id）。
+  // connections 必须非空：为空会走「连接你的下一台主机」分支，覆盖不到 D-3 的失效 selection 路径。
+  vm.runInContext(`
+    __state.connections.push({ id: 'c-1', label: 'gone', host: '127.0.0.1', port: 22, username: 'u', auth: { method: 'password' }, group: 'g', favorite: false })
+    __state.connections.push({ id: 'c-2', label: 'other', host: '127.0.0.2', port: 22, username: 'u2', auth: { method: 'password' }, group: 'g', favorite: false })
+    __state.selection = 'c-1'
+    __state.connections = __state.connections.filter(c => c.id !== 'c-1') // 删除选中的那台
+  `, fresh)
+  // renderIdentity 在 selection 失效时必须归「未选中」形态，不抛 TypeError。
+  vm.runInContext('__renderIdentity()', fresh)
+  assert.equal(doc.getElementById('identity-name').textContent, 'SSH 工作区', '删主机后 identity 归工作区默认文案')
+  assert.equal(doc.getElementById('identity-env').hidden, true)
+  // emptyStateNodes 同病同修：失效 selection 回退「选择一台主机」空态。
+  const nodes = vm.runInContext('__emptyStateNodes()', fresh)
+  assert.ok(Array.isArray(nodes) && nodes.length > 0)
+  const heading = nodes.find(n => n.tagName === 'H2')
+  assert.equal(heading.textContent, '选择一台主机', '失效 selection 必须回空态而不是读 undefined')
+})
+
+// ---- D4 尾项①（§16.4-3 顺延项）：renderBanner 隐藏时必须清空横幅内容 --------------------
+// 旧实现只设 hidden：上一次 bannerNode 渲染的图标 / 文案 / 按钮节点留在 DOM
+//（含 onclick 闭包引用）。行为闭环：显示（有内容）→ 隐藏（容器必须空）→ 再显示（重建）。
+test('D4 renderBanner 隐藏时清空横幅内容，再显示时重建（尾项①回归）', () => {
+  const byId = new Map()
+  const node = tag => {
+    const n = {
+      tagName: String(tag ?? 'div').toUpperCase(), children: [], hidden: false,
+      className: '', id: '', textContent: '', type: '', value: '', title: '',
+      attributes: new Map(), handlers: new Map(), style: {}, disabled: false,
+      setAttribute(k, v) { this.attributes.set(k, String(v)) },
+      getAttribute(k) { return this.attributes.get(k) ?? null },
+      appendChild(c) { this.children.push(c); return c },
+      append(...cs) { for (const c of cs) { if (c) this.children.push(c) } },
+      replaceChildren(...cs) { this.children = [...cs] },
+      addEventListener(k, fn) { this.handlers.set(k, fn) },
+      querySelector(sel) { return this.children.find(c => sel.endsWith(c.id) && c.id !== '') ?? null },
+      querySelectorAll() { return [] },
+    }
+    return n
+  }
+  const doc = {
+    body: node('body'),
+    createElement: tag => node(tag),
+    createElementNS: (_ns, tag) => node(tag),
+    getElementById: id => byId.get(id) ?? null,
+    querySelector: () => null,
+    addEventListener() {},
+  }
+  const registerIds = n => { if (n.id) byId.set(n.id, n); for (const c of n.children) registerIds(c) }
+  const fresh = vm.createContext({
+    window: { addEventListener() {} },
+    document: doc,
+    __doc: doc,
+  })
+  vm.runInContext(source + `
+;globalThis.__renderBanner = renderBanner
+;globalThis.__state = state`, fresh, { filename: 'app.js' })
+  vm.runInContext('buildSkeleton(__doc.body)', fresh)
+  registerIds(doc.body)
+  doc.querySelector = sel => sel.startsWith('#') ? (byId.get(sel.slice(1)) ?? null) : null
+  const banner = () => doc.getElementById('state-banner')
+
+  // 1) 进入一个有横幅的状态（waiting-fingerprint）：bannerNode 重建内容。
+  vm.runInContext(`
+    __state.connections.push({ id: 'c-1', label: 'h', host: '127.0.0.1', port: 22, username: 'u', auth: { method: 'password' }, group: 'g', favorite: false })
+    __state.tabs.push('c-1'); __state.activeTab = 'c-1'
+    __state.frameState = { state: 'waiting-fingerprint', token: 't', fingerprint: 'f' }
+  `, fresh)
+  vm.runInContext('__renderBanner()', fresh)
+  assert.equal(banner().hidden, false)
+  const shownCount = banner().children.length
+  assert.ok(shownCount >= 3, `显示态应有 icon+文案+按钮（实际 ${shownCount} 节点）`)
+
+  // 2) 切回隐藏态（frameState 置空且无 pendingError）：hidden=true 且容器必须空。
+  vm.runInContext('__state.frameState = null', fresh)
+  vm.runInContext('__renderBanner()', fresh)
+  assert.equal(banner().hidden, true)
+  assert.equal(banner().children.length, 0, '隐藏态容器必须清空（旧实现残留按钮/文案节点）')
+
+  // 3) 再切回显示态：内容正常重建（无空白、无旧内容闪烁）。
+  vm.runInContext(`__state.frameState = { state: 'connecting' }`, fresh)
+  vm.runInContext('__renderBanner()', fresh)
+  assert.equal(banner().hidden, false)
+  assert.ok(banner().children.length >= 2, '再显示时必须重建 icon+文案')
+})
+
+// ---- D2 顶栏段数（2026-09-15 实机验收发现 → 用户定向「hero 态不渲染该段」）----------
+// canvas 只注册在会话头 actions 槽 ⇒ hero 态没有胶囊可委托，顶栏「会话布」必然失效。
+// 宿主随 chrome 消息下发 canvasAvailable，浮层据此决定段数；默认（没收到字段）保持三段。
+test('D2 顶栏段数随 canvasAvailable 变化：会话态三段 / hero 态两段', () => {
+  const byId = new Map()
+  const node = tag => {
+    const n = {
+      tagName: String(tag ?? 'div').toUpperCase(), children: [], hidden: false,
+      className: '', textContent: '', type: '', title: '', dataset: {},
+      attributes: new Map(), handlers: new Map(), style: { setProperty() {}, removeProperty() {} },
+      setAttribute(k, v) { this.attributes.set(k, String(v)) },
+      getAttribute(k) { return this.attributes.get(k) ?? null },
+      addEventListener(k, fn) { this.handlers.set(k, fn) },
+      appendChild(c) { this.children.push(c); c.parent = this; return c },
+      prepend(c) { this.children.unshift(c); c.parent = this; return c },
+      remove() { if (this.parent) this.parent.children = this.parent.children.filter(x => x !== this) },
+      querySelector() { return null },
+      querySelectorAll() { return [] },
+    }
+    Object.defineProperty(n, 'id', { get: () => n._id ?? '', set: v => { n._id = v; byId.set(v, n) } })
+    return n
+  }
+  const doc = {
+    body: node('body'),
+    documentElement: node('html'),
+    createElement: t => node(t),
+    getElementById: id => byId.get(id) ?? null,
+    querySelector: () => null,
+    addEventListener() {},
+  }
+  const root = node('div')
+  root.id = 'ssh-root'
+  doc.body.appendChild(root)
+  const fresh = vm.createContext({ window: { addEventListener() {} }, document: doc, __doc: doc, __root: root })
+  vm.runInContext(source + `
+;globalThis.__buildTopbar = buildTopbar
+;globalThis.__applyChrome = applyChrome
+;globalThis.__overlayState = overlayState`, fresh, { filename: 'app.js' })
+
+  const segments = () => {
+    const bar = root.children.find(c => c.id === 'ssh-topbar')
+    const group = bar.children.find(c => c.tagName === 'DIV')
+    return group.children.map(b => ({ seg: b.dataset.seg, label: b.textContent, aria: b.getAttribute('aria-current') }))
+  }
+  const rebuild = () => vm.runInContext('__buildTopbar(__root)', fresh)
+
+  // 默认（未收到 chrome 消息）：三段，SSH 段仍是当前态
+  rebuild()
+  assert.deepEqual(segments().map(s => s.label), ['对话', '会话布', 'SSH'], '默认必须渲染三段（不擅自减入口）')
+  assert.equal(segments().at(-1).aria, 'page')
+
+  // 收到 canvasAvailable=true：仍三段（幂等重建，不叠加）
+  vm.runInContext('__applyChrome({ type: "chrome", version: 1, overlayToken: "tok-1", reserve: 150, canvasAvailable: true })', fresh)
+  assert.deepEqual(segments().map(s => s.label), ['对话', '会话布', 'SSH'])
+  assert.equal(root.children.filter(c => c.id === 'ssh-topbar').length, 1, '重建不得留下两个顶栏')
+  assert.equal(vm.runInContext('__overlayState.token', fresh), 'tok-1', 'chrome 消息必须记录 overlayToken')
+
+  // 收到 canvasAvailable=false（hero 态）：只两段，且没有占位死按钮
+  vm.runInContext('__applyChrome({ type: "chrome", version: 1, overlayToken: "tok-1", reserve: 0, canvasAvailable: false })', fresh)
+  assert.deepEqual(segments().map(s => s.label), ['对话', 'SSH'], 'hero 态不得渲染「会话布」段')
+  assert.equal(segments().some(s => s.seg === 'canvas'), false)
+  assert.equal(segments().at(-1).aria, 'page', 'SSH 段仍须是当前态')
+
+  // 回到会话态：段数恢复（修复必须是双向的）
+  vm.runInContext('__applyChrome({ type: "chrome", version: 1, overlayToken: "tok-1", reserve: 150, canvasAvailable: true })', fresh)
+  assert.deepEqual(segments().map(s => s.label), ['对话', '会话布', 'SSH'])
+})
+
+// ---- D-1 回归护栏（2026-09-15 实机验收逮到，阻断级）------------------------------
+// 「保存并连接」曾写成 `event.saveAndConnect = true`：那颗 `event` 解析到全局 window.event
+// （click 事件），而 `dispatchEvent(new Event('submit'))` 让处理器拿到的是新事件对象
+// ⇒ 标记永远读不到、connectFlow 从未被调用（按钮实际只保存）。行为闭环由实机验收
+// P16a 覆盖（真实点击 + 远端 TCP 计数），这里钉住"不许写回事件对象"这一形态。
+test('保存并连接：意图标记不得挂在事件对象上（D-1 回归）', () => {
+  assert.doesNotMatch(source, /event\.saveAndConnect/, '不得把意图挂到事件对象（dispatchEvent 后读不到）')
+  assert.match(source, /let saveAndConnect = false/, '意图必须走闭包变量')
+  assert.match(source, /const alsoConnect = saveAndConnect/, 'submit 处理器必须读闭包标记')
+  assert.match(source, /if \(alsoConnect === true\) void connectFlow\(connection\)/, '标记为真时必须真的发起连接')
+})
+
+// ---- 2026-09-15 实机反馈：SSH 抽屉标题栏的 × 与桌面壳窗控组叠在同一块像素上 ---------
+// 桌面壳窗控组是 fixed 右上角的零占位浮层，压在页面之上；抽屉标题栏的 × 只比它低 9px、
+// 靠左 14px ⇒ 被窗控压住点不到。修法是抽屉整体下移到窗控下沿之下，让位量由窗控组与
+// iframe 的**父视口**矩形实测得到（两种挂载形态共用一套算法）。
+test('computeChromeClearance：窗控下沿 → 让位量，iframe 在窗控下方时归零', () => {
+  const capsule = { width: 100, height: 26, bottom: 37 }
+  assert.equal(context.computeChromeClearance(capsule, { top: 0 }), 45, '37 + 8px 呼吸 = 45')
+  assert.equal(context.computeChromeClearance(capsule, { top: 44 }), 0, 'iframe 从会话头下方开始：窗控不挡，别凭空下移')
+  assert.equal(context.computeChromeClearance(capsule, null), 45, '量不到 iframe 矩形时按顶格算')
+  assert.equal(context.computeChromeClearance(capsule, undefined), 45)
+  assert.equal(context.computeChromeClearance(null, { top: 0 }), null, '没有窗控组（浏览器）就是"量不到"')
+  assert.equal(context.computeChromeClearance({ width: 0, height: 0, bottom: 0 }, { top: 0 }), null, '零尺寸=不可见，按量不到处理')
+  assert.equal(context.computeChromeClearance({ width: 10, height: 26, bottom: Number.NaN }, { top: 0 }), null)
+})
+
+/** 造一个「SSH 页面跑在 iframe 里」的 vm 环境，用于测量 / 让位变量的行为闭环。 */
+function bootShell({ capsuleRect = null, frameRect = null, topLevel = false, throwOnQuery = false, reserve = 0 } = {}) {
+  const style = new Map()
+  const iframeDoc = {
+    addEventListener() {},
+    documentElement: { style: { setProperty: (key, value) => style.set(key, value) } },
+  }
+  const parentDoc = {
+    querySelector() {
+      if (throwOnQuery) throw new Error('SecurityError: cross-origin frame')
+      return capsuleRect === null ? null : { getBoundingClientRect: () => capsuleRect }
+    },
+  }
+  const win = { addEventListener() {} }
+  win.parent = topLevel ? win : { document: parentDoc }
+  win.frameElement = frameRect === null ? null : { getBoundingClientRect: () => frameRect }
+  const ctx = vm.createContext({ window: win, document: iframeDoc })
+  vm.runInContext(source, ctx, { filename: 'app.js' })
+  if (reserve > 0) vm.runInContext(`overlayState.reserve = ${reserve}`, ctx)
+  return { ctx, style }
+}
+
+test('syncChromeClearance：量到窗控走垂直让位，量不到才退回宿主 reserve 的水平让位', () => {
+  const capsuleRect = { width: 100, height: 26, bottom: 37 }
+
+  // ① 桌面壳 + iframe 顶格（浮层 / 覆盖式会话头）：抽屉下移 45px，水平让位归零
+  const shell = bootShell({ capsuleRect, frameRect: { top: 0, right: 800 }, reserve: 150 })
+  assert.equal(vm.runInContext('measureChromeClearance()', shell.ctx), 45)
+  vm.runInContext('syncChromeClearance()', shell.ctx)
+  assert.equal(shell.style.get('--ssh-chrome-clearance'), '45px')
+  assert.equal(shell.style.get('--ssh-chrome-avoid-right'), '0px', '垂直已让开时不得再左推 ×')
+
+  // ② iframe 本就在窗控下方（会话视图）：不让位，也不左推
+  const lower = bootShell({ capsuleRect, frameRect: { top: 44, right: 800 }, reserve: 150 })
+  vm.runInContext('syncChromeClearance()', lower.ctx)
+  assert.equal(lower.style.get('--ssh-chrome-clearance'), '0px')
+  assert.equal(lower.style.get('--ssh-chrome-avoid-right'), '0px')
+
+  // ③ 量不到窗控组（浏览器）但有宿主 reserve：退回水平让位
+  const blind = bootShell({ reserve: 150 })
+  assert.equal(vm.runInContext('measureChromeClearance()', blind.ctx), null)
+  vm.runInContext('syncChromeClearance()', blind.ctx)
+  assert.equal(blind.style.get('--ssh-chrome-clearance'), '0px')
+  assert.equal(blind.style.get('--ssh-chrome-avoid-right'), '150px', '宿主实测的 reserve 是最后一道兜底')
+
+  // ④ 顶层窗口（浏览器直接打开 /ssh/）：两个变量都归零，抽屉照旧顶格
+  const top = bootShell({ capsuleRect, frameRect: { top: 0, right: 800 } , topLevel: true })
+  vm.runInContext('syncChromeClearance()', top.ctx)
+  assert.equal(top.style.get('--ssh-chrome-clearance'), '0px')
+  assert.equal(top.style.get('--ssh-chrome-avoid-right'), '0px')
+
+  // ⑤ 跨源读父文档抛错：静默降级为不让位，不冒泡
+  const crossOrigin = bootShell({ throwOnQuery: true, reserve: 150 })
+  vm.runInContext('syncChromeClearance()', crossOrigin.ctx)
+  assert.equal(crossOrigin.style.get('--ssh-chrome-clearance'), '0px')
+  assert.equal(crossOrigin.style.get('--ssh-chrome-avoid-right'), '150px')
+})
+
+test('抽屉让位的样式契约：.sheet 消费 clearance，.sheet-head 消费 avoid-right', async () => {
+  const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8')
+  assert.match(css, /\.sheet \{[^}]*height: calc\(100% - var\(--ssh-chrome-clearance, 0px\)\)/,
+    '抽屉高度必须减掉让位量，否则 margin-top 会把抽屉顶出视口')
+  assert.match(css, /\.sheet \{[^}]*margin-top: var\(--ssh-chrome-clearance, 0px\)/)
+  assert.match(css, /\.sheet-head \{[^}]*padding-right: calc\(20px \+ var\(--ssh-chrome-avoid-right, 0px\)\)/)
+})
