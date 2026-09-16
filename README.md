@@ -10,7 +10,7 @@
 | Fleet | [`dsh-miasaki-fleet/`](dsh-miasaki-fleet/) | 多 Agent CLI 编排（v0.16）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）/ G0–G4 图工程判定层（契约、图与就绪度、能力图、异构验证者选取）。 |
 | Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.6，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
 | Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.8.1-miasaki.0）：**接入官方右侧 Sidebar**，提供审查 / 终端两个 tab 类型（辅助对话归 M2）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除 232 行）；**2026-09-12 内嵌终端两形态落地**——底部面板 + 右栏 tab 是**同一个 pty 会话的两个 viewer**（切换容器不丢状态），自持 node-pty 路线 B（零编译 prebuilds）、一次性 token 闸门、回放环 + 背压淘汰。单测 54 例、静态回归 10/10。 |
-| SSH | [`dsh-miasaki-ssh/`](dsh-miasaki-ssh/) | DSH web SSH 插件 `@miasaki/dsh-ssh`（全新自研，2026-09-09 立项）：**会话头第一行**「SSH」段（与「对话 / 会话布」同一个胶囊，三段一体）+ **画布页面内部**那组按钮旁的「SSH」（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器。**M1 代码完成，已 link 安装，待重启验证真实连接**；**2026-09-12 U0 可靠性闭环 + U1 统一工作区均已实施**（二进制输出修复、查看器实例化、指纹闭环、主机导航 + 多标签 + 编辑抽屉、**三主题桥接**、复制粘贴 / 查找 / 字号、容器查询响应式），单测 60 例、静态回归 12/12，待实机验收；U2（SFTP / 多 shell）U3（跳板 / 转发）未动。 |
+| SSH | [`dsh-miasaki-ssh/`](dsh-miasaki-ssh/) | DSH web SSH 插件 `@miasaki/dsh-ssh`（全新自研，2026-09-09 立项）：**会话头第一行**「SSH」段（与「对话 / 会话布」同一个胶囊，三段一体）+ **画布页面内部**那组按钮旁的「SSH」（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器。**M1 代码完成，已 link 安装**；U0 可靠性闭环 + U1 统一工作区（2026-09-12）、A0 上下文桥（2026-09-14）、D1–D4 全屏浮层改造与**四轮真机验收**（2026-09-15）、**U2 主体落地**（2026-09-16：U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复）均已实施，单测 **110 例**、静态回归 12/12；U2.2 SFTP 与 U3（跳板 / 转发）未动，实机项待验收。 |
 | 双模型 | [`dsh-miasaki-dual-model/`](dsh-miasaki-dual-model/) | DSH web 双模型插件 `@miasaki/dsh-dual-model`（2026-09-10 立项）：会话级「主模型 + 辅助模型」，只要其一支持图片即可上传图片，输入框右下角（`conversation.input.right`）快速配置。**M1 实现完成，待实机验证**——M0 六项技术假设实测全部成立；准入走一行本体补丁（可选服务探测，未装插件零退化，规则 + 双基线入库并可离线自证）；单测 24 例、`verify-all dual-model` 10/10。设计文档与变更记录见其 `design/`。 |
 | 外观 | [`dsh-miasaki-appearance/`](dsh-miasaki-appearance/) | DSH web 外观插件 `@miasaki/dsh-appearance`（2026-09-11 立项）：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果。**M2 已收官（2026-09-12）**——M1 底座（设置栏 + 首帧注入 + 契约自检）实机六项全过后，S1–S6 依次落地 **皮肤层**（`derive-skins.mjs` 编译 105 token 表 + 首帧防闪色 boot style）、**壁纸与玻璃档位**（配置 v2、内置程序化渐变 + 本地图源、`color-mix` 表面透明度自动跟皮肤跟明暗）、**桌面壳让位协议**（`data-miasaki-theme-yield` 免刷新翻转、冲突自检）。走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject`，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约。单测 60 例、静态回归 12/12；M3–M4 接动效与会话效果。 |
 | 共享参考 | [`dsh-miasaki-shared-docs/`](dsh-miasaki-shared-docs/) | `cross/` 跨线设计契约（如 A×B 桌宠↔fleet 联动、sidebar 路线讨论）、`dsh-platform/` DSH 平台调研与升级回归记录。 |
@@ -30,8 +30,7 @@ dsh-miasaki/
 ├─ dsh-miasaki-appearance/  # 外观线（index.js + client.js + lib/ + test/；design/ 在其内）
 ├─ dsh-miasaki-shared-docs/ # 跨线共享参考（含 cross/smoke-test-matrix.md 回归矩阵）
 ├─ scripts/verify-all.mjs   # 七线统一静态回归入口（L0 + L1）
-├─ AGENTS.md                # 工作区纪律（缓存卫生 / 目录职责 / 提交纪律 / 收尾清单）
-└─ .gitignore               # _refs/ vendor/ dist/ .vs/ .workbuddy/ .learnings/ 等均已忽略
+└─ .gitignore               # _refs/ vendor/ dist/ .vs/ .workbuddy/ .learnings/ AGENTS.md 等均已忽略
 ```
 
 ## 统一回归（七线）
@@ -116,6 +115,7 @@ pnpm test        # 54 项单测（审查 5 / 审查视图 10 / 目录分组 3 / 
 
 - 各线设计决策与变更记录：`dsh-miasaki-desktop/design/`、`dsh-miasaki-canvas/design/`、`dsh-miasaki-sidebar/design/`、`dsh-miasaki-appearance/design/`、`dsh-miasaki-fleet/docs/`
 - 跨线契约：`dsh-miasaki-shared-docs/cross/`；DSH 平台调研：`dsh-miasaki-shared-docs/dsh-platform/`
-- 工作区纪律（缓存卫生 / 目录职责 / 提交纪律 / 会话收尾清单）：[AGENTS.md](AGENTS.md)
+- 工作区纪律（缓存卫生 / 目录职责 / 提交纪律 / 会话收尾清单）由维护者以**本地 `AGENTS.md`** 维护，
+  **不入库、不随 clone 分发**（已在 `.gitignore` 挡回）；仓库内可见的纪律以本文档与各线 README / `design/` 为准。
 
 归档与外部产物（`_refs/`、`vendor/`、`dist/`、`.vs/` 等）已 gitignore，不入库。

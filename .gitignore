@@ -12,6 +12,12 @@ node_modules/
 # （注意：DSH profile 目录用 pnpm 是其宿主生态的既定方式，与本条无关。）
 dsh-miasaki-desktop/pnpm-lock.yaml
 
+# ---- 仓库维护者内部文档（2026-09-16 决议：不入库）----
+# 工作区指令与仓库纪律（AGENTS.md）属维护者内部文档，**只在本机保留**以继续生效为
+# 工作区指令，不推送。通配写法覆盖任意层级，防将来各线自建同类文件再被误提交。
+# （注意：dsh-miasaki-fleet/agents/ 是产品运行配置目录，文件名不是 AGENTS.md，不受本条影响。）
+AGENTS.md
+
 # ---- 官方仓库克隆与本地备份（含嵌套 .git，禁止入库）----
 vendor/
 _refs/
