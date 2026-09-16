@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D2 收工看板 — @miasaki/dsh-ssh 全屏浮层（路线丁）</title>
+<style>
+  /* Müller-Brockmann 瑞士网格纯粹主义：8pt 基线 · 严格左对齐 · 黑白 + 单强调色 · 零装饰 */
+  :root { --ink:#111111; --paper:#ffffff; --accent:#c8331f; --muted:#666666; --u:8px; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Helvetica Neue",Helvetica,"PingFang SC","Microsoft YaHei",Arial,sans-serif; color:var(--ink); margin:calc(var(--u)*4); background:var(--paper); }
+  .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:var(--u); max-width:1280px; }
+  .rule-top { border-top:calc(var(--u)/2) solid var(--ink); }
+  .cell { border-top:2px solid var(--ink); padding-top:var(--u); }
+  .c3{grid-column:span 3}.c4{grid-column:span 4}.c6{grid-column:span 6}.c8{grid-column:span 8}.c9{grid-column:span 9}.c12{grid-column:span 12}
+  h1 { font-size:calc(var(--u)*5); line-height:1.05; font-weight:700; letter-spacing:-0.01em; text-transform:uppercase; }
+  h1 .accent { color:var(--accent); }
+  .meta { font-size:11px; line-height:1.7; text-align:right; color:var(--muted); }
+  h2 { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:calc(var(--u)*1.5); }
+  h2 .no { color:var(--accent); margin-right:calc(var(--u)/2); }
+  p, li, td, th { font-size:12.5px; line-height:1.65; }
+  .lead { font-size:15px; line-height:1.7; max-width:64ch; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-weight:700; font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; border-bottom:2px solid var(--ink); padding:0 var(--u) var(--u) 0; }
+  td { border-bottom:1px solid #d9d9d9; padding:calc(var(--u)/2) var(--u) calc(var(--u)/2) 0; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  .num { font-variant-numeric:tabular-nums; }
+  .accent { color:var(--accent); } .muted { color:var(--muted); }
+  ul.plain { list-style:none; }
+  ul.plain li { padding-left:calc(var(--u)*2); position:relative; }
+  ul.plain li::before { content:""; position:absolute; left:0; top:7px; width:8px; height:2px; background:var(--accent); }
+  .kpi { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--u); margin-bottom:calc(var(--u)*2); }
+  .kpi div { border-top:2px solid var(--ink); padding-top:var(--u); }
+  .kpi b { display:block; font-size:calc(var(--u)*3.5); font-weight:700; font-variant-numeric:tabular-nums; }
+  .kpi span { font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); }
+  .badge { display:inline-block; font-size:10px; font-weight:700; letter-spacing:0.08em; border:1.5px solid var(--ink); padding:1px 6px; text-transform:uppercase; }
+  .badge.done { background:var(--ink); color:var(--paper); }
+  .dot-s { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  .dot-done { background:var(--ink); } .dot-todo { background:#fff; border:1.5px solid var(--ink); } .dot-risk { background:var(--accent); }
+  footer { margin-top:calc(var(--u)*4); border-top:calc(var(--u)/4) solid var(--ink); padding-top:var(--u); display:flex; justify-content:space-between; font-size:10.5px; color:var(--muted); }
+  @media (max-width:900px){ .c3,.c4,.c6,.c8,.c9{grid-column:span 12} .kpi{grid-template-columns:repeat(2,1fr)} }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <header class="rule-top" style="display:grid;grid-template-columns:repeat(12,1fr);gap:8px;width:100%;padding-top:calc(var(--u)*2)">
+    <h1 class="c9">SSH 全屏浮层<br><span class="accent">D2 收工看板</span></h1>
+    <div class="meta c3">
+      项目 <b>@miasaki/dsh-ssh</b> · 路线丁<br>
+      日期 2026-09-15 · 状态 <b class="accent">D2 完成</b><br>
+      上游 D1 骨架（四门槛全过）+ D1.1 launcher<br>
+      下一站 D3 清理与回归
+    </div>
+  </header>
+
+  <p class="lead c12">一句话结论：浮层内的「对话｜会话布｜SSH」自绘顶栏落地——「对话」经消息协议退出浮层并写回记忆，「会话布」跳转委托宿主、无画布时静默收手，桌面壳窗控让位由 <b>--ssh-chrome-reserve</b> 消费；D1 的临时退出条按计划移除，单向门教训固化为带 token 防伪的消息行为闭环测试。</p>
+
+  <section class="cell c12">
+    <h2><span class="no">01</span>D2 任务清单与执行台账（逐项打卡）</h2>
+    <table>
+      <tr><th style="width:6%">#</th><th style="width:30%">任务</th><th style="width:9%">优先级</th><th style="width:9%">工时</th><th style="width:10%">截止</th><th style="width:36%">状态 / 产出</th></tr>
+      <tr><td class="num">2.1</td><td>client.js：删 D1 临时退出条（.dsh-ssh-bar / .dsh-ssh-exit 及其 CSS）</td><td>P0</td><td class="num">0.5h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — innerHTML 结构与 SWITCH_CSS 同步清理</td></tr>
+      <tr><td class="num">2.2</td><td>client.js：顶栏消息协议（ssh:close / ssh:view）+ overlayToken 防伪 + 卸载解绑</td><td>P0</td><td class="num">1.5h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — onOverlayMessage + chrome 消息下发 token</td></tr>
+      <tr><td class="num">2.3</td><td>client.js：入口/launcher/画布广播改 openOverlayFrom(el) 记录归焦目标</td><td>P1</td><td class="num">0.5h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — close 时焦点归还最后触发者</td></tr>
+      <tr><td class="num">2.4</td><td>app.js：chrome 消息扩展（token + reserve → --ssh-chrome-reserve）</td><td>P0</td><td class="num">0.5h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — setupThemeListener 同通道分发</td></tr>
+      <tr><td class="num">2.5</td><td>app.js：isOverlayMode + buildTopbar（对话｜会话布｜SSH，SSH 当前态）+ mount 接线</td><td>P0</td><td class="num">1.5h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — 回退视图不渲染顶栏</td></tr>
+      <tr><td class="num">2.6</td><td>styles.css：顶栏样式（--ssh-* 令牌）+ #ssh-root 纵向 flex + reserve 消费</td><td>P0</td><td class="num">1h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — 三主题令牌化，无硬编码色</td></tr>
+      <tr><td class="num">2.7</td><td>client.test.js 改写：删旧 bar 断言 → D2 消息行为闭环 + token 防伪 + 非法 view 拒绝</td><td>P0</td><td class="num">2h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — 21/21 全绿</td></tr>
+      <tr><td class="num">2.8</td><td>D2 探针实测（真浏览器 × 真 client.js × 真 app.js 顶栏）</td><td>P0</td><td class="num">2h</td><td class="num">D2</td><td><span class="dot-s dot-done"></span>完成 — 六项全过（见 03）</td></tr>
+      <tr><td class="num">2.9</td><td>A0 文案改「点左上『对话』退出后粘贴」（原计划 D2，实际顺延 D3 —— 见 05 偏差）</td><td>P1</td><td class="num">0.5h</td><td class="num">D3</td><td><span class="dot-s dot-risk"></span>顺延 D3 — 与响应式重校准同批验收更连贯</td></tr>
+    </table>
+  </section>
+
+  <section class="cell c8">
+    <h2><span class="no">02</span>D2 实测记录（六项全过）</h2>
+    <table>
+      <tr><th style="width:26%">门槛</th><th>实测</th><th style="width:10%">判定</th></tr>
+      <tr><td>顶栏渲染</td><td>浮层 iframe 内 <code>#ssh-topbar</code> 三按钮齐全，SSH 段 active + aria-current="page"</td><td><span class="badge done">过</span></td></tr>
+      <tr><td>「对话」退出</td><td>点击 → ssh:close 消息 → 浮层关闭 + 记忆归 0；launcher 重开正常（探针桩曾用 push 语义拿旧代闭包，改为 cordis 同名替换语义后修正）</td><td><span class="badge done">过</span></td></tr>
+      <tr><td>「会话布」跳转</td><td>消息 → 关自己 + 委托宿主；探针页无 canvas 胶囊 → 静默收手，零异常</td><td><span class="badge done">过</span></td></tr>
+      <tr><td>回退无顶栏</td><td>宿主文档 #ssh-topbar 数量为 0（顶栏只在浮层 iframe 内）</td><td><span class="badge done">过</span></td></tr>
+      <tr><td>零损失回归</td><td>30 开关：session 同实例、零 resize 帧、回放环保留</td><td><span class="badge done">过</span></td></tr>
+      <tr><td>静态回归</td><td>client 21/21 · app/session/store 34 例 · verify-all ssh 12/12</td><td><span class="badge done">过</span></td></tr>
+    </table>
+  </section>
+
+  <section class="cell c4">
+    <h2><span class="no">03</span>异常与处置记录</h2>
+    <ul class="plain">
+      <li><b>探针桩 slots.inject 语义缺陷</b>（dispose+重 apply 后 find() 拿到旧代闭包，launcher 点击操作了已出 DOM 的宿主）：处置 = 桩改为 cordis 同名替换语义；非产品缺陷。</li>
+      <li><b>单测桩缺属性选择器 / click()</b>：D2 契约需要 [aria-label="…"] 查询与程序化点击；处置 = 桩 matches 取选择器末段匹配 + 节点补 click()。</li>
+      <li><b>临时清理被安全护栏拦截</b>（.openclaw/tmp 探针目录删除）：处置 = 不重试，目录在 ignore 区无害，有效探针已归档 _refs。</li>
+    </ul>
+    <h2 style="margin-top:16px"><span class="no">04</span>风险与回滚</h2>
+    <ul class="plain">
+      <li><b>消息防伪</b>：overlayToken 随机、仅经 chrome 消息下发、宿主严格校验（单测覆盖错 token 拒绝）。</li>
+      <li><b>回滚入口</b>：git revert 本批 commit → 临时退出条版本（D1 热修形态），功能可用；更彻底回 view-only 需 revert D1 批次。</li>
+      <li><b>遗留</b>：实机三主题观感与桌面壳窗控让位的视觉复验（需重启 dsh web，用户动作）。</li>
+    </ul>
+  </section>
+
+  <section class="cell c8">
+    <h2><span class="no">05</span>D2 复盘：完成度对比、偏差与 D3 建议</h2>
+    <div class="kpi">
+      <div><b>6/6</b><span>探针门槛全过</span></div>
+      <div><b>21/21</b><span>client 契约单测</span></div>
+      <div><b>12/12</b><span>verify-all ssh</span></div>
+      <div><b>8/9</b><span>任务完成（1 项顺延）</span></div>
+    </div>
+    <p><b>完成度</b>：D2 范围内 8/9 完成、1 项顺延（2.9 A0 文案，理由：与 D3 响应式重校准/四档宽度验收同批执行更连贯，避免一次实机验收跑两遍）。<b>偏差</b>：无计划外范围膨胀；探针桩两处语义修正属测试基建而非产品改动。<b>D3 行动建议</b>：① 删 conversation.view + tab 委托三件套（client.js ~100 行）并同步单测；② A0 文案 + 四档宽度重校准一并做；③ 响应式断点语义从中栏宽变视口宽后需重跑 1280/960/720/480；④ D3 收口后删除全部回退分支前先跑一次全量探针。<b>交接</b>：代码 dsh-miasaki-ssh/{client.js, app.js, styles.css, test/client.test.js}；数据 _refs/scripts-archive/ssh-d0-spike/d2-result.json；决策链 方案 §14/§15 + CHANGELOG。</p>
+  </section>
+
+  <footer class="c12">
+    <span>@miasaki/dsh-ssh · 全屏浮层（路线丁）· D2 收工包</span>
+    <span>瑞士网格 · 8pt 基线 · 黑白 + 单强调色 #c8331f</span>
+  </footer>
+
+</div>
+</body>
+</html>

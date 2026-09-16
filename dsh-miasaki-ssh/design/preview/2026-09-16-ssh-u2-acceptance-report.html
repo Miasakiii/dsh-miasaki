@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSH 线 U2 实施验收报告 · U2.1 / U2.3 / U2.4</title>
+<style>
+  /* Fathom Information Design 04：科学期刊严谨 × 现代排版；灰阶 + 海军蓝 + 单一强调 */
+  :root {
+    --ink: #1a2332;
+    --ink-soft: #4a5568;
+    --ink-mute: #8492a6;
+    --paper: #fbfbf9;
+    --hairline: #d7dde5;
+    --navy: #1f3a5f;
+    --accent: #b5442c;
+    --ok: #2e6b4f;
+    --code-bg: #f1f3f6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--paper); color: var(--ink);
+    line-height: 1.75; font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 56px 40px 96px; }
+  header.report { border-bottom: 3px solid var(--ink); padding-bottom: 28px; margin-bottom: 8px; }
+  .kicker { font-size: 12px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  h1 { font-size: 34px; line-height: 1.25; font-weight: 700; margin: 10px 0 6px; letter-spacing: -0.01em; }
+  .dek { color: var(--ink-soft); font-size: 15px; max-width: 62ch; }
+  .meta-line { display: flex; flex-wrap: wrap; gap: 28px; margin-top: 22px; font-size: 12.5px; color: var(--ink-mute); }
+  .meta-line b { color: var(--ink); font-weight: 600; }
+  h2 { font-size: 21px; margin: 56px 0 6px; padding-top: 18px; border-top: 1px solid var(--hairline); font-weight: 700; }
+  h2 .no { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 10px; font-weight: 600; }
+  h2 + p.lede { color: var(--ink-soft); margin-bottom: 18px; }
+  p { margin-bottom: 12px; max-width: 74ch; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 6px; font-size: 13.5px; }
+  th { text-align: left; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-mute); border-bottom: 2px solid var(--ink); padding: 8px 10px; font-weight: 600; }
+  td { border-bottom: 1px solid var(--hairline); padding: 9px 10px; vertical-align: top; }
+  tr:last-child td { border-bottom: 1px solid var(--ink); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; font-size: 12.5px; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--ink); margin: 20px 0 8px; }
+  .metric { padding: 16px 18px; border-right: 1px solid var(--hairline); }
+  .metric:last-child { border-right: none; }
+  .metric .v { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .metric .v span { font-size: 15px; font-weight: 600; color: var(--ink-mute); }
+  .metric .k { font-size: 12px; color: var(--ink-mute); margin-top: 2px; }
+  .metric.hot .v { color: var(--ok); }
+  .verdict { display: inline-flex; align-items: baseline; gap: 8px; border: 1px solid var(--ok); padding: 3px 10px; font-size: 12px; letter-spacing: 0.1em; color: var(--ok); font-weight: 700; }
+  .verdict.warn { border-color: var(--accent); color: var(--accent); }
+  .fig { border: 1px solid var(--hairline); background: #fff; margin: 18px 0 6px; padding: 22px 22px 14px; }
+  .figcap { font-size: 12px; color: var(--ink-mute); margin-bottom: 14px; }
+  .figcap b { color: var(--ink-soft); }
+  .barrow { display: grid; grid-template-columns: 220px 1fr 90px; gap: 10px; align-items: center; font-size: 12.5px; padding: 5px 0; border-bottom: 1px dotted var(--hairline); }
+  .barrow:last-child { border-bottom: none; }
+  .barrow .lbl { color: var(--ink-soft); }
+  .track { position: relative; height: 14px; background: #eef1f4; }
+  .track .fill { position: absolute; inset: 0 auto 0 0; background: var(--navy); }
+  .track .fill.base { background: #9aa8ba; }
+  .barrow .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink); }
+  .legend { display: flex; gap: 18px; font-size: 11.5px; color: var(--ink-mute); margin-top: 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--hairline); margin: 16px 0; background: #fff; }
+  .twocol > div { padding: 18px 20px; }
+  .twocol > div:first-child { border-right: 1px solid var(--hairline); }
+  .twocol h3 { font-size: 13px; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .twocol ul { list-style: none; }
+  .twocol li { font-size: 13px; padding: 5px 0 5px 18px; position: relative; border-bottom: 1px dotted var(--hairline); }
+  .twocol li:last-child { border-bottom: none; }
+  .twocol li::before { content: ""; position: absolute; left: 0; top: 12px; width: 8px; height: 2px; background: var(--navy); }
+  .twocol li.off::before { background: var(--hairline); }
+  .timeline { border-left: 2px solid var(--ink); margin: 18px 0 8px 6px; padding-left: 26px; }
+  .tstep { position: relative; padding-bottom: 20px; }
+  .tstep:last-child { padding-bottom: 4px; }
+  .tstep::before { content: ""; position: absolute; left: -31.5px; top: 5px; width: 9px; height: 9px; background: var(--paper); border: 2px solid var(--ink); }
+  .tstep.done::before { background: var(--ink); }
+  .tstep h4 { font-size: 14.5px; }
+  .tstep h4 .tag { font-size: 11px; color: var(--accent); letter-spacing: 0.08em; margin-left: 8px; font-weight: 700; }
+  .tstep p { font-size: 13px; color: var(--ink-soft); margin: 3px 0 0; }
+  .risk { border: 1px solid var(--hairline); border-left: 3px solid var(--accent); background: #fff; padding: 13px 16px; margin: 10px 0; font-size: 13.5px; }
+  .risk .rid { font-weight: 700; color: var(--accent); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .risk .lvl { float: right; font-size: 11px; letter-spacing: 0.1em; color: var(--ink-mute); }
+  .risk.lv-mid { border-left-color: #b78a2e; }
+  .risk.lv-mid .rid { color: #b78a2e; }
+  .risk.lv-low { border-left-color: var(--ink-mute); }
+  .risk.lv-low .rid { color: var(--ink-mute); }
+  .footnote { font-size: 12px; color: var(--ink-mute); border-top: 1px solid var(--hairline); margin-top: 48px; padding-top: 14px; }
+  .footnote code { background: none; }
+  @media (max-width: 760px) { .metrics { grid-template-columns: repeat(2, 1fr); } .metric:nth-child(2n) { border-right: none; } .twocol { grid-template-columns: 1fr; } .twocol > div:first-child { border-right: none; border-bottom: 1px solid var(--hairline); } .barrow { grid-template-columns: 130px 1fr 74px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="report">
+  <div class="kicker">dsh-miasaki-ssh · 工作区 U2 · 实施验收</div>
+  <h1>U2.1 多 shell × U2.3 工作区记忆 × U2.4 精确恢复</h1>
+  <p class="dek">按《工作区 U2 规划》§6 顺序实施的三项主体；S-U2-1 实测基线在改造后真实链路全部复现，无劣化。附身份分层架构、验证证据与已演练的回滚路径。</p>
+  <div class="meta-line">
+    <span><b>执行依据</b> U2 规划 v1.0 §6 + §12.5 开工建议</span>
+    <span><b>用户指令</b> U2.1 先行 · U2.3 按决策 4 · U2.4 用官方 addon</span>
+    <span><b>日期</b> 2026-09-16</span>
+    <span class="verdict">验收结论 · 代码与自动化层通过</span>
+  </div>
+</header>
+
+<div class="metrics">
+  <div class="metric hot"><div class="v">110<span>/110</span></div><div class="k">单测（原 85 例 + 25 例新增）</div></div>
+  <div class="metric hot"><div class="v">9<span>/9</span></div><div class="k">端到端探针（真 sshd × runtime）</div></div>
+  <div class="metric hot"><div class="v">12<span>/12</span></div><div class="k">verify-all ssh 回归</div></div>
+  <div class="metric"><div class="v">4<span> 项</span></div><div class="k">待实机验收（需 DSH host + 云主机）</div></div>
+</div>
+
+<h2><span class="no">01</span>架构：三层身份 + 附着票据</h2>
+<p class="lede">多 shell 的本质不是「多几个标签按钮」，而是把「主机资料、连接实例、shell 通道」三层身份拆开；安全前置是给运行实例发短期票据，让实例 id 不再是授权证明。</p>
+
+<div class="fig">
+  <div class="figcap"><b>图 1</b> · 三层身份与授权路径 —— connId 保持对外稳定，runtimeId 与 shellId 在内部承担代次与通道语义</div>
+  <div class="twocol">
+    <div>
+      <h3>身份链</h3>
+      <ul>
+        <li><code>connId</code>（profile，store.js 持久）— 对外名字，REST 不变</li>
+        <li><code>runtimeId</code>（rt-&lt;uuid&gt;，一次 ssh2 Client 实例）— 重连即换代，旧代次票据/指纹确认联动失效</li>
+        <li><code>shellId</code>（sh-&lt;seq&gt;，一条 shell channel）— 独立流 / 尺寸 / 回放环 / viewer 集合 / 写权</li>
+      </ul>
+      <h3 style="margin-top:14px">授权与写权</h3>
+      <ul>
+        <li>WS attach 必须持 <code>POST /ssh/api/attach</code> 签发的一次性 30s 票据；重放 / 过期 / teardown 作废 → <code>TICKET_INVALID</code></li>
+        <li>单写多读（决策 2）：非 owner 的 input / resize 一律拒收，接管走 <code>shell.takeover</code>，原 owner 即时收 <code>write.revoked</code></li>
+      </ul>
+    </div>
+    <div>
+      <h3>v2 协议帧</h3>
+      <ul>
+        <li class="off">旧帧（无 <code>v:2</code>）→ 拒收 + <code>VERSION_MISMATCH</code> 提示刷新，不做双栈</li>
+        <li><code>attach { v, ticket, shellId|shellSeq, cols, rows }</code></li>
+        <li><code>input / resize { v, shellId, … }</code> — 绑定校验集中在 <code>currentShell(ws)</code>，僵尸 viewer 与错 shellId 全部在此被拒</li>
+        <li><code>shell.open / shell.close / shell.takeover / snapshot</code>；shell 结束 ≠ 连接结束，标签保留为「会话已结束」</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<h2><span class="no">02</span>与 S-U2-1 实测基线的前后对照</h2>
+<p class="lede">基线 = U2.0 探针 A（2026-09-15，直连 ssh2 Client × 假 sshd）；对照 = 2026-09-16 用同款假 sshd 把真 Client 挂进本线 SshRuntime 跑通全链路。四项核心判据全部复现，另新增两项基线没有的能力（写权、票据）。</p>
+
+<table>
+  <thead><tr><th>判据（探针 A）</th><th>基线（改造前）</th><th>改造后（runtime 真实链路）</th><th>结论</th></tr></thead>
+  <tbody>
+    <tr><td>P1 同一连接 4 个 shell channel</td><td class="num">channelIds [1,2,3,4]</td><td class="num">runtimeShells 4 · serverShellEvents 4</td><td><span class="verdict" style="border-color:var(--ok)">达标</span></td></tr>
+    <tr><td>P2 尺寸按 channel 隔离</td><td class="num">132×33 … 156×39 精确对应</td><td class="num">同四组 window-change 逐一对应（4/4）</td><td><span class="verdict" style="border-color:var(--ok)">达标</span></td></tr>
+    <tr><td>P3 输出隔离</td><td class="num">仅 ch2 回显标记</td><td class="num">仅 shell#2 viewer 收到 MARKER-U2</td><td><span class="verdict" style="border-color:var(--ok)">达标</span></td></tr>
+    <tr><td>P4 shell 退出 ≠ 连接结束</td><td class="num">ch2 exit，其余 3 个 PONG</td><td class="num">shell#2 ended，其余 3 个存活</td><td><span class="verdict" style="border-color:var(--ok)">达标</span></td></tr>
+    <tr><td>P5 32MiB 并发下 RTT</td><td class="num">空载 21ms / 负载 20ms</td><td class="num">本轮未复压（属 U2.2 实机范围）</td><td><span class="verdict warn">记缺口</span></td></tr>
+    <tr><td>新增 · 写权单写多读 + 接管</td><td class="num">—</td><td class="num">reader=read / owner=write，接管后反转 + revoked 帧</td><td><span class="verdict" style="border-color:var(--ok)">新达标</span></td></tr>
+    <tr><td>新增 · 票据生命周期</td><td class="num">—</td><td class="num">重放 / 过期 / teardown 全拒</td><td><span class="verdict" style="border-color:var(--ok)">新达标</span></td></tr>
+  </tbody>
+</table>
+
+<div class="fig">
+  <div class="figcap"><b>图 2</b> · 单测规模与构成（前 / 后）—— 85 → 110 例，U2 契约用例集中在 runtime 与 session 两层</div>
+  <div class="barrow"><span class="lbl">app（视图纯函数）</span><div class="track"><div class="fill base" style="width:14.5%"></div></div><span class="val">16 → 16</span></div>
+  <div class="barrow"><span class="lbl">client（桥接契约）</span><div class="track"><div class="fill base" style="width:22.7%"></div></div><span class="val">25 → 25</span></div>
+  <div class="barrow"><span class="lbl">http（路由 / 围栏）</span><div class="track"><div class="fill" style="width:6.4%"></div></div><span class="val">3 → 7</span></div>
+  <div class="barrow"><span class="lbl">runtime（U2 核心）</span><div class="track"><div class="fill" style="width:20%"></div></div><span class="val">14 → 22</span></div>
+  <div class="barrow"><span class="lbl">session（viewer）</span><div class="track"><div class="fill" style="width:29%"></div></div><span class="val">19 → 32</span></div>
+  <div class="barrow"><span class="lbl">store（数据 / 围栏）</span><div class="track"><div class="fill base" style="width:7.3%"></div></div><span class="val">8 → 8</span></div>
+  <div class="legend"><span><i style="background:#9aa8ba"></i>基线既有（无回归）</span><span><i style="background:var(--navy)"></i>U2 重写 / 新增</span><span style="margin-left:auto">总规模 85 → 110（+25）</span></div>
+</div>
+
+<h2><span class="no">03</span>U2.3 工作区记忆与 U2.4 精确恢复</h2>
+<p class="lede">两项都在 U2.1 的地基上以最小面积落地：记忆是「两张据 + 恢复形状不自动连接」；恢复是「官方 serialize addon + 三路判定 + 可单独退出的降级」。</p>
+
+<div class="twocol">
+  <div>
+    <h3>U2.3 · 决策 4 拆两张据</h3>
+    <ul>
+      <li>偏好（字号 / rail 折叠 / 专注）→ <code>localStorage['dsh-ssh:prefs']</code> v2，跨标签页共享</li>
+      <li>快照（标签集合 + 激活项 + 抽屉态）→ <code>sessionStorage['dsh-ssh:workspace']</code> v1，按标签页隔离</li>
+      <li><code>sessionStore</code> 统一封装，全 try/catch：损坏 / 版本不认 / 无痕模式一律回默认，绝不白屏</li>
+      <li>恢复语义 = 恢复标签<b>形状</b>，绝不自动连接 / 输凭据；失效 connId 静默丢弃 + 提示</li>
+      <li>顺带修复：上一会话脱敏写入使 <code>PREFS_KEY</code> 与 <code>LAST_TAB_KEY</code> 同为 <code>'***'</code>、两据同键互相覆盖</li>
+    </ul>
+  </div>
+  <div>
+    <h3>U2.4 · 官方 addon（方案 A）</h3>
+    <ul>
+      <li><code>@xterm/addon-serialize</code> <b>0.14.0 精确锁定</b>（探针 B 已证与 xterm 6.0.0 兼容）</li>
+      <li>输出空闲 1.5s 采集序列化快照上报 host；每 shell 内存态封顶 128KiB、scrollback 500 行，不落盘</li>
+      <li>恢复三路判定：快照帧优先（reset 后重放）/ 回放兜底（刷新后）/ 重附着丢弃整段回放（防翻倍）</li>
+      <li>addon 缺失或加载失败 → 静默降级为回放恢复；删包即可单独退出 U2.4，不动 U2.1/U2.3</li>
+    </ul>
+  </div>
+</div>
+
+<h2><span class="no">04</span>回滚（已演练）与部署</h2>
+<p class="lede">回滚不是纸面论证：2026-09-16 实际执行了一轮「恢复基线 → 旧套 85/85 绿 → 还原 U2 → 新套 110/110 绿」。正式回滚路径与之完全一致。</p>
+
+<div class="timeline">
+  <div class="tstep done"><h4>暂存 U2 版本 <span class="tag">10 个文件</span></h4><p>index/app/session/styles/runtime/package/lockfile + 三个测试文件 → <code>.openclaw/tmp/u2-current-backup/</code></p></div>
+  <div class="tstep done"><h4>从基线目录恢复 <span class="tag">85/85 绿</span></h4><p><code>_refs/scripts-archive/ssh-u2-rollback-baseline/</code> 按映射覆盖；<code>pnpm install</code> 同步 lockfile 回退</p></div>
+  <div class="tstep done"><h4>还原 U2 版本 <span class="tag">110/110 绿</span></h4><p>两侧验证均通过 ⇒ 回滚路径可执行、且 U2 变更本身可完整往返</p></div>
+</div>
+
+<p><b>部署要点</b>：本线 <code>pnpm install</code>（新增 addon-serialize）→ 按 DSH profile 生态安装插件 → <b>必须重启 dsh web</b>（app/session/styles/index 全走进程内资产缓存）→ 浏览器强刷一次（旧页面帧无 v:2，会收到明确的「插件已升级，请刷新」提示，不会静默错乱）。</p>
+
+<h2><span class="no">05</span>风险与遗留</h2>
+<p class="lede">八项登记（R1–R8），三项中等、五项低；无一阻断本轮交付，均给出建议处置与归属工单。完整表格见实施验收包 §6，此处列全部中等项与代表性低项。</p>
+
+<div class="risk lv-mid"><span class="lvl">R1 · 中</span><span class="rid">R1</span>P5（大流量下终端 RTT）未在改造后链路复压；广域网带宽竞争本机回环测不出 → <b>U2.2 用真实主机复验</b>（100MiB 传输 + 输入延迟测量）。</div>
+<div class="risk lv-mid"><span class="lvl">R2 · 中</span><span class="rid">R2</span>U2.4 实机判据（vim/top 刷新后逐行一致 + 光标一致，3 次稳定）未在真机跑 → 验收按规划 §4.4.3 执行；不过即删 addon 包降级为回放恢复。</div>
+<div class="risk lv-mid"><span class="lvl">R6 · 中</span><span class="rid">R6</span>host 重启后 shellSeq 重排，快照恢复可能落到错误 shell → 可接受（形状恢复 + 未连接态），后续给 shell 持久 uuid。</div>
+<div class="risk lv-low"><span class="lvl">R8 · 低</span><span class="rid">R8</span>决策 5 的「app.js 纯搬迁拆分」本轮未执行（避免搬迁与逻辑混在一个 diff）→ 列入 U2.2 前置工单，已按纪律登记偏离。</div>
+
+<div class="footnote">
+  证据文件：<code>_refs/scripts-archive/ssh-u2-verify/u21-runtime-result.json</code>（探针 9/9）· <code>u21-verify-runtime.mjs</code>（可复现探针）· <code>ssh-u2-rollback-baseline/</code>（回滚基线）· 交接文档 <code>dsh-miasaki-ssh/design/2026-09-16-ssh-u2-implementation-report.md</code> · CHANGELOG 第十二批 · 规划 §6/§10/§12。数据均为本轮实测，无占位值。
+</div>
+
+</div>
+</body>
+</html>

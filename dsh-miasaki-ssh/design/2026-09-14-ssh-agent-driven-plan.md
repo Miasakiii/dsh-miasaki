@@ -158,9 +158,9 @@ ctx.slots.inject('tool.call.toolview', () =>
 - 密码认证的主机，Agent 只能操作**人在本次 host 进程内已经连接过**的连接（凭据在 `SshRuntime` 内存中存活期间）；key/agent 认证的主机可自行发起连接；
 - **可见面即授权面**：`ssh_hosts` 只列出 `agentAccess !== 'none'` 的主机，模型看不到未被授权的主机 id。
 
-### J4 审批走官方 seam，且必须诚实说明它拦得住什么
+### J4 危险操作必须换来人一次显式确认，且必须诚实说明它拦得住什么
 
-危险命令走 `ctx.approval.request()`：拿到官方审批 UI、官方审计、官方失败关闭（无应答者 ⇒ `unavailable` ⇒ 拒绝）。
+危险命令走官方的人机交互 seam（实测后定为 `ctx.userQuestions.ask()`，理由见 §7.3）：拿到官方 UI、官方失败关闭，且 `detail` 字段能携带**完整命令**。
 
 **但必须诚实**：基于命令文本的分级（§7.2）**不是安全边界**。shell 是图灵完备的，`bash -c "$(curl …)"`、`python -c …`、变量拼接、base64 解码都能绕过正则。分级的作用是**降低误伤、把人的注意力引导到该看的地方**，真正的边界是三条：
 
@@ -314,6 +314,35 @@ class ExecChannel {
 
 ### 7.3 审批接入
 
+**⚠ 实测状态（2026-09-14，动态 Cordis 探针，复现步骤见 §16）**：在一次真实模型工具调用中发起 `ctx.approval.request()`，结果是——服务可达（`ctx.get('approval')` 非空）、`request` 是函数、**open-turn 前提满足**（未抛「no turn is open」），但**决策结果为 `unavailable`**。`approval/request` 是 scope-filtered waterfall，本进程没有应答者接手，**官方审批 UI 没有出现**。
+
+`unavailable` 是失败关闭（安全方向正确，符合 §3.2），但对 A2 意味着「官方审批 seam 当前用不上」。因此 A2 采用**方案 A**，把方案 B 留作 seam 修复后的升级路径。
+
+#### 方案 A（推荐，已实测可用）：`ctx.userQuestions.ask()`
+
+```js
+const answer = await ctx.userQuestions.ask({
+  questions: [{
+    id: 'ssh-exec',
+    header: `在 ${host.label} 上执行命令`,
+    question: `${riskLevel} 级操作，是否允许本次执行？`,
+    detail: command,                     // ← 完整命令细节可以直接给人看
+    options: [{ label: '允许一次' }, { label: '拒绝' }],
+  }],
+  agent: exec.agent,
+  signal: exec.signal,
+})
+const choice = answer.answers[0]?.selected?.[0]
+if (choice !== '允许一次') return { refused: 'REJECTED_BY_USER' }
+```
+
+**优点**：能携带**完整命令细节**（`detail` 字段，正好补上 §3.2「审批请求不携带参数」的缺口）；官方提问 UI 在对话页（`ui-user-questions`），与 §8.4 的决策一致；可给选项、可多问题；**已实测可用**（`ask_user_question` 工具此刻就在工作，它走的就是这条服务）。
+**代价**：不走官方 `approval/asked|decided` 审计对 ⇒ 审计由 §7.5 的 SSH 台账承担；它不是权限 seam 的「语义正确」用法。
+
+**契约约束**（`ctx.userQuestions.ask`）：提供给 `agent` 时，只有**精确的 live runtime root** 能与人交互——owned child 没有 human answerer 会永久阻塞；`CALLER_NOT_LIVE` / `DELEGATED_CALLER` / `ASK_ABORTED` 三个错误码必须分别处理（分别对应：agent 非 live 实例、被委派的 agent、信号中止）。
+
+#### 方案 B（语义正确，当前实测不可用）：`ctx.approval.request()`
+
 ```js
 // ssh_exec 执行体的形状
 const decision = await ctx.approval.request({
@@ -377,13 +406,13 @@ if (exec.agent === undefined) return refuse('NO_AGENT_CONTEXT')  // 无 agent �
 - **不写 PTY、不占终端标签**——它是独立的时间线，不是终端的第二路输出；
 - 未读标记：Agent 在页面未激活时执行了操作，切回来能看见。
 
-### 8.2 终端 → 对话（上下文桥，最便宜的第一步）
+### 8.2 终端 → 对话（上下文桥，最便宜的第一步）✅ **已实施（2026-09-14，见 §17）**
 
-三处入口，复用官方既有的「引用/发送到对话」机制（不要自造）：
+三个入口，全部落在 SSH iframe 内部：
 
-1. **选区发送**：终端选中文本 → 右键/快捷键 → 送进对话输入框（带主机名与来源标注）；
-2. **错误一键追问**：状态横幅或终端右键「让 Agent 看看这个错误」→ 自动附上最近 N 行输出 + 主机身份；
-3. **主机上下文**：在 SSH 页面发起的对话消息，自动带上 `{ host: label, address, agentAccess }` 元信息。
+1. **选区发送**：终端选中文本 → 工具区「送往对话」或右键菜单 → 格式化后进剪贴板；
+2. **错误一键追问**：同菜单「让 Agent 看这个错误」→ 最近 60 行 + 引导语；
+3. **主机上下文**：以上两种产出**首行都带来源标记** `[SSH web-01 · ops@host:22]`——A0 走剪贴板通道，无法替用户「随消息附带」元信息，于是把来源写进正文本身。
 
 **⚠ 已核验（2026-09-14）：没有现成的公开通道。** `dsh-client-ui-reference` 的对外注册面只有「一个 slash source」（`dsh-client-ui-reference/README.zh.md`:104），服务的是 `@` 补全菜单的**固定候选领域**（文件 / 文件夹 / 会话），不是「插入任意文本」；`ui-input-trigger` 是该 source 注册进的行内建议机制，语义同样为 `@` / `/` 服务。因此 A0 有三条路：
 
@@ -426,9 +455,9 @@ Agent 触发的危险命令，审批卡出现在**官方对话流**里（`ui-app
 
 | 阶段 | 交付 | 依赖 | 门槛 |
 |---|---|---|---|
-| **A0 上下文桥** | 选区送对话、错误一键追问、主机身份随消息 | 无平台新能力 | 纯前端 + 既有 API；不触碰 host 侧 |
+| **A0 上下文桥** ✅ **已实施** | 选区 / 最近输出 / 错误追问三个入口 + 剪贴板通道 + 来源主机标记（§8.2 路径 1，见 §17） | 无 | 纯前端 + 既有 API、不触碰 host 侧；单测 63 例全绿、`verify-all ssh` 12/12；**待实机验证**（静态资源是进程内缓存，须重启 `dsh web`） |
 | **A1 工具面 v1** | `ctx.tools` 注册、`ssh_hosts` + `ssh_exec` + `ssh_session_read`、exec 通道、输出预算 | SPIKE S1–S4 | **默认关闭**，config 显式开启；只读工具先跑通 |
-| **A2 治理闭环** | 主机授权字段、命令分级、`ctx.approval` 接入、执行台账 | A1 | 危险命令拦得住、拒绝有结构化回执、审计可查 |
+| **A2 治理闭环** | 主机授权字段、命令分级、**`ctx.userQuestions` 确认**（§7.3 方案 A）、执行台账 | A1 | 危险命令拦得住、拒绝有结构化回执、审计可查 |
 | **B 协作面** | Agent 活动时间线、对话流 SSH 卡片 | A2 | Agent 执行时人在 SSH 页面看得见 |
 | **C 自主面** | 子代理承接多步运维任务、任务级目标 | B + §3.4 核验 | **独立安全评审**；不进第一版 |
 | **D 接管模式** | Agent 驱动人的 PTY | C | 独立评审；默认关闭 + 强制指示 + 超时 |
@@ -474,9 +503,9 @@ Agent 触发的危险命令，审批卡出现在**官方对话流**里（`ui-app
 
 | 编号 | 验证项 | 失败后果 |
 |---|---|---|
-| **S1** | profile bundle 层的插件 `inject: ['tools']` 能否拿到服务、`register` 是否真的对**会话内的 agent** 可见 | 工具面整条路走不通；退守 A0 + B |
-| **S2** | ✅ **已静态核实（2026-09-14）**：`exec.callId` 与 `exec.agent?` 均在（`dsh-tools/lib/types/index.d.ts:197–284`）。**剩余待验**：运行时 SSH 工具的常规调用路径上 `agent` 是否总被填充 | 若常为空，需另找 agent 关联通道；执行体已按「无 agent 即拒绝需审批操作」处理 |
-| **S3** | `ctx.approval.request()` 在**插件自有工具**里的调用是否满足「open turn」前提、Web 端 `ui-approval` 是否确实应答 | A2 的审批退化，只能自建确认 UI（并失去官方审计） |
+| **S1** | ✅ **已实测通过（2026-09-14）**：Host 侧 `ctx.get('tools')` 可达；`harness.defineTool` + `harness.registerTool(ctx, tool)` 注册成功，工具**立即出现在该 agent 的 `Tool.listTools` 与模型 `<functions>` 中**，schema 正确投影 | 已验证——工具面可行 |
+| **S2** | ✅ **已实测通过（2026-09-14）**：真实模型调用中 `exec.agent` **被填充**（`agentPresent: true`，`agentId` = 会话 id）、`exec.callId` 存在、`exec.signal` / `deferContext` / `concludeTurn` 均为可用成员 | 已验证——审批所需的 agent 与 callId 齐备 |
+| **S3** | ⚠ **已实测：部分通过（2026-09-14）**。✅ 服务可达、✅ open-turn 前提满足；❌ 结果为 `unavailable`——scope-filtered waterfall 无同进程应答者，**审批 UI 未出现**。回退通道已确认存在：`ctx.userQuestions.ask()`（§7.3 方案 A） | A2 改用 `userQuestions`；官方审批审计对由 §7.5 台账替代 |
 | **S4** | 同一 `Client` 上 `shell()` 与 `exec()` 并存是否稳定（多 channel、退出互不影响、连接死亡时 exec 正确结算） | 通道分离（J2）不成立，需改用独立 Client（成本大增） |
 | **S5** | （对照实验）`ctx.terminals.registerBackend` 是否对外可用、SSH 后端是否真如 §3.3 判断那样别扭 | 若意外顺手，可重新评估是否复用官方会话语义 |
 | **S6** | 官方 shell 工具的 **spill 约定**（超大输出如何落盘与提示），以便对齐 | 自造截断语义，与官方视觉不一致 |
@@ -501,11 +530,11 @@ Agent 触发的危险命令，审批卡出现在**官方对话流**里（`ui-app
 ### B. 治理
 
 1. L0 命令在 `full` 主机免审批直通；
-2. L1/L2 命令弹出官方审批卡，`reason` 中可见**主机与完整命令**；
-3. 审批拒绝后工具返回结构化拒绝（**不抛异常、不中止轮次**）；
-4. `agentAccess: 'readonly'` 主机上 L1/L2 **直接被拒**（不是「审批后放行」）；
-5. 无应答者（`never` 策略）时失败关闭，操作为 `unavailable`；
-6. `approval/asked|decided` 在会话日志中成对出现；
+2. L1/L2 命令弹出官方提问卡（`ui-user-questions`），`detail` 中可见**主机与完整命令**；
+3. 用户拒绝后工具返回结构化拒绝（**不抛异常、不中止轮次**）；
+4. `agentAccess: 'readonly'` 主机上 L1/L2 **直接被拒**（不是「确认后放行」）；
+5. 提问通道不可用（`ASK_ABORTED` / `CALLER_NOT_LIVE` / `DELEGATED_CALLER`）时**失败关闭**，操作不执行；
+6. 每次决策进 SSH 执行台账（§7.5）——官方 `approval/asked|decided` 当前不可用，见 §7.3；
 7. SSH 执行台账逐条可查，且**不含输出内容**；
 8. 密码主机在无人连接过的情况下，Agent 发起 `ssh_exec` 得到 `NOT_CONNECTED` 而非任何凭据交互。
 
@@ -524,13 +553,22 @@ Agent 触发的危险命令，审批卡出现在**官方对话流**里（`ui-app
 
 ---
 
-## 13. 待评审的取舍
+## 13. 决策记录
 
-1. **要不要做 A0（上下文桥）？** 它不依赖任何平台能力、风险最低、立刻消除信息孤岛；但它不属于严格意义上的「Agent 驱动」，可能被视为「不够解渴」。**推荐做**——它是后续所有层的地基，且单独就有价值。
-2. **工具注册的默认姿态：`off` 还是 `readonly`？** `off` 最稳妥（零 token、零暴露），但需要用户改配置才能体验到；`readonly` 开箱即有感知，但每个会话都多付 schema token。**推荐 `off`**，与 appearance 线的「默认关闭、关掉即原生」一致。
-3. **审批只能发生在对话页（§8.4 选项 A）能否接受？** 若不能接受，就必须自建确认 UI，代价是失去官方审计语义与单一审批真相。**推荐接受 A**，并把「跳转到待审批处」做顺。
-4. **`ssh_exec` 是否允许隐式建连（key/agent 认证 + 已授权主机）？** 允许则 Agent 真正自主（人在授权时已经决策过），不允许则每次都要人先连。**推荐允许**，且把「允许隐式建连」做成主机级可选字段而非全局。
-5. **v1 的工具数量**：三个（本方案）还是先只上 `ssh_hosts` + `ssh_exec` 两个？`ssh_session_read` 的价值（读人的现场）很高，但它是唯一「读人终端」的能力，需要单独想清楚隐私边界。**推荐三个一起上**，但 `ssh_session_read` 的输出在页面时间线里要显式标注「Agent 读取了你的终端」。
+### 已定（2026-09-14，用户拍板）
+
+| # | 决策 | 影响 |
+|---|---|---|
+| **D1** | 立场：做「Agent 的 SSH 手」，**不做**「SSH 里的 Agent」 | 锁定 J1——不建内嵌对话，页面只作观察窗 |
+| **D2** | 工具注册**总开关默认 `off`** | 不注册即不进 schema、不占 token；沿用 appearance 线「关掉即原生」的纪律（§9） |
+| **D3** | **确认发生在对话页** | 采纳 §8.4 选项 A；§8.1 的「跳转到待确认处」因此是必需项。**实测后落点为 `ui-user-questions` 而非 `ui-approval`**（§7.3） |
+| **D4** | **允许对 key/agent 认证主机隐式建连** | §7.4 第三条成立；密码类主机仍需人先在本次 host 进程内连接过 |
+
+### 待定
+
+1. **A0（上下文桥）是否作为第一个交付？** 它不依赖任何平台能力、风险最低、单独就有价值，但不算严格意义的「Agent 驱动」。**建议做**——它是后续所有层的地基。
+2. **v1 工具数量**：三个（`ssh_hosts` / `ssh_exec` / `ssh_session_read`）还是先只上两个？`ssh_session_read` 是唯一「读人终端」的能力，隐私边界需单独想清楚。**建议三个一起上**，但它的输出在页面时间线里要显式标注「Agent 读取了你的终端」。
+3. **是否深挖 `approval` 应答者缺失的根因**（§7.3 实测）：可能是本部署的应答者配置问题，也可能该 seam 只服务沙箱升级路径。修好后方案 B 可回归，届时能白拿官方审计对。
 
 ---
 
@@ -565,3 +603,66 @@ DSH 本体 0.1.5-rc.1（安装产物，`<dsh-install>/node_modules/@deepseek-ai/
 - `dsh-client-ui-tool/README.zh.md`：`tool.call.toolview` keyed slot、`ToolCallOwnerProps`、官方 terminal 卡片先例。
 - `dsh-web-app/cordis.patch.yml`：`:224` approval、`:328` subagent、`:460` tools 的 host 平面归属；`:351–484` Agent 平面迁移与两条平面判据原文；`:252` `ui-approval` 挂载。
 - `dsh-base/cordis.patch.yml`：`:33` session、`:67` agent、`:205` sandbox、`:224` approval、`:460` tools。
+
+---
+
+## 16. SPIKE 实测记录（2026-09-14）
+
+本轮用**动态 Cordis 探针**（Host 半边：`harness.defineTool` + `harness.registerTool`）在**本进程内**完成了 S1–S3 的实测。**探针已按纪律删除**（`cordis_undefine`），不留残留工具。
+
+### 复现步骤
+
+1. 定义 Host 探针包：`apply(ctx)` 中取 `ctx.get('tools')`，用 `harness.defineTool` 声明一个探针工具，`execute(args, exec)` 只回报**标量事实**（不序列化任何活对象）；
+2. `cordis_run` 激活；
+3. 用 Inspect 的 `Tool.listTools` 核对工具是否进入**当前 agent 的可见集合**；
+4. 在会话中真实调用该工具一次，读取 `exec` 的运行时事实。
+
+### 结果
+
+| 项 | 实测值 | 判定 |
+|---|---|---|
+| `ctx.get('tools')` | 非 undefined | ✅ 服务可达 |
+| 注册后出现在 `Tool.listTools` | 是（`note` 参数与描述原样保留） | ✅ 注册→可见链路通 |
+| 注册后出现在模型 `<functions>` | 是 | ✅ 对会话内 agent 生效 |
+| `exec.agent` | `agentPresent: true`，`agentId` = `session-0fc13dae-…` | ✅ 被 agent loop 填充 |
+| `exec.callId` | `call_00_jde7rJUEX1wa5Iyvdlvt6268` | ✅ 存在 |
+| `exec.rootCallId` | 存在 | ✅ |
+| `exec.signal` | 存在 | ✅ 协作取消可用 |
+| `exec.deferContext` / `exec.concludeTurn` | 均为 function | ✅ 可用（`deferContext` 可往结果附带上下文） |
+| `ctx.get('approval').request` | 是 function | ✅ 服务可达 |
+| `approval.request()` 决策 | **`unavailable`**（无应答者，UI 未出现） | ⚠️ 见 §7.3 |
+| `ctx.get('userQuestions').ask` | 契约存在，且 `ask_user_question` 工具在该会话正常工作 | ✅ 回退通道可用 |
+
+### 边界与不可外推之处
+
+- 探针注册于**动态插件的会话 ctx**（calling agent scope）；真实 `@miasaki/dsh-ssh` 作为 **profile bundle 行**注册的是**全局层**。层级不同，但「注册 → 进入 schema → 对 agent 可见」这条链路与 `exec.agent` 的填充（属 agent loop 行为，与注册层级无关）结论一致。
+- S1 **尚未在真实 profile 插件里跑过一遍**；A1 落地时应顺手再确认一次（同一条 `ctx.tools.register`，成本极低）。
+- S3 的 `unavailable` 是**本部署当前状态**的实测，不是 `approval` seam 的固有缺陷。修复应答者链路后，§7.3 方案 B 可重新评估。
+- **S4 本轮未实测**（同 Client 上 `shell()` 与 `exec()` 并存）——它需要一台真实可连的 SSH 主机；这是 A1 开工前的最后一道门槛。
+
+---
+
+## 17. A0 实施记录（2026-09-14）
+
+**结论先行**：A0 只能走剪贴板通道——SSH iframe 与对话页之间**不存在**官方的「插入文本」API。这不是取巧，是核验后的唯一可行路径。
+
+### 通道核验
+
+| 候选 | 结果 |
+|---|---|
+| `ui-input-trigger` 注册 `@ssh` 引用 source（§8.2 路径 2） | ❌ slot 树中**不存在** `input.trigger` 槽（`Slots.listSubTree` 返回 `available: false`）；`dsh-client-ui-reference` 的对外注册面只有一个 slash source，服务 `@` 补全的**固定领域**（文件 / 文件夹 / 会话），不是通用文本插入 |
+| 写对话输入框（§8.2 路径 3） | ❌ 需 DOM 桥，稳定性差；跨线纪律禁止触碰官方组件内部 |
+| **剪贴板 + 引导（§8.2 路径 1）** | ✅ 采用 |
+
+### 落地形态
+
+- **只读**：`session.js` 新增 `snapshot(lines)`，只从 xterm 缓冲区取文本，**不向 socket 写任何字节**（单测断言）。
+- **格式化**：`app.js` 的纯函数 `formatSshContext(conn, body, { intro })` 产出 `[SSH <label> · <user>@<host>:<port>]` 首行 + 正文；空正文返回空串，调用方据此提示「没有可送出的内容」。
+- **三个入口**：工具区 `#btn-send` 与终端右键菜单共用同一份 `sendMenuItems`（沿用 `hostMenuItems` 的「同源」约定）；意图为 `selection` / `recent`（40 行）/ `error`（60 行 + 引导语）。
+- **不代劳人的动作**：复制后状态栏只提示字符数与「切到对话粘贴（Ctrl+V）」，**不自动发送、不自动追加回车、不碰 SSH 连接**。A0 的立场是：人决定说什么，Agent 才知道什么。
+
+### 已知覆盖不到的地方
+
+- 粘贴到对话后，**对话侧不会自动知道**这是 SSH 现场——只能靠首行文本。要真正结构化的上下文，得等 `@ssh` 引用域成为可能（§11 S7 保留）。
+- `index.js` 的 `cachedAsset` 对静态资源做**进程内一次性缓存** ⇒ 改了 `app.js` / `session.js` **必须重启 `dsh web`**，浏览器强刷不够。
+- 实机验收三条已并入跨线矩阵 `dsh-miasaki-shared-docs/cross/smoke-test-matrix.md` §3.6。

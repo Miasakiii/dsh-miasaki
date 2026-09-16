@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D1 启动看板 — @miasaki/dsh-ssh 全屏浮层（路线丁）</title>
+<style>
+  /* Müller-Brockmann 瑞士网格纯粹主义：8pt 基线 · 严格左对齐 · 黑白 + 单强调色 · 零装饰 */
+  :root {
+    --ink: #111111;
+    --paper: #ffffff;
+    --accent: #c8331f; /* 单强调色 */
+    --rule: #111111;
+    --muted: #666666;
+    --u: 8px; /* 8pt 基线 */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: var(--paper); }
+  body {
+    font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    color: var(--ink);
+    /* 12 列数学网格：外边距 32px，列距 8px */
+    margin: calc(var(--u) * 4);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(12, 1fr);
+    gap: var(--u);
+    max-width: 1280px;
+  }
+  .rule-top { border-top: calc(var(--u) / 2) solid var(--ink); }
+  .cell { border-top: 2px solid var(--rule); padding-top: var(--u); }
+  .c3 { grid-column: span 3; } .c4 { grid-column: span 4; } .c6 { grid-column: span 6; }
+  .c8 { grid-column: span 8; } .c12 { grid-column: span 12; }
+  h1 {
+    font-size: calc(var(--u) * 5); line-height: 1.05; font-weight: 700;
+    letter-spacing: -0.01em; text-transform: uppercase; grid-column: span 9;
+  }
+  h1 .accent { color: var(--accent); }
+  .meta { grid-column: span 3; font-size: 11px; line-height: 1.6; text-align: right; color: var(--muted); }
+  h2 {
+    font-size: 13px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: calc(var(--u) * 1.5);
+  }
+  h2 .no { color: var(--accent); margin-right: calc(var(--u) / 2); }
+  p, li, td, th { font-size: 12.5px; line-height: 1.65; }
+  .lead { font-size: 15px; line-height: 1.7; grid-column: span 12; max-width: 62ch; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; font-weight: 700; font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; border-bottom: 2px solid var(--rule); padding: 0 var(--u) var(--u) 0;
+  }
+  td { border-bottom: 1px solid #d9d9d9; padding: calc(var(--u) / 2) var(--u) calc(var(--u) / 2) 0; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .num { font-variant-numeric: tabular-nums; }
+  .accent { color: var(--accent); }
+  .muted { color: var(--muted); }
+  ul.plain { list-style: none; }
+  ul.plain li { padding-left: calc(var(--u) * 2); position: relative; }
+  ul.plain li::before { content: ""; position: absolute; left: 0; top: 7px; width: 8px; height: 2px; background: var(--accent); }
+  .kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--u); margin-bottom: calc(var(--u) * 2); }
+  .kpi div { border-top: 2px solid var(--ink); padding-top: var(--u); }
+  .kpi b { display: block; font-size: calc(var(--u) * 3.5); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi span { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+    border: 1.5px solid var(--ink); padding: 1px 6px; text-transform: uppercase; }
+  .badge.done { background: var(--ink); color: var(--paper); }
+  .badge.going { border-color: var(--accent); color: var(--accent); }
+  .status-todo, .status-done, .status-going, .status-blocked { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
+  .status-todo { background: #ffffff; border: 1.5px solid var(--ink); }
+  .status-going { background: var(--accent); }
+  .status-done { background: var(--ink); }
+  .status-blocked { background: var(--accent); outline: 2px solid var(--accent); outline-offset: 2px; }
+  footer { margin-top: calc(var(--u) * 4); border-top: calc(var(--u) / 4) solid var(--ink); padding-top: var(--u);
+    display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); }
+  @media (max-width: 900px) {
+    .c3, .c4, .c6, .c8 { grid-column: span 12; }
+    h1 { grid-column: span 12; }
+    .meta { grid-column: span 12; text-align: left; }
+    .kpi { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <header class="rule-top" style="display:grid;grid-template-columns:repeat(12,1fr);gap:8px;width:100%;padding-top:calc(var(--u)*2)">
+    <h1>SSH 全屏浮层<br><span class="accent">D1 启动看板</span></h1>
+    <div class="meta">
+      项目 <b>@miasaki/dsh-ssh</b> · 路线丁（会话布同构）<br>
+      日期 2026-09-14 · 状态 <b class="accent">D1 完成</b><br>
+      上游 D0 SPIKE 五项全过（§12）<br>
+      下一站 D2 页面顶栏
+    </div>
+  </header>
+
+  <p class="lead">一句话目标：把 SSH 从「会话的一个视图」升级为<b>会话之外的全屏功能模块</b>——点入口进浮层、点「对话」退出、终端零损失、刷新自动恢复；D1 交付浮层骨架并保留旧视图作回退。</p>
+
+  <section class="cell c4">
+    <h2><span class="no">01</span>项目章程</h2>
+    <p><b>目标</b>：SSH 成为 DSH 的一等功能模块（全屏浮层，会话布同构），切会话不消失、刷新不掉线。</p>
+    <p style="margin-top:8px"><b>范围</b></p>
+    <ul class="plain">
+      <li>做：浮层宿主 / 常驻 iframe / 懒加载 / 开关记忆 / 入口改线 / 刷新恢复</li>
+      <li>不做：删 view 回退（D3）、页面自绘顶栏（D2）、Esc 关闭（已否）、SSH 引擎与安全边界</li>
+    </ul>
+    <p style="margin-top:8px"><b>验收口径</b>：D1 四项门槛实测全过 + 单测全绿 + verify-all 12/12。</p>
+    <p style="margin-top:8px"><b>干系人</b>：用户（拍板与实机验收）· 本线 Agent（实施与回归）· desktop/canvas 线（theme-init 与浮层蓝本参照）</p>
+  </section>
+
+  <section class="cell c8">
+    <h2><span class="no">02</span>D1–D4 排期（工作日推进，含判定标准）</h2>
+    <table>
+      <tr><th style="width:8%">日</th><th style="width:22%">里程碑</th><th>交付物</th><th style="width:30%">判定标准</th><th style="width:14%">状态</th></tr>
+      <tr><td class="num">D0</td><td>SPIKE 实测</td><td>五项风险实测数据（方案 §12）</td><td>五项全过，PTY 零退化帧</td><td><span class="badge done">通过</span></td></tr>
+      <tr><td class="num"><b class="accent">D1</b></td><td><b class="accent">浮层骨架</b></td><td>client.js 宿主/懒加载/记忆/入口改线；app.js 刷新恢复；单测 16 例</td><td>四项门槛实测全过（本轮探针）</td><td><span class="badge done">完成</span></td></tr>
+      <tr><td class="num">D2</td><td>页面顶栏</td><td>自绘顶栏（对话｜会话布｜SSH）+ chrome-reserve 消费 + 焦点归还</td><td>三主题顶栏与宿主观感一致</td><td><span class="badge">待办</span></td></tr>
+      <tr><td class="num">D3</td><td>清理与回归</td><td>删 view 回退与 tab 委托 hack；响应式重校准；A0 文案</td><td>verify-all 全绿 + 四档宽度三主题</td><td><span class="badge">待办</span></td></tr>
+      <tr><td class="num">D4</td><td>可选打磨</td><td>打开过渡动效（尊重 prefers-reduced-motion）</td><td>逐项单独验收</td><td><span class="badge">待办</span></td></tr>
+    </table>
+  </section>
+
+  <section class="cell c12">
+    <h2><span class="no">03</span>任务台账（WBS · 状态实时可查；负责人＝本线 Agent，复核＝用户实机）</h2>
+    <table>
+      <tr><th style="width:6%">#</th><th style="width:34%">任务</th><th style="width:12%">优先级</th><th style="width:10%">工时</th><th style="width:14%">截止</th><th style="width:24%">状态</th></tr>
+      <tr><td class="num">1.1</td><td>client.js：浮层宿主 + visibility 隐藏 + 懒加载</td><td>P0</td><td class="num">1.5h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">1.2</td><td>client.js：sessionStorage 开关记忆（§5.9）+ 记忆恢复路径</td><td>P0</td><td class="num">1h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">1.3</td><td>client.js：入口/画布广播改线为开浮层（保留 tab 委托回退）</td><td>P0</td><td class="num">1h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">1.4</td><td>client.js：主题桥/chrome-reserve 迁移到浮层 iframe</td><td>P1</td><td class="num">1h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">1.5</td><td>app.js：sessionStorage lastTab 刷新恢复（重挂 attach）</td><td>P0</td><td class="num">1h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">1.6</td><td>client.test.js 契约重写（16 例）+ verify-all 12/12</td><td>P0</td><td class="num">2h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">1.7</td><td>D1 探针实测四项门槛（真 client.js × 真 host 栈）</td><td>P0</td><td class="num">2h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">1.8</td><td>修复 #status-text 被 renderStatusbar 抹掉（TOFU 死锁，D0 递延）</td><td>P0</td><td class="num">1h</td><td class="num">D1</td><td><span class="status-done"></span>完成</td></tr>
+      <tr><td class="num">2.1</td><td>D2：自绘顶栏三按钮 + chrome-reserve 消费</td><td>P0</td><td class="num">3h</td><td class="num">D2</td><td><span class="status-todo"></span>待办</td></tr>
+      <tr><td class="num">2.2</td><td>D2：「会话布」跳转 + 焦点归还入口按钮</td><td>P1</td><td class="num">2h</td><td class="num">D2</td><td><span class="status-todo"></span>待办</td></tr>
+      <tr><td class="num">3.1</td><td>D3：删 conversation.view 与 tab 委托全套 + 响应式重校准</td><td>P0</td><td class="num">2h</td><td class="num">D3</td><td><span class="status-todo"></span>待办</td></tr>
+      <tr><td class="num">3.2</td><td>D3：A0 文案改「点左上『对话』退出后粘贴」+ 四档宽度三主题验收</td><td>P1</td><td class="num">2h</td><td class="num">D3</td><td><span class="status-todo"></span>待办</td></tr>
+      <tr><td class="num">0.1</td><td>实机验收：重启 dsh web 真机走浮层 + 桌面壳窗控/IS_TOP 复验</td><td>P0</td><td class="num">0.5h</td><td class="num">D2 前</td><td><span class="status-todo"></span>待办（需用户）</td></tr>
+    </tr>
+    </table>
+  </section>
+
+  <section class="cell c6">
+    <h2><span class="no">04</span>风险登记册（触发信号 → 应对 → 回滚）</h2>
+    <table>
+      <tr><th>风险</th><th style="width:30%">触发信号</th><th style="width:42%">应对 / 回滚</th></tr>
+      <tr><td><b>延期</b>（D2/D3 超一日）</td><td>当日台账有任务跨日未闭环</td><td>砍 D4 可选项保 D2/D3 主线；回滚：git revert 对应 commit，浮层回退 view 仍在</td></tr>
+      <tr><td><b>依赖缺失</b>（浮层跑不通官方槽）</td><td>实机 apply 报 invalid plugin / 槽不渲染</td><td>回退开关：conversation.view 注册保留至 D3，入口退回委托点击；探索性改动一律 feature-flag 不硬切</td></tr>
+      <tr><td><b>需求模糊</b>（顶栏内容/记忆策略反复）</td><td>同一问题第二轮定向</td><td>冻结 D1 已定决策（§5.9 记忆、Esc 不关）；新诉求进 D4 候选池，不动已交付骨架</td></tr>
+      <tr><td><b>PTY 写坏</b>（隐藏态误 fit）</td><td>假 sshd window-change 出现 cols≤2</td><td>visibility 策略 + fit 门控双保险（D0 §12 已实测零退化帧）；回滚：恢复 view-only 形态</td></tr>
+    </table>
+  </section>
+
+  <section class="cell c6">
+    <h2><span class="no">05</span>异常处置预案（升级路径）</h2>
+    <table>
+      <tr><th style="width:22%">场景</th><th>处理路径</th></tr>
+      <tr><td><b>任务延期</b></td><td>台账标记跨日 → 砍 D4 保主线 → 连续两日延期则降范围（D3 只删 view 不做响应式重校准）→ 用户知情</td></tr>
+      <tr><td><b>被阻塞</b></td><td>阻塞即记台账（blocked 状态 + 原因）→ 转做并行任务（如 D2 顶栏样式）→ 实机依赖类阻塞（需重启 dsh web）列为「用户动作」并给出精确步骤</td></tr>
+      <tr><td><b>需求变更</b></td><td>新诉求先对齐 §1 决策记录 → 不动已交付骨架 → 变更进 D4 候选池 → 影响门槛项时重开 SPIKE</td></tr>
+    </table>
+    <h2 style="margin-top:16px"><span class="no">06</span>D1 收尾复核（对照验收口径）</h2>
+    <ul class="plain">
+      <li>四项门槛实测全过（P1 apply / P2 懒加载+连接 / P3 零损失 / P4 刷新恢复）✓</li>
+      <li>单测 16/16 · verify-all ssh 12/12 ✓</li>
+      <li>回退路径保留（view 注册 + tab 委托三件套）✓</li>
+      <li>未闭环：实机验收（需重启 dsh web，用户动作）→ 补救时间：D2 开工前</li>
+    </ul>
+  </section>
+
+  <section class="cell c12">
+    <h2><span class="no">07</span>交接说明（新接手人凭此续作）</h2>
+    <div class="kpi">
+      <div><b>4/4</b><span>D1 门槛实测通过</span></div>
+      <div><b>16</b><span>client 契约单测</span></div>
+      <div><b>12/12</b><span>verify-all ssh</span></div>
+      <div><b>1</b><span>阻断缺陷修复（TOFU 死锁）</span></div>
+    </div>
+    <p><b>进度</b>：D1 完成（骨架已实测），D2 顶栏未开工。<b>代码</b>：dsh-miasaki-ssh/{client.js, app.js}，契约 test/client.test.js，实测数据 _refs/scripts-archive/ssh-d0-spike/{d0-result.json, d1-result.json}。<b>下一步</b>：① 用户重启 dsh web 实机验收浮层；② Agent 开工 D2 顶栏（方案 §6 改动清单 app.js/styles.css 行）。<b>回滚</b>：git revert 单 commit 即回 view-only 形态（view 注册在 D3 前一直是回退路径）。<b>决策依据</b>：方案 §1 决策记录 + §12 D0/D1 实测记录，CHANGELOG 逐条可查。</p>
+  </section>
+
+  <footer>
+    <span>@miasaki/dsh-ssh · 全屏浮层（路线丁）· D1 启动包</span>
+    <span>瑞士网格 · 8pt 基线 · 黑白 + 单强调色 #c8331f</span>
+  </footer>
+
+</div>
+</body>
+</html>

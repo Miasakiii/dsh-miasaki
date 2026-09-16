@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>D3 收工看板 — @miasaki/dsh-ssh 全屏浮层（路线丁）</title>
+<style>
+  /* Müller-Brockmann 瑞士网格纯粹主义：8pt 基线 · 严格左对齐 · 黑白 + 单强调色 · 零装饰 */
+  :root { --ink:#111111; --paper:#ffffff; --accent:#c8331f; --muted:#666666; --u:8px; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Helvetica Neue",Helvetica,"PingFang SC","Microsoft YaHei",Arial,sans-serif; color:var(--ink); margin:calc(var(--u)*4); background:var(--paper); }
+  .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:var(--u); max-width:1280px; }
+  .rule-top { border-top:calc(var(--u)/2) solid var(--ink); }
+  .cell { border-top:2px solid var(--ink); padding-top:var(--u); }
+  .c3{grid-column:span 3}.c4{grid-column:span 4}.c6{grid-column:span 6}.c8{grid-column:span 8}.c9{grid-column:span 9}.c12{grid-column:span 12}
+  h1 { font-size:calc(var(--u)*5); line-height:1.05; font-weight:700; letter-spacing:-0.01em; text-transform:uppercase; }
+  h1 .accent { color:var(--accent); }
+  .meta { font-size:11px; line-height:1.7; text-align:right; color:var(--muted); }
+  h2 { font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:calc(var(--u)*1.5); }
+  h2 .no { color:var(--accent); margin-right:calc(var(--u)/2); }
+  p, li, td, th { font-size:12.5px; line-height:1.65; }
+  .lead { font-size:15px; line-height:1.7; max-width:66ch; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-weight:700; font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; border-bottom:2px solid var(--ink); padding:0 var(--u) var(--u) 0; }
+  td { border-bottom:1px solid #d9d9d9; padding:calc(var(--u)/2) var(--u) calc(var(--u)/2) 0; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  .num { font-variant-numeric:tabular-nums; }
+  code { font:12px Consolas, monospace; background:#f2f2f2; padding:0 4px; }
+  .accent { color:var(--accent); } .muted { color:var(--muted); }
+  ul.plain { list-style:none; }
+  ul.plain li { padding-left:calc(var(--u)*2); position:relative; }
+  ul.plain li::before { content:""; position:absolute; left:0; top:7px; width:8px; height:2px; background:var(--accent); }
+  .kpi { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--u); margin-bottom:calc(var(--u)*2); }
+  .kpi div { border-top:2px solid var(--ink); padding-top:var(--u); }
+  .kpi b { display:block; font-size:calc(var(--u)*3.5); font-weight:700; font-variant-numeric:tabular-nums; }
+  .kpi span { font-size:10.5px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); }
+  .badge { display:inline-block; font-size:10px; font-weight:700; letter-spacing:0.08em; border:1.5px solid var(--ink); padding:1px 6px; text-transform:uppercase; }
+  .badge.done { background:var(--ink); color:var(--paper); }
+  .dot-s { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  .dot-done { background:var(--ink); } .dot-defer { background:var(--accent); }
+  footer { margin-top:calc(var(--u)*4); border-top:calc(var(--u)/4) solid var(--ink); padding-top:var(--u); display:flex; justify-content:space-between; font-size:10.5px; color:var(--muted); }
+  @media (max-width:900px){ .c3,.c4,.c6,.c8,.c9{grid-column:span 12} .kpi{grid-template-columns:repeat(2,1fr)} }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <header class="rule-top" style="display:grid;grid-template-columns:repeat(12,1fr);gap:8px;width:100%;padding-top:calc(var(--u)*2)">
+    <h1 class="c9">SSH 全屏浮层<br><span class="accent">D3 收工看板</span></h1>
+    <div class="meta c3">
+      项目 <b>@miasaki/dsh-ssh</b> · 路线丁<br>
+      日期 2026-09-15 · 状态 <b class="accent">D3 完成</b><br>
+      上游 D0(§12)→D1(§13)→D2(§15/§16)<br>
+      下一站 D4 可选打磨（动效）
+    </div>
+  </header>
+
+  <p class="lead c12">一句话结论：路线丁的清理收口完成——<b>conversation.view 与 tab 委托三件套整体删除</b>（浮层成为唯一形态）、D-3 判空缺陷六处修复（含探针实测逮到的第三处同病）、A0 文案替换、响应式四档从「中栏宽容器查询」重校准为「视口语义」并修正含端点断点；探针 11/11、单测 63/63、verify-all 12/12 全绿。</p>
+
+  <section class="cell c12">
+    <h2><span class="no">01</span>D3 任务台账（对照方案 §16.4 四张核对清单，逐项打卡）</h2>
+    <table>
+      <tr><th style="width:6%">#</th><th style="width:30%">任务</th><th style="width:9%">优先级</th><th style="width:9%">工时</th><th style="width:10%">截止</th><th style="width:36%">状态 / 产出</th></tr>
+      <tr><td class="num">3.1</td><td>D-3：renderIdentity 判空修（byId 失配 → ?? null）+ 单测</td><td>P0</td><td class="num">0.5h</td><td class="num">D3</td><td><span class="dot-s dot-done"></span>完成 — 同病排查扩至 6 处（见 02）</td></tr>
+      <tr><td class="num">3.2</td><td>删 conversation.view 注册 + SshView 组件</td><td>P0</td><td class="num">1h</td><td class="num">D3</td><td><span class="dot-s dot-done"></span>完成 — 全局搜索零残留</td></tr>
+      <tr><td class="num">3.3</td><td>删 tab 委托三件套（ownTab/hideOwnTab/restoreTabs/viewIsSsh/selectSsh）及 onDialogClick/bind 链</td><td>P0</td><td class="num">1h</td><td class="num">D3</td><td><span class="dot-s dot-done"></span>完成 — dismissCanvasOverlay 保留（互斥仍用）</td></tr>
+      <tr><td class="num">3.4</td><td>A0 文案：「切到『对话』粘贴」→「点左上『对话』退出后粘贴」</td><td>P0</td><td class="num">0.25h</td><td class="num">D3</td><td><span class="dot-s dot-done"></span>完成 — 旧文案全局零命中</td></tr>
+      <tr><td class="num">3.5</td><td>响应式四档重校准：@container → @media（视口语义）+ 断点含端点</td><td>P0</td><td class="num">1h</td><td class="num">D3</td><td><span class="dot-s dot-done"></span>完成 — 四档 + 三过渡区间实测落位</td></tr>
+      <tr><td class="num">3.6</td><td>单测同步：3 条 D1 回退期断言改写为 D3 清理断言 + D-3 回归新例</td><td>P0</td><td class="num">1.5h</td><td class="num">D3</td><td><span class="dot-s dot-done"></span>完成 — 63/63</td></tr>
+      <tr><td class="num">3.7</td><td>D3 探针回归（四档/过渡/零损失/D-3 行为闭环）</td><td>P0</td><td class="num">2h</td><td class="num">D3</td><td><span class="dot-s dot-done"></span>完成 — 11/11</td></tr>
+      <tr><td class="num">3.8</td><td>可选：renderBanner 隐藏时清空横幅内容</td><td>P2</td><td class="num">0.25h</td><td class="num">D3</td><td><span class="dot-s dot-defer"></span>未做 — 无害项（hidden 元素不参与渲染），留给 D4 顺手</td></tr>
+      <tr><td class="num">0.1</td><td>实机复验（重启 dsh web：全流程 + 三主题 + 四档实机截图）</td><td>P0</td><td class="num">0.5h</td><td class="num">D3 后</td><td><span class="dot-s dot-defer"></span>待用户 — 探针已覆盖几何与行为，实机补人眼证据</td></tr>
+    </table>
+  </section>
+
+  <section class="cell c8">
+    <h2><span class="no">02</span>D-3 同病排查：6 处判空修复（1 处方案原文 + 5 处同根因）</h2>
+    <table>
+      <tr><th style="width:22%">位置</th><th>触发症状</th><th style="width:16%">发现途径</th></tr>
+      <tr><td>renderIdentity</td><td>读 conn.group 抛 TypeError（§16.4-1 原始发现）</td><td>实机验收</td></tr>
+      <tr><td>emptyStateNodes</td><td>读 conn.label 抛</td><td>同病排查</td></tr>
+      <tr><td>renderStatusbar</td><td>activeTab 失效 → liveOf(conn.id) 抛</td><td><b class="accent">探针 P4 实测逮到</b></td></tr>
+      <tr><td>renderBanner</td><td>同链读 conn.id</td><td>同病排查</td></tr>
+      <tr><td>renderBody</td><td>同链</td><td>同病排查</td></tr>
+      <tr><td>banner「编辑主机」闭包</td><td>同链</td><td>同病排查</td></tr>
+    </table>
+    <p style="margin-top:8px">统一修法：<code>byId(...) ?? null</code>（selection/activeTab 失效 = 未选中）。回归护栏：单测新例（connections 非空 + selection 指向已删 id）+ 探针 P4 行为闭环（真页面删选中主机 → renderAll 零异常、identity 归「SSH 工作区」）。</p>
+  </section>
+
+  <section class="cell c4">
+    <h2><span class="no">03</span>删除清单（client.js 净 -6.6KB）</h2>
+    <ul class="plain">
+      <li>conversation.view 注册块</li>
+      <li>SshView 组件（主题桥已由浮层共享桥承担）</li>
+      <li>ownHeader / tabButtons / ownTab</li>
+      <li>hiddenTabs / hideOwnTab / restoreTabs</li>
+      <li>viewIsSsh / selectSsh / selectDefaultView</li>
+      <li>onDialogClick / bind/unbindDialogButton / dismissing</li>
+      <li>sync() 内 hideOwnTab/bindDialogButton 调用</li>
+    </ul>
+    <p style="margin-top:8px"><b>保留</b>：dismissCanvasOverlay（互斥与消息协议仍用）、:has() 隐藏宽度手柄规则（官方手柄仍在）。注册面：三项 → <b>两项</b>（胶囊 + launcher）。</p>
+  </section>
+
+  <section class="cell c12">
+    <h2><span class="no">04</span>四档 + 过渡区间实测（探针 P2，rail/溢出/遮挡逐档断言）</h2>
+    <table>
+      <tr><th style="width:14%">视口</th><th style="width:16%">档位</th><th style="width:24%">rail</th><th style="width:22%">右缘对齐</th><th>溢出 / 遮挡</th></tr>
+      <tr><td class="num">1280</td><td>desktop</td><td>flex 232px（全宽）</td><td>toolbar/holder = 1280 = workbench</td><td>无横向滚动、无越界</td></tr>
+      <tr><td class="num">960</td><td>narrow</td><td>flex 208px（窄档）</td><td>960 = 960</td><td>无</td></tr>
+      <tr><td class="num">720</td><td>drawer</td><td>none（收起）</td><td>720 = 720</td><td>无</td></tr>
+      <tr><td class="num">480</td><td>compact</td><td>none + 可选件隐藏</td><td>480 = 480</td><td>无</td></tr>
+      <tr><td class="num">860 / 600 / 500</td><td>过渡区间</td><td>208 / none / none（落位正确）</td><td>逐档对齐</td><td>无</td></tr>
+    </table>
+    <p style="margin-top:8px"><b class="accent">校准发现</b>：原断点 959/719/479 在典型宽度恰好等于断点值时错位一档（960 落全宽档、720 落窄档——首轮探针实测暴露）。修正为含端点的 <b>960/720/480</b> 后四档逐档落位正确。</p>
+  </section>
+
+  <section class="cell c8">
+    <h2><span class="no">05</span>回归总表与异常处置</h2>
+    <div class="kpi">
+      <div><b>11/11</b><span>D3 探针全过</span></div>
+      <div><b>63/63</b><span>单测（+D-3 回归）</span></div>
+      <div><b>12/12</b><span>verify-all ssh</span></div>
+      <div><b>6</b><span>D-3 判空修复处数</span></div>
+    </div>
+    <ul class="plain">
+      <li><b>探针 widthProbe 两处判据修正</b>（非产品缺陷）：① 30 开关前抓的 frame 执行上下文在重 apply 后失效 → 每档重取；② 探针体误用宿主选择器查 iframe 内 DOM → 改查本档 document。</li>
+      <li><b>档位错位</b>（断点 vs 典型宽度）：产品样式修正，见 04。</li>
+      <li><b>临时目录清理被护栏拦截</b>：不重试，ignore 区无害，探针已归档 _refs。</li>
+    </ul>
+  </section>
+
+  <section class="cell c4">
+    <h2><span class="no">06</span>风险与回滚</h2>
+    <ul class="plain">
+      <li><b>回退路径已不存在</b>：浮层是唯一形态。若实机不可用，只能整体回滚本批 commit。</li>
+      <li><b>无害冗余</b>：sync() 的 MutationObserver 仍观察 aria-selected（三件套删除后不影响激活态），留 D4 决定是否移除。</li>
+      <li><b>回滚步骤</b>：<code>git revert &lt;D3-commit&gt;</code> 恢复 D2 收尾形态；逐文件：<code>git checkout &lt;D2commit&gt; -- dsh-miasaki-ssh/client.js app.js styles.css test/</code>。</li>
+    </ul>
+  </section>
+
+  <section class="cell c12">
+    <h2><span class="no">07</span>交接（新接手人凭此续作）</h2>
+    <p><b>进度</b>：路线丁 D0–D3 全部收口，D4（打开过渡动效，尊重 prefers-reduced-motion）为唯一可选项。<b>代码</b>：dsh-miasaki-ssh/{client.js, app.js, styles.css}——注册面两项（会话头胶囊 order 26 + shell.overlay launcher order 40），浮层消息协议（ssh:close / ssh:view，overlayToken 防伪）。<b>数据</b>：_refs/scripts-archive/ssh-d0-spike/{d0,d1,d2,d3}-result.json + 各 run-*.mjs 可复现。<b>决策链</b>：方案 §12–§17。<b>验收建议</b>：重启 dsh web 后实机跑一遍「hero 入口 → 连接 → 顶栏退出/跳转 → 三主题 → 四档宽度」，人眼补齐探针覆盖不到的观感项。</p>
+  </section>
+
+  <footer class="c12">
+    <span>@miasaki/dsh-ssh · 全屏浮层（路线丁）· D3 收工包</span>
+    <span>瑞士网格 · 8pt 基线 · 黑白 + 单强调色 #c8331f</span>
+  </footer>
+
+</div>
+</body>
+</html>

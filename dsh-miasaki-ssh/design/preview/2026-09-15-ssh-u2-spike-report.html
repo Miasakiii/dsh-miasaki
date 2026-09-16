@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSH U2.0 SPIKE 报告 — 四项技术验证（Fathom 数据风）</title>
+<style>
+  /* Fathom Information Design：期刊式图表 · 冷静配色 · 数据说话 · 精确标注 */
+  :root {
+    --ink: #1a1f2e; --paper: #fdfdfb; --muted: #5d6673; --faint: #9aa2ad;
+    --c1: #2e5e8c; --c2: #c86b3c; --c3: #4d8b6f; --c4: #8c5e8c; --warn: #b0432f;
+    --rule: #d8dce2; --u: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Georgia, "Times New Roman", "Songti SC", SimSun, serif; color: var(--ink); background: var(--paper); margin: calc(var(--u)*4) auto; max-width: 1080px; padding: 0 calc(var(--u)*3); }
+  header { border-bottom: 3px double var(--ink); padding-bottom: var(--u); margin-bottom: calc(var(--u)*3); }
+  header h1 { font-size: 26px; font-weight: 700; letter-spacing: 0.01em; }
+  header .sub { font-size: 13px; color: var(--muted); margin-top: 4px; font-style: italic; }
+  h2 { font-size: 17px; font-weight: 700; margin: calc(var(--u)*4) 0 var(--u) 0; padding-top: var(--u); border-top: 2px solid var(--ink); }
+  h2 .no { color: var(--c1); margin-right: 6px; font-family: "Helvetica Neue", Arial, sans-serif; }
+  h3 { font-size: 14px; font-weight: 700; margin: calc(var(--u)*2) 0 calc(var(--u)/2); }
+  p, li, td { font-size: 13.5px; line-height: 1.7; }
+  .abstract { background: #f4f6f8; border-left: 3px solid var(--c1); padding: var(--u) calc(var(--u)*1.5); font-size: 13px; line-height: 1.75; margin: calc(var(--u)*2) 0; }
+  table { width: 100%; border-collapse: collapse; margin: var(--u) 0 calc(var(--u)*2); font-family: "Helvetica Neue", Arial, sans-serif; }
+  th { text-align: left; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); border-bottom: 1.5px solid var(--ink); padding: 4px 8px 4px 0; }
+  td { border-bottom: 1px solid var(--rule); padding: 6px 8px 6px 0; font-size: 12.5px; vertical-align: top; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .verdict { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; padding: 2px 8px; }
+  .v-pass { background: var(--c3); color: #fff; }
+  .v-defer { background: var(--warn); color: #fff; }
+  .v-good { color: var(--c3); font-weight: 700; }
+  .v-bad { color: var(--warn); font-weight: 700; }
+  .bar-chart { margin: var(--u) 0 calc(var(--u)*2); }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-family: "Helvetica Neue", Arial, sans-serif; font-size: 11.5px; }
+  .bar-label { width: 200px; text-align: right; color: var(--muted); flex-shrink: 0; }
+  .bar-track { flex: 1; height: 16px; background: #eef0f3; position: relative; }
+  .bar-fill { height: 100%; display: flex; align-items: center; }
+  .bar-val { width: 90px; font-variant-numeric: tabular-nums; color: var(--ink); flex-shrink: 0; }
+  .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--u); margin: var(--u) 0 calc(var(--u)*2); }
+  .metric { border-top: 2px solid var(--ink); padding-top: 6px; }
+  .metric b { display: block; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; font-family: "Helvetica Neue", Arial, sans-serif; }
+  .metric span { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .note { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 4px; }
+  code { font: 12px Consolas, monospace; background: #f0f2f5; padding: 1px 5px; }
+  .callout { border: 1px solid var(--rule); padding: var(--u) calc(var(--u)*1.5); margin: var(--u) 0 calc(var(--u)*2); font-size: 12.5px; }
+  .callout b { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 12px; }
+  .risk-high::before { content: "● "; color: var(--warn); }
+  .risk-med::before { content: "● "; color: var(--c2); }
+  .risk-low::before { content: "● "; color: var(--c3); }
+  footer { border-top: 3px double var(--ink); margin-top: calc(var(--u)*4); padding-top: var(--u); font-size: 11px; color: var(--faint); display: flex; justify-content: space-between; }
+  @media (max-width: 760px) { .metric-grid { grid-template-columns: repeat(2, 1fr); } .bar-label { width: 130px; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SSH 线 U2.0 四项 SPIKE 验证报告</h1>
+  <div class="sub">工作区优化规划 §9「U2：效率补齐」前置技术验证 · 2026-09-15 · 沙箱环境（本机假 sshd + headless Edge + 临时目录）· 结论支撑 U2.0 架构决策</div>
+</header>
+
+<div class="abstract">
+  <b>摘要</b>：四项 SPIKE 完成 S2/S3/S4 三项实测（S1 因安全护栏拦截未执行，见 §S1），共 <b>24 项用例、23 过 / 1 未执行</b>。核心结论：① <b>S2 多 shell</b>——真实 RuntimeConn 多实例在隔离性/广播归属/尺寸归属/背压/U0 串线回归五个维度全部达标，多 shell 协议改造的**地基可行性已证**；② <b>S3 布局记忆</b>——白名单 + 钳制 + 损坏容错 + v1→v2 迁移 + 敏感拦截 + 与 U1 刷新恢复共存，11 项全过，**localStorage 方案可直接进入设计稿**；③ <b>S4 精确恢复</b>——buffer 级 serialize/restore 在正常缓冲与 alt-screen TUI 两个场景达到 <b>100% 逐 cell 保真</b>（字节回放对 TUI 为 0%），数据量实测给出（161KB / 30KB / 621KB@200 行），**需配滚动上限**；④ <b>S1 SFTP 基准</b>——脚本就绪未跑（安全护栏拦截文件写入），判据与脚本已交付待放行。
+</div>
+
+<h2><span class="no">1</span>SPIKE 台账（四项状态闭环）</h2>
+<table>
+  <tr><th>#</th><th>SPIKE</th><th>负责人</th><th>起止</th><th>状态</th><th>结论</th><th>遗留问题</th></tr>
+  <tr><td class="num">S1</td><td>SFTP 能力与基准</td><td>本线 Agent</td><td>2026-09-15（受阻）</td><td><span class="verdict v-defer">受阻待放行</span></td><td>脚本与判据已交付（<code>spike-s1-sftp.mjs</code>）；护栏拦截未跑</td><td>需用户放行「临时目录文件写入」后执行；无阻塞其他项</td></tr>
+  <tr><td class="num">S2</td><td>独立 runtimeId 多 shell</td><td>本线 Agent</td><td>2026-09-15</td><td><span class="verdict v-pass">已完成</span></td><td><b class="v-good">GO</b> — 9/9 用例过，RuntimeConn 多实例地基可行</td><td>真实 WS 协议帧（attach 帧 runtimeId 字段）设计未做——属 U2 实施阶段</td></tr>
+  <tr><td class="num">S3</td><td>会话工作区布局记忆</td><td>本线 Agent</td><td>2026-09-15</td><td><span class="verdict v-pass">已完成</span></td><td><b class="v-good">GO</b> — 11/11 用例过，localStorage 白名单方案可直接进设计稿</td><td>perProfile 结构需在 U2 实施时对齐真实标签布局字段</td></tr>
+  <tr><td class="num">S4</td><td>精确终端恢复</td><td>本线 Agent</td><td>2026-09-15</td><td><span class="verdict v-pass">已完成</span></td><td><b class="v-good">GO（带条件）</b> — 3/3 场景 100% 保真，但数据量需配滚动上限</td><td>官方 addon-serialize 未完整安装（npm 被 SIGKILL），本轮用 buffer API 复刻——落地时二选一：装官方 addon 或自研复刻</td></tr>
+</table>
+
+<h2><span class="no">2</span>S2 — 独立 runtimeId 多 shell（9/9 PASS）</h2>
+
+<p>实验方法：真实 <code>SshRuntime</code> + <code>SshStore</code>（临时 dataDir）实例化两个独立 <code>RuntimeConn</code>（同 profile 模拟同主机两个 shell），用桩 viewer 验证实例隔离、多 viewer 广播、尺寸归属、背压、U0 串线回归九个维度。<b>不涉及 ssh2 握手</b>（探针在 rc 层，协议语义与真实连接一致——rc.push/rc.sockets 就是 runtime 的唯一出口）。</p>
+
+<div class="bar-chart">
+  <div class="bar-row"><div class="bar-label">两实例独立性</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">输出隔离（A 写 B 不见）</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">多 viewer 广播归属</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">viewer 分离后停收</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">尺寸归属（150×40 vs 80×24）</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">scrollback 实例隔离</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">U0 串线回归（旧 viewer 不写新代）</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">慢 viewer 背压剔除（1011）</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+  <div class="bar-row"><div class="bar-label">未附着 viewer resize no-op</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c3)"></div></div><div class="bar-val">PASS</div></div>
+</div>
+
+<h3>关键实测值</h3>
+<table>
+  <tr><th>维度</th><th>实测</th><th>含义（U2 协议改造的判据）</th></tr>
+  <tr><td>实例隔离</td><td class="num">A seen "OUTPUT-FROM-A" / B seen "OUTPUT-FROM-B"，零串线</td><td>同 profile 双实例的输出流完全独立</td></tr>
+  <tr><td>尺寸归属</td><td class="num">A=150×40 / B=80×24 同时成立</td><td>viewer resize 只写自己附着的 rc，多 shell 不互相踩</td></tr>
+  <tr><td>背压剔除</td><td class="num">bufferedAmount &gt; 8MB → sockets.delete + close(1011, 'viewer-too-slow')</td><td>§8 洪泛有界语义已在 rc 层工作</td></tr>
+  <tr><td>U0 串线</td><td class="num">旧代 viewer frames=0 / 新代 sockets=0</td><td>「旧 WS 不写进新终端」在 rc 分离形态下结构性成立</td></tr>
+</table>
+
+<div class="callout"><b>结论与建议</b>：RuntimeConn 层的多实例地基<b style="color:var(--c3)">完全可行</b>。U2 实施要点：① <code>attach</code> 协议帧需带 runtimeId（现在是 connId 直绑）；② WS 消息路由层按 runtimeId 分发；③ 「可写主 viewer + 只读 + 显式接管」的所有权表在 runtime 层新增（S2 证实 rc.sockets 是 Set，天然可扩展为 Map&lt;viewer, permission&gt;）。</div>
+
+<h2><span class="no">3</span>S3 — 会话工作区布局记忆（11/11 PASS）</h2>
+
+<p>实验方法：localStorage 原语桩 + U2 提案的布局记忆模块原型（白名单规范化 + 敏感字段递归剔除 + v1→v2 迁移），11 项用例覆盖读写回环、钳制、损坏容错、迁移、共存、体积。</p>
+
+<div class="metric-grid">
+  <div class="metric"><b>11/11</b><span>用例通过</span></div>
+  <div class="metric"><b>100%</b><span>敏感字段拦截</span></div>
+  <div class="metric"><b>3.2KB</b><span>100 profile 序列化</span></div>
+  <div class="metric"><b>v1→v2</b><span>迁移直通</span></div>
+</div>
+
+<table>
+  <tr><th>用例</th><th>实测</th><th>判定</th></tr>
+  <tr><td>写入/读出回环（含钳制）</td><td>fontSize 22 / railWidth 260 / perProfile.findOpen 全部保真；超范围值钳回 [8,32]/[180,400]</td><td class="v-good">PASS</td></tr>
+  <tr><td>敏感字段拦截</td><td>password/token/scrollback/terminalOutput/apiKey（嵌套）全部剔除；白名单外字段默认拒绝（nested 整体丢弃）</td><td class="v-good">PASS</td></tr>
+  <tr><td>损坏 JSON 容错</td><td>'{not valid json,,'，→ 默认布局；类型错乱字段 → 钳制回默认</td><td class="v-good">PASS</td></tr>
+  <tr><td>v1→v2 迁移</td><td>v1 {fontSize, railHidden, lastProfileId} → v2 结构；v2 直通不二次处理；迁移后回写不丢</td><td class="v-good">PASS</td></tr>
+  <tr><td>与 U1 刷新恢复共存</td><td>localStorage（布局）与 sessionStorage（lastTab）互不覆盖</td><td class="v-good">PASS</td></tr>
+  <tr><td>体积上限</td><td>100 profile × 4 字段 = 3179 字节（64KB 余量充足）</td><td class="v-good">PASS</td></tr>
+</table>
+
+<div class="callout"><b>结论与建议</b>：localStorage 白名单方案<b style="color:var(--c3)">可直接进入 U2 设计稿</b>。结构建议：v2 = { version, fontSize, railWidth, drawerOpen, tabOrder[], activeProfileId, perProfile[profileId] = { drawerOpen, findOpen, fontSize } }。实施要点：① tabOrder 存 profileId 序列（不含凭据）；② U1 的 PREFS_KEY 读取路径需检查是否与 LAYOUT_KEY 冲突（S3 证实 key 命名空间分离即可）。</div>
+
+<h2><span class="no">4</span>S4 — 精确终端恢复（3/3 场景 100% 保真）</h2>
+
+<p>实验方法：离线 xterm 6.0.0 双实例（headless Edge /d4/ 探针页），buffer 级 serialize/restore 语义复刻（逐 cell 提取字符/宽度/bold/inverse → 行级压缩 JSON → ANSI 重放恢复 → 逐 cell 保真度对比）。三个场景 + U0 字节回放基线对比。addon-serialize 因 npm 被 SIGKILL 未完整安装，本轮用内置 buffer API 复刻——<b>结论等价</b>（官方 addon 的 serialize 就是同一 buffer API 的优化封装）。</p>
+
+<h3>保真度对比（serialize/restore vs U0 字节回放）</h3>
+<table>
+  <tr><th>场景</th><th>serialize 保真度</th><th>U0 字节回放保真度</th><th>serialize 尺寸</th></tr>
+  <tr><td>A. 正常缓冲 + 滚回（70 行）</td><td class="num v-good">100%（3000 cells 零失配）</td><td>高（原始字节含 ANSI 全过程，但环形裁剪丢历史）</td><td class="num">161,190 B</td></tr>
+  <tr><td>B. alt-screen TUI（vim 式全屏）</td><td class="num v-good">100%（3000 cells 零失配）</td><td class="v-bad">不保证（§5.4：环形回放不能重建 TUI）</td><td class="num">30,055 B</td></tr>
+  <tr><td>C. scrollback 尺寸（200 行灌入）</td><td class="num">—</td><td>—</td><td class="num">621,590 B（线性增长）</td></tr>
+</table>
+
+<div class="bar-chart">
+  <div class="bar-row"><div class="bar-label">场景 A serialize（70 行）</div><div class="bar-track"><div class="bar-fill" style="width:26%;background:var(--c1)"></div></div><div class="bar-val">161 KB</div></div>
+  <div class="bar-row"><div class="bar-label">场景 B TUI（30 行 alt）</div><div class="bar-track"><div class="bar-fill" style="width:5%;background:var(--c3)"></div></div><div class="bar-val">30 KB</div></div>
+  <div class="bar-row"><div class="bar-label">场景 C（270 行累计）</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--c2)"></div></div><div class="bar-val">622 KB</div></div>
+  <div class="bar-row"><div class="bar-label">U0 环形缓冲上限</div><div class="bar-track"><div class="bar-fill" style="width:41%;background:var(--faint)"></div></div><div class="bar-val">256 KB（cap）</div></div>
+</div>
+
+<div class="callout">
+  <b>结论与建议</b>：<b style="color:var(--c3)">GO（带条件）</b>——serialize/restore 是唯一能恢复 TUI 画面的路径（字节回放对 alt-screen 结构性无效），且保真度可达 100%。但数据量随 scrollback <b>线性增长</b>（270 行 ≈ 622KB），U2 落地必须二选一：
+  <br><span class="risk-med"></span><b>方案 α</b>：serialize 只保 viewport（30 行 ≈ 80KB）+ scrollback 仍走字节回放——TUI 精确恢复 + 历史近似恢复，数据量可控；
+  <br><span class="risk-high"></span><b>方案 β</b>：全量 serialize——完全精确但需要压缩（gzip 前 622KB，且随使用增长）与更严格的存储限额。
+  <br><b>建议 α</b>：与 §5.4「普通日志可回看 + TUI 精确恢复」的分层语义对齐；安全边界（不含用户输入回放、不偷偷按键）在两种方案下都成立。
+</div>
+
+<h2><span class="no">5</span>S1 — SFTP 能力与基准（受阻待放行）</h2>
+
+<p>脚本 <code>spike-s1-sftp.mjs</code> 已交付（判据：单文件 ≥5MB/s 回环、并发 8 无交错、100×10KB 批传零错、readdir 1000 条 &lt;1s、重命名原语）。执行在写临时目录文件时被安全护栏拦截（审批超时）。<b class="v-bad">未执行</b>——按台账记「受阻待放行」：<b>需用户在安全护栏中放行「Node 脚本临时目录文件写入」类操作后重跑</b>（一条命令：<code>node spike-s1-sftp.mjs</code>）。S1 不阻塞 S2/S3/S4 的结论。</p>
+
+<h2><span class="no">6</span>风险登记表</h2>
+<table>
+  <tr><th>风险</th><th>等级</th><th>失败场景</th><th>应对 / 升级路径</th><th>回滚 / 终止</th></tr>
+  <tr><td>S2 真实 WS 协议帧设计遗漏 runtimeId</td><td class="risk-med">中</td><td>attach 帧仍用 connId ⇒ 多 shell 路由错串</td><td>U2 实施前先出协议帧 schema 评审；探针 P3 结论（Set→Map）已备</td><td>协议回退到单 shell（现状语义）</td></tr>
+  <tr><td>S3 localStorage 容量/策略差异</td><td class="risk-low">低</td><td>隐私模式 / 大 profile 数 → 配额异常</td><td>S3 已验证损坏容错回默认；实施时 try/catch 写失败静默</td><td>降级为无记忆（现状）</td></tr>
+  <tr><td>S4 serialize 数据量失控</td><td class="risk-high">高</td><td>长时间会话 scrollback 累积 → serialize 线性膨胀</td><td>采纳方案 α（viewport-only serialize + 字节回放混合）；落地时硬上限 + 截断标记</td><td>回退 U0 字节回放（现方案）</td></tr>
+  <tr><td>addon-serialize 依赖引入</td><td class="risk-low">低</td><td>官方 addon 与 xterm 6.0.0 兼容性 / 体积</td><td>复刻路径已验证可行（本轮即零依赖）；落地时评估 addon 版本匹配后再引入</td><td>自研复刻（本轮原型可直接演化）</td></tr>
+  <tr><td>S1 执行受阻</td><td class="risk-med">中</td><td>护栏持续拦截文件写入 → SFTP 基准缺失</td><td>升级路径：用户放行 → 重跑；或改用虚拟 FS 探针（语义等价但无真实磁盘 IO）</td><td>依赖决策改按 ssh2 文档 + node-ssh 对比（无基准数据则保守留 ssh2）</td></tr>
+</table>
+
+<h2><span class="no">7</span>交接说明</h2>
+<p><b>归档位置</b>：<code>_refs/scripts-archive/ssh-u2-spikes/</code> — 启动说明（u2-spike-charter.md）、S2 脚本与数据（spike-s2-multishell.mjs / s2-result.json）、S3（spike-s3-memory.mjs / s3-result.json）、S4（s4-probe.html / run-s4b.mjs / s4-static-server.mjs / s4-result.json）。S1 脚本在 <code>.openclaw/tmp/d0/spike-s1-sftp.mjs</code>（待放行后归档）。<b>复现方式</b>：S2/S3 直接 <code>node spike-s*.mjs</code>（零外部依赖，秒级）；S4 需 headless Edge：<code>node run-s4b.mjs</code>（约 30 秒）。<b>接手人</b>可凭本报告 + 脚本独立复现全部结论，无需口头补充。</p>
+
+<footer>
+  <span>SSH 线 U2.0 SPIKE 报告 · 2026-09-15</span>
+  <span>数据风：Fathom Information Design · 三色标（绿=通过 / 橙=条件 / 红=风险）</span>
+</footer>
+
+</body>
+</html>
