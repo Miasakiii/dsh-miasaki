@@ -181,6 +181,19 @@ function planDesktop() {
     args: [join(dir, 'patches/dsh-cordis-host-runner/patch.mjs'), 'verify'],
     cwd: dir,
   })
+  // 「测试连通性 v2」的 host 侧能力（plugins/dsh-model-probe）：语法检查 +
+  // 探测判定表单测（URL 规则 / 两段式档案 / 分类表 / 脱敏 / 截断）。全部是纯逻辑，
+  // 不发起任何网络请求——真实探测属实机项，见 smoke-test-matrix.md。
+  for (const entry of ['lib/index.js', 'lib/probe.js']) {
+    checks.push({ line: 'desktop', name: `syntax plugins/dsh-model-probe/${entry}`, cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-model-probe', entry)], cwd: dir })
+  }
+  checks.push({
+    line: 'desktop',
+    name: 'test model-probe (连通性探测判定表)',
+    cmd: process.execPath,
+    args: [join(dir, 'plugins/dsh-model-probe/test/probe.test.js')],
+    cwd: join(dir, 'plugins/dsh-model-probe'),
+  })
   // Rust 侧单测（pulse stale 语义 + 立绘回落链）。cargo 常不在 PATH，回落到
   // rustup 默认安装位置；找不到时跳过而非报失败——非 Rust 环境仍应能跑完前几项。
   const cargo = cargoBin()

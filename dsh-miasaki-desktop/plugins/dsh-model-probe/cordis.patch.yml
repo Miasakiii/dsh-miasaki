@@ -1,0 +1,27 @@
+# dsh-model-probe
+#
+# DSH web profile bundle：模型连通性真实探测（host only，无 client 半侧）。
+#
+# 设置页「测试连通性」按钮由 desktop 线补丁
+# （patches/dsh-client-ui-settings-models/）改写，按钮点击后 fetch 本插件的
+# 同源 JSON 路由；UI 本身仍在官方 Models 页，本插件不注册任何 slot。
+#
+# host 侧能力：
+#   POST /model-probe-api/probe  —— 两段式探测：先发必然被参数校验拒绝的
+#     握手请求（空 messages / 空 input），据此区分「key 坏」(401/403) 与
+#     「key 好且端点通」(400)，仅在后者继续发 max_tokens=1 的生成请求。
+#     响应外层 ok 表示「探测执行了」，内层 result.ok 表示「模型可用」。
+#   GET  /model-probe-api/health —— 就绪探针（版本 / 支持的协议 / 超时）。
+#
+# 凭据：优先用请求体里携带的表单临时 key（尚未保存的新 key），否则经
+# credentials 服务解析 profile 的 apiKeyEnv，再回落进程环境变量；
+# 任何情况下都不把 key 写进响应（detail 已脱敏）。
+#
+# 信任栅栏：Host/Origin/sec-fetch-site 三层，拒绝跨站与 DNS rebinding，
+# 与 sidebar / canvas 插件的 /api 栅栏同构。
+- insert:
+    - id: model-probe
+      name: 'dsh-model-probe'
+      config:
+        # 额外信任的 authority（host 或 host:port）；localhost 与 127.0.0.1 恒可信。
+        trustedHosts: []

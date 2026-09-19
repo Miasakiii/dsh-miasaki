@@ -481,6 +481,65 @@ window.__ModuleLoader__.load({
 		function testResultClass(ok, stylesRef) {
 			return ok ? stylesRef["savedNotice"] : stylesRef["error"];
 		}
+		/**
+		 * Localized copy for one host probe result. The host answers with a stable
+		 * kind (never a sentence), so every word the user reads is translated here
+		 * and the two languages cannot drift apart. Latency is appended only when
+		 * the host actually measured a round trip (a planning failure has none).
+		 */
+		function describeProbe(result, t) {
+			const ms = typeof result.latencyMs === "number" ? ` · ${result.latencyMs}ms` : "";
+			switch (result.kind) {
+				case "ok": return t("testProbeOk") + ms;
+				case "unauthorized": return t("testProbeUnauthorized");
+				case "model-missing": return t("testProbeModelMissing");
+				case "quota": return t("testProbeQuota");
+				case "rate-limited": return t("testProbeRateLimited");
+				case "timeout": return t("testProbeTimeout");
+				case "unreachable": return t("testProbeUnreachable");
+				case "bad-request": return t("testProbeBadRequest");
+				case "server-error": return t("testProbeServerError");
+				case "unsupported": return t("testProbeUnsupported");
+				case "no-credential": return t("testProbeNoCredential");
+				case "no-endpoint": return t("testProbeNoEndpoint");
+				case "no-model": return t("testProbeNoModel");
+				default: return t("testProbeUnknown");
+			}
+		}
+		/**
+		 * Ask the host probe plugin whether this model can actually be talked to.
+		 * Returns the result object, or null when the plugin is not serving this
+		 * route (absent / host not restarted / not JSON) — the caller's cue to fall
+		 * back to the catalog probe, so the button is never dead.
+		 */
+		async function probeViaHost(id, probe) {
+			let response;
+			try {
+				response = await fetch("/model-probe-api/probe", {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({
+						...probe.provider === void 0 ? {} : { provider: probe.provider },
+						...probe.baseURL === void 0 || probe.baseURL.length === 0 ? {} : { baseURL: probe.baseURL },
+						...probe.api === void 0 ? {} : { api: probe.api },
+						...probe.apiKey === void 0 ? {} : { apiKey: probe.apiKey },
+						model: id
+					})
+				});
+			} catch {
+				return null;
+			}
+			/* 200 is the only status that means "the probe ran"; a 403 from the trust
+			   fence or a 404 from a missing route both mean "ask the catalog instead". */
+			if (response.status !== 200) return null;
+			let answer;
+			try {
+				answer = await response.json();
+			} catch {
+				return null;
+			}
+			return answer !== null && typeof answer === "object" && answer.result !== void 0 ? answer.result : null;
+		}
 		/** A row's text field, or the empty string when unset or not a string. */
 		function textOf(model, key) {
 			const value = model[key];
@@ -685,7 +744,15 @@ window.__ModuleLoader__.load({
 					next.delete(index);
 					return next;
 				});
+				const settle = (ok, message) => {
+					setTestResults((prev) => new Map(prev).set(index, { ok, message }));
+				};
 				try {
+					const result = await probeViaHost(id, probe);
+					if (result !== null) {
+						settle(result.ok === true, describeProbe(result, t));
+						return;
+					}
 					const answer = await operations.discoverModels(probe.settingsNs, {
 						...probe.provider === void 0 ? {} : { provider: probe.provider },
 						...probe.baseURL === void 0 || probe.baseURL.length === 0 ? {} : { baseURL: probe.baseURL },
@@ -693,17 +760,14 @@ window.__ModuleLoader__.load({
 						...probe.apiKey === void 0 ? {} : { apiKey: probe.apiKey }
 					});
 					if (answer.kind === "refused") {
-						setTestResults((prev) => new Map(prev).set(index, { ok: false, message: answer.message }));
+						settle(false, answer.message);
 						return;
 					}
 					const found = answer.models.some((candidate) => candidate.id === id);
-					setTestResults((prev) => new Map(prev).set(index, {
-						ok: true,
-						message: found ? t("testSuccess") : t("testReachableNotListed")
-					}));
+					settle(true, (found ? t("testSuccess") : t("testReachableNotListed")) + t("testCatalogFallback"));
 				} catch (error) {
 					const explain = error && typeof error === "object" && "message" in error ? error.message : String(error);
-					setTestResults((prev) => new Map(prev).set(index, { ok: false, message: explain }));
+					settle(false, explain);
 				} finally {
 					setTesting((prev) => {
 						const next = new Set(prev);
@@ -2855,7 +2919,22 @@ window.__ModuleLoader__.load({
 			testModel: "Test connectivity",
 			testing: "Testing…",
 			testSuccess: "Reachable · listed",
-			testReachableNotListed: "Reachable, but not listed in catalog"
+			testReachableNotListed: "Reachable, but not listed in catalog",
+			testProbeOk: "Reachable",
+			testProbeUnauthorized: "Authentication failed — check the API key",
+			testProbeModelMissing: "Model ID not registered or misspelled",
+			testProbeQuota: "Quota exhausted or plan expired",
+			testProbeRateLimited: "Rate limited — retry later",
+			testProbeTimeout: "Timed out (15s)",
+			testProbeUnreachable: "Cannot connect — check the URL and network",
+			testProbeBadRequest: "Request rejected — protocol or parameters mismatch",
+			testProbeServerError: "Gateway error",
+			testProbeUnsupported: "This protocol cannot be probed",
+			testProbeNoCredential: "No API key found — enter one first",
+			testProbeNoEndpoint: "No API address configured",
+			testProbeNoModel: "Model ID is required",
+			testProbeUnknown: "Probe did not pass",
+			testCatalogFallback: " (probe service unavailable — fell back to the catalog)"
 		};
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
@@ -2965,7 +3044,22 @@ window.__ModuleLoader__.load({
 			testModel: "测试连通性",
 			testing: "测试中…",
 			testSuccess: "可达 · 已在目录中列出",
-			testReachableNotListed: "可达，但目录中未列出"
+			testReachableNotListed: "可达，但目录中未列出",
+			testProbeOk: "可用",
+			testProbeUnauthorized: "认证失败——检查 API Key",
+			testProbeModelMissing: "模型 ID 未注册或拼写错误",
+			testProbeQuota: "额度不足或套餐过期",
+			testProbeRateLimited: "触发限流，请稍后重试",
+			testProbeTimeout: "连接超时（15s）",
+			testProbeUnreachable: "无法连接——检查地址与网络",
+			testProbeBadRequest: "请求被拒——协议或参数不匹配",
+			testProbeServerError: "网关内部错误",
+			testProbeUnsupported: "该协议暂不支持探测",
+			testProbeNoCredential: "未找到 API Key，请先填写",
+			testProbeNoEndpoint: "缺少 API 地址",
+			testProbeNoModel: "模型 ID 不能为空",
+			testProbeUnknown: "探测未通过",
+			testCatalogFallback: "（探测服务未就绪，已回退目录探测）"
 		};
 		//#endregion
 		//#region lib/types/client/index.js

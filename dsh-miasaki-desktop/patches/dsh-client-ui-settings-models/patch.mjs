@@ -15,11 +15,16 @@
 // 插入块保留目标文件自身的缩进风格。7 条编辑（5 处插入 + 2 处字典替换）见 EDITS。
 //
 // 用法：
-//   node patch.mjs verify            # 离线自检：baseline 原始 → 重建 → 与 baseline 产物逐字节比对
-//   node patch.mjs status            # 检查已安装 bundle 的补丁状态
-//   node patch.mjs apply [--yes]     # 备份 + 应用（幂等：已打过则跳过）
+//   node patch.mjs verify            # 离线自检：baseline 原始 → 重建 → 逐字节比对 + 语法闸门
+//   node patch.mjs status            # 检查已安装 bundle 的补丁状态与**语法状态**
+//   node patch.mjs apply [--yes]     # 备份 + 应用（幂等：已打过则跳过；打坏则拒绝静默跳过）
+//   node patch.mjs resync            # 由 backup 重打（apply 幂等跳过时的正确重打姿势）
 //   node patch.mjs revert            # 从 .dsh-bak 还原
+//   node patch.mjs rebuild           # 改过 EDITS 后：由 baseline 原始文件重建 golden 产物
 //   通用参数：--target <client.js 路径>  覆盖自动探测
+//
+// 出口不变量（2026-09-19 起）：任何进入安装目录的产物都必须过**语法闸门**
+// （vm.Script / 经典脚本目标），因为"重建 == baseline"只证明可复现、不证明合法。
 //
 // 设计文档：../../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md
 
@@ -28,6 +33,7 @@ import { existsSync } from 'node:fs'
 import { copyFile, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { Script } from 'node:vm'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BASELINE = join(HERE, 'baseline')
@@ -39,8 +45,15 @@ export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-settings-models'
 export const BASELINE_DSH_VERSION = '0.1.5-rc.1'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
 export const ORIGINAL_SHA256 = 'A60FD86357F9FBC6F5276ED0393682F7F2223FAEDEC4F30C719D66E99600B1BB'
-/** 应用本补丁后的 SHA-256（安装目录 2026-09-10 起的状态）。 */
-export const PATCHED_SHA256 = 'E602C1F1518F5436D8624B30A4295ECBB525655C8CA004AD264F04EC84DBED45'
+/**
+ * 应用本补丁后的 SHA-256（v2 连通性探测 + locale 尾逗号修复，2026-09-19 起的状态）。
+ *
+ * 沿革：`E602C1F1…`（v1）→ `C6C1DCBC…`（v2，**语法非法，见下**）→ `F1717A07…`（v2 + 修复）。
+ * `C6C1DCBC…` 那一版是本次事故的产物：locale 字典漏了两个尾逗号（en/zh 各一处），
+ * 产物语法错误且让整份 client bundle 不注册。它之所以能通过 `verify` 并被打进生产，
+ * 是因为当时的 `verify` 只做逐字节比对（可复现 ≠ 合法）——`assertParses` 因此加入。
+ */
+export const PATCHED_SHA256 = 'F1717A078C13A3A9EB5E8307F0BFE7968C38A5FE5A5452B88A31D35225D05980'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = 'const REASONING_LEVELS = '
 
@@ -74,6 +87,65 @@ const EDITS = [
       '\t\tfunction testResultClass(ok, stylesRef) {',
       '\t\t\treturn ok ? stylesRef["savedNotice"] : stylesRef["error"];',
       '\t\t}',
+      '\t\t/**',
+      '\t\t * Localized copy for one host probe result. The host answers with a stable',
+      '\t\t * kind (never a sentence), so every word the user reads is translated here',
+      '\t\t * and the two languages cannot drift apart. Latency is appended only when',
+      '\t\t * the host actually measured a round trip (a planning failure has none).',
+      '\t\t */',
+      '\t\tfunction describeProbe(result, t) {',
+      '\t\t\tconst ms = typeof result.latencyMs === "number" ? ` · ${result.latencyMs}ms` : "";',
+      '\t\t\tswitch (result.kind) {',
+      '\t\t\t\tcase "ok": return t("testProbeOk") + ms;',
+      '\t\t\t\tcase "unauthorized": return t("testProbeUnauthorized");',
+      '\t\t\t\tcase "model-missing": return t("testProbeModelMissing");',
+      '\t\t\t\tcase "quota": return t("testProbeQuota");',
+      '\t\t\t\tcase "rate-limited": return t("testProbeRateLimited");',
+      '\t\t\t\tcase "timeout": return t("testProbeTimeout");',
+      '\t\t\t\tcase "unreachable": return t("testProbeUnreachable");',
+      '\t\t\t\tcase "bad-request": return t("testProbeBadRequest");',
+      '\t\t\t\tcase "server-error": return t("testProbeServerError");',
+      '\t\t\t\tcase "unsupported": return t("testProbeUnsupported");',
+      '\t\t\t\tcase "no-credential": return t("testProbeNoCredential");',
+      '\t\t\t\tcase "no-endpoint": return t("testProbeNoEndpoint");',
+      '\t\t\t\tcase "no-model": return t("testProbeNoModel");',
+      '\t\t\t\tdefault: return t("testProbeUnknown");',
+      '\t\t\t}',
+      '\t\t}',
+      '\t\t/**',
+      '\t\t * Ask the host probe plugin whether this model can actually be talked to.',
+      '\t\t * Returns the result object, or null when the plugin is not serving this',
+      '\t\t * route (absent / host not restarted / not JSON) — the caller\'s cue to fall',
+      '\t\t * back to the catalog probe, so the button is never dead.',
+      '\t\t */',
+      '\t\tasync function probeViaHost(id, probe) {',
+      '\t\t\tlet response;',
+      '\t\t\ttry {',
+      '\t\t\t\tresponse = await fetch("/model-probe-api/probe", {',
+      '\t\t\t\t\tmethod: "POST",',
+      '\t\t\t\t\theaders: { "content-type": "application/json" },',
+      '\t\t\t\t\tbody: JSON.stringify({',
+      '\t\t\t\t\t\t...probe.provider === void 0 ? {} : { provider: probe.provider },',
+      '\t\t\t\t\t\t...probe.baseURL === void 0 || probe.baseURL.length === 0 ? {} : { baseURL: probe.baseURL },',
+      '\t\t\t\t\t\t...probe.api === void 0 ? {} : { api: probe.api },',
+      '\t\t\t\t\t\t...probe.apiKey === void 0 ? {} : { apiKey: probe.apiKey },',
+      '\t\t\t\t\t\tmodel: id',
+      '\t\t\t\t\t})',
+      '\t\t\t\t});',
+      '\t\t\t} catch {',
+      '\t\t\t\treturn null;',
+      '\t\t\t}',
+      '\t\t\t/* 200 is the only status that means "the probe ran"; a 403 from the trust',
+      '\t\t\t   fence or a 404 from a missing route both mean "ask the catalog instead". */',
+      '\t\t\tif (response.status !== 200) return null;',
+      '\t\t\tlet answer;',
+      '\t\t\ttry {',
+      '\t\t\t\tanswer = await response.json();',
+      '\t\t\t} catch {',
+      '\t\t\t\treturn null;',
+      '\t\t\t}',
+      '\t\t\treturn answer !== null && typeof answer === "object" && answer.result !== void 0 ? answer.result : null;',
+      '\t\t}',
     ],
   },
   {
@@ -99,7 +171,15 @@ const EDITS = [
       '\t\t\t\t\tnext.delete(index);',
       '\t\t\t\t\treturn next;',
       '\t\t\t\t});',
+      '\t\t\t\tconst settle = (ok, message) => {',
+      '\t\t\t\t\tsetTestResults((prev) => new Map(prev).set(index, { ok, message }));',
+      '\t\t\t\t};',
       '\t\t\t\ttry {',
+      '\t\t\t\t\tconst result = await probeViaHost(id, probe);',
+      '\t\t\t\t\tif (result !== null) {',
+      '\t\t\t\t\t\tsettle(result.ok === true, describeProbe(result, t));',
+      '\t\t\t\t\t\treturn;',
+      '\t\t\t\t\t}',
       '\t\t\t\t\tconst answer = await operations.discoverModels(probe.settingsNs, {',
       '\t\t\t\t\t\t...probe.provider === void 0 ? {} : { provider: probe.provider },',
       '\t\t\t\t\t\t...probe.baseURL === void 0 || probe.baseURL.length === 0 ? {} : { baseURL: probe.baseURL },',
@@ -107,17 +187,14 @@ const EDITS = [
       '\t\t\t\t\t\t...probe.apiKey === void 0 ? {} : { apiKey: probe.apiKey }',
       '\t\t\t\t\t});',
       '\t\t\t\t\tif (answer.kind === "refused") {',
-      '\t\t\t\t\t\tsetTestResults((prev) => new Map(prev).set(index, { ok: false, message: answer.message }));',
+      '\t\t\t\t\t\tsettle(false, answer.message);',
       '\t\t\t\t\t\treturn;',
       '\t\t\t\t\t}',
       '\t\t\t\t\tconst found = answer.models.some((candidate) => candidate.id === id);',
-      '\t\t\t\t\tsetTestResults((prev) => new Map(prev).set(index, {',
-      '\t\t\t\t\t\tok: true,',
-      '\t\t\t\t\t\tmessage: found ? t("testSuccess") : t("testReachableNotListed")',
-      '\t\t\t\t\t}));',
+      '\t\t\t\t\tsettle(true, (found ? t("testSuccess") : t("testReachableNotListed")) + t("testCatalogFallback"));',
       '\t\t\t\t} catch (error) {',
       '\t\t\t\t\tconst explain = error && typeof error === "object" && "message" in error ? error.message : String(error);',
-      '\t\t\t\t\tsetTestResults((prev) => new Map(prev).set(index, { ok: false, message: explain }));',
+      '\t\t\t\t\tsettle(false, explain);',
       '\t\t\t\t} finally {',
       '\t\t\t\t\tsetTesting((prev) => {',
       '\t\t\t\t\t\tconst next = new Set(prev);',
@@ -203,7 +280,22 @@ const EDITS = [
       '\t\t\ttestModel: "Test connectivity",',
       '\t\t\ttesting: "Testing…",',
       '\t\t\ttestSuccess: "Reachable · listed",',
-      '\t\t\ttestReachableNotListed: "Reachable, but not listed in catalog"',
+      '\t\t\ttestReachableNotListed: "Reachable, but not listed in catalog",',
+      '\t\t\ttestProbeOk: "Reachable",',
+      '\t\t\ttestProbeUnauthorized: "Authentication failed — check the API key",',
+      '\t\t\ttestProbeModelMissing: "Model ID not registered or misspelled",',
+      '\t\t\ttestProbeQuota: "Quota exhausted or plan expired",',
+      '\t\t\ttestProbeRateLimited: "Rate limited — retry later",',
+      '\t\t\ttestProbeTimeout: "Timed out (15s)",',
+      '\t\t\ttestProbeUnreachable: "Cannot connect — check the URL and network",',
+      '\t\t\ttestProbeBadRequest: "Request rejected — protocol or parameters mismatch",',
+      '\t\t\ttestProbeServerError: "Gateway error",',
+      '\t\t\ttestProbeUnsupported: "This protocol cannot be probed",',
+      '\t\t\ttestProbeNoCredential: "No API key found — enter one first",',
+      '\t\t\ttestProbeNoEndpoint: "No API address configured",',
+      '\t\t\ttestProbeNoModel: "Model ID is required",',
+      '\t\t\ttestProbeUnknown: "Probe did not pass",',
+      '\t\t\ttestCatalogFallback: " (probe service unavailable — fell back to the catalog)"',
     ],
   },
   {
@@ -218,10 +310,108 @@ const EDITS = [
       '\t\t\ttestModel: "测试连通性",',
       '\t\t\ttesting: "测试中…",',
       '\t\t\ttestSuccess: "可达 · 已在目录中列出",',
-      '\t\t\ttestReachableNotListed: "可达，但目录中未列出"',
+      '\t\t\ttestReachableNotListed: "可达，但目录中未列出",',
+      '\t\t\ttestProbeOk: "可用",',
+      '\t\t\ttestProbeUnauthorized: "认证失败——检查 API Key",',
+      '\t\t\ttestProbeModelMissing: "模型 ID 未注册或拼写错误",',
+      '\t\t\ttestProbeQuota: "额度不足或套餐过期",',
+      '\t\t\ttestProbeRateLimited: "触发限流，请稍后重试",',
+      '\t\t\ttestProbeTimeout: "连接超时（15s）",',
+      '\t\t\ttestProbeUnreachable: "无法连接——检查地址与网络",',
+      '\t\t\ttestProbeBadRequest: "请求被拒——协议或参数不匹配",',
+      '\t\t\ttestProbeServerError: "网关内部错误",',
+      '\t\t\ttestProbeUnsupported: "该协议暂不支持探测",',
+      '\t\t\ttestProbeNoCredential: "未找到 API Key，请先填写",',
+      '\t\t\ttestProbeNoEndpoint: "缺少 API 地址",',
+      '\t\t\ttestProbeNoModel: "模型 ID 不能为空",',
+      '\t\t\ttestProbeUnknown: "探测未通过",',
+      '\t\t\ttestCatalogFallback: "（探测服务未就绪，已回退目录探测）"',
     ],
   },
 ]
+
+/** 一份 bundle 文本的 SHA-256（大写十六进制），与三个常量同一口径。 */
+function sha256(text) {
+  return createHash('sha256').update(text, 'utf8').digest('hex').toUpperCase()
+}
+
+/**
+ * 语法闸门：产物必须是可解析的**经典脚本**。
+ *
+ * 按 script 目标解析而不是 ESM（`node --check` + `.mjs`）：这些 client bundle 的真实形态是
+ * `window.__ModuleLoader__.load({ id, factory })`，浏览器按普通脚本求值。用 `vm.Script`
+ * 与加载路径一致，V8 报出的行号能直接对回文件行，排查不必二次换算。
+ *
+ * **为什么必须有这道闸门（2026-09-19 事故）**：`verify` 原本只做「重建产物 == baseline 产物」
+ * 的逐字节比对——它证明的是**可复现**，不是**合法**。locale 字典里漏掉一个尾逗号时，
+ * 重建产物与 baseline 逐字节一致、`verify` 照常 PASS，但产物是语法错误。
+ * 代价远不止少一个按钮：client bundle 是多包合并产物，一个包语法坏了会让**整份 bundle
+ * 全部不注册**，浏览器直接报 `failed to import loader entry … loaded without registering`，
+ * 页面里所有插件一起失效。语法闸门是这条链上唯一能挡住它的东西。
+ *
+ * @param {string} source 待校验的 bundle 全文
+ * @param {string} label 出错时用于指名对象（如「重建产物」/ 目标文件路径）
+ */
+export function assertParses(source, label) {
+  try {
+    new Script(source, { filename: 'bundle.js' })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${label} 不是合法 JavaScript：${message}${locateSyntaxError(error, source)}`)
+  }
+}
+
+/**
+ * 语法判定的非抛错版本：合法返回 null，非法返回一句可读的原因（含行号）。
+ * `status` / `apply` 需要的是「能报出来」而不是「当场炸」，故与 assertParses 并存。
+ */
+export function parseVerdict(source) {
+  try {
+    new Script(source, { filename: 'bundle.js' })
+    return null
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    const stack = error instanceof Error && typeof error.stack === 'string' ? error.stack : ''
+    const hit = /bundle\.js:(\d+)/.exec(stack)
+    return hit === null ? message : `${message}（第 ${hit[1]} 行）`
+  }
+}
+
+/** 从 SyntaxError 的调用栈里抠出 `bundle.js:<行号>`，附上该行 ± 2 行上下文。 */
+function locateSyntaxError(error, source) {
+  const stack = error instanceof Error && typeof error.stack === 'string' ? error.stack : ''
+  const hit = /bundle\.js:(\d+)/.exec(stack)
+  if (hit === null) return ''
+  const line = Number(hit[1])
+  const lines = source.split('\n')
+  const from = Math.max(0, line - 3)
+  const to = Math.min(lines.length, line + 2)
+  const context = []
+  for (let i = from; i < to; i += 1) {
+    context.push(`       ${i + 1 === line ? '>>' : '  '} ${i + 1}: ${lines[i]}`)
+  }
+  return `\n       出错行 ${line}：\n${context.join('\n')}`
+}
+
+/**
+ * 字典替换的结构不变量：`replaceLine` 是「一行 → 多行」的字典展开，除最后一行外，
+ * 每个词条行都必须以逗号结尾，否则整个对象字面量缺分隔符。
+ *
+ * 这是针对上述事故的**定点补强**：语法闸门能兜住，但它报的是 V8 在几百行之外撞到
+ * 裸标识符（`Unexpected identifier`），极具误导性；这里能直接点名是哪条编辑的第几行、
+ * 少了哪个逗号。
+ *
+ * 注意：发出的逗号写在**字符串内部**（`'… "value",'` —— 逗号在单引号之内），
+ * 行尾那个逗号只是数组元素分隔符，二者不可混淆。
+ */
+function assertDictionaryContinued(edit) {
+  if (edit.mode !== 'replaceLine') return
+  for (let i = 0; i < edit.lines.length - 1; i += 1) {
+    if (!edit.lines[i].trimEnd().endsWith(',')) {
+      throw new Error(`${edit.id}: 第 ${i + 1} 行词条缺尾逗号（除最后一行外都必须以逗号结尾）：${JSON.stringify(edit.lines[i])}`)
+    }
+  }
+}
 
 /** 定位唯一的锚点行；不唯一即报错（宁可失败，也不瞎改）。 */
 function findUnique(lines, anchor) {
@@ -237,6 +427,15 @@ function findUnique(lines, anchor) {
  */
 export function applyPatch(source) {
   if (source.includes(PATCH_MARKER)) throw new Error('该文件已包含补丁标记，拒绝重复应用')
+  // 稀疏数组守卫：`[a,,b]` 语法合法但会在 lines 里留一个 undefined 空洞，
+  // 随后以 `Cannot read properties of undefined (reading 'trim')` 的形式
+  // 在几百行之外炸开，极难定位。编辑规则是手写的，就在这里当场拦住。
+  for (const edit of EDITS) {
+    if (edit.lines.some((line) => typeof line !== 'string')) {
+      throw new Error(`${edit.id}: lines 含非字符串项（多半是数组里多写了一个逗号，形成空洞）`)
+    }
+    assertDictionaryContinued(edit)
+  }
   let lines = source.split('\n')
   for (const edit of EDITS) {
     const at = findUnique(lines, edit.anchor)
@@ -257,12 +456,16 @@ export function applyPatch(source) {
       throw new Error(`${edit.id}: 未知的编辑模式 ${edit.mode}`)
     }
   }
-  return lines.join('\n')
+  // 语法闸门放在纯函数出口，verify / apply / rebuild 三条路径全部自动继承——
+  // 任何"能产出、但产不出合法 JS"的编辑规则都出不了这个函数（详见 assertParses 注释）。
+  const output = lines.join('\n')
+  assertParses(output, 'applyPatch 产物')
+  return output
 }
 
 /** 判定一份 bundle 的状态：original / patched / unknown。 */
 export function classify(text) {
-  const sha = createHash('sha256').update(text, 'utf8').digest('hex').toUpperCase()
+  const sha = sha256(text)
   if (sha === ORIGINAL_SHA256) return { state: 'original', sha }
   if (text.includes(PATCH_MARKER)) return { state: 'patched', sha }
   return { state: 'unknown', sha }
@@ -288,21 +491,39 @@ function parseArgs(argv) {
   return args
 }
 
-/** verify：baseline 原始文件 → 重建 → 与 baseline 产物逐字节比对。 */
+/**
+ * verify：baseline 原始文件 → 重建 → 与 baseline 产物逐字节比对，两侧都过语法闸门。
+ *
+ * 两侧都查是刻意的：只查重建产物会漏掉「golden 被手工改过」的情形——
+ * 那种情况下的症状是"重建与 baseline 不一致"，但真正的原因是 baseline 坏了。
+ */
 async function cmdVerify() {
   const original = await readFile(ORIGINAL_FILE, 'utf8')
   const patched = await readFile(PATCHED_FILE, 'utf8')
+  assertParses(patched, 'baseline/client.patched.js')
   const rebuilt = applyPatch(original)
-  const sha = createHash('sha256').update(rebuilt, 'utf8').digest('hex').toUpperCase()
+  const sha = sha256(rebuilt)
   if (rebuilt !== patched) {
     console.error(`[patch] FAIL 重建结果与 baseline 产物不一致`)
     console.error(`  重建 SHA-256: ${sha}`)
-    console.error(`  baseline     : ${createHash('sha256').update(patched, 'utf8').digest('hex').toUpperCase()}`)
+    console.error(`  baseline     : ${sha256(patched)}`)
     console.error(`  长度 重建=${Buffer.byteLength(rebuilt, 'utf8')} baseline=${Buffer.byteLength(patched, 'utf8')}`)
     process.exitCode = 1
     return
   }
   console.log(`[patch] PASS 由 baseline 原始文件重建出逐字节一致的补丁产物（${EDITS.length} 条编辑，SHA-256 ${sha.slice(0, 16)}…）`)
+  console.log('[patch] PASS 两侧产物的语法闸门通过（vm.Script / 经典脚本目标）')
+  // 常量自洽性：只比对「重建 vs 磁盘 golden」的话，改了 EDITS 又重生成 golden 却不更新
+  // PATCHED_SHA256，verify 依然 PASS —— 常量会长期漂移而无人察觉（本补丁曾吃过同类亏）。
+  if (sha !== PATCHED_SHA256) {
+    console.error(`[patch] FAIL PATCHED_SHA256 常量与产物不一致`)
+    console.error(`  产物  : ${sha}`)
+    console.error(`  常量  : ${PATCHED_SHA256}`)
+    console.error(`  修法  : 把上面「产物」那行写回 patch.mjs 的 PATCHED_SHA256`)
+    process.exitCode = 1
+    return
+  }
+  console.log('[patch] PASS PATCHED_SHA256 常量与产物一致')
 }
 
 async function cmdStatus(args) {
@@ -318,6 +539,14 @@ async function cmdStatus(args) {
   console.log(`[patch] 目标   ${target}`)
   console.log(`[patch] 状态   ${state}  (SHA-256 ${sha.slice(0, 16)}…)`)
   console.log(`[patch] 备份   ${existsSync(backup) ? backup : '（无）'}`)
+  // 语法状态是**独立于补丁状态**的一维：文件可以"打过了"却依然语法错误
+  // （2026-09-19 事故即如此：状态 patched、SHA 与常量一致，产物却是坏的）。
+  const broken = parseVerdict(text)
+  console.log(`[patch] 语法   ${broken === null ? '合法' : `非法 —— ${broken}`}`)
+  if (broken !== null) {
+    console.log('[patch] 警告   该文件正在让整份 client bundle 无法注册（页面所有插件失效）')
+    console.log('[patch] 处置   先修规则与 baseline（改 EDITS → node patch.mjs rebuild → verify），再 node patch.mjs resync')
+  }
   if (state === 'unknown') {
     console.log(`[patch] 提示   该文件既非 ${BASELINE_DSH_VERSION} 原版也非补丁版——DSH 很可能已升级，需先核对锚点再适配`)
   }
@@ -333,7 +562,16 @@ async function cmdApply(args) {
   const text = await readFile(target, 'utf8')
   const { state } = classify(text)
   if (state === 'patched') {
-    console.log('[patch] 已应用，跳过（幂等）')
+    // 幂等跳过前先看一眼语法：补丁标记在场 ≠ 产物合法。
+    // 若这里是坏的，静默跳过等于把一个已经打坏的文件留在生产路径上。
+    const broken = parseVerdict(text)
+    if (broken === null) {
+      console.log('[patch] 已应用，跳过（幂等）')
+      return
+    }
+    console.error(`[patch] 已应用但产物语法非法：${broken}`)
+    console.error('[patch] 幂等跳过会把它继续留在页面上；请用 `node patch.mjs resync` 由 backup 重打')
+    process.exitCode = 1
     return
   }
   if (state === 'unknown' && !args.yes) {
@@ -345,11 +583,64 @@ async function cmdApply(args) {
   const backup = `${target}.dsh-bak`
   if (!existsSync(backup)) await copyFile(target, backup)
   await writeFile(target, patched, 'utf8')
-  const sha = createHash('sha256').update(patched, 'utf8').digest('hex').toUpperCase()
+  const sha = sha256(patched)
   console.log(`[patch] 已应用 → ${target}`)
   console.log(`[patch] 备份   ${backup}`)
   console.log(`[patch] 结果   ${Buffer.byteLength(patched, 'utf8')} 字节，SHA-256 ${sha.slice(0, 16)}…${sha === PATCHED_SHA256 ? '（与 baseline 产物一致）' : ''}`)
   console.log('[patch] 提示   浏览器侧生效需刷新页面；若 DSH host 启动早于本次写入，client-hmr 会热推 rebuilt 帧')
+}
+
+/**
+ * resync：备份 → 重打，一步到位。
+ *
+ * 存在意义：`apply` 对"已打过标记"的文件是幂等跳过的，于是**规则修好后无法直接重打**
+ * ——必须先 `revert` 再 `apply`。这是 2026-09-19 修语法错误时踩到的操作坑，固化成命令。
+ * 安全性：只有备份确实是已知官方原版（SHA == ORIGINAL_SHA256）才动手；否则拒绝，
+ * 因为那种情况的正确处理是 rebuild-baseline 重新适配锚点，而不是拿一份来历不明的备份覆盖。
+ */
+async function cmdResync(args) {
+  const target = args.target ?? defaultTarget()
+  if (target === null) {
+    console.error('[patch] 未找到已安装的 client.js（用 --target 指定，或设 MIASAKI_DSH_BUNDLE）')
+    process.exitCode = 2
+    return
+  }
+  const backup = `${target}.dsh-bak`
+  if (!existsSync(backup)) {
+    console.error(`[patch] 没有备份可用：${backup}——无法 resync（该文件从未被本补丁改过？直接用 apply）`)
+    process.exitCode = 2
+    return
+  }
+  const backupText = await readFile(backup, 'utf8')
+  if (sha256(backupText) !== ORIGINAL_SHA256) {
+    console.error('[patch] 备份不是已知的官方原版，拒绝 resync（避免拿来历不明的备份覆盖）')
+    console.error(`[patch] 备份 SHA-256 ${sha256(backupText).slice(0, 16)}…，期望 ${ORIGINAL_SHA256.slice(0, 16)}…`)
+    console.error('[patch] 提示   若 DSH 已升级，请改走 rebuild-baseline 重新适配锚点')
+    process.exitCode = 2
+    return
+  }
+  const patched = applyPatch(backupText)
+  await writeFile(target, patched, 'utf8')
+  const sha = sha256(patched)
+  console.log(`[patch] 已由备份重打 → ${target}`)
+  console.log(`[patch] 结果   ${Buffer.byteLength(patched, 'utf8')} 字节，SHA-256 ${sha.slice(0, 16)}…${sha === PATCHED_SHA256 ? '（与 baseline 产物一致）' : '（注意：与 PATCHED_SHA256 常量不一致，记得同步）'}`)
+  console.log('[patch] 提示   浏览器侧生效需刷新页面')
+}
+
+/** rebuild：由 baseline 原始文件重新生成补丁产物，并打印待同步的常量。 */
+async function cmdRebuild() {
+  const original = await readFile(ORIGINAL_FILE, 'utf8')
+  const rebuilt = applyPatch(original)
+  await writeFile(PATCHED_FILE, rebuilt, 'utf8')
+  const sha = sha256(rebuilt)
+  console.log(`[patch] 已由 baseline 原始文件重建 ${PATCHED_FILE}`)
+  console.log(`[patch] 产物   ${Buffer.byteLength(rebuilt, 'utf8')} 字节，SHA-256 ${sha}`)
+  if (sha === PATCHED_SHA256) {
+    console.log('[patch] 与 patch.mjs 的 PATCHED_SHA256 常量一致，无需同步')
+  } else {
+    console.log('[patch] 与常量不一致——请同步（本脚本刻意不代劳，改常量是有语义的决策）：')
+    console.log(`        export const PATCHED_SHA256 = '${sha}'`)
+  }
 }
 
 async function cmdRevert(args) {
@@ -372,10 +663,10 @@ async function cmdRevert(args) {
 // 仅在直接执行时跑 CLI（被 import 时不执行）。
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
   const args = parseArgs(process.argv.slice(2))
-  const commands = { verify: cmdVerify, status: cmdStatus, apply: cmdApply, revert: cmdRevert }
+  const commands = { verify: cmdVerify, status: cmdStatus, apply: cmdApply, revert: cmdRevert, resync: cmdResync, rebuild: cmdRebuild }
   const command = commands[args.mode]
   if (command === undefined) {
-    console.error(`[patch] 未知模式：${args.mode}（可选 verify / status / apply / revert）`)
+    console.error(`[patch] 未知模式：${args.mode}（可选 verify / status / apply / resync / revert / rebuild）`)
     process.exitCode = 2
   } else {
     // 锚点缺失/不唯一时给出可读结论，而不是抛裸栈——这是 DSH 升级后最可能的失败点。
