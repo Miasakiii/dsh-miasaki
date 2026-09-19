@@ -257,6 +257,47 @@ test('TICKET: expired ticket is refused (injectable clock)', async () => {
   }
 })
 
+// 实机验收逮住的回归：TOFU 首连时 viewer 在「等待指纹」阶段就 attach（U0 契约：待指纹
+// 主机的主动作是打开终端），那时没有 shell 可绑 ⇒ ready 帧 shellId=null。连接就绪后若
+// 不补绑，该 viewer 之后每一帧 input/resize 都被 currentShell 判为绑定失效（STALE_SHELL），
+// 而该错误会覆盖「核对指纹」横幅 ⇒ 首连彻底不可用。
+test('TOFU: a viewer attached during waiting-fingerprint is bound when the first shell opens', async () => {
+  const { runtime, cleanup } = await freshRuntime()
+  try {
+    const rc = new RuntimeConn(runtime, 'conn-1', { host: 'box', label: 'example' }, { runtimeId: 'rt-tofu' })
+    rc.status = 'waiting-fingerprint'
+    runtime.conns.set(rc.id, rc)
+    runtime.byProfile.set('conn-1', rc.id)
+
+    const ws = fakeWs()
+    const { ticket } = runtime.issueAttachTicket('conn-1')
+    runtime.attach(ws, { ticket, cols: 100, rows: 30 })
+    const firstReady = ws.sentFrames.find(f => f.type === 'ready')
+    assert.equal(firstReady.shellId, null, '等待指纹时确实没有 shell 可绑')
+    assert.equal(ws.shellId, null)
+
+    // 指纹确认通过 → 连接就绪 → onReady 开主 shell
+    rc.client = { shell(_options, cb) { cb(null, fakeStream()) } }
+    runtime.onReady(rc)
+
+    const ready = ws.sentFrames.filter(f => f.type === 'ready').at(-1)
+    assert.equal(ready.state, 'connected')
+    assert.equal(typeof ready.shellId, 'string', '就绪后必须补绑并把 shellId 告知 viewer')
+    assert.equal(ws.shellId, ready.shellId)
+    assert.equal(ws.mode, 'write', '补绑的 viewer 拿到写权（单写多读的空位即得）')
+    assert.equal(rc.shells.size, 1)
+
+    // 绑定已生效：此后 input/resize 不再被判绑定失效
+    ws.sentFrames.length = 0
+    runtime.viewerInput(ws, ws.shellId, 'ls\n')
+    runtime.viewerResize(ws, ws.shellId, 120, 40)
+    assert.equal(ws.sentFrames.some(f => f.code === 'STALE_SHELL'), false, '补绑后不得再报 STALE_SHELL')
+    assert.deepEqual(rc.shells.get(ws.shellId).stream.writes, ['ls\n'])
+  } finally {
+    await cleanup()
+  }
+})
+
 test('TICKET: teardown of the runtime voids its outstanding tickets', async () => {
   const { runtime, cleanup } = await freshRuntime()
   try {

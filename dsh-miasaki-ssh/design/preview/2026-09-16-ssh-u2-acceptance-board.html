@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSH 线 U2 实机验收板 · 2026-09-16</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161a21; --panel-2:#1c2129; --line:#252c36; --text:#e6e9ef; --muted:#98a2b3;
+    --pass:#3ddc97; --fail:#ff6b6b; --warn:#ffc857; --info:#5aa9ff; --accent:#b18cff;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Mono",Consolas,monospace;
+    --sans:-apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f6f7f9; --panel:#fff; --panel-2:#f0f2f5; --line:#e2e5ea; --text:#171a1f; --muted:#5b6472;
+           --pass:#0f9d63; --fail:#d92d20; --warn:#a86b00; --info:#1f6feb; --accent:#6f42c1; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.65 var(--sans);-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:40px 24px 72px}
+  header{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:28px}
+  .kicker{color:var(--muted);font-size:12px;letter-spacing:.14em;text-transform:uppercase}
+  h1{margin:8px 0 10px;font-size:27px;letter-spacing:-.01em}
+  h2{margin:38px 0 14px;font-size:17px;letter-spacing:.01em}
+  h3{margin:0 0 6px;font-size:15px}
+  p{margin:8px 0}
+  .lede{color:var(--muted);max-width:76ch}
+  .badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .badge{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 12px;font-size:12.5px;color:var(--muted)}
+  .badge b{color:var(--text)}
+  .grid{display:grid;gap:14px}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media (max-width:880px){ .g4{grid-template-columns:repeat(2,1fr)} .g2{grid-template-columns:1fr} }
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .stat .n{font:600 26px/1.2 var(--mono);letter-spacing:-.02em}
+  .stat .l{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .stat.pass .n{color:var(--pass)} .stat.fail .n{color:var(--fail)} .stat.warn .n{color:var(--warn)} .stat.info .n{color:var(--info)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12.5px;letter-spacing:.03em}
+  tr:last-child td{border-bottom:none}
+  code{font:12.5px var(--mono);background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  pre{margin:10px 0 0;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow:auto;font:12.5px/1.55 var(--mono)}
+  .pill{display:inline-block;font:600 11.5px/1 var(--mono);border-radius:6px;padding:4px 8px;border:1px solid}
+  .p-pass{color:var(--pass);border-color:color-mix(in oklab,var(--pass) 45%,transparent);background:color-mix(in oklab,var(--pass) 12%,transparent)}
+  .p-fail{color:var(--fail);border-color:color-mix(in oklab,var(--fail) 45%,transparent);background:color-mix(in oklab,var(--fail) 12%,transparent)}
+  .p-warn{color:var(--warn);border-color:color-mix(in oklab,var(--warn) 45%,transparent);background:color-mix(in oklab,var(--warn) 12%,transparent)}
+  .p-info{color:var(--info);border-color:color-mix(in oklab,var(--info) 45%,transparent);background:color-mix(in oklab,var(--info) 12%,transparent)}
+  .defect{border-left:3px solid var(--fail)}
+  .defect.mid{border-left-color:var(--warn)}
+  .defect .id{font:600 12px var(--mono);color:var(--muted);letter-spacing:.06em}
+  .chain{color:var(--muted);font-size:13px;margin-top:6px}
+  .fix{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line);font-size:13.5px}
+  .fix b{color:var(--pass)}
+  ul{margin:8px 0 0;padding-left:20px} li{margin:4px 0}
+  .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;font-size:13px}
+  .kv dt{color:var(--muted);font-family:var(--mono);font-size:12.5px}
+  .kv dd{margin:0;font-family:var(--mono);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">dsh-miasaki-ssh · 实机验收</div>
+  <h1>U2 实机验收板：多 shell / 工作区记忆 / 精确恢复</h1>
+  <p class="lede">
+    通道同 D2–D4：真 Edge（headless）× <b>真实 DSH GUI</b>（真宿主 + 真插件 + 真桌面壳注入）× 真实鼠标/键盘（走 hit-test）×
+    本地假 sshd（真 SSH 协议、多 shell channel）。判据全部取运行态证据（DOM / host REST / sshd 事件流）。
+  </p>
+  <div class="badges">
+    <span class="badge">自动化闸门 <b>12/12</b></span>
+    <span class="badge">单测 <b>110 → 113</b></span>
+    <span class="badge">实机 <b>通过 6 / 失败或未判定 8</b></span>
+    <span class="badge">缺陷 <b>4（2 阻断 · 1 高危 · 1 中危）</b></span>
+    <span class="badge">状态 <b>已修复，待重启复验</b></span>
+  </div>
+</header>
+
+<section class="grid g4">
+  <div class="card stat pass"><div class="n">113/113</div><div class="l">单测（修复后，+3 条回归断言）</div></div>
+  <div class="card stat pass"><div class="n">12/12</div><div class="l">verify-all ssh</div></div>
+  <div class="card stat fail"><div class="n">2</div><div class="l">阻断级缺陷（首连不可用）</div></div>
+  <div class="card stat warn"><div class="n">1</div><div class="l">高危：多 shell 输入串台</div></div>
+</section>
+
+<h2>一句话结论</h2>
+<div class="card">
+  <p>
+    U2 的自动化闸门全绿，但<b>实机验收在「首次连接」这一步就被挡住</b>：等待指纹确认时 viewer 已 attach 而那时没有任何 shell，
+    前端无条件发出的 input/resize 被 host 判为 <code>STALE_SHELL</code>，该错误横幅<b>覆盖了唯一带「核对指纹」按钮的分支</b> ⇒ 新主机连不上。
+    顺着这条线还查出「连接就绪不补绑 viewer」（同为阻断）与「同主机多 shell 输入串台」（高危，正是方案 §8 风险表第一条）等共 4 处真实缺陷。
+    <b>4 处已全部定位并修复</b>；修复与 U2.4 的 addon 都需重启 <code>dsh web</code> 才生效 ⇒ 实机复验待重启。
+  </p>
+</div>
+
+<h2>验收矩阵</h2>
+<div class="card" style="padding:6px 10px">
+<table>
+  <thead><tr><th style="width:150px">项</th><th>门槛</th><th style="width:112px">判定</th><th>关键证据</th></tr></thead>
+  <tbody>
+    <tr><td>自动化</td><td>单测全绿 + <code>verify-all ssh</code> 12/12</td><td><span class="pill p-pass">PASS</span></td><td>110 → 113 例；12/12</td></tr>
+    <tr><td>运行态核查</td><td>运行宿主加载的确是 U2 代码</td><td><span class="pill p-pass">PASS</span></td><td>三资产与磁盘 <b>SHA256 逐字节一致</b>；host 半命中 U2 的 attach 分支</td></tr>
+    <tr><td>U2.4 通道</td><td>官方 addon 上线</td><td><span class="pill p-fail">FAIL</span></td><td>运行态返回 <b>79 字节占位脚本</b>（依赖装于宿主启动之后，判定只在 apply 时跑一次）</td></tr>
+    <tr><td>A1/A2 多 shell 隔离</td><td>逐标签输入按 channel 精确路由</td><td><span class="pill p-fail">FAIL → 已修</span></td><td>sshd 实测 <code>inputChannels [1,1,1]</code>（全部落 ch-1）</td></tr>
+    <tr><td>A3 每 shell 独立尺寸</td><td>尺寸 per-shell 下发</td><td><span class="pill p-warn">待复验</span></td><td>夹具 pty 归属缺陷已修，判据改为「每 channel 各有 pty 记录」</td></tr>
+    <tr><td>A4 写入所有权</td><td>单写多读 + 显式接管</td><td><span class="pill p-pass">PASS</span></td><td>B 只读条在场 / A 保持 owner / <b>零新 TCP</b>；接管后 A 即时转只读、B 输入送达远端</td></tr>
+    <tr><td>A6 关闭语义</td><td>关闭此 shell ≠ 断开连接</td><td><span class="pill p-warn">待复验</span></td><td>按钮缺席（串台缺陷的连锁）；对话框遮挡输入已修</td></tr>
+    <tr><td>C1 工作区记忆</td><td>刷新恢复形状 + 零自动连接</td><td><span class="pill p-warn">半 PASS</span></td><td>标签数量恢复、<code>tcp-connect</code>/<code>shell</code> 事件<b>零增长</b> ✅；标签集合错乱（<code>[#3,#2,#3]</code>）待复验</td></tr>
+    <tr><td>C4 记忆损坏降级</td><td>不白屏</td><td><span class="pill p-pass">PASS</span></td><td>写入 <code>{oops not json</code> 后刷新：rail/工作区俱在、标签回默认、零异常</td></tr>
+    <tr><td>A5 8 shell 上限</td><td>第 9 个被拒 + 可读提示</td><td><span class="pill p-warn">待复验</span></td><td>驱动未先归位 selection ⇒ <code>+</code> 退化为打开导航（已修）</td></tr>
+    <tr><td>D3 旧帧拒绝</td><td>明确提示刷新</td><td><span class="pill p-pass">PASS</span></td><td>页面内发无 <code>v</code> 旧帧 → <code>VERSION_MISMATCH</code>「插件已升级，请刷新」</td></tr>
+    <tr><td>D2 三主题回归</td><td>三主题下浮层顶栏稳定</td><td><span class="pill p-info">未执行</span></td><td>排在连接可用的后续阶段（重启后一并跑）</td></tr>
+    <tr><td>U2.4 判据</td><td>刷新后逐行 + 光标一致 ×3</td><td><span class="pill p-info">未执行</span></td><td>依赖 addon 上线（重启）+ 连接可用；专项驱动 <code>run-u2-tui.mjs</code> 已就绪</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>四处缺陷：因果链与修复</h2>
+<div class="grid g2">
+  <div class="card defect">
+    <div class="id">U2-A · 阻断</div>
+    <h3>首连的指纹确认入口被 <code>STALE_SHELL</code> 覆盖</h3>
+    <p class="chain">
+      等待指纹（无 shell）→ viewer 依 U0 契约已 attach → <code>onResize/onData</code> 无条件发帧（<code>shellId=null</code>）→
+      host <code>currentShell()</code> 判绑定失效 → <code>STALE_SHELL</code> → 前端 <code>onStatus('error')</code> 写成 <code>frameState</code> →
+      <b>横幅被覆盖</b>，<code>renderBanner</code> 的 waiting-fingerprint 分支（唯一带「核对指纹」按钮）不再渲染。
+    </p>
+    <p class="chain">
+      旁证：状态栏「指纹待确认」按钮 onclick 实为 <code>trustListSheet()</code>（打开信任记录列表，此刻为空）—— <b>确实无路可走</b>。
+    </p>
+    <div class="fix"><b>修</b>：未绑定 shell 时<b>不发</b> input/resize；绑定后由新增 <code>syncSize()</code> 补发真实尺寸（U0 契约不丢）。</div>
+  </div>
+
+  <div class="card defect">
+    <div class="id">U2-B · 阻断</div>
+    <h3>连接就绪时不补绑已 attach 的 viewer</h3>
+    <p class="chain">
+      <code>onReady()</code> 建好主 shell 后只 <code>broadcast({type:'ready', state, runtimeId, shells})</code> ——
+      <b>不带 <code>shellId</code>、也不做服务端绑定</b> ⇒ 等待指纹期间 attach 的 viewer 永远停在 <code>shellId=null</code>，
+      指纹确认通过后终端仍不可用。
+    </p>
+    <p class="chain">实测：手动点一次标签重挂（shell 已存在、走全新 attach）才拿到绑定，终端随即有内容（43 行）。</p>
+    <div class="fix"><b>修</b>：<code>onReady</code> 遍历 <code>rc.sockets</code>，对未绑定者 <code>bindShell()</code> 并逐发带 <code>shellId/mode</code> 的 <code>ready</code>。</div>
+  </div>
+
+  <div class="card defect">
+    <div class="id">U2-C · 高危（方案 §8 风险表第一条）</div>
+    <h3>同主机多 shell 输入串台</h3>
+    <p class="chain">
+      ① <code>app.js openHost()</code> 用 <code>tabs.find(t =&gt; t.connId === id)</code> 找标签 —— 同主机多 shell <b>永远命中第一个</b>，
+      激活第 2/3 个标签反而改写第一个标签的 <code>shellSeq</code> 并把 <code>activeTab</code> 指回 0。<br>
+      ② <code>session.js</code> 拿票据后无条件取「第一个 live shell」，<b>覆盖</b>了调用方传入的 <code>shellSeq</code>。
+    </p>
+    <p class="chain">实测：三标签各发一个标记 ⇒ sshd <code>inputChannels [1,1,1]</code>，标签 2/3 屏幕显示的是 ch-1 的内容。</p>
+    <div class="fix"><b>修</b>：<code>openHost</code> 支持 <code>tabIndex</code> 精确定位（三个调用点同步）+ 按 <code>shellSeq</code> 精确匹配（无 seq 才回退）+ attach 返回补 <code>shellSeq</code>。</div>
+  </div>
+
+  <div class="card defect mid">
+    <div class="id">U2-D · 中危</div>
+    <h3>恢复后标签错乱 / 点标签空白</h3>
+    <p class="chain">
+      U2-C 的连锁：刷新恢复出 <code>["… #3","… #2","… #3"]</code>（缺 <code>#1</code>、<code>#3</code> 重复）、点标签屏幕空白、
+      关闭对话框缺「关闭此 shell（连接保留）」（其条件依赖被错置的 <code>activeTab</code>）。
+    </p>
+    <div class="fix"><b>修</b>：随 U2-C 一并闭环（<code>openHost</code> 的 <code>tabIndex</code> 路径 + 挂载恢复传索引），待重启复验。</div>
+  </div>
+</div>
+
+<h2>最小复现与运行态核查</h2>
+<div class="grid g2">
+  <div class="card">
+    <h3><code>diag-tofu.mjs</code>：45s 采样（每 300ms）</h3>
+    <pre>sawFingerprintButton : false        ← 「核对指纹」从未出现
+firstStaleSample      : i=3 (≈1.2s)  ← 横幅已被 STALE_SHELL 覆盖
+banner.buttons        : ["编辑主机","重新连接"]
+status bar            : 指纹待确认
+host state            : waiting-fingerprint / shells=0
+remote (fake sshd)    : tcp-connect=1  auth-ok=0  shell=0
+                        ↑ 握手停在 hostVerifier</pre>
+  </div>
+  <div class="card">
+    <h3>运行态 vs 磁盘（SHA256）</h3>
+    <dl class="kv">
+      <dt>session.js</dt><dd>22647B · 6FF20BC8A4B3D0F3 · <span style="color:var(--pass)">一致</span></dd>
+      <dt>app.js</dt><dd>89197B · 1699CE062407020D · <span style="color:var(--pass)">一致</span></dd>
+      <dt>styles.css</dt><dd>21672B · 086AC645F6CEFDCC · <span style="color:var(--pass)">一致</span></dd>
+      <dt>addon-serialize.js</dt><dd>运行态 79B 占位 / 包本体 16441B · <span style="color:var(--fail)">不一致</span></dd>
+      <dt>宿主启动</dt><dd>12:52:17</dd>
+      <dt>依赖安装</dt><dd>12:57:17 ← 晚于启动，故 hasSerializeAddon=false</dd>
+    </dl>
+  </div>
+</div>
+
+<h2>环境适配（复跑者必读）</h2>
+<div class="card">
+  <p>
+    首轮驱动在<b>受限沙箱</b>下无法启动任何浏览器：Edge 与 Chrome 均以 <code>STATUS_BREAKPOINT</code> 退出。Edge 日志给出确凿根因：
+  </p>
+  <pre>FATAL:mojo\public\cpp\platform\platform_channel.cc:183] Check failed: . : 拒绝访问。 (0x5)</pre>
+  <p style="margin-top:10px">
+    Chromium 的 Mojo IPC 需要<b>命名管道</b>，而受限模式禁止 ⇒ 授予完整访问后浏览器正常、驱动全程可跑。
+  </p>
+</div>
+
+<h2>待重启复验清单</h2>
+<div class="card">
+  <p><b>前置</b>：重启 <code>dsh web</code>（<code>app.js</code>/<code>session.js</code>/<code>styles.css</code> 走进程内 <code>cachedAsset</code>；<code>lib/runtime.js</code>/<code>index.js</code> 随插件 ESM 加载；<code>hasSerializeAddon</code> 只在 apply 时判定一次），并强刷浏览器一次。</p>
+  <ul>
+    <li><code>node run-u2-accept.mjs</code> —— 多 shell 隔离（三 channel 应为 <code>[1,2,3]</code>）/ per-shell 尺寸 / 双窗口写权与接管 / 关闭三分支 / 刷新恢复与两张据 / 8 shell 上限 + host RSS / 旧帧</li>
+    <li><code>node run-u2-tui.mjs</code> —— U2.4：TUI 画面刷新后<b>逐行 + 光标行一致 ×3</b>，并记录 addon 是否真上线</li>
+    <li>三主题回归（D2 门槛本尊：顶栏 reserve 消费与段数稳定）</li>
+  </ul>
+  <p style="color:var(--muted);font-size:13px;margin-top:10px">
+    预期：P0b 转 PASS（确认入口在场且不被覆盖）；P1b 的三个 channel 变为 <code>[1,2,3]</code>；P5a 恢复为 <code>[…, #2, #3]</code>；P2a 出现「关闭此 shell（连接保留）」。
+  </p>
+</div>
+
+<h2>本轮未覆盖 / 明确边界</h2>
+<div class="card">
+  <ul>
+    <li><b>U2.2 SFTP 未开工</b>（规划内下一阶段，需真实主机补验 S1 性能基线）—— 不是本轮缺口。</li>
+    <li><b>真实云主机未接入</b>：全部实机项走本地假 sshd（真协议、多 channel、真 pty/window-change/exit 语义）；广域网 RTT 与大流量压力项仍留待 U2.2 复验。</li>
+    <li><b>app.js 纯搬迁拆分</b>（决策 5）仍未执行，沿用实施验收包的既有登记。</li>
+    <li>本轮改动<b>未提交</b>（按仓库纪律等待确认）。</li>
+  </ul>
+</div>
+
+<div class="foot">
+  驱动与原始结果：<code>_refs/scripts-archive/ssh-u2-accept/</code>（<code>run-u2-accept.mjs</code> / <code>run-u2-tui.mjs</code> / <code>diag-tofu.mjs</code> / <code>fake-sshd-u2.mjs</code> + <code>*-result.json</code> + <code>shots/</code>）&nbsp;·&nbsp;
+  文字报告：<code>design/2026-09-16-ssh-u2-acceptance-report.md</code>
+</div>
+
+</div>
+</body>
+</html>

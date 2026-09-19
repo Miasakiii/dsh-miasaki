@@ -29,7 +29,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **终端功能**：多主机标签（同主机只 attach；关闭查看 ≠ 断开，断开需确认）、Ctrl+Shift+C/V 复制粘贴、缓冲区原生查找（**零新依赖**——addon-search 对 xterm 6 只有 beta 版，未核验不引入）、字号 12–20px、本地清屏、专注模式、多行 / 含控制字符粘贴先预览确认；
 - **响应式**：容器查询断点 960 / 720 / 480（依据 SSH 容器宽度而非窗口宽度），窄屏导航改模态抽屉（焦点陷阱 + Esc 归还焦点）。
 
-**待实机验证**（U0+U1+A0+D2–D4+U2 合并验收，见 [回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)）：**重启 `dsh web`**（`index.js` 的 `cachedAsset` 对静态资源做进程内一次性缓存，浏览器强刷不够）后按清单逐项过。U2.2（SFTP）留待真实主机补验后开工、U3（跳板 / 转发）未动；A1（工具面）待 SPIKE S4 实测。
+**待实机验证**（U0+U1+A0+D2–D4+U2 合并验收，见 [回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)）：**重启 `dsh web`**（`index.js` 的 `cachedAsset` 对静态资源做进程内一次性缓存，浏览器强刷不够）后按清单逐项过。**U2 已于 2026-09-16 跑过一轮完整实机验收并修复 4 处回归（见下文「U2 实机验收」段），实机复验同样待重启后进行**。U2.2（SFTP）留待真实主机补验后开工、U3（跳板 / 转发）未动；A1（工具面）待 SPIKE S4 实测。
 
 **2026-09-14 A0 上下文桥已实施**（[Agent 化规划](design/2026-09-14-ssh-agent-driven-plan.md) §8.2/§17，用户拍板四项决策后的首个交付）：
 
@@ -84,6 +84,14 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **待实机验收**：vim / top 刷新后恢复逐行一致、双窗口写权互斥、8 shell RSS、三主题回归。
 - **偏离登记**：规划决策 5 的「`app.js` 纯搬迁拆分」本轮未执行（改造以补丁叠加，避免搬迁与逻辑混在一个 diff，`app.js` 已 1731 行），列入 U2.2 前置工单。
 
+**2026-09-16 U2 实机验收：自动化全绿，实机首连被两处阻断级回归挡住 —— 4 处缺陷已定位并修复，待重启复验**（[验收报告](design/2026-09-16-ssh-u2-acceptance-report.md)；驱动与结果归档 `_refs/scripts-archive/ssh-u2-accept/`）：
+
+- **发现（2 阻断 / 1 高危 / 1 中危）**：① 等待指纹阶段 viewer 依 U0 契约已 attach，而那时**没有 shell** ⇒ 前端无条件发出的 input/resize 被判 `STALE_SHELL`，该错误横幅**覆盖了唯一带「核对指纹」按钮的 waiting-fingerprint 分支** ⇒ **新主机彻底连不上**（最小复现：45s 内确认入口从未出现，远端握手停在 hostVerifier）；② `onReady` 广播的 `ready` **不带 `shellId`、也不做服务端补绑** ⇒ 指纹确认通过后终端仍拿不到 shell 绑定；③ **同主机多 shell 输入串台**（`openHost` 按 `connId` 找标签永远命中第一个 + 前端无条件取「第一个 live shell」，实测三个标签的输入全部落在 ch-1 —— 正是方案 §8 风险表第一条）；④ 刷新恢复后标签错乱 / 点标签空白（③ 的连锁）。
+- **修复**：`session.js` 未绑定 shell 时**不发** input/resize + 绑定后 `syncSize()` 补发真实尺寸 + 票据 shell 清单按 `shellSeq` 精确匹配；`lib/runtime.js` 的 `onReady` 对未绑定 viewer 补 `bindShell()` 并逐发带 `shellId/mode` 的 `ready`；`app.js` 的 `openHost` 支持 `tabIndex` 精确定位（`openHostAt` / 关闭接续 / 挂载恢复三处同步）；`index.js` 的 `/ssh/api/attach` 返回补 `shellSeq`。单测 110 → **113 例**（新增 3 条回归断言），`verify-all ssh` **12/12**。
+- **已 PASS 的实机项**：双窗口单写多读（第二窗口只读条、原 owner 保持写权、零新建 TCP）与显式接管（原 owner 即时转只读、新 owner 输入送达远端）；3 个 shell 建立（host × sshd × 标签三方对齐）；刷新后标签数量恢复且 `tcp-connect`/`shell` 事件**零增长**（零自动连接）；损坏快照不白屏；旧帧收 `VERSION_MISMATCH`。
+- **U2.4 本轮实际未上线**（非代码缺陷）：`@xterm/addon-serialize` 在宿主启动**之后**才安装，而 `hasSerializeAddon` 只在 apply 时判定一次 ⇒ 运行态回 79 字节占位脚本、前端静默降级为回放恢复；重启即解。
+- **下一步（重启 `dsh web` 后）**：`node run-u2-accept.mjs`（多 shell 隔离 / 双窗口写权 / 关闭语义 / 刷新恢复 / 8 shell 上限 + host RSS / 旧帧）、`node run-u2-tui.mjs`（U2.4：TUI 画面刷新后逐行 + 光标行一致 ×3）、三主题回归。
+
 设计要点速览（完整版见 [设计文档](design/2026-09-09-ssh-design.md)）：
 
 | 维度 | 决策 |
@@ -106,7 +114,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 | **M1** | 纯终端 + 连接管理：`conversation.view` 入口、`/ssh/` 页面、密码/私钥/agent 三种认证、xterm 交互终端、known_hosts、三道围栏、连接保活 | **代码完成，待实机验收** |
 | **U0+U1**（工作区规划） | U0 可靠性闭环（二进制输出 / 查看器实例 / 恢复 attach / 指纹闭环 / 输入归属）+ U1 统一工作区（主机导航 / 多标签 / 编辑抽屉 / 三主题桥接 / 复制粘贴 / 查找 / 字号 / 响应式） | **已实施，待实机验收** |
 | **A0**（Agent 化规划 §8.2/§17） | 上下文桥：送往对话（选区 / 最近 40 行 / 错误追问）+ 来源主机标记 + 剪贴板通道 | **已实施（2026-09-14），待实机验收**（单测 63 例、`verify-all ssh` 12/12） |
-| M2 | SFTP、系统终端打开、空白会话备用入口（多标签 / 断线重连 / 主题跟随 / 分组收藏已随 U1 交付） | **U2 主体已实施（2026-09-16）：[U2 规划](design/2026-09-15-ssh-u2-plan.md) §6 的 U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复已落地并过 110 例单测 + 端到端探针（见[实施验收包](design/2026-09-16-ssh-u2-implementation-report.md)）；U2.2 SFTP 留待真实主机补验后开工** |
+| M2 | SFTP、系统终端打开、空白会话备用入口（多标签 / 断线重连 / 主题跟随 / 分组收藏已随 U1 交付） | **U2 主体已实施（2026-09-16）：[U2 规划](design/2026-09-15-ssh-u2-plan.md) §6 的 U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复已落地并过 **113 例单测** + 端到端探针（见[实施验收包](design/2026-09-16-ssh-u2-implementation-report.md)）；同轮实机验收发现并修复 4 处回归（2 阻断 / 1 高危 / 1 中危，见[验收报告](design/2026-09-16-ssh-u2-acceptance-report.md)）⇒ **待重启复验**；U2.2 SFTP 留待真实主机补验后开工** |
 | M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划（对应 U3）；**细化方案见 [Agent 化规划](design/2026-09-14-ssh-agent-driven-plan.md)（已定稿：D1 做「Agent 的 SSH 手」/ D2 总开关默认 `off` / D3 确认在对话页 / D4 允许 key·agent 主机隐式建连；A1–B 待做）** |
 
 ## M1 前置 SPIKE
@@ -135,8 +143,8 @@ dsh-miasaki-ssh/
 ├── session.js              # 前端查看器实例：一个查看器独占 xterm + WS，整体可销毁（U0）+ 主题/字号/查找 API（U1）+ 只读缓冲区快照（A0）+ v2 票据附着/多 shell 绑定/写权/序列化快照（U2）
 ├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑抽屉 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）
 ├── styles.css              # 工作区布局 + --ssh-* 语义令牌（原生明暗兜底，宿主桥接覆盖）
-├── test/                   # 单测 110 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell ↔
-│                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照 ↔ app: 分组过滤/粘贴守卫/颜色合成/送对话格式/工作区快照 ↔
+├── test/                   # 单测 113 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑 ↔
+│                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照/未绑定不发帧/按 seq 匹配 ↔ app: 分组过滤/粘贴守卫/颜色合成/送对话格式/工作区快照 ↔
 │                           #   http: 路由与 attach 票据 ↔ client: 工厂契约 + 主题桥接快照）
 ├── design/
 │   ├── 2026-09-09-ssh-design.md
@@ -145,11 +153,15 @@ dsh-miasaki-ssh/
 │   ├── 2026-09-14-ssh-global-panel-plan.md     # 独立模块化（全局面板）规划（待评审，未实施）
 │   ├── 2026-09-14-ssh-fullscreen-overlay-plan.md  # 全屏浮层路线丁（D0–D4 全部实施并验收）
 │   ├── 2026-09-15-ssh-u2-plan.md               # 工作区 U2 规划（SFTP / 多 shell / 工作区记忆 / 精确恢复）
+│   ├── 2026-09-16-ssh-u2-implementation-report.md  # U2.1/U2.3/U2.4 实施验收包（变更清单/回滚演练/风险表）
+│   ├── 2026-09-16-ssh-u2-acceptance-report.md  # U2 实机验收报告（4 处回归定位与修复 + 待复验清单）
 │   ├── preview/
 │   │   ├── 2026-09-12-ssh-workspace-concept.html  # 可交互概念稿（三主题 / 四档宽度 / 八种状态）
 │   │   ├── 2026-09-14-ssh-d1-kickoff-board.html
 │   │   ├── 2026-09-15-ssh-d2-review-board.html
-│   │   └── 2026-09-15-ssh-d3-review-board.html
+│   │   ├── 2026-09-15-ssh-d3-review-board.html
+│   │   ├── 2026-09-15-ssh-u2-spike-report.html    # U2.0 SPIKE 验收报告板（探针 A/B/C）
+│   │   └── 2026-09-16-ssh-u2-acceptance-board.html  # U2 实机验收板（矩阵 / 四缺陷 / 复验清单）
 │   └── CHANGELOG.md
 └── README.md
 ```
@@ -165,6 +177,8 @@ dsh-miasaki-ssh/
 | [**独立模块化规划**](design/2026-09-14-ssh-global-panel-plan.md) | **从「会话视图」升级为「全局面板」（2026-09-14，待评审，未实施）**：诉求拆解（R1 独立 / R2 不消失 / R3 模块化）、作用域错配诊断、会话布参照物解剖、**0.1.5 全局面板通道逐行取证（`main` root keyed slot + `sidebar.panellist` + `ctx.layout.selectPanel`）**、**官方硬约束 F4（点会话条目强制回对话）**、A/B/C 方案对比、G0–G4 分期与 SPIKE 清单、待决策四项 |
 | [**全屏浮层规划（已定向）**](design/2026-09-14-ssh-fullscreen-overlay-plan.md) | **路线丁：照会话布同构（2026-09-14/15，用户拍板「全屏／走丁方案」，**D0 五项（§12）+ D1 四门槛（§13）+ D1.1 launcher（§14）+ D2 顶栏六项（§15/§16）+ D3 清理回归十一项（§17/§18）+ D4 尾项清理三项（§19）实测全过**，浮层改造收官）**：决策记录、三路对比（甲/乙/丁）、分层结构、**与 canvas 的同构对照表**、五个关键技术问题（**§5.1 隐藏态误 fit 会写坏远端 PTY——必须偏离 canvas 的 `display:none`**、窗控 reserve、双浮层互斥、响应式重校准、焦点）、逐文件改动清单、D0–D4 分期、验收矩阵与风险表 |
 | [**工作区 U2 规划**](design/2026-09-15-ssh-u2-plan.md) | **效率补齐（2026-09-15，**v1.0 已定稿**：7 项决策全部拍板；尚未开工）**：现状取证（**profile/runtime 共用 `connId`**、单 shell、连接级回放环与尺寸、WS 四帧、ssh2 SFTP 能力面、addon 版本实测）、**三层身份（connId → runtimeId → shellId）+ 短期附着票据**（规划 §8 硬要求）、四项分项设计（**同主机多 shell** / **SFTP**（REST 流式 + host 端零本机 IO）/ **工作区记忆**（偏好 `localStorage` + 快照 `sessionStorage` 双据）/ **精确恢复**（价值被 D0–D4 收窄，可降级为已知边界））、逐文件改动清单、U2.0–U2.4 分期与门槛、验收矩阵、风险表、SPIKE S-U2-1…4、**决策记录 7 项（全部已定）**；**§12 U2.0 SPIKE 验收：批内判据强度不通过（验的是自己构造的对象）→ 补做探针 A/B/C（真 Client×4 channel / 官方 addon / 真 GUI）全过后四项命门全部回答，两条独立路径同指 Go** |
+| [**U2 实施验收包**](design/2026-09-16-ssh-u2-implementation-report.md) | **U2.1/U2.3/U2.4 交付说明**：逐文件变更清单、与 S-U2-1 实测基线的前后对照、自动化与手动验证记录、**回滚步骤（已实际演练：基线 85/85 绿 → U2 还原 110/110 绿）**、部署/发布说明、风险与遗留事项 R1–R7、决策符合性自检 |
+| [**U2 实机验收报告**](design/2026-09-16-ssh-u2-acceptance-report.md) | **2026-09-16 实机验收**：验收矩阵逐项判定、运行态逐字节核查（含 addon 未上线的时序根因）、**4 处缺陷（2 阻断 / 1 高危 / 1 中危）的因果链与修复**、夹具缺陷登记、沙箱环境适配记录、**待重启复验清单**、未覆盖边界 |
 | [CHANGELOG](design/CHANGELOG.md) | 本线变更记录 |
 
 ## 相关线

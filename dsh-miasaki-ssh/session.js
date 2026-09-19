@@ -100,11 +100,16 @@
     }
 
     term.onData(data => {
+      // U2：尚未绑定 shell 时不发送。host 侧 currentShell 会把无绑定的帧判为
+      // STALE_SHELL，而该错误会经 onStatus('error') 覆盖「等待指纹」横幅 —— TOFU
+      // 首连的确认入口因此消失（实机验收逮住）。绑定后 ready/shell.opened 会补状态。
+      if (shellId === null) return
       const s = socket
       if (s !== null && s.readyState === 1) s.send(JSON.stringify({ v: PROTOCOL_VERSION, type: 'input', shellId, data }))
     })
     term.onResize(({ cols, rows }) => {
       onResize({ cols, rows })
+      if (shellId === null) return // 绑定后由 syncSize() 补发，真实尺寸不丢
       const s = socket
       if (s !== null && s.readyState === 1) {
         s.send(JSON.stringify({ v: PROTOCOL_VERSION, type: 'resize', shellId, cols: clampDim(cols, COLS_RANGE, cols), rows: clampDim(rows, ROWS_RANGE, rows) }))
@@ -133,6 +138,22 @@
     function send(json) {
       const s = socket
       if (s !== null && s.readyState === 1) s.send(JSON.stringify({ v: PROTOCOL_VERSION, ...json }))
+    }
+
+    /**
+     * 绑定 shell 后补发一次当前尺寸：未绑定时 onResize 不发帧（见上），
+     * 若不补发，指纹确认 / 新建 shell 后的真实 PTY 尺寸就永远送不出去（U0 契约）。
+     */
+    function syncSize() {
+      if (shellId === null) return
+      const s = socket
+      if (s === null || s.readyState !== 1) return
+      try {
+        s.send(JSON.stringify({
+          v: PROTOCOL_VERSION, type: 'resize', shellId,
+          cols: clampDim(term.cols, COLS_RANGE, term.cols), rows: clampDim(term.rows, ROWS_RANGE, term.rows),
+        }))
+      } catch { /* socket gone */ }
     }
 
     // ------------------------------------------------------------------ U2.4 snapshot capture
@@ -191,6 +212,7 @@
         if (typeof msg.shellId === 'string' && msg.shellId.length > 0) shellId = msg.shellId
         if (typeof msg.shellSeq === 'number') shellSeq = msg.shellSeq
         if (msg.mode === 'write' || msg.mode === 'read') setMode(msg.mode)
+        syncSize()
         onStatus(msg.state === 'connected' ? 'ok' : 'muted', msg.state === 'connected' ? `已连接 ${conn.host}` : (STATE_TEXT[msg.state] ?? '已附着'))
         return
       }
@@ -207,6 +229,7 @@
         if (seqMatch !== null) shellSeq = Number(seqMatch[1])
         sshEnded = false
         setMode(msg.mode === 'write' ? 'write' : 'read')
+        syncSize()
         onFrame({ type: 'shell.opened', shellId: msg.shellId, title: msg.title })
         return
       }
@@ -264,9 +287,13 @@
       getTicket().then(info => {
         if (disposed) return
         // 票据可能带着 host 侧 shell 清单：默认 shell（或记忆的 shellId）在 ready 帧确认。
+        // ⚠ 必须优先按记忆的 shellSeq 精确匹配：无条件取「第一个 live shell」会让第 2/3 个
+        // 标签也 attach 到第一个 shell（多 shell 输入串台 —— 正是方案 §8 风险表第一条）——
+        // 实机验收逮住。只有「没有 seq 的全新打开」才回退第一个 live。
         if (Array.isArray(info.shells) && shellId === null) {
-          const live = info.shells.find(sh => sh.state === 'live')
-          if (live !== undefined) shellId = live.shellId
+          const bySeq = shellSeq !== null ? info.shells.find(sh => sh.shellSeq === shellSeq) : undefined
+          const pick = bySeq ?? (shellSeq === null ? info.shells.find(sh => sh.state === 'live') : undefined)
+          if (pick !== undefined) shellId = pick.shellId
         }
         openSocketWithTicket(info.ticket)
       }).catch(err => {

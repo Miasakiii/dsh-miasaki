@@ -159,6 +159,47 @@ test('attach: ticket minted over HTTP, v2 frame carries ticket/size/shellSeq', a
   void term
 })
 
+// 实机验收逮住的回归：票据带着多个 shell 时，前端无条件取「第一个 live shell」，
+// 于是点第 2/3 个标签也 attach 到第一个 shell ⇒ 输入串台（方案 §8 风险表第一条）。
+test('attach: remembered shellSeq wins over the first live shell in the ticket list', async () => {
+  const h = makeHarness()
+  h.setFetch(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ticket: 'tok-seq',
+      shells: [
+        { shellId: 'sh-1', shellSeq: 1, state: 'live' },
+        { shellId: 'sh-2', shellSeq: 2, state: 'live' },
+        { shellId: 'sh-3', shellSeq: 3, state: 'live' },
+      ],
+    }),
+  }))
+  h.create({ extra: { shellSeq: 2 } })
+  const ws = await h.openFirst()
+  const attach = JSON.parse(ws.sent[0])
+  assert.equal(attach.shellId, 'sh-2', '必须按记忆的 shellSeq 精确匹配')
+})
+
+test('attach: without a remembered seq it still falls back to the first live shell', async () => {
+  const h = makeHarness()
+  h.setFetch(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ticket: 'tok-fresh',
+      shells: [
+        { shellId: 'sh-1', shellSeq: 1, state: 'ended' },
+        { shellId: 'sh-2', shellSeq: 2, state: 'live' },
+      ],
+    }),
+  }))
+  h.create()
+  const ws = await h.openFirst()
+  const attach = JSON.parse(ws.sent[0])
+  assert.equal(attach.shellId, 'sh-2', '全新打开：回退第一个 live（跳过已结束的）')
+})
+
 test('binary output frames reach the terminal as bytes', async () => {
   const h = makeHarness()
   h.create()
@@ -389,18 +430,27 @@ test('malformed control frames are ignored without breaking the session', async 
   assert.equal(statuses.length, before)
 })
 
-test('outgoing input/resize carry v:2 + shellId; resize is clamped', async () => {
+test('outgoing input/resize carry v:2 + shellId; unbound frames are withheld', async () => {
   const h = makeHarness()
   const { term } = h.create()
   const ws = await h.openFirst()
+  // 未绑定 shell（ready 之前）不发 input/resize：host 侧 currentShell 会判 STALE_SHELL，
+  // 而该错误帧会覆盖「等待指纹」横幅，令 TOFU 首连的确认入口消失（实机验收逮住）。
+  const beforeReady = ws.sent.length
+  term.handlers.data('should-not-go')
+  term.handlers.resize({ cols: 100, rows: 30 })
+  assert.equal(ws.sent.length, beforeReady)
+  // 绑定后 ready 帧补发一次真实尺寸（syncSize），真实 PTY 尺寸不会因为 guard 而丢失
   ws.serverText({ type: 'ready', state: 'connected', shellId: 'sh-1', mode: 'write' })
+  const frames = ws.sent.map(s => JSON.parse(s))
+  assert.deepEqual(frames[1], { v: 2, type: 'resize', shellId: 'sh-1', cols: 80, rows: 24 })
   term.handlers.resize({ cols: 99999, rows: -3 })
   term.handlers.resize({ cols: 100, rows: 30 })
-  const frames = ws.sent.map(s => JSON.parse(s))
-  assert.deepEqual(frames[1], { v: 2, type: 'resize', shellId: 'sh-1', cols: 1000, rows: 2 })
-  assert.deepEqual(frames[2], { v: 2, type: 'resize', shellId: 'sh-1', cols: 100, rows: 30 })
+  const after = ws.sent.map(s => JSON.parse(s))
+  assert.deepEqual(after[2], { v: 2, type: 'resize', shellId: 'sh-1', cols: 1000, rows: 2 })
+  assert.deepEqual(after[3], { v: 2, type: 'resize', shellId: 'sh-1', cols: 100, rows: 30 })
   term.handlers.data('ls\n')
-  const input = frames.concat(ws.sent.slice(3).map(s => JSON.parse(s))).filter(f => f.type === 'input')
+  const input = ws.sent.map(s => JSON.parse(s)).filter(f => f.type === 'input')
   assert.deepEqual(input, [{ v: 2, type: 'input', shellId: 'sh-1', data: 'ls\n' }])
 })
 

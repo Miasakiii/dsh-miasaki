@@ -2,6 +2,19 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-16（第十三批：U2 实机验收 —— 4 处回归定位并修复）
+
+- **U2 实机验收：自动化全绿，实机在「首次连接」即被挡住。共发现 4 处真实缺陷（2 阻断 / 1 高危 / 1 中危），全部已定位并修复（含 3 条新增回归断言）；单测 110 → 113 例、`verify-all ssh` 12/12。**完整报告：[U2 实机验收报告](2026-09-16-ssh-u2-acceptance-report.md)；通道同 D2/D3/D4（真 Edge × 真实 DSH GUI × 真实鼠标/键盘 × 本地假 sshd 真协议），驱动与结果归档 `_refs/scripts-archive/ssh-u2-accept/`。
+  - **U2-A（阻断）首连的指纹确认入口被 `STALE_SHELL` 覆盖**：等待指纹阶段 viewer 依 U0 契约已 attach，而此时**没有任何 shell** ⇒ `session.js` 无条件发出的 input/resize 被 host `currentShell()` 判为绑定失效，`STALE_SHELL` 经 `onStatus('error')` 写成 `frameState`，**覆盖 `renderBanner` 的 waiting-fingerprint 分支**（该分支是唯一带「核对指纹」按钮的）⇒ 新主机彻底连不上；状态栏「指纹待确认」按钮 onclick 实为 `trustListSheet()`（打开信任记录列表，此时为空），**不是确认入口**。最小复现 `diag-tofu.mjs`：45s 采样内「核对指纹」从未出现、横幅在第 3 个采样点（≈1.2s）即被覆盖、远端 `tcp-connect=1 / auth-ok=0 / shell=0`（握手停在 hostVerifier）。**修**：未绑定 shell 时**不发** input/resize，并在绑定后由新增 `syncSize()` 补发一次真实尺寸（U0 契约不丢）。
+  - **U2-B（阻断）连接就绪时不补绑已 attach 的 viewer**：`onReady()` 建好主 shell 后只 `broadcast({ type:'ready', state:'connected', runtimeId, shells })` —— **不带 `shellId`、也不做服务器端绑定** ⇒ 等待指纹期间 attach 的 viewer 永远停在 `shellId=null`，指纹确认通过后终端仍不可用（实测：手动点一次标签重挂走全新 attach 才拿到绑定）。**修**：`onReady` 遍历 `rc.sockets`，对尚未绑定 shell 的 viewer 调 `bindShell()` 并逐发带 `shellId / mode` 的 `ready`。
+  - **U2-C（高危 · 方案 §8 风险表第一条）同主机多 shell 输入串台**：两处根因叠加 —— ① `app.js openHost()` 用 `state.tabs.find(item => item.connId === id)` 找标签，同主机多 shell 时**永远命中第一个标签**，于是激活第 2/3 个标签反而改写第一个标签的 `shellSeq` 并把 `activeTab` 指回 0；② `session.js` 拿到票据后 `info.shells.find(sh => sh.state === 'live')` **无条件取第一个 live shell**，覆盖了调用方传入的 `shellSeq`。实测三个标签各发一个标记，sshd 侧 `inputChannels [1,1,1]`（全部落在 ch-1），标签 2/3 的屏幕显示的是 ch-1 的内容。**修**：`openHost` 支持 `tabIndex` 精确定位（`openHostAt` / 关闭接续 / 挂载恢复三处调用点同步）、票据 shell 清单按 `shellSeq` 精确匹配（仅「无 seq 的全新打开」才回退）、`index.js` 的 `/ssh/api/attach` 返回补 `shellSeq` 供前端匹配。
+  - **U2-D（中）恢复后标签错乱 / 点标签空白**：上条的连锁 —— 刷新后恢复出 `["… #3","… #2","… #3"]`（缺 `#1`、`#3` 重复）、点标签屏幕空白、关闭对话框缺「关闭此 shell（连接保留）」（其条件依赖被错置的 `activeTab`）。随 U2-C 一并闭环，待重启复验。
+  - **运行态核查（逐字节，非推断）**：`session.js` / `app.js` / `styles.css` 运行态与磁盘 **SHA256 完全一致**；host 半确认是 U2（`/ssh/api/attach` 命中 U2 分支的 404 文案）。**但 `/ssh/vendor/addon-serialize.js` 运行态返回 79 字节占位脚本** —— 根因是启动时序：宿主 **12:52:17** 启动、而 `@xterm/addon-serialize` **12:57:17** 才装进 `node_modules`，`index.js` 的 `hasSerializeAddon` 只在 apply 时判定一次 ⇒ **U2.4 本轮实际没有上线**（重启即解，非代码缺陷）。
+  - **已 PASS 的实机项**（在两处阻断被绕过后取得）：**双窗口单写多读**（第二窗口只读条在场、原 owner 保持可写、**零新建 TCP 连接**）+ **显式接管**（原 owner 即时转只读、新 owner 输入送达远端、可夺回）；**3 个 shell 建立**（host `sh-1..3` × sshd 3 个 shell 事件 × 3 个标签）；**刷新后标签数量恢复且 `tcp-connect`/`shell` 事件零增长**（零自动连接）；**损坏快照不白屏**；**旧帧收 `VERSION_MISMATCH`**。
+  - **夹具缺陷（非产品，已修并登记在报告 §4）**：假 sshd 的 `pty` 事件早于 `shell` 到达导致 channel 归属丢失（改 pending 补写）；后台标签页 rAF 节流使 `.xterm-rows` 读到旧内容（读前 `Page.bringToFront`）；关闭对话框未关会盖住终端、后续输入被 sheet 吃掉（用后即关）；`+` 需先把 selection 归位；prefs 判据误设（偏好只在用户改设置时落盘）。
+  - **环境适配记录**：受限沙箱下 Edge 与 Chrome 均以 `STATUS_BREAKPOINT` 退出，Edge 日志定位为 `FATAL:mojo/platform_channel.cc Check failed: 拒绝访问 (0x5)`（Chromium 的 Mojo IPC 需要命名管道，受限模式禁止）⇒ 完整访问下浏览器正常、驱动全程可跑。复跑本驱动的人需注意这一点。
+  - **待重启复验**：P0b（TOFU 入口）、P1b（三 channel 应为 `[1,2,3]`）、P2a（关闭三分支齐备）、P3（per-shell 尺寸）、P5b/P5c（两张据与重附着）、P7（8 shell 上限 + host RSS）、U2.4 判据（`run-u2-tui.mjs`：TUI 刷新后逐行 + 光标行一致 ×3）、三主题回归。**本轮改动已提交**（`fix(ssh): U2 实机验收定位并修复 4 处回归（2 阻断 / 1 高危 / 1 中危）`）。
+
 ## 2026-09-16（第十二批：U2.1 多 shell + U2.3 工作区记忆 + U2.4 精确恢复）
 
 - **U2 主体落地**（按 [U2 规划](2026-09-15-ssh-u2-plan.md) §6 顺序：U2.1 → U2.3 → U2.4，U2.2 SFTP 留待下一阶段用真实主机补验）。交接文档（变更清单/基线对照/回滚演练/风险表）：[实施验收包](2026-09-16-ssh-u2-implementation-report.md)。

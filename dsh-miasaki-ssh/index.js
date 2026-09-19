@@ -147,7 +147,7 @@ export function apply(ctx, config) {
           runtimeId,
           state: rc.status,
           shells: (rc.shells ? [...rc.shells.values()] : []).map(sh => ({
-            shellId: sh.id, title: sh.title, state: sh.ended ? 'ended' : 'live', cols: sh.cols, rows: sh.rows,
+            shellId: sh.id, shellSeq: sh.seq, title: sh.title, state: sh.ended ? 'ended' : 'live', cols: sh.cols, rows: sh.rows,
           })),
         })
       }

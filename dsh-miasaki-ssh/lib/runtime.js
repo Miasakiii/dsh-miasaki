@@ -310,7 +310,22 @@ export class SshRuntime {
         rc.answer('SHELL_FAILED', `无法打开 shell: ${err.message}`)
         return
       }
-      rc.broadcast({ type: 'ready', state: 'connected', runtimeId: rc.id, shells: shellSummaries(rc) })
+      // TOFU 首连的真实时序：viewer 在「等待指纹确认」阶段就已经 attach（U0 契约：
+      // 待指纹主机的主动作是打开终端、只 attach），那时还没有任何 shell ⇒ 它收到的
+      // ready 帧 shellId 为 null。连接就绪、主 shell 建好后必须**补绑**这些 viewer 并
+      // 逐个告知，否则前端永远拿不到 shellId ⇒ 之后每一帧 input/resize 都被
+      // currentShell 判为绑定失效（实机验收逮住：指纹确认后终端仍不可用）。
+      const summaries = shellSummaries(rc)
+      for (const ws of [...rc.sockets]) {
+        const bound = typeof ws.shellId === 'string' && rc.shells.get(ws.shellId) !== undefined
+        if (!bound) this.bindShell(ws, shell)
+        try {
+          ws.send(JSON.stringify({
+            type: 'ready', state: 'connected', runtimeId: rc.id,
+            shellId: ws.shellId, mode: ws.mode, shells: summaries,
+          }))
+        } catch { /* gone */ }
+      }
     })
   }
 

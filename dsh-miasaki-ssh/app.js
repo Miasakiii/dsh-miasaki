@@ -863,7 +863,7 @@ async function connectFlow(conn) {
   openHost(conn.id)
 }
 
-function openHost(id, { shellSeq = null } = {}) {
+function openHost(id, { shellSeq = null, tabIndex = null } = {}) {
   const conn = byId(id)
   if (conn === undefined) return
   state.selection = id
@@ -872,7 +872,10 @@ function openHost(id, { shellSeq = null } = {}) {
   state.transport = false
   // U2.1 标签结构化（方案 §4.1.3）：tab = { connId, shellSeq, title, live }。
   // shellSeq 为 null 表示「用默认（首个）shell」，数字表示恢复/打开指定 shell。
-  let tab = state.tabs.find(item => item.connId === id)
+  // ⚠ 已有标签必须优先按 tabIndex 定位：同主机多 shell 时按 connId 查找会**永远命中
+  // 第一个标签**，于是激活第 2/3 个标签反而改写第一个标签的 shellSeq（标签与 shell
+  // 全面错位、输入串到第一个 shell）—— 实机验收逮住（多 shell 串台 / 恢复后标签错乱）。
+  let tab = tabIndex !== null ? state.tabs[tabIndex] : state.tabs.find(item => item.connId === id)
   if (tab === undefined) {
     tab = { connId: id, shellSeq: shellSeq ?? 1, title: null, live: true }
     state.tabs.push(tab)
@@ -889,7 +892,7 @@ function openHost(id, { shellSeq = null } = {}) {
 function openHostAt(index) {
   const tab = state.tabs[index]
   if (tab === undefined) return
-  openHost(tab.connId, { shellSeq: tab.shellSeq })
+  openHost(tab.connId, { shellSeq: tab.shellSeq, tabIndex: index })
 }
 
 function mountSession(conn, tab) {
@@ -1325,9 +1328,10 @@ function closeTabDialog(index) {
       state.activeTab = null
       destroySession()
       state.frameState = null
-      const next = state.tabs[Math.min(index, state.tabs.length - 1)]
+      const nextIndex = Math.min(index, state.tabs.length - 1)
+      const next = state.tabs[nextIndex]
       if (next !== undefined) {
-        openHost(next.connId, { shellSeq: next.shellSeq })
+        openHost(next.connId, { shellSeq: next.shellSeq, tabIndex: nextIndex })
         return
       }
     } else if (state.activeTab !== null && state.activeTab > index) {
@@ -2041,7 +2045,7 @@ async function mount() {
   }
   const activeItem = state.activeTab !== null ? state.tabs[state.activeTab] : null
   if (activeItem !== undefined && activeItem !== null && isLive(liveOf(activeItem.connId))) {
-    try { openHost(activeItem.connId, { shellSeq: activeItem.shellSeq }) } catch { /* 恢复失败不阻塞 mount */ }
+    try { openHost(activeItem.connId, { shellSeq: activeItem.shellSeq, tabIndex: state.activeTab }) } catch { /* 恢复失败不阻塞 mount */ }
   } else {
     renderAll()
   }
