@@ -1,6 +1,6 @@
 {
   "name": "@miasaki/dsh-sidebar",
-  "version": "0.8.1-miasaki.0",
+  "version": "0.9.0-miasaki.0",
   "description": "A lightweight right sidebar plugin for DeepSeek Harness: review checklist + terminal launcher + side chat, built without any heavy sidebar base.",
   "type": "module",
   "main": "index.js",

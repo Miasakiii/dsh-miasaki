@@ -2,6 +2,148 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-19
+
+- **收尾验证补记：`terminal-hub.test.js` 与宿主环境解耦（`resolveBin` 可注入）** —— 全量
+  `verify-all` 在受限沙箱下报 `sidebar: 9/10`（`terminal-hub.test.js` 15 项里 9 项失败）。
+  - **根因不是本次多标签改动**：该文件的注释与本线 README 都写着「fake pty 注入，不需要真实 shell」，
+    但 `_spawn` 里的 `resolvePtyBin()` 走的是 `where.exe` —— **子进程 + 管道 stdio**。受限沙箱对
+    Node 子进程管道 stdio 一律 `spawn EPERM`（同环境下 shell 明明装着：`where.exe powershell.exe`
+    手工可解析），于是 9 个用例全部倒在「未安装或找不到 powershell.exe」。**是环境的假阴性，
+    但暴露了测试的真实脆弱点**：`hub._pty` 注入了，`resolvePtyBin` 却是模块级硬引用，漏在外面。
+  - **修法（最小侵入、生产行为不变）**：`TerminalHub` 构造函数新增 `resolveBin` 选项（默认仍是
+    `resolvePtyBin`），`_spawn` 改调 `this._resolveBin(shellDef)`；测试在 `makeHub()` 里注入
+    `async shell => 'C:\\fake-shells\\<bin>.exe'`（断言只要求「是绝对路径」，故仍成立）。
+  - **复跑**：`node test/terminal-hub.test.js` **15/15 全绿**，`verify-all` 全仓 **7/7 线 PASS**
+    （sidebar 恢复 10/10）。**注意区分**：本线的 `node --test` 多进程隔离在受限沙箱下另有 EPERM
+    问题（见 README「验证」段），那是运行方式限制，与本次修复无关。
+  - 触摸点：`index.js`（构造函数 + `_spawn`）、`test/terminal-hub.test.js`（`makeHub`）、本文件、`README.md`。
+
+- **v0.9.0-miasaki.0：M3.1 内嵌终端「标签栏多开」落地**（按[补充设计](2026-09-19-terminal-multi-tab-plan.md)
+  §9 的推荐项全部实施，P0 协议加维 + P1 标签栏 + P2 无障碍与刷新恢复一次做完；P3 OSC 动态标题留待按需）。
+  - **host 半**（`index.js`）：`TerminalHub` 由单会话改为**会话集合**——`sessions: Map<sessionId, session>`、
+    `viewers: Map<ws, {sessionId, cols, rows}>`（ws 有了身份才可能不串台）、`broadcastTo(sessionId, frame)`
+    定向广播、`write/resize` 按 ws 寻址、`bind/detach/arbitrate/close/list/snapshot/status` 一套新 API；
+    `ensureSession` 支持 `sessionId`（给了就定位、没给就新建，未知 id 按新建处理并回带真 id）；
+    **最小尺寸仲裁** `pty.cols = min(viewer.cols)`（结果变化才 `resize`，TUI 不反复重排），`detach` 后重算；
+    会话上限 **8**（`TERMINAL_MAX_SESSIONS`，超限抛 `LimitError` → 前端 `LIMIT` 提示）；
+    `close()` = kill + 摘会话 + 广播 `closed` + 解绑 viewer；`dispose()` 遍历全部会话 kill（不再只 kill 一个）。
+  - **帧协议 v2**：`attach/input/resize/close` 全带 `sessionId`，回包 `ready/replay/output/status/closed/error`
+    全带 `sessionId`；`input`/`resize` 不带 `v:2` 的旧帧一律拒收并回 `VERSION_MISMATCH`（不做双栈，对齐 ssh 线 U2.1）。
+  - **路由**：`GET /sidebar/api/terminal/session` 改为回 `{ sessions, limit }`（原 `{ session }` 的旧字段废弃）；
+    新增 `POST /sidebar/api/terminal/close`（无 WS 可用的孤儿清理兜底）。`token` 仍**不绑会话**——
+    `sessionId` 只寻址不授权（三道围栏 + 一次性 token 不变）。
+  - **client 半**（`client.js`）：`terminalClient` 改为会话集合镜像（`sessions`/`order`/`active{bottom,right}`），
+    每 viewer 绑一个 `sessionId`、输出按 `sessionId` 过滤（绝不写进别的 xterm）；`_snapshot` 仍是稳定引用
+    （emit 时重建，2026-09-12「终端空白」教训延续）；新增 `terminalTabs` 命令式组件（**底部面板与右栏 tab
+    共用同一套实现**，避免两套行为漂移）：标签栏 + pane 栈、懒挂载（首次激活才建 xterm）、隐藏 pane 只藏不拆、
+    零尺寸守卫（`display:none` 不发 resize）、`＋`/`×`/中键关闭/双击重命名/右键菜单/`▾` 溢出下拉、空态与退出态、
+    每容器活动标签（sessionStorage 记忆）、`refreshFromHost()` 刷新恢复（host 存活的 pty 补成可见标签 ⇒ 不再有孤儿）。
+    快捷键：`Ctrl+Shift+`` 新建、`Ctrl+PageUp·PageDown` 切换、`Alt+1..8` 跳转、`Delete`/`F2`（焦点在标签上）、
+    方向键/Home/End；`Ctrl+`` 切底部面板保持不变。**WT 默认的 `Ctrl+Shift+T/W` 是浏览器保留键，页面上拿不到**，
+    故不采用（设计 §7.3 矩阵）。shell 胶囊语义改为「新标签默认 shell」，换 shell 收进标签右键「重启」。
+  - **两处被测试逮住的真 bug**（都在 host 半，已修）：① `close()` 原先「先解绑 viewer 再广播」⇒ `closed` 帧
+    没有任何接收者，前端标签不会被摘掉；② `detach()` 后不重算尺寸 ⇒ 剩下的 viewer 仍被已消失的最小尺寸压着。
+  - **前端验证**（本线前端无 DOM 单测，惯例是实机验证）：本次多标签链路用**一次性 DOM 桩探针**做了冒烟
+    （刷新恢复 → 懒挂载 → attach 带 sessionId → 临时 id 换真 id → close → closed 摘除 → 活动项回落 → pane 回收，
+    16 项断言全过，探针即弃）。探针另逮到一个真 bug：`fitPane` 只判了 `viewer === undefined`，而 `pane.viewer`
+    初值是 `null`（xterm 要等 `ensureAssets` 之后才挂上）⇒ 新建标签的首次渲染会抛 TypeError（已修）。
+  - **与设计的偏差**（如实记录）：WS `list` 帧未实现——客户端刷新恢复一律走 `GET /sidebar/api/terminal/session`，
+    少一条路径、也让「恢复」与「孤儿清理」同源；设计 §5.2 的帧表按此收敛。
+  - **单测 54 → 62 项全绿**：`test/terminal-hub.test.js` 重写为多会话形状并新增 8 项（会话隔离 / 未知 id 静默
+    丢弃 / 上限与回收 / 关闭回收 + 广播 / 最小尺寸仲裁 / 背压按会话 / dispose 全杀 / 常量）。
+  - 触摸点：`index.js`（TerminalHub / 帧协议 / WS 接线 / 路由）、`client.js`（terminalClient / terminalTabs /
+    bottomPanel / TerminalTab / 样式 / 快捷键）、`package.json`（0.9.0-miasaki.0）、`test/terminal-hub.test.js`、
+    `README.md`、本文件。**待重启 `dsh web` 实机验证**：多标签互不串台、两容器同看一会话不错行、刷新后标签恢复、
+    8 上限提示、三主题配色。
+
+- **同日四次修正（用户实机反馈：「新建标签页的逻辑也有问题」，确认症状 = 右栏开第二个终端标签页后先前那个白掉）**：
+  - **根因**：`terminalTabs.instances` 按 **kind**（`'bottom'` / `'right'`）键控，`mount()` 第一句是
+    `unmount(key)` + `instances.set(key, inst)` ⇒ 官方右栏里开出**第二个终端标签页**（分栏 / 浮窗，
+    官方对「页类型」只在同一 pane 内去重）时，第二次 mount 会把第一个实例顶掉：`unmount` 清空它的
+    `tabHost.textContent`、并 `dropPane` 掉它的 xterm（dispose + 关 WS）⇒ 那个标签页直接白掉。
+  - **修法**：实例 id 唯一（`kind#N`，`terminalTabs.seq`），`unmount(id)` 按 id 拆；活动标签仍按 kind
+    （`active.bottom` / `active.right`），同类实例共享同一活动项（两个终端标签页镜像显示同一活动会话）。
+    新增 `primaryOf(kind)` / `hasKind(kind)` 供「底部面板 / 主右栏实例」的调用点使用（面板 dispose、
+    标题栏「新建终端标签」、`showInBottom` / `showInRight`、快捷键 stepTab/Alt+N 共 6 处改用它）。
+    底部面板改存 `mount()` 返回的卸载函数（`bottomPanel.unmountTabs`）。
+  - 复跑：单测 62 项全绿 + DOM 桩冒烟 **12 断言全过**（两个右栏实例共存 / 先开的不被清空且 pane 完好 /
+    共享同一会话集合不重复开终端 / `primaryOf` 指向首个 / 按 id 拆掉一个另一个不受影响），探针即弃。
+  - 说明：官方 `+` 菜单里的「辅助对话」不是本插件注册的（本插件只注册 `审查` / `终端`，见 `RIGHT_BAR_TABS`），
+    插件侧无需改动。
+
+- **同日三次调整（用户实机反馈）：「侧边栏终端应该是一整块，不需要分下半部分」**：
+  - **终端整块化**：此前标签栏 / xterm / 状态条各自成盒（各有 `.5px` 边框 + 8px 圆角 + 10px 间距），
+    观感是「三块拼起来」。现在由外壳 `.dsh-sidebar-term` 承担**唯一的一圈边框 + 圆角 + 裁切**，
+    三块之间 `gap:0`、不再各自带边框与圆角 —— 对齐 Windows Terminal「标签条 + 内容是一整块」的观感。
+  - **状态条改为条件可见**：`terminalStatus()` 新增 `visible`，只在**有话说**时占一行
+    （会话级报错 / 已退出 / 工作区变更 / 全局错误）；正常运行状态下终端就是「标签栏 + 内容」两块，
+    没有底部条。常规信息（`N/8 个会话` · shell 名）只在状态条出现时一并带上，不再常驻——
+    shell 名在标签栏左标题里已有，路径 / pid 在标签 tooltip 里。
+  - 底部面板同步：`bottomPanel.statusEl` 按 `visible` 切 `display`（首次 `ensureDom` 就置位，无闪烁）。
+  - 能力不丢：`[重启]` / `[移到当前工作区]` / `[在底部打开 ↧]` 仍在状态条里（该出现时才出现），
+    且标签右键菜单里各有一份常驻入口。
+  - 复跑：单测 62 项全绿 + DOM 桩冒烟 **10 断言全过**（正常态无状态条 / 退出态出现并带重启 /
+    恢复后再次隐藏 / 报错态出现 / 外壳下只有标签栏与 panes 两块），探针即弃。
+
+- **同日二次调整（用户实机反馈）：「下半部分不太需要」+「点击终端默认打开一个终端」**：
+  - **移除右栏终端 tab 的下半部分配置区**（`工作目录` / `新标签默认 SHELL` / `外部系统终端（独立窗口）`
+    整块 `details`）：视图只剩 **标签栏 + xterm pane 栈 + 细状态条** 三块。随之删掉该区块的 React 状态机
+    （`shells/picked/phase/result` 与 `/terminal/options` 拉取）与 **12 条死样式**
+    （`.dsh-sidebar-term-cwd*` / `-copy` / `-shells` / `-shell` / `-shellname` / `-shellnote` / `-go` /
+    `-result` / `-retry` / `-label`、`.dsh-sidebar-shellpick` / `-shellchip`），不留死代码。
+  - **能力不丢，收进 `＋` 的右键菜单**（对应参考图 `+` 旁的 profile 下拉）：`新建：<shell>`（指定 shell 开标签）
+    与 `在新窗口打开：<shell>`（原外部系统终端）；用 host 探测过的完整表（含容器型 wt 的可用性），未安装置灰。
+    `＋` 左键仍是「按默认 shell 新建」，tooltip 注明右键用法。
+  - **点击终端默认就有一个终端**：容器挂载后若会话集合为空、当前有工作区且未达上限，自动新建一个标签
+    （先 `ensureShellPicked()`——shell 是 spawn 前提），不再让用户面对空态。两个容器（右栏 tab / 底部面板）
+    共用 `mount` 的这条路径；host 已有存活会话时（刷新恢复）不重复新开。空态只在「无工作区 / 探测不到 shell」时出现。
+  - **探针逮到一个真 bug**：`connectViewer` 的 attach 帧用的是全局默认 shell，**忽略了待建会话自己的 shell**
+    ⇒ `＋` 右键「新建：Windows PowerShell」会静默开出默认 shell（pwsh）。改为 `pending?.shell ?? wantedShell`。
+  - 顺带清掉已无引用的 `terminalClient.setDefaultShell()` 与快照里的 `wantedShell` 字段（死代码）。
+  - 复跑：单测 62 项全绿 + DOM 桩冒烟 **13 断言全过**（自动开一个 / 已有存活会话不重开 / ＋ 右键菜单项
+    与置灰 / 指定 shell 生效），探针即弃。
+
+- **同日「按原型对齐」补齐（用户确认原型后逐条比对实现与原型的差异）**：
+  - **右栏形态的 `×` 从「缺席」改为可用**：原型里它关闭整个右栏 tab；实现阶段因当时不确定能否调官方 API 而
+    临时隐藏。核实 `@deepseek-ai/dsh-client-ui-sidebar-right` 的 `SidebarRightTabActions.close()` 后，经 slot
+    注入的 `props.useTabInfo()` 拿到 `tab.actions.close()` —— 右栏标签栏最右的 `×` 现在真的关掉这个右栏 tab
+    （`terminalTabs.mount('right', …, { onCloseContainer })`，与底部面板的「收起」语义分开）。
+  - **右键菜单补跨容器移位**（原型 §7.1）：底部标签右键「在右栏显示此终端」经官方
+    `ctx.sidebarRight.openTab('terminal')` 打开/聚焦右栏 tab，并先把 `active.right` 记为该会话（右栏首次打开时
+    `mount()` 读到的就是它，天然落位）；右栏标签右键对应「在底部面板显示此终端」。此前只有状态条一个入口。
+  - **状态条补会话计数** `N/8 个会话`（原型状态条要素，此前只有 bin · pid）。
+  - `ctx.get('sidebarRight')` 走**软依赖**（不进 `inject`）：宿主没有该服务时降级为「请用官方添加控件」提示，
+    不阻塞插件其余功能。
+  - **作用域教训（差点漏进真机）**：终端区（`terminalClient`/`terminalTabs`/`showInRight`）定义在
+    `module.exports.apply = ctx => {…}` **之前**，`ctx` 只是 `apply` 的形参——在那一层直接写 `ctx.get(...)`
+    运行时会 `ReferenceError`。修为模块级 `let sidebarRightService = null` + `apply` 内赋值。**第一版冒烟探针
+    把 `ctx` 当参数传进提取代码，把这个作用域 bug 掩盖成了「通过」** ⇒ 记一条：探针注入的依赖必须与生产代码
+    **同一条取用路径**（这次改为在提取代码里照 `apply` 的写法给模块级变量赋值），否则验证是假的。
+  - 复跑：单测 62 项全绿（host 未变）+ DOM 桩冒烟 **17 断言全过**（右栏 × / 底部 × / 跨容器菜单 / openTab /
+    状态条计数 / 新建→ready 换真 id→关闭链路），探针即弃。
+
+- **内嵌终端「标签栏多开」补充设计（规划设计，未改代码）**：用户以 Windows Terminal 标签栏截图为参考，
+  要求内嵌终端支持标签栏多开。产出 [补充设计](2026-09-19-terminal-multi-tab-plan.md) 与
+  [可交互可视原型](2026-09-19-terminal-tabs-mockup.html)。
+  - **现状核查（代码级）**：`TerminalHub` 只持 `this.session`、`viewers` 是无身份 `Set<ws>`、
+    `input`/`resize` 帧**不带会话标识**、`broadcast` 全连接扇出 ⇒ **多开的第一障碍是协议不是 UI**；
+    且两容器同看一会话时 `pty.resize` 是「最后一次获胜」，先 attach 的一侧必然折行错乱（现存缺陷）。
+  - **核心方案**：帧协议 **v2**（attach/input/resize/close/list 全带 `sessionId` + `broadcastTo` 定向广播
+    + 旧帧 `VERSION_MISMATCH` 拒收不做双栈）；「单实例纪律」升级为**单集合纪律**（会话集合仍 host 唯一事实源）；
+    **每容器独立活动标签**（底部跑构建、右栏盯服务器，两个 viewer 指向同一 `sessionId` 即原有「移位」体验）；
+    **最小尺寸仲裁**（`pty.cols = min(viewers)`，结果变化才 `resize`，顺带修掉上述现存缺陷）；
+    会话上限 **8**（对齐 ssh 线 U2.1）；刷新后存活 pty 用 `list` 列出并支持接管 / 一键清理（现在会变孤儿）；
+    `sessionId` **只寻址不授权**（WS 仍走三道围栏 + 一次性 token）。
+  - **交互与视觉**：标签栏复刻参考图语义（左「终端 + shell 名」标题、活动标签胶囊含 `×`、右侧 `＋`/`×`）
+    + `▾` 溢出下拉 + 中键关闭 + 双击重命名 + 右键菜单；**浏览器保留键不可拦截**（`Ctrl+T/W`、`Ctrl+Shift+T/W`、
+    `Ctrl+Tab` 一律拿不到）⇒ 采用 `Ctrl+Shift+`` 新建、`Ctrl+PageUp·PageDown` 切换、`Alt+1..8` 跳转，
+    关闭交给 `×`/中键/`Delete`/菜单；32px 高度 + 6px 圆角，全部走 `--dsw-*` 令牌（三主题无硬编码色）。
+  - **待拍板 9 项**（补充设计 §9，推荐项已在原型决策卡预选）；拍板后按 §10 分 **P0 协议加维（≈+12 例单测）
+    → P1 标签栏 → P2 无障碍与刷新恢复 → P3 可选增强**，预计 2–3.5 天，落地版本 `0.9.0-miasaki.0`。
+  - 触摸点：新增 `design/2026-09-19-terminal-multi-tab-plan.md`、`design/2026-09-19-terminal-tabs-mockup.html`；
+    `README.md` 待办与特性表登记。**`index.js` / `client.js` 未改动**。
+
 ## 2026-09-12
 
 - **v0.8.1-miasaki.0：v0.8.0 首轮实机反馈两修复**（用户实测：右栏终端 tab 空白 + 标题栏两按钮顺序）。

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -111,6 +111,8 @@ export function resolveWorkdir(raw) {
 
 class InputError extends Error {}
 class NotFoundError extends Error {}
+/** Session-cap rejection: surfaced to the client as an `error` frame with code LIMIT. */
+class LimitError extends Error {}
 
 async function runGit(cwd, args, { ignoreExit } = {}) {
   try {
@@ -677,18 +679,31 @@ export class ScrollbackRing {
 }
 
 /**
- * One embedded terminal session, many viewers. `node-pty` and `ws` are BOTH
- * loaded lazily: they are native/copy-sensitive deps, and a load failure must
- * degrade to "embedded terminal unavailable" — never take the whole plugin
- * (review tab still works) down with it.
+ * Multi-session terminal hub (2026-09-19 tabs): one pty + one replay ring per
+ * session, viewers keyed by socket. Input/output/resize all carry a sessionId —
+ * the single-session hub's "no address" shortcut is exactly what races two
+ * tabs into one pty (ssh line U2.1 same class of bug).
+ *
+ * Sessions are created by an attach without a known id and killed explicitly
+ * (tab close). They are never reaped behind the user's back: the pty may be
+ * running something they stepped away from, so an idle session with no viewer
+ * only shows up in `list()` and waits for a client to re-attach or close it.
  */
+export const TERMINAL_MAX_SESSIONS = 8
+
 export class TerminalHub {
-  constructor({ replayBytes = 1024 * 1024, viewers = new Set(), logger = console } = {}) {
+  constructor({ replayBytes = 1024 * 1024, maxSessions = TERMINAL_MAX_SESSIONS, viewers = new Map(), logger = console, resolveBin = resolvePtyBin } = {}) {
     this.replayBytes = replayBytes
-    this.viewers = viewers // websocket set; broadcast fan-out for pty output
+    this.maxSessions = maxSessions
+    this.viewers = viewers // Map<ws, { sessionId, cols, rows }> — identity is what makes tabs safe
+    this.sessions = new Map() // sessionId → session
     this.logger = logger
-    this.session = null
     this._pty = null // lazy require('node-pty')
+    // Shell → absolute path. Injectable so the single-process unit tests stay
+    // shell-free: the default probes PATH through `where.exe`, i.e. a child
+    // process with piped stdio, which a restricted sandbox denies (spawn EPERM)
+    // even though the shell is installed. Production always uses the default.
+    this._resolveBin = resolveBin
   }
 
   _loadPty() {
@@ -701,29 +716,79 @@ export class TerminalHub {
     }
   }
 
-  status() {
-    const s = this.session
+  get(sessionId) {
+    return typeof sessionId === 'string' ? this.sessions.get(sessionId) ?? null : null
+  }
+
+  /** Per-session status for the HTTP route / status frames; unknown id → idle. */
+  status(sessionId) {
+    const s = this.get(sessionId)
     if (s === null) return { state: 'idle' }
-    return { state: s.exited ? 'exited' : 'running', shell: s.shell, bin: s.bin, cwd: s.cwd, pid: s.pid, exitCode: s.exitCode }
+    return { state: s.exited ? 'exited' : 'running', id: s.id, shell: s.shell, bin: s.bin, cwd: s.cwd, pid: s.pid, exitCode: s.exitCode }
+  }
+
+  /** Every live session: what the client restores its tab bar from after a reload. */
+  list() {
+    return [...this.sessions.values()].map(s => ({
+      id: s.id,
+      shell: s.shell,
+      bin: s.bin,
+      cwd: s.cwd,
+      pid: s.pid,
+      state: s.exited ? 'exited' : 'running',
+      exitCode: s.exitCode,
+      viewers: this.viewerCount(s.id),
+    }))
+  }
+
+  /** Route payload: the tab set plus the cap, so the client can grey out '+'. */
+  snapshot() {
+    return { sessions: this.list(), limit: this.maxSessions }
+  }
+
+  viewerCount(sessionId) {
+    let n = 0
+    for (const binding of this.viewers.values()) if (binding.sessionId === sessionId) n++
+    return n
   }
 
   /**
-   * Single-session semantics (launcher design §4.3, kept): a running session
-   * is NEVER respawned with new parameters — a cwd change shows a hint in the
-   * UI instead of killing a live process. Exceptions: an exited session always
-   * respawns, and `restart: true` (user-invoked: shell change, [重启] button)
-   * kills the live session first.
+   * Attach semantics, per session (design 2026-09-19 §5.5):
+   * - running session + no `restart` → returns as-is, new params ignored
+   *   (a live process is never killed by a parameter change; cwd moves only
+   *   show a hint in the UI). Exited sessions always respawn (the [重启] path),
+   *   and `restart: true` (shell change / button) kills first.
+   * - unknown / absent id → brand-new session, capped by `maxSessions`.
    */
-  async ensureSession({ shell, cwd, cols, rows, restart = false }) {
-    const s = this.session
-    if (s !== null && !s.exited) {
-      if (!restart) return { session: s, spawned: false }
-      s.pty.kill()
-      this.session = null
+  async ensureSession({ sessionId = null, shell, cwd, cols, rows, restart = false }) {
+    const existing = this.get(sessionId)
+    if (existing !== null) {
+      if (existing.exited || restart) {
+        this._killPty(existing)
+        await this._spawn(existing, shell, cwd, cols, rows)
+        return { session: existing, spawned: true }
+      }
+      return { session: existing, spawned: false }
     }
+    if (this.sessions.size >= this.maxSessions) {
+      throw new LimitError(`终端标签已达上限 ${this.maxSessions} 个，请先关闭一个再新建`)
+    }
+    const session = {
+      id: randomUUID(),
+      shell: null, bin: null, cwd: null, pid: null,
+      ring: null, pty: null, exited: false, exitCode: null,
+      cols: null, rows: null, createdAt: Date.now(),
+    }
+    await this._spawn(session, shell, cwd, cols, rows)
+    this.sessions.set(session.id, session)
+    return { session, spawned: true }
+  }
+
+  /** Spawn (or respawn in place) the pty for a session; a fresh ring every time. */
+  async _spawn(session, shell, cwd, cols, rows) {
     const shellDef = ptyShellsForPlatform().find(entry => entry.id === shell)
     if (shellDef === undefined) throw new InputError(`未知的终端类型：${String(shell).slice(0, 40)}`)
-    const bin = await resolvePtyBin(shellDef)
+    const bin = await this._resolveBin(shellDef)
     await assertDirectory(cwd)
     const pty = this._loadPty().spawn(bin, shellDef.args, {
       name: 'xterm-256color',
@@ -731,29 +796,83 @@ export class TerminalHub {
       rows: clampPtySize(rows, 4, 300, 24),
       cwd,
     })
-    const session = {
-      shell: shellDef.id, bin, cwd, pid: pty.pid,
-      ring: new ScrollbackRing(this.replayBytes),
-      pty, exited: false, exitCode: null,
-    }
+    session.shell = shellDef.id
+    session.bin = bin
+    session.cwd = cwd
+    session.pid = pty.pid
+    session.pty = pty
+    session.cols = clampPtySize(cols, 16, 500, 80)
+    session.rows = clampPtySize(rows, 4, 300, 24)
+    session.exited = false
+    session.exitCode = null
+    session.ring = new ScrollbackRing(this.replayBytes)
     pty.onData(data => {
       session.ring.push(data)
-      this.broadcast({ type: 'output', data })
+      this.broadcastTo(session.id, { type: 'output', data })
     })
     pty.onExit(({ exitCode }) => {
       session.exited = true
       session.exitCode = exitCode
-      this.broadcast({ type: 'status', state: 'exited', code: exitCode })
+      this.broadcastTo(session.id, { type: 'status', state: 'exited', code: exitCode })
     })
-    this.session = session
-    this.logger?.info?.(`sidebar:terminal pty spawn ${bin} (pid ${pty.pid}) cwd ${cwd}`)
-    return { session, spawned: true }
+    this.logger?.info?.(`sidebar:terminal pty spawn ${bin} (pid ${pty.pid}) cwd ${cwd} session ${session.id}`)
   }
 
-  /** Fan out to every viewer; a backed-up socket drops the frame (T6: flood protection — terminal output is lossy by design). */
-  broadcast(frame) {
-    const text = JSON.stringify(frame)
-    for (const ws of this.viewers) {
+  /**
+   * Bind a freshly attached socket to a session, then re-arbitrate its size.
+   * A socket is only ever bound to ONE session — its `input` frames therefore
+   * cannot reach another tab's pty.
+   */
+  bind(ws, session, cols, rows) {
+    if (session === null || session === undefined) return
+    let binding = this.viewers.get(ws)
+    if (binding === undefined) {
+      binding = { sessionId: null, cols: null, rows: null }
+      this.viewers.set(ws, binding)
+    }
+    binding.sessionId = session.id
+    binding.cols = clampPtySize(cols, 16, 500, 80)
+    binding.rows = clampPtySize(rows, 4, 300, 24)
+    this.arbitrate(session)
+  }
+
+  detach(ws) {
+    const binding = this.viewers.get(ws)
+    const sessionId = binding?.sessionId ?? null
+    this.viewers.delete(ws)
+    // 少了一个 viewer：剩下的最小尺寸可能变大，pty 该跟着放开（否则剩下的
+    // 容器一直被最小的那一侧压着）。
+    if (sessionId !== null) this.arbitrate(this.sessions.get(sessionId) ?? null)
+  }
+
+  /**
+   * Size arbitration (design §5.4): a pty has ONE size but may be watched from
+   * two containers at once (bottom panel + right tab). Take the minimum across
+   * bound viewers so no viewer ever wraps early — the others just get padding.
+   * Only issue `pty.resize` when the result actually changes (TUI churn).
+   */
+  arbitrate(session) {
+    if (session === null || session.pty === null || session.exited) return
+    let cols = null
+    let rows = null
+    for (const binding of this.viewers.values()) {
+      if (binding.sessionId !== session.id) continue
+      if (typeof binding.cols !== 'number' || typeof binding.rows !== 'number') continue
+      cols = cols === null ? binding.cols : Math.min(cols, binding.cols)
+      rows = rows === null ? binding.rows : Math.min(rows, binding.rows)
+    }
+    if (cols === null || rows === null) return
+    if (cols === session.cols && rows === session.rows) return
+    session.cols = cols
+    session.rows = rows
+    session.pty.resize(cols, rows)
+  }
+
+  /** Fan out to the viewers of ONE session; a backed-up socket drops the frame (T6: flood protection — terminal output is lossy by design). */
+  broadcastTo(sessionId, frame) {
+    const text = JSON.stringify({ v: 2, sessionId, ...frame })
+    for (const [ws, binding] of this.viewers) {
+      if (binding.sessionId !== sessionId) continue
       try {
         if (ws.bufferedAmount > 8 * 1024 * 1024) continue
         ws.send(text)
@@ -761,26 +880,48 @@ export class TerminalHub {
     }
   }
 
-  write(data) {
-    const s = this.session
+  write(ws, data) {
+    const s = this.sessionOf(ws)
     if (s !== null && !s.exited) s.pty.write(data)
   }
 
-  resize(cols, rows) {
-    const s = this.session
-    if (s !== null && !s.exited) s.pty.resize(clampPtySize(cols, 16, 500, 80), clampPtySize(rows, 4, 300, 24))
+  resize(ws, cols, rows) {
+    const s = this.sessionOf(ws)
+    if (s === null || s.exited) return
+    const binding = this.viewers.get(ws)
+    binding.cols = clampPtySize(cols, 16, 500, 80)
+    binding.rows = clampPtySize(rows, 4, 300, 24)
+    this.arbitrate(s)
   }
 
-  kill() {
-    const s = this.session
-    if (s !== null && !s.exited) {
-      try { s.pty.kill() } catch (error) { this.logger?.warn?.(`sidebar:terminal kill: ${error instanceof Error ? error.message : String(error)}`) }
-    }
+  sessionOf(ws) {
+    const binding = this.viewers.get(ws)
+    if (binding === undefined || binding.sessionId === null) return null
+    return this.sessions.get(binding.sessionId) ?? null
+  }
+
+  /** Kill the pty only; the session object stays (ring + exited flag) for replay. */
+  _killPty(session) {
+    if (session.pty === null || session.exited) return
+    try { session.pty.kill() } catch (error) { this.logger?.warn?.(`sidebar:terminal kill: ${error instanceof Error ? error.message : String(error)}`) }
+  }
+
+  /** Close a tab: kill the pty, drop the session, unbind its viewers, tell everyone. */
+  close(sessionId) {
+    const session = this.get(sessionId)
+    if (session === null) return false
+    this._killPty(session)
+    this.sessions.delete(session.id)
+    // 先广播后解绑：解绑之后 broadcastTo 就找不到接收者了（关闭帧会静默丢失）。
+    this.broadcastTo(session.id, { type: 'closed', reason: 'user' })
+    for (const binding of this.viewers.values()) if (binding.sessionId === session.id) binding.sessionId = null
+    this.logger?.info?.(`sidebar:terminal session closed ${session.id}`)
+    return true
   }
 
   dispose() {
-    this.kill()
-    this.session = null
+    for (const session of [...this.sessions.values()]) this._killPty(session)
+    this.sessions.clear()
   }
 }
 
@@ -975,8 +1116,18 @@ export function createApi({ dataFile, trustedHosts = [], logger = console } = {}
       if (path === '/sidebar/api/terminal/token' && req.method === 'POST') {
         return sendJson(res, 200, { token: tokens.issue(), ttlMs: TERMINAL_TOKEN_TTL_MS })
       }
+      // Tab set snapshot (2026-09-19): what the client rebuilds its tab bar from
+      // after a reload, so a host-side pty that survived the page is never orphaned.
       if (path === '/sidebar/api/terminal/session' && req.method === 'GET') {
-        return sendJson(res, 200, { session: hub.status() })
+        return sendJson(res, 200, hub.snapshot())
+      }
+      // Close one session without holding a socket to it (orphan cleanup path;
+      // the WS `close` frame is the in-app equivalent).
+      if (path === '/sidebar/api/terminal/close' && req.method === 'POST') {
+        const body = await readJson(req, 8 * 1024)
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+        const closed = hub.close(sessionId)
+        return sendJson(res, 200, { closed })
       }
       return sendJson(res, 404, { error: '接口不存在' })
     } catch (error) {
@@ -1039,33 +1190,54 @@ function wireEmbeddedTerminal(ctx, api) {
   const hub = api.hub
 
   wss.on('connection', (ws, req) => {
-    hub.viewers.add(ws)
+    void req
+    // One socket = one session binding (2026-09-19 tabs). Without this identity a
+    // second tab's input/resize would land in the first tab's pty.
+    hub.viewers.set(ws, { sessionId: null, cols: null, rows: null })
     ws.on('message', data => {
       if (data.length > MAX_WS_FRAME_BYTES) return
       let msg
       try { msg = JSON.parse(String(data)) } catch { return }
+      // Frame protocol v2: a frame without `v:2` comes from a stale bundle —
+      // reject it instead of maintaining a dual stack (ssh line U2.1 discipline).
+      if (msg.v !== 2) {
+        try {
+          ws.send(JSON.stringify({
+            v: 2, type: 'error', sessionId: null, code: 'VERSION_MISMATCH',
+            message: '终端协议已升级，请刷新页面后重试',
+          }))
+        } catch { /* closed */ }
+        return
+      }
+      const sid = typeof msg.sessionId === 'string' ? msg.sessionId : null
       if (msg.type === 'attach') {
-        // attach: { shell, cwd, cols, rows } — spawn or re-attach, then replay.
+        // attach: { sessionId?, shell, cwd, cols, rows, restart? } — spawn or
+        // re-attach one session, then replay its ring.
         const cols = clampPtySize(msg.cols, 16, 500, 80)
         const rows = clampPtySize(msg.rows, 4, 300, 24)
         Promise.resolve()
           .then(() => ensureAttached(ws, msg, cols, rows))
           .catch(error => {
-            const message = error instanceof InputError || error instanceof NotFoundError
+            const message = error instanceof InputError || error instanceof NotFoundError || error instanceof LimitError
               ? error.message
               : `内嵌终端启动失败：${error instanceof Error ? error.message : String(error)}`
-            try { ws.send(JSON.stringify({ type: 'error', code: 'SPAWN_FAILED', message })) } catch { /* closed */ }
+            try {
+              ws.send(JSON.stringify({ v: 2, type: 'error', sessionId: sid, code: 'SPAWN_FAILED', message }))
+            } catch { /* closed */ }
           })
       } else if (msg.type === 'input' && typeof msg.data === 'string') {
-        hub.write(msg.data)
+        hub.write(ws, msg.data)
       } else if (msg.type === 'resize') {
-        hub.resize(msg.cols, msg.rows)
+        hub.resize(ws, msg.cols, msg.rows)
+      } else if (msg.type === 'close') {
+        // Tab close: kill the pty, drop the session, tell every viewer of it.
+        hub.close(sid)
       }
       // `detach` needs no frame: the pty outlives viewers by design (§4.3) and
-      // socket close already removes the viewer. Hiding the panel or the tab
-      // simply closes the socket.
+      // socket close already drops the binding. Hiding the panel or switching
+      // tabs simply closes the socket.
     })
-    const drop = () => { hub.viewers.delete(ws) }
+    const drop = () => { hub.detach(ws) }
     ws.on('close', drop)
     ws.on('error', drop)
   })
@@ -1073,25 +1245,27 @@ function wireEmbeddedTerminal(ctx, api) {
   async function ensureAttached(ws, msg, cols, rows) {
     const cwd = resolveWorkdir(msg.cwd)
     const { session, spawned } = await hub.ensureSession({
+      sessionId: typeof msg.sessionId === 'string' ? msg.sessionId : null,
       shell: typeof msg.shell === 'string' ? msg.shell : '',
       cwd,
       cols,
       rows,
       restart: msg.restart === true,
     })
-    const ready = { type: 'ready', shell: session.shell, bin: session.bin, pid: session.pid, cwd: session.cwd, spawned }
-    try { ws.send(JSON.stringify(ready)) } catch { return }
+    hub.bind(ws, session, cols, rows)
+    const ready = { type: 'ready', shell: session.shell, bin: session.bin, pid: session.pid, cwd: session.cwd, spawned, cols: session.cols, rows: session.rows }
+    try { ws.send(JSON.stringify({ v: 2, sessionId: session.id, ...ready })) } catch { return }
     const replay = session.ring.read()
     if (replay !== '') {
-      try { ws.send(JSON.stringify({ type: 'replay', data: replay })) } catch { return }
+      try { ws.send(JSON.stringify({ v: 2, sessionId: session.id, type: 'replay', data: replay })) } catch { return }
     }
     if (session.exited) {
-      try { ws.send(JSON.stringify({ type: 'status', state: 'exited', code: session.exitCode })) } catch { /* closed */ }
+      try { ws.send(JSON.stringify({ v: 2, sessionId: session.id, type: 'status', state: 'exited', code: session.exitCode })) } catch { /* closed */ }
     }
   }
 
   const pingTimer = setInterval(() => {
-    for (const ws of hub.viewers) { try { ws.ping() } catch { hub.viewers.delete(ws) } }
+    for (const ws of hub.viewers.keys()) { try { ws.ping() } catch { hub.detach(ws) } }
   }, 30_000)
 
   // WS upgrade gate: browser-trust fence, then the one-shot token, then the socket.
@@ -1109,7 +1283,7 @@ function wireEmbeddedTerminal(ctx, api) {
 
   ctx.effect(() => () => {
     clearInterval(pingTimer)
-    for (const ws of hub.viewers) { try { ws.terminate() } catch { /* noop */ } }
+    for (const ws of hub.viewers.keys()) { try { ws.terminate() } catch { /* noop */ } }
     hub.viewers.clear()
     hub.dispose()
   }, 'sidebar: terminal lifecycle')

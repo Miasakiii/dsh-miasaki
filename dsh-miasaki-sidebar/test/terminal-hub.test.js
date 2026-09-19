@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import {
   PTY_SHELLS,
   ScrollbackRing,
+  TERMINAL_MAX_SESSIONS,
   TerminalHub,
   clampPtySize,
   createTokenGate,
@@ -70,8 +71,9 @@ test('fenceRequest: the WS upgrade runs the same three layers as the HTTP routes
 })
 
 // ---------------------------------------------------------------------------
-// TerminalHub：注入 fake pty（node-pty 的原生加载与真实 spawn 由 T2 spike 与
-// 实机验证覆盖；这里锁单会话语义、回放、广播与生命周期）。
+// TerminalHub（2026-09-19 多标签）：注入 fake pty（node-pty 的原生加载与真实
+// spawn 由 T2 spike 与实机验证覆盖；这里锁多会话隔离、定向广播、上限、关闭
+// 回收与尺寸仲裁）。
 // ---------------------------------------------------------------------------
 
 function makeFakePtyModule() {
@@ -106,85 +108,226 @@ function makeViewer() {
     sent,
     bufferedAmount: 0,
     send(text) { sent.push(text) },
-    frame(type) {
-      return sent.map(t => JSON.parse(t)).filter(frame => frame.type === type)
-    },
+    frames() { return sent.map(t => JSON.parse(t)) },
+    frame(type) { return sent.map(t => JSON.parse(t)).filter(frame => frame.type === type) },
   }
 }
 
-test('TerminalHub: single session, replay, broadcast and exit status', { skip: process.platform === 'win32' ? false : 'where 解析用例只在 win32 跑' }, async () => {
+const quietLogger = { warn() {}, info() {}, error() {} }
+
+function makeHub(replayBytes = 1024) {
   const fakeModule = makeFakePtyModule()
-  const hub = new TerminalHub({ replayBytes: 1024, viewers: new Set(), logger: { warn() {}, info() {}, error() {} } })
+  // resolveBin 也注入：默认实现用 `where.exe` 探测 PATH（子进程 + 管道 stdio），
+  // 受限沙箱会以 spawn EPERM 拒绝，于是「不需要真实 shell」的单测反而全挂。
+  // 给一个绝对假路径即可与宿主环境彻底解耦（断言只要求「是绝对路径」）。
+  const hub = new TerminalHub({
+    replayBytes,
+    viewers: new Map(),
+    logger: quietLogger,
+    resolveBin: async shell => `C:\\fake-shells\\${shell.bin}.exe`,
+  })
   hub._pty = fakeModule
-  const viewer = makeViewer()
-  hub.viewers.add(viewer)
+  return { hub, fakeModule }
+}
 
-  assert.deepEqual(hub.status(), { state: 'idle' })
+/** 把一个 viewer 绑到某个会话（WS 接线里由 ensureAttached → hub.bind 完成）。 */
+function attach(hub, viewer, session, cols = 80, rows = 24) {
+  hub.bind(viewer, session, cols, rows)
+  return viewer
+}
 
-  // cwd 校验先于 spawn：不存在的目录 404，绝不 spawn。
+test('TerminalHub: TERMINAL_MAX_SESSIONS is the documented cap', () => {
+  assert.equal(TERMINAL_MAX_SESSIONS, 8, '上限 8（对齐 ssh 线 U2.1），且是 host 侧强制常量')
+})
+
+test('TerminalHub: per-session lifecycle — idle, cwd fence, enum fence, spawn shape', async () => {
+  const { hub, fakeModule } = makeHub()
+  assert.deepEqual(hub.status('nope'), { state: 'idle' }, '未知 id 的状态是 idle，不当探针面')
+  assert.deepEqual(hub.list(), [], '初始没有会话')
+
+  // cwd 校验先于 spawn：不存在的目录直接拒绝，绝不 spawn。
   await assert.rejects(() => hub.ensureSession({ shell: 'powershell', cwd: 'C:\\NoSuchDir_terminal_hub_test', cols: 80, rows: 24 }), /工作目录不存在/)
-
-  // 未知 shell id / 二进制枚举外：显式拒绝（空闲态下校验才可达——运行中的
-  // 单会话本来就忽略新参数，这是 §4.3 的语义，不是漏洞）。
+  // shell 枚举外（含 wt 这类窗口容器）：显式拒绝。
   await assert.rejects(() => hub.ensureSession({ shell: 'wt', cwd: process.cwd(), cols: 80, rows: 24 }), /未知的终端类型/)
 
   const first = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
   assert.equal(first.spawned, true)
-  assert.equal(hub.status().state, 'running')
+  assert.equal(typeof first.session.id, 'string', 'session id 由 host 生成（客户端只寻址）')
   assert.equal(fakeModule.spawned.length, 1)
-  // T2 spike 纪律：spawn 的是 where 解析出的绝对路径，不是裸名。
   assert.equal(fakeModule.spawned[0].bin.includes('\\'), true, 'spawn 用绝对路径（conpty 拒绝裸名）')
   assert.deepEqual(fakeModule.spawned[0].opts, { name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd() })
+  assert.equal(hub.status(first.session.id).state, 'running')
+  assert.equal(hub.snapshot().sessions.length, 1)
+  assert.equal(hub.snapshot().limit, 8)
+})
 
-  // 运行中的会话绝不因新参数重启（§4.3：切会话不自动重启）。
-  const again = await hub.ensureSession({ shell: 'cmd', cwd: process.cwd(), cols: 120, rows: 40 })
+test('TerminalHub: a running session ignores new parameters, restart respawns in place', async () => {
+  const { hub, fakeModule } = makeHub()
+  const first = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const id = first.session.id
+
+  // 运行中的会话绝不因新参数重启（切会话不自动重启的红线延续）。
+  const again = await hub.ensureSession({ sessionId: id, shell: 'cmd', cwd: process.cwd(), cols: 120, rows: 40 })
   assert.equal(again.spawned, false)
   assert.equal(again.session, first.session)
   assert.equal(fakeModule.spawned.length, 1)
 
-  // 输出 → 环形缓冲 + 广播；write/resize 到达 pty。
-  first.session.pty.emitData('hello pty')
-  assert.deepEqual(viewer.frame('output'), [{ type: 'output', data: 'hello pty' }])
-  hub.write('ls\r')
-  assert.deepEqual(fakeModule.spawned[0].writes, ['ls\r'])
-  hub.resize(100, 30)
-  assert.deepEqual(fakeModule.spawned[0].resized, [[100, 30]])
-
-  // exit → 状态帧 + exited 标记；write/resize 对已退出会话 no-op。
-  first.session.pty.emitExit(7)
-  assert.deepEqual(viewer.frame('status'), [{ type: 'status', state: 'exited', code: 7 }])
-  assert.equal(hub.status().state, 'exited')
-  assert.equal(hub.status().exitCode, 7)
-  hub.write('x')
-  hub.resize(1, 1)
-  assert.equal(fakeModule.spawned[0].writes.length, 1)
-  assert.equal(fakeModule.spawned[0].resized.length, 1)
-
-  // 退出后再次 attach → 重新 spawn（用户手点 [重启] 的语义）。
-  const third = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
-  assert.equal(third.spawned, true)
+  // 退出后再次 attach 同一 id → 重新 spawn（[重启] 语义，tab 不变）。
+  first.session.pty.emitExit(0)
+  assert.equal(hub.status(id).state, 'exited')
+  const respawned = await hub.ensureSession({ sessionId: id, shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  assert.equal(respawned.spawned, true)
+  assert.equal(respawned.session.id, id, '同一个 id 重生：前端 tab 不需要换键')
   assert.equal(fakeModule.spawned.length, 2)
 
   // 运行中 + restart: true → kill 旧进程后 spawn 新的（换 shell 语义）。
-  const old = third.session.pty
-  const fourth = await hub.ensureSession({ shell: 'cmd', cwd: process.cwd(), cols: 80, rows: 24, restart: true })
+  const old = respawned.session.pty
+  const fourth = await hub.ensureSession({ sessionId: id, shell: 'cmd', cwd: process.cwd(), cols: 80, rows: 24, restart: true })
   assert.equal(old.killed, true)
   assert.equal(fourth.spawned, true)
+  assert.equal(fourth.session.id, id)
   assert.equal(fakeModule.spawned.length, 3)
 })
 
-test('TerminalHub: a backed-up viewer drops frames instead of growing memory without bound', async () => {
-  const fakeModule = makeFakePtyModule()
-  const hub = new TerminalHub({ replayBytes: 1024, viewers: new Set(), logger: { warn() {}, info() {}, error() {} } })
-  hub._pty = fakeModule
-  const healthy = makeViewer()
-  const flooded = makeViewer()
-  flooded.bufferedAmount = 9 * 1024 * 1024
-  hub.viewers.add(healthy)
-  hub.viewers.add(flooded)
+test('TerminalHub: multi-session isolation — output, input and resize never cross tabs', async () => {
+  const { hub, fakeModule } = makeHub()
+  const a = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const b = await hub.ensureSession({ shell: 'cmd', cwd: process.cwd(), cols: 100, rows: 30 })
+  assert.notEqual(a.session.id, b.session.id, '两个会话 id 不同')
+  assert.equal(hub.list().length, 2)
 
-  const { session } = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
-  session.pty.emitData('tick')
-  assert.deepEqual(healthy.frame('output'), [{ type: 'output', data: 'tick' }])
+  const viewerA = attach(hub, makeViewer(), a.session, 80, 24)
+  const viewerB = attach(hub, makeViewer(), b.session, 100, 30)
+
+  // 输出只去该会话的 viewer（多开不串台的第一条）。
+  a.session.pty.emitData('hello pty')
+  assert.deepEqual(viewerA.frame('output'), [{ v: 2, sessionId: a.session.id, type: 'output', data: 'hello pty' }])
+  assert.deepEqual(viewerB.sent, [], 'A 的输出不会写进 B 的 xterm')
+
+  // 输入只进该会话的 pty。
+  hub.write(viewerA, 'ls\r')
+  assert.deepEqual(fakeModule.spawned[0].writes, ['ls\r'])
+  assert.deepEqual(fakeModule.spawned[1].writes, [])
+
+  // resize 只动该会话的 pty。
+  hub.resize(viewerB, 120, 40)
+  assert.deepEqual(fakeModule.spawned[1].resized, [[120, 40]])
+  assert.deepEqual(fakeModule.spawned[0].resized, [], 'A 的 pty 尺寸不被 B 的 resize 改动')
+
+  // 退出状态也只通知该会话的 viewer。
+  b.session.pty.emitExit(7)
+  assert.deepEqual(viewerB.frame('status'), [{ v: 2, sessionId: b.session.id, type: 'status', state: 'exited', code: 7 }])
+  assert.deepEqual(viewerA.frame('status'), [])
+  assert.equal(hub.status(b.session.id).exitCode, 7)
+
+  // write/resize 对已退出会话 no-op。
+  hub.write(viewerB, 'x')
+  hub.resize(viewerB, 1, 1)
+  assert.equal(fakeModule.spawned[1].writes.length, 0)
+  assert.equal(fakeModule.spawned[1].resized.length, 1)
+})
+
+test('TerminalHub: an unbound or unknown sessionId drops input/resize silently', async () => {
+  const { hub, fakeModule } = makeHub()
+  const a = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const unbound = makeViewer() // 从未 bind：模拟没带 sessionId 的帧
+  hub.viewers.set(unbound, { sessionId: null, cols: null, rows: null })
+  const stale = makeViewer() // 绑定到一个已被关掉的会话
+  hub.viewers.set(stale, { sessionId: 'gone-session', cols: 80, rows: 24 })
+
+  hub.write(unbound, 'x')
+  hub.resize(unbound, 10, 10)
+  hub.write(stale, 'y')
+  hub.resize(stale, 10, 10)
+  assert.deepEqual(fakeModule.spawned[0].writes, [], '未绑定的帧写不进任何 pty')
+  assert.deepEqual(fakeModule.spawned[0].resized, [], '未知 id 的 resize 被静默丢弃（不当探针面）')
+  assert.equal(hub.status(a.session.id).state, 'running')
+
+  // attach 带一个不存在的 id：按新建处理，ready 帧带回真 id。
+  const created = await hub.ensureSession({ sessionId: 'gone-session', shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  assert.notEqual(created.session.id, 'gone-session')
+  assert.equal(created.spawned, true)
+})
+
+test('TerminalHub: session cap rejects the 9th session, close frees a slot', async () => {
+  const { hub } = makeHub()
+  for (let i = 0; i < TERMINAL_MAX_SESSIONS; i++) {
+    await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  }
+  assert.equal(hub.list().length, 8)
+  await assert.rejects(() => hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 }), /上限 8 个/)
+
+  const victim = hub.list()[0].id
+  assert.equal(hub.close(victim), true)
+  assert.equal(hub.list().length, 7)
+  const fresh = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  assert.equal(fresh.spawned, true)
+  assert.equal(hub.list().length, 8)
+})
+
+test('TerminalHub: close() kills the pty, drops the session and notifies its viewers', async () => {
+  const { hub, fakeModule } = makeHub()
+  const a = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const viewer = attach(hub, makeViewer(), a.session)
+  const other = attach(hub, makeViewer(), a.session)
+
+  assert.equal(hub.close('does-not-exist'), false, '关闭未知会话幂等失败、不抛错')
+  assert.equal(hub.close(a.session.id), true)
+
+  assert.equal(fakeModule.spawned[0].killed, true, 'close = kill 掉真实进程')
+  assert.equal(hub.get(a.session.id), null, '会话对象被摘掉')
+  assert.equal(hub.list().length, 0)
+  for (const viewerEntry of [viewer, other]) {
+    assert.deepEqual(viewerEntry.frame('closed'), [{ v: 2, sessionId: a.session.id, type: 'closed', reason: 'user' }])
+    assert.equal(hub.viewers.get(viewerEntry).sessionId, null, 'viewer 绑定被解除，无法再写进已关闭的会话')
+  }
+})
+
+test('TerminalHub: size arbitration takes the minimum across viewers of one session', async () => {
+  const { hub, fakeModule } = makeHub()
+  const a = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const pty = fakeModule.spawned[0]
+
+  const wide = attach(hub, makeViewer(), a.session, 160, 50)
+  assert.deepEqual(pty.resized, [[160, 50]], '单 viewer 时采用它自己的尺寸（覆盖 spawn 时的默认值）')
+
+  const narrow = attach(hub, makeViewer(), a.session, 90, 20)
+  assert.deepEqual(pty.resized.at(-1), [90, 20], '两个 viewer 取最小：保证窄的一侧不折行错乱')
+
+  // 宽的一侧再放大：最小值不变 ⇒ 不该再 resize（避免 TUI 反复重排）。
+  hub.resize(wide, 200, 60)
+  assert.equal(pty.resized.length, 2, '最小值未变则不调用 pty.resize')
+
+  // 窄的一侧撤了：最小值变成宽的一侧。
+  hub.detach(narrow)
+  assert.deepEqual(pty.resized.at(-1), [200, 60], 'viewer 消失后重算最小值')
+})
+
+test('TerminalHub: a backed-up viewer drops frames of its own session only', async () => {
+  const { hub } = makeHub()
+  const a = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const b = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const healthy = attach(hub, makeViewer(), a.session)
+  const flooded = attach(hub, makeViewer(), a.session)
+  const otherSession = attach(hub, makeViewer(), b.session)
+  flooded.bufferedAmount = 9 * 1024 * 1024
+
+  a.session.pty.emitData('tick')
+  assert.deepEqual(healthy.frame('output').length, 1)
   assert.deepEqual(flooded.sent, [], '背压超限的 viewer 丢帧（T6：洪泛保护），不阻塞其他 viewer')
+  assert.deepEqual(otherSession.sent, [], '别的会话的 viewer 更不该收到')
+
+  b.session.pty.emitData('tock')
+  assert.deepEqual(otherSession.frame('output').length, 1)
+})
+
+test('TerminalHub: dispose() kills every session (no orphan pty after plugin unload)', async () => {
+  const { hub, fakeModule } = makeHub()
+  for (let i = 0; i < 3; i++) {
+    await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  }
+  assert.equal(fakeModule.spawned.length, 3)
+  hub.dispose()
+  assert.equal(fakeModule.spawned.every(proc => proc.killed), true, '卸载时全部会话都被 kill')
+  assert.equal(hub.list().length, 0)
 })

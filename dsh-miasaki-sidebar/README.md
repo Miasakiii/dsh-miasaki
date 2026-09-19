@@ -5,7 +5,11 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 - 路线 D（2026-09-06 拍板）：不安装 `dsh-better-sidebar` 基座，完全自研；与 canvas 线同构技术栈，零代码耦合；
 - 产品理念参考：Codex `/side` 侧边对话、GitHub Copilot 右栏范式、CHI'25 常显侧面板研究（详见设计文档 §2 调研来源）；
 - 红线沿用 canvas：不改系统提示/模型请求/工具 schema；DSH 原生会话是唯一事实来源；插件不直接调模型。
-- **当前待办：P0/P1 + P2 内嵌终端已落地（2026-09-12，待重启 `dsh web` 实机验证）** —— 审查 tab 数据一致性
+- **当前待办（2026-09-19）：内嵌终端「标签栏多开」已实施（v0.9.0-miasaki.0），待重启 `dsh web` 实机验证** ——
+  参考 Windows Terminal 标签栏，把单 pty 会话改为多会话标签（帧协议 v2 + 每容器独立活动标签 + 最小尺寸仲裁 +
+  会话上限 8 + 刷新后孤儿会话接管）；见 [补充设计](design/2026-09-19-terminal-multi-tab-plan.md) 与
+  [可视原型](design/2026-09-19-terminal-tabs-mockup.html)。
+- **上一轮待办：P0/P1 + P2 内嵌终端已落地（2026-09-12，待重启 `dsh web` 实机验证）** —— 审查 tab 数据一致性
   修复 + diff 阅读器重做（v0.7.0）；**内嵌终端两形态**（v0.8.0：底部面板 + 右栏 tab 共享同一 pty 会话，
   node-pty 路线 B 已过 T2 spike）；点名交互重排待实机确认。
   见 [优化规划](design/2026-09-12-rightbar-optimization-plan.md) §6 拍板记录 与
@@ -60,8 +64,9 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 | 组件 | 定位 | 里程碑 | 状态 |
 |---|---|---|---|
 | 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff（v0.7.0 重做：双行号 / hunk 头 / 换行默认开 / 上下文档位 / 变更跳转 / 分段渲染；详情基线随视图，主点击展开、点名移行首） | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 复验通过）；2026-09-10 迁移为官方右栏 tab 类型；**v0.7.0 P0/P1 重做待实机验证**（2026-09-12） |
-| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08）；v0.8.0 起收进终端 tab 的「外部系统终端」折叠区 |
-| 内嵌终端（两形态） | **底部面板 + 右栏 tab 共享同一 pty 会话**（node-pty 路线 B + WS + xterm；单实例保活 + 重连回放 + restart 语义；标题栏终端按钮 + Ctrl+`） | M3 / v0.8.0 | **已实现待实机验证**（2026-09-12 拍板两形态并存，见优化规划 §6；T2 spike 通过：预编译命中 + resize 生效） |
+| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08）；v0.8.0 起收进终端 tab 折叠区，**2026-09-19 起收进 `＋` 右键菜单**（折叠区随「下半部分」一并移除，能力不变） |
+| 内嵌终端（两形态） | **底部面板 + 右栏 tab 共享同一 pty 会话**（node-pty 路线 B + WS + xterm；保活 + 重连回放 + restart 语义；标题栏终端按钮 + Ctrl+`） | M3 / v0.8.0 | **已实机验证**（2026-09-12 拍板两形态并存，见优化规划 §6；T2 spike 通过：预编译命中 + resize 生效） |
+| 内嵌终端多标签（多会话） | **标签栏多开**：会话集合（上限 8）+ 每容器独立活动标签 + 最小尺寸仲裁 + 帧协议 v2；实例身份每 mount 唯一（右栏**分栏 / 浮窗**可同时开多个终端标签页，同类实例共享会话集合与活动项）；`＋`/`×`/中键/双击重命名/右键菜单/`▾` 溢出 + `Ctrl+Shift+`` / `Ctrl+PageUp·Down` / `Alt+1..8`；右栏 `×` 走官方 `tabActions.close()`，跨容器移位走 `ctx.sidebarRight.openTab`；**终端是一整块**（标签栏 + xterm，无下半部分），状态条只在报错/退出/工作区变更时出现；`＋` 右键选 shell / 开系统终端 | M3.1 / v0.9.0 | **已实施，待实机验证**（2026-09-19；见[补充设计](design/2026-09-19-terminal-multi-tab-plan.md)与[可视原型](design/2026-09-19-terminal-tabs-mockup.html)；单测 54 → 62 项全绿，前端 DOM 桩冒烟 52 断言全过） |
 | 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成（待实现后再注册官方 tab 类型） |
 | 标题栏启动器组 | ~~底部内嵌终端面板（xterm + node-pty + WS 回放）~~ → **已按 2026-09-12 拍板落地为「内嵌终端两形态」**（见上）；外部程序跳转按钮（explorer / VS Code 菜单）仍为未实现残留 | M3（已部分落地） | 终端部分 = **v0.8.0 已实现**；外部跳转按钮未实现（前提已随壳退役重建，待另立项） |
 | ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉 / 桌面壳让位~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线） |
@@ -98,6 +103,8 @@ dsh-miasaki-sidebar/
     ├── 2026-09-10-migrate-to-official-rightbar.md # 迁移官方右栏：壳退役映射表 + 官方契约要点 + 丢失能力补偿（当前形态的设计依据）
     ├── 2026-09-12-rightbar-optimization-plan.md  # **优化规划设计（2026-09-12，未写代码）**：审查基线不一致缺陷 + diff 阅读器重做 + 终端改判右栏内嵌 + 宿主自带 PTY 栈核查 + spike T1–T6
     ├── 2026-09-12-rightbar-mockup.html           # 上述设计的界面示意（现状 vs 建议，浏览器打开）
+    ├── 2026-09-19-terminal-multi-tab-plan.md     # **内嵌终端「标签栏多开」补充设计（2026-09-19，已实施）**：协议 v2 加维 / 单集合纪律 / 每容器独立活动标签 / 最小尺寸仲裁 / 上限 8 / 孤儿会话收口 + 9 项待拍板（已按推荐项实施）
+    ├── 2026-09-19-terminal-tabs-mockup.html      # 上述设计的可交互原型（标签栏复刻参考图 + 两形态 + 三主题 + 决策卡，浏览器直接打开）
     └── CHANGELOG.md                            # 本线变更记录
 ```
 
@@ -152,22 +159,23 @@ socket `bufferedAmount` 超 8MB 丢帧（终端输出有损可接受），不无
 ## 验证
 
 ```powershell
-# 本线单测（54 项：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
-#            右栏 guide 契约 4 + 终端 7 + 内嵌终端 hub 7 + 路由 12）
+# 本线单测（62 项：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
+#            右栏 guide 契约 4 + 终端 launcher 7 + 内嵌终端 hub 15 + 路由 12）
 node test/review-data.test.js
 node test/review-view.test.js        # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过）
 node test/review-grouping.test.js    # 审查列表目录分组与组内统计求和（从 client.js 抽取纯函数求值）
 node test/review-view-store.test.js  # 审查视图持久化（抽取 client.js 的 reviewView，注入 mock localStorage）
 node test/rightbar-guide.test.js     # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
 node test/terminal-launcher.test.js
-node test/terminal-hub.test.js       # 内嵌终端 host 半（fake pty 注入，不需要真实 shell）
+node test/terminal-hub.test.js       # 内嵌终端 host 半（fake pty + fake resolveBin 双注入，不需要真实 shell）：多会话隔离 / 定向广播 / 未知 id 静默丢弃 / 上限 8 / 关闭回收 / 最小尺寸仲裁 / dispose 全杀
 node test/api-routing.test.js        # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、浏览器信任三道、视图白名单与 /review/diff 新契约
 
 # 受限沙箱（禁止子进程管道 stdio）里 node --test 的多进程隔离会 spawn EPERM，
 # 改用同进程模式：node --test --test-isolation=none <逐个测试文件>
-# 另注：terminal-hub.test.js 在受限沙箱下另有两条假阴性——ensureSession 链路里的
+# 另注：terminal-hub.test.js 曾经在受限沙箱下全挂——一是 ensureSession 链路里的
 # resolvePtyBin 要捕获 `where.exe` 输出解析 shell 绝对路径，捕获即 EPERM（报「未安装或
-# 找不到 powershell.exe」）。须在**普通终端**跑；判据与正确跑法见回归矩阵 §1 的 ※※ 注记。
+# 找不到 powershell.exe」）。**已修**（2026-09-19）：resolveBin 改为可注入，测试不再碰宿主
+# shell。判据与正确跑法见回归矩阵 §1 的 ※※ 注记。
 
 # 统一静态回归（含本线）
 node ..\scripts\verify-all.mjs sidebar
@@ -176,7 +184,7 @@ node ..\scripts\verify-all.mjs sidebar
 改完 `index.js` / `client.js` 后**必须重启 `dsh web`**——本线以 `link:` 装入 profile，源码即时落盘，
 但 host 半与 client bundle 都在启动时载入内存，刷新/强刷页面均无效。`GET /sidebar/api/health` 的
 `version` 字段是判断 host 是否已加载新 bundle 的可靠信号——它现在**直接读 `package.json`**（不再手抄，
-2026-09-10 修正），当前应为 `0.8.1-miasaki.0`。
+2026-09-10 修正），当前应为 `0.9.0-miasaki.0`。
 
 ## 规划来源
 

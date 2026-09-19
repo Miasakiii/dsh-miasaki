@@ -1,0 +1,748 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>内嵌终端「标签栏多开」可视原型 — sidebar 线 M3.1</title>
+<!--
+  设计原型（2026-09-19，sidebar 线 M3.1）
+  配套文档：design/2026-09-19-terminal-multi-tab-plan.md
+  本文件是**设计产物**，不是插件运行代码：令牌值是按 DSH 三主题手工取样的近似值，
+  真机实现必须用 getComputedStyle 读 --dsw-* 真值（规划 §8）。
+  参考图语义：标签栏左标题 + 活动标签胶囊（含 ×）+ 右侧 ＋/×（§2 拆解）。
+-->
+<style>
+  :root{
+    --radius:6px;
+    --tabbar-h:32px;
+    --font-ui:"Segoe UI",system-ui,"Microsoft YaHei",sans-serif;
+    --font-mono:"Cascadia Mono",Consolas,"Courier New",monospace;
+  }
+  /* --- DSH 三主题令牌（近似取样）：浅 / 深 / 高对比 --- */
+  html[data-theme="light"]{
+    --dsw-alias-bg-layer-1:#ffffff; --dsw-alias-bg-layer-2:#f4f5f7; --dsw-alias-bg-layer-3:#e9eaee;
+    --dsw-alias-label-primary:#111827; --dsw-alias-label-secondary:#4b5563; --dsw-alias-label-tertiary:#9ca3af;
+    --dsw-alias-border-l2:#d1d5db; --dsw-alias-border-l3:rgba(0,0,0,.08);
+    --dsw-alias-state-error-primary:#dc2626; --dsw-static-deepseek-450:#4d6bfe;
+    --stage-bg:#eef0f4;
+  }
+  html[data-theme="dark"]{
+    --dsw-alias-bg-layer-1:#16161a; --dsw-alias-bg-layer-2:#1f1f24; --dsw-alias-bg-layer-3:#2b2b32;
+    --dsw-alias-label-primary:#f4f4f6; --dsw-alias-label-secondary:#b9b9c2; --dsw-alias-label-tertiary:#8a8a95;
+    --dsw-alias-border-l2:#37373f; --dsw-alias-border-l3:rgba(255,255,255,.08);
+    --dsw-alias-state-error-primary:#f2555a; --dsw-static-deepseek-450:#5b78ff;
+    --stage-bg:#0d0d10;
+  }
+  html[data-theme="contrast"]{
+    --dsw-alias-bg-layer-1:#000000; --dsw-alias-bg-layer-2:#0a0a0a; --dsw-alias-bg-layer-3:#1c1c1c;
+    --dsw-alias-label-primary:#ffffff; --dsw-alias-label-secondary:#e8e8e8; --dsw-alias-label-tertiary:#bdbdbd;
+    --dsw-alias-border-l2:#5a5a5a; --dsw-alias-border-l3:rgba(255,255,255,.2);
+    --dsw-alias-state-error-primary:#ff6b6b; --dsw-static-deepseek-450:#8ea2ff;
+    --stage-bg:#000000;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--stage-bg);color:var(--dsw-alias-label-primary);
+    font:13px/20px var(--font-ui);
+  }
+  /* ---------------- 顶部控制条 ---------------- */
+  .topbar{
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:10px 16px;border-bottom:1px solid var(--dsw-alias-border-l2);
+    background:var(--dsw-alias-bg-layer-1);position:sticky;top:0;z-index:40;
+  }
+  .brand{font-weight:600;font-size:14px}
+  .brand .ver{font-weight:400;color:var(--dsw-alias-label-tertiary);font-size:12px;margin-left:8px}
+  .grow{flex:1}
+  .seg{display:flex;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;overflow:hidden}
+  .seg button{
+    border:0;background:transparent;color:var(--dsw-alias-label-secondary);
+    font:12px/18px var(--font-ui);padding:5px 12px;cursor:pointer;
+  }
+  .seg button+button{border-left:1px solid var(--dsw-alias-border-l2)}
+  .seg button[aria-pressed="true"]{background:var(--dsw-static-deepseek-450);color:#fff}
+  .seg-label{font-size:12px;color:var(--dsw-alias-label-tertiary);margin-right:-8px}
+  /* ---------------- 舞台：模拟 DSH 界面 ---------------- */
+  .wrap{padding:16px;display:grid;gap:16px;grid-template-columns:minmax(0,1fr) 340px}
+  @media (max-width:1080px){.wrap{grid-template-columns:minmax(0,1fr)}}
+  .app{
+    display:flex;min-height:420px;border:1px solid var(--dsw-alias-border-l2);
+    border-radius:10px;overflow:hidden;background:var(--dsw-alias-bg-layer-1);
+  }
+  .rail{
+    width:52px;flex:0 0 auto;background:var(--dsw-alias-bg-layer-2);
+    border-right:1px solid var(--dsw-alias-border-l3);display:flex;flex-direction:column;
+    align-items:center;padding-top:10px;gap:8px;color:var(--dsw-alias-label-tertiary);font-size:11px;
+  }
+  .rail .dot{width:22px;height:22px;border-radius:6px;background:var(--dsw-alias-bg-layer-3)}
+  .center{flex:1;min-width:0;display:flex;flex-direction:column}
+  .chat{flex:1;padding:14px 16px;color:var(--dsw-alias-label-secondary);overflow:hidden}
+  .chat .bubble{
+    background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l3);
+    border-radius:8px;padding:8px 10px;margin-bottom:8px;max-width:520px;
+  }
+  .chat .bubble.me{margin-left:auto;background:color-mix(in srgb,var(--dsw-static-deepseek-450) 16%,var(--dsw-alias-bg-layer-2))}
+  .rightbar{
+    width:336px;flex:0 0 auto;display:flex;flex-direction:column;
+    border-left:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);
+  }
+  .rightbar-head{
+    height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;
+    border-bottom:1px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-tertiary);font-size:12px;
+  }
+  .app[data-form="right"] .rightbar{display:flex}
+  .app[data-form="bottom"] .rightbar{display:none}
+  /* ---------------- 终端容器（两形态） ---------------- */
+  .term{display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);min-height:0}
+  .term.is-bottom{
+    border-top:1px solid var(--dsw-alias-border-l2);height:300px;
+  }
+  .term.is-right{flex:1;min-height:0;border-top:1px solid var(--dsw-alias-border-l3)}
+  /* 标签栏：参考图复刻 —— 左标题 + 活动标签胶囊 + 右侧 ＋ / × */
+  .term-tabs{
+    display:flex;align-items:center;gap:6px;height:var(--tabbar-h);padding:0 6px 0 10px;
+    background:var(--dsw-alias-bg-layer-2);border-bottom:1px solid var(--dsw-alias-border-l3);flex:0 0 auto;
+  }
+  .term-tabs-title{
+    color:var(--dsw-alias-label-tertiary);font-size:12px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;max-width:132px;flex:0 1 auto;
+  }
+  .term-tabs-strip{
+    display:flex;align-items:center;gap:2px;flex:1;min-width:0;
+    overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
+  }
+  .term-tabs-strip::-webkit-scrollbar{display:none}
+  .term-tab{
+    display:flex;align-items:center;gap:4px;height:24px;padding:0 6px 0 9px;
+    border:0;border-radius:var(--radius);background:transparent;
+    color:var(--dsw-alias-label-secondary);font:12px/18px var(--font-ui);
+    min-width:96px;max-width:200px;flex:0 0 auto;cursor:pointer;position:relative;
+  }
+  .term-tab:hover{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary)}
+  .term-tab[aria-selected="true"]{
+    background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);
+    box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l2);
+  }
+  .term-tab[aria-selected="true"]::after{
+    content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;
+    background:var(--dsw-static-deepseek-450);border-radius:2px;opacity:.9;
+  }
+  .term-tab-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;text-align:left}
+  .term-tab input{
+    width:100%;min-width:60px;border:0;background:transparent;color:inherit;
+    font:12px/18px var(--font-ui);outline:1px solid var(--dsw-static-deepseek-450);border-radius:3px;padding:0 2px;
+  }
+  .term-tab-dot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-error-primary);flex:0 0 auto}
+  .term-tab-close{
+    width:16px;height:16px;flex:0 0 auto;border-radius:3px;display:grid;place-items:center;
+    font-size:11px;line-height:1;opacity:0;color:inherit;
+  }
+  .term-tab:hover .term-tab-close,.term-tab[aria-selected="true"] .term-tab-close{opacity:.75}
+  .term-tab-close:hover{background:var(--dsw-alias-state-error-primary);color:#fff;opacity:1}
+  .term-btn{
+    width:22px;height:22px;flex:0 0 auto;border:0;border-radius:5px;background:transparent;
+    color:var(--dsw-alias-label-secondary);font-size:14px;line-height:1;cursor:pointer;display:grid;place-items:center;
+  }
+  .term-btn:hover{background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary)}
+  .term-body{flex:1;min-height:0;position:relative}
+  .term-pane{position:absolute;inset:0;padding:8px 10px;overflow:auto;display:none}
+  .term-pane.is-active{display:block}
+  .term-pane pre{margin:0;font:12px/16px var(--font-mono);color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-all}
+  .term-pane .cursor{display:inline-block;width:7px;height:13px;background:var(--dsw-static-deepseek-450);vertical-align:-2px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .term-empty{
+    position:absolute;inset:0;display:grid;place-items:center;text-align:center;
+    color:var(--dsw-alias-label-tertiary);font-size:12px;gap:6px;
+  }
+  .term-empty button{
+    margin-top:10px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);
+    color:var(--dsw-alias-label-primary);border-radius:8px;padding:7px 14px;font:12px/18px var(--font-ui);cursor:pointer;
+  }
+  .term-empty button:hover{background:var(--dsw-alias-bg-layer-3)}
+  .term-status{
+    height:22px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
+    border-top:1px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-tertiary);font-size:11px;
+    background:var(--dsw-alias-bg-layer-2);
+  }
+  .term-status .grow{flex:1}
+  .link{color:var(--dsw-static-deepseek-450);cursor:pointer;background:none;border:0;font:11px/16px var(--font-ui);padding:0}
+  .grip{height:4px;flex:0 0 auto;cursor:ns-resize;background:linear-gradient(var(--dsw-alias-border-l3),transparent)}
+  /* ---------------- 右键 / 下拉菜单 ---------------- */
+  .menu{
+    position:fixed;z-index:80;min-width:168px;padding:4px;border-radius:8px;
+    background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);
+    box-shadow:0 8px 24px rgba(0,0,0,.28);
+  }
+  .menu button{
+    display:block;width:100%;text-align:left;border:0;background:transparent;color:var(--dsw-alias-label-primary);
+    font:12px/18px var(--font-ui);padding:6px 8px;border-radius:5px;cursor:pointer;
+  }
+  .menu button:hover{background:var(--dsw-alias-bg-layer-3)}
+  .menu .sep{height:1px;margin:4px 6px;background:var(--dsw-alias-border-l3)}
+  .menu .note{padding:6px 8px;color:var(--dsw-alias-label-tertiary);font-size:11px}
+  /* ---------------- 决策卡 ---------------- */
+  .panel{
+    border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-1);
+    padding:14px;align-self:start;position:sticky;top:64px;max-height:calc(100vh - 88px);overflow:auto;
+  }
+  .panel h2{margin:0 0 4px;font-size:14px}
+  .panel p.hint{margin:0 0 12px;color:var(--dsw-alias-label-tertiary);font-size:12px}
+  .dec{border-top:1px solid var(--dsw-alias-border-l3);padding:10px 0}
+  .dec:first-of-type{border-top:0}
+  .dec .q{font-size:12px;font-weight:600;margin-bottom:6px}
+  .dec .q .no{color:var(--dsw-alias-label-tertiary);margin-right:6px}
+  .dec .opts{display:flex;flex-direction:column;gap:4px}
+  .dec .opt{
+    display:flex;gap:6px;align-items:flex-start;font-size:12px;color:var(--dsw-alias-label-secondary);
+    border:1px solid transparent;border-radius:6px;padding:5px 7px;cursor:pointer;background:transparent;text-align:left;
+  }
+  .dec .opt:hover{background:var(--dsw-alias-bg-layer-2)}
+  .dec .opt[aria-pressed="true"]{
+    border-color:var(--dsw-static-deepseek-450);
+    background:color-mix(in srgb,var(--dsw-static-deepseek-450) 14%,transparent);
+    color:var(--dsw-alias-label-primary);
+  }
+  .dec .opt .mark{color:var(--dsw-static-deepseek-450);font-weight:700}
+  .dec .opt .rec{
+    font-size:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 5px;
+    color:var(--dsw-alias-label-tertiary);margin-left:auto;white-space:nowrap;
+  }
+  .panel .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .panel .actions button{
+    flex:1;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);
+    color:var(--dsw-alias-label-primary);border-radius:8px;padding:8px;font:12px/18px var(--font-ui);cursor:pointer;
+  }
+  .panel .actions button.primary{background:var(--dsw-static-deepseek-450);border-color:transparent;color:#fff}
+  .panel textarea{
+    width:100%;height:150px;margin-top:10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);
+    background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);
+    font:12px/17px var(--font-mono);padding:8px;display:none;
+  }
+  .legend{font-size:11px;color:var(--dsw-alias-label-tertiary);padding:0 16px 20px;max-width:1200px}
+  .legend code{background:var(--dsw-alias-bg-layer-2);border-radius:3px;padding:1px 4px}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">内嵌终端「标签栏多开」可视原型<span class="ver">sidebar 线 M3.1 · 2026-09-19 · 配套 design/2026-09-19-terminal-multi-tab-plan.md</span></div>
+  <div class="grow"></div>
+  <span class="seg-label">形态</span>
+  <div class="seg" id="segForm">
+    <button data-form="bottom" aria-pressed="true">底部面板</button>
+    <button data-form="right" aria-pressed="false">右栏 tab</button>
+    <button data-form="both" aria-pressed="false">两形态并存</button>
+  </div>
+  <span class="seg-label">主题</span>
+  <div class="seg" id="segTheme">
+    <button data-theme="light" aria-pressed="false">浅色</button>
+    <button data-theme="dark" aria-pressed="true">深色</button>
+    <button data-theme="contrast" aria-pressed="false">高对比</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- ============ 模拟应用 ============ -->
+  <div class="app" id="app" data-form="bottom">
+    <div class="rail">
+      <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+      <div style="margin-top:auto;padding-bottom:10px">示意</div>
+    </div>
+
+    <div class="center">
+      <div class="chat">
+        <div class="bubble me">补充终端设计，它要可以标签栏多开，参考图片规划设计</div>
+        <div class="bubble">已按参考图（Windows Terminal 标签栏）出补充设计与可视原型：多会话键控、每容器独立活动标签、最小尺寸仲裁、关闭语义与键盘可拦截性矩阵。</div>
+        <div class="bubble" style="opacity:.7">（此区域仅为版式示意，不参与原型交互）</div>
+      </div>
+      <!-- 底部面板形态的终端宿主 -->
+      <div class="term is-bottom" id="termBottom"></div>
+    </div>
+
+    <!-- 右栏：官方 right sidebar 的两个 tab（审查 / 终端） -->
+    <div class="rightbar">
+      <div class="rightbar-head">
+        <span>右栏 tab</span>
+        <span style="color:var(--dsw-static-deepseek-450)">终端</span>
+        <span>审查</span>
+        <span class="grow" style="flex:1"></span>
+        <span>×</span>
+      </div>
+      <div class="term is-right" id="termRight"></div>
+    </div>
+  </div>
+
+  <!-- ============ 决策卡 ============ -->
+  <aside class="panel">
+    <h2>待拍板决策点</h2>
+    <p class="hint">点选项即可切换；默认选中即规划 §9 的推荐项。「生成清单」输出可粘贴的选择结果。</p>
+    <div id="decList"></div>
+    <div class="actions">
+      <button class="primary" id="btnGen">生成选择清单</button>
+      <button id="btnReset">恢复推荐</button>
+    </div>
+    <textarea id="out" readonly></textarea>
+  </aside>
+</div>
+
+<div class="legend">
+  原型说明：标签栏左侧「终端 + 当前 shell 名」对应参考图左上角的 <code>终端 PowerShell</code>；活动标签胶囊对应 <code>default</code>（含 ×）；
+  右侧 <code>＋</code> / <code>×</code> 对应参考图的「新建标签 / 关闭」。可试：<code>＋</code> 新建、标签 × 或中键关闭、双击标签重命名、右键菜单、
+  <code>Alt+1..8</code> 跳转、<code>Ctrl+Shift+`</code> 新建、<code>Ctrl+PageUp/PageDown</code> 切换（页面内可拦截；<code>Ctrl+Shift+T/W</code> 被浏览器占用、拿不到，故不采用）。
+</div>
+
+<script>
+(() => {
+  'use strict'
+
+  // ---------------------------------------------------------------- 数据模型
+  // 模拟 host 侧 TerminalHub.sessions（全局会话集合）+ 每容器独立活动项（规划 §4.1/§4.2）
+  const SHELLS = [
+    { id:'pwsh', label:'PowerShell 7', banner:['PowerShell 7.4.6','版权所有 (C) Microsoft Corporation。保留所有权利。','','  安装最新的 PowerShell，了解新功能和改进！https://aka.ms/PSWindows',''] },
+    { id:'powershell', label:'Windows PowerShell', banner:['Windows PowerShell','Copyright (C) Microsoft Corporation. All rights reserved.','','  安装最新的 PowerShell，了解新功能和改进！https://aka.ms/PSWindows',''] },
+    { id:'cmd', label:'命令提示符', banner:['Microsoft Windows [版本 10.0.26100.1742]','(c) Microsoft Corporation。保留所有权利。',''] },
+  ]
+  const CWD = 'C:\\Users\\Asakii\\Desktop\\dsh-miasaki'
+  const LIMIT = 8
+
+  let nextId = 1
+  let sessions = []                        // { id, shellId, title, exited, lines[], cwd }
+  const active = { bottom:null, right:null }   // 每容器独立活动标签（§4.2 A）
+  let form = 'bottom'
+
+  const shellOf = id => SHELLS.find(s => s.id === id) || SHELLS[0]
+  const byId = id => sessions.find(s => s.id === id)
+
+  function defaultTitle(shellId) {
+    const base = shellOf(shellId).label
+    const n = sessions.filter(s => s.shellId === shellId).length
+    return n === 0 ? base : base + ' (' + (n + 1) + ')'
+  }
+
+  function create(shellId, opts) {
+    if (sessions.length >= LIMIT) { toast('已达 ' + LIMIT + ' 个终端上限：先关闭一个再新建（规划 §5.5）'); return null }
+    const shell = shellOf(shellId || (active[form] ? byId(active[form]).shellId : 'pwsh'))
+    const s = {
+      id: 's' + (nextId++),
+      shellId: shell.id,
+      title: (opts && opts.title) || defaultTitle(shell.id),
+      cwd: CWD,
+      exited: false,
+      lines: shell.banner.concat(['PS ' + CWD + '> ']),
+    }
+    sessions.push(s)
+    // 新建后：当前形态激活它；若「两形态并存」则另一形态没活动项时也接管
+    active[form === 'right' ? 'right' : 'bottom'] = s.id
+    if (form === 'both') { active.bottom = s.id; active.right = s.id }
+    render()
+    return s.id
+  }
+
+  function close(id) {
+    const i = sessions.findIndex(s => s.id === id)
+    if (i < 0) return
+    sessions.splice(i, 1)
+    for (const key of ['bottom', 'right']) {
+      if (active[key] === id) active[key] = sessions.length > 0 ? sessions[Math.max(0, i - 1)].id : null
+    }
+    render()
+  }
+
+  function restart(id) {
+    const s = byId(id); if (!s) return
+    s.exited = false
+    s.lines = shellOf(s.shellId).banner.concat(['PS ' + s.cwd + '> '])
+    render()
+  }
+
+  function rename(id, title) {
+    const s = byId(id); if (!s) return
+    s.title = title.trim() === '' ? defaultTitle(s.shellId) : title.trim().slice(0, 40)
+    render()
+  }
+
+  // ---------------------------------------------------------------- 渲染
+  const host = { bottom: document.getElementById('termBottom'), right: document.getElementById('termRight') }
+  const app = document.getElementById('app')
+
+  function visibleKeys() {
+    if (form === 'bottom') return ['bottom']
+    if (form === 'right') return ['right']
+    return ['bottom', 'right']
+  }
+
+  function render() {
+    app.dataset.form = form === 'both' ? 'bottom' : form
+    host.bottom.style.display = (form === 'bottom' || form === 'both') ? 'flex' : 'none'
+    host.right.style.display = (form === 'right' || form === 'both') ? 'flex' : 'none'
+    for (const key of visibleKeys()) renderTerminal(key, host[key])
+  }
+
+  function renderTerminal(key, root) {
+    const activeId = active[key]
+    root.textContent = ''
+
+    // --- 标签栏 ---
+    const bar = el('div', 'term-tabs')
+    const title = el('span', 'term-tabs-title')
+    const activeShell = activeId && byId(activeId) ? shellOf(byId(activeId).shellId).label : '终端'
+    title.textContent = '终端 ' + (activeId ? activeShell : '')
+    title.title = '当前标签的 shell；参考图左上角的「终端 PowerShell」'
+    bar.append(title)
+
+    const strip = el('div', 'term-tabs-strip')
+    strip.setAttribute('role', 'tablist')
+    sessions.forEach((s, index) => {
+      const tab = el('button', 'term-tab')
+      tab.setAttribute('role', 'tab')
+      tab.setAttribute('aria-selected', String(s.id === activeId))
+      tab.title = s.title + '\n' + s.shellId + ' · ' + s.cwd + (s.exited ? '\n（已退出）' : '')
+      if (s.exited) tab.append(el('span', 'term-tab-dot'))
+
+      const label = el('span', 'term-tab-label')
+      label.textContent = s.title
+      tab.append(label)
+
+      const close = el('span', 'term-tab-close')
+      close.textContent = '×'
+      close.setAttribute('role', 'button')
+      close.setAttribute('aria-label', '关闭 ' + s.title)
+      close.addEventListener('click', e => { e.stopPropagation(); close(s.id) })
+      tab.append(close)
+
+      tab.addEventListener('click', () => { active[key] = s.id; render() })
+      tab.addEventListener('auxclick', e => { if (e.button === 1) { e.preventDefault(); close(s.id) } })
+      tab.addEventListener('dblclick', e => { e.preventDefault(); startRename(tab, label, s) })
+      tab.addEventListener('contextmenu', e => { e.preventDefault(); tabMenu(e, s, key, tab) })
+      strip.append(tab)
+    })
+    bar.append(strip)
+
+    const add = el('button', 'term-btn'); add.textContent = '＋'
+    add.title = '新建终端标签（Ctrl+Shift+`）'
+    add.addEventListener('click', () => create(null))
+    bar.append(add)
+
+    const more = el('button', 'term-btn'); more.textContent = '▾'
+    more.title = '所有标签'
+    more.addEventListener('click', e => { e.stopPropagation(); listMenu(more, key) })
+    bar.append(more)
+
+    const closePanel = el('button', 'term-btn'); closePanel.textContent = '×'
+    closePanel.title = key === 'bottom' ? '收起底部终端面板（Ctrl+`）' : '关闭右栏终端 tab'
+    closePanel.addEventListener('click', () => {
+      if (form === 'both') { toast('两形态并存：× 只收起/关闭该容器（原型不做容器开关）') }
+      else toast(key === 'bottom' ? '收起底部面板（原型仅示意）' : '关闭右栏 tab（原型仅示意）')
+    })
+    bar.append(closePanel)
+    root.append(bar)
+
+    // --- 正文 ---
+    if (key === 'bottom') root.append(el('div', 'grip'))
+    const body = el('div', 'term-body')
+    if (sessions.length === 0) {
+      const empty = el('div', 'term-empty')
+      const p = el('div', null)
+      p.innerHTML = '当前没有终端标签<br><span style="opacity:.75">工作目录 ' + CWD + '</span>'
+      empty.append(p)
+      const btn = el('button', null); btn.textContent = '＋ 新建终端'
+      btn.addEventListener('click', () => create(null)); empty.append(btn)
+      body.append(empty)
+    } else if (activeId === null || byId(activeId) === undefined) {
+      const empty = el('div', 'term-empty')
+      empty.append(el('div', null, '该容器没有活动标签 —— 点上方任一标签接管'))
+      body.append(empty)
+    } else {
+      for (const s of sessions) {
+        const pane = el('div', 'term-pane' + (s.id === activeId ? ' is-active' : ''))
+        const pre = el('pre', null)
+        pre.textContent = s.lines.join('\n')
+        pane.append(pre)
+        if (s.exited) {
+          const note = el('div', null, '已退出（code 0）')
+          note.style.cssText = 'color:var(--dsw-alias-state-error-primary);font:12px/18px var(--font-ui);margin-top:6px'
+          pane.append(note)
+          const rb = el('button', 'link'); rb.textContent = '重启'
+          rb.style.marginLeft = '8px'
+          rb.addEventListener('click', () => restart(s.id))
+          pane.append(rb)
+        } else {
+          pre.append(el('span', 'cursor'))
+        }
+        body.append(pane)
+      }
+    }
+    root.append(body)
+
+    // --- 状态条 ---
+    const st = el('div', 'term-status')
+    const a = activeId && byId(activeId) ? byId(activeId) : null
+    st.append(el('span', null, sessions.length + '/' + LIMIT + ' 个会话' + (a ? ' · ' + a.shellId + ' · pid ' + (4100 + Number(a.id.slice(1))) : '')))
+    const g = el('span', 'grow'); g.style.flex = '1'; st.append(g)
+    if (a && a.cwd !== CWD) st.append(el('span', null, '会话工作区已变更（终端仍在 ' + a.cwd + '）'))
+    if (key === 'right') {
+      const b = el('button', 'link'); b.textContent = '在底部打开 ↧'
+      b.title = '把该会话交给底部面板显示（会话集合共享，规划 §4.2）'
+      b.addEventListener('click', () => { active.bottom = a ? a.id : active.bottom; toast('已在底部面板指向同一会话（同一 pty 的两个 viewer）') })
+      st.append(b)
+    }
+    root.append(st)
+  }
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag)
+    if (cls) n.className = cls
+    if (text !== undefined) n.textContent = text
+    return n
+  }
+
+  // ---------------------------------------------------------------- 重命名
+  function startRename(tab, label, s) {
+    const input = document.createElement('input')
+    input.value = s.title
+    label.replaceWith(input)
+    input.focus(); input.select()
+    const commit = () => { const v = input.value; rename(s.id, v) }
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); commit() }
+      if (e.key === 'Escape') { e.preventDefault(); render() }
+    })
+    input.addEventListener('blur', commit)
+  }
+
+  // ---------------------------------------------------------------- 菜单
+  function popMenu(anchor, build) {
+    document.querySelectorAll('.menu').forEach(m => m.remove())
+    const menu = el('div', 'menu')
+    build(menu, () => menu.remove())
+    document.body.append(menu)
+    const r = anchor.getBoundingClientRect()
+    const w = menu.offsetWidth, h = menu.offsetHeight
+    menu.style.left = Math.max(6, Math.min(window.innerWidth - w - 6, r.left)) + 'px'
+    menu.style.top = Math.max(6, Math.min(window.innerHeight - h - 6, r.bottom + 4)) + 'px'
+    setTimeout(() => {
+      const dismiss = e => {
+        if (e.target instanceof Node && menu.contains(e.target)) return
+        menu.remove(); document.removeEventListener('pointerdown', dismiss, true)
+      }
+      document.addEventListener('pointerdown', dismiss, true)
+    }, 0)
+  }
+  const item = (menu, text, act, close) => {
+    const b = el('button', null, text)
+    b.addEventListener('click', () => { close(); act() })
+    menu.append(b)
+  }
+  const sep = menu => menu.append(el('div', 'sep'))
+
+  function tabMenu(e, s, key, index) {
+    popMenu(e.target, (menu, close) => {
+      item(menu, '新建标签', () => create(null), close)
+      sep(menu)
+      item(menu, '关闭', () => close0(s.id), close)
+      item(menu, '关闭其他', () => closeOthers(s.id), close)
+      item(menu, '关闭全部', () => closeAll(), close)
+      sep(menu)
+      item(menu, '重命名', () => {
+        const tab = [...document.querySelectorAll('.term-tab')].find((_, i) => i === index)
+        const label = tab && tab.querySelector('.term-tab-label')
+        if (tab && label) startRename(tab, label, s)
+      }, close)
+      item(menu, '重启（kill 后重新 spawn）', () => restart(s.id), close)
+      item(menu, '复制工作目录', () => { copy(s.cwd); toast('已复制：' + s.cwd) }, close)
+      if (key === 'right') item(menu, '在底部打开', () => { active.bottom = s.id; toast('底部面板已指向该会话') }, close)
+      if (key === 'bottom') item(menu, '在右栏打开', () => { active.right = s.id; toast('右栏已指向该会话') }, close)
+    })
+    function close0(id) { close(id) }
+  }
+  function closeOthers(keep) {
+    if (sessions.length > 2) toast('关闭其他（' + (sessions.length - 1) + ' 个）需要确认 —— 规划 §7.1')
+    sessions = sessions.filter(s => s.id === keep)
+    if (active.bottom !== keep) active.bottom = keep
+    if (active.right !== keep) active.right = keep
+    render()
+  }
+  function closeAll() {
+    if (sessions.length > 1 && !confirm('关闭全部 ' + sessions.length + ' 个终端标签？正在运行的进程会被结束。')) return
+    sessions = []
+    active.bottom = active.right = null
+    render()
+  }
+  function listMenu(anchor, key) {
+    popMenu(anchor, (menu, close) => {
+      if (sessions.length === 0) menu.append(el('div', 'note', '暂无标签'))
+      sessions.forEach((s, i) => {
+        item(menu, (i + 1) + '. ' + s.title + (s.exited ? '（已退出）' : '') + '  ·  ' + s.shellId,
+          () => { active[key] = s.id; render() }, close)
+      })
+      sep(menu)
+      item(menu, '＋ 新建标签', () => create(null), close)
+    })
+  }
+
+  // ---------------------------------------------------------------- 小工具
+  let toastTimer = null
+  function toast(text) {
+    let box = document.getElementById('toast')
+    if (!box) {
+      box = el('div'); box.id = 'toast'
+      box.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:90;' +
+        'background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);' +
+        'border-radius:8px;padding:8px 14px;font:12px/18px var(--font-ui);box-shadow:0 8px 24px rgba(0,0,0,.3);max-width:80vw'
+      document.body.append(box)
+    }
+    box.textContent = text
+    box.style.display = 'block'
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => { box.style.display = 'none' }, 2600)
+  }
+  function copy(text) { try { navigator.clipboard && navigator.clipboard.writeText(text) } catch (_) {} }
+
+  // ---------------------------------------------------------------- 顶部控制
+  document.getElementById('segForm').addEventListener('click', e => {
+    const b = e.target.closest('button[data-form]'); if (!b) return
+    form = b.dataset.form
+    ;[...b.parentElement.children].forEach(x => x.setAttribute('aria-pressed', String(x === b)))
+    if (form === 'both' && active.right === null && sessions.length > 0) active.right = sessions[0].id
+    render()
+  })
+  document.getElementById('segTheme').addEventListener('click', e => {
+    const b = e.target.closest('button[data-theme]'); if (!b) return
+    document.documentElement.dataset.theme = b.dataset.theme
+    ;[...b.parentElement.children].forEach(x => x.setAttribute('aria-pressed', String(x === b)))
+  })
+
+  // ---------------------------------------------------------------- 键盘（仅演示可拦截键；§7.3 矩阵）
+  document.addEventListener('keydown', e => {
+    const key = form === 'both' ? 'bottom' : form
+    const mod = e.ctrlKey || e.metaKey
+    if (mod && e.shiftKey && e.code === 'Backquote') { e.preventDefault(); create(null); return }
+    if (mod && e.code === 'PageDown') { e.preventDefault(); step(key, 1); return }
+    if (mod && e.code === 'PageUp') { e.preventDefault(); step(key, -1); return }
+    if (e.altKey && !mod && /^Digit[1-8]$/.test(e.code)) {
+      const i = Number(e.code.slice(5)) - 1
+      if (i < sessions.length) { e.preventDefault(); active[key] = sessions[i].id; render() }
+    }
+  }, true)
+  function step(key, delta) {
+    if (sessions.length === 0) return
+    const i = sessions.findIndex(s => s.id === active[key])
+    const next = ((i < 0 ? 0 : i + delta) + sessions.length) % sessions.length
+    active[key] = sessions[next].id
+    render()
+  }
+
+  // ---------------------------------------------------------------- 决策卡
+  const DECISIONS = [
+    { id:'d1', q:'活动标签归属', rec:0, opts:[
+      ['每容器独立活动项（会话集合共享）', '底部跑构建、右栏盯服务器，两容器可同时看不同会话'],
+      ['全局共享活动项', '更接近「同一个终端移位」，但多开价值减半'],
+      ['各容器独立会话集合', '放弃「一个 pty 两个 viewer」契约，不推荐'],
+    ]},
+    { id:'d2', q:'同会话多 viewer 的尺寸仲裁', rec:0, opts:[
+      ['最小尺寸优先', '保证没有任何一侧折行错乱；结果变化才调用 pty.resize'],
+      ['最近一次获胜（现状）', '窄的一侧必然错乱，属现存缺陷'],
+      ['最大尺寸优先', '宽侧正常、窄侧仍错乱'],
+    ]},
+    { id:'d3', q:'关闭标签语义', rec:0, opts:[
+      ['直接 kill，不二次确认', '本地终端无「保留会话」入口；仅「关闭全部/其他」在 >1 时确认'],
+      ['每次弹确认', '多开下极其烦人'],
+      ['仿 ssh 线三选一', '本地终端没有第三选项，形同虚设'],
+    ]},
+    { id:'d4', q:'xterm 实例策略', rec:0, opts:[
+      ['常驻池 + 懒挂载', '切换瞬时、保留滚动位置；每标签一个实例'],
+      ['单实例复用 + 切换重放', '省内存，但切换闪烁、丢滚动位置'],
+      ['非活动标签释放实例', '复杂度高于收益'],
+    ]},
+    { id:'d5', q:'快捷键集合', rec:0, opts:[
+      ['Ctrl+Shift+` 新建 / Ctrl+PageUp·Down 切换 / Alt+1..8 跳转', '全部可被页面拦截；关闭交给 ×、中键、Delete'],
+      ['沿用 Windows Terminal 键位（Ctrl+Shift+T/W）', '浏览器保留键，页面上拿不到'],
+      ['不设快捷键', '键盘效率归零'],
+    ]},
+    { id:'d6', q:'会话上限', rec:0, opts:[
+      ['8（对齐 ssh 线 U2.1）', '上限即 DoS 防线，host 侧强制'],
+      ['4', '更省资源，多开空间受限'],
+      ['不限', '无上限即风险面'],
+    ]},
+    { id:'d7', q:'刷新后的孤儿会话', rec:0, opts:[
+      ['list 列出 → 接管 / 一键清理', '不丢用户正在跑的进程，也不留泄漏'],
+      ['静默 kill', '丢进程'],
+      ['静默自动 attach', '行为不可预期'],
+    ]},
+    { id:'d8', q:'标签标题', rec:0, opts:[
+      ['shell label + 序号；OSC 动态标题为 P2 可选项默认关', '避免不可信字符串进 UI'],
+      ['默认开 OSC 动态标题', '需转义 + 截断，风险面更大'],
+      ['只用 cwd basename', '同一 shell 多开时辨识度差'],
+    ]},
+    { id:'d9', q:'旧协议（无 v 的帧）', rec:0, opts:[
+      ['拒收并提示刷新（VERSION_MISMATCH）', '对齐 ssh 线纪律，不做双栈'],
+      ['双栈兼容一个版本', '长期维护负担'],
+    ]},
+  ]
+  const chosen = {}
+  const decList = document.getElementById('decList')
+
+  function renderDecisions() {
+    decList.textContent = ''
+    DECISIONS.forEach((d, di) => {
+      const box = el('div', 'dec')
+      const q = el('div', 'q')
+      q.append(el('span', 'no', String(di + 1).padStart(2, '0')))
+      q.append(document.createTextNode(d.q))
+      box.append(q)
+      const opts = el('div', 'opts')
+      d.opts.forEach(([label, note], oi) => {
+        const b = el('button', 'opt')
+        b.setAttribute('aria-pressed', String((chosen[d.id] ?? d.rec) === oi))
+        const mark = el('span', 'mark', (chosen[d.id] ?? d.rec) === oi ? '●' : '○')
+        b.append(mark)
+        const text = el('span', null)
+        text.append(el('div', null, label))
+        if (note) {
+          const small = el('div', null, note)
+          small.style.cssText = 'color:var(--dsw-alias-label-tertiary);font-size:11px;margin-top:2px'
+          text.append(small)
+        }
+        b.append(text)
+        if (oi === d.rec) { const r = el('span', 'rec', '推荐'); b.append(r) }
+        b.addEventListener('click', () => { chosen[d.id] = oi; renderDecisions() })
+        opts.append(b)
+      })
+      box.append(opts)
+      decList.append(box)
+    })
+  }
+
+  document.getElementById('btnGen').addEventListener('click', () => {
+    const lines = ['内嵌终端「标签栏多开」— 决策选择（2026-09-19）', '']
+    DECISIONS.forEach((d, i) => {
+      const pick = chosen[d.id] ?? d.rec
+      lines.push(String(i + 1).padStart(2, '0') + '. ' + d.q + ' → ' + d.opts[pick][0] + (pick === d.rec ? '（推荐）' : '（改选）'))
+    })
+    lines.push('', '备注：')
+    const out = document.getElementById('out')
+    out.style.display = 'block'
+    out.value = lines.join('\n')
+    out.select()
+    copy(out.value)
+    toast('清单已生成并尝试写入剪贴板')
+  })
+  document.getElementById('btnReset').addEventListener('click', () => {
+    for (const k of Object.keys(chosen)) delete chosen[k]
+    document.getElementById('out').style.display = 'none'
+    renderDecisions()
+  })
+
+  // ---------------------------------------------------------------- 启动
+  create('pwsh', { title:'PowerShell 7' })
+  create('powershell', { title:'default' })   // 对齐参考图的 default 标签
+  active.bottom = sessions[0].id
+  active.right = sessions[1].id
+  renderDecisions()
+  render()
+
+  window.addEventListener('resize', () => render())
+})()
+</script>
+</body>
+</html>
