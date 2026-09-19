@@ -33,7 +33,12 @@ Miasaki.exe (Tauri 2, 单进程)
 | 启动健康标记 = bootstrap.json(v1),temp+rename 原子写 | 启动阶段落盘(bootstrap/spawn/waiting/up),失败可诊断;损坏删除重建默认(不猜不静默)。设计见 bootstrap-reliability.md |
 | 重试 = BOOTSTRAP_GEN 代际计数(+1 后旧序列自行退出) | spawn 失败后旧循环不再 spawn,原「重试」按钮形同虚设;换代后新序列完整重跑 |
 | 桌宠缩放 = 预乘空间双线性采样(2026-08-30) | 非整数最近邻(208→270 ×1.298)把单点杂色撕成锯齿簇,540→270 隔行丢像素破坏抗锯齿;双线性在预乘空间下数学正确且 ULW 兼容 |
-| 桌宠状态源 = 官方契约为主 + DOM 兜底(v3 M2 2026-09-12) | `dsh-pet-panel` 读官方 `ctx.sessions`/`ctx.uiSession.pendingInteractions`(inject 白名单实证),hash `pet=` 上报;DOM 扫描仅通道死亡时兜底。单写者:注入运行时 syncHash 合并 pet 字段,pet-panel 只写全局对象 |
+| 桌宠状态源 = 官方契约为主 + DOM 兜底(v3 M2 2026-09-12;R0 2026-09-16 改为**跨会话聚合**) | `dsh-pet-panel` 读官方 `ctx.sessions`/`ctx.uiSession.pendingInteractions`(inject 白名单实证),hash `pet=` 上报;DOM 扫描仅通道死亡时兜底。单写者:注入运行时 syncHash 合并 pet 字段,pet-panel 只写全局对象。**R0 起**:审批遍历全部会话的 `pendingInteractions`(切走会话也能看到后台待审批),运行态「任一非子代理会话 running = 忙」;审批带出 `sessionId`/`reason`,**无稳定身份不显示** |
+| 桌宠窗口 = 不夺前台(`WS_EX_NOACTIVATE`,R1 2026-09-16) | 点击桌宠不再夺走前台/键盘焦点——否则用户在原应用的 Ctrl+C/V 会落到桌宠窗口(参考实现 issue #98 的「整机复制粘贴失效」观感)。**只改扩展样式位、不重建原生窗口**;鼠标/键盘消息照常送达,点击/拖动/双击不受影响 |
+| 桌宠窗口 = 透明区域逐像素穿透(R2 2026-09-16) | 10ms 光标轮询(`IDT_HIT`) + 查**当前合成缓冲 `buf`** 的 alpha(阈值 `CLICK_THROUGH_ALPHA=16`) → 动态置位/清除 `WS_EX_TRANSPARENT`。**必须轮询**:置位后本窗口收不到鼠标消息,恢复判定无从由事件得知。拖拽/隐藏中恒不穿透;只改样式位不重建窗口(重建会闪烁) |
+| 桌宠位置 = pet.json v2 比例 + 屏幕身份(R3 2026-09-16) | 「**角色可见区域**中心」相对所在工作区的比例 `rx/ry` + 工作区几何(屏幕身份) + 绝对坐标兜底 + hide;v1 按 `version` 分流读取并自动升级。可见性判据 = **角色可见区域 ∩ 工作区 ≥ 25%**(角色区域 = 底部 `CELL_H` 带,与 `blit_center_bottom` 几何一致)。旧「窗口中心点」判据在 M4.1 peek 缩边时必然误判「不可见」→ 拉回默认位置 |
+| 桌宠气泡 = 提醒模型 `Alert`(R4/R7 2026-09-16) | 单槽 → `{ id, frame, priority, sticky, until }`;优先级 **审批(0) > 告警(1) > 状态(2) > 台词(3)**;同 id **就地更新**(不重置计时,状态抖动不闪);**按 id 精确移除**(`resolve_alert`);低优先级受 `ALERT_MIN_DWELL_MS=900ms` 最小驻留保护,审批/告警**恒可立即抢占**。未采纳参考实现的「被抢占项回队首」(我方同时只展示一个气泡) |
+| 桌宠内联审批 = 单向链 + 官方 `answer()`(R5/M3.2 2026-09-16) | **Rust 不持有任何 DSH API**:命中区(`approval.png` 固定矩形)→ `decide_approval` → 乐观收起 + 单调 `seq` → `wv.eval` 派发 `miasaki-approval-decision` → `dsh-pet-panel` 在跨会话 `pendingInteractions` 中按 `key` 匹配 → 官方 `PendingApproval.answer('allowed-once'\|'rejected')`。红线:仅用户显式点击、仅两个枚举、seq 去重、**失败不假装成功**(`DECISION_FALLBACK_MS=3000ms` 后回落「需要你的批准」);**无 `key` 不挂可交互气泡**(身份门禁) |
 | 桌宠状态扫描(DOM 兜底) = 节奏分级 + 零强制布局(2026-09-08) | 原实现每轮对每个 button 求 `offsetParent`(强制布局)、且每轮重算含 `elementFromPoint`/`getComputedStyle` 的 diag;长会话+流式输出下实测每 1.5s 出现 15~47ms 主线程尖峰,表现为输入发涩/发送无响应。改为 activity 每轮、effort/approval 每 2 轮、hidden 时每 4 轮,diag 按 10s 节流重算 |
 
 ## 3. 数据流
@@ -58,10 +63,18 @@ tb-drag pointerdown → 记录起点;pointermove → move=累计物理增量(×d
 
 ### 3.4 桌宠状态源(v3 M2 2026-09-12 重做:官方契约为主,DOM 兜底)
 ```
-主信号 —— DSH 官方契约(dsh-pet-panel 插件,inject sessions/uiSession):
-  ctx.sessions.list.getSnapshot()   → { ids, byId, current, ... } row.running(当前选中会话)
-  ctx.uiSession.pendingInteractions → ReadonlyMap<SessionId, PendingApproval>(toolName/reason)
+主信号 —— DSH 官方契约(dsh-pet-panel 插件,inject sessions/uiSession;**R0 起跨会话聚合**):
+  ctx.sessions.list.getSnapshot()   → { ids, byId, current, ... };遍历 ids/byId 取 row.running
+                                      (**任一非子代理会话 running = 忙**;不再只读 current)
+  ctx.uiSession.pendingInteractions → ReadonlyMap<SessionId, PendingApproval>;**遍历全部会话**
+                                      找审批(切走会话也能看到后台待审批);带出 toolName+sessionId+reason+key;
+                                      **无稳定身份的审批不显示**(身份门禁)
+  hash petkey= ← 官方 PendingApproval.key(审批的幂等身份;R5 内联审批按它匹配与移除)
   合成六态 idle/thinking/waiting/error/done(subagent 会话不计入;running true→false 边沿=done)
+反向(仅 R5 决策,用户点击才发生):
+  Rust 命中区 → 乐观收起 + seq → wv.eval 派发 'miasaki-approval-decision'
+    → dsh-pet-panel 按 key 匹配 → 官方 PendingApproval.answer('allowed-once'|'rejected')
+    → (失败) 3s 内审批仍在 → 桌宠改显「需要你的批准」提示去 DSH 界面处理
     │ 每 1.5s 心跳写 window.__miasakiPetPanel = { ts, state, tool }
     ▼
 注入运行时 02-core.js syncHash(hash 单写者):心跳 5s 内 → 追加 pet=<态>&pettool=<工具名>&petts=<ms>

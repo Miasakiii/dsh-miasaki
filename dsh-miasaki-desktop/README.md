@@ -99,16 +99,34 @@ node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
 
 - 图集兼容 Codex 宠物 V1/V2 格式（8 列 192×208，自动探测每行非空帧）；kurumi 已切全 9 行语义帧
   （idle/runRight/runLeft/wave/jump/failed/wait/run/review），whale idle 为帧序列（idle.gif 拆分 6 帧）
-- 交互（v3 M1，2026-09-12 重排）：**拖动**移动 / **单击**「撸一下」跳跃+气泡（**不抢焦点**；等待审批或
-  主窗口最小化/隐藏时单击为**唤起主窗口**）/ **双击**挥手（250ms 去抖与单击区分；等待审批或主窗口
-  最小化/隐藏时双击为**唤起主窗口**）/ **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
+- 交互（v3 M1，2026-09-12 重排；**R1/R2 于 2026-09-16 补窗口层**）：**拖动**移动 / **单击**「撸一下」
+  跳跃+气泡（**不抢焦点**——窗口已带 `WS_EX_NOACTIVATE`，点击不会夺走前台与键盘焦点，
+  在被遮挡的应用里 Ctrl+C/V 照常可用；等待审批或主窗口最小化/隐藏时单击为**唤起主窗口**）/
+  **双击**挥手（250ms 去抖与单击区分；等待审批或主窗口最小化/隐藏时双击为**唤起主窗口**）/
+  **右键**菜单（显示主窗口、隐藏桌宠、最小化主窗口、退出）
+- **透明区域鼠标穿透**（R2，2026-09-16）：角色轮廓以外的透明像素不再拦截鼠标——10ms 轮询光标位置，
+  查**当前合成缓冲**的 alpha（阈值 16，与显示逐像素一致），命中透明像素即置位 `WS_EX_TRANSPARENT`
+  把点击交给下层窗口，光标回到角色本体立即恢复可点；隐藏 / 拖拽中恒不穿透（保证跟手）。
+  只改扩展样式位、不重建窗口（无闪烁）；切换日志按 500 次节流
+- **桌宠内联审批（R5 / M3.2，2026-09-16）**：审批等待时气泡升级为**含「拒绝 / 允许一次」两个按钮**
+  的交互气泡（`ui/pets/approval.png`，240×84，构建期 `gen-bubbles.ps1` 出图、运行时零字体调用；
+  两按钮间留 8px 间隙防误触）。点按钮 → 桌面端记单调 `seq` 并经 `eval` 派发
+  `miasaki-approval-decision` → `dsh-pet-panel` 调用官方 `PendingApproval.answer('allowed-once'|'rejected')`。
+  **红线**：只在用户显式点击时决策、只发这两个枚举、不做「全部允许 / 记住选择」；
+  点完**先本地收起**，若 3s 内该审批仍在（未生效）则回显「需要你的批准」提示去 DSH 界面处理，
+  **绝不假装成功**。拿不到官方 `key` 的审批不挂可交互气泡（身份门禁）
 - 自主动作（环境编排）：静止且空闲时低频随机小动作（挥手/检查/等待，偶发跳跃——表演 1.2~2.2s、
   休息 8~18s、首次 5.5s 延迟；指针按下即打断）；等待审批 / fleet 指示 / busy 工作态期间
   散步与小动作**停触发**（工作姿态可读，不被环境动作打断）
-- **工作动态 + 权限申请提示**（v3 M2 2026-09-12 重做）：桌宠反映**当前选中会话** 的六态
-  `idle / thinking / waiting / error / done / fleet-blocked`——**主信号 = DSH 官方契约**：
-  `dsh-pet-panel` 插件读官方 `ctx.sessions`（当前会话 `running`）+ `ctx.uiSession.pendingInteractions`
-  （审批等待，含工具名），1.5s 心跳写 `window.__miasakiPetPanel`，由注入运行时 `syncHash`
+- **工作动态 + 权限申请提示**（v3 M2 2026-09-12 重做；**R0 2026-09-16 改为跨会话聚合**）：
+  桌宠反映六态 `idle / thinking / waiting / error / done / fleet-blocked`——**主信号 = DSH 官方契约**：
+  `dsh-pet-panel` 插件读官方 `ctx.sessions`（**跨会话聚合**：任一非子代理会话 `running` = 忙，
+  修掉「先完成的会话把仍在干活的顶成 idle」）+ `ctx.uiSession.pendingInteractions`
+  （**遍历全部会话**找审批——切走会话后仍能看到后台会话的待审批，这是「快捷提权」的价值前提；
+  随态带出工具名 + `sessionId` + 原因（截断 160 字符）+ **官方 `key`**（经 hash `petkey=` 上报，
+  用于内联审批的幂等身份），并落地**身份门禁**：拿不到稳定身份的审批一律不显示，
+  宁可不报也不挂一个永远等不到 resolved 的常驻态），
+  1.5s 心跳写 `window.__miasakiPetPanel`，由注入运行时 `syncHash`
   合并进 URL hash `pet=/pettool=/petts=`（单写者定律不变）。Rust `compose` 合成六态并按
   **Waiting(审批) > FleetBlocked(告警) > Error > Done > Thinking(静默守候) > Idle** 优先级
   映射立绘/气泡（`pick_state_row` 单测钉死）：waiting 强制 kurumi `wait` 行 /
@@ -124,8 +142,14 @@ node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
   脉冲看门狗 2s 轮询，桌宠按 **fleet 告警(blocked/error，failed 行 + 常驻
   “需要你的批准”气泡）> DSH 等待审批 > fleet 运行中（work 立绘 + 常驻“忙碌中…”）
   > busy > intensity** 映射；未设变量时联动静默关闭。
-- 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`（v1：位置 + 隐藏状态，原子写；
-  位置不在任何可见显示器工作区时自动回默认 (1200,500)，修复拔掉副屏/分辨率变化后的「桌宠丢了」）
+- 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`（**v2，2026-09-16**：
+  「**角色可见区域**中心」相对所在显示器工作区的比例 `rx/ry` + 工作区几何（作为屏幕身份）
+  + 绝对坐标兜底 + 隐藏状态，原子写；**v1 文件自动读取并在下次保存时升级**）。
+  恢复顺序：工作区几何完全一致 → 按比例还原并 clamp 回工作区（**分辨率/缩放变化后位置仍成立**）；
+  几何已变 → 绝对坐标 + 可见性校验；都不可见 → 回默认 (1200,500)（保留隐藏设置）。
+  可见性判据为「**角色可见区域 ∩ 工作区的面积占比 ≥ 25%**」——半出屏/贴边保留，完全出屏才回默认；
+  旧的「窗口中心点」判据已废弃，它是 M4.1（peek 缩边）的必然坑：peek 时窗口中心在屏外，
+  会被误判「不可见」而把桌宠拉回默认位置（即「桌宠丢了」回归）
 - **设置入口**：DSH「设置 → 桌宠」面板（`plugins/dsh-pet-panel/`）提供：
   显示/隐藏开关、位置重置（屏幕外找回）、状态回显（面板挂载时经
   `cmd=pet-state` 请求，桌面端 eval `miasaki-pet-state` 事件回推）。
@@ -203,11 +227,12 @@ desktop/
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
 ├─ plugins/dsh-token-monitor/    # DSH web profile bundle：用量监控（会话「用量」Tab 纯会话视角 + 侧栏脚部「用量统计」入口 → 全局浮窗：总览六卡/年热力图/趋势/模型用量 + 会话活跃分布（标题折叠自会话日志／近 30 日逐日分布条／排序·搜索·条数控件）/今日限额，v0.5.0）
 ├─ plugins/dsh-session-log-move/ # DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧，见下）
+├─ plugins/dsh-model-probe/      # DSH web profile bundle：模型连通性真实探测（host only，设置页「测试连通性」的 B 档能力，见下）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
 ├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
-├─ scripts/gen-bubbles.ps1   # 气泡台词位图精灵表（预渲染，规避 GDI 字体崩溃）
+├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
    ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航 + fleet 脉冲看门狗（环境变量 MIASAKI_FLEET_PULSE）
    ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
@@ -283,11 +308,48 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 先行动态插件验证（2026-09-07）通过后按此形态固化；设计见
 `design/session-log-download-relocate.md`，安装同 token-monitor profile bundle。
 
+## DSH 插件：模型连通性探测（`plugins/dsh-model-probe/`）
+
+设置页「测试连通性」按钮的**真实可用性探测**（host only，无 client 半侧）。配套补丁
+[`patches/dsh-client-ui-settings-models/`](patches/dsh-client-ui-settings-models/README.md)
+负责按钮侧调用，本插件负责「问对的问题」。设计见 `design/model-probe-v2.md`。
+
+**解决什么**：v1 的按钮复用官方目录探测（`GET {baseURL}/v1/models`），问的是
+「网关能不能列出模型目录」，而按钮语义是「这个模型能不能用」。StepFun Step Plan
+这类只兼容 `POST /v1/messages` 的订阅网关对 `/v1/models` 回 401 —— 于是**能正常对话的
+模型被报成认证失败**。v2 改为发真实对话请求。
+
+- **两段式，默认零消耗**：① 握手档发一个必然被参数校验拒绝的请求（空 `messages`），
+  401/403 = key 坏（**到此结束，不产生任何生成**）；400 = 鉴权已通过。
+  ② 仅在鉴权通过后才发 `max_tokens: 1` 的生成请求确认端到端可用。
+- **结果六分类**：`ok`（附耗时）/ `unauthorized` / `model-missing` / `quota` /
+  `rate-limited` / `timeout` / `unreachable` / `bad-request` / `server-error` /
+  `unknown` / `unsupported` / `no-credential` / `no-endpoint` / `no-model`。
+  host 只回稳定 `kind`，文案在客户端本地化（中英各一份）。
+- **协议覆盖**：`anthropic-messages`（`POST {root}/v1/messages`，与对话路径同规则）、
+  `openai-completions`、`openai-responses`；其余协议明确回 `unsupported`。
+- **凭据**：表单临时 key → `credentials.resolve(apiKeyEnv)` → 进程环境变量；
+  **key 永不回传**（`detail` 两遍脱敏）。
+- **信任栅栏**：Host / Origin / `sec-fetch-site` 三层（与 sidebar、canvas 的 `/api` 栅栏同构）。
+- **无副作用**：除一次极小模型调用外不改配置、不写文件。
+- **降级**：路由 404（插件未装 / host 未重启）时补丁自动回退 v1 目录探测并附提示，
+  因此本插件是补丁的**可选**依赖，缺失不会让按钮失效。
+
+路由：`POST /model-probe-api/probe`、`GET /model-probe-api/health`。
+
+安装：同其它 profile bundle —— `%USERPROFILE%\.dsh\profiles\web\package.json` 的
+`dependencies` + `dsh.profile.bundles` 加 `dsh-model-probe`（file: 依赖），
+profile 目录 `pnpm install`，**host 重启**后生效。
+
+自证：`node plugins/dsh-model-probe/test/probe.test.js`（18 例判定表单测，纯逻辑无网络），
+已并入 `node scripts/verify-all.mjs desktop`。
+
 ## 设计规范
 
 - 总体设计与三主题规范：`design/themes.md`
 - DSH 令牌面（构建校验依据）：`design/token-surface.txt`
 - 启动可靠性（失败恢复页/健康标记）：`design/bootstrap-reliability.md`
+- 模型连通性探测 v2（两段式探测 / 分类表 / 降级策略）：`design/model-probe-v2.md`
 
 ## 行为约定
 

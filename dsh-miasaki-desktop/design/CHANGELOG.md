@@ -2,6 +2,267 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-19 · 模型连通性探测 v2（「测试连通性」改问对的问题）
+
+**起因**：用户在设置 → 模型里对 `step/step-5-preview`（StepFun Step Plan）点「测试连通性」，
+得到 `https://api.stepfun.com/step_plan/v1/models?limit=1000 answered 401; check the API key`，
+但同一模型的对话完全正常。根因不是 key：v1 按钮复用官方**目录探测**
+（`GET {baseURL}/v1/models`），问的是「网关能不能列出模型目录」，而按钮语义是
+「这个模型能不能用」——Step Plan 只兼容 `POST /v1/messages`，对 `/v1/models` 回 401。
+v1 设计稿 §6.2 早已写明「不能因 A 档失败就认为不通」，但 B 档与六分类当时未落地。
+
+- **新增 host 插件 `plugins/dsh-model-probe/`**（host only，无 client 半侧、不注册 slot）
+  - 路由：`POST /model-probe-api/probe`、`GET /model-probe-api/health`，
+    经 `ctx.webServer.register` + `ctx.effect` 注册；`inject: ['settings', 'webServer']`。
+  - **两段式探测**：① 握手档发必然被参数校验拒绝的请求（空 `messages` / 空 `input`）——
+    401/403 = key 坏则**当场结束、零 token 消耗**；400 = 鉴权已通过、端点存在；
+    ② 仅在鉴权通过后发 `max_tokens: 1` 的生成请求确认端到端可用。
+  - **结果类别**：`ok`（附耗时）/ `unauthorized` / `model-missing` / `quota` /
+    `rate-limited` / `timeout` / `unreachable` / `bad-request` / `server-error` /
+    `unknown` / `unsupported` / `no-credential` / `no-endpoint` / `no-model`。
+    host 只回稳定 `kind`，**文案在客户端本地化**（中英各一份），两语言不会漂移。
+  - **协议**：`anthropic-messages` 用 `POST {root}/v1/messages`（`root` 去尾 `/v1`，
+    与 `dsh-llm-pi-ai` 的 `listingUrl()` 同规则——探测路径必须与真实对话路径一致）；
+    `openai-completions` → `/chat/completions`；`openai-responses` → `/responses`；
+    其余协议回 `unsupported` 且不发请求。
+  - **凭据**：表单临时 key → `credentials.resolve(apiKeyEnv)`（`.credentials.yaml`，
+    Models 页写入处）→ 进程环境变量。注意 v1 的 `process.env` 单路径在本机**本来就取不到
+    step 的 key**（它存在 `.credentials.yaml`），这也是新插件必须接 credentials 服务的原因。
+  - **安全**：Host/Origin/`sec-fetch-site` 三层信任栅栏（与 sidebar、canvas 同构）；
+    响应 `detail` 两遍脱敏（精确 key + `sk-`/长串通配）；无副作用（不改配置、不写文件）。
+  - **快照式设计**：`lib/probe.js` 承载全部纯逻辑（URL/请求体构造、状态分类、脱敏、截断），
+    `lib/index.js` 只做装配 —— 于是判定表能被 18 例单测完整覆盖而不碰网络。
+- **补丁升级 `patches/dsh-client-ui-settings-models/`**（仍是 7 条编辑，内容变化）
+  - edit #1 追加 `describeProbe()`（结果类别 → 本地化文案）与 `probeViaHost()`
+    （调 host 路由；非 200 / 非 JSON / 网络失败一律返回 null）。
+  - edit #3 `testModel()` 改为**先** `probeViaHost`、返回 null 时**降级** `discoverModels`，
+    降级文案尾附「探测服务未就绪，已回退目录探测」——因此插件是补丁的**可选**依赖。
+  - edit #6/#7 词条 7 → 22（新增 13 条类别文案 + 降级提示）。
+  - 产物 `144,576 B / E602C1F1…` → `148,922 B / C6C1DCBC…` → **`148,924 B / F1717A07…`**
+    （中间那一版语法非法、曾导致整页插件不注册，见下方「同日补记」；**当前生效的是最后一个**）；
+    官方原版未变
+    （`138,937 B / A60FD863…`），故只换 `PATCHED_SHA256` 与 baseline 产物。
+  - `patch.mjs` 新增**稀疏数组守卫**：编辑规则里的 `[a,,b]` 语法合法却会留 `undefined` 空洞，
+    随后在几百行之外以 `Cannot read properties of undefined (reading 'trim')` 炸开
+    （本次实际踩到，`node --check` 放行）。现在当场报出可读错误。
+- **验证**：插件单测 18/18；`node patch.mjs verify` PASS（由官方原版重建逐字节一致）；
+  `node scripts/verify-all.mjs desktop` **11/11**（新增插件语法 2 项 + 判定表 1 项 + cargo 19 例）。
+- **待办（实机项）**：profile 安装插件 + host 重启后，`step/step-5-preview` 应显示绿色
+  「可用 · Nms」；错 key 应显示「认证失败」且零消耗；错模型 ID 应显示「模型 ID 未注册」；
+  停用插件应看到降级文案。设计见 [`model-probe-v2.md`](model-probe-v2.md)。
+
+### 同日补记 · 补丁产物语法事故与**语法闸门**（v2 → v2.1）
+
+**现场**：浏览器 `Failed to load plugins`，`@deepseek-ai/dsh-client-*` 全系 + 5 个自研插件
+一起 `loaded without registering`；控制台 `Unexpected identifier 'testProbeOk'`。
+**不是崩溃而是"整页插件全灭"** —— 这是多包合并 client bundle 的失效形态。
+
+**根因**：v2 的 locale 字典（edit #6/#7）在 en / zh 各漏一个**尾逗号**。注意本补丁的写法约定：
+发出的逗号写在**字符串内部**（`'\t\t\tkey: "value",'`），行尾那个逗号只是数组元素分隔符 ——
+少写"内部那个"，产出就是缺分隔符的 JS：`testReachableNotListed: "…"` 紧跟 `testProbeOk: "…"`。
+
+**为什么规则错了却没被拦住**（这条比事故本身更重要）：当时的 `verify` 只做
+「由 original 重建 == baseline 产物」的逐字节比对，它证明的是**可复现**、不是**合法**。
+规则错、产物错、golden 也错，三者一致 ⇒ `verify` 照常 PASS、`apply` 照常写入。
+`node --check` 当时也不会被想起——它对**另一个**包（cordis）才有。
+
+**修复与补强**（`patches/dsh-client-ui-settings-models/`）：
+- 补回两个逗号；产物 `148,922 B / C6C1DCBC…` → **`148,924 B / F1717A07…`**（官方原版未变）。
+- **语法闸门**：`applyPatch` **出口**强制 `vm.Script` 解析（按经典脚本目标，与该 bundle
+  `window.__ModuleLoader__.load({…})` 的真实加载路径一致，报出的行号可直接对回文件）。
+  放在纯函数出口 ⇒ `verify` / `apply` / `rebuild` 三条路径自动继承，无第二条路能把非法产物写进安装目录。
+- **字典结构不变量**：`replaceLine`（一行 → 多行字典展开）除末行外每行必须有尾逗号，
+  在入口当场点名「哪条编辑的第几行缺尾逗号」——语法闸门能兜住，但 V8 报的是几百行外的裸标识符，极具误导性。
+- **`verify` 增加常量自洽校验**：产物 SHA 必须等于 `PATCHED_SHA256`，堵住「改了 EDITS +
+  重生成 golden 却忘了同步常量」的静默漂移（本补丁历史上吃过同类亏）。
+- **`status` 增加"语法状态"维度**，独立于补丁状态：文件可以 `patched`、SHA 与常量一致、
+  产物却是坏的 —— 本次正是如此。发现该状态时给出一条明确处置路径。
+- **新增 `resync` 模式**：`apply` 对带标记的文件幂等跳过 ⇒ **规则修好后无法直接重打**，
+  必须先 `revert` 再 `apply`。这条操作坑真踩到了，固化成命令；它只接受 SHA 等于已知官方原版的 backup。
+- **新增 `rebuild` 模式**：改过 `EDITS` 后由 original 重建 golden 并打印新常量（只写 `baseline/`，不改常量）。
+
+**排查方法可复用**（三条独立证据链对齐，任一单独都不足以定性）：
+① `status` 报「语法 非法（第 2923 行）」；② 安装文件与 `baseline/client.patched.js` SHA 相同
+（`C6C1DCBC…`）⇒ 线上跑的就是入库产物、没被外部改坏；③ `applyPatch(original)` 重建结果**逐字节等于**
+该产物 ⇒ 反证"规则本身产出了坏 JS"。
+
+**验证**：`node patch.mjs verify` 三行 PASS；全量复扫 15 个 client/host bundle
+（4 个本体补丁目标 + 10 个自研插件）语法 **0 例同类**；`verify-all.mjs desktop` **11/11**。
+
+## 2026-09-16 · 桌宠第二批落地（R4/R5/R7：提醒模型 + **桌宠内联审批**）
+
+按 [`pet-reference-benchmark.md`](pet-reference-benchmark.md) §4 第二批实施。
+新增一张**构建期**位图；运行时仍是零依赖、零 GDI 字体调用、零新增 IPC。
+
+- **R4 · 提醒（气泡）模型**（`pet_native/model.rs::Alert` + `window.rs` 合流段）
+  - 单槽 `Option<(usize, Instant)>` → `Alert { id, frame, priority, sticky, until }`，优先级
+    **审批(0) > 告警(1) > 状态(2) > 台词(3)**；**同 id 就地更新**（帧变了才换、不重置计时 →
+    状态抖动不再闪气泡）；**按 id 精确移除**（`resolve_alert`）；限时项显式 `until`
+    （取代原先「状态帧不参与 3s 过期」的散列判定）。
+  - id 语义：审批 = `approval:<官方 PendingApproval.key>`；状态 = `state:*`；台词 = `quote` / `quote:click`。
+  - 单击「撸一下」的台词按**告警档(1)**展示（用户主动交互可短暂压过状态气泡），
+    但**压不过审批(0)**——审批气泡必须常驻到 resolved（v3 M3 硬约束）。
+  - **未采纳**参考实现的「被抢占项回队首、稍后恢复」：我方同时只展示一个气泡，
+    被抢占的低优先级项要么是台词（可丢弃）、要么是状态派生项（状态仍在，下一轮自然回来）。
+- **R7 · 气泡最小驻留**（按我方实际情况**重塑**，非照搬 30s 节流）
+  - 参考实现的「跨检测器 30s 节流」作用于**事件型告警源**（stuck/pattern/exploration 三检测器）；
+    我方状态均为快照派生、**没有事件型检测器**，直接搬会把状态变化一并吞掉。
+  - 故只取其**防抖内核**：同优先级新项在 `ALERT_MIN_DWELL_MS=900ms` 内不替换当前项，
+    而**审批(0)/告警(1) 恒可立即抢占**（可读性优先，与 v3 M1「审批 ≤2s 切过去」一致）。
+- **R5 · 桌宠内联审批（M3.2）**
+  - **新增位图** `ui/pets/approval.png`（240×84：提问文案 +「拒绝 / 允许一次」两按钮），
+    由 `scripts/gen-bubbles.ps1` 一并生成（构建期 System.Drawing 出图、运行时零字体调用）；
+    两按钮之间留 **8px 间隙**防误触（roadmap M3.2 红线）。
+    `build.rs` 需**显式登记**该素材——该函数是显式清单、不扫 `pets/` 根目录，
+    漏登记会让单文件分发时内嵌兜底缺图。
+  - **hash 身份通路**：`client.js` 把官方 `PendingApproval.key` 写进 `window.__miasakiPetPanel.key`
+    → 注入运行时 `syncHash` 合并 `petkey=`（仍由注入运行时单写 hash）→ `main.rs` `parse_fragment`
+    解析（percent-decode）→ `set_official_state(ts, state, tool, key)` → `PetShared.official_key`。
+  - **Rust 侧**：`approval_hit()` 固定矩形命中判定（不新增 GDI 对象）→ `decide_approval()`：
+    ① **乐观收起**该审批气泡；② 记单调 `seq`；③ 经 `wv.eval` 派发 CustomEvent
+    `miasaki-approval-decision`（detail: `key`/`decision`/`seq`，key 经 `serde_json` 转义防注入）。
+    日志**不打 key 明文**（含 sessionId），只记长度与决策。
+  - **插件侧**（`dsh-pet-panel` 0.1.0 → **0.2.0**）：监听该事件 → 在**跨会话** `pendingInteractions`
+    中按 key 找到待审批项 → 调用官方 `PendingApproval.answer('allowed-once' | 'rejected')`。
+    **红线**：只接受这两个枚举（协议收窄）；按 seq 去重（用集合而非单调比较——壳重启会重置 seq）；
+    先本地收起再异步确认，**失败不假装成功**（写 `decisionError`）。
+  - **失败回落**：点击后 `DECISION_FALLBACK_MS=3000ms` 内该审批**仍在** → 桌宠改显
+    `BUBBLE_NEED_APPROVE`（"需要你的批准"）提示去 DSH 界面处理——**绝不显示"已处理"**。
+  - **身份门禁**（R0 起延续）：拿不到官方 `key` 的审批**不挂可交互气泡**（只作普通 waiting 呈现），
+    杜绝「挂出一个永远等不到 resolved、也点不动的气泡」（参考实现同款教训）。
+- **R6 · 等待态语义补全（本轮为结论，无代码）**
+  - 官方 `SessionPendingInteractionMap` **当前只有 `approval` 域**
+    （`dsh-client-ui-approval/lib/types/client/contract/slots.d.ts:6-11`）⇒
+    **提问等待（`ask_user_question`）不在该通道**，走 `dsh-client-ui-user-questions`，
+    属**新增通道**而非改映射（未做，已记入 TODO）。
+  - **cordis 动态插件运行审批是否落在 `approval` 域：本轮未能运行时验证**——客户端插件包的激活
+    需要用户批准，而本会话审批已禁用（探针插件无法激活）。已记入实机验收项：
+    跑一个动态 Cordis 插件，观察桌宠是否出现审批气泡。
+  - 代码侧防御：R5 只处理 `kind === "approval"`，其余 kind 一律忽略（未来出现新域时需显式扩展）。
+- **验证**：`cargo check` 零警告；`cargo test` **19/19**（新增 3 例 Alert 单测：优先级次序 /
+  同 id 就地更新 / 只有限时项过期）；`verify-all desktop` **8/8**；`node --check` 通过；
+  `gen-bubbles.ps1` 重跑后 `bubbles.png` **逐字节未变**（生成链确定性），`approval.png` 240×84 已入册。
+- **实机验收清单（待用户）**：
+  1. 触发一次工具审批 → 桌宠显示含「拒绝 / 允许一次」的审批气泡；
+  2. 点「允许一次」→ 会话继续、气泡收起、DSH 界面审批消失；
+  3. 点「拒绝」→ 工具被拒、会话继续；
+  4. 让插件不可用（无插件宿主）后点按钮 → 3s 后出现「需要你的批准」回落提示（**不假装成功**）；
+  5. 审批期间点角色本体 → 仍唤起主窗口（审批语义优先）；点气泡外空白 → 正常「撸一下」；
+  6. `pet.log` 出现 `approval decision sent -> allowed-once seq=…`（无 key 明文）。
+- 触摸点：`src-tauri/build.rs`、`src-tauri/src/pet_native.rs`、
+  `src-tauri/src/pet_native/{model,window,image,config}.rs`、`plugins/dsh-pet-panel/lib/client.js`、
+  `plugins/dsh-pet-panel/package.json`、`themes/src/02-core.js`、`scripts/gen-bubbles.ps1`、
+  新增 `ui/pets/approval.png`、`README.md`、本文件。
+  **需重编壳；插件已同步 profile（0.2.0，哈希核对一致），重启 DSH host 后生效。**
+
+## 2026-09-16 · 桌宠第一批改进落地（R0–R3：跨会话审批 / 不夺焦点 / 透明穿透 / 位置 v2）
+
+按 [`pet-reference-benchmark.md`](pet-reference-benchmark.md) §4 第一批（用户拍板）实施——
+**零素材、零新增依赖、不动状态机与 hash 协议**。
+
+- **R0 · 跨会话聚合待审批 + 审批身份门禁**（`plugins/dsh-pet-panel/lib/client.js`）
+  - 旧实现只读 `sessions.list.current`：用户切走会话后，别的会话正在等待的审批**完全不可见**——
+    而「快捷提权」的价值前提正是「不用切窗口」。深挖 A 判定这是当前最大的一处漏报面。
+  - 改为遍历 `ctx.uiSession.pendingInteractions`（本就是 `ReadonlyMap<SessionId, PendingApproval>`）
+    找审批、遍历 `list.ids`/`byId` 判 running（**任一非子代理会话 running = 忙**，
+    修掉「先完成的会话把仍在干活的顶成 idle」）；M2.3 子代理排除保留。
+  - **身份透出**：`sessionId` + `reason`（截断 160 字符）随态写入 `window.__miasakiPetPanel`
+    （非审批态清空），供 M3 决策链路使用；不进 hash ⇒ **Rust 零改动**。
+  - **插件版本 0.1.0 → 0.2.0**（行为与语义变更；同时便于 profile 侧 `pnpm install` 识别
+    `file:` 依赖变化——同版本号时 pnpm 可能跳过拷贝，这是本线已知的 store 缓存滞后问题）。
+  - **身份门禁**：拿不到任何稳定身份（条目 `sessionId` 或 map key）的审批**一律不显示**——
+    宁可不报，也不挂一个永远等不到 resolved 的常驻态（参考实现踩坑：`agent_link.py:3190-3194`）。
+- **R1 · 点击桌宠不夺前台**（`pet_native/window.rs` 窗口样式 + `ffi.rs` 常量）
+  - 扩展样式补 `WS_EX_NOACTIVATE`：此前点击桌宠会把前台与键盘焦点夺走，用户在原应用的
+    Ctrl+C/V 会落到桌宠窗口（参考实现 issue #98 的「整机复制粘贴失效」观感）。
+  - 只改样式位、**不重建原生窗口**；鼠标/键盘消息照常送达（点击、拖动、双击不受影响）。
+  - **右键菜单兼容（必做，否则是回归）**：`TrackPopupMenu` 要求 owner 窗口是**前台窗口**，
+    否则「点击菜单外不关闭」；而 `WS_EX_NOACTIVATE` 会让 `SetForegroundWindow` 失效。
+    故 `show_menu` 改为：弹菜单前用 `GetForegroundWindow` 记下原前台 → **临时摘掉该样式位** →
+    `SetForegroundWindow` 自身 → 弹菜单 → 按 MSDN 建议补 `PostMessageW(WM_NULL)` 确保菜单消失 →
+    **恢复样式位并把前台归还原窗口**（用完不留前台占用）。
+- **R2 · 透明区域逐像素鼠标穿透**（`pet_native/window.rs` + `config.rs` + `ffi.rs`）
+  - 新增 **10ms 光标轮询定时器**（`IDT_HIT`），按光标位置查**当前合成缓冲 `buf` 的 alpha**——
+    `buf` 已是「立绘 + 气泡」逐像素 over 之后的最终结果，故**无需为每种元素单独维护 mask**
+    （比参考实现的 Qt mask 路径更省）；阈值 `CLICK_THROUGH_ALPHA = 16`（参考实机值）。
+  - 命中透明像素 → 置位 `WS_EX_TRANSPARENT`（鼠标穿透到下层窗口），否则清除。
+    **必须轮询**：置位后本窗口收不到鼠标消息，「何时恢复可点击」无从由事件得知。
+  - 隐藏 / 拖拽中恒不穿透；只改扩展样式位、**不重建窗口**（重建会造成可见闪烁）；
+    切换日志按 `CLICK_THROUGH_LOG_EVERY=500` 节流（鼠标扫过轮廓会频繁切换，不能每切必写盘）。
+- **R3 · 位置持久化 v2 + 可见性判据修正**（`pet_native/persist.rs` + `pet_native.rs`）
+  - `pet.json` 升 **v2**：`rx`/`ry`（**角色可见区域中心**相对所在显示器工作区的比例）
+    + `work`（该工作区几何，作为「屏幕身份」）+ 绝对坐标兜底 + `hide`。
+    **v1 文件可无缝读取**（按 `version` 字段分流解析），读后下次保存即自动升级为 v2。
+  - 恢复顺序：工作区几何**完全一致** → 按比例还原并 clamp 回工作区（分辨率/缩放变化安全）；
+    几何已变 → 绝对坐标 + 可见性校验；都不可见 → 默认位置（保留 `hide`）。
+  - **可见性判据由「窗口中心点」改为「角色可见区域 ∩ 工作区的面积占比 ≥ 25%」**：
+    角色区域 = 底部 `CELL_H` 高的一条带（与 `blit_center_bottom` 的几何一致），
+    排除了窗口上方的气泡带与左右留白。**这是 M4.1（peek 缩边）的前置**——
+    peek 时窗口中心会落在屏外，旧判据会误判「不可见」并把桌宠拉回默认位置（「桌宠丢了」回归）；
+    参考实现同款结论见 `pet/window_placement.py:183-200`（以角色 alpha 轮廓为可见性口径）。
+- **验证**：`cargo check --offline` 零警告；`cargo test --offline` **16/16**
+  （新增 6 例 `persist` 单测：相交面积 / 角色带几何 / 全局矩形偏移 / v1 解析 /
+  v2 往返 / 未知版本拒绝）；`node --check plugins/dsh-pet-panel/lib/client.js` 通过。
+- **实机验收清单（待用户，需提权 + 真实 DSH 页）**：
+  1. 会话 A 触发审批 → **切到会话 B** → 桌宠仍显示「等待审批」（R0 核心）；
+  2. 点击桌宠后，在记事本里 Ctrl+C/Ctrl+V 仍作用于记事本（R1）；
+  3. 点击桌宠**透明区域**（角色身旁空白）→ 命中下层窗口；点击角色本体 → 照常跳跃/拖动（R2）；
+  4. 拖动桌宠到屏幕边缘并重启 → 位置保持（R3）；改分辨率/缩放后重启 → 位置按比例合理落位；
+  5. `pet.log` 出现 `pet.json v2 restored by ratio …` 或 `workarea changed ->`；
+     无新增 `ULW failed`，GDI 对象数不增。
+- 触摸点：`plugins/dsh-pet-panel/lib/client.js`、`src-tauri/src/pet_native/{window.rs,persist.rs,config.rs,ffi.rs}`、
+  `src-tauri/src/pet_native.rs`、`README.md`、本文件。**Rust 需重编壳**（`npm run tauri build`）。
+
+## 2026-09-16 · 桌宠参考实现对标评估（**仅调研，代码零改动**）
+
+- **来源**：用户给定第三方参考 `MerZlin/dsh-pet-indesktop`（上游 `PC2005-cloud/dsh-pet` 的跨平台
+  移植 fork，Python + PySide6，自述 v4.2.0）。源码经 **GitHub API 快照**归档于
+  `_refs/dsh-pet-indesktop/`（本机 `git clone` 因 schannel 凭证不可用，`gh api` 通道可用；
+  归档为会话期临时档案，已 ignore、不入库）。
+- **产出**：新增 [`pet-reference-benchmark.md`](pet-reference-benchmark.md)——评估范围与许可边界、
+  参考实现全景（DSH 联动/审批、提醒队列、窗口层、边缘探头、位置持久化、工程门禁）、
+  16 项可迁移性分级、建议落地清单 R0–R10、明确不采纳清单、待拍板 8 项、证据索引。
+  另有三路并行深挖报告（`_refs/pet-analysis/A-dsh-link.md` 等，临时档案）。
+- **对标结论（要点）**：
+  - **新查出我方一处真实漏报面**：桌宠只读**当前选中会话**（`plugins/dsh-pet-panel/lib/client.js:216-232`
+    写死 `ls.current`），用户切走会话后**看不到其他会话的待审批**；而官方
+    `ctx.uiSession.pendingInteractions` 本就是 `ReadonlyMap<SessionId,…>`，改为遍历即可
+    （建议 R0：`client.js` ~25 行、**Rust 零改动**）。
+  - **两处窗口层缺口**：① 无透明区域逐像素穿透（`grep WS_EX_TRANSPARENT|NCHITTEST|SetWindowRgn`
+    零命中 ⇒ 现为整窗矩形吃鼠标）；② 窗口样式缺 `WS_EX_NOACTIVATE`
+    （`pet_native/window.rs:998`），点击桌宠会夺前台——参考项目记录该缺陷会造成
+    「整机 Ctrl+C/V 失效」的观感（其 issue #98）。
+  - **一处结构缺口**：气泡为单槽 `Option<(usize, Instant)>`（`window.rs:31`）；M3 审批气泡
+    常驻后需要「带 id/优先级的提醒队列 + 精确移除 + 恢复防抖」，参考项目
+    `pet/window_alerts.py:68-160` 有完整先例与踩坑记录。
+  - **一条改变 M5 顺序的发现**：参考实现**三处独立写明**「旋转/形变在绘制层完成、**不依赖素材**、
+    不改动帧缓存/解码链」⇒ 用户抱怨的「动作太少」里有**一大块不需要出图**（黄金回旋 / Q 弹挤压 /
+    甩出 / 探头倾斜都是纯绘制变换）；真正要补的是 **whale `work`/`deep` 与 inverse 三态目前各只有
+    1 帧**（`frames.json` 已核实）——这是「非 idle 态完全静止」的最强来源。M5 顺序因此改为
+    **先建变换管线 → 再补单帧 → 最后才谈新动作素材**（R11–R15）。
+  - **一处确定性体验缺陷**：拖动为 `WM_MOUSEMOVE` 逐事件 `MoveWindow`（`window.rs:736-754`，
+    1000Hz 鼠标即每秒千次窗口移动）；参考侧为此专门做了 8ms 合帧 + 回归测试
+    （R13，也是「甩出物理」的必要前置）。
+  - **窗口层另两处可抄语义**：位置持久化用「中心相对**工作区**比例 + 屏幕名」、可见性判据用
+    **角色轮廓而非窗口矩形**（`window_placement.py:183-263`，正对 M4.1 的 peek 误判坑，R3）；
+    边缘探头露出量必须以**旋转后投影 bbox** 为分母、且 `pause/resume` 要平移过渡起点（R14）。
+  - **订正历史记录**：`pet-v3-roadmap.md:100`「审批只有通知」针对的是其**上游 Electron 版**，
+    **不适用本 fork**——本 fork 已有完整可点击审批（同意/拒绝 + 回写），是我方 M3.2 的直接参照。
+  - **无借鉴价值项（重要）**：参考实现**没有**「GUI 事件循环心跳超时 → 落盘线程栈/自愈」类
+    进程内看门狗（其 6 类 heartbeat/watchdog 全部是业务级；`faulthandler` / `sys._current_frames` /
+    `MiniDumpWriteDump` 在 `pet/` 全目录零命中）⇒ 我方 P0「偶发全黑无响应」**无法从它抄现成方案**。
+    深挖 C 另给出**三条可执行机制建议**（评估文档 §4 第六批）：P0-1 独立 OS 线程心跳看门狗 +
+    自检 + dump（心跳用既有 `AtomicU32`，零分配；A 层文本 marker 必须先 fsync）、
+    P0-2 外部 `SendMessageTimeoutW(SMTO_ABORTIFHUNG)` 探测 + **外部进程**抓 dump、
+    P0-3 把「关不掉」从症状里摘出去（独立线程强制退出通道 + 给 `wv.url()` 慢调用设硬阈值出口）。
+  - **素材许可**：其角色动画为 CC BY-NC-SA 类条款（仅个人非商业、须署名）⇒
+    **不引入任何素材与代码**，只吸收机制与教训。
+- 触摸点：新增 `design/pet-reference-benchmark.md`；`design/pet-v3-roadmap.md`（§1.6 补订正与指向）、
+  本文件。**代码零改动，无需重编。**
+- **待用户拍板**：见评估文档 §6（10 项）——R0–R3 是否立即落地、跨会话审批提示的语义边界、
+  M3.2 一键审批、穿透阈值、是否补「等待回答」态、`pet.json` 是否升 v2、设置准入线、
+  「通道死亡」实机探针、第三批（玩法与物理）如何排期、P0 三项是否立项及顺序。
+
 ## 2026-09-12 · 依赖安全：sharp 升级 0.35.4（修复 libheif 高危漏洞）
 
 - **来源**：GitHub dependabot alert #2（severity **high**，`GHSA-rgj7-g3m4-5g8c`）——
