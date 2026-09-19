@@ -28,7 +28,15 @@ pub(crate) struct PetWin {
     /// M2:Done 庆祝已播(一次性 review,不循环;state 离开 Done 后复位)
     done_celebrated: bool,
     next_ambient: std::time::Instant,
-    bubble: Option<(usize, std::time::Instant)>,
+    /// R4(2026-09-16):提醒（气泡）——取代 v3 的单槽 `Option<(usize, Instant)>`，
+    /// 带稳定 id + 优先级 + 常驻标记（模型见 `model.rs::Alert`）。
+    alert: Option<Alert>,
+    /// R7:当前气泡的展示起点（最小驻留防抖；审批/告警不受其约束）。
+    alert_shown_at: std::time::Instant,
+    /// R5:审批决策单调序号（防重放；随 eval 事件一起下发，插件侧据此去重）。
+    decision_seq: u64,
+    /// R5:最近一次用户决策（官方 key → 发起时刻）——用于「点了但没生效」的回落提示。
+    last_decision: Option<(String, std::time::Instant)>,
     press_pt: (i32, i32),
     dragged: bool,
     pos: (i32, i32),
@@ -46,6 +54,10 @@ pub(crate) struct PetWin {
     surface_fail_streak: u32,
     /// D3 GDI 兜底:累计重建次数（诊断用，pet.log 可见）
     surface_rebuilds: u32,
+    /// R2:当前是否已置位「鼠标穿透」扩展样式（缓存，避免每次轮询都读写窗口样式）
+    click_through: bool,
+    /// R2:穿透样式切换累计次数（诊断；每 CLICK_THROUGH_LOG_EVERY 次打一行）
+    ct_switches: u32,
 }
 impl PetWin {
     fn compose(&mut self) {
@@ -166,13 +178,15 @@ impl PetWin {
         }
 
         // —— 待机随机行为：定时气泡台词 + 定时散步（kurumi 专属,左右移动贴边吸附） ——
-        if now >= self.next_quote && self.bubble.is_none() {
+        if now >= self.next_quote && self.alert.is_none() {
             self.next_quote = now + std::time::Duration::from_millis(rand_range(40000, 90000));
             let idx = {
                 let s = self.shared.lock().unwrap();
                 pick_quote(&s.mode)
             };
-            self.bubble = Some((idx, now));
+            // R4:定时台词是最低优先级限时项——不覆盖任何常驻提醒（状态/审批/告警）
+            self.alert = Some(Alert::timed("quote", idx, ALERT_PRI_QUOTE, QUOTE_MS));
+            self.alert_shown_at = now;
             self.last_tick = now - std::time::Duration::from_secs(10); // 立即触发重绘
             dirty = true;
         }
@@ -203,7 +217,7 @@ impl PetWin {
             };
             // M2(v3):非 Idle 六态(含 fleet_running)不开小动作(触发必能播,不挂空槽)
             let blocked = state != PetState::Idle || fleet_running;
-            if idle_intensity && !blocked && self.bubble.is_none() {
+            if idle_intensity && !blocked && self.alert.is_none() {
                 let row = pick_ambient_row();
                 self.action = Some(ActionSlot {
                     action: Action::Ambient { row },
@@ -266,26 +280,78 @@ impl PetWin {
                     if fleet_running { "work" } else { intensity.as_str() }
                 }
             };
-            // 状态气泡（常驻，不参与 3s 过期）：六态直接映射
-            {
-                let want = match state {
-                    PetState::FleetBlocked => Some(BUBBLE_NEED_APPROVE),
-                    PetState::Waiting => Some(BUBBLE_WAITING),
-                    PetState::Error => Some(BUBBLE_ERROR),
-                    PetState::Done => Some(BUBBLE_DONE),
-                    PetState::Thinking => Some(BUBBLE_BUSY),
+            // —— R4(2026-09-16):提醒（气泡）合流 ——
+            // ① 派生「期望项」want（审批 0 > fleet 告警 1 > 状态 2）；
+            // ② **同 id 就地更新**（帧变了才换，不重置计时 → 状态抖动不闪）；
+            // ③ **高优先级抢占**；④ 低优先级受**最小驻留**保护（R7，防 waiting↔fleet 交替闪烁）；
+            // ⑤ 状态类项在状态消失时清除；台词项由超时段清理（见下方）。
+            // 注：want 每轮构造含一次短 String 分配，量级与既有 `pick_state_row` 的
+            //     `to_string()` 相同，不引入集合增长（沿用「33ms 主路径不新增增长性分配」口径）。
+            let want: Option<Alert> = {
+                let s = self.shared.lock().unwrap();
+                let key = s.official_key.trim();
+                // R5:若用户刚点过这个审批、但它仍在（决策没生效：插件缺失/answer 抛错/超时）
+                // → 换成 stale 项提示去 DSH 界面处理，**绝不假装成功**。
+                let stale = self
+                    .last_decision
+                    .as_ref()
+                    .map(|(k, at)| {
+                        k == key
+                            && now.duration_since(*at)
+                                >= std::time::Duration::from_millis(DECISION_FALLBACK_MS)
+                    })
+                    .unwrap_or(false);
+                match state {
+                    PetState::Waiting if !key.is_empty() && stale => Some(Alert::sticky(
+                        &format!("approval-stale:{key}"),
+                        BUBBLE_NEED_APPROVE,
+                        ALERT_PRI_APPROVAL,
+                    )),
+                    PetState::Waiting if !key.is_empty() => Some(Alert::sticky(
+                        &format!("{APPROVAL_ID_PREFIX}{key}"),
+                        BUBBLE_WAITING, // 绘制时按 id 前缀改走 approval.png（含两按钮）
+                        ALERT_PRI_APPROVAL,
+                    )),
+                    PetState::Waiting => Some(Alert::state("state:waiting", BUBBLE_WAITING)),
+                    PetState::FleetBlocked => {
+                        Some(Alert::sticky("fleet:alert", BUBBLE_NEED_APPROVE, ALERT_PRI_ALERT))
+                    }
+                    PetState::Error => Some(Alert::state("state:error", BUBBLE_ERROR)),
+                    PetState::Done => Some(Alert::state("state:done", BUBBLE_DONE)),
+                    PetState::Thinking => Some(Alert::state("state:busy", BUBBLE_BUSY)),
                     PetState::Idle => {
-                        if fleet_running { Some(BUBBLE_BUSY) } else { None }
+                        if fleet_running {
+                            Some(Alert::state("state:busy", BUBBLE_BUSY))
+                        } else {
+                            None
+                        }
                     }
-                };
-                let is_status = matches!(self.bubble, Some((idx, _)) if matches!(idx, BUBBLE_BUSY | BUBBLE_WAITING | BUBBLE_NEED_APPROVE | BUBBLE_ERROR | BUBBLE_DONE));
-                match (want, self.bubble.clone()) {
-                    (Some(w), Some((cur, _))) if cur == w => {}
-                    (Some(w), _) => self.bubble = Some((w, std::time::Instant::now())),
-                    (None, Some((cur, _))) if is_status && matches!(cur, BUBBLE_BUSY | BUBBLE_WAITING | BUBBLE_NEED_APPROVE | BUBBLE_ERROR | BUBBLE_DONE) => {
-                        self.bubble = None
+                }
+            };
+            {
+                let dwell_ok = now.duration_since(self.alert_shown_at)
+                    >= std::time::Duration::from_millis(ALERT_MIN_DWELL_MS);
+                let mut apply: Option<Option<Alert>> = None; // Some(None) = 清除
+                match (&want, self.alert.as_ref()) {
+                    (Some(w), Some(cur)) if same_alert(w, cur) => {
+                        if cur.frame != w.frame {
+                            apply = Some(Some(w.clone()));
+                        }
                     }
+                    (Some(w), Some(cur)) if alert_preempts(w, cur) => {
+                        // 审批(0)/告警(1) 不受最小驻留约束（可读性优先）；低优先级需驻留期满
+                        if w.priority <= ALERT_PRI_ALERT || dwell_ok {
+                            apply = Some(Some(w.clone()));
+                        }
+                    }
+                    (Some(w), None) => apply = Some(Some(w.clone())),
+                    (None, Some(cur)) if cur.priority <= ALERT_PRI_STATE => apply = Some(None),
                     _ => {}
+                }
+                if let Some(next) = apply {
+                    self.alert = next;
+                    self.alert_shown_at = now;
+                    // 帧更新块末尾已无条件置脏（见下方 `dirty = true`），此处不重复赋值
                 }
             }
             if mode == "whale" || mode == "inverse" {
@@ -384,21 +450,25 @@ impl PetWin {
                 }
             }
             // 气泡与角色同帧绘制(帧更新清空 buf 后重画,避免每 tick 文本渲染)
-            if let Some((idx, _)) = self.bubble.clone() {
-                self.blit_bubble(idx);
+            // R5:审批提醒走独立位图（帧高 84，含「拒绝 / 允许一次」两按钮）；其余仍走 22 帧精灵表
+            let is_approval = self
+                .alert
+                .as_ref()
+                .map(|a| a.id.starts_with(APPROVAL_ID_PREFIX))
+                .unwrap_or(false);
+            if is_approval {
+                self.blit_approval();
+            } else if let Some(frame) = self.alert.as_ref().map(|a| a.frame) {
+                self.blit_bubble(frame);
             }
             dirty = true;
         }
         // 气泡:超时检查每 tick;绘制只在帧更新后(避免每 33ms 图像合成)
-        // v2026-08-30:状态帧(BUBBLE_BUSY/WAITING/NEED_APPROVE)不参与 3s 过期,常驻
-        if let Some((idx, t0)) = self.bubble.clone() {
-            let is_status = matches!(idx, BUBBLE_BUSY | BUBBLE_WAITING | BUBBLE_NEED_APPROVE | BUBBLE_ERROR | BUBBLE_DONE);
-            if !is_status && now.duration_since(t0).as_secs() > 3 {
-                self.bubble = None;
-                dirty = true;
-            } else {
-                // 若本 tick 未重绘(帧未更新),气泡已在上一帧的 buf 上,无需重复绘制
-            }
+        // R4:常驻项(sticky)不参与超时,须被更高优先级抢占或按 id 移除;
+        //     限时项(定时台词/单击反馈)到期即清——取代原先「状态帧不参与 3s 过期」的散列判定。
+        if self.alert.as_ref().map(|a| a.expired(now)).unwrap_or(false) {
+            self.alert = None;
+            dirty = true;
         }
         if tick < 3 {
             let s = self.shared.lock().unwrap();
@@ -524,6 +594,149 @@ impl PetWin {
         }
     }
 
+    /// R2(2026-09-16):窗口局部坐标处是否「透明」（= 可让鼠标穿透到下层窗口）。
+    /// 直接查当前合成缓冲 `buf`——它已是「立绘 + 气泡」逐像素 over 之后的**最终结果**，
+    /// 因此不必像参考实现那样为每种元素单独维护 mask（`pet/window.py:_sync_mask`）：
+    /// 阈值 `CLICK_THROUGH_ALPHA` 之下的像素视为透明。
+    fn is_transparent_at(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= WIN_W || y >= WIN_H {
+            return true;
+        }
+        let a = (self.buf[(y * WIN_W + x) as usize] >> 24) & 0xFF;
+        a < CLICK_THROUGH_ALPHA
+    }
+
+    /// R2:按光标位置切换 `WS_EX_TRANSPARENT`（由 10ms 轮询定时器驱动）。
+    /// **必须轮询**：一旦置位穿透，本窗口收不到鼠标消息，「何时恢复可点击」无从由事件得知。
+    /// 规则：隐藏 / 拖拽中恒不穿透（保证跟手与恢复入口可用），其余按命中结果切换。
+    fn update_click_through(&mut self) {
+        if !self.shown || self.dragged {
+            self.set_click_through(false);
+            return;
+        }
+        let mut p = Point { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut p);
+        }
+        let transparent = self.is_transparent_at(p.x - self.pos.0, p.y - self.pos.1);
+        self.set_click_through(transparent);
+    }
+
+    /// R2:切换穿透样式位（只改扩展样式，**不重建原生窗口**——重建会造成可见的闪烁；
+    /// 参考实现在此处踩过坑，见其 `pet/platform_win.py:79-114` 的注释）。
+    fn set_click_through(&mut self, on: bool) {
+        if self.click_through == on {
+            return;
+        }
+        unsafe {
+            let cur = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
+            let next = if on { cur | WS_EX_TRANSPARENT } else { cur & !WS_EX_TRANSPARENT };
+            if next != cur {
+                SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, next as isize);
+            }
+        }
+        self.click_through = on;
+        self.ct_switches = self.ct_switches.wrapping_add(1);
+        if self.ct_switches % CLICK_THROUGH_LOG_EVERY == 0 {
+            pet_log_line(&format!(
+                "[native-pet] click-through toggles={} (now={})\n",
+                self.ct_switches, on
+            ));
+        }
+    }
+
+    /// R4:按 id **精确移除**一条提醒（审批 resolved / 决策失败回落时调用）。
+    /// 只清匹配项——多会话并发审批时不会误伤别人的提醒（参考实现 `resolve_alert` 的核心价值）。
+    /// 返回是否命中。
+    fn resolve_alert(&mut self, id: &str) -> bool {
+        let hit = self.alert.as_ref().map(|a| a.id == id).unwrap_or(false);
+        if hit {
+            self.alert = None;
+            self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// R5:审批气泡在窗口内的 y——帧高 84（普通气泡 56），故独立定位。
+    fn approval_y0() -> i32 {
+        WIN_H - CELL_H as i32 - APPROVAL_H - 4
+    }
+
+    /// R5:绘制审批气泡（预渲染位图，含「拒绝 / 允许一次」两按钮）。**不调用任何字体 API**。
+    /// 素材缺失（`Frames.approval = None`）→ 不画：宁可不显示，也不画一对点不到的空按钮。
+    fn blit_approval(&mut self) {
+        // frames 加载后不可变 → 裸指针解引用安全，且规避 `&mut self` 与 `&self.frames` 的借用冲突
+        // （与 whale/inverse 立绘分支同一范式）。
+        let ptr = match self.frames.approval.as_ref().map(|i| i as *const Image) {
+            Some(p) => p,
+            None => return,
+        };
+        let img = unsafe { &*ptr };
+        let x0 = (WIN_W - APPROVAL_W) / 2;
+        self.blit_img(img, x0, Self::approval_y0());
+    }
+
+    /// R5:命中审批按钮 → `Some(true)`=「允许一次」/`Some(false)`=「拒绝」/`None`=未命中。
+    /// 两按钮之间留 8px 间隙（见 config 常量），降低误触。
+    fn approval_hit(&self, x: i32, y: i32) -> Option<bool> {
+        let a = self.alert.as_ref()?;
+        if !a.id.starts_with(APPROVAL_ID_PREFIX) {
+            return None;
+        }
+        let x0 = (WIN_W - APPROVAL_W) / 2;
+        let y0 = Self::approval_y0();
+        let hit = |bx: i32| -> bool {
+            x >= x0 + bx
+                && x < x0 + bx + APPROVAL_BTN_W
+                && y >= y0 + APPROVAL_BTN_Y
+                && y < y0 + APPROVAL_BTN_Y + APPROVAL_BTN_H
+        };
+        if hit(APPROVAL_BTN_ALLOW_X) {
+            Some(true)
+        } else if hit(APPROVAL_BTN_DENY_X) {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// R5:用户点击审批按钮 → ① 乐观收起气泡；② 经 eval 派发决策事件给 `dsh-pet-panel`，
+    /// 由插件调用官方 `PendingApproval.answer()`（**桌宠侧不持有也不调用任何 DSH API**）。
+    ///
+    /// 红线（与 `pet-v3-roadmap.md` M3.2 一致）：只在用户**显式点击**时触发；只发
+    /// `allowed-once` / `rejected` 两个枚举；不做「全部允许 / 记住选择」等持久化语义；
+    /// 失败不假装成功——3s 内该审批仍在则由 stale 回落重新提示（见 compose 合流段）。
+    fn decide_approval(&mut self, allow: bool) {
+        let key = match self.alert.as_ref().and_then(|a| a.id.strip_prefix(APPROVAL_ID_PREFIX)) {
+            Some(k) => k.to_string(),
+            None => return,
+        };
+        let decision = if allow { "allowed-once" } else { "rejected" };
+        self.decision_seq = self.decision_seq.wrapping_add(1);
+        let seq = self.decision_seq;
+        self.last_decision = Some((key.clone(), std::time::Instant::now()));
+        // 乐观收起：立刻移除该审批气泡（避免「以为已经生效」）；失败时由 stale 回落重提示
+        self.resolve_alert(&format!("{APPROVAL_ID_PREFIX}{key}"));
+        // Rust → 页面：eval + CustomEvent（与 miasaki-pet-state / miasaki-max-state 同模式）。
+        // 远程页无 IPC 权限、hash 又是单向的，故这是唯一合规的反向通道。
+        let js = format!(
+            "window.dispatchEvent(new CustomEvent('miasaki-approval-decision',{{detail:{{key:{},decision:{},seq:{}}}}}))",
+            json_lit(&key),
+            json_lit(decision),
+            seq
+        );
+        if let Some(w) = self.app.get_webview_window("main") {
+            let _ = w.eval(&js);
+        }
+        // 日志不打 key 明文（含 sessionId），只记长度与决策
+        pet_log_line(&format!(
+            "[native-pet] approval decision sent -> {decision} seq={seq} key_len={}\n",
+            key.len()
+        ));
+    }
+
     fn present(&mut self) {
         // D3 GDI 兜底:表面无效 → 低频重试重建（每 ~30 次 compose 一次 ≈1s，不刷屏不自旋）
         if self.present_dc == 0 || self.present_dib == 0 || self.present_bits.is_null() {
@@ -590,7 +803,10 @@ impl PetWin {
             let s = self.shared.lock().unwrap();
             pick_quote(&s.mode)
         };
-        self.bubble = Some((idx, std::time::Instant::now()));
+        // R4:单击「撸一下」是**用户主动**交互——其台词按告警档(1)展示，可短暂压过状态气泡，
+        // 但**压不过审批**(0)：审批气泡必须常驻到 resolved（v3 M3 的硬约束）。
+        self.alert = Some(Alert::timed("quote:click", idx, ALERT_PRI_ALERT, QUOTE_MS));
+        self.alert_shown_at = std::time::Instant::now();
     }
 
     /// v2 双击挥手:播 wave 行(约 500ms 内容,余量 1300ms 收尾)。
@@ -640,8 +856,20 @@ impl PetWin {
             AppendMenuW(m, MF_STRING, MENU_HIDE, s2.as_ptr());
             AppendMenuW(m, MF_STRING, MENU_MIN, s3.as_ptr());
             AppendMenuW(m, MF_STRING, MENU_EXIT, s4.as_ptr());
+            // R1 兼容：`TrackPopupMenu` 要求 owner 窗口是**前台窗口**，否则「点击菜单外不关闭」。
+            // 而 R1 新加的 `WS_EX_NOACTIVATE` 会让 `SetForegroundWindow` 失效，
+            // 故此处临时摘掉该样式位，菜单结束后恢复，并把前台归还给原窗口。
+            let prev_fg = GetForegroundWindow();
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, (ex & !WS_EX_NOACTIVATE) as isize);
             SetForegroundWindow(self.hwnd);
             let cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, self.hwnd, 0);
+            // MSDN 推荐：菜单结束后补一条空消息，确保菜单可靠消失
+            PostMessageW(self.hwnd, WM_NULL, 0, 0);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex as isize);
+            if prev_fg != 0 && prev_fg != self.hwnd {
+                SetForegroundWindow(prev_fg); // 焦点归还（R1：用完不留前台占用）
+            }
             DestroyMenu(m);
             match cmd as usize {
                 MENU_SHOW => self.focus_main(),
@@ -706,6 +934,10 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                     (*pet).do_hop();
                 }
                 0
+            } else if wp == IDT_HIT {
+                // R2:透明区域鼠标穿透——10ms 轮询光标并切换 WS_EX_TRANSPARENT
+                (*pet).update_click_through();
+                0
             } else {
                 (*pet).compose();
                 0
@@ -758,6 +990,16 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                 (*pet).swallow_next_up = false;
                 return 0;
             }
+            // R5:审批按钮命中优先于拖动/单击语义——这次点击是「决策」，不是「撸一下」。
+            // （命中区判定在角色本体范围内，故不会与透明穿透冲突：能点到就说明窗口可点。）
+            if !(*pet).dragged {
+                let mut pt = Point { x: 0, y: 0 };
+                GetCursorPos(&mut pt);
+                if let Some(allow) = (*pet).approval_hit(pt.x - (*pet).pos.0, pt.y - (*pet).pos.1) {
+                    (*pet).decide_approval(allow);
+                    return 0;
+                }
+            }
             if !(*pet).dragged {
                 // M1.3 单击语义:等待审批或主窗口不可见 → 立即唤起主窗口(保留有用语义);
                 // 否则 → 去抖 250ms 判定是否双击,到期执行「撸一下」——不再无条件抢焦点(D5)
@@ -800,6 +1042,7 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             0
         }
         WM_DESTROY => {
+            KillTimer(hwnd, IDT_HIT); // R2:光标轮询随窗口一起停
             PostQuitMessage(0);
             0
         }
@@ -819,6 +1062,11 @@ unsafe extern "system" fn dot_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) 
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
+}
+
+/// R5:JSON 字符串字面量——把 key/decision 安全注入 eval 的 JS 片段（防注入）。
+fn json_lit(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -954,7 +1202,10 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             swallow_next_up: false,
             done_celebrated: false,
             next_ambient: std::time::Instant::now() + std::time::Duration::from_millis(AMBIENT_FIRST_DELAY_MS),
-            bubble: None,
+            alert: None,
+            alert_shown_at: std::time::Instant::now(),
+            decision_seq: 0,
+            last_decision: None,
             press_pt: (0, 0),
             dragged: false,
             pos: (x, y),
@@ -967,6 +1218,8 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             ulw_fail_streak: 0,
             surface_fail_streak: 0,
             surface_rebuilds: 0,
+            click_through: false,
+            ct_switches: 0,
         });
         let pet_ptr = &mut *pet as *mut PetWin;
         let inst = GetModuleHandleW(std::ptr::null());
@@ -995,7 +1248,10 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         };
         let _ = RegisterClassW(&dot_wc);
 
-        let ex = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+        // R1(2026-09-16):补 WS_EX_NOACTIVATE——点击桌宠不再把前台/键盘焦点夺走
+        // （否则用户在原应用的 Ctrl+C/V 会落到桌宠窗口，观感是「整机复制粘贴失效」）。
+        // R2 的 WS_EX_TRANSPARENT 不入初始样式：运行时按光标命中动态切换。
+        let ex = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         let hwnd = CreateWindowExW(
             ex, cls.as_ptr(), cls.as_ptr(), WS_POPUP,
             x, y, WIN_W, WIN_H,
@@ -1013,6 +1269,9 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         // 关键:WM_CREATE 期间 USERDATA 尚未设置,wnd_proc 的 SetTimer 不会执行;
         // 在此(USERDATA 就位后)显式启动 33ms 动画定时器
         SetTimer(hwnd, IDT_COMPOSE, 33, 0);
+        // R2:透明的光标轮询定时器（独立于 compose；穿透状态下窗口收不到鼠标消息，
+        // 只能靠主动轮询恢复可点击判定）
+        SetTimer(hwnd, IDT_HIT, HIT_POLL_MS, 0);
 
         // 持久 GDI 表面(创建一次,终身复用;避免高频 CreateDIBSection 触发 gdi32full 崩溃)
         // D3:失败不致命 → present() 低频重试重建（surface_fail_streak 路径）

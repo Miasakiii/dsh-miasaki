@@ -1,8 +1,8 @@
 {
   "name": "dsh-pet-panel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
-  "description": "桌宠设置面板 + 官方契约状态上报：显示/隐藏、位置重置（hash cmd 通道）；读官方 sessions/uiSession 契约合成桌宠六态，1.5s 心跳交注入运行时经 hash pet= 上报桌面端。",
+  "description": "桌宠设置面板 + 官方契约状态上报：显示/隐藏、位置重置（hash cmd 通道）；读官方 sessions/uiSession 契约合成桌宠六态。v0.2.0（2026-09-16，对标 R0）：审批改为**跨会话聚合**（遍历全部会话的 pendingInteractions，切走会话也能看到后台待审批），随态带出 sessionId/reason 并落地身份门禁（无稳定身份不显示）；运行态「任一非子代理会话 running = 忙」。1.5s 心跳交注入运行时经 hash pet= 上报桌面端。",
   "license": "MIT",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

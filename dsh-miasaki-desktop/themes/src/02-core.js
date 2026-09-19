@@ -57,7 +57,10 @@
         try {
           var pp = window.__miasakiPetPanel
           if (pp && pp.ts && now - pp.ts < 5000) {
-            petPart = '&pet=' + pp.state + '&pettool=' + encodeURIComponent(pp.tool || '') + '&petts=' + pp.ts
+            // R4(2026-09-16):petkey = 审批的稳定身份（官方 PendingApproval.key），
+            // 供 Rust 侧挂「可交互审批气泡」并按 id 精确移除；空 = 无身份（不挂可交互气泡）。
+            petPart = '&pet=' + pp.state + '&pettool=' + encodeURIComponent(pp.tool || '') +
+              '&petts=' + pp.ts + '&petkey=' + encodeURIComponent(pp.key || '')
           }
         } catch (e) { /* ignore */ }
         history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + petPart + '&diag=' + DIAG_CACHE)

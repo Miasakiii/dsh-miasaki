@@ -172,82 +172,203 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * M2 桌宠六态上报（官方契约通道，2026-09-12，pet-v3-roadmap.md M2）：
-		 * 读官方 ClientSessions（当前选中会话的 SessionSnapshot：running/lastAgentError）
+		 * 桌宠六态上报（官方契约通道；M2 于 2026-09-12 落地，R0 于 2026-09-16 改为跨会话聚合）：
+		 * 读官方 ClientSessions（`list.ids`/`byId` 的 SessionSnapshot：running/lastAgentError）
 		 * 与 UiSession.pendingInteractions（审批等待），合成六态
 		 * idle/thinking/waiting/error/done 写 window.__miasakiPetPanel；
 		 * 由桌面端注入运行时（themes/src/02-core.js syncHash）合并进 URL hash
 		 * （pet=/pettool=/petts=）——hash 单写者仍是注入运行时，本插件不直接写 hash。
 		 * 心跳 1.5s；官方通道 5s 无心跳时注入运行时自动回落 DOM 扫描兜底。
-		 * M2.3 会话口径：只读 list.current（当前选中会话），subagent 会话不入选。
+		 * 会话口径（R0 起）：**跨会话聚合**——审批遍历全部会话的 `pendingInteractions`，
+		 * 运行态「任一（非子代理）会话 running = 忙」（旧实现只读 `list.current`，会漏报
+		 * 后台会话的待审批、且先完成的会话会把仍在干活的顶成 idle）；subagent 会话仍不入选。
 		 * 安全：只读官方快照，绝不调用 answer()（决策权归 M3 且仅在用户显式点击时）。
 		 */
+		/**
+		 * R0-① 跨会话读待审批（2026-09-16，design/pet-reference-benchmark.md R0）：
+		 * `pendingInteractions` 本身就是 `ReadonlyMap<SessionId, PendingApproval>`，直接遍历即可——
+		 * 旧实现只读 `list.current`，用户切走会话后别的会话的待审批**完全不可见**，
+		 * 而「快捷提权」的价值前提正是「不用切窗口」。
+		 * R0-② 身份透出：除 toolName 外带出 sessionId 与 reason（截断），供 M3 决策链路使用。
+		 * R0-③ 身份门禁：拿不到任何稳定身份的审批**一律不显示**（宁可不报，
+		 * 也不挂一个永远等不到 resolved 的常驻态——参考实现在此处踩过坑）。
+		 */
+		function readPendingApproval(ctx) {
+			try {
+				const pi = ctx.uiSession && ctx.uiSession.pendingInteractions;
+				if (!pi) return null;
+				let snap = null;
+				if (typeof pi.get === "function") snap = pi.get();
+				else if (typeof pi.getSnapshot === "function") snap = pi.getSnapshot();
+				if (!snap) return null;
+				let found = null;
+				const consider = (key, it) => {
+					if (found !== null || !it || it.kind !== "approval") return;
+					const fromItem = it.sessionId === undefined || it.sessionId === null ? "" : String(it.sessionId);
+					const fromKey = key === undefined || key === null ? "" : String(key);
+					const sessionId = fromItem || fromKey;
+					// R5：官方不透明身份（PendingApproval.key）——决策链路的幂等键与按 id 移除的依据
+					const identity = it.key === undefined || it.key === null ? "" : String(it.key);
+					if (sessionId === "" && identity === "") return; // R0-③ 身份门禁
+					found = {
+						tool: String(it.toolName || ""),
+						sessionId: sessionId,
+						key: identity || sessionId,
+						reason: String(it.reason || "").slice(0, APPROVAL_REASON_MAX),
+					};
+				};
+				if (typeof snap.forEach === "function") snap.forEach((v, k) => consider(k, v));
+				else if (typeof snap.entries === "function") { for (const pair of snap.entries()) consider(pair[0], pair[1]); }
+				return found;
+			} catch (e) { return null; /* 官方 API 缺失 → 注入运行时 DOM 兜底 */ }
+		}
+
+		/**
+		 * R0-① 跨会话聚合运行态：任一（非子代理）会话 `running` 即视为「忙」。
+		 * 旧实现只读 `list.current`——先完成的会话会把仍在干活的会话顶成 idle（参考实现同款教训）。
+		 * `lastAgentError` 只对 materialize 过的会话可读（`sessions.get()` 可能返回 null），
+		 * 故按「当前会话优先 + 探测上限」读取。
+		 */
+		function readRunningAggregate(ctx) {
+			let running = false;
+			let agentError = null;
+			try {
+				const ls = ctx.sessions.list.getSnapshot();
+				const ids = Array.isArray(ls.ids) ? ls.ids : [];
+				const byId = ls.byId || {};
+				for (const id of ids) {
+					const row = byId[id];
+					if (!row) continue;
+					// M2.3 会话口径：subagent 会话不计入主态
+					if (row.projectionValues && row.projectionValues.subagent) continue;
+					if (row.running) running = true;
+				}
+				const probe = [];
+				if (ls.current !== undefined && ls.current !== null) probe.push(ls.current);
+				for (const id of ids) {
+					if (probe.length >= ERROR_PROBE_MAX) break;
+					if (id !== ls.current) probe.push(id);
+				}
+				if (typeof ctx.sessions.get === "function") {
+					for (const id of probe) {
+						try {
+							const f = ctx.sessions.get(id);
+							const s = f && typeof f.getSnapshot === "function" ? f.getSnapshot() : null;
+							if (s && s.lastAgentError) { agentError = s.lastAgentError; break; }
+						} catch (e2) { /* 未 materialize → 无 error 信号 */ }
+					}
+				}
+			} catch (e) { /* ignore */ }
+			return { running: running, agentError: agentError };
+		}
+
 		const PET_PANEL_KEY = "__miasakiPetPanel";
 		const PET_HB_MS = 1500;
 		const DONE_HOLD_MS = 10000; // done 庆祝期：气泡常驻 10s 后回 idle（roadmap M2.1）
-		const petPanel = { ts: 0, state: "idle", tool: "" };
+		/** R0：reason 截断长度（对齐参考实现 agent_link.py 的 160 字符口径） */
+		const APPROVAL_REASON_MAX = 160;
+		/** R0：lastAgentError 探测的会话上限（避免每心跳遍历过多会话） */
+		const ERROR_PROBE_MAX = 6;
+		const petPanel = { ts: 0, state: "idle", tool: "", sessionId: "", reason: "", key: "" };
 		window[PET_PANEL_KEY] = petPanel;
 
 		function startPetStateReporter(ctx) {
 			let lastRunning = false;
 			let doneHoldUntil = 0;
 			const tick = () => {
-				// —— 审批等待（优先级最高）：pendingInteractions 中的 approval 项 ——
-				let approvalTool = null;
-				try {
-					const pi = ctx.uiSession && ctx.uiSession.pendingInteractions;
-					if (pi) {
-						let snap = null;
-						if (typeof pi.get === "function") snap = pi.get();
-						else if (typeof pi.getSnapshot === "function") snap = pi.getSnapshot();
-						if (snap && typeof snap.values === "function") {
-							for (const it of snap.values()) {
-								if (it && it.kind === "approval") { approvalTool = it.toolName || ""; break; }
-							}
-						}
-					}
-				} catch (e) { /* 官方 API 缺失 → 注入运行时 DOM 兜底 */ }
-				// —— 运行状态：当前选中会话（list row 自带 running;探针实证 2026-09-12）——
-				// sessions.get() 仅对 materialize 过的会话返回 SessionFace,依赖它会漏报;
-				// lastAgentError 只在 materialized Session 上有,尽力读、读不到则不报 error 态。
-				let running = false;
-				let agentError = null;
-				try {
-					const ls = ctx.sessions.list.getSnapshot();
-					const id = ls.current;
-					const row = id !== undefined ? ls.byId[id] : null;
-					if (row) {
-						// M2.3 会话口径:subagent 会话不计入主态
-						const isSubagent = !!(row.projectionValues && row.projectionValues.subagent);
-						if (!isSubagent) {
-							running = !!row.running;
-							try {
-								if (typeof ctx.sessions.get === "function") {
-									const f = ctx.sessions.get(id);
-									const s = f && typeof f.getSnapshot === "function" ? f.getSnapshot() : null;
-									if (s) agentError = s.lastAgentError ?? null;
-								}
-							} catch (e2) { /* 未 materialize → 无 error 信号 */ }
-						}
-					}
-				} catch (e) { /* ignore */ }
+				// —— 审批等待（优先级最高）：跨会话遍历 pendingInteractions（R0）——
+				const approval = readPendingApproval(ctx);
+				// —— 运行状态：跨会话聚合（R0；list row 自带 running，探针实证 2026-09-12）——
+				const agg = readRunningAggregate(ctx);
 				// —— 六态合成：waiting > error > done(边沿,10s) > thinking > idle ——
 				const now = Date.now();
 				let state;
-				if (approvalTool !== null) state = "waiting";
-				else if (agentError) state = "error";
-				else if (lastRunning && !running && now >= doneHoldUntil) { state = "done"; doneHoldUntil = now + DONE_HOLD_MS; }
-				else if (now < doneHoldUntil && !running) state = "done";
-				else if (running) state = "thinking";
+				if (approval !== null) state = "waiting";
+				else if (agg.agentError) state = "error";
+				else if (lastRunning && !agg.running && now >= doneHoldUntil) { state = "done"; doneHoldUntil = now + DONE_HOLD_MS; }
+				else if (now < doneHoldUntil && !agg.running) state = "done";
+				else if (agg.running) state = "thinking";
 				else state = "idle";
-				if (running) doneHoldUntil = 0;
-				lastRunning = running;
+				if (agg.running) doneHoldUntil = 0;
+				lastRunning = agg.running;
 				petPanel.ts = now;
 				petPanel.state = state;
-				petPanel.tool = approvalTool ?? "";
+				// R0：审批身份随态透出（非审批态清空）；sessionId/reason 供 M3 决策链路使用
+				petPanel.tool = approval === null ? "" : approval.tool;
+				petPanel.sessionId = approval === null ? "" : approval.sessionId;
+				petPanel.reason = approval === null ? "" : approval.reason;
+				// R5：稳定身份（官方 key）——Rust 侧据此挂可交互审批气泡并幂等移除
+				petPanel.key = approval === null ? "" : approval.key;
 			};
 			tick();
 			return setInterval(tick, PET_HB_MS);
+		}
+
+		/**
+		 * R5（2026-09-16，design/pet-reference-benchmark.md R5）：桌宠内联审批的**唯一回写点**。
+		 *
+		 * 链路：用户点击桌宠审批气泡的「拒绝 / 允许一次」→ Rust 记 seq 并经
+		 * `wv.eval` 派发 CustomEvent `miasaki-approval-decision`（detail: {key, decision, seq}）
+		 * → 本函数调用官方 `PendingApproval.answer(decision)`。
+		 * 桌宠侧不持有任何 DSH API，插件侧不做任何自主决策。
+		 *
+		 * 红线（与 pet-v3-roadmap.md M3.2 / 对标 R5 一致）：
+		 * ① **协议收窄**：只接受 `allowed-once` / `rejected` 两个枚举，其余一律忽略；
+		 * ② **幂等/防重放**：按 seq 去重（用集合而非单调比较——壳重启后 seq 会从头计）；
+		 * ③ **先本地收起、再异步确认**：await `answer()`，失败**不假装成功**
+		 *    （写 `decisionError` 供面板/日志；桌面端另有 3s stale 回落提示）；
+		 * ④ **只在事件到来时决策**——本插件没有任何定时器或自动决策路径。
+		 */
+		const DECISION_ENUM = { "allowed-once": true, rejected: true };
+		const seenDecisionSeq = new Set();
+		function handleApprovalDecision(ctx, detail) {
+			try {
+				if (!detail || typeof detail !== "object") return;
+				const decision = String(detail.decision || "");
+				if (DECISION_ENUM[decision] !== true) return; // ① 协议收窄
+				const key = String(detail.key || "");
+				if (key === "") return;
+				const seq = Number(detail.seq || 0);
+				if (seenDecisionSeq.has(seq)) return; // ② 防重放
+				seenDecisionSeq.add(seq);
+				if (seenDecisionSeq.size > 64) { // 有界：避免长会话下无限增长
+					seenDecisionSeq.clear();
+					seenDecisionSeq.add(seq);
+				}
+				// 在跨会话 map 中找匹配的待审批项（key 为官方不透明身份）
+				let target = null;
+				try {
+					const pi = ctx.uiSession && ctx.uiSession.pendingInteractions;
+					let snap = null;
+					if (pi) {
+						if (typeof pi.get === "function") snap = pi.get();
+						else if (typeof pi.getSnapshot === "function") snap = pi.getSnapshot();
+					}
+					if (snap && typeof snap.forEach === "function") {
+						snap.forEach((it) => {
+							if (target !== null || !it || it.kind !== "approval") return;
+							const ik = it.key === undefined || it.key === null ? "" : String(it.key);
+							if (ik === key) target = it;
+						});
+					}
+				} catch (e) { /* ignore */ }
+				if (target === null) return; // 已被处理/已 resolved/身份不匹配 → 不动作
+				if (typeof target.answer !== "function") {
+					petPanel.decisionError = "官方 answer() 不可用";
+					return;
+				}
+				// ③ 先本地收起（乐观），再异步确认；失败如实记录，不假装成功
+				petPanel.decisionError = "";
+				Promise.resolve()
+					.then(() => target.answer(decision))
+					.then(() => {
+						petPanel.lastDecision = { key: key, decision: decision, ts: Date.now(), ok: true };
+					})
+					.catch((e) => {
+						petPanel.lastDecision = { key: key, decision: decision, ts: Date.now(), ok: false };
+						petPanel.decisionError = (e && e.message) ? String(e.message) : "answer() 调用失败";
+					});
+			} catch (e) { /* 决策链路异常绝不阻断插件 */ }
 		}
 
 		/**
@@ -272,6 +393,12 @@ window.__ModuleLoader__.load({
 				const timer = startPetStateReporter(ctx);
 				return () => clearInterval(timer);
 			}, "dsh-pet-panel: pet state reporter");
+			// R5:桌宠内联审批的决策回写（Rust eval 派发 → 官方 answer()）
+			ctx.effect(() => {
+				const onDecision = (e) => handleApprovalDecision(ctx, e && e.detail);
+				window.addEventListener("miasaki-approval-decision", onDecision);
+				return () => window.removeEventListener("miasaki-approval-decision", onDecision);
+			}, "dsh-pet-panel: approval decision wiring");
 		}
 
 		exports.apply = apply;

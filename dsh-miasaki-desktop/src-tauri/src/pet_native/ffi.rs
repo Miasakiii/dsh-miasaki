@@ -121,6 +121,8 @@ extern "system" {
     pub(crate) fn TrackPopupMenu(menu: isize, flags: u32, x: i32, y: i32, rsv: i32, h: isize, rect: usize) -> i32;
     pub(crate) fn DestroyMenu(menu: isize) -> i32;
     pub(crate) fn SetForegroundWindow(h: isize) -> i32;
+    pub(crate) fn GetForegroundWindow() -> isize;
+    pub(crate) fn PostMessageW(h: isize, m: u32, w: usize, l: isize) -> i32;
     pub(crate) fn GetModuleHandleW(n: *const u16) -> isize;
 }
 
@@ -137,6 +139,17 @@ pub(crate) const WS_POPUP: u32 = 0x8000_0000;
 pub(crate) const WS_EX_LAYERED: u32 = 0x0008_0000;
 pub(crate) const WS_EX_TOPMOST: u32 = 0x0000_0008;
 pub(crate) const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+/// R1(2026-09-16，design/pet-reference-benchmark.md R1)：**不接收激活**——点击桌宠不再
+/// 把前台与键盘焦点夺走。参考实现记录该缺陷会让用户随后的 Ctrl+C/V「整机失效」
+/// （键盘输入全落到桌宠窗口，点回原窗口才恢复；其 issue #98）。
+/// 只改扩展样式位、不重建原生窗口；鼠标与键盘消息照常送达（点击/拖动/双击不受影响）。
+pub(crate) const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+/// R2(2026-09-16)：命中测试判定为透明像素时置位，让鼠标穿透到下层窗口。
+/// `HTTRANSPARENT` 只能继续命中同线程窗口、无法穿透到其它应用，故必须用该扩展样式位。
+/// 注意：置位后本窗口**收不到鼠标消息**，恢复只能靠独立定时器轮询光标位置。
+pub(crate) const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+/// Get/SetWindowLongPtrW 的扩展样式索引（64 位下必须用 Ptr 版本）。
+pub(crate) const GWL_EXSTYLE: i32 = -20;
 pub(crate) const CS_HREDRAW: u32 = 0x0002;
 pub(crate) const CS_VREDRAW: u32 = 0x0001;
 pub(crate) const CS_DBLCLKS: u32 = 0x0008;
@@ -149,6 +162,7 @@ pub(crate) const MF_STRING: u32 = 0;
 pub(crate) const TPM_RETURNCMD: u32 = 0x0100;
 pub(crate) const TPM_RIGHTBUTTON: u32 = 0x0002;
 pub(crate) const WM_CREATE: u32 = 0x0001;
+pub(crate) const WM_NULL: u32 = 0x0000;
 pub(crate) const WM_DESTROY: u32 = 0x0002;
 pub(crate) const WM_TIMER: u32 = 0x0113;
 pub(crate) const WM_LBUTTONDOWN: u32 = 0x0201;

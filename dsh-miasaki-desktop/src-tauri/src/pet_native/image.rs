@@ -52,6 +52,9 @@ pub(crate) struct Frames {
     pub(crate) whale_states: HashMap<String, Vec<Image>>,
     pub(crate) inverse_states: HashMap<String, Vec<Image>>,
     pub(crate) bubbles: Vec<Image>,
+    /// R5(2026-09-16):审批气泡（240x84，含「拒绝 / 允许一次」两个按钮）。
+    /// 独立于 22 帧精灵表（帧高不同），由 `scripts/gen-bubbles.ps1` 一并生成。
+    pub(crate) approval: Option<Image>,
 }
 
 impl Frames {
@@ -128,6 +131,11 @@ pub(crate) fn load_frames() -> Frames {
                 }
             }
         }
+    }
+    // R5:审批气泡（240x84，含「拒绝 / 允许一次」两按钮）——帧高与 22 帧精灵表不同，故独立文件。
+    // 素材缺失 → Frames.approval = None → 运行时不画审批气泡（宁可不显示，也不画空按钮）。
+    if let Some(bytes) = crate::assets::read("pets/approval.png") {
+        f.approval = load_png(&bytes);
     }
     if let Some(bytes) = crate::assets::read("pets/frames.json") {
         if let Ok(txt) = String::from_utf8(bytes) {

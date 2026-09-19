@@ -46,6 +46,10 @@ pub struct PetShared {
     pub official_state: Option<PetState>,
     /// M2:等待审批时的工具名（M3 气泡用；M2 仅透传存储）
     pub official_tool: String,
+    /// R4(2026-09-16):审批的**稳定身份**（官方 `PendingApproval.key`，hash `petkey=` 上报）。
+    /// 空 = 无身份 → 按普通 waiting 处理（**身份门禁**：不挂可交互审批气泡，
+    /// 也绝不凭工具名伪造审批——参考实现在此处踩过「挂出永远关不掉的气泡」的坑）。
+    pub official_key: String,
     /// M2:最后一次官方心跳的 petts（hash 值，同值 = 页面未更新 = 非新心跳）
     pub official_ts: i64,
     /// M2:最后一次官方心跳到达时刻（compose 内 5s 新鲜度判定）
@@ -59,7 +63,7 @@ pub struct NativePet {
 
 impl NativePet {
     pub fn spawn(app: AppHandle) -> Self {
-        let restore_hide = persist::load_pet_state().map(|s| s.hide).unwrap_or(false);
+        let restore_hide = persist::load_hide();
         let shared = Arc::new(Mutex::new(PetShared {
             mode: "whale".to_string(),
             intensity: "idle".to_string(),
@@ -71,6 +75,7 @@ impl NativePet {
             fleet_alert: false,
             official_state: None,
             official_tool: String::new(),
+            official_key: String::new(),
             official_ts: 0,
             official_at: None,
         }));
@@ -138,7 +143,7 @@ impl NativePet {
     /// M2(v3):官方契约六态上报（main.rs watchdog 解析 hash pet=/pettool=/petts=）。
     /// 同 petts 视为页面未更新（非新心跳,不刷新 official_at）；白名单外一律归一化为
     /// idle（防篡改,roadmap M2.2）。新鲜度判定（5s）在 compose/查询点进行。
-    pub fn set_official_state(&self, ts: i64, state: &str, tool: &str) {
+    pub fn set_official_state(&self, ts: i64, state: &str, tool: &str, key: &str) {
         if let Ok(mut s) = self.shared.lock() {
             if s.official_ts == ts {
                 return;
@@ -161,6 +166,11 @@ impl NativePet {
             let mut t = tool.to_string();
             t.truncate(80);
             s.official_tool = t;
+            // R4:审批的稳定身份（官方 `PendingApproval.key`）。插件仅在审批态填充，其余态为空。
+            // hash 字段不可信 → 截断上限；身份门禁（拿不到身份就不显示可交互审批气泡）在 compose 侧。
+            let mut k = key.to_string();
+            k.truncate(120);
+            s.official_key = k;
         }
     }
 

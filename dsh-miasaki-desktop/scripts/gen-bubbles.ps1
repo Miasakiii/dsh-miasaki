@@ -6,6 +6,7 @@
 #
 # 用法: powershell -File scripts/gen-bubbles.ps1
 # 输出: ui/pets/bubbles.png （240x56 x 22 帧，横向排布：17 台词 + 5 状态帧）
+#       ui/pets/approval.png（240x84，R5 审批气泡：提问 + 「拒绝/允许一次」两按钮）
 #
 # 注意: 台词池必须与 src/pet_native.rs 的 quote_pool 保持完全一致，
 #       修改文案后必须重新运行本脚本生成。
@@ -94,3 +95,88 @@ $g.Dispose()
 $sheet.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
 $sheet.Dispose()
 Write-Host "saved: $out ($(Get-Item $out).Length bytes)"
+
+# ============================================================================
+# R5(2026-09-16, design/pet-reference-benchmark.md R5)：**审批气泡**（含两个按钮）
+# 240x84：上半为提问气泡，下半为「拒绝 / 同意」两个按钮。
+# 运行时按固定矩形做命中判定（不新增 GDI 对象、不调用任何字体 API），
+# 点击后经 eval 派发决策事件给 dsh-pet-panel → 官方 PendingApproval.answer()。
+# 注：**工具名不进位图**（运行时排版 = 调 GDI 字体 = 踩 CreateFontW 崩溃区），
+#     工具名仍经 hash pettool= 上报，留给未来的组合帧/DirectWrite 方案。
+# ============================================================================
+$apW = 240; $apH = 84
+$btnW = 92; $btnH = 26; $btnY = 54
+$denyX = 24; $allowX = 124   # 24+92=116，与 124 之间留 8px 间隙（防误触，roadmap M3.2 红线）
+$apOut = Join-Path $PSScriptRoot '..\ui\pets\approval.png'
+$ap = New-Object System.Drawing.Bitmap $apW, $apH, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+$ag = [System.Drawing.Graphics]::FromImage($ap)
+$ag.Clear([System.Drawing.Color]::Transparent)
+$ag.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+$ag.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+
+# —— 提问气泡（与普通气泡同几何：帧内 15,4,210,48）——
+$apPath = New-Object System.Drawing.Drawing2D.GraphicsPath
+$r = [float]$radius
+$apPath.AddArc($bubbleX, $bubbleY, $r * 2, $r * 2, 180, 90)
+$apPath.AddArc($bubbleX + $bubbleW - $r * 2, $bubbleY, $r * 2, $r * 2, 270, 90)
+$apPath.AddArc($bubbleX + $bubbleW - $r * 2, $bubbleY + $bubbleH - $r * 2, $r * 2, $r * 2, 0, 90)
+$apPath.AddArc($bubbleX, $bubbleY + $bubbleH - $r * 2, $r * 2, $r * 2, 90, 90)
+$apPath.CloseFigure()
+$apBrush = New-Object System.Drawing.SolidBrush $bubbleColor
+$ag.FillPath($apBrush, $apPath)
+$apBrush.Dispose()
+$apPath.Dispose()
+
+# 文案（居中）
+$apText = '允许这次工具调用吗？'
+$apFont = New-Object System.Drawing.Font $fontName, 16.0, ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+$apFmt = [System.Drawing.StringFormat]::GenericTypographic
+$apFmt.Alignment = [System.Drawing.StringAlignment]::Center
+$apFmt.LineAlignment = [System.Drawing.StringAlignment]::Center
+$apFmt.FormatFlags = [System.Drawing.StringFormatFlags]::NoWrap
+$apTextRect = New-Object System.Drawing.RectangleF ([float]($bubbleX + 8)), ([float]$bubbleY), ([float]($bubbleW - 16)), ([float]$bubbleH)
+$apTextBrush = New-Object System.Drawing.SolidBrush $textColor
+$ag.DrawString($apText, $apFont, $apTextBrush, $apTextRect, $apFmt)
+$apTextBrush.Dispose(); $apFont.Dispose(); $apFmt.Dispose()
+
+# —— 两个按钮（圆角 8；拒绝=暗色描边底，同意=鎏金实心）——
+function New-RoundPath([int]$x, [int]$y, [int]$w, [int]$h, [float]$rad) {
+    $p = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $d = $rad * 2
+    $p.AddArc($x, $y, $d, $d, 180, 90)
+    $p.AddArc($x + $w - $d, $y, $d, $d, 270, 90)
+    $p.AddArc($x + $w - $d, $y + $h - $d, $d, $d, 0, 90)
+    $p.AddArc($x, $y + $h - $d, $d, $d, 90, 90)
+    $p.CloseFigure()
+    return $p
+}
+$btnFont = New-Object System.Drawing.Font $fontName, 14.0, ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
+$btnFmt = [System.Drawing.StringFormat]::GenericTypographic
+$btnFmt.Alignment = [System.Drawing.StringAlignment]::Center
+$btnFmt.LineAlignment = [System.Drawing.StringAlignment]::Center
+$btnFmt.FormatFlags = [System.Drawing.StringFormatFlags]::NoWrap
+
+$denyFill = [System.Drawing.Color]::FromArgb(235, 62, 56, 70)
+$denyText = [System.Drawing.Color]::FromArgb(255, 232, 226, 216)
+$allowFill = [System.Drawing.Color]::FromArgb(235, 176, 138, 74)
+$allowText = [System.Drawing.Color]::FromArgb(255, 28, 24, 34)
+
+$bp1 = New-RoundPath $denyX $btnY $btnW $btnH 8.0
+$bb1 = New-Object System.Drawing.SolidBrush $denyFill
+$ag.FillPath($bb1, $bp1); $bb1.Dispose(); $bp1.Dispose()
+$bt1 = New-Object System.Drawing.SolidBrush $denyText
+$ag.DrawString('拒绝', $btnFont, $bt1, (New-Object System.Drawing.RectangleF ([float]$denyX), ([float]$btnY), ([float]$btnW), ([float]$btnH)), $btnFmt)
+$bt1.Dispose()
+
+$bp2 = New-RoundPath $allowX $btnY $btnW $btnH 8.0
+$bb2 = New-Object System.Drawing.SolidBrush $allowFill
+$ag.FillPath($bb2, $bp2); $bb2.Dispose(); $bp2.Dispose()
+$bt2 = New-Object System.Drawing.SolidBrush $allowText
+$ag.DrawString('允许一次', $btnFont, $bt2, (New-Object System.Drawing.RectangleF ([float]$allowX), ([float]$btnY), ([float]$btnW), ([float]$btnH)), $btnFmt)
+$bt2.Dispose()
+
+$btnFont.Dispose(); $btnFmt.Dispose()
+$ag.Dispose()
+$ap.Save($apOut, [System.Drawing.Imaging.ImageFormat]::Png)
+$ap.Dispose()
+Write-Host "saved: $apOut ($(Get-Item $apOut).Length bytes)"

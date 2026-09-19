@@ -420,7 +420,8 @@ fn start_launch_sequence(app: &AppHandle) {
 
 /* ---------------- hash 命令/状态通道（33ms 轮询，跟手拖窗） ---------------- */
 
-/// hash 片段解析结果。M2(v3) 新增官方契约三字段：pet=<六态> / pettool=<工具名> / petts=<心跳 ms>。
+/// hash 片段解析结果。M2(v3) 新增官方契约三字段：pet=<六态> / pettool=<工具名> / petts=<心跳 ms>；
+/// R4(2026-09-16) 再增 petkey=<审批稳定身份，官方 PendingApproval.key>。
 struct FragmentParts {
     theme: Option<String>,
     int: Option<String>,
@@ -429,6 +430,7 @@ struct FragmentParts {
     wait: Option<bool>,
     pet: Option<String>,
     pet_tool: Option<String>,
+    pet_key: Option<String>,
     pet_ts: Option<i64>,
     move_xy: Option<(i32, i32)>,
     move_reset: bool,
@@ -465,6 +467,7 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         wait: None,
         pet: None,
         pet_tool: None,
+        pet_key: None,
         pet_ts: None,
         move_xy: None,
         move_reset: false,
@@ -491,6 +494,10 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         }
         if let Some(v) = part.strip_prefix("pettool=") {
             p.pet_tool = Some(percent_decode(v));
+        }
+        // R4:审批稳定身份（percent-encoded；官方 key 含 ':' 等字符）
+        if let Some(v) = part.strip_prefix("petkey=") {
+            p.pet_key = Some(percent_decode(v));
         }
         if let Some(v) = part.strip_prefix("petts=") {
             p.pet_ts = v.parse().ok();
@@ -780,10 +787,15 @@ fn start_hash_watchdog(app: &AppHandle) {
             if let Some(w) = parts.wait {
                 pet.set_waiting_approval(w);
             }
-            // M2(v3):官方契约六态通道（pet=/pettool=/petts=）;petts 同值 = 页面未更新,
+            // M2(v3):官方契约六态通道（pet=/pettool=/petts=/petkey=）;petts 同值 = 页面未更新,
             // set_official_state 内部去重（不刷新心跳）→ 通道静默 5s 后 compose 自动回落 DOM 兜底
             if let (Some(st), Some(ts)) = (parts.pet.as_deref(), parts.pet_ts) {
-                pet.set_official_state(ts, st, parts.pet_tool.as_deref().unwrap_or(""));
+                pet.set_official_state(
+                    ts,
+                    st,
+                    parts.pet_tool.as_deref().unwrap_or(""),
+                    parts.pet_key.as_deref().unwrap_or(""),
+                );
             }
             if parts.move_reset {
                 last_move = (0, 0);

@@ -29,6 +29,50 @@ pub(crate) const SINGLE_CLICK_DEBOUNCE_MS: u32 = 250;
 // compose 33ms 心跳定时器沿用 id=1;单击去抖另用 id=2(wnd_proc 按 wp 分流)
 pub(crate) const IDT_COMPOSE: usize = 1;
 pub(crate) const IDT_SINGLE_CLICK: usize = 2;
+/// R2(2026-09-16):透明区域鼠标穿透的光标轮询定时器（独立于 compose）。
+/// 必须独立且高频：一旦置位 `WS_EX_TRANSPARENT`，本窗口**收不到鼠标消息**，
+/// 「何时恢复可点击」只能靠主动轮询光标位置（参考实现同款：常态 10ms、拖拽中降频）。
+pub(crate) const IDT_HIT: usize = 3;
+pub(crate) const HIT_POLL_MS: u32 = 10;
+/// R2:命中判据阈值——alpha 低于此值视为「透明像素」（参考实现实机取 16）。
+/// 注：`load_png` 已把 a<8 归零，取 16 可一并消除 8..15 的「看不见但能点到」窄带。
+pub(crate) const CLICK_THROUGH_ALPHA: u32 = 16;
+/// R2:穿透样式切换的日志节流（鼠标扫过轮廓会频繁切换，不能每次都写盘）。
+pub(crate) const CLICK_THROUGH_LOG_EVERY: u32 = 500;
+/// R3(2026-09-16):位置可见性阈值——角色可见区域与任一工作区的相交面积占比 ≥ 25% 视为可见。
+/// 半出屏/贴边/未来的 peek 缩边都会保留；完全出屏才回默认位置。
+pub(crate) const VISIBLE_MIN_PCT: i64 = 25;
+
+// —— R4/R7（2026-09-16，design/pet-reference-benchmark.md R4/R7）：提醒（气泡）模型 ——
+/// 随机台词/单击台词的限时（v3 起为 3s，改用 Alert 后显式化）。
+pub(crate) const QUOTE_MS: u64 = 3000;
+/// R7（按我方实际情况重塑）：**气泡最小驻留**——防止状态快速交替
+/// （waiting ↔ fleet_alert ↔ busy）导致气泡高频闪烁。
+/// 只约束**低优先级**项（状态 2 / 台词 3）：同档新项在窗内不替换当前项；
+/// **审批(0)/告警(1) 恒可立即抢占**（可读性优先，与 v3 M1「审批 ≤2s 切过去」一致）。
+/// 注：参考实现的「跨检测器 30s 节流」作用于**事件型告警源**（stuck/pattern/exploration
+/// 三个检测器可能连环弹窗）；我方当前无事件型检测器（状态均为快照派生），
+/// 故只取其「防抖」内核，不引入 30s 抑制窗（否则会把状态变化一并吞掉）。
+pub(crate) const ALERT_MIN_DWELL_MS: u64 = 900;
+
+// —— R5（2026-09-16，design/pet-reference-benchmark.md R5）：审批气泡（含按钮）——
+// 几何必须与 `scripts/gen-bubbles.ps1` 的审批段逐值一致（该脚本生成 ui/pets/approval.png）。
+pub(crate) const APPROVAL_W: i32 = 240;
+pub(crate) const APPROVAL_H: i32 = 84;
+pub(crate) const APPROVAL_BTN_W: i32 = 92;
+pub(crate) const APPROVAL_BTN_H: i32 = 26;
+/// 帧内按钮 y（脚本 `$btnY`）
+pub(crate) const APPROVAL_BTN_Y: i32 = 54;
+/// 帧内「拒绝」按钮 x（脚本 `$denyX`）
+pub(crate) const APPROVAL_BTN_DENY_X: i32 = 24;
+/// 帧内「允许一次」按钮 x（脚本 `$allowX`）——与拒绝按钮之间留 **8px 间隙**防误触
+pub(crate) const APPROVAL_BTN_ALLOW_X: i32 = 124;
+/// 决策失败回落窗口：点击后若该审批仍存在超过此时长 → 用户没点成 → 提示去 DSH 界面处理
+/// （桌宠**绝不假装**决策已生效；参考实现同款纪律）。
+pub(crate) const DECISION_FALLBACK_MS: u64 = 3000;
+/// 可交互审批提醒的 id 前缀（`approval:<官方 PendingApproval.key>`）。
+/// 绘制与命中选择、按 id 移除都以它为准。
+pub(crate) const APPROVAL_ID_PREFIX: &str = "approval:";
 pub(crate) const AMBIENT_PLAY_MIN_MS: u64 = 1200; // ambient 表演下限
 pub(crate) const AMBIENT_PLAY_VAR_MS: u64 = 1000; // ambient 表演随机幅度(1.2~2.2s)
 pub(crate) const AMBIENT_REST_MIN_MS: u64 = 8000; // ambient 休息下限
