@@ -5,6 +5,12 @@
 - 补丁入库（2026-09-08）：`dsh-miasaki-desktop/patches/dsh-client-ui-settings-models/`（规则 + 基线 + 四模式 CLI，已接入 `verify-all.mjs desktop`），见 §15.5。
 - 实施方式：因本机无 pnpm 全量构建链路（网络/数据库/sandbox 均受限），改为**直接改写已安装 bundle** `node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.js`（生产仓库就是每个包的 `lib/client.js`，`dsh-web-frontend/dist` 不内含它；加载器经 `/plugins/??...&rev=` 组合 URL 拉取）。补丁副本与回滚点见 §13。
 - 目标环境：DSH 0.1.2-rc.1（`~/.dsh/settings.yaml` 为用户配置事实源）
+- **后续（2026-09-19）：本文 §6.1 的 B 档「真实可用性」与 §6.2 的六分类错误文案已落地** ——
+  见 `dsh-miasaki-desktop/design/model-probe-v2.md`：新增 host 插件
+  `dsh-miasaki-desktop/plugins/dsh-model-probe/`（两段式探测：零消耗握手 + 1-token 生成确认），
+  补丁 `dsh-client-ui-settings-models` 升级为「优先真实探测、插件缺席时降级回本文的 A 档目录探测」。
+  起因是 A 档在 Step Plan 这类只兼容 `/v1/messages` 的订阅网关上会把可用模型误报成 401
+  （正是本文 §6.2 末尾预警、当时未落地的场景）。
 - 用户参考设计：模型列表（每模型标签"视觉/1M"、逐行连通性测试、编辑/删除）+「编辑模型配置」对话框（模型 ID / 上下文窗口 / 最大输出 Token / 输入类型 / 输出类型）
 
 ## 0. TL;DR

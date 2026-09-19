@@ -8,7 +8,7 @@
 | 层 | 内容 | 载体 | 可自动化 |
 |---|---|---|---|
 | **L0** 静态检查 | 语法（`node --check`）、令牌完备性、令牌漂移 | `node scripts/verify-all.mjs` | 是 |
-| **L1** 单线单测 | Canvas 89 项、Sidebar 54 项、SSH 110 项、双模型 24 项、外观 60 项、Fleet 108 项 | `node scripts/verify-all.mjs` | 是 |
+| **L1** 单线单测 | Canvas 89 项、Sidebar 62 项、SSH 113 项、双模型 24 项、外观 60 项、Fleet 108 项、Desktop 18+19 项 | `node scripts/verify-all.mjs` | 是 |
 | **L2** 插件加载 | 装 profile → 重启 host → 页面刷新 → 插件生效/停用可恢复 | 本文档 §2 | 否（需重启 host） |
 | **L3** 实机冒烟 | 桌面壳启动、窗口、主题、桌宠、Canvas、Sidebar、SSH、双模型、外观 | 本文档 §3 | 否（需真机） |
 | **L4** 跨线联动 | Fleet pulse → 桌宠；主题 → Canvas/Sidebar；标题栏让位 | 本文档 §4 | 否 |
@@ -20,15 +20,15 @@ node scripts/verify-all.mjs            # 七线全量
 node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）
 ```
 
-**2026-09-12 实测基线**（七线全量重跑，共 **78 项检查**；DSH 0.1.5-rc.1 / Node v24.15.0）：
+**2026-09-19 实测基线**（七线全量重跑，共 **81 项检查**；DSH 0.1.5-rc.1 / Node v24.15.0）：
 
 | 线 | 项数 | 内容 | 结果 |
 |---|---:|---|---|
-| sidebar | 10 | `index.js`/`client.js` 语法 + 8 个测试文件（review-data 5 / review-view 10 / review-grouping 3 / review-view-store 6 / rightbar-guide 4 / terminal-launcher 7 / api-routing 12 / terminal-hub 7，共 54 例） | 9/10 ※※ |
+| sidebar | 10 | `index.js`/`client.js` 语法 + 8 个测试文件（review-data 5 / review-view 10 / review-grouping 3 / review-view-store 6 / rightbar-guide 4 / terminal-launcher 7 / api-routing 12 / terminal-hub 15，共 62 例） | PASS |
 | canvas | 11 | 三入口语法 + 8 个测试文件共 89 例（含 mergeStale 失效、external-views 外部视图槽、header-adaptive 会话头自适应） | PASS |
 | fleet | 15 | 图与总线判定 10 项（liveness 7 例 / bus-contract 23 / bus-apply 15 / bus-integration 13 / task-graph 13 / capability-graph 17 / verifier 20，共 108 例，及 `task-ready` `agent-pick` `verifier-pick` 的 `--check`、**dispatch 能力闸门接线**）+ server.js 语法 + validate-bus + publish-pulse + validate-bus --strict | PASS |
-| desktop | 8 | gen-init（令牌校验）+ tokens:diff（无漂移）+ patch verify ×5（模型设置 / 会话头溢出保护 / 轨迹计时恢复 / 消息气泡计时恢复 / cordis client 查询挂起修复）+ cargo test 10 例（pulse stale 语义 + 立绘回落链） | PASS（MSVC 环境）※ |
-| ssh | 12 | 6 个入口语法（index / client / app / session / lib-store / lib-runtime）+ 6 个测试文件共 110 例（U0 故障注入：指纹保存失败 / 跨代确认隔离 / viewer 输入归属 / 尺寸限界 / 背压淘汰 / 重附着预算；U1：分组过滤 / 粘贴守卫 / 颜色合成 / 缓冲查找 / 主题下发 / 会话头列宽手柄隐藏；D2：顶栏消息闭环 / 浮层契约 / `ready`·`status` 帧必须喂状态模型（D-2 回归）/ `canvasAvailable` 段数双向变化（hero 两段）/ 「保存并连接」形态护栏（D-1 回归）；U2：v2 帧契约与 `VERSION_MISMATCH` / 一次性 attach 票据生命周期 / 多 shell 隔离与写权接管 / 关闭语义三分 / 工作区快照恢复与损坏降级 / 序列化快照三路恢复） | PASS |
+| desktop | 11 | gen-init（令牌校验）+ tokens:diff（无漂移）+ patch verify ×5（模型设置 / 会话头溢出保护 / 轨迹计时恢复 / 消息气泡计时恢复 / cordis client 查询挂起修复）+ `plugins/dsh-model-probe` 语法 2 项 + 连通性探测判定表 18 例 + cargo test 19 例（pulse stale 语义 + 立绘回落链 + 桌宠 Alert 提醒模型 3 例） | PASS（MSVC 环境）※ |
+| ssh | 12 | 6 个入口语法（index / client / app / session / lib-store / lib-runtime）+ 6 个测试文件共 113 例（U0 故障注入：指纹保存失败 / 跨代确认隔离 / viewer 输入归属 / 尺寸限界 / 背压淘汰 / 重附着预算；U1：分组过滤 / 粘贴守卫 / 颜色合成 / 缓冲查找 / 主题下发 / 会话头列宽手柄隐藏；D2：顶栏消息闭环 / 浮层契约 / `ready`·`status` 帧必须喂状态模型（D-2 回归）/ `canvasAvailable` 段数双向变化（hero 两段）/ 「保存并连接」形态护栏（D-1 回归）；U2：v2 帧契约与 `VERSION_MISMATCH` / 一次性 attach 票据生命周期 / 多 shell 隔离与写权接管 / 关闭语义三分 / 工作区快照恢复与损坏降级 / 序列化快照三路恢复；**U2 实机验收回归：未绑定 shell 不发帧 / 就绪补绑 / 按 `shellSeq` 精确匹配**） | PASS |
 | dual-model | 10 | 6 个入口语法 + 3 个测试文件共 24 例 + 图片准入补丁 `patch verify` | PASS |
 | appearance | 12 | 5 个入口语法（index / client / lib-config / lib-store / lib-fence）+ 6 个测试文件共 60 例 + `derive-skins --check`（M2 皮肤表可复算） | PASS |
 
@@ -39,14 +39,18 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > 正确跑法是在 VS 2022 的 x64 开发者环境（`vcvars64.bat` / x64 Native Tools）或带 MSVC 的 PowerShell 中执行。
 > 2026-09-12 全量重跑即在带 MSVC 的 PowerShell 中执行，该项 **PASS**（10 例全绿）。
 
-> ※※ **sidebar 的 `terminal-hub.test.js` 两条用例在受限沙箱下是环境假阴性**（2026-09-12 实测）：
-> 该用例断言 `ensureSession` 的 cwd 校验与背压淘汰，链路里 `resolvePtyBin` 会用 `where.exe`
-> 解析 shell 的**绝对路径**（T2 spike 纪律：conpty 拒绝裸名），而受限沙箱**禁止管道捕获子进程输出**
-> （`EPERM spawnSync where.exe EPERM`）⇒ 落入 catch 后抛 `未安装或找不到 powershell.exe`，
-> 用例在到达被测分支前就失败。**判据**：同一环境里 `where.exe powershell.exe` 以
-> `stdio: 'inherit'` 运行退出码 0 且打印 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
-> ——PATH 里有、只是不能捕获。**正确跑法**：在普通终端执行
-> `node dsh-miasaki-sidebar/test/terminal-hub.test.js` → 应为 **7/7**。其余 8 个测试文件不受影响。
+> ※※ **【2026-09-19 已修，本条判定作废】** sidebar 的 `terminal-hub.test.js` 曾在受限沙箱下整片失败
+> （2026-09-12 首次归因，当时基线 sidebar 9/10）：该文件的注释与本线 README 都写着「fake pty 注入，
+> 不需要真实 shell」，但 `_spawn` 里的 `resolvePtyBin` 会走 `where.exe` 解析 shell 的**绝对路径**
+> （T2 spike 纪律：conpty 拒绝裸名）——**子进程 + 管道捕获**，而受限沙箱禁止管道捕获子进程输出
+> （`EPERM`）⇒ 落入 catch 后抛 `未安装或找不到 powershell.exe`，用例在到达被测分支前就失败。
+> **判据**（当时）：同一环境里 `where.exe powershell.exe` 以 `stdio: 'inherit'` 运行退出码 0 且打印
+> `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` —— PATH 里有、只是不能捕获。
+> **修法**：`TerminalHub` 构造函数新增 `resolveBin` 选项（默认仍是 `resolvePtyBin`，**生产行为不变**），
+> `_spawn` 改调 `this._resolveBin(shellDef)`；测试的 `makeHub()` 注入绝对假路径 ⇒ 单测与宿主 shell
+> 彻底解耦，名副其实。**现状**：受限沙箱下直接
+> `node dsh-miasaki-sidebar/test/terminal-hub.test.js` → **15/15 全绿**，**无须再切普通终端**。
+> 保留本注记仅为记录归因过程与「模块级硬引用漏在注入点之外」这一测试设计教训。
 
 **实现注记**：`node --test` 会为每个测试文件 spawn 子进程并用管道捕获输出，在受限沙箱下以
 `EPERM` 失败。`verify-all.mjs` 因此直接 `node <file>` 逐文件执行、`stdio: 'inherit'`，以退出码判定。
@@ -70,6 +74,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 双模型准入补丁在位 | `node dsh-miasaki-dual-model/patches/dsh-api-session-controller/patch.mjs status` | 输出 `patched`；**该补丁与 dual-model 插件必须同版本上线**——补丁负责放行、插件负责真的有人能处理图片，只打前者会让图片被静默丢弃 |
 | 计时面板可恢复 | 刷新页面 → 打开任一**已结束**步骤的轨迹计时面板 / 悬停消息耗时面板 | 首 token 延迟、生成、吞吐量三行与气泡「首 token 用时（TTFT）」均为数字（修复前为「首 token 时间不可用」） |
 | 外观线 host 半生效 | 重启 `dsh web` → `curl -s http://127.0.0.1:3080/appearance/api/state` | 返回 `{"config":{…},"revision":N,"persistent":true}`；`persistent:false` 表示 `cordis.patch.yml` 的 `dataDir` 没传进 config（改动只存在于内存） |
+| 模型探测插件 host 半生效（连通性 v2） | 重启 `dsh web` → `curl -s http://127.0.0.1:3080/model-probe-api/health` | 返回 `{"ok":true,"version":"0.1.0","protocols":[…],"timeoutMs":15000}`。**404 = 插件未被 host 加载**——此时设置页按钮会自动降级为目录探测并附提示（功能不缺失，但口径变旧） |
 
 > **部署契约（易踩）**：sidebar/canvas 改代码后，只刷新页面无效、强刷也无效——
 > **必须重启 `dsh web`**。`/sidebar/api/health` 的 `version` 字段是判断 host 是否已加载新 bundle 的
@@ -164,6 +169,25 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 
 **U2 主体实施（2026-09-16，实机验收待跑）**：`dsh-miasaki-ssh/design/2026-09-15-ssh-u2-plan.md` §6 的 **U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复**已落地（**U2.2 SFTP** 留待真实主机补验后开工）。单测 **85 → 110 例**（runtime 22 / session 32 / http 7 重写适配 v2 契约，app 16 / client 25 / store 8 无回归）、`verify-all ssh` **12/12**；端到端探针（真 sshd × 本线 `SshRuntime`）**9/9**；**回滚演练实际执行**（基线恢复 85/85 绿 → U2 还原 110/110 绿）。上表 **U2 四行**即本轮实机验收判据，明细见 `dsh-miasaki-ssh/README.md` 与 `dsh-miasaki-ssh/design/CHANGELOG.md` 第十二批（含「规划决策 5 的 `app.js` 纯搬迁拆分未执行」的偏离登记）。
 
+### 3.7 模型连通性探测（desktop 线 `plugins/dsh-model-probe/`，2026-09-19）
+
+「测试连通性 v2」的实机判据。补丁侧已生效（`settings-models` = `patched / F1717A07…`，
+即 v2.1 —— v2 首版的产物曾因 locale 尾逗号而语法非法、导致整页插件不注册，
+详见该补丁 README 的「事故记录」），插件是补丁的**可选**依赖——缺席时按钮走降级路径。
+设计见 `dsh-miasaki-desktop/design/model-probe-v2.md`。
+
+| 检查项 | 步骤 | 通过判据 |
+|---|---|---|
+| host 就绪 | `curl -s http://127.0.0.1:3080/model-probe-api/health` | `{"ok":true,…}`（见 §2 表） |
+| **误报修复（本次主目标）** | 设置 → 模型 → `step` 的 `step-5-preview` 点「测试连通性」 | **绿色「可用 · Nms」**。v1 在这一项报 `…/step_plan/v1/models?limit=1000 answered 401; check the API key`——该文案不再出现即达标 |
+| 错 key 零消耗 | 临时在表单里填一个明显错误的 key 后测试 | 「认证失败——检查 API Key」，且**握手档 401 即终止**（不产生生成调用，套餐用量无变化） |
+| 错模型 ID | 把模型 ID 改成 `no-such-model-xyz` 后测试 | 「模型 ID 未注册或拼写错误」——**不是** 401，也不是原始错误串 |
+| 地址不可达 | 把 baseURL 改成 `https://127.0.0.1:9` 后测试 | 「无法连接——检查地址与网络」 |
+| 超时 | 指向一个会挂起的地址 | 「连接超时（15s）」（15s 内返回，不无限「测试中…」） |
+| **降级路径** | 从 profile 移除该 bundle → 重启 host → 刷新页面 → 再测试 | 显示 v1 目录探测结果并附「（探测服务未就绪，已回退目录探测）」；**不得白屏、不得永久停在「测试中…」** |
+| 协议不支持 | 对 `api` 不属于三种协议之一的路由测试 | 「该协议暂不支持探测」（不发请求） |
+| 无副作用 | 上述各项执行后检查 `~/.dsh/settings.yaml` | 内容未被改动（探测只读配置，结果只存在于页面运行态） |
+
 ## 4. L4：跨线联动
 
 | 链路 | 步骤 | 通过判据 |
@@ -227,3 +251,4 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 2026-09-15(晚) | **SSH 线 D3 清理与回归实机验收（独立重跑，8 项门槛 7 PASS）**（§3.6 补充该节，方案 §18）：驱动 `_refs/scripts-archive/ssh-d3-accept/run-d3-accept.mjs`（约 4 分钟可复现，`d3-accept-result.json` + `shots/`），**不依赖 D3 实施者自己的探针**。通过：**四档宽度按视口语义落位**（1280 rail 232 / **960 rail 208 = 恰在断点值落紧凑档** / 720、480 抽屉 + 关闭钮；四档零横向溢出）、三主题 × 1280/480（零溢出 + 顶栏稳定 + reserve 164px）、A0 文案（状态栏「点左上「对话」退出后粘贴」+ 剪贴板首行 `[SSH 标签 · 用户@主机:端口]`）、官方 tab 栏无 SSH、会话态官方 `[data-width-handle]` 正常显示、回退视图面零残留、真实连接链路。**D3-F1 同日闭环**：那条 `div[data-phase]:has(...) [data-width-handle]` 死规则已删（用户定向「现在就删」），旧断言改写 + 新增回归断言 ⇒ 「grep 应无命中」达标，D3 完全达标。单测 **81 例**、`ssh` **12/12** |
 | 2026-09-15(深夜) | **SSH 线 D4（D3 三项尾项清理）实机验收：6 项门槛全 PASS**（§3.6 补充该节，方案 §20）：驱动 `_refs/scripts-archive/ssh-d4-accept/run-d4-accept.mjs`。**尾项①`renderBanner` 隐藏即清空**（运行态取证：可见态 `childCount:3` → 连接完成后 `hidden:true/display:none/**childCount:0**`；旧实现节点残留）**+ 清空后仍能重建**（断开后 `childCount:4`）；**尾项③过渡区间**（1280 rail 232 / 860 rail 208 / 600 抽屉 / **500 `.tools .optional` 可见** / 480 隐藏；五档零溢出）；**尾项②运行态**（30 次开关零异常 + iframe 未重载 + 零 resize 帧；静态 `observe(header,{childList,subtree})`、`aria-selected` 仅剩注释）；**附带**注入样式零 `width-handle`（D3-F1 实机复核）。单测 **82 例**（实施记录原写 65/65 为沿用旧基线的笔误，验收时校正）、`ssh` **12/12** |
 | 2026-09-16 | **SSH 线 U2 主体落地（多 shell / 工作区记忆 / 精确恢复）**：U2.1 身份分层（`connId → runtimeId → shellId`）+ 一次性 30s attach 票据 + 单写多读写权接管、U2.3 偏好与工作区快照拆两张据（`localStorage` v2 / `sessionStorage` v1，只在存活连接上重挂、绝不自动重连）、U2.4 官方 `@xterm/addon-serialize` 0.14.0 精确锁定 + 空闲 1.5s 采集快照（每 shell 128KiB / 500 行，不落盘）三路恢复。**§0 的 L1 行与 §1 表 ssh 行例数同步 70/82 → 110**（旧值停在 D4 批次，属文档欠账）；§3.6 标题扩为 `U0+U1+A0+D2–D4+U2`、新增 U2 四行实机验收判据与该节小结。单测 **110 例**（app 16 / client 25 / http 7 / runtime 22 / session 32 / store 8）、`ssh` **12/12**；端到端探针（真 sshd × 本线运行时）**9/9**；**回滚演练实际执行**（85/85 → 110/110）。U2.2 SFTP 与 U3 未动 |
+| 2026-09-19 | **七线全量重跑定新基线（81 项检查，七线全 PASS）**：desktop 8 → **11**（新增「测试连通性 v2」host 插件 `plugins/dsh-model-probe` 的入口语法 2 项 + 连通性判定表 18 例；`cargo test` 10 → **19** 例，含 R5 桌宠 `Alert` 提醒模型 3 例）、ssh 例数 110 → **113**（U2 实机验收 4 处回归配套的 3 条新断言）、sidebar 例数 54 → **62**（`terminal-hub.test.js` 重写为多会话形状，7 → 15 例）。**sidebar 由 9/10 转 PASS**——`terminal-hub.test.js` 的受限沙箱假阴性已**根治**：`TerminalHub` 构造函数新增可注入的 `resolveBin`（默认仍是 `resolvePtyBin`，生产行为不变），测试不再碰宿主 shell（详见 §1 表下 ※※ 注记）。§0 的 L1 行同步（Sidebar 54 → 62 / SSH 110 → 113 / 补 Desktop 18+19）。**本轮另新增 §3.7 模型连通性探测实机判据**（desktop 线 `plugins/dsh-model-probe`：两段式探测 / 误报修复 / 错 key 零消耗 / 降级路径 / 无副作用）与 §2 的 `/model-probe-api/health` 自检行 |

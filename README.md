@@ -54,17 +54,20 @@ node scripts/verify-all.mjs               # 七线全量（L0 静态检查 + L1 
 node scripts/verify-all.mjs appearance    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）
 ```
 
-**2026-09-12 最新基线（全量 78 项检查）**：sidebar 9/10 ※、canvas 11/11、fleet 15/15、desktop 8/8、ssh 12/12、dual-model 10/10、appearance 12/12
-（**分母为检查项数**：syntax + 单测文件 + 补丁自证；如 ssh 的 12 项内含 60 例单测、canvas 的 11 项内含 89 例单测、appearance 的 12 项内含 60 例单测、sidebar 的 10 项内含 54 例单测）。
-desktop 项含 `cargo test`（10 例 Rust 单测，pulse stale 语义 + 立绘回落链）与 `patch verify` ×5（五个运行时补丁由基线原始文件重建并与产物逐字节比对）
+**2026-09-19 最新基线（全量 81 项检查，七线全 PASS）**：sidebar 10/10、canvas 11/11、fleet 15/15、desktop 11/11、ssh 12/12、dual-model 10/10、appearance 12/12
+（**分母为检查项数**：syntax + 单测文件 + 补丁自证；如 ssh 的 12 项内含 113 例单测、canvas 的 11 项内含 89 例单测、appearance 的 12 项内含 60 例单测、sidebar 的 10 项内含 62 例单测）。
+desktop 项含 `cargo test`（19 例 Rust 单测：pulse stale 语义 + 立绘回落链 + 桌宠 `Alert` 提醒模型）与 `patch verify` ×5（五个运行时补丁由基线原始文件重建并与产物逐字节比对），
+外加 `plugins/dsh-model-probe` 入口语法 2 项 + 连通性判定表 18 例
 ——script 会在 `PATH` 外自动探测 `~/.cargo/bin/cargo`。dual-model 项含 24 例单测与 `patch verify`（图片准入补丁离线自证）。
 
-> ※ **sidebar 的 `terminal-hub.test.js` 两条用例在受限沙箱下是环境假阴性**（2026-09-12 实测）：
+> ※ **【2026-09-19 已修】** sidebar 的 `terminal-hub.test.js` 曾在受限沙箱下整片失败（2026-09-12 归因）：
 > `resolvePtyBin` 用 `where.exe` 解析 shell 绝对路径并**捕获其输出**，而受限沙箱禁止管道捕获
-> （`EPERM spawnSync where.exe EPERM`）⇒ 落入 catch 后抛「未安装或找不到 powershell.exe」。
-> 判据：同一环境里 `where.exe powershell.exe` 以 `stdio: 'inherit'` 运行**退出码 0 且打印正确路径**
-> （说明 PATH 里有、只是不能捕获）。**正确跑法**：在普通终端执行
-> `node dsh-miasaki-sidebar/test/terminal-hub.test.js` → 应为 **7/7**（该线在真实环境下即 10/10）。
+> （`EPERM`）⇒ 落入 catch 后抛「未安装或找不到 powershell.exe」。根子是 `hub._pty` 注入了、
+> `resolvePtyBin` 却还是模块级硬引用。**修法**：`TerminalHub` 构造函数新增可注入的 `resolveBin`
+> （默认仍是 `resolvePtyBin`，生产行为不变），测试注入假路径 ⇒ 单测与宿主 shell 彻底解耦。
+> **现状**：受限沙箱下直接 `node dsh-miasaki-sidebar/test/terminal-hub.test.js` → **15/15 全绿**，
+> 无须再切普通终端。归因过程与判据见
+> [回归矩阵 §1 的 ※※ 注记](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
 
 历史基线：2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
