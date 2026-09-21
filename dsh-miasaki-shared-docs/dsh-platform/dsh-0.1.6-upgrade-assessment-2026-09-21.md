@@ -226,12 +226,24 @@ npm view @deepseek-ai/dsh dist-tags --json
 
 - `0.1.5-rc.2`（现在的 `latest`）：**补丁零阻力**（§4），但**收益也确实为零**（① 文档 §2：只改了 6 个包）。
   作为"顺手抬一格"可以，**不值得为它单独安排一次升级**。
-- `0.1.6-alpha.2`：**不建议现在升**——alpha 轨 + `settings-models` 适配未做 + `sidebar`/`ssh` 两线的方向决策未拍板。
+- `0.1.6-alpha.2`：**不建议现在升**——alpha 轨 + `sidebar`/`ssh` 两线的方向决策未拍板。
+  （`settings-models` 的适配**已于当日完成**，见下。）
 
-**建议动作（本次唯一建议立刻做的）**：
+**两条建议动作 —— 均已于 2026-09-21 当日完成**：
 
-1. ~~给 `settings-models` 补丁做适配~~ → **先登记，不急做**（§9 已把它写成升级清单的第 7 步）。
-2. **给 sidebar 线的两个 tab 类型补显式 `priority: 'extension'`**（① 文档 §5 建议 1）——一行改动、零行为变化。
+1. ✅ **`settings-models` 补丁适配**（commit `eead583`）：`patch.mjs` 新增**变体机制**
+   （`variants` + `probe`），edit #5 分两代分支 —— 0.1.5 走原内联 JSX 路径（**逐字节不变**），
+   0.1.6-alpha.2 起走「Editor 渲染成 ReactNode → `reasoningRow` prop → `ModelRow` 摆位」。
+   **两份 baseline 与三个常量刻意未动**（当前运行仍是 0.1.5-rc.1，换掉会让补丁打不上当前环境），
+   `verify` 三行 PASS 照旧。实测两代真实产物上 `apply` 均成功。详见该补丁 README「双代变体」节。
+2. ✅ **sidebar 显式 `priority: 'extension'`**（commit `9544b93`，① 文档 §5 建议 1）——
+   一行改动、零行为变化，把"我们压在官方内置终端之上"从隐式变成显式。
+
+> **因此升级成本又降了一档**：升到 `0.1.6-alpha.2` 时 `settings-models` **不再需要人工适配**
+> （§9 第 7 步已相应简化），只需换 baseline 与常量。门槛重新回到「alpha 稳定性」与非补丁侧的
+> 破坏性变更（插件依赖改运行时解析、客户端 Session slot 变化、创造模式移除 Cordis 动态工具）。
+>
+> **2026-09-21 决策**：用户选择**暂不升级**，维持原触发条件 —— 等 `next` 轨出现 `0.1.6-rc.*`。
 
 ---
 
@@ -241,21 +253,25 @@ npm view @deepseek-ai/dsh dist-tags --json
 
 1. 确认所有在跑的会话已收尾（升级会中断它们）。
 2. 备份 `~/.dsh`（复制成 `~/.dsh-backup-<版本>-<日期>`）。
-3. **在沙箱外的普通终端执行**。
+   `[实测]` 2026-09-21 复核：`~/.dsh` 下现有备份**只有一份 09-10 的 `0.1.2-rc.1` 时代快照** ——
+   升级前必须刷新，别以为"已经备过了"。
+3. **在沙箱外的普通终端执行**。`[实测]` 2026-09-21 复核：本会话（`workspace-write`）写
+   `%APPDATA%\npm` **被拒**（探针文件 `DENIED`），`npm i -g` 无从执行；**且第 7 步的补丁 `apply`
+   同样要写安装目录** —— 整条链路（安装 + 补丁重打）都无法在受限沙箱内闭环，必须沙箱外执行，
+   或对每次写操作单独提权（每次都会弹批准框）。**重开会话解决不了**：新会话默认仍是 `workspace-write`。
 
 **执行**
 
 4. `npm i -g @deepseek-ai/dsh@<目标版本>` → `dsh --version` 核对。
 5. 检查 `~/.dsh/settings.yaml` 与 profile 的三个 `link:` 插件（canvas / sidebar / ssh）是否仍有效。
 6. 七条线逐条 `node scripts/verify-all.mjs <line>`。
-7. **补丁——本轮唯一新增的步骤**：
-   - 对 **5 个零改动**补丁：`node rebuild-baseline.mjs` → 同步 3 个常量 → `node patch.mjs verify` → `apply`；
-   - 对 **`settings-models`**：
-     a. 先读新版 `ModelListEditor.tsx` 的 `ModelRow` props 契约；
-     b. 重新设计 `reasoning-ui` 的插入点与 `expect` 断言（§2.4 三条路线）；
-     c. 改 `EDITS` → `node patch.mjs rebuild` → `verify` → 同步 `PATCHED_SHA256`；
-     d. `apply`；
-     e. **刷新页面确认「思考强度」与「测试连通性」两个控件真的在**（这一条最容易被漏——产物合法不等于 UI 在位）。
+7. **补丁 —— 6 个全部走同一套机械流程**（`settings-models` 的人工适配已于 2026-09-21 完成，
+   变体机制会自动选中新版分支，`EDITS` 无需再改）：
+   - 逐个：`node rebuild-baseline.mjs` → 同步 3 个常量 → `node patch.mjs verify` → `apply`；
+   - 对 **`settings-models`** 额外确认两点：① `verify` 里 `7 条编辑`的 SHA 应随新 baseline 变化
+     （说明变体选中了 `model-row` 分支）；② `apply` **不报「没有任何变体的探测锚点命中」** ——
+     报了就说明 DSH 已超出本补丁已知的两代，需按补丁 README 的「双代变体」增补第三个变体；
+   - **刷新页面确认「思考强度」与「测试连通性」两个控件真的在**（这一条最容易被漏——产物合法不等于 UI 在位）。
 8. 重跑 persona 同步脚本 `dsh-miasaki-desktop/preset-sources/apply-presets.ps1`（**本次实测该字段未变**）。
 9. 重启 `dsh web`，按 `cross/smoke-test-matrix.md` 走 L2/L3。
 10. **升到 0.1.6 后新增的观察项**：官方侧边栏终端被我们的 `kind: 'terminal'` 遮蔽，
