@@ -284,3 +284,50 @@ test('头像文件路由：穿越、非 PNG 名、缺失文件一律 404', async
   assert.equal((await callFile(ctx, '/appearance/avatar/config.json')).status, 404, '非 .png 名必须 404')
   assert.equal((await callFile(ctx, '/appearance/avatar/missing.png')).status, 404)
 })
+
+// ---------------------------------------------------------------------------
+// M2.7：应用图标预设（清单 → 幂等落盘 → 与用户上传同源）
+test('预设路由：GET /presets 幂等落盘到 avatars/，且能经头像文件路由取回', async () => {
+  const { mkdtempSync, existsSync, readFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'mia-presets-'))
+
+  const ctx = fakeCtx()
+  host.apply(ctx, { dataDir: dir })
+  const res = await callApi(ctx, '/appearance/api/presets')
+  assert.equal(res.status, 200)
+  assert.equal(res.body.persistent, true)
+  assert.equal(res.body.presets.length >= 8, true, '至少八款程序化预设')
+  assert.equal(res.body.presets[0].id, 'default', '默认款在首位')
+  assert.equal(res.body.presets[1].id, 'portrait', '位图预设紧随其后')
+  // 每款文件名都必须命中跨线契约的白名单（桌面壳据此在 avatars 目录里找）
+  for (const preset of res.body.presets) {
+    assert.match(preset.file, /^[\w][\w.-]{0,80}\.png$/, `${preset.file} 必须过白名单`)
+    assert.equal(preset.url, `/appearance/avatar/${preset.file}`)
+    assert.equal(existsSync(join(dir, 'avatars', preset.file)), true, `${preset.file} 必须真的落盘`)
+  }
+  // 落盘内容与面板预览同源：文件路由取回的字节 == 磁盘字节
+  const defaultFile = join(dir, 'avatars', 'preset-default.png')
+  const got = await callFile(ctx, '/appearance/avatar/preset-default.png')
+  assert.equal(got.status, 200)
+  assert.equal(got.headers['content-type'], 'image/png')
+  assert.deepEqual(Buffer.from(got.body), readFileSync(defaultFile))
+  // 幂等：重复请求不改写磁盘（渲染是确定性的 + 落地前先比字节）
+  const before = readFileSync(defaultFile)
+  const again = await callApi(ctx, '/appearance/api/presets')
+  assert.equal(again.status, 200)
+  assert.deepEqual(readFileSync(defaultFile), before)
+  assert.deepEqual(again.body.local, res.body.local, '清单稳定')
+  // 位图预设来自插件资源：体积明显大于程序化渲染的那几张（后者每张不过几十 KB 上限）
+  const portrait = res.body.presets.find(p => p.id === 'portrait')
+  assert.equal(existsSync(join(dir, 'avatars', portrait.file)), true)
+})
+
+test('预设路由：无 dataDir 时清单为空但请求不失败（面板给提示而非崩）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const res = await callApi(ctx, '/appearance/api/presets')
+  assert.equal(res.status, 200)
+  assert.equal(res.body.persistent, false)
+  assert.deepEqual(res.body.presets, [], '落不了盘就不谎报可用')
+})

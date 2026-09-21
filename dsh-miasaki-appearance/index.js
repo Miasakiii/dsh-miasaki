@@ -10,6 +10,7 @@
 //   GET  /appearance/api/wallpapers      壁纸图源清单（内置 id + local 目录扫描）
 //   GET  /appearance/api/avatars         头像清单（avatars 目录扫描；M2.5）
 //   POST /appearance/api/avatar          上传头像（PNG data URL → avatars/<新文件名>.png；M2.5）
+//   GET  /appearance/api/presets         应用图标预设清单（按需生成/复制到 avatars/；M2.7）
 //   GET  /appearance/wallpaper/local/…   本地壁纸文件（白名单目录 + 文件名白名单，防穿越）
 //   GET  /appearance/avatar/…            头像文件（同上；桌面壳不经 HTTP，直读磁盘）
 //
@@ -18,12 +19,14 @@
 // 的闪色。总开关关闭时该脚本对页面零影响（只写 data-* 属性）。
 //
 // 本文件不含任何第三方依赖：配置模型与判定规则在 lib/config.js（纯逻辑、可单测），
-// 持久化在 lib/store.js，围栏在 lib/fence.js。
+// 持久化在 lib/store.js，围栏在 lib/fence.js，预设图标在 lib/icon-presets.js。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join, basename, normalize, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildSurfaceTokens, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
 import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
+import { ICON_PRESETS, presetAssetPath, presetFileName, presetUrl, renderPresetPng } from './lib/icon-presets.js'
 import { AppearanceStore } from './lib/store.js'
 import { buildTrustedHosts, fenceCheck } from './lib/fence.js'
 import { meta as zafkielMeta, tokens as zafkielTokens } from './lib/skins/zafkiel.js'
@@ -65,6 +68,10 @@ export const inject = ['webServer']
 const MAX_BODY_BYTES = 32 * 1024
 /** 头像上传的 body 上限：base64 后的 PNG（面板侧最长边已压到 512），远小于此。 */
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+/** 插件根目录：位图预设（`assets/presets/*.png`）以它为基准解析。 */
+const PLUGIN_ROOT = fileURLToPath(new URL('.', import.meta.url))
+/** 预设图标生成尺寸：与面板上传归一化的上限一致（桌面壳最大用到 256）。 */
+const PRESET_ICON_SIZE = 512
 const API_PREFIX = '/appearance/api/'
 
 function sendJson(res, status, body) {
@@ -177,6 +184,60 @@ export function apply(ctx, config) {
     return resolveInDir(avatarDir, AVATAR_NAME_RE, file)
   }
 
+  /**
+   * 取一款预设图标的 PNG 字节：位图预设读插件自带资源，其余即时渲染。
+   * @param {string} id - 预设 id。
+   * @returns {Buffer|null} 字节；资源缺失或未知 id 返回 null。
+   */
+  function presetBytes(id) {
+    const asset = presetAssetPath(id)
+    if (asset !== null) {
+      try {
+        return readFileSync(join(PLUGIN_ROOT, asset))
+      } catch {
+        return null
+      }
+    }
+    return renderPresetPng(id, PRESET_ICON_SIZE)
+  }
+
+  /**
+   * 把一款预设图标落到 avatars 目录（内容相同则跳过写入）。
+   *
+   * 落盘这一步是**跨线契约的关键**：桌面壳只认 `avatars/<白名单文件名>`，预设图标因此
+   * 与用户上传的图走同一条路 —— 壳侧对"预设"零感知，一个字的改动都不需要。
+   * @param {string} id - 预设 id。
+   * @returns {Promise<string|null>} 写入的文件名；无法落盘返回 null。
+   */
+  async function materializePreset(id) {
+    if (avatarDir === null) return null
+    const bytes = presetBytes(id)
+    if (bytes === null) return null
+    const file = presetFileName(id)
+    const full = join(avatarDir, file)
+    try {
+      if (existsSync(full) && readFileSync(full).equals(bytes)) return file
+      await mkdir(avatarDir, { recursive: true })
+      await writeFile(full, bytes)
+      return file
+    } catch (error) {
+      ctx.logger?.error?.(error instanceof Error ? error : new Error(String(error)))
+      return null
+    }
+  }
+
+  /** 确保全部预设就位，返回可直接给面板消费的清单（幂等，重复调用只读一次磁盘）。 */
+  async function materializePresets() {
+    const out = []
+    for (const preset of ICON_PRESETS) {
+      const file = await materializePreset(preset.id)
+      if (file !== null) {
+        out.push({ id: preset.id, label: preset.label, file, url: presetUrl(preset.id) })
+      }
+    }
+    return out
+  }
+
   function sendFile(res, fullPath) {
     const type = LOCAL_WALLPAPER_TYPES[fullPath.slice(fullPath.lastIndexOf('.')).toLowerCase()] ?? 'application/octet-stream'
     res.writeHead(200, { 'content-type': type, 'cache-control': 'max-age=300' })
@@ -225,6 +286,14 @@ export function apply(ctx, config) {
     // M2.5：头像清单（面板的「已有头像」选择器消费）。
     if (path === `${API_PREFIX}avatars` && req.method === 'GET') {
       return sendJson(res, 200, { local: listLocalAvatars() })
+    }
+
+    // M2.7：应用图标预设清单。**这个 GET 带一次幂等落盘**（把预设图标写进 avatars/），
+    // 因为「预设」对桌面壳必须长得和用户上传的图一模一样；重复请求只做一次字节比较。
+    // 无 dataDir 时仍返回清单（面板可预览），只是选了也落不了盘 —— 由面板给提示。
+    if (path === `${API_PREFIX}presets` && req.method === 'GET') {
+      const presets = await materializePresets()
+      return sendJson(res, 200, { presets, persistent: avatarDir !== null, local: listLocalAvatars() })
     }
 
     // M2.5：上传头像。浏览器侧已用 canvas 把任意格式重编码成 PNG，这里只做最终把关

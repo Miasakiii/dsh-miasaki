@@ -21,7 +21,13 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > **M2.6 面板风格对齐官方「通用设置」页（2026-09-21）**：整栏面板重做为官方行式风格
 > （0.5px 分隔线 + 16px 行距 / 14px 标题 / 12px 说明 / 明暗立方 / 步进器），交互控件
 > 直接复用官方 primitives（`Button / Switch / Pill / 图标`，前端壳 seed 模块，零新依赖）；
-> 行为逻辑零变化。动效 / 会话效果分别在 M3–M4 接入同一套管线。
+> 行为逻辑零变化。
+>
+> **M2.7 应用图标预设已实现（2026-09-21）**：外观设置里的「软件头像」升级为**「应用图标」**——
+> 九宫格内置九款预设（默认 / 头像 / 暗夜玻璃 / 素雅银 / 果冻蓝 / 缠线绿 / 蒙德里安 / 暖橙 / 流光），
+> 点选即用；预设图标由本线**程序化生成**（手写 PNG 编码 + SDF 绘制，零第三方依赖、零图片资源），
+> 落盘后与用户上传的图同源 ⇒ **桌面壳零改动**（见 [M2.7 设计](design/2026-09-21-appearance-icon-presets-design.md)）。
+> 动效 / 会话效果分别在 M3–M4 接入同一套管线。
 
 ---
 
@@ -45,13 +51,15 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 dsh-miasaki-appearance/
 ├── index.js               # Host 半：/appearance/api/* 路由 + 首帧注入
 ├── client.js              # Client 半：设置页「外观」（官方通用设置页风格）+ 契约自检 + 应用管线
+├── assets/presets/        # 位图预设图标（portrait.png + 来源/处理链 README）
 ├── lib/
 │   ├── config.js          # 配置模型：默认值 / 收窄钳制 / 深合并 / 迁移 / 首帧脚本 / 契约判定
 │   ├── avatar.js          # 软件头像：PNG 魔数 / data URL 解析 / 文件名白名单（跨线契约的 JS 半）
+│   ├── icon-presets.js    # 应用图标预设：手写 PNG 编码 + SDF 绘制 + 九款配色（程序化生成）
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 81 例纯逻辑单测（配置 / 头像 / 围栏 / 持久化 / client 契约 / host 路由契约）
-├── design/                # 规划设计 + M1/M2/M2.5/M2.6 实施 + 变更记录
+├── test/                  # 91 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
+├── design/                # 规划设计 + M1/M2/M2.5/M2.6/M2.7 实施 + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
 
@@ -82,6 +90,17 @@ dsh-miasaki-appearance/
 > 边界：**EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标是构建期资源**
 > （`make-icons.mjs` + `npx tauri icon`），任何运行时设置都改不了它们。
 
+### M2.7 应用图标预设（2026-09-21）
+
+| 能力 | 说明 |
+|---|---|
+| 设置页「应用图标」 | 九宫格内置九款预设（默认 / 头像 / 暗夜玻璃 / 素雅银 / 果冻蓝 / 缠线绿 / 蒙德里安 / 暖橙 / 流光），点选即写 `avatar.source`；选中格走官方 `bg-module-platform` + `neutral-bluish-400` 描边 |
+| 预设从哪来 | `lib/icon-presets.js` **程序化生成**：手写 PNG 编码（CRC32 + `node:zlib`）+ SDF 解析式抗锯齿绘制 + 渐变/装饰层/顶部高光合成；**零第三方依赖、零图片资源** |
+| 位图预设 | 「头像」= `assets/presets/portrait.png`（用户提供的图，trim 黑边 → 居中裁方 → 圆角 → 量化；来源与参数见该目录 README） |
+| 落盘接口 | `GET /appearance/api/presets` —— **幂等落盘**（`avatars/preset-<id>.png`，内容相同则跳过写入）+ 返回清单；位图与程序化对 host 是同一个接口 |
+| 跨线影响 | **零**：预设图标与用户上传的图走同一条路（同目录 / 同白名单 / 同文件路由），桌面壳不知道"预设"的存在 |
+| 我的上传 | 「我的上传」pills 自动过滤 `preset-*`，用户只看自己的资产 |
+
 ### 里程碑
 
 - **M2 主题 + 壁纸**（[设计已定稿](design/2026-09-12-appearance-m2-design.md)）：刻刻帝 / 狂狂帝皮肤
@@ -91,6 +110,8 @@ dsh-miasaki-appearance/
   桌面壳图标消费（本线第一条跨线能力；M2 与 M3 之间插入，用户直接点名需求）；
 - **M2.6 面板风格对齐**（见 [变更记录](design/CHANGELOG.md) 同日条目）：行式布局 / 官方 primitives /
   `.mia-*` 前缀 CSS 注入，行为逻辑零变化；
+- **M2.7 应用图标预设**（[设计](design/2026-09-21-appearance-icon-presets-design.md)）：九宫格预设、
+  程序化 PNG 生成、位图预设，跨线契约零变更；
 - **M3 动效**：CSS 动效层挂在 `[data-slot]` 稳定锚点上、三套预设、强度倍率、`prefers-reduced-motion` 强制降级；
 - **M4 会话效果**：消息密度与最大宽度、流式光标、代码块与引用样式、工具卡折叠、字体。
 
@@ -125,8 +146,8 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test --test-isolation=none "test/*.test.js"     # 81 例（7 个测试文件）
-node ../scripts/verify-all.mjs appearance              # 统一回归入口（14 项）
+node --test --test-isolation=none "test/*.test.js"     # 91 例（8 个测试文件）
+node ../scripts/verify-all.mjs appearance              # 统一回归入口（16 项）
 ```
 
 > 沙箱提示：受限环境里 `node --test` 会为每个测试文件 spawn 子进程而撞 `EPERM`。
@@ -152,4 +173,6 @@ factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条�
   验收矩阵与 6 步实施顺序；
 - [M2.5 软件头像设计](design/2026-09-21-appearance-avatar-launcher-design.md) —— 跨线契约（配置 / 目录 /
   文件名白名单）、为什么走配置文件而非页面通道、为什么收敛到 PNG、上传链路与边界；
+- [M2.7 应用图标预设设计](design/2026-09-21-appearance-icon-presets-design.md) —— 为什么程序化生成、
+  渲染管线（PNG 编码 / SDF / 合成）、骨架四版目检、位图预设的黑边坑、为什么跨线契约零变更；
 - [变更记录](design/CHANGELOG.md)。

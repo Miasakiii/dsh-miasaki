@@ -249,7 +249,7 @@ async function planAppearance() {
   // 首帧脚本/契约判定；围栏；持久化；client 半装载契约 —— 在无 `module` 的 VM 上下文里
   // 跑 factory，钉死「module is not defined」那类整包加载失败）。都不碰网络与 DSH 运行时，
   // 任意机器可复现；实机项（插件加载 / 设置栏出现 / 「关掉即原生」）见 smoke-test-matrix.md。
-  for (const entry of ['index.js', 'client.js', 'lib/config.js', 'lib/avatar.js', 'lib/store.js', 'lib/fence.js']) {
+  for (const entry of ['index.js', 'client.js', 'lib/config.js', 'lib/avatar.js', 'lib/icon-presets.js', 'lib/store.js', 'lib/fence.js']) {
     checks.push({ line: 'appearance', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
   for (const file of await testFiles(dir)) {

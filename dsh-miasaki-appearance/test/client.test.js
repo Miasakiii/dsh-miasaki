@@ -245,8 +245,22 @@ function collectText(node, out = []) {
   return out
 }
 
-test('面板渲染冒烟：软件头像板块（已设置 + 已有清单）不抛错且文案在位', () => {
-  // M2.5 回归闸门：头像板块读 state.config.avatar 与 avatars 清单两个来源，
+/** 深度收集满足谓词的渲染节点（断言 className / src / aria 等 props 用）。 */
+function collectNodes(node, predicate, out = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const child of node) collectNodes(child, predicate, out)
+    return out
+  }
+  if (node.props !== undefined && node.props !== null && predicate(node) === true) out.push(node)
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) collectNodes(child, predicate, out)
+  }
+  return out
+}
+
+test('面板渲染冒烟：应用图标板块（预设 + 已设置 + 我的上传）不抛错且文案在位', () => {
+  // M2.5/M2.7 回归闸门：图标板块读 state.config.avatar、avatars 清单、presets 清单三个来源，
   // 任一为 undefined 都会在渲染期炸掉整个面板（2026-09-12 空白面板事故的同型风险）。
   const { descriptor } = capture()
   const ctx = fakeCtx()
@@ -270,19 +284,73 @@ test('面板渲染冒烟：软件头像板块（已设置 + 已有清单）不�
       persistent: true,
     },
     null, null, null, false, null,
-    { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png'] },
+    { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png', 'preset-default.png'] },
+    {
+      presets: [
+        { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
+        { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
+      ],
+    },
   ]
   try {
     const element = view()
     assert.notEqual(element, null)
     const texts = collectText(element)
-    assert.equal(texts.includes('软件头像'), true, '板块标题必须渲染')
+    assert.equal(texts.includes('应用图标'), true, '板块标题必须渲染')
     assert.equal(texts.includes('上传图片…'), true, '上传按钮必须渲染')
     assert.equal(texts.includes('清除'), true)
-    // 已设置时说明里带上当前文件名
-    assert.equal(texts.some(t => t.includes('avatar-lz3k9q-4f2a1b.png')), true)
-    // 清单里的第二个文件出现在选择器里（长名会被截断成 `avatar-other-ab…`）
-    assert.equal(texts.some(t => t.includes('avatar-other')), true)
+    // 预设九宫格：名称与格子数
+    assert.equal(texts.includes('默认'), true, '预设名称必须渲染')
+    assert.equal(texts.includes('头像'), true)
+    const cells = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className.startsWith('mia-iconCell'))
+    assert.equal(cells.length, 2, '两款预设 → 两个格子')
+    // 我的上传：预设文件不得混进「自定义」清单（否则用户会看到一堆系统生成的条目）
+    assert.equal(texts.some(t => t.includes('preset-default.png')), false, '预设文件不进「我的上传」')
+    assert.equal(texts.some(t => t.includes('avatar-lz3k9q')), true, '用户自己的文件必须在清单里')
+    assert.equal(texts.some(t => t.includes('avatar-other')), true, '长名会被截断成 avatar-other-ab…')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('面板渲染冒烟：九宫格按 avatar.source 点亮选中格', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  const presetUrl = '/appearance/avatar/preset-portrait.png'
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'pure', scheme: 'dark', accent: '', fontSize: 14 },
+        wallpaper: {
+          source: '', light: '', dark: '', blur: 0, scrim: 0,
+          fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: presetUrl },
+        motion: { enabled: false, preset: 'fluid', scale: 1 },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 5,
+      persistent: true,
+    },
+    null, null, null, false, null, { local: [] },
+    {
+      presets: [
+        { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
+        { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: presetUrl },
+      ],
+    },
+  ]
+  try {
+    const element = view()
+    const active = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className.includes('is-active'))
+    assert.equal(active.length, 1, '有且只有一个选中格')
+    assert.equal(active[0].props['aria-pressed'], true)
+    const imgs = collectNodes(element, node => node.type === 'img')
+    assert.equal(imgs.some(img => img.props.src === presetUrl), true, '格子用 host 的同源路由做预览')
   } finally {
     react.stateQueue = null
   }
@@ -311,7 +379,7 @@ test('面板渲染冒烟：host 未下发 avatar 字段时给重启提示而非�
       persistent: true,
     },
     { ok: false, issues: [{ level: 'warn', code: 'avatar-host-stale', message: '请重启 dsh web' }] },
-    null, null, false, null, null,
+    null, null, false, null, null, null,
   ]
   try {
     const element = view()

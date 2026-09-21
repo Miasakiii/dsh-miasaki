@@ -2,6 +2,51 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-21 · M2.7：应用图标预设（九宫格 + 程序化生成 + 位图预设）
+
+- **起因**：M2.5 上线后用户给出参考截图，要求「像这样的预设」—— 一组**内置可选的应用图标**
+  （网格排列、点选即用），而不只是上传自己的图。设计见
+  [M2.7 设计](2026-09-21-appearance-icon-presets-design.md)。
+
+- **预设从哪来：程序化生成，不是塞一批 PNG 资源**。三条理由：① 本线硬纪律是**零第三方依赖**
+  （不能引 sharp / canvas），而仓库里唯一现成的光栅器在 desktop 线，跨线取素材正是本仓明令避免的耦合；
+  ② 图像资源一旦入库就不可参数化，而这里配色 / 圆角 / 构图全是数据；③ 交付物仍是普通 PNG，
+  所以**桌面壳那侧零改动、跨线契约一个字不用改**。
+  - `lib/icon-presets.js`：手写 PNG 编码（CRC32 + chunk 组装 + `node:zlib` deflate）、
+    SDF 解析式抗锯齿绘制（圆角矩形 / 圆）、线性渐变填充、逐层 alpha-over 合成、圆角方遮罩裁边。
+    512×512 单张毫秒级，九张一次生成不到一秒。
+  - 骨架（抽象「M」：左右各一组「短块 + 长块」+ 中央两枚圆点）由 A/B/C/D 四版**渲染出来目检**后选定
+    （C 版：方块 + 圆点的像素感，与参考图的视觉语言最接近）；八款配色共用一个骨架 → 换色不换形。
+  - **九款**：默认 / 头像 / 暗夜玻璃 / 素雅银 / 果冻蓝 / 缠线绿 / 蒙德里安 / 暖橙 / 流光。
+    配色取本仓三主题的色感（墨夜 / 绯红 / 鎏金 / 骨白 / 枪铁）与 DeepSeek 品牌蓝；
+    蒙德里安用新增的 `deco` 装饰层（三角色块压在底与徽记之间）。
+
+- **「头像」是唯一的位图预设**（用户点名：「用我前面发给你的那个头像修剪一下做第二个应用图标」）：
+  - 资源 `assets/presets/portrait.png`（512×512，97 KB）。原图边缘有一圈**纯黑描边**，
+    直接裁方会带黑边 —— 处理链因此是 `trim(12) → 居中裁方 420 → resize 512 → 23.5% 圆角蒙版 →
+    PNG 调色板量化`（未量化 471 KB → 97 KB，肉眼无差）。参数与来源记在 `assets/presets/README.md`。
+  - 生成脚本一次性（依赖 sharp，不入库）：本线零依赖，sharp 只在 desktop 线的构建链里。
+
+- **host**：新增 `GET /appearance/api/presets` —— 一次请求里做**幂等落盘**（把预设图标写进
+  `avatars/preset-<id>.png`，内容相同则跳过写入）+ 返回清单。落盘是契约的关键：预设图标与
+  用户上传的图走**同一条路**（同一个目录、同一套文件名白名单、同一个文件路由），
+  桌面壳对「预设」零感知。位图预设读插件资源，其余即时渲染，两者对 host 是同一个接口。
+
+- **client**：`软件头像` 板块升级为**`应用图标`** —— 九宫格（`repeat(auto-fill, minmax(104px,1fr))`，
+  选中格走官方 `bg-module-platform` + `neutral-bluish-400` 描边，与官方「通用设置」页选中态同源）
+  + 「自定义」行（上传 / 清除）+「我的上传」pills（**过滤掉 `preset-*`**，用户只看自己的资产）。
+  上传链路与归一化未变。
+
+- **验证**：单测 81 → **91 例**（新增 `test/icon-presets.test.js` 7 例：预设表一致性、文件名 / URL 往返、
+  圆角外透明与徽记可见、渲染确定性、PNG 结构（签名 + IHDR + IEND + IDAT 可解 + 尺寸钳制）、
+  CRC 自查、位图资源在位；host 侧 2 例：幂等落盘 + 无 dataDir 不谎报）；verify-all appearance
+  14 → **16 项**。九款预设拼图目检通过（`_refs/preview/presets-grid.png`，一次性产物）。
+
+- 触摸点：`lib/icon-presets.js`（新）、`assets/presets/{portrait.png,README.md}`（新）、
+  `index.js`、`client.js`、`test/{icon-presets,host,client}.test.js`、`package.json`、
+  `README.md`、`design/2026-09-21-appearance-icon-presets-design.md`；
+  `../scripts/verify-all.mjs`、`../dsh-miasaki-shared-docs/cross/{appearance-launcher-icon-2026-09-21,smoke-test-matrix}.md`。
+
 ## 2026-09-21 · M2.6：面板风格对齐官方「通用设置」页
 
 - **起因**：用户「新加的设置也都参照通用设置页的风格优化设计」。本线面板此前的自绘卡片风

@@ -308,9 +308,13 @@ window.__ModuleLoader__.load({
 .mia-noticeOk{color:var(--dsw-alias-state-success-primary)}
 .mia-error{color:var(--dsw-alias-state-error-primary);margin:0;padding:8px 0 0;font-size:12px;line-height:18px}
 .mia-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:18px}
-.mia-avatarLead{flex-direction:row;align-items:center;gap:12px}
-.mia-avatarPreview{width:44px;height:44px;border:.5px solid var(--dsw-alias-border-l4);border-radius:12px;object-fit:cover;background:0 0;flex:none}
-.mia-avatarEmpty{width:44px;height:44px;border:.5px dashed var(--dsw-alias-border-l4);border-radius:12px;justify-content:center;align-items:center;font-size:11px;color:var(--dsw-alias-label-tertiary);display:flex;flex:none}
+.mia-iconGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;padding:16px 0 4px;display:grid}
+.mia-iconCell{box-sizing:border-box;border:.5px solid transparent;background:0 0;border-radius:12px;flex-direction:column;align-items:center;gap:8px;padding:12px 6px 10px;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;display:flex}
+.mia-iconCell:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.mia-iconCell:disabled{cursor:default;opacity:.5}
+.mia-iconCell.is-active{border-color:var(--dsw-static-neutral-bluish-400);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary)}
+.mia-iconImg{border-radius:14px;width:56px;height:56px;object-fit:cover;background:0 0;display:block}
+.mia-iconLabel{text-align:center;font-size:12px;line-height:18px}
 `
     const PANEL_CSS_ID = '@miasaki/dsh-appearance/panel.css'
     // 与官方 client 插件同一注入式（factory 体内、按 data-plugin-css 去重）：
@@ -440,6 +444,8 @@ window.__ModuleLoader__.load({
       // M2.5：头像目录清单（「已有头像」选择器消费）。刻意放在 state 队列末尾，
       // 让 test/client.test.js 的 stateQueue 注入顺序保持稳定。
       const [avatars, setAvatars] = react.useState(null)
+      // M2.7：应用图标预设清单（九宫格消费；来自 /presets，host 会顺带把图标落进 avatars/）。
+      const [presets, setPresets] = react.useState(null)
 
       const ctx = runtime === null ? null : runtime.ctx
       const theme = runtime === null ? undefined : runtime.theme
@@ -455,6 +461,13 @@ window.__ModuleLoader__.load({
           }
           requestJson('/wallpapers', { method: 'GET' }).then(setWallpapers).catch(() => setWallpapers(null))
           requestJson('/avatars', { method: 'GET' }).then(setAvatars).catch(() => setAvatars(null))
+          // /presets 会顺带把预设图标落到 avatars/（幂等），因此它同时刷新了本地清单。
+          requestJson('/presets', { method: 'GET' })
+            .then(result => {
+              setPresets(Array.isArray(result.presets) ? result.presets : null)
+              if (Array.isArray(result.local)) setAvatars({ local: result.local })
+            })
+            .catch(() => setPresets(null))
           setError(null)
         } catch (e) {
           setError(String(e && e.message ? e.message : e))
@@ -628,25 +641,26 @@ window.__ModuleLoader__.load({
         ),
       ]))
 
-      // ---- 软件头像（M2.5）
+      // ---- 应用图标（M2.5 自定义 + M2.7 预设）
       const avatar = state === null || state.config === null || state.config === undefined || state.config.avatar === undefined
         ? null
         : state.config.avatar
-      children.push(group('软件头像', avatar === null ? [hint(state === null
+      const presetList = presets !== null && presets !== undefined && Array.isArray(presets.presets) ? presets.presets : null
+      const localFiles = avatars !== null && avatars !== undefined && Array.isArray(avatars.local) ? avatars.local : []
+      // 「我的上传」= avatars 目录里除预设之外的文件（预设由 host 生成，不属于用户资产）。
+      const myFiles = localFiles.filter(file => !file.startsWith('preset-'))
+      children.push(group('应用图标', avatar === null ? [hint(state === null
         ? '配置未加载。'
-        : 'Host 半尚未认识该板块（见上方契约提示）：请重启 dsh web，否则头像设置写不进去。')] : [
-        reactElementAvatarRow(
-          avatar,
-          busy,
-          save,
-          () => pickImageFile(uploadAvatar, setError),
-        ),
-        reactElementAvatarPicker(avatar.source, avatars !== null && avatars !== undefined && Array.isArray(avatars.local) ? avatars.local : [], busy, save),
+        : 'Host 半尚未认识该板块（见上方契约提示）：请重启 dsh web，否则图标设置写不进去。')] : [
+        presetList === null ? hint('预设清单加载中…') : reactElementIconGrid(presetList, avatar.source, busy, save),
+        row('自定义', '上传自己的图片（会自动转成 PNG、最长边 512），或把 PNG 放进 ~/.dsh/miasaki-appearance/avatars/ 后从下方清单里选。', [
+          outlineButton('上传图片…', () => pickImageFile(uploadAvatar, setError), busy),
+          ghostButton('清除', () => save({ avatar: { source: '' } }), busy || avatar.source === ''),
+        ]),
+        myFiles.length === 0 ? null : reactElementAvatarPicker(avatar.source, myFiles, busy, save),
         hint(
-          '桌面端（Miasaki.exe）读同一份配置：改完约 1–2 秒内，窗口 / 任务栏 / 托盘图标跟着变。' +
-          '上传前会自动转成 PNG 并把最长边压到 512px；' +
-          '也可以把 PNG 直接放进 ~/.dsh/miasaki-appearance/avatars/ 后在左侧列表里选。' +
-          '注意：EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标属于构建期资源，不随此处变化。',
+          '点选即用：桌面端（Miasaki.exe）读同一份配置，约 1–2 秒内窗口 / 任务栏 / 托盘图标跟着变；' +
+          '「清除」回退出厂图标。注意：EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标属于构建期资源，不随此处变化。',
         ),
       ]))
 
@@ -665,37 +679,25 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 软件头像行（M2.5）：左侧 44px 预览 + 说明，右侧「上传图片…／清除」。
-     * 预览直接用 host 的同源路由地址 —— 面板从不持有图片数据本身。
+     * 应用图标九宫格（M2.7）：每格一枚预设图标的预览 + 名称，点选即写 `avatar.source`。
+     * 预览图直接吃 host 的同源路由（预设图标此刻已落在 avatars 目录，与用户上传的图同源）。
      */
-    function reactElementAvatarRow(avatar, busy, save, onUpload) {
-      const preview = avatar.source === ''
-        ? react.createElement('div', { key: 'empty', className: 'mia-avatarEmpty' }, '无')
-        : react.createElement('img', {
-          key: 'img',
-          src: avatar.source,
-          alt: '当前软件头像',
-          className: 'mia-avatarPreview',
-        })
-      const note = avatar.source === ''
-        ? '未设置：桌面端（Miasaki.exe）继续用出厂图标。'
-        : `已启用：${avatar.source.slice(AVATAR_PREFIX.length)} · 桌面端窗口 / 任务栏 / 托盘图标约 1–2 秒内跟随。`
-      return react.createElement('div', {
-        key: 'avatar-row',
-        className: 'mia-row',
-      }, [
-        react.createElement('div', { key: 'l', className: 'mia-rowText mia-avatarLead' }, [
-          preview,
-          react.createElement('div', { key: 't', style: { minWidth: 0 } }, [
-            react.createElement('div', { key: 'n', className: 'mia-title' }, '软件头像'),
-            react.createElement('div', { key: 'd', className: 'mia-desc' }, note),
-          ]),
-        ]),
-        react.createElement('div', { key: 'c', className: 'mia-control' }, [
-          outlineButton('上传图片…', () => onUpload(), busy),
-          ghostButton('清除', () => save({ avatar: { source: '' } }), busy || avatar.source === ''),
-        ]),
-      ])
+    function reactElementIconGrid(presets, source, busy, save) {
+      return react.createElement('div', { key: 'icon-grid', className: 'mia-iconGrid' }, presets.map(preset => {
+        const active = source === preset.url
+        return react.createElement('button', {
+          key: preset.id,
+          type: 'button',
+          className: active === true ? 'mia-iconCell is-active' : 'mia-iconCell',
+          'aria-pressed': active === true,
+          disabled: busy === true,
+          title: preset.label,
+          onClick: () => save({ avatar: { source: preset.url } }),
+        }, [
+          react.createElement('img', { key: 'i', className: 'mia-iconImg', src: preset.url, alt: '' }),
+          react.createElement('span', { key: 'l', className: 'mia-iconLabel' }, preset.label),
+        ])
+      }))
     }
 
     /** 头像选择器：目录里已有的文件（含手动放入的）+ 「不使用」。 */
