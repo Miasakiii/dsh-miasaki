@@ -8,7 +8,9 @@
 //
 // 渲染管线（单遍扫描，解析式抗锯齿，不做超采样）：
 //   SDF（有符号距离场）算覆盖率 → 逐层 alpha-over 合成 → 圆角方遮罩裁边 → PNG 编码（node:zlib）。
-// 512×512 一张约 26 万像素、每像素十来个图元求值，单张毫秒级；八张一次生成不到一秒。
+// 512×512 一张约 26 万像素、每像素十来个图元求值，单张毫秒级。
+//
+// 预设表当前**只有两款**（默认 / 头像），理由见 ICON_PRESETS 的注释。
 
 import { deflateSync } from 'node:zlib'
 
@@ -114,9 +116,8 @@ function coverage(distance, pixel) {
 const CANVAS = Object.freeze({ radius: 0.235, safe: 0.2 })
 
 /**
- * 统一的几何徽记：抽象「M」—— 左右各一组「短块 + 长块」+ 中央两枚圆点。
- * 未声明 `marks` 的预设都用它 → 换配色不换骨架（2026-09-21 由 A/B/C/D 四版骨架目检选定，
- * 这一版与业界同类产品的图标语言最接近：方块 + 圆点的像素感）。
+ * 「默认」款的几何徽记：抽象「M」—— 左右各一组「短块 + 长块」+ 中央两枚圆点。
+ * （2026-09-21 由 A/B/C/D 四版骨架**渲染出来目检**后选定；方块 + 圆点的像素感）
  */
 const MARK = Object.freeze([
   Object.freeze({ kind: 'rect', x: 0.200, y: 0.285, w: 0.155, h: 0.155, r: 0.045 }),
@@ -127,23 +128,22 @@ const MARK = Object.freeze([
   Object.freeze({ kind: 'circle', cx: 0.500, cy: 0.565, r: 0.055 }),
 ])
 
-/** 顶部高光：一条自顶向下的白色半透明带，给「玻璃 / 果冻」类材质用。 */
-const GLOSS = Object.freeze({
-  kind: 'rect', x: 0, y: 0, w: 1, h: 0.46, r: 0.235,
-  fill: { kind: 'linear', from: [0, 0], to: [0, 0.46], stops: [[0, '#ffffff'], [1, '#ffffff']] },
-  opacity: (x, y) => Math.max(0, 0.16 * (1 - y / 0.46)),
-})
-
 /**
- * 九款预设。字段：
+ * 预设表。
+ *
+ * **只有两款**（2026-09-21 用户拍板）：参考截图里那套通用软件风格的多配色图标
+ * （暗夜玻璃 / 素雅银 / 果冻蓝 / 缠线绿 / 蒙德里安 / 暖橙 / 流光）**不适合本项目**，
+ * 参考图只是"要有预设、网格可选"这一形式的参照 —— 因此初版那七款连同它们带出的
+ * 渲染能力（顶部高光 `gloss` / 装饰层 `deco` / 骨架覆盖 `marks`）一并撤掉，
+ * 只保留本项目的两款：程序化生成的「默认」，与用户提供的「头像」。
+ *
+ * 字段：
  *  - `base`：底层（纯色或线性渐变），先画；
- *  - `deco`：可选的装饰层（图元列表，画在底与徽记之间 —— 蒙德里安的色块走它）；
- *  - `marks`：可选的骨架覆盖（不给就用统一的 MARK 徽记）；
  *  - `mark`：徽记颜色（纯色或渐变）；
- *  - `gloss`：是否叠顶部高光（玻璃 / 果冻 / 流光材质）；
  *  - `asset`：位图预设（插件自带 PNG 的相对路径）；给了它就不走程序化绘制。
- * 命名对齐业界同类产品的中文习惯（默认 / 头像 / 暗夜玻璃 / 素雅银 / 果冻蓝 / 缠线绿 / 蒙德里安 / 暖橙 / 流光），
- * 配色则取自本仓三主题的色感（墨夜 / 绯红 / 鎏金 / 骨白 / 枪铁）与 DeepSeek 品牌蓝。
+ *
+ * 将来若要加款，**配色应当取本仓三主题的色感**（墨夜 / 绯红 / 鎏金 / 骨白 / 枪铁）
+ * 或角色主题，而不是通用软件的配色习惯。
  */
 export const ICON_PRESETS = Object.freeze([
   Object.freeze({
@@ -152,69 +152,13 @@ export const ICON_PRESETS = Object.freeze([
     base: { kind: 'linear', from: [0, 0], to: [1, 1], stops: [[0, '#26262c'], [1, '#0e0e12']] },
     mark: '#f4f4f6',
   }),
-  // 「头像」是本表里唯一的**位图预设**：资源入库在 assets/presets/portrait.png（用户提供的图，
-  // 处理链见该目录 README）。其余各款由本文件的绘制器即时生成 —— 两者对 host 是同一个接口：
+  // 「头像」是位图预设：资源入库在 assets/presets/portrait.png（用户提供的图，
+  // 处理链见该目录 README）。程序化与位图对 host 是同一个接口：
   // 「给一个预设 id，拿一份 PNG 字节」，落盘路径与跨线契约完全一致。
   Object.freeze({
     id: 'portrait',
     label: '头像',
     asset: 'assets/presets/portrait.png',
-  }),
-  Object.freeze({
-    id: 'night',
-    label: '暗夜玻璃',
-    base: { kind: 'linear', from: [0, 0], to: [0, 1], stops: [[0, '#262b38'], [1, '#0e1119']] },
-    mark: '#5b647a',
-    gloss: true,
-  }),
-  Object.freeze({
-    id: 'silver',
-    label: '素雅银',
-    base: { kind: 'linear', from: [0, 0], to: [0, 1], stops: [[0, '#f6f7f9'], [1, '#d7dae0']] },
-    mark: '#8e949d',
-  }),
-  Object.freeze({
-    id: 'jelly',
-    label: '果冻蓝',
-    base: { kind: 'linear', from: [0, 0], to: [0, 1], stops: [[0, '#e2f0ff'], [1, '#b6d8ff']] },
-    mark: { kind: 'linear', from: [0, 0], to: [1, 1], stops: [[0, '#4d8dfb'], [1, '#1f63e0']] },
-    gloss: true,
-  }),
-  Object.freeze({
-    id: 'thread',
-    label: '缠线绿',
-    base: { kind: 'linear', from: [0, 0], to: [0, 1], stops: [[0, '#e9f7ee'], [1, '#c6e8d3']] },
-    mark: '#2f7d5b',
-  }),
-  Object.freeze({
-    id: 'mondrian',
-    label: '蒙德里安',
-    base: '#f7f7f4',
-    // 四角色块（蒙德里安的经典三原色）+ 黑色徽记：色块走 deco 层，吃得住图案压在它上面。
-    deco: Object.freeze([
-      Object.freeze({ kind: 'rect', x: 0, y: 0, w: 0.40, h: 0.30, r: 0.02, fill: '#e23b2e' }),
-      Object.freeze({ kind: 'rect', x: 0.60, y: 0, w: 0.40, h: 0.30, r: 0.02, fill: '#f4b400' }),
-      Object.freeze({ kind: 'rect', x: 0, y: 0.70, w: 0.40, h: 0.30, r: 0.02, fill: '#1a73e8' }),
-    ]),
-    mark: '#141414',
-  }),
-  Object.freeze({
-    id: 'ember',
-    label: '暖橙',
-    base: { kind: 'linear', from: [0, 0], to: [1, 1], stops: [[0, '#ffa25c'], [1, '#f0522f']] },
-    mark: '#fff4e8',
-  }),
-  Object.freeze({
-    id: 'aurora',
-    label: '流光',
-    base: { kind: 'linear', from: [0, 0], to: [0, 1], stops: [[0, '#141420'], [1, '#08080c']] },
-    mark: {
-      kind: 'linear',
-      from: [0, 0],
-      to: [1, 1],
-      stops: [[0, '#7c5cff'], [0.5, '#22d3ee'], [1, '#f472b6']],
-    },
-    gloss: true,
   }),
 ])
 
@@ -261,12 +205,7 @@ export function renderPreset(preset, size) {
   const baseFill = preset.base === undefined ? null : compileFill(preset.base)
   const markFill = compileFill(preset.mark)
   const baseShape = { kind: 'rect', x: 0, y: 0, w: 1, h: 1, r: CANVAS.radius }
-  // 骨架可被预设覆盖（`marks`），默认用统一徽记；装饰层（`deco`）画在底与图案之间。
-  const marks = Array.isArray(preset.marks) ? preset.marks : MARK
-  const markShapes = marks.map(shape => ({ ...shape, fill: markFill }))
-  const decoShapes = Array.isArray(preset.deco)
-    ? preset.deco.map(shape => ({ ...shape, fill: compileFill(shape.fill) }))
-    : []
+  const markShapes = MARK.map(shape => ({ ...shape, fill: markFill }))
 
   for (let iy = 0; iy < px; iy += 1) {
     const y = (iy + 0.5) * pixel
@@ -297,22 +236,10 @@ export function renderPreset(preset, size) {
       // 1) 底：纯色或渐变
       if (baseFill !== null) over(baseFill(x, y), 1)
 
-      // 2) 装饰层（蒙德里安式色块等），在底与徽记之间
-      for (const shape of decoShapes) {
-        const cov = coverage(shapeDistance(x, y, shape), pixel)
-        if (cov > 0) over(shape.fill(x, y), cov)
-      }
-
-      // 3) 徽记（默认四枚图元，统一取 mark 的颜色/渐变）
+      // 2) 徽记（六枚图元，统一取 mark 的颜色/渐变）
       for (const shape of markShapes) {
         const cov = coverage(shapeDistance(x, y, shape), pixel)
         if (cov > 0) over(markFill(x, y), cov)
-      }
-
-      // 4) 顶部高光（玻璃 / 果冻 / 流光材质）
-      if (preset.gloss === true) {
-        const cov = coverage(roundRectDistance(x, y, GLOSS), pixel)
-        if (cov > 0) over([255, 255, 255], cov * GLOSS.opacity(x, y))
       }
 
       const offset = (iy * px + ix) * 4

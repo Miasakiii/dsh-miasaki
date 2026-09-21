@@ -43,7 +43,8 @@ function chunksOf(png) {
   return chunks
 }
 
-test('预设表：id 唯一、标签非空，且每款要么可渲染要么有位图资源', () => {
+test('预设表：只有两款（默认 / 头像），id 唯一、标签非空，且每款要么可渲染要么有位图资源', () => {
+  assert.equal(ICON_PRESETS.length, 2, '预设只有「默认」与「头像」两款（用户 2026-09-21 拍板）')
   const ids = new Set()
   for (const preset of ICON_PRESETS) {
     assert.match(preset.id, /^[a-z][a-z0-9-]*$/, `${preset.id} 必须是合法 id（文件名要过白名单）`)
@@ -54,7 +55,7 @@ test('预设表：id 唯一、标签非空，且每款要么可渲染要么有�
     const renderable = preset.base !== undefined && preset.mark !== undefined
     assert.equal(renderable || typeof preset.asset === 'string', true, `${preset.id} 既不能渲染也没有资源`)
   }
-  // 「默认」必须在首位（面板九宫格的第一格），「头像」紧随其后
+  // 「默认」在首位（九宫格的第一格），「头像」紧随其后
   assert.equal(ICON_PRESETS[0].id, 'default')
   assert.equal(ICON_PRESETS[1].id, 'portrait')
 })
@@ -92,13 +93,13 @@ test('renderPreset：圆角外透明、圆角内不透明、徽记真的画上�
 })
 
 test('renderPreset：同一 id 两次渲染逐字节一致（可复现，便于落盘幂等）', () => {
-  const a = renderPresetPng('jelly', 64)
-  const b = renderPresetPng('jelly', 64)
+  const a = renderPresetPng('default', 64)
+  const b = renderPresetPng('default', 64)
   assert.deepEqual(a, b, '渲染必须是确定性的，否则每次请求都会重写磁盘')
 })
 
 test('renderPresetPng：合法 PNG（签名 / IHDR 尺寸 / IEND），尺寸受钳制', () => {
-  const png = renderPresetPng('aurora', 64)
+  const png = renderPresetPng('default', 64)
   assert.deepEqual(png.subarray(0, 8), PNG_MAGIC)
   const chunks = chunksOf(png)
   assert.deepEqual(chunks.map(c => c.type), ['IHDR', 'IDAT', 'IEND'])

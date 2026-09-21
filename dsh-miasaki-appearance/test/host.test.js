@@ -297,7 +297,7 @@ test('预设路由：GET /presets 幂等落盘到 avatars/，且能经头像文�
   const res = await callApi(ctx, '/appearance/api/presets')
   assert.equal(res.status, 200)
   assert.equal(res.body.persistent, true)
-  assert.equal(res.body.presets.length >= 8, true, '至少八款程序化预设')
+  assert.equal(res.body.presets.length, 2, '预设只有「默认」与「头像」两款')
   assert.equal(res.body.presets[0].id, 'default', '默认款在首位')
   assert.equal(res.body.presets[1].id, 'portrait', '位图预设紧随其后')
   // 每款文件名都必须命中跨线契约的白名单（桌面壳据此在 avatars 目录里找）
