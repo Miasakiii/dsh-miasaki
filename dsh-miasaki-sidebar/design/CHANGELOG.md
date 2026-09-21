@@ -2,6 +2,28 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-21
+
+- **右栏 tab 类型显式声明 `priority: 'extension'`（零行为变化，把一条隐式依赖变成显式契约）** ——
+  起因是官方仓库增量复查
+  （[`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md) §5）
+  读到了 `ui-sidebar-right/src/client/tab-registry.ts` 的 kind 裁决规则 —— 这条规则在 alpha.1 → alpha.2 **逐字节未变**，
+  但 09-16 那次复查漏掉了它：
+  - **规则**：一个 kind 的槽最多容纳 `builtin` + `extension` 各**一条**；`extension` 恒为 in force（生效方），
+    `builtin` 被 shadow，extension 注销后 builtin 自动恢复；**除此之外任何撞 kind 的组合直接抛错**，`id` 重复也抛错。
+    **默认 band 就是 `extension`**。
+  - **我们的处境**：终端 tab 的 `kind: 'terminal'` 与官方内置终端
+    （`@deepseek-ai/dsh-client-ui-sidebar-terminal`，声明 `builtin`）**同 kind**；两条注册可以共存且**我们压过官方**
+    —— 因此引导页**不会**出现两个终端入口（09-16 §6.2 担心的困惑场景不会发生）。审查 tab 用 `kind: 'review'`，
+    官方改动审阅用 **`changes-review`**，二者不撞。
+  - **为什么仍要显式写出**：值没变（默认值就是它），但「我们有意压在官方之上」此前是**隐式**的。显式化后：
+    ① 后人读注册处即知这条依赖；② 官方若改默认 band，我们的行为不会跟着漂移；③ 提示了真实脆性 ——
+    我们自己或任何第三方再注册一个 `kind: 'terminal'` 的 extension 会**当场抛错、插件加载失败**。
+  - **未做（押后）**：把 kind 改名（如 `miasaki-terminal`）会让官方终端与我们**并存**、引导页出现两个入口 ——
+    当前「遮蔽官方」的状态反而更清爽，故等本线实机验收有结论后再定。
+  - 触摸点：`client.js`（注册处 + 注释）、`README.md`（「接入方式」行）、本文件。
+  - 回归：`node scripts/verify-all.mjs sidebar` **10/10 PASS**（含 `rightbar-guide.test.js` 4 项）。
+
 ## 2026-09-19
 
 - **收尾验证补记：`terminal-hub.test.js` 与宿主环境解耦（`resolveBin` 可注入）** —— 全量

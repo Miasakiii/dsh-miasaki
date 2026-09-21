@@ -21,7 +21,7 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 
 | 维度 | 事实 |
 |---|---|
-| 接入方式 | `ctx.sidebarRightTabs.register`（类型声明 + `guide` 入口胶囊）+ `ctx.slots.register({ name: 'sidebar.right.pane.tab', key })`（正文） |
+| 接入方式 | `ctx.sidebarRightTabs.register`（类型声明 + `guide` 入口胶囊 + **显式 `priority: 'extension'`**）+ `ctx.slots.register({ name: 'sidebar.right.pane.tab', key })`（正文）。<br>`priority` 与官方默认值相同（2026-09-21 起显式写出）：我们的终端 kind 与官方内置终端**同为 `terminal`**、官方声明 `builtin`，而 registry 的规则是「extension 压过 builtin，且一个 kind 最多容纳这两条」——写显式值让这条依赖可见，也防官方改默认值或第三方撞 kind 时无声异常 |
 | 打开入口 | 官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊（审查 / 终端） |
 | 状态归属 | 面板开合 / 宽度 / 分栏 / 全屏 / 标签栏**全部由官方框架负责**，本线不介入 |
 | 自研持久化 | 只剩一处：审查视图（`miasaki-sidebar:review-view`，全局单值）。官方不持久化 tab 状态，且 `tabActions` 只有 openResource / openTab / close，**没有**「更新当前 tab 参数」通道，故视图选择自管 |

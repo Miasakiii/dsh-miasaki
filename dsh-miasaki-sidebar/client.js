@@ -2265,9 +2265,17 @@ window.__ModuleLoader__.load({
         for (const tab of RIGHT_BAR_TABS) {
           // ① 类型声明：id 全局唯一，title 在 tab 打开时被捕获。
           // guide 条目的 title / description 必须是**函数**（见 rightBarGuideEntry）。
+          //
+          // priority 显式写 'extension'（2026-09-21）：与官方默认值相同，写出来是**为了让它可见**。
+          // 我们的终端 kind 与官方内置终端（@deepseek-ai/dsh-client-ui-sidebar-terminal）**同为
+          // 'terminal'**，官方声明 'builtin'；registry 的裁决是「extension 压过 builtin，且一个 kind
+          // 最多容纳这两条」——所以我们恰好遮蔽官方终端（引导页不会出现两个入口），换成任一默认值
+          // 变化或第三方也注册 'terminal' 的 extension，就会当场抛错。见
+          // dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md §5。
           disposers.push(ctx.sidebarRightTabs.register({
             id: tab.id,
             kind: tab.kind,
+            priority: 'extension',
             title: () => tab.title,
             guide: [rightBarGuideEntry(tab.title, tab.description, tab.order)],
           }))
