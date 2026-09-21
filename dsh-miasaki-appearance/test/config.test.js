@@ -77,8 +77,7 @@ test('mergeConfig：非法增量不会污染现有配置', () => {
   const merged = mergeConfig(base, { theme: { skin: 'oops', accent: 'not-a-color' } })
   assert.equal(merged.theme.skin, 'pure')
   assert.equal(merged.theme.accent, '')
-  assert.equal(merged.enabled, true)
-})
+  assert.equal(merged.enabled, true)})
 
 test('configEquals：忽略键序与非法输入差异', () => {
   assert.equal(configEquals({ enabled: true }, { enabled: true }), true)
@@ -224,13 +223,15 @@ test('sanitizeConfig：v2 壁纸字段收窄（非法回退默认，surface 逐�
   assert.deepEqual(safe.wallpaper.surface, { sidebar: 100, conversation: 0, composer: 100, overlay: 50 })
 })
 
-test('migrateConfig：v1 → v2 抬版本（新增字段由 sanitize 补默认）', () => {
+test('migrateConfig：旧版本抬到当前版本（新增字段由 sanitize 补默认）', () => {
   const migrated = migrateConfig({ version: 1, enabled: true, theme: { skin: 'zafkiel' } })
-  assert.equal(migrated.version, 2)
+  assert.equal(migrated.version, CONFIG_VERSION)
   const safe = sanitizeConfig(migrated)
   assert.equal(safe.enabled, true)
   assert.equal(safe.theme.skin, 'zafkiel')
   assert.deepEqual(safe.wallpaper.surface, { sidebar: 100, conversation: 100, composer: 100, overlay: 100 })
+  // M2.5：v2 配置升到 v3 后 avatar 补成「未设置」，桌面壳继续用出厂图标。
+  assert.deepEqual(safe.avatar, { source: '' })
 })
 
 test('buildSurfaceTokens：全部 100 → null；降了的部分映射正确端点（dark 用深端、light 用浅端）', () => {
@@ -293,4 +294,56 @@ test('evaluateContract：glass 非 off 且锚点全未命中 → glass-anchor-mi
   assert.equal(miss.issues.some(i => i.code === 'glass-anchor-miss'), true)
   const hit = evaluateContract({ ...base, glassAnchors: { sidebar: true, mainConversation: true, rightbar: false } })
   assert.equal(hit.issues.some(i => i.code === 'glass-anchor-miss'), false)
+})
+
+// ---------------------------------------------------------------------------
+// M2.5：软件头像（外观设置 → 桌面壳图标）
+test('sanitizeConfig：avatar.source 只接受本线头像路由下的白名单文件', () => {
+  const keep = '/appearance/avatar/avatar-lz3k9q-4f2a1b.png'
+  assert.equal(sanitizeConfig({ avatar: { source: keep } }).avatar.source, keep)
+  // 桌面壳只读本地目录：外链、其它路由、非 PNG、穿越路径一律清空
+  for (const bad of [
+    'https://example.com/a.png',
+    '/appearance/wallpaper/local/a.png',
+    '/appearance/avatar/a.jpg',
+    '/appearance/avatar/../config.json',
+    '/appearance/avatar/%2e%2e%2fconfig.json',
+    '/appearance/avatar/sub/a.png',
+    'javascript:alert(1)',
+  ]) {
+    assert.equal(sanitizeConfig({ avatar: { source: bad } }).avatar.source, '', `${bad} 必须被清空`)
+  }
+  // 缺失／类型错误同样回退出厂值
+  assert.deepEqual(sanitizeConfig({}).avatar, { source: '' })
+  assert.deepEqual(sanitizeConfig({ avatar: 'not-an-object' }).avatar, { source: '' })
+})
+
+test('mergeConfig：头像单字段可独立更新，不被同板块或其它板块影响', () => {
+  const base = sanitizeConfig({ enabled: true, avatar: { source: '/appearance/avatar/a-1.png' } })
+  assert.equal(mergeConfig(base, { avatar: { source: '/appearance/avatar/b-2.png' } }).avatar.source, '/appearance/avatar/b-2.png')
+  assert.equal(mergeConfig(base, { theme: { fontSize: 16 } }).avatar.source, '/appearance/avatar/a-1.png', '改别的板块不动头像')
+  assert.equal(mergeConfig(base, { avatar: { source: '' } }).avatar.source, '', '清空是合法操作')
+  assert.equal(mergeConfig(base, { avatar: { source: 'https://evil/x.png' } }).avatar.source, '', '非法值不得写进配置')
+})
+
+test('configEquals：头像变化被识别为实质变更（面板据此写盘）', () => {
+  const a = sanitizeConfig({ avatar: { source: '/appearance/avatar/a-1.png' } })
+  const b = sanitizeConfig({ avatar: { source: '/appearance/avatar/b-2.png' } })
+  assert.equal(configEquals(a, b), false)
+  assert.equal(configEquals(a, sanitizeConfig(a)), true)
+})
+
+test('evaluateContract：host 半不认识 avatar 字段时给重启提示（旧 client 不误报）', () => {
+  const base = {
+    services: { theme: true, slots: true },
+    themeMethods: { getTheme: true, setTheme: true, setFontSize: true, overrideTokens: true },
+    anchors: { main: true },
+    tokens: { aliasBgBase: true, staticDeepseek500: true },
+  }
+  const stale = evaluateContract({ ...base, avatarField: false })
+  assert.equal(stale.issues.some(i => i.code === 'avatar-host-stale'), true)
+  assert.equal(stale.issues.find(i => i.code === 'avatar-host-stale').level, 'warn')
+  // 探针明确报 true（host 已更新）或干脆没报（旧 client）都不判定 —— 只有确知 false 才提示
+  assert.equal(evaluateContract({ ...base, avatarField: true }).issues.some(i => i.code === 'avatar-host-stale'), false)
+  assert.equal(evaluateContract(base).issues.some(i => i.code === 'avatar-host-stale'), false)
 })

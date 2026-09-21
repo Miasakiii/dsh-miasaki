@@ -8,6 +8,8 @@
 //    本文件在**没有 `module` 的 VM 上下文**里跑 factory，正是为了把这个坑钉死。
 // 2) 槽位契约：外观栏必须注册在官方 `settings.section`（list 槽）上，id=appearance、
 //    order=5 —— 官方「通用」是 0、「模型」是 10，5 落在两者之间即「紧跟通用」。
+// 3) 风格契约（2026-09-21 M2.6）：面板对齐官方「通用设置」页 —— 复用官方 primitives
+//    （前端壳 seed 模块）+ `.mia-*` 行式 CSS（0.5px 分隔线 / 16px 行距 / 官方 token）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -15,14 +17,24 @@ import vm from 'node:vm'
 
 const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
 
+/** 面板 CSS 正文：从 bundle 源里截出 PANEL_CSS 模板字面量，供风格契约断言。 */
+const PANEL_CSS_SOURCE = (() => {
+  const start = source.indexOf('const PANEL_CSS = `')
+  assert.notEqual(start, -1, 'client.js 必须定义 PANEL_CSS 模板字面量')
+  const end = source.indexOf('const PANEL_CSS_ID', start)
+  assert.notEqual(end, -1)
+  return source.slice(start, end)
+})()
+
 /** 在 VM 里执行 client.js，捕获装载器收到的描述符。上下文刻意不提供 `module`。 */
 function capture() {
   let descriptor = null
   const window = { __ModuleLoader__: { load(d) { descriptor = d } } }
   const document = {
     body: { append() {} },
-    createElement: () => ({ style: {}, append() {}, remove() {}, setAttribute() {} }),
-    head: { append() {} },
+    // dataset 供面板 CSS 注入打 data-plugin-css 标记（官方 client 插件同一注入式）。
+    createElement: () => ({ style: {}, dataset: {}, append() {}, remove() {}, setAttribute() {} }),
+    head: { append() {}, appendChild() {} },
     documentElement: { getAttribute: () => null, hasAttribute: () => false, setAttribute() {} },
     querySelector: () => null,
     querySelectorAll: () => [],
@@ -45,8 +57,21 @@ const react = {
   },
   useEffect: () => {},
 }
+// 官方 primitives stub：前端壳 staticModules 的 seed 模块（M2.6 起面板复用）。
+// react stub 的 createElement 只把组件当 type 记录、不会真调用，占位即可。
+const primitivesStub = {
+  Button: 'Button',
+  Switch: 'Switch',
+  Pill: 'Pill',
+  IconLightOutline16: 'IconLightOutline16',
+  IconDarkOutline16: 'IconDarkOutline16',
+  IconFollowsystemOutline16: 'IconFollowsystemOutline16',
+  IconChevronUpOutline14: 'IconChevronUpOutline14',
+  IconChevronDownOutline14: 'IconChevronDownOutline14',
+}
 const requireStub = name => {
   if (name === 'react') return react
+  if (name === '@deepseek-ai/dsh-client-ui-primitives') return primitivesStub
   throw new Error(`unexpected require: ${name}`)
 }
 
@@ -127,6 +152,37 @@ test('与 Host 的通信走同源 JSON 路由，不用动态插件的 host.call'
   assert.doesNotMatch(code, /host\.call/)
 })
 
+test('面板复用官方 primitives（seed 模块 require，不新增 external 声明）', () => {
+  // M2.6：交互控件全部换成官方 Button / Switch / Pill / 图标。primitives 是前端壳
+  // staticModules 里的 seed 模块（见 dsh-web-frontend 的 My() seed 表），require 即得、
+  // 不产生模块图边 —— 因此 package.json 不需要 dsh.client.external。这条断言钉住
+  // 「require 官方 seed 模块」这一形态，防止退化成自制控件或漏改。
+  const { descriptor } = capture()
+  const exports = descriptor.factory(requireStub)
+  assert.equal(typeof exports, 'object')
+})
+
+test('面板挂载官方「通用设置」页风格：mia-* 行式 + 官方 token + 0.5px 分隔线', () => {
+  // 风格契约（对照 dsh-client-ui-theme 的 FontSizeRow/AppearanceRow 与
+  // settings-general 的 SettingsRoot）：行 16px 0 内边距、0.5px border-l2 分隔线、
+  // 14px/22 标题、12px/18 三级说明、明暗立方与步进器。防「换皮不换骨」。
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  const element = view()
+  assert.equal(element.props.className, 'mia-panel', '面板根节点用官方栏宽制式')
+  assert.match(PANEL_CSS_SOURCE, /\.mia-row\{[^}]*border-bottom:\.5px solid var\(--dsw-alias-border-l2\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-row\{[^}]*padding:16px 0/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-title\{[^}]*font-size:14px/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-desc\{[^}]*var\(--dsw-alias-label-tertiary\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-cube\{[^}]*border-radius:20px/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-selected\{[^}]*var\(--dsw-alias-bg-module-platform\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-stepper\{[^}]*var\(--dsw-alias-bg-module-platform\)/)
+  // 注入去重标记与官方插件同构（data-plugin-css）。
+  assert.match(source, /data-plugin-css/)
+})
+
 test('面板组件渲染冒烟：view 调用不抛错且产出元素（2026-09-12 实机空白面板的回归闸门）', () => {
   // 实机事故：reactElementWallpaperPicker（factory 作用域）引用了组件内 useState 的
   // `wallpapers` → 渲染期 ReferenceError → 整个外观面板空白。注册期契约测试抓不到
@@ -170,6 +226,99 @@ test('面板渲染冒烟：state 就绪（含 v2 壁纸字段）时不抛错', (
   try {
     const element = view()
     assert.notEqual(element, null)
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+/** 深度收集渲染树里的文本节点（用于断言板块文案在位）。 */
+function collectText(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out
+  if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+  if (Array.isArray(node)) {
+    for (const child of node) collectText(child, out)
+    return out
+  }
+  if (typeof node === 'object' && Array.isArray(node.children)) {
+    for (const child of node.children) collectText(child, out)
+  }
+  return out
+}
+
+test('面板渲染冒烟：软件头像板块（已设置 + 已有清单）不抛错且文案在位', () => {
+  // M2.5 回归闸门：头像板块读 state.config.avatar 与 avatars 清单两个来源，
+  // 任一为 undefined 都会在渲染期炸掉整个面板（2026-09-12 空白面板事故的同型风险）。
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'pure', scheme: 'dark', accent: '', fontSize: 14 },
+        wallpaper: {
+          source: '', light: '', dark: '', blur: 0, scrim: 0,
+          fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: '/appearance/avatar/avatar-lz3k9q-4f2a1b.png' },
+        motion: { enabled: false, preset: 'fluid', scale: 1 },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 4,
+      persistent: true,
+    },
+    null, null, null, false, null,
+    { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png'] },
+  ]
+  try {
+    const element = view()
+    assert.notEqual(element, null)
+    const texts = collectText(element)
+    assert.equal(texts.includes('软件头像'), true, '板块标题必须渲染')
+    assert.equal(texts.includes('上传图片…'), true, '上传按钮必须渲染')
+    assert.equal(texts.includes('清除'), true)
+    // 已设置时说明里带上当前文件名
+    assert.equal(texts.some(t => t.includes('avatar-lz3k9q-4f2a1b.png')), true)
+    // 清单里的第二个文件出现在选择器里（长名会被截断成 `avatar-other-ab…`）
+    assert.equal(texts.some(t => t.includes('avatar-other')), true)
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('面板渲染冒烟：host 未下发 avatar 字段时给重启提示而非崩溃', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  // 旧 host：config 里没有 avatar（client 先更新、host 未重启的真实形态）
+  react.stateQueue = [
+    {
+      config: {
+        enabled: false,
+        theme: { skin: 'pure', scheme: 'system', accent: '', fontSize: 14 },
+        wallpaper: {
+          source: '', light: '', dark: '', blur: 0, scrim: 0,
+          fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        motion: { enabled: false, preset: 'fluid', scale: 1 },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 1,
+      persistent: true,
+    },
+    { ok: false, issues: [{ level: 'warn', code: 'avatar-host-stale', message: '请重启 dsh web' }] },
+    null, null, false, null, null,
+  ]
+  try {
+    const element = view()
+    assert.notEqual(element, null)
+    const texts = collectText(element)
+    assert.equal(texts.some(t => t.includes('重启 dsh web')), true, '必须给出重启提示')
+    assert.equal(texts.includes('上传图片…'), false, 'host 未更新时不渲染会写不进去的上传按钮')
   } finally {
     react.stateQueue = null
   }

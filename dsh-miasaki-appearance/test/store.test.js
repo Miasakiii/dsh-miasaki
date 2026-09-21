@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AppearanceStore } from '../lib/store.js'
-import { DEFAULT_CONFIG, sanitizeConfig } from '../lib/config.js'
+import { CONFIG_VERSION, DEFAULT_CONFIG, sanitizeConfig } from '../lib/config.js'
 
 /** 建一个用完即删的临时数据目录。 */
 async function withTempDir(fn) {
@@ -34,7 +34,7 @@ test('save → load：往返一致且磁盘格式可读', async () => {
     const raw = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
     assert.equal(raw.enabled, true)
     assert.equal(raw.theme.skin, 'zafkiel')
-    assert.equal(raw.version, 2) // M2 S5：CONFIG_VERSION v1 → v2
+    assert.equal(raw.version, CONFIG_VERSION) // M2 S5 起 v2；M2.5 的 avatar 板块抬到 v3
 
     assert.deepEqual(await store.load(), saved)
   })

@@ -172,3 +172,115 @@ test('本地壁纸路由：白名单文件 200，穿越与非法扩展 404', asy
   assert.deepEqual(listRes.body.local, ['good.png'])
   assert.ok(listRes.body.builtin.includes('aurora'))
 })
+
+// ---------------------------------------------------------------------------
+// M2.5：软件头像（上传落盘 → 配置启用 → 桌面壳消费）
+test('头像路由注册为 prefix 且路径无尾随斜杠', () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const avatar = ctx.routes.find(route => route.path === '/appearance/avatar')
+  assert.notEqual(avatar, undefined, '头像文件路由必须注册')
+  assert.equal(avatar.kind, 'prefix')
+  assert.equal(prefixMatches('/appearance/avatar', '/appearance/avatar/a.png'), true)
+  assert.equal(prefixMatches('/appearance/avatar', '/appearance/avatars'), false, '相似前缀不得误吞')
+})
+
+/** 一段最小 PNG 载荷（8 字节魔数 + 尾巴）：host 只验魔数，不解码。 */
+function pngPayload(tail = 8) {
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(tail, 3)])
+}
+
+/** 调用图片文件路由（无 JSON 体，需读回原始字节）。 */
+function callFile(ctx, pathname) {
+  const route = ctx.routes.find(r => r.path === '/appearance/avatar')
+  return new Promise(resolve => {
+    const res = {
+      writeHead(status, headers) { this.status = status; this.headers = headers },
+      end(body) { resolve({ status: this.status, headers: this.headers, body }) },
+    }
+    void route.handler({ url: pathname, method: 'GET', headers: {} }, res)
+  })
+}
+
+test('头像上传 → 清单 → 文件路由：合法 PNG 全链路可达', async () => {
+  const { mkdtempSync, readFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'mia-avatar-'))
+
+  const ctx = fakeCtx()
+  host.apply(ctx, { dataDir: dir })
+  const bytes = pngPayload(24)
+  const up = await callApi(ctx, '/appearance/api/avatar', 'POST', {
+    dataUrl: `data:image/png;base64,${bytes.toString('base64')}`,
+  })
+  assert.equal(up.status, 200)
+  assert.match(up.body.file, /^avatar-[0-9a-z]+-[0-9a-f]{6}\.png$/, '文件名由 host 生成，不采信客户端')
+  assert.equal(up.body.url, `/appearance/avatar/${up.body.file}`)
+  assert.deepEqual(up.body.local, [up.body.file], '上传响应顺带回带新清单')
+  // 真的落到了 <dataDir>/avatars/，且字节一致
+  assert.deepEqual(readFileSync(join(dir, 'avatars', up.body.file)), bytes)
+
+  const list = await callApi(ctx, '/appearance/api/avatars')
+  assert.deepEqual(list.body.local, [up.body.file])
+
+  const got = await callFile(ctx, `/appearance/avatar/${up.body.file}`)
+  assert.equal(got.status, 200)
+  assert.equal(got.headers['content-type'], 'image/png')
+  assert.deepEqual(Buffer.from(got.body), bytes)
+
+  // 上传后经 /config 启用：配置里存的是本线头像路由下的白名单路径（跨线契约的一半）
+  const enabled = await callApi(ctx, '/appearance/api/config', 'POST', { patch: { avatar: { source: up.body.url } } })
+  assert.equal(enabled.status, 200)
+  assert.equal(enabled.body.config.avatar.source, up.body.url)
+  const state = await callApi(ctx, '/appearance/api/state')
+  assert.equal(state.body.config.avatar.source, up.body.url)
+})
+
+test('头像上传：非 PNG、伪装 PNG、非法 dataUrl 一律 400 且不落盘', async () => {
+  const { mkdtempSync, existsSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'mia-avatar-bad-'))
+
+  const ctx = fakeCtx()
+  host.apply(ctx, { dataDir: dir })
+  const cases = [
+    { dataUrl: `data:image/jpeg;base64,${pngPayload().toString('base64')}`, why: 'MIME 不是 PNG' },
+    { dataUrl: `data:image/png;base64,${Buffer.from('GIF89a-not-png').toString('base64')}`, why: '伪装成 PNG 的其它内容' },
+    { dataUrl: 'data:image/png;base64,!!!!', why: '非法 base64' },
+    { dataUrl: '', why: '空数据' },
+    { why: '缺字段' },
+  ]
+  for (const c of cases) {
+    const res = await callApi(ctx, '/appearance/api/avatar', 'POST', c.dataUrl === undefined ? {} : { dataUrl: c.dataUrl })
+    assert.equal(res.status, 400, `${c.why} 必须 400`)
+    assert.equal(typeof res.body.error, 'string')
+  }
+  assert.equal(existsSync(join(dir, 'avatars')), false, '被拒的上传不得留下目录或文件')
+})
+
+test('头像上传：无 dataDir 时 503（不静默假装成功）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const res = await callApi(ctx, '/appearance/api/avatar', 'POST', {
+    dataUrl: `data:image/png;base64,${pngPayload().toString('base64')}`,
+  })
+  assert.equal(res.status, 503)
+  assert.match(res.body.error, /dataDir/)
+})
+
+test('头像文件路由：穿越、非 PNG 名、缺失文件一律 404', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'mia-avatar-route-'))
+  mkdirSync(join(dir, 'avatars'))
+  writeFileSync(join(dir, 'avatars', 'ok.png'), pngPayload(4))
+  writeFileSync(join(dir, 'config.json'), '{"secret":true}')
+
+  const ctx = fakeCtx()
+  host.apply(ctx, { dataDir: dir })
+  assert.equal((await callFile(ctx, '/appearance/avatar/ok.png')).status, 200)
+  assert.equal((await callFile(ctx, '/appearance/avatar/%2e%2e%2fconfig.json')).status, 404, '编码穿越必须 404')
+  assert.equal((await callFile(ctx, '/appearance/avatar/..%2Fconfig.json')).status, 404)
+  assert.equal((await callFile(ctx, '/appearance/avatar/config.json')).status, 404, '非 .png 名必须 404')
+  assert.equal((await callFile(ctx, '/appearance/avatar/missing.png')).status, 404)
+})

@@ -11,7 +11,17 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > M1 已实机验证（六项全过）；M2 的皮肤/壁纸/玻璃链路已实机验证（绯红品牌、color-mix 表面、
 > backdrop-filter 均生效），**12 组视觉矩阵、帧率基线与桌面壳同页实机项（切换条双入口 /
 > aurora×壁纸）待用户验收**。设计见 [M2 设计](design/2026-09-12-appearance-m2-design.md)，
-> 变更详情见 [变更记录](design/CHANGELOG.md)。动效 / 会话效果分别在 M3–M4 接入同一套管线。
+> 变更详情见 [变更记录](design/CHANGELOG.md)。
+>
+> **M2.5 软件头像已实现（2026-09-21）**：外观设置里可上传 / 选择一张 PNG 作为**软件头像**，
+> 桌面壳 `Miasaki.exe` 读同一份配置把它用作窗口 / 任务栏 / 托盘图标（本线第一条跨线能力，
+> 契约见 [M2.5 设计](design/2026-09-21-appearance-avatar-launcher-design.md)）——
+> **实机验收（上传 → 任务栏图标跟随）待重启 `dsh web` 后由用户执行**。
+>
+> **M2.6 面板风格对齐官方「通用设置」页（2026-09-21）**：整栏面板重做为官方行式风格
+> （0.5px 分隔线 + 16px 行距 / 14px 标题 / 12px 说明 / 明暗立方 / 步进器），交互控件
+> 直接复用官方 primitives（`Button / Switch / Pill / 图标`，前端壳 seed 模块，零新依赖）；
+> 行为逻辑零变化。动效 / 会话效果分别在 M3–M4 接入同一套管线。
 
 ---
 
@@ -26,20 +36,22 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
    （与 `dsh-canvas` / `dsh-sidebar` / `dsh-ssh` / `dsh-dual-model` 一致）；
 4. **重启 `dsh web`**（roster 在启动时组装，首次装载必须重启；此后本线 client 改动可由 client-hmr 热更）。
 
-数据落在 `~/.dsh/miasaki-appearance/config.json`（由 `cordis.patch.yml` 的 `dataDir` 指定，与本仓其余线不共享）。
+数据落在 `~/.dsh/miasaki-appearance/config.json`（由 `cordis.patch.yml` 的 `dataDir` 指定，与本仓其余线不共享）；
+上传 / 手动放入的**软件头像** PNG 落在同目录的 `avatars/`（桌面壳直读，不经 HTTP）。
 
 ## 目录
 
 ```
 dsh-miasaki-appearance/
 ├── index.js               # Host 半：/appearance/api/* 路由 + 首帧注入
-├── client.js              # Client 半：设置页「外观」+ 契约自检 + 应用管线
+├── client.js              # Client 半：设置页「外观」（官方通用设置页风格）+ 契约自检 + 应用管线
 ├── lib/
 │   ├── config.js          # 配置模型：默认值 / 收窄钳制 / 深合并 / 迁移 / 首帧脚本 / 契约判定
+│   ├── avatar.js          # 软件头像：PNG 魔数 / data URL 解析 / 文件名白名单（跨线契约的 JS 半）
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 38 例纯逻辑单测（配置 / 围栏 / 持久化 / client 契约 / host 路由契约）
-├── design/                # 规划设计 + M1 实施 + 变更记录
+├── test/                  # 81 例纯逻辑单测（配置 / 头像 / 围栏 / 持久化 / client 契约 / host 路由契约）
+├── design/                # 规划设计 + M1/M2/M2.5/M2.6 实施 + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
 
@@ -49,7 +61,7 @@ dsh-miasaki-appearance/
 
 | 能力 | 说明 |
 |---|---|
-| 设置页「外观」 | `settings.section`，`id: appearance`、`order: 5`（紧跟官方「通用」，位于「模型」之前） |
+| 设置页「外观」 | `settings.section`，`id: appearance`、`order: 5`（紧跟官方「通用」，位于「模型」之前）；**M2.6 起整栏重做为官方「通用设置」页行式风格**（0.5px 分隔线行 / 14px 标题 / 12px 说明 / 明暗立方 / 步进器，控件复用官方 primitives） |
 | 明暗偏好 | 直通官方 `ctx.theme.setTheme()` —— 与官方「通用 → 外观」是**同一个偏好**，改动立即生效 |
 | 正文字号 | 直通官方 `ctx.theme.setFontSize()`（12–17px） |
 | 总开关 | 门控 `html[data-mia-appearance]`，关闭时零影响 |
@@ -57,11 +69,28 @@ dsh-miasaki-appearance/
 | 让位检测 | 检测到桌面壳注入层（`html[data-miasaki-theme]`）时提示按让位协议处理 |
 | 配置读写 | `GET /appearance/api/state`、`POST /appearance/api/config`（按板块深合并 + `expectedRevision` 乐观并发） |
 
+### M2.5 软件头像（2026-09-21，跨线：外观设置 → 桌面壳启动器图标）
+
+| 能力 | 说明 |
+|---|---|
+| 设置页「软件头像」 | 面板内**上传图片…**（浏览器 canvas 归一化成 PNG、最长边 512）或从 `avatars/` 目录清单里选；预览 + 清除 |
+| 头像存储 | `~/.dsh/miasaki-appearance/avatars/<avatar-时间戳-随机>.png`（文件名由 host 生成，绝不覆盖既有文件） |
+| 上传接口 | `POST /appearance/api/avatar`（`data:image/png;base64,` 形态，上限 4MB；只写文件，不改配置）；`GET /appearance/api/avatars` 清单；`GET /appearance/avatar/<file>` 预览 |
+| 桌面壳消费 | `Miasaki.exe` 读同一份 `config.json` 的 `avatar.source` → 窗口 / 任务栏 / 托盘图标（1.5s 巡检跟随；契约见 [M2.5 设计](design/2026-09-21-appearance-avatar-launcher-design.md)） |
+| 契约自检 | `avatar-host-stale`：client 已更新而 host 未重启时给黄条 + 重启提示（旧 client 不误报） |
+
+> 边界：**EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标是构建期资源**
+> （`make-icons.mjs` + `npx tauri icon`），任何运行时设置都改不了它们。
+
 ### 里程碑
 
 - **M2 主题 + 壁纸**（[设计已定稿](design/2026-09-12-appearance-m2-design.md)）：刻刻帝 / 狂狂帝皮肤
   **下沉到 alias 层**（不是直接喂 static 色阶，理由见设计 §1.2）、`overrideTokens` 双 source 参数层、
   壁纸伪元素层与图源、玻璃档位、`desktop` 注入层让位；
+- **M2.5 软件头像**（[设计](design/2026-09-21-appearance-avatar-launcher-design.md)）：头像上传与存储、
+  桌面壳图标消费（本线第一条跨线能力；M2 与 M3 之间插入，用户直接点名需求）；
+- **M2.6 面板风格对齐**（见 [变更记录](design/CHANGELOG.md) 同日条目）：行式布局 / 官方 primitives /
+  `.mia-*` 前缀 CSS 注入，行为逻辑零变化；
 - **M3 动效**：CSS 动效层挂在 `[data-slot]` 稳定锚点上、三套预设、强度倍率、`prefers-reduced-motion` 强制降级；
 - **M4 会话效果**：消息密度与最大宽度、流式光标、代码块与引用样式、工具卡折叠、字体。
 
@@ -96,9 +125,12 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test test/*.test.js                             # 60 例（6 个测试文件）
-node ../scripts/verify-all.mjs appearance              # 统一回归入口（12 项）
+node --test --test-isolation=none "test/*.test.js"     # 81 例（7 个测试文件）
+node ../scripts/verify-all.mjs appearance              # 统一回归入口（14 项）
 ```
+
+> 沙箱提示：受限环境里 `node --test` 会为每个测试文件 spawn 子进程而撞 `EPERM`。
+> 此时用 `node --test --test-isolation=none "test/*.test.js"`（单进程内跑完，结果一致）。
 
 `test/client.test.js` 是 client 半的**装载契约**闸门：DSH 的客户端装载器只把 `require`
 交给 factory（`factory(require) → exports`），**不注入 `module`**。bundle 里写 `module.exports`
@@ -107,7 +139,9 @@ node ../scripts/verify-all.mjs appearance              # 统一回归入口（12
 factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条钉死。
 
 实机项（插件加载 / 设置栏出现 / 「关掉即原生」截图比对）见
-[`../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md`](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
+[`../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md`](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)；
+头像 → 启动器图标的跨线契约见
+[`../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md`](../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md)。
 
 ## 设计文档
 
@@ -116,4 +150,6 @@ factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条�
 - [M2 设计](design/2026-09-12-appearance-m2-design.md) —— 官方主题层取证（三层 token 与解析作用域）、
   色阶清单 A/B/C 三类、双明暗协同、desktop 让位协议、壁纸层与玻璃档位、boot style 防闪色、
   验收矩阵与 6 步实施顺序；
+- [M2.5 软件头像设计](design/2026-09-21-appearance-avatar-launcher-design.md) —— 跨线契约（配置 / 目录 /
+  文件名白名单）、为什么走配置文件而非页面通道、为什么收敛到 PNG、上传链路与边界；
 - [变更记录](design/CHANGELOG.md)。

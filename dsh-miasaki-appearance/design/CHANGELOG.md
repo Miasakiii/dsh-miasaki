@@ -2,6 +2,114 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-21 · M2.6：面板风格对齐官方「通用设置」页
+
+- **起因**：用户「新加的设置也都参照通用设置页的风格优化设计」。本线面板此前的自绘卡片风
+  （描边圆角盒 + 药丸按钮 + 自绘滑块）与官方「通用设置」页的行式风格不一致，视觉上像
+  「另一个应用」。M2.6 把**整栏面板**（含 M2 皮肤 / 壁纸 / 玻璃与 M2.5 软件头像）重做为
+  官方行式风格。
+
+- **风格取证（逐条对照官方包，不猜）**：
+  - 行：`@deepseek-ai/dsh-client-ui-theme` 的 `FontSizeRow.module.css` ——
+    `border-bottom:.5px solid var(--dsw-alias-border-l2)` + `padding:16px 0`，
+    标题 14px/22 `label-primary`（weight 400），说明 12px/18 `label-tertiary`，
+    控件右置（`rowText` flex:1 + `padding-right:48px`）；
+  - 组标题 / 明暗立方：同包 `AppearanceRow` —— 立方 `.5px border-l4`、`border-radius:20px`、
+    `padding:20px 32px`、选中态 `bg-module-platform` + `neutral-bluish-400` 边；
+  - 步进器：`FontSizeRow` 的 `stepper` 胶囊（`bg-module-platform`、`radius:18px`、
+    `min-width:72px`、`tabular-nums` 值、悬停/聚焦露出 9px 上下箭头）；
+  - 栏宽与通知：`dsh-client-ui-settings-models` 的 `section{max-width:720px}` 与
+    `notice`（12px/18，warn-label / success-primary 着色）。
+
+- **为什么直接复用官方 primitives 而不是继续自绘**：`Button / Switch / Pill / 图标`
+  经取证是**前端壳 staticModules 的 seed 模块**（`dsh-web-frontend` 的 `My()` seed 表里
+  有 `@deepseek-ai/dsh-client-ui-primitives`），`require` 即得、**不产生模块图边**
+  （seed 词无 external 声明也不需要，`orderByModuleGraph` 明确 seed 不加边），因此
+  `package.json` 无需 `dsh.client.external`。所得即官方同款控件：Switch 是官方
+  `role=switch` 实现、Pill 是官方分段选择、Button 的 outline/sm 与「打开配置文件」
+  同一规格 —— 行为（键盘、焦点、禁用态、悬停色）也一并是官方的，不必各自维护。
+
+- **为什么 CSS 走自有 `.mia-*` 前缀注入**：官方行式 CSS 在各自包的 module.css 里，
+  跨包不可 import；照抄一份到本 bundle 并用 `.mia-*` 前缀（README 锚点纪律：
+  不依赖官方哈希类名，官方改版不连带打脸）。注入式与官方 client 插件同构 ——
+  factory 体内按 `data-plugin-css` 查询去重后 `head.appendChild`，token 全走
+  `--dsw-*` 官方变量，**自动跟皮肤与明暗解析**（本线皮肤覆盖的 alias 同样生效）。
+
+- **同步整理的文案**：玻璃档位改中文标签（关闭 / 轻 / 磨砂 / 云母，配置值不变）、
+  内置渐变改「内置 · 极光/暮色/余烬」；面板不再自绘大标题（官方 section 页由导航栏
+  标注「外观」，通用页本身无页头），运行信息 / 占位板块收敛为组标题 + 三级说明文字。
+
+- **行为零变化**：配置读写、契约自检、上传链路、皮肤接管、明暗/字号直通官方 API 的
+  逻辑一行未动，只换表现层。M2.5 的 `avatar-host-stale` 降级提示保留。
+
+- **验证**：单测 **81 例全绿**（原 79 + 风格契约 2：primitives require 形态、`.mia-*`
+  行式与官方 token 断言）；`node --check` 双文件通过；`verify-all appearance` **14/14**。
+  实机视觉（行距 / 立方 / 步进器 / 三主题）待用户重启 `dsh web` 后验收。
+
+- 触摸点：`client.js`（面板重写 + primitives require + `.mia-*` CSS 注入）、
+  `test/client.test.js`（primitives stub / document stub `dataset`+`appendChild` /
+  风格契约 2 例）、`README.md`、本文件。
+
+## 2026-09-21 · M2.5：软件头像（外观设置 → 桌面壳启动器图标）
+
+- **起因**：用户「外观设置里要可以设置软件头像，比如这个」（附图）。澄清后确认落点是
+  **桌面壳 `Miasaki.exe` 的启动器图标**（任务栏 / 窗口 / 托盘那一处），入口仍是本线在
+  设置里的「外观」栏 —— 也就是本线第一条**跨线**能力：外观线出配置与图片，桌面壳消费。
+  设计见 [M2.5 设计](2026-09-21-appearance-avatar-launcher-design.md)。
+
+- **为什么走「配置文件」而不是页面通道**：桌面壳已有 hash 巡检（页面 → Rust）与 1.5s
+  自愈巡检两套机制，但头像是**文件态**——用户既可能在面板里上传，也可能直接往
+  `avatars/` 里丢一张图。让 Rust 直读 `<dshHome>/miasaki-appearance/config.json`
+  对两条路径一视同仁，且页面没开着也生效；代价只是每 1.5 秒一次小 JSON 读取。
+  （DOM 属性 / hash 通道方案被否：多一跳、且要求页面在场。）
+
+- **契约收敛到唯一一种格式：PNG**。桌面壳只依赖 `png` crate（不引入 jpeg/webp 解码器），
+  所以浏览器侧用 canvas 把任意格式重编码成 PNG（最长边压到 512）后上传；host 只做
+  「真 PNG？多大？」的最终把关。好处是三处受益：壳侧零新依赖、上传体积可控、
+  「面板上传」与「手动放目录」落到同一种文件上。
+
+- **host（`index.js` + `lib/`）**
+  - 配置 v2 → v3：新增 `avatar.source`（纯新增字段，旧配置补空串 = 不设置）。
+  - `lib/avatar.js`（新）：`isPng` 魔数校验、`parseAvatarDataUrl`（只收
+    `data:image/png;base64,`，上限 4MB）、`avatarFileFromSource`（文件名白名单 +
+    percent 解码 + 单段路径）、`makeAvatarName`（时间戳 + 随机后缀，绝不覆盖）。
+  - 路由：`GET /appearance/api/avatars`（清单）、`POST /appearance/api/avatar`（上传，
+    只写文件不改配置）、`GET /appearance/avatar/<file>`（预览）；上传 body 上限单独放宽到
+    8MB，文件路由与壁纸共用同一套「目录 + 文件名白名单 + normalize 前缀」防穿越。
+  - `config.avatar.source` 的收窄**比壁纸严得多**：只接受本线头像路由下的白名单文件
+    （外链、其它路由、非 PNG、穿越路径一律清空）——因为它是跨线输入，壳侧必须永远只读
+    自己那一个本地目录、永不联网。
+
+- **client（`client.js`）**
+  - 面板新增「软件头像」板块：预览（44px）+「上传图片…／清除」+ 已有文件选择器。
+  - 上传链路：`createImageBitmap` → canvas 重编码 PNG（≤512）→ `POST /avatar` →
+    `PATCH /config` 启用。**两步是刻意的**：上传只落盘、启用由配置决定，
+    这样「上传了先不用」是合法状态，也不会顶掉用户已选的头像。
+  - 契约自检新增 `avatar-host-stale`：client 更新而 host 未重启时配置里根本没有
+    `avatar` 字段（写进去会被旧 sanitize 丢掉），面板给黄条 + 重启提示，
+    而不是让设置静默失效。**只在探针明确报 `false` 时判定**，旧 client 不上报该字段
+    → 不误报。
+
+- **desktop（消费端，见 desktop CHANGELOG 同日条目）**：新增 `launcher_icon` 模块 ——
+  读同一份配置 → PNG 解码 → 中心裁方（图标必须方的，非方图会被拉伸）+ 盒式降采样到
+  ≤256px → `window.set_icon` + `tray.set_icon`。任何异常（配置坏、文件缺失、解码失败）
+  都只写一行日志并回退出厂图标，绝不阻断启动。
+
+- **边界（明确不做）**：EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标是**构建期资源**
+  （`make-icons.mjs` + `npx tauri icon`），运行时改不了 —— 面板文案已写明，
+  避免用户以为是 bug。
+
+- **验证**：appearance 单测 **79 例全绿**（原 60 + 头像 19：`lib/avatar.js` 纯逻辑 8、
+  配置收窄与契约 4、host 路由 4、client 渲染冒烟 2、既有断言随 v3 调整），
+  覆盖「伪装成 PNG 的其它内容」「编码穿越」「host 未更新时的面板降级」三条主风险；
+  desktop `cargo check --tests` 通过 + `cargo test` 新增 6 例（白名单/百分号解码/中心裁方/
+  降采样/坏 PNG 不 panic）。**实机验收（上传 → 任务栏图标跟随）待用户重启 dsh web 后执行**。
+
+- 触摸点：`index.js`、`client.js`、`lib/{config,avatar}.js`、`test/{avatar,config,host,client}.test.js`、
+  `README.md`、`design/2026-09-21-appearance-avatar-launcher-design.md`；
+  desktop：`src-tauri/src/{main,launcher_icon}.rs`、`design/CHANGELOG.md`、`README.md`；
+  `../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md`（跨线契约）。
+
 ## 2026-09-12（深夜）· M2 S4–S6：皮肤/壁纸/玻璃全链路落地 + 让位协议收官
 
 - **修：外观面板空白（实机验收发现，2026-09-12 深夜）**：`reactElementWallpaperPicker`（factory 作用域）引用了组件内 useState 的 `wallpapers` → 渲染期 ReferenceError → 整个面板组件树崩掉（S5 建面板时引入；注册期契约测试抓不到——slots.inject 的回调不执行；S5 实机验证只做了协议层断言未开面板）。修法：picker 参数化（local 清单由组件传入）。连带发现并修：`mergeConfig` 对 `wallpaper.surface` 是整块浅合并——调一个旋钮会把其它三个重置回 100，改为逐旋钮合并。**回归闸门**：`test/client.test.js` 增「面板渲染冒烟」——react stub 的 useState 支持按序注入，把组件驱动到「配置已加载」的完整渲染路径（含壁纸区块与三个 picker）；故障注入回验（复现作用域错误 → 测试红 → 修复 → 绿）。

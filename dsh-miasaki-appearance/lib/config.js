@@ -4,9 +4,10 @@
 // 判定逻辑放这里而不是 client 半，是因为 client bundle 由 ModuleLoader 装载、
 // **不能 import**（只能 require('react')），所以浏览器只负责「采集事实」，
 // 判定与归一化一律由 Host 侧执行 —— 这样这一段可以直接被单测覆盖。
+import { avatarFileFromSource } from './avatar.js'
 
 /** 配置版本；结构不兼容变更时 +1，并在 migrateConfig 里补一条迁移分支。 */
-export const CONFIG_VERSION = 2
+export const CONFIG_VERSION = 3
 
 /** 皮肤白名单。M1 只有「纯净」；M2 下沉 desktop 线的刻刻帝 / 狂狂帝。 */
 export const SKINS = Object.freeze(['pure', 'zafkiel', 'kurkuriel'])
@@ -69,6 +70,10 @@ export const DEFAULT_CONFIG = Object.freeze({
     fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
     surface: Object.freeze({ sidebar: 100, conversation: 100, composer: 100, overlay: 100 }),
   }),
+  // 软件头像（M2.5）：一张 PNG，浏览器侧归一化后落在 `<dataDir>/avatars/`；
+  // 除本线设置面板外，**桌面壳也读同一份配置**（窗口 / 任务栏 / 托盘图标），
+  // 因此这里的字段是跨线契约，改动需同步 dsh-miasaki-desktop 的 launcher_icon 模块。
+  avatar: Object.freeze({ source: '' }),
   motion: Object.freeze({ enabled: false, preset: 'fluid', scale: 1 }),
   conversation: Object.freeze({ density: 'comfortable', maxWidth: 0 }),
 })
@@ -125,6 +130,19 @@ function toWallpaperSource(value) {
   return ''
 }
 
+/**
+ * 头像图源只接受空串或**本线头像路由下的白名单文件**。
+ *
+ * 比壁纸严得多，因为它是跨线输入：桌面壳（Miasaki.exe）会读同一份配置去取图标，
+ * 只认 `/appearance/avatar/<白名单文件名>` 意味着壳侧永远只读自己那一个本地目录，
+ * 既不需要联网，也没有第二个路径穿越面。
+ */
+function toAvatarSource(value) {
+  const text = toText(value)
+  if (text === '') return ''
+  return avatarFileFromSource(text) === null ? '' : text
+}
+
 /** 把一个板块的原始输入收窄成对象（非对象一律当空对象）。 */
 function asRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -146,6 +164,8 @@ export function migrateConfig(raw) {
   // v0（无 version 字段）→ v1：v1 引入前没有任何已发布字段，直接补齐版本号。
   // v1 → v2：wallpaper 增量字段（light/dark/fit/focus/glass/vignette/surface）——
   // 全部纯新增，sanitizeConfig 对缺失字段回退默认，这里只需抬版本号让 sanitize 补齐。
+  // v2 → v3：avatar 板块（软件头像）—— 同样纯新增，旧配置补 `avatar.source = ''`（= 不设置，
+  // 桌面壳继续用出厂图标），因此没有需要搬运的旧字段。
   return { ...source, version: CONFIG_VERSION }
 }
 
@@ -158,6 +178,7 @@ export function sanitizeConfig(raw) {
   const source = migrateConfig(raw)
   const theme = asRecord(source.theme)
   const wallpaper = asRecord(source.wallpaper)
+  const avatar = asRecord(source.avatar)
   const motion = asRecord(source.motion)
   const conversation = asRecord(source.conversation)
 
@@ -186,6 +207,9 @@ export function sanitizeConfig(raw) {
         composer: clampInt(asRecord(wallpaper.surface).composer, SURFACE_MIN, SURFACE_MAX, 100),
         overlay: clampInt(asRecord(wallpaper.surface).overlay, SURFACE_MIN, SURFACE_MAX, 100),
       },
+    },
+    avatar: {
+      source: toAvatarSource(avatar.source),
     },
     motion: {
       enabled: toBoolean(motion.enabled, DEFAULT_CONFIG.motion.enabled),
@@ -220,6 +244,7 @@ export function mergeConfig(current, patch) {
     ...incoming,
     theme: { ...base.theme, ...asRecord(incoming.theme) },
     wallpaper: { ...base.wallpaper, ...incomingWallpaper, surface: mergedSurface },
+    avatar: { ...base.avatar, ...asRecord(incoming.avatar) },
     motion: { ...base.motion, ...asRecord(incoming.motion) },
     conversation: { ...base.conversation, ...asRecord(incoming.conversation) },
   })
@@ -472,6 +497,17 @@ export function evaluateContract(probe) {
     } else if (appearanceOn !== true && facts.desktopYield !== true) {
       issues.push({ level: 'warn', code: 'desktop-theme-active', message: '检测到桌面壳主题引擎在位（html[data-miasaki-theme]）——按让位协议，本线主题板块先让位，避免两套主题互相覆盖' })
     }
+  }
+
+  // M2.5：client 更新而 host 未重启时，配置里根本没有 avatar 板块（旧 sanitize 会把它丢掉），
+  // 面板上的头像设置会静默失效 —— 明确报出来，而不是让用户以为功能坏了。
+  // 只在探针**明确报了 false** 时判定：旧 client（不认识该字段）不上报，不能误报。
+  if (facts.avatarField === false) {
+    issues.push({
+      level: 'warn',
+      code: 'avatar-host-stale',
+      message: 'Host 半尚未认识「软件头像」（配置里没有 avatar 字段）——请重启 dsh web，否则头像设置无法保存',
+    })
   }
 
   return { ok: issues.length === 0, issues }

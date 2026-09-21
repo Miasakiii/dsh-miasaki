@@ -8,7 +8,10 @@
 //   POST /appearance/api/contract        提交浏览器侧契约探针，返回判定结果
 //   GET  /appearance/api/skin            当前皮肤的 token 表（client overrideTokens 消费）
 //   GET  /appearance/api/wallpapers      壁纸图源清单（内置 id + local 目录扫描）
+//   GET  /appearance/api/avatars         头像清单（avatars 目录扫描；M2.5）
+//   POST /appearance/api/avatar          上传头像（PNG data URL → avatars/<新文件名>.png；M2.5）
 //   GET  /appearance/wallpaper/local/…   本地壁纸文件（白名单目录 + 文件名白名单，防穿越）
+//   GET  /appearance/avatar/…            头像文件（同上；桌面壳不经 HTTP，直读磁盘）
 //
 // 首帧：订阅 webServer 的 `webserver/index-inject`，把门控脚本插在 body 开标签之后、
 // shell 挂载之前 —— 与官方 ui-theme 的 bootThemeInjection 同理，避免「先原生后外观」
@@ -17,8 +20,10 @@
 // 本文件不含任何第三方依赖：配置模型与判定规则在 lib/config.js（纯逻辑、可单测），
 // 持久化在 lib/store.js，围栏在 lib/fence.js。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join, basename, normalize, sep } from 'node:path'
 import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildSurfaceTokens, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
+import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
 import { AppearanceStore } from './lib/store.js'
 import { buildTrustedHosts, fenceCheck } from './lib/fence.js'
 import { meta as zafkielMeta, tokens as zafkielTokens } from './lib/skins/zafkiel.js'
@@ -46,11 +51,20 @@ const LOCAL_WALLPAPER_DIRNAME = 'wallpapers'
 const LOCAL_WALLPAPER_RE = /^[\w][\w.-]{0,80}\.(?:png|jpe?g|webp|gif|bmp|avif)$/i
 const LOCAL_WALLPAPER_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp', '.avif': 'image/avif' }
 
+/**
+ * 头像走的是另一条链路（M2.5）：它除了在设置面板里预览，还要被**桌面壳**读去做
+ * 窗口 / 任务栏 / 托盘图标。因此目录与白名单都独立于壁纸，且格式收敛到 PNG ——
+ * 壳侧只依赖 `png` crate，不引入 jpeg/webp 解码器。规则细节见 lib/avatar.js。
+ */
+const AVATAR_DIR = AVATAR_DIRNAME
+
 export const name = 'appearance'
 /** webServer 是硬依赖（要挂路由与首帧注入）；settings 刻意不用，见 lib/store.js 注释。 */
 export const inject = ['webServer']
 
 const MAX_BODY_BYTES = 32 * 1024
+/** 头像上传的 body 上限：base64 后的 PNG（面板侧最长边已压到 512），远小于此。 */
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 const API_PREFIX = '/appearance/api/'
 
 function sendJson(res, status, body) {
@@ -59,12 +73,12 @@ function sendJson(res, status, body) {
 }
 
 /** 读取并解析 JSON 请求体；超过上限或非法 JSON 抛错。 */
-async function readJson(req) {
+async function readJson(req, limit = MAX_BODY_BYTES) {
   const chunks = []
   let length = 0
   for await (const chunk of req) {
     length += chunk.length
-    if (length > MAX_BODY_BYTES) throw new Error('请求体过大')
+    if (length > limit) throw new Error('请求体过大')
     chunks.push(chunk)
   }
   const text = Buffer.concat(chunks).toString('utf8')
@@ -117,27 +131,50 @@ export function apply(ctx, config) {
     ? join(config.dataDir, LOCAL_WALLPAPER_DIRNAME)
     : null
 
-  function listLocalWallpapers() {
-    if (localDir === null || !existsSync(localDir)) return []
+  /** 头像目录（同上；无 dataDir 时上传被拒、文件路由降级 404）。 */
+  const avatarDir = config?.dataDir !== undefined && config?.dataDir !== ''
+    ? join(config.dataDir, AVATAR_DIR)
+    : null
+
+  /** 按目录 + 文件名白名单列文件（壁纸与头像共用同一条纪律）。 */
+  function listDirFiles(dir, nameRe) {
+    if (dir === null || !existsSync(dir)) return []
     try {
-      return readdirSync(localDir)
-        .filter(name => LOCAL_WALLPAPER_RE.test(name))
-        .filter(name => statSync(join(localDir, name)).isFile())
+      return readdirSync(dir)
+        .filter(name => nameRe.test(name))
+        .filter(name => statSync(join(dir, name)).isFile())
         .sort()
     } catch {
       return []
     }
   }
 
-  /** 解析并安全校验 local 图源请求的文件名；不合法返回 null。 */
-  function resolveLocalWallpaper(file) {
-    if (localDir === null) return null
+  /** 解析并安全校验请求的文件名；不合法返回 null（basename + 二次前缀核对，防穿越）。 */
+  function resolveInDir(dir, nameRe, file) {
+    if (dir === null) return null
     const name = basename(file)
-    if (!LOCAL_WALLPAPER_RE.test(name)) return null
-    const full = normalize(join(localDir, name))
-    if (!full.startsWith(normalize(localDir) + sep)) return null
+    if (!nameRe.test(name)) return null
+    const full = normalize(join(dir, name))
+    if (!full.startsWith(normalize(dir) + sep)) return null
     if (!existsSync(full)) return null
     return full
+  }
+
+  function listLocalWallpapers() {
+    return listDirFiles(localDir, LOCAL_WALLPAPER_RE)
+  }
+
+  function resolveLocalWallpaper(file) {
+    return resolveInDir(localDir, LOCAL_WALLPAPER_RE, file)
+  }
+
+  /** 头像清单：面板的「已有头像」选择器消费（含手动放进目录的文件）。 */
+  function listLocalAvatars() {
+    return listDirFiles(avatarDir, AVATAR_NAME_RE)
+  }
+
+  function resolveLocalAvatar(file) {
+    return resolveInDir(avatarDir, AVATAR_NAME_RE, file)
   }
 
   function sendFile(res, fullPath) {
@@ -185,6 +222,43 @@ export function apply(ctx, config) {
       })
     }
 
+    // M2.5：头像清单（面板的「已有头像」选择器消费）。
+    if (path === `${API_PREFIX}avatars` && req.method === 'GET') {
+      return sendJson(res, 200, { local: listLocalAvatars() })
+    }
+
+    // M2.5：上传头像。浏览器侧已用 canvas 把任意格式重编码成 PNG，这里只做最终把关
+    // （真 PNG？多大？能不能落盘？），文件名由 host 生成 —— 绝不采信客户端给的名字。
+    // 只写文件、不改配置：是否启用由面板随后的 /config 请求决定（两步语义清晰，
+    // 也避免「上传即启用」把用户已选的头像顶掉）。
+    if (path === `${API_PREFIX}avatar` && req.method === 'POST') {
+      if (avatarDir === null) {
+        return sendJson(res, 503, { error: '未配置 dataDir，头像无法落盘' })
+      }
+      let body = null
+      try {
+        body = await readJson(req, MAX_UPLOAD_BYTES)
+      } catch (error) {
+        return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      }
+      const parsed = parseAvatarDataUrl(body?.dataUrl)
+      if (!parsed.ok) return sendJson(res, 400, { error: parsed.error })
+      const file = makeAvatarName(Date.now())
+      try {
+        await mkdir(avatarDir, { recursive: true })
+        await writeFile(join(avatarDir, file), parsed.bytes)
+      } catch (error) {
+        ctx.logger?.error?.(error instanceof Error ? error : new Error(String(error)))
+        return sendJson(res, 500, { error: '头像写入失败（检查数据目录权限）' })
+      }
+      return sendJson(res, 200, {
+        file,
+        url: `${AVATAR_URL_PREFIX}${file}`,
+        bytes: parsed.bytes.length,
+        local: listLocalAvatars(),
+      })
+    }
+
     if (path === `${API_PREFIX}config` && req.method === 'POST') {
       let body = null
       try {
@@ -228,24 +302,39 @@ export function apply(ctx, config) {
     return sendJson(res, 404, { error: '未知的接口路径' })
   }
 
-  /** 本地壁纸文件：不走 JSON 围栏（img/background 请求无自定义头），安全靠路径白名单。 */
-  const wallpaperFile = async (req, res) => {
-    let pathname = '/'
-    try {
-      pathname = new URL(req.url ?? '/', 'http://dsh.local').pathname
-    } catch {
-      res.writeHead(400); return res.end()
+  /**
+   * 本机图片文件路由（壁纸 / 头像共用）：不走 JSON 围栏（img/background 请求无自定义头），
+   * 安全完全靠「目录 + 文件名白名单 + 防穿越」三件套。
+   */
+  function fileRoute(prefix, resolve) {
+    return async (req, res) => {
+      let pathname = '/'
+      try {
+        pathname = new URL(req.url ?? '/', 'http://dsh.local').pathname
+      } catch {
+        res.writeHead(400); return res.end()
+      }
+      if (req.method !== 'GET' || !pathname.startsWith(prefix)) {
+        res.writeHead(404); return res.end()
+      }
+      let decoded = ''
+      try {
+        decoded = decodeURIComponent(pathname.slice(prefix.length))
+      } catch {
+        res.writeHead(404); return res.end()
+      }
+      const fullPath = resolve(decoded)
+      if (fullPath === null) {
+        res.writeHead(404); return res.end()
+      }
+      sendFile(res, fullPath)
     }
-    const prefix = '/appearance/wallpaper/local/'
-    if (req.method !== 'GET' || !pathname.startsWith(prefix)) {
-      res.writeHead(404); return res.end()
-    }
-    const fullPath = resolveLocalWallpaper(decodeURIComponent(pathname.slice(prefix.length)))
-    if (fullPath === null) {
-      res.writeHead(404); return res.end()
-    }
-    sendFile(res, fullPath)
   }
+
+  /** 本地壁纸文件。 */
+  const wallpaperFile = fileRoute('/appearance/wallpaper/local/', resolveLocalWallpaper)
+  /** 头像文件（面板预览用；桌面壳直读磁盘，不经这条路由）。 */
+  const avatarFile = fileRoute(AVATAR_URL_PREFIX, resolveLocalAvatar)
 
   // 路由前缀不得带尾随斜杠：webserver 的 prefix 匹配是
   // `pathname === prefix || pathname.startsWith(prefix + '/')`，
@@ -253,6 +342,7 @@ export function apply(ctx, config) {
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/appearance/api', handler: api }), 'appearance: api route')
   // 最长前缀优先（webserver 是 longest-prefix-wins），/appearance/wallpaper 不会吞掉 /appearance/api。
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/appearance/wallpaper', handler: wallpaperFile }), 'appearance: wallpaper route')
+  ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/appearance/avatar', handler: avatarFile }), 'appearance: avatar route')
 }
 
 /** 供单测与后续里程碑复用：本线对外暴露的出厂配置。 */
