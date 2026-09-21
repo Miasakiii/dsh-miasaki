@@ -8,7 +8,7 @@
 | 层 | 内容 | 载体 | 可自动化 |
 |---|---|---|---|
 | **L0** 静态检查 | 语法（`node --check`）、令牌完备性、令牌漂移 | `node scripts/verify-all.mjs` | 是 |
-| **L1** 单线单测 | Canvas 89 项、Sidebar 62 项、SSH 113 项、双模型 24 项、外观 81 项、Fleet 108 项、Desktop 18+25 项 | `node scripts/verify-all.mjs` | 是 |
+| **L1** 单线单测 | Canvas 89 项、Sidebar 62 项、SSH 113 项、双模型 24 项、外观 91 项、Fleet 108 项、Desktop 18+25 项 | `node scripts/verify-all.mjs` | 是 |
 | **L2** 插件加载 | 装 profile → 重启 host → 页面刷新 → 插件生效/停用可恢复 | 本文档 §2 | 否（需重启 host） |
 | **L3** 实机冒烟 | 桌面壳启动、窗口、主题、桌宠、Canvas、Sidebar、SSH、双模型、外观 | 本文档 §3 | 否（需真机） |
 | **L4** 跨线联动 | Fleet pulse → 桌宠；主题 → Canvas/Sidebar；标题栏让位 | 本文档 §4 | 否 |
@@ -30,7 +30,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | desktop | 11 | gen-init（令牌校验）+ tokens:diff（无漂移）+ patch verify ×5（模型设置 / 会话头溢出保护 / 轨迹计时恢复 / 消息气泡计时恢复 / cordis client 查询挂起修复）+ `plugins/dsh-model-probe` 语法 2 项 + 连通性探测判定表 18 例 + cargo test 25 例（pulse stale 语义 + 立绘回落链 + 桌宠 Alert 提醒模型 3 例 + 软件头像契约 6 例） | PASS（MSVC 环境）※ |
 | ssh | 12 | 6 个入口语法（index / client / app / session / lib-store / lib-runtime）+ 6 个测试文件共 113 例（U0 故障注入：指纹保存失败 / 跨代确认隔离 / viewer 输入归属 / 尺寸限界 / 背压淘汰 / 重附着预算；U1：分组过滤 / 粘贴守卫 / 颜色合成 / 缓冲查找 / 主题下发 / 会话头列宽手柄隐藏；D2：顶栏消息闭环 / 浮层契约 / `ready`·`status` 帧必须喂状态模型（D-2 回归）/ `canvasAvailable` 段数双向变化（hero 两段）/ 「保存并连接」形态护栏（D-1 回归）；U2：v2 帧契约与 `VERSION_MISMATCH` / 一次性 attach 票据生命周期 / 多 shell 隔离与写权接管 / 关闭语义三分 / 工作区快照恢复与损坏降级 / 序列化快照三路恢复；**U2 实机验收回归：未绑定 shell 不发帧 / 就绪补绑 / 按 `shellSeq` 精确匹配**） | PASS |
 | dual-model | 10 | 6 个入口语法 + 3 个测试文件共 24 例 + 图片准入补丁 `patch verify` | PASS |
-| appearance | 14 | 6 个入口语法（index / client / lib-config / lib-avatar / lib-store / lib-fence）+ 7 个测试文件共 81 例（含 M2.6 风格契约）+ `derive-skins --check`（M2 皮肤表可复算） | PASS |
+| appearance | 16 | 7 个入口语法（index / client / lib-config / lib-avatar / lib-icon-presets / lib-store / lib-fence）+ 8 个测试文件共 91 例（含 M2.6 风格契约、M2.7 预设渲染与落盘）+ `derive-skins --check`（M2 皮肤表可复算） | PASS |
 
 > ※ **desktop 的 `cargo test` 项在非 MSVC 环境是环境假阴性**（2026-09-11 实测）：Git Bash 的 `PATH` 中
 > `/usr/bin/link.exe`（GNU coreutils 的 `link`）会遮蔽 MSVC 链接器，报
@@ -143,10 +143,13 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 
 | 检查项 | 通过判据 |
 |---|---|
-| 板块出现 | 设置 → 外观 → 「软件头像」显示预览位 + 「上传图片…／清除」+ 已有文件选择器；契约条**无** `avatar-host-stale` 黄条（有 = host 未重启） |
-| 上传即预览 | 点「上传图片…」选一张非 PNG（如 jpg）→ 面板预览立刻显示该图；`~/.dsh/miasaki-appearance/avatars/` 出现 `avatar-<时间戳>-<随机>.png` |
+| 板块出现 | 设置 → 外观 → 「应用图标」显示**九宫格预设**（默认 / 头像 / 暗夜玻璃 / 素雅银 / 果冻蓝 / 缠线绿 / 蒙德里安 / 暖橙 / 流光）+ 「自定义」行（上传图片…／清除）；契约条**无** `avatar-host-stale` 黄条（有 = host 未重启） |
+| 预设点选即用 | 点「流光」→ 该格出现选中态（背景 + 描边），**约 1.5–2 秒内桌面端三处图标变成渐变色那款**；`~/.dsh/miasaki-appearance/avatars/` 下出现 9 个 `preset-*.png` |
+| 位图预设 | 「头像」格显示用户提供的那位蓝发角色（不是程序化几何图案），点选后三处图标同步 |
+| 我的上传隔离 | 「我的上传」清单里**不出现** `preset-*.png`（预设是系统生成的，不属于用户资产） |
+| 上传即预览 | 点「上传图片…」选一张非 PNG（如 jpg）→ 立即可选并生效；`avatars/` 出现 `avatar-<时间戳>-<随机>.png` |
 | **图标跟随** | 约 1.5–2 秒内：桌面端**任务栏**、**窗口左上角**、**托盘**三处图标同时变成该图（无重启、无重开窗口） |
-| 清单选择 | 目录里手动放入一张白名单命名的 PNG → 重新打开面板出现在选择器里 → 选中即生效 |
+| 清单选择 | 目录里手动放入一张白名单命名的 PNG → 重新打开面板出现在「我的上传」里 → 选中即生效 |
 | 清除回退 | 点「清除」→ 三处图标回到出厂图标（`avatar.source` 变空串） |
 | 坏文件不崩 | 把 `config.json` 的 `avatar.source` 指向不存在的文件名（或写入非 PNG 内容）→ 桌面端**照常启动/运行**，图标回退出厂值，`%LOCALAPPDATA%\miasaki\pet.log` 有一行 `launcher-icon:` 说明 |
 | 边界如文案所述 | EXE 文件自身图标与桌面 / 开始菜单快捷方式图标**不随设置变化**（构建期资源，面板文案已写明） |
@@ -267,4 +270,6 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 2026-09-15(深夜) | **SSH 线 D4（D3 三项尾项清理）实机验收：6 项门槛全 PASS**（§3.6 补充该节，方案 §20）：驱动 `_refs/scripts-archive/ssh-d4-accept/run-d4-accept.mjs`。**尾项①`renderBanner` 隐藏即清空**（运行态取证：可见态 `childCount:3` → 连接完成后 `hidden:true/display:none/**childCount:0**`；旧实现节点残留）**+ 清空后仍能重建**（断开后 `childCount:4`）；**尾项③过渡区间**（1280 rail 232 / 860 rail 208 / 600 抽屉 / **500 `.tools .optional` 可见** / 480 隐藏；五档零溢出）；**尾项②运行态**（30 次开关零异常 + iframe 未重载 + 零 resize 帧；静态 `observe(header,{childList,subtree})`、`aria-selected` 仅剩注释）；**附带**注入样式零 `width-handle`（D3-F1 实机复核）。单测 **82 例**（实施记录原写 65/65 为沿用旧基线的笔误，验收时校正）、`ssh` **12/12** |
 | 2026-09-16 | **SSH 线 U2 主体落地（多 shell / 工作区记忆 / 精确恢复）**：U2.1 身份分层（`connId → runtimeId → shellId`）+ 一次性 30s attach 票据 + 单写多读写权接管、U2.3 偏好与工作区快照拆两张据（`localStorage` v2 / `sessionStorage` v1，只在存活连接上重挂、绝不自动重连）、U2.4 官方 `@xterm/addon-serialize` 0.14.0 精确锁定 + 空闲 1.5s 采集快照（每 shell 128KiB / 500 行，不落盘）三路恢复。**§0 的 L1 行与 §1 表 ssh 行例数同步 70/82 → 110**（旧值停在 D4 批次，属文档欠账）；§3.6 标题扩为 `U0+U1+A0+D2–D4+U2`、新增 U2 四行实机验收判据与该节小结。单测 **110 例**（app 16 / client 25 / http 7 / runtime 22 / session 32 / store 8）、`ssh` **12/12**；端到端探针（真 sshd × 本线运行时）**9/9**；**回滚演练实际执行**（85/85 → 110/110）。U2.2 SFTP 与 U3 未动 |
 | 2026-09-19 | **七线全量重跑定新基线（81 项检查，七线全 PASS）**：desktop 8 → **11**（新增「测试连通性 v2」host 插件 `plugins/dsh-model-probe` 的入口语法 2 项 + 连通性判定表 18 例；`cargo test` 10 → **19** 例，含 R5 桌宠 `Alert` 提醒模型 3 例）、ssh 例数 110 → **113**（U2 实机验收 4 处回归配套的 3 条新断言）、sidebar 例数 54 → **62**（`terminal-hub.test.js` 重写为多会话形状，7 → 15 例）。**sidebar 由 9/10 转 PASS**——`terminal-hub.test.js` 的受限沙箱假阴性已**根治**：`TerminalHub` 构造函数新增可注入的 `resolveBin`（默认仍是 `resolvePtyBin`，生产行为不变），测试不再碰宿主 shell（详见 §1 表下 ※※ 注记）。§0 的 L1 行同步（Sidebar 54 → 62 / SSH 110 → 113 / 补 Desktop 18+19）。**本轮另新增 §3.7 模型连通性探测实机判据**（desktop 线 `plugins/dsh-model-probe`：两段式探测 / 误报修复 / 错 key 零消耗 / 降级路径 / 无副作用）与 §2 的 `/model-probe-api/health` 自检行 |
-| 2026-09-21 | **外观线 M2.5「软件头像」落地（本仓第一条 appearance × desktop 跨线能力）**：用户「外观设置里要可以设置软件头像」→ 澄清落点为**桌面壳启动器图标**（任务栏/窗口/托盘）。appearance 侧配置 v2 → v3（新增 `avatar.source`）+ `lib/avatar.js`（PNG 魔数 / data URL 解析 / 文件名白名单）+ 上传·清单·文件三条路由 + 面板板块（canvas 归一化 PNG ≤512）+ 契约 `avatar-host-stale`；desktop 侧新增 `src-tauri/src/launcher_icon.rs`（读同一份配置 → PNG 解码 → 中心裁方 + 盒式降采样 ≤256 → `window.set_icon` + `tray.set_icon`，1.5s 巡检跟随，失败一律回退出厂图标）。appearance **12 → 14 项**（+`lib/avatar.js` 语法；单测 60 → **81** 例 —— 其中 M2.5 头像 19 例、同批次入库的 M2.6 面板风格契约 2 例）、desktop `cargo test` 19 → **25** 例、desktop 仍 **11/11**。契约文档 `appearance-launcher-icon-2026-09-21.md`，实机判据新增 **§3.5b**（上传→三处图标跟随 / 清单选择 / 清除回退 / 坏文件不崩 / 边界如文案）。**实机验收待用户重启 `dsh web` 与桌面壳后执行** |
+| 2026-09-21 | **外观线 M2.5「软件头像」落地（本仓第一条 appearance × desktop 跨线能力）**：用户「外观设置里要可以设置软件头像」→ 澄清落点为**桌面壳启动器图标**（任务栏/窗口/托盘）。appearance 侧配置 v2 → v3（新增 `avatar.source`）+ `lib/avatar.js`（PNG 魔数 / data URL 解析 / 文件名白名单）+ 上传·清单·文件三条路由 + 面板板块（canvas 归一化 PNG ≤512）+ 契约 `avatar-host-stale`；desktop 侧新增 `src-tauri/src/launcher_icon.rs`（读同一份配置 → PNG 解码 → 中心裁方 + 盒式降采样 ≤256 → `window.set_icon` + `tray.set_icon`，1.5s 巡检跟随，失败一律回退出厂图标）。appearance **12 → 14 项**（+`lib/avatar.js` 语法；单测 60 → **81** 例，含同批次入库的 M2.6 面板风格契约 2 例）、desktop `cargo test` 19 → **25** 例、desktop 仍 **11/11**。契约文档 `appearance-launcher-icon-2026-09-21.md`，实机判据新增 **§3.5b**（上传→三处图标跟随 / 清单选择 / 清除回退 / 坏文件不崩 / 边界如文案）。**实机验收待用户重启 `dsh web` 与桌面壳后执行** |
+| 2026-09-21 | **外观线 M2.6「面板风格对齐官方通用设置页」**（并行会话）：整栏面板重做为官方行式风格（0.5px 分隔线行 / 16px 行距 / 14px 标题 / 12px 说明 / 明暗立方 / 步进器），交互控件复用官方 primitives（前端壳 seed 模块，零新依赖），`.mia-*` 前缀 CSS 注入，行为逻辑零变化；配套风格契约测试 2 例。与 M2.5 同批次入库（同文件混改，无法文件级拆分；提交信息已如实记录两者） |
+| 2026-09-21 | **外观线 M2.7「应用图标预设」落地**：用户给出参考截图要求「像这样的预设」→ 面板 `软件头像` 升级为 **`应用图标`** 九宫格（默认 / 头像 / 暗夜玻璃 / 素雅银 / 果冻蓝 / 缠线绿 / 蒙德里安 / 暖橙 / 流光）。预设图标由本线**程序化生成**（新增 `lib/icon-presets.js`：手写 PNG 编码 CRC32 + `node:zlib`、SDF 解析式抗锯齿、渐变/deco/高光合成、圆角遮罩；**零第三方依赖、零图片资源**），骨架由 A/B/C/D 四版渲染目检定稿；「头像」为唯一位图预设（用户提供的图：trim 黑边 → 居中裁方 → 512 → 圆角 → 量化，97 KB，资源入库 `assets/presets/`）。host 新增 `GET /appearance/api/presets`（**幂等落盘** `avatars/preset-<id>.png` + 清单）—— 预设与用户上传同源，**跨线契约零变更、桌面壳零改动**。appearance **14 → 16 项**、单测 81 → **91** 例。实机判据 §3.5b 增补四条（九宫格出现 / 点选即用 / 位图预设 / 我的上传隔离） |
