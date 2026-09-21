@@ -2,6 +2,32 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-21 · 模型设置补丁 v2.2：双代变体（同时支持 0.1.5-rc.x 与 0.1.6-alpha.2）
+
+**起因**：官方仓库增量复查发现 `0.1.6-alpha.2` 上 `patches/dsh-client-ui-settings-models/` 的
+第 5 条编辑锚点失效 —— `editCapacity(index, "maxTokens", event.target.value);` 命中 0 次。
+根因是官方把 model row 抽成了独立组件 `ModelRow.tsx`（该文件 `0.1.6-alpha.2` 才有、alpha.1 还没有），
+容量字段的渲染随之搬进组件内部，回调签名也从 `(event) => event.target.value` 改成 `(text) => text`。
+
+- **难点是跨作用域，不是找新锚点**：`testing` / `testResults` / `testModel` / `patch` / `t` / `disabled`
+  全在 `ModelListEditor` 里，而渲染位置在 `ModelRow` 内部、props 契约是官方的。
+- **解法**：`EDITS` 支持**变体**（`variants` + `probe`），edit #5 分两代分支。新版走
+  「Editor 侧把两块 UI 渲染成一个 `Fragment`（闭包仍在 Editor）→ 作为 `reasoningRow` prop 传给
+  `ModelRow` → `ModelRow` 把它摆到容量字段之后」。跨组件传的是**已渲染好的节点**，不是状态函数。
+- **`patch.mjs` 的改动**：拆出 `resolveEdits()`（选变体）与 `applyOne()`（施加单条编辑），
+  `applyPatch` 对单条/变体两种形态统一处理；入口守卫（稀疏数组、字典尾逗号）递归覆盖子编辑。
+  **单条形态完全向后兼容**，其余 6 条编辑与另外 4 个补丁一字未动。
+- **零回归**：两份 baseline 与三个常量均未变（官方原版仍是 0.1.5-rc.1），legacy 分支逐字节不动，
+  `verify` 三行 PASS 照旧（`F1717A07…`）；`verify-all.mjs desktop` **11/11**。
+- **实测覆盖两代**：`0.1.5-rc.2`（当前 `latest`）与 `0.1.6-alpha.2` 的真实 npm 产物上 `apply` 均成功；
+  alpha.2 产物 140,442 → 150,544 B，`reasoningRow` 落在 props（L889）与渲染槽位（L266，
+  容量字段 map 与 `ModelInputTypes` 之间），7 条编辑的注入件全部到位。
+- **两条踩坑记录**（都撞在 `applyPatch` 出口的语法闸门上）：① 锚点不能选 `onFieldChange` ——
+  `ModelRow` 被两个编辑器共用，该锚点在 bundle 里命中 2 次；② `}, field)), (0, jsx)(ModelInputTypes, {`
+  这行插不进独立行（行内同时装着上一项的收尾与下一项的开头），必须用 `replaceLine` 整行重写。
+  详见补丁 README 的「双代变体」节。
+- 触摸点：`patches/dsh-client-ui-settings-models/patch.mjs`、该目录 `README.md`、本文件。
+
 ## 2026-09-19 · 模型连通性探测 v2（「测试连通性」改问对的问题）
 
 **起因**：用户在设置 → 模型里对 `step/step-5-preview`（StepFun Step Plan）点「测试连通性」，

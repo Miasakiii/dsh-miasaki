@@ -229,43 +229,128 @@ const EDITS = [
     ],
   },
   {
-    // 插入点不是锚点本身，而是「maxTokens 输入框闭合」之后（锚点 +2 行），
-    // 因此在锚点之外额外断言目标行内容，避免 DSH 改版后插错层级。
+    // 思考强度选择器 + 连通性测试按钮。两个 DSH 版本的渲染结构不同，故分**变体**：
+    //   · inline-jsx（0.1.5-rc.x）：model row 是 ModelListEditor 里的内联 JSX，
+    //     插入点紧跟 maxTokens 输入框之后（锚点 +2 行是该 children 数组的收尾 `})]`）。
+    //   · model-row（0.1.6-alpha.2 起）：官方把 model row 抽成独立的 `ModelRow` 组件
+    //     （`ModelRow.tsx`），容量字段的渲染随之搬进组件内部，而 `testing` /
+    //     `testResults` / `testModel` 这些状态留在 ModelListEditor —— 组件里够不着。
+    //     故改为**跨组件传一个已渲染好的 ReactNode**：Editor 侧构造 `reasoningRow`
+    //     （闭包仍捕获全部状态），ModelRow 侧把它摆到容量字段之后。两条子编辑成对出现。
+    //   变体由 `probe` 选中：探针行在源文件里出现即采用该变体；两者都不出现则报错。
     id: 'reasoning-ui',
-    mode: 'insertAfterOffset',
-    anchor: 'editCapacity(index, "maxTokens", event.target.value);',
-    offset: 2,
-    expect: '})]',
-    lines: [
-      '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("label", {',
-      '\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelField"],',
-      '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {',
-      '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelFieldLabel"],',
-      '\t\t\t\t\t\t\t\t\tchildren: t("modelReasoningEffort")',
-      '\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("select", {',
-      '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["input"],',
-      '\t\t\t\t\t\t\t\t\tvalue: reasoningChoice(model),',
-      '\t\t\t\t\t\t\t\t\t"aria-label": `${t("modelReasoningEffort")} ${index + 1}`,',
-      '\t\t\t\t\t\t\t\t\tdisabled,',
-      '\t\t\t\t\t\t\t\t\tonChange: (event) => {',
-      '\t\t\t\t\t\t\t\t\t\tconst next = reasoningPatch(event.target.value);',
-      '\t\t\t\t\t\t\t\t\t\tif (next === void 0) patch(index, { reasoningEfforts: void 0 });',
-      '\t\t\t\t\t\t\t\t\t\telse patch(index, { reasoningEfforts: next });',
-      '\t\t\t\t\t\t\t\t\t},',
-      '\t\t\t\t\t\t\t\t\tchildren: [...REASONING_LEVELS.map((level) => (0, react_jsx_runtime.jsx)("option", { key: level, value: level, children: level })), (0, react_jsx_runtime.jsx)("option", { value: "inherit", children: t("modelReasoningInherit") }), (0, react_jsx_runtime.jsx)("option", { value: "disabled", children: t("modelReasoningDisabled") })]',
-      '\t\t\t\t\t\t\t\t})]',
-      '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("span", {',
-      '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("button", {',
-      '\t\t\t\t\t\t\t\t\ttype: "button",',
-      '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["secondaryButton"],',
-      '\t\t\t\t\t\t\t\t\tdisabled: disabled || testing.has(index) || textOf(model, "id").trim().length === 0,',
-      '\t\t\t\t\t\t\t\t\t"aria-label": `${t("testModel")} ${index + 1}`,',
-      '\t\t\t\t\t\t\t\t\tonClick: () => { testModel(index, model); },',
-      '\t\t\t\t\t\t\t\t\tchildren: testing.has(index) ? t("testing") : t("testModel")',
-      '\t\t\t\t\t\t\t\t}), testResults.has(index) ? (0, react_jsx_runtime.jsx)("span", {',
-      '\t\t\t\t\t\t\t\t\tclassName: testResultClass(testResults.get(index).ok === true, ModelsSection_module_css_default),',
-      '\t\t\t\t\t\t\t\t\tchildren: testResults.get(index).message',
-      '\t\t\t\t\t\t\t\t}) : null]',
+    variants: [
+      {
+        probe: 'editCapacity(index, "maxTokens", event.target.value);',
+        edits: [
+          {
+            id: 'reasoning-ui@inline-jsx',
+            mode: 'insertAfterOffset',
+            anchor: 'editCapacity(index, "maxTokens", event.target.value);',
+            offset: 2,
+            expect: '})]',
+            lines: [
+              '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("label", {',
+              '\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelField"],',
+              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {',
+              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelFieldLabel"],',
+              '\t\t\t\t\t\t\t\t\tchildren: t("modelReasoningEffort")',
+              '\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("select", {',
+              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["input"],',
+              '\t\t\t\t\t\t\t\t\tvalue: reasoningChoice(model),',
+              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("modelReasoningEffort")} ${index + 1}`,',
+              '\t\t\t\t\t\t\t\t\tdisabled,',
+              '\t\t\t\t\t\t\t\t\tonChange: (event) => {',
+              '\t\t\t\t\t\t\t\t\t\tconst next = reasoningPatch(event.target.value);',
+              '\t\t\t\t\t\t\t\t\t\tif (next === void 0) patch(index, { reasoningEfforts: void 0 });',
+              '\t\t\t\t\t\t\t\t\t\telse patch(index, { reasoningEfforts: next });',
+              '\t\t\t\t\t\t\t\t\t},',
+              '\t\t\t\t\t\t\t\t\tchildren: [...REASONING_LEVELS.map((level) => (0, react_jsx_runtime.jsx)("option", { key: level, value: level, children: level })), (0, react_jsx_runtime.jsx)("option", { value: "inherit", children: t("modelReasoningInherit") }), (0, react_jsx_runtime.jsx)("option", { value: "disabled", children: t("modelReasoningDisabled") })]',
+              '\t\t\t\t\t\t\t\t})]',
+              '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("span", {',
+              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("button", {',
+              '\t\t\t\t\t\t\t\t\ttype: "button",',
+              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["secondaryButton"],',
+              '\t\t\t\t\t\t\t\t\tdisabled: disabled || testing.has(index) || textOf(model, "id").trim().length === 0,',
+              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("testModel")} ${index + 1}`,',
+              '\t\t\t\t\t\t\t\t\tonClick: () => { testModel(index, model); },',
+              '\t\t\t\t\t\t\t\t\tchildren: testing.has(index) ? t("testing") : t("testModel")',
+              '\t\t\t\t\t\t\t\t}), testResults.has(index) ? (0, react_jsx_runtime.jsx)("span", {',
+              '\t\t\t\t\t\t\t\t\tclassName: testResultClass(testResults.get(index).ok === true, ModelsSection_module_css_default),',
+              '\t\t\t\t\t\t\t\t\tchildren: testResults.get(index).message',
+              '\t\t\t\t\t\t\t\t}) : null]',
+            ],
+          },
+        ],
+      },
+      {
+        probe: 'editCapacity(index, "maxTokens", text);',
+        edits: [
+          {
+            // Editor 侧：把两块 UI 渲染成一个 ReactNode 交给 ModelRow。闭包在这里，
+            // testing / testResults / testModel / patch / t / disabled 全部可见。
+            //
+            // 锚点刻意不选 `onFieldChange`：ModelRow 被**两个编辑器**共用（本包与
+            // DeepSeekModelsEditor/CustomProviderCard），那个锚点在 bundle 里命中 2 次，
+            // 会撞上 findUnique 的唯一性要求。`inputLoading` 里的 `catalogProvider`
+            // 只有本编辑器有 —— 实测唯一命中。
+            id: 'reasoning-ui@model-row-prop',
+            mode: 'insertBefore',
+            anchor: 'inputLoading: catalogProvider !== void 0 && catalog === void 0,',
+            lines: [
+              '\t\t\t\t\t\t\treasoningRow: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsxs)("label", {',
+              '\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelField"],',
+              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {',
+              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelFieldLabel"],',
+              '\t\t\t\t\t\t\t\t\tchildren: t("modelReasoningEffort")',
+              '\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("select", {',
+              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["input"],',
+              '\t\t\t\t\t\t\t\t\tvalue: reasoningChoice(model),',
+              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("modelReasoningEffort")} ${index + 1}`,',
+              '\t\t\t\t\t\t\t\t\tdisabled,',
+              '\t\t\t\t\t\t\t\t\tonChange: (event) => {',
+              '\t\t\t\t\t\t\t\t\t\tconst next = reasoningPatch(event.target.value);',
+              '\t\t\t\t\t\t\t\t\t\tif (next === void 0) patch(index, { reasoningEfforts: void 0 });',
+              '\t\t\t\t\t\t\t\t\t\telse patch(index, { reasoningEfforts: next });',
+              '\t\t\t\t\t\t\t\t\t},',
+              '\t\t\t\t\t\t\t\t\tchildren: [...REASONING_LEVELS.map((level) => (0, react_jsx_runtime.jsx)("option", { key: level, value: level, children: level })), (0, react_jsx_runtime.jsx)("option", { value: "inherit", children: t("modelReasoningInherit") }), (0, react_jsx_runtime.jsx)("option", { value: "disabled", children: t("modelReasoningDisabled") })]',
+              '\t\t\t\t\t\t\t\t})]',
+              '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("span", {',
+              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("button", {',
+              '\t\t\t\t\t\t\t\t\ttype: "button",',
+              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["secondaryButton"],',
+              '\t\t\t\t\t\t\t\t\tdisabled: disabled || testing.has(index) || textOf(model, "id").trim().length === 0,',
+              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("testModel")} ${index + 1}`,',
+              '\t\t\t\t\t\t\t\t\tonClick: () => { testModel(index, model); },',
+              '\t\t\t\t\t\t\t\t\tchildren: testing.has(index) ? t("testing") : t("testModel")',
+              '\t\t\t\t\t\t\t\t}), testResults.has(index) ? (0, react_jsx_runtime.jsx)("span", {',
+              '\t\t\t\t\t\t\t\t\tclassName: testResultClass(testResults.get(index).ok === true, ModelsSection_module_css_default),',
+              '\t\t\t\t\t\t\t\t\tchildren: testResults.get(index).message',
+              '\t\t\t\t\t\t\t\t}) : null]',
+              '\t\t\t\t\t\t\t})] }),',
+            ],
+          },
+          {
+            // ModelRow 侧：把它摆到两个容量字段之后（map 结果与 ModelInputTypes 之间），
+            // 与 inline-jsx 变体的视觉位置一致。
+            //
+            // 用 replaceLine 而不是 insertBefore：这一行**行内**同时装着上一项的收尾
+            // （`.map(...)` 的 `)`）与下一项的开头（ModelInputTypes），插不进独立一行 ——
+            // 在它之前插入会落进 `.map()` 的参数里，在它之后插入会落进 ModelInputTypes
+            // 的 props 里，两者都是语法错误（都实测撞过 applyPatch 出口的语法闸门）。
+            // 整行重写把我们的节点放在两者之间，正是那个 children 数组的第二项。
+            //
+            // 另一处 ModelRow 调用点（DeepSeekModelsEditor）不传 `reasoningRow`，
+            // 值为 undefined —— React 对 undefined 子节点不渲染任何东西，安全。
+            id: 'reasoning-ui@model-row-slot',
+            mode: 'replaceLine',
+            anchor: '}, field)), (0, react_jsx_runtime.jsx)(ModelInputTypes, {',
+            lines: [
+              '\t\t\t\t\t\t}, field)), props.reasoningRow, (0, react_jsx_runtime.jsx)(ModelInputTypes, {',
+            ],
+          },
+        ],
+      },
     ],
   },
   {
@@ -422,6 +507,52 @@ function findUnique(lines, anchor) {
 }
 
 /**
+ * 把一条 EDITS 项解析成**具体编辑**列表。
+ *
+ * 两种形态：
+ * - 单条：`{ id, mode, anchor, lines, … }` —— 自身即一次编辑。
+ * - 变体：`{ id, variants: [{ probe, edits: [...] }, …] }` —— 同一处 UI 在 DSH 两代里结构不同时用。
+ *   `probe` 是一行源码文本，trim 后全等且在源文件里出现即选中该变体。
+ *
+ * 没有任何 probe 命中就报错：「两个已知版本都不匹配」必须响亮失败，不能静默跳过——
+ * 静默跳过的后果是补丁"成功"了但 UI 不在位，而那要等用户打开设置页才发现。
+ *
+ * @param lines - 源文件切分后的行数组（只读，仅用于探测）。
+ * @param edit - EDITS 里的一项。
+ * @returns 要按顺序施加的编辑。
+ */
+function resolveEdits(lines, edit) {
+  if (edit.variants === undefined) return [edit]
+  const chosen = edit.variants.find((variant) => lines.some((line) => line.trim() === variant.probe))
+  if (chosen === undefined) {
+    const probes = edit.variants.map((variant) => JSON.stringify(variant.probe)).join('、')
+    throw new Error(`${edit.id}: 没有任何变体的探测锚点命中（试过：${probes}）——DSH 版本已超出本补丁已知的两代，需人工适配`)
+  }
+  return chosen.edits
+}
+
+/** 施加一条具体编辑：锚点唯一命中后按 mode 插入或替换。 */
+function applyOne(lines, edit) {
+  const at = findUnique(lines, edit.anchor)
+  if (edit.mode === 'insertBefore') {
+    lines.splice(at, 0, ...edit.lines)
+  } else if (edit.mode === 'insertAfter') {
+    lines.splice(at + 1, 0, ...edit.lines)
+  } else if (edit.mode === 'insertAfterOffset') {
+    const target = at + edit.offset
+    const actual = lines[target] === undefined ? null : lines[target].trim()
+    if (actual !== edit.expect) {
+      throw new Error(`${edit.id}: 期望锚点 +${edit.offset} 行为 ${JSON.stringify(edit.expect)}，实际 ${JSON.stringify(actual)}`)
+    }
+    lines.splice(target + 1, 0, ...edit.lines)
+  } else if (edit.mode === 'replaceLine') {
+    lines.splice(at, 1, ...edit.lines)
+  } else {
+    throw new Error(`${edit.id}: 未知的编辑模式 ${edit.mode}`)
+  }
+}
+
+/**
  * 把补丁应用到一份 bundle 文本上，返回新文本。
  * 纯函数：不碰文件系统，便于 `verify` 与单测直接调用。
  */
@@ -430,31 +561,18 @@ export function applyPatch(source) {
   // 稀疏数组守卫：`[a,,b]` 语法合法但会在 lines 里留一个 undefined 空洞，
   // 随后以 `Cannot read properties of undefined (reading 'trim')` 的形式
   // 在几百行之外炸开，极难定位。编辑规则是手写的，就在这里当场拦住。
+  // 变体形态下逐个检查其子编辑，守卫不因分层而漏。
   for (const edit of EDITS) {
-    if (edit.lines.some((line) => typeof line !== 'string')) {
-      throw new Error(`${edit.id}: lines 含非字符串项（多半是数组里多写了一个逗号，形成空洞）`)
-    }
-    assertDictionaryContinued(edit)
-  }
-  let lines = source.split('\n')
-  for (const edit of EDITS) {
-    const at = findUnique(lines, edit.anchor)
-    if (edit.mode === 'insertBefore') {
-      lines.splice(at, 0, ...edit.lines)
-    } else if (edit.mode === 'insertAfter') {
-      lines.splice(at + 1, 0, ...edit.lines)
-    } else if (edit.mode === 'insertAfterOffset') {
-      const target = at + edit.offset
-      const actual = lines[target] === undefined ? null : lines[target].trim()
-      if (actual !== edit.expect) {
-        throw new Error(`${edit.id}: 期望锚点 +${edit.offset} 行为 ${JSON.stringify(edit.expect)}，实际 ${JSON.stringify(actual)}`)
+    for (const one of (edit.variants ?? [edit]).flatMap((entry) => entry.edits ?? [entry])) {
+      if (one.lines.some((line) => typeof line !== 'string')) {
+        throw new Error(`${one.id}: lines 含非字符串项（多半是数组里多写了一个逗号，形成空洞）`)
       }
-      lines.splice(target + 1, 0, ...edit.lines)
-    } else if (edit.mode === 'replaceLine') {
-      lines.splice(at, 1, ...edit.lines)
-    } else {
-      throw new Error(`${edit.id}: 未知的编辑模式 ${edit.mode}`)
+      assertDictionaryContinued(one)
     }
+  }
+  const lines = source.split('\n')
+  for (const edit of EDITS) {
+    for (const one of resolveEdits(lines, edit)) applyOne(lines, one)
   }
   // 语法闸门放在纯函数出口，verify / apply / rebuild 三条路径全部自动继承——
   // 任何"能产出、但产不出合法 JS"的编辑规则都出不了这个函数（详见 assertParses 注释）。

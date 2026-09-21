@@ -19,6 +19,17 @@
 > **多包合并的 client bundle 里只要一个包语法坏了，整份 bundle 都不注册，页面里所有插件一起失效**。
 > 现在 `applyPatch` 出口强制过 `vm.Script` 语法闸门。细节见下文「产物不变量」。产物
 > `C6C1DCBC…` → `F1717A07…`（+2 字节 = 补回的两个逗号）。
+>
+> **2026-09-21（v2.2）：edit #5 升级为「双代变体」，补丁同时支持 `0.1.5-rc.x` 与 `0.1.6-alpha.2`。**
+> 官方在 0.1.6-alpha.2 把 model row 抽成独立组件 `ModelRow.tsx`，容量字段的渲染随之搬进组件内部，
+> 而 `testing` / `testResults` / `testModel` 这些状态留在 `ModelListEditor` —— 于是：
+> ① 原锚点 `editCapacity(index, "maxTokens", event.target.value);`（回调吃**事件对象**）在新版变成
+> `editCapacity(index, "maxTokens", text);`（回调吃**文本**）；② 原插入位置（内联 JSX 的 children 数组）
+> 在新版已不存在——那里是**组件的 props 对象**。因此 edit #5 改为 `variants` + `probe` 两代分支：
+> 新版走「Editor 侧把两块 UI 渲染成 ReactNode → 作为 `reasoningRow` prop 传给 ModelRow →
+> ModelRow 把它摆到容量字段之后」，闭包仍在 Editor，跨组件的是**已渲染好的节点**而非状态函数。
+> **两份 baseline 与三个常量均未变**（官方原版仍是 0.1.5-rc.1），legacy 分支逐字节不动，
+> `verify` 三行 PASS 照旧。实测两代真实产物上 `apply` 均成功（`0.1.5-rc.2`、`0.1.6-alpha.2`）。
 
 ## 为什么是「运行时补丁」而不是插件
 
@@ -39,7 +50,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| `patch.mjs` | **补丁规范**：7 条锚点编辑规则（5 处插入 + 2 处字典替换）+ CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
+| `patch.mjs` | **补丁规范**：7 条锚点编辑规则（5 处插入 + 2 处字典替换；其中 **#5 分两代变体**，见下文「双代变体」）+ CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建两份 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
 | `baseline/client.original.js` | DSH **0.1.5-rc.1** 官方原版 client.js（138,937 B，SHA-256 `A60FD863…`）。与安装目录的 `client.js.dsh-bak` 逐字节一致 |
 | `baseline/client.patched.js` | 应用补丁后的产物（148,924 B，SHA-256 `F1717A07…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
@@ -101,7 +112,7 @@ node ..\..\..\scripts\verify-all.mjs desktop
 | 2 | `ModelListEditor` state 区 | `testing` / `testResults` 两个 useState |
 | 3 | `askable` 前 | `testModel()`——**先** `probeViaHost`（真实可用性，六分类）；返回 null（插件未就绪）时**降级**为 `operations.discoverModels`（目录探测），并在文案尾附「探测服务未就绪」 |
 | 4 | 删除模型行处 | `testing` / `testResults` 的行号重排（防幽灵按钮） |
-| 5 | 高级编辑区（maxTokens 之后） | 思考强度 `<select>` + 测试按钮 + 结果文案 |
+| 5 | 高级编辑区（maxTokens 之后） | 思考强度 `<select>` + 测试按钮 + 结果文案。**分两代变体**（`variants` + `probe`）：`0.1.5-rc.x` 直接插入内联 JSX（1 条子编辑）；`0.1.6-alpha.2` 起改为「Editor 渲染成 ReactNode → `reasoningRow` prop → ModelRow 摆位」（2 条子编辑，成对生效） |
 | 6/7 | en / zh 字典 | 22 个词条（思考强度 / 继承提供方默认 / 不支持思考 / 测试连通性 / 测试中… / 可达·已列出 / 可达·未列出 / 探测服务未就绪 + 13 条探测类别文案） |
 
 语义：`inherit` = 不写字段、`disabled` = `reasoningEfforts: false`、其余 = `{off: null, [lvl]: lvl}`。
@@ -112,7 +123,39 @@ node ..\..\..\scripts\verify-all.mjs desktop
 `server-error` / `unknown` / `unsupported` / `no-credential` / `no-endpoint` / `no-model`。
 v1 的「原样回显错误串」已不再出现——那条路径只在降级时保留。
 
-## 产物不变量（三条，缺一不可）
+## 双代变体（edit #5 如何同时支持两个 DSH 版本）
+
+`EDITS` 的项有两种形态：**单条**（`{ id, mode, anchor, lines }`，自身即一次编辑）与
+**变体**（`{ id, variants: [{ probe, edits: [...] }] }`）。`probe` 是一行源码文本，trim 后全等且在
+源文件里出现即选中该变体；**没有任何 probe 命中就报错** —— 「两个已知版本都不匹配」必须响亮失败，
+因为静默跳过会让补丁「成功」而 UI 不在位，那要等用户打开设置页才发现。
+
+edit #5（思考强度 + 测试按钮）是唯一用到变体的：
+
+| 子编辑 | probe（选中条件） | 模式 | 插到哪里 |
+|---|---|---|---|
+| `reasoning-ui@inline-jsx` | `editCapacity(index, "maxTokens", event.target.value);` | `insertAfterOffset` | `ModelListEditor` 内联 JSX 的 children 数组，紧跟 maxTokens 输入框（锚点 +2 行的 `})]` 之后） |
+| `reasoning-ui@model-row-prop` | `editCapacity(index, "maxTokens", text);` | `insertBefore` | Editor 的 `<ModelRow>` props：插一个 `reasoningRow`（已渲染好的 `Fragment`） |
+| `reasoning-ui@model-row-slot` | 同上 | `replaceLine` | `ModelRow` 内部：把 `props.reasoningRow` 摆到容量字段 map 之后、`ModelInputTypes` 之前 |
+
+**新版为什么跨组件传节点，而不是把状态搬进组件**：`testing` / `testResults` / `testModel` 以及
+`patch`、`t`、`disabled`、`model`、`index` 全在 `ModelListEditor` 作用域里，而 `ModelRow` 是官方组件、
+props 契约固定。所以让**闭包留在 Editor**，跨组件传递的是**已渲染好的 ReactNode** ——
+`ModelRow` 只负责摆位置。另一处 `ModelRow` 调用点（`DeepSeekModelsEditor`）不传 `reasoningRow`，
+值为 `undefined`，React 对 undefined 子节点不渲染任何东西，**安全且无需改动它**。
+
+> **两条实测踩过的坑**（都撞在 `applyPatch` 出口的语法闸门上，值得记下）：
+> ① **锚点不能选 `onFieldChange`** —— `ModelRow` 被**两个编辑器**共用，那个锚点在 bundle 里命中 2 次，
+> 撞 `findUnique` 的唯一性要求；`inputLoading` 里的 `catalogProvider` 只有本编辑器有，实测唯一命中。
+> ② **`}, field)), (0, react_jsx_runtime.jsx)(ModelInputTypes, {` 这一行插不进独立行** ——
+> 它**行内**同时装着上一项的收尾（`.map(...)` 的 `)`）与下一项的开头：在它之前插入会落进
+> `.map()` 的参数里，在它之后插入会落进 `ModelInputTypes` 的 props 里。改用 `replaceLine` 整行重写，
+> 把节点放在两者之间。
+
+**legacy 分支逐字节不变**：0.1.5 走的分支与改造前完全一致，两份 baseline 与三个常量都未动，
+`verify` 仍报同一条 `F1717A07…`。因此这次改造**不影响当前运行环境**，只增加了一条未来路径。
+
+## 产物不变量（四条，缺一不可）
 
 `verify` 的 PASS 只说明这些不变量当前成立；任一条破了都必须先修再重打。
 
@@ -121,6 +164,7 @@ v1 的「原样回显错误串」已不再出现——那条路径只在降级�
 | 1 | 锚点唯一命中，`insertAfterOffset` 的期望行相符 | `findUnique` / `applyPatch` | 直接抛错，不瞎改 |
 | 2 | 编辑规则的 `lines` 无稀疏空洞；`replaceLine`（字典展开）除末行外每行都有尾逗号 | `applyPatch` 入口守卫 | 当场报出「哪条编辑的第几行缺尾逗号」 |
 | 3 | **产物是可解析的经典脚本** | `applyPatch` 出口 `assertParses`（`vm.Script`） | 语法闸门抛错；`status` 单独报「语法 非法」 |
+| 4 | **变体探测命中**：至少要有一个 `probe` 在源文件里 trim 后整行全等 | `resolveEdits` | 抛出「没有任何变体的探测锚点命中」并列出试过的 probe —— **不静默跳过** |
 
 ### 为什么「逐字节一致」不够（2026-09-19 事故复盘）
 
@@ -167,6 +211,14 @@ SHA 与常量一致、产物却是坏的）。`verify` 同时校验 `PATCHED_SHA
 > 也全部通过 —— 因此**未改动任何 EDITS**，只换了两份 baseline 并更新三个常量
 > （`BASELINE_DSH_VERSION` / `ORIGINAL_SHA256` / `PATCHED_SHA256`）。
 > 重建与重打各一次成功，`verify-all.mjs desktop` 4/4 通过。
+
+> **实操记录（2026-09-21，前瞻适配 0.1.6-alpha.2）**：在 alpha.2 的真实 npm 产物上，
+> 第 5 条编辑锚点**失效**（命中 0 次），其余 6 条**全部唯一命中**。按上文「双代变体」改造后，
+> 两代产物上 `apply` 均成功（`0.1.5-rc.2` 与 `0.1.6-alpha.2`）。
+> **本轮刻意不换 baseline** —— 当前运行环境仍是 0.1.5-rc.1，换掉会让补丁打不上当前环境；
+> 变体机制的意义正是「先把未来的路铺好，而不动脚下」。
+> **真正升到 0.1.6 时的动作**：`node rebuild-baseline.mjs` 重建两份 baseline → 同步三个常量 →
+> `verify` → `apply`；**`EDITS` 无需再改**（变体已覆盖两代）。
 
 > **事故记录（2026-09-19，v2 → v2.1）**：不是 DSH 升级，而是 v2 的编辑规则本身有缺陷。
 > 现场表现是浏览器 `Failed to load plugins` + 整串 `@deepseek-ai/dsh-client-*` 及自研插件
