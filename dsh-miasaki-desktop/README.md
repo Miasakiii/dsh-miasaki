@@ -87,6 +87,24 @@ node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
 切换：右下角悬浮按钮 → 悬停展开三主题；每个主题悬浮显示各自的介绍文案（不再全部是当前主题的提示），
 选择持久化于 localStorage，重启保持。
 
+## 软件头像（启动器图标）
+
+**在 DSH 页面的「设置 → 外观 → 软件头像」里换掉本应用在任务栏 / 窗口 / 托盘上的图标**，
+无需重建 EXE（2026-09-21 落地，appearance 线跨线消费端）。
+
+| 项 | 说明 |
+|---|---|
+| 入口 | DSH 页面 设置 → **外观** → 「软件头像」→ 上传图片 / 从清单里选 / 清除（appearance 线提供） |
+| 存储 | 图片归一化成 **PNG** 落在 `~/.dsh/miasaki-appearance/avatars/`，配置记在 `~/.dsh/miasaki-appearance/config.json` 的 `avatar.source` |
+| 生效面 | 主窗口图标（**任务栏**随之）+ **托盘**图标；改完 1.5s 巡检内跟随 |
+| 实现 | `src-tauri/src/launcher_icon.rs` —— 读配置 → PNG 解码（`png` crate，零新依赖）→ 中心裁方 + 盒式降采样（≤256px）→ `window.set_icon` + `tray.set_icon` |
+| 失败姿态 | 配置损坏 / 文件缺失 / 解码失败 → 一行日志 + 回退出厂图标，不阻断启动 |
+| **不含** | EXE 内嵌图标、桌面 / 开始菜单快捷方式的静态图标（构建期资源，只有重跑 `make-icons.mjs` + `npx tauri icon` 才能改）、页面 favicon |
+
+契约（配置路径 / 文件名白名单 / 目录）见
+[`../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md`](../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md)；
+改契约必须同时改 appearance 线的 `lib/avatar.js`（两侧各有单测钉同一组样本）。
+
 ## Q 版桌宠（Codex 风格）
 
 透明置顶小窗桌宠，随主题自动换角色：
@@ -235,6 +253,7 @@ desktop/
 ├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
    ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航 + fleet 脉冲看门狗（环境变量 MIASAKI_FLEET_PULSE）
+   ├─ src/launcher_icon.rs   # 软件头像 → 窗口/托盘图标（读 appearance 线配置，1.5s 巡检跟随）
    ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
    ├─ injected/theme-init.js # 构建产物（include_str! 注入，勿手改）
    └─ capabilities/          # 最小权限（core:default）

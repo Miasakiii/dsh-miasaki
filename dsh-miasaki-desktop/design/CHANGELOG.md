@@ -2,6 +2,36 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-21 · 软件头像 → 启动器图标（appearance 线跨线消费）
+
+**起因**：用户「外观设置里要可以设置软件头像，比如这个」（附图），澄清后落点是**桌面壳的启动器图标**
+（任务栏 / 窗口 / 托盘那一处）。上传与存储由 appearance 线负责（见该线 CHANGELOG 同日 M2.5 条目），
+本文是消费端 —— 这也是 desktop 线第一次**读别的线的配置**。
+
+- **新增 `src-tauri/src/launcher_icon.rs`**（含 6 例单测）
+  - **契约解析**：dshHome（非空白 `$DSH_HOME` 优先 → `%USERPROFILE%\.dsh`，与官方
+    `dsh-home-paths` 同口径）→ `<dshHome>/miasaki-appearance/config.json` 的 `avatar.source`
+    → 白名单文件名（复刻 JS 侧 `^[\w][\w.-]{0,80}\.png$` + percent 解码 + 单段路径）。
+  - **图片**：`png` crate 解码（**零新依赖** —— 桌宠图集本就在用）→ 中心裁方（图标必须是方的，
+    非方图会被系统拉伸）→ 超过 256px 时盒式降采样 → `Image::new_owned`。
+  - **应用**：`window.set_icon` + `app.tray_by_id("main-tray")` 取回句柄后 `set_icon`
+    （任务栏图标跟窗口图标走）。
+  - **跟随**：1.5s 巡检（与既有 pulse / hash 巡检同范式），幂等键 = 文件名 + mtime + 大小；
+    选轮询而非页面推 hash，是因为头像本质是**文件态**（用户可能直接换 `avatars/` 里的文件，
+    页面没开着也要生效）。
+  - **失败姿态**：配置损坏 / 文件缺失 / 解码失败 → 一行日志 + 回退出厂图标，**绝不阻断启动**。
+- **接线**：`main.rs` 的 setup 中，托盘 build 之后 `apply()` 一次（首次生效不等巡检）+
+  `spawn_watcher()`。出厂未设置时是 no-op（回退默认图标并去重），对既有外观零影响。
+- **验证**：`cargo check --bin miasaki --tests` 通过；`cargo test --bin miasaki`
+  **25 例全过**（新增 6：白名单一致性、百分号解码与坏转义不 panic、中心裁方取中、
+  降采样尺寸与颜色、坏 PNG 报错不 panic、源串解析）。**实机（上传 → 任务栏图标跟随）
+  待重启桌面壳后验收**。
+- **边界（明确不做）**：EXE 内嵌图标与桌面 / 开始菜单快捷方式的静态图标是构建期资源
+  （`make-icons.mjs` + `npx tauri icon`），运行时改不了；本模块改的是运行中的窗口与托盘图标。
+  该边界已写进 DSH 面板文案，避免用户误判成 bug。
+- 触摸点：`src-tauri/src/launcher_icon.rs`（新）、`src-tauri/src/main.rs`、`README.md`、
+  `../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md`、本文件。
+
 ## 2026-09-21 · 模型设置补丁 v2.2：双代变体（同时支持 0.1.5-rc.x 与 0.1.6-alpha.2）
 
 **起因**：官方仓库增量复查发现 `0.1.6-alpha.2` 上 `patches/dsh-client-ui-settings-models/` 的

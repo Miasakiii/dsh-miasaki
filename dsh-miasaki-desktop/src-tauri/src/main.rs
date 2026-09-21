@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod assets;
+mod launcher_icon;
 mod pet_native;
 
 use std::{
@@ -1305,6 +1306,13 @@ fn main() {
                     .build(app)
                     .expect("tray build");
             }
+
+            // 软件头像 → 启动器图标（appearance 线的桌面消费端，2026-09-12）：
+            // 窗口与托盘都在位后才能设图标；此处先按当前配置应用一次，随后交给巡检跟随变化。
+            // 出厂未设置时是 no-op（apply 内部回退出厂图标并去重），不影响既有外观。
+            let icon_app = app.handle().clone();
+            launcher_icon::apply(&icon_app);
+            launcher_icon::spawn_watcher(icon_app);
 
             // 原生分层窗口桌宠（与主窗同进程，零 IPC 同步）
             app.manage(pet_native::NativePet::spawn(app.handle().clone()));
