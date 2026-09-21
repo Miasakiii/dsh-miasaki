@@ -1,5 +1,10 @@
 # DSH 升级评估：0.1.6-alpha.1（实测版）
 
+> ⚠️ **本版结论已被取代**（2026-09-21）：本文实测的是 `0.1.6-alpha.1`，结论为「6 个本体补丁全部零改动」。
+> 09-21 在 `0.1.6-alpha.2` 上重测，**`settings-models` 补丁的 `reasoning-ui` 锚点已失效**（官方重构了
+> `ModelListEditor` 的容量字段渲染），升级成本不再是"纯机械"。
+> 现行版本：[`dsh-0.1.6-upgrade-assessment-2026-09-21.md`](dsh-0.1.6-upgrade-assessment-2026-09-21.md)。
+
 - 日期：2026-09-16
 - 当前运行：`@deepseek-ai/dsh@0.1.5-rc.1`（= npm `latest`）
 - 候选：`0.1.6-alpha.1`（`alpha` 轨）／`0.1.5-rc.2`（`next` 轨）

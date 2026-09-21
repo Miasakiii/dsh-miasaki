@@ -1,5 +1,10 @@
 # 官方仓库复查：0.1.6-alpha.1 与两条线的撞车预警
 
+> ⚠️ **本版时点与部分结论已被取代**（2026-09-21）：本文写于 `latest = 0.1.5-rc.1`、`alpha = 0.1.6-alpha.1`；
+> 且 §6.2 担心的「引导页会出现两个终端入口」经查明**不会发生**——`SidebarRightTabRegistry` 的 kind 裁决
+> 使我们的 `extension` 压过官方 `builtin`，官方终端被**遮蔽**。
+> 现行版本：[`dsh-official-repo-review-2026-09-21.md`](dsh-official-repo-review-2026-09-21.md)。**引用前请先读 09-21 版。**
+
 - 日期：2026-09-16
 - 调研者：总指挥（Miasaki 会话）
 - 上一份同类：`dsh-official-repo-review-2026-08-17-rc7.md`（08-17，rc.7）
