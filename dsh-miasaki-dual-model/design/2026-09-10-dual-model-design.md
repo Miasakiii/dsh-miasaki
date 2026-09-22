@@ -540,6 +540,15 @@ client 半实测该 slot 提供 **13 个 props**：
 
 **对 §5 UI 设计的意义**：M1 的右下角控件因此可直接拿到 `sessionId`、`inputActions`（含 `submit` / `addImages` / `removeImage`）、`useInput`（`imageIds` / `draft` / `phase`）、`useConversation`。**读取会话内输入状态无需新增 host 数据通道**——host 通道只需承担「模型能力查询」这一件事。
 
+> **契约修正（2026-09-22 实测）**：`useInput` 等 `useXxx` 属 **SnapshotSelectorHook**，
+> 必须**带 selector 调用**——`bindSnapshotSelector` 把入参原样透传给
+> `useSyncExternalStoreWithSelector`（无 identity 兜底），无参调用会在订阅回调里抛
+> `TypeError: selector is not a function`（bundle 内表现为 `l is not a function`），
+> 整个控件被 slot error boundary 吞掉、按钮完全不渲染。
+> 另：`InputState` 的草稿附件字段名是 **`attachmentIds`**（本设计文档 8.4 上下文所提
+> `imageIds` 不存在）；`conversation.input.right` 的 kit 不提供 `resolveDraftAttachments`，
+> 无法区分图片/文件，UI 计数只能按附件口径。
+
 ### 8.5 剩余待验证
 
 1. **plugin 来源消息注入 API 的具体签名**（路线 2 备用）—— `agent.inject` 已确认存在（arity=1），但参数结构与可用标记（`MessageSourceMap.plugin` + `ContextFormed.form`）需进一步确认。**已选定的路线 1 不依赖它。**

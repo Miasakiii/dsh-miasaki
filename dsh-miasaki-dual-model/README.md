@@ -4,7 +4,13 @@
 
 ## 状态
 
-**M1 实现完成，待实机验证**（2026-09-10）。M0 六项技术假设已实测全部成立，
+**0.1.1-miasaki.0（2026-09-22）**：M1 的「配置模型」控件渲染崩溃已修复——
+标准 kit hook `useInput` 必须带 selector 调用（`bindSnapshotSelector` 无 identity 兜底，
+无参调用抛 `selector is not a function`，控件被 slot error boundary 吞掉）；
+字段名由 `imageIds` 更正为 `attachmentIds`。修复后按钮 / 面板 / 下拉在真实 GUI 实测可用，
+详见 [`design/CHANGELOG.md`](design/CHANGELOG.md) 2026-09-22 条目。
+
+M1 原始实现见 2026-09-10 记录；M0 六项技术假设已实测全部成立，
 设计定稿见 [`design/2026-09-10-dual-model-design.md`](design/2026-09-10-dual-model-design.md)（§8 为 M0 实测结果）。
 
 ## 解决什么

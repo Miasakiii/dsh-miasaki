@@ -1,5 +1,33 @@
 # 变更记录 — dsh-miasaki-dual-model
 
+## 2026-09-22
+
+### 0.1.1-miasaki.0 — 修复「配置模型」控件渲染崩溃（根因：标准 hook 无 selector 调用）
+
+**症状**：输入框右下角「双模型」控件完全不渲染，浏览器控制台持续报
+`TypeError: l is not a function` → `slot entry crashed in 'conversation.input.right'`。
+
+**根因**（堆栈定位到 bundle 第 11727 行 `a = l(a)`，即
+`useSyncExternalStoreWithSelector` 内 `selector(nextSnapshot)`）：
+`client.js` 以 `props.useInput()` **无参**调用标准 kit hook。cordis-client-runner 的
+`bindSnapshotSelector` 把入参**原样透传**给 `useSyncExternalStoreWithSelector`
+（无 identity 兜底），selector 为 `undefined`，订阅回调触发即抛
+「selector is not a function」，整个控件被 error boundary 吞掉。
+设计文档 §5 只列了 props 名，未记录「SnapshotSelectorHook 必须带 selector」这一契约。
+
+**修复**：
+1. `useInput` 改为带 selector 调用：`useInputHook((s) => s?.attachmentIds?.length ?? 0)`；
+   缺失时以常量兜底钩子 `() => 0` 保持 Hook 调用顺序稳定。
+2. 修正字段名：`InputState` 的草稿附件字段是 **`attachmentIds`**（原代码读 `imageIds`，
+   恒为 undefined，附件计数永远是 0）。本槽位 kit 不提供 `resolveDraftAttachments`，
+   无法细分图片/文件，文案随之由「N 张图片」改为「N 个附件」（计数可上报的上界）。
+3. 设计文档 §5 追加「标准 hook 必须带 selector」的契约注记（见 2026-09-10 文档附录）。
+
+**验证**：真实 GUI 重载后按钮渲染、面板展开、状态行与 10 个视觉模型下拉全部就位，
+控制台不再出现该 TypeError；host 路由 `/dual-model/api/state`  unchanged。
+`npm test`（host 侧 lib 单测）本机沙箱禁用子进程 spawn（EPERM），未跑；
+本次改动仅 client.js，不触及测试覆盖的 lib/。
+
 ## 2026-09-10
 
 ### M1 实现（首次落代码）

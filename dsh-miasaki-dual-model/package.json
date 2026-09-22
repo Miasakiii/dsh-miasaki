@@ -1,6 +1,6 @@
 {
   "name": "@miasaki/dsh-dual-model",
-  "version": "0.1.0-miasaki.0",
+  "version": "0.1.1-miasaki.0",
   "description": "DSH web dual-model plugin: session-level primary + assist model, so images can be attached whenever either one accepts them.",
   "type": "module",
   "main": "index.js",

@@ -61,24 +61,32 @@ window.__ModuleLoader__.load({
     }
 
     /** 状态行文案 —— 把"隐式降级"变成显式契约。 */
-    function statusLine(state, draftImages) {
+    function statusLine(state, draftAttachments) {
       if (state === null) return '正在读取状态…'
       if (state.enabled !== true) return '已关闭：图片只由主模型处理'
       const assistName = state.assistName || (state.assist && state.assist.model) || '辅助模型'
       if (state.imageOwner === 'none') return '两个模型都不支持图片输入'
       if (state.imageOwner === 'assist') {
-        return draftImages > 0
-          ? `${draftImages} 张图片将由「${assistName}」处理`
-          : `图片将交给「${assistName}」处理`
+        return draftAttachments > 0
+          ? `${draftAttachments} 个附件将由「${assistName}」处理`
+          : `附件将交给「${assistName}」处理`
       }
-      return draftImages > 0 ? `${draftImages} 张图片由主模型直接处理` : '主模型可直接读图'
+      return draftAttachments > 0 ? `${draftAttachments} 个附件由主模型直接处理` : '主模型可直接读图'
     }
 
     function DualModelControl(props) {
       const sessionId = props && props.sessionId !== undefined ? String(props.sessionId) : ''
-      // `useInput` 是 conversation.input.right 的标准 props（实测恒在），故无条件调用。
-      const input = typeof props.useInput === 'function' ? props.useInput() : null
-      const draftImages = input && Array.isArray(input.imageIds) ? input.imageIds.length : 0
+      // `useInput` 是 conversation.input.right 的标准 props（实测恒在），但**必须带
+      // selector 调用**：标准 kit 的 hook 是 SnapshotSelectorHook，内部直接转发给
+      // useSyncExternalStoreWithSelector（无 identity 兜底）——无参调用会在订阅回调里
+      // 抛 `selector is not a function`，整个控件渲染崩溃（2026-09-22 实操修复）。
+      // 用常量兜底钩子保证 Hook 调用顺序稳定（props 在条目生命周期内不变，但兜底更稳）。
+      const useInputHook = typeof props.useInput === 'function' ? props.useInput : () => 0
+      // InputState 的草稿附件字段名是 `attachmentIds`（不是 imageIds）；
+      // 本槽位的 kit 不提供 resolveDraftAttachments，无法细分图片/文件，故按附件计数。
+      const draftAttachments = useInputHook((snapshot) => (
+        snapshot && Array.isArray(snapshot.attachmentIds) ? snapshot.attachmentIds.length : 0
+      ))
 
       const [open, setOpen] = react.useState(false)
       const [state, setState] = react.useState(null)
@@ -114,7 +122,7 @@ window.__ModuleLoader__.load({
 
       const button = react.createElement('button', {
         type: 'button',
-        title: state === null ? '双模型' : statusLine(state, draftImages),
+        title: state === null ? '双模型' : statusLine(state, draftAttachments),
         'aria-expanded': open,
         onClick: () => setOpen(!open),
         style: {
@@ -164,7 +172,7 @@ window.__ModuleLoader__.load({
       children.push(react.createElement('div', {
         key: 'status',
         style: { fontSize: '11px', lineHeight: '1.5', color, marginBottom: '8px' },
-      }, statusLine(state, draftImages)))
+      }, statusLine(state, draftAttachments)))
 
       // 辅助模型选择
       const visionModels = state !== null && Array.isArray(state.visionModels) ? state.visionModels : []
