@@ -2,6 +2,13 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-22 · 文档整理（删除冗余上游产物）
+
+- **删除**：`docs/images/`（两张全仓零引用孤儿图 `native-webui.jpg` / `synapse-map.jpg`，运行时与构建链均无引用）；`docs/development.md`（上游 `dsh-synapse` 的发布指南，描述本仓不存在的三套 GitHub workflow 与 npm 发布流程，对本 fork 零适用性）。
+- **死链修复**：zh-CN / en 用户手册「开发与发布」段原指向已删的 `../development.md`，改为指向本仓真实入口 `node ..\..\..\scripts\verify-all.mjs canvas`；`architecture.md` 的相关文档列表同步移除该链接。
+- **事实修正**（`docs/architecture.md`）：按 `cordis.patch.yml` 与 README 口径，画布元数据目录 `$DSH_HOME/synapse/workspaces.json` → `$DSH_HOME/miasaki-canvas/workspaces.json`；Host 校验端点 `/synapse` → `/canvas`；文档顶部补上游改编说明横幅（与 zh-CN 手册同款）。
+- 代码零改动，`node ..\scripts\verify-all.mjs canvas` 全绿；README「目录结构」对 `docs/` 的描述（上游用户手册 zh-CN / en）依然成立。
+
 ## 2026-09-12（二）
 
 - **视觉与交互精细化 V1–V4 实施（版本升至 `0.5.0-miasaki.6`）**：按 [设计文档](2026-09-12-canvas-visual-refinement.md)（同日草案 v0.1，状态已更新为"已实施"）落地四阶段，全部纯表现层，**零 schema 变更、零新依赖、`CARD_WIDTH/HEIGHT/GAP_Y` 未动**：

@@ -1,5 +1,10 @@
 # Architecture and runtime boundaries
 
+> **⚠️ 本文档为上游 [dsh-synapse](https://github.com/liangmianya/dsh-synapse) v0.4.1 原文，供参考。**
+> 本仓产物是其二开版 **`@miasaki/dsh-canvas`**，以下事实已按本 fork 修正：画布元数据目录为
+> `$DSH_HOME/miasaki-canvas/`（与上游 `$DSH_HOME/synapse/` 零共享），Web 端点为 `/canvas`
+> （上游为 `/synapse`）。其余架构描述（投影模型、工具折叠、边界红线）与上游一致。
+
 ## Purpose
 
 `dsh-synapse` is a presentation and organization layer for DeepSeek Harness conversations. It turns existing DSH sessions, turns, and forks into a visual map without replacing the systems that own those conversations.
@@ -30,10 +35,10 @@ Synapse projects committed DSH events into cards and sends user actions back thr
 
 ## Canvas metadata
 
-By default, Synapse stores canvas metadata at:
+By default, the canvas stores metadata at (this fork; upstream used `$DSH_HOME/synapse/`):
 
 ```text
-$DSH_HOME/synapse/workspaces.json
+$DSH_HOME/miasaki-canvas/workspaces.json
 ```
 
 The file contains organizational state such as workspace mapping, card layout, and fork anchors. It does not replace session logs.
@@ -71,7 +76,7 @@ Private-browsing restrictions or local-storage failures must not prevent DSH con
 
 ## Host validation
 
-The `/synapse` endpoint always accepts `localhost` and `127.0.0.1`. Additional LAN or proxy authorities must be listed in `trustedHosts` as a host or `host:port` value.
+The `/canvas` endpoint always accepts `localhost` and `127.0.0.1`. Additional LAN or proxy authorities must be listed in `trustedHosts` as a host or `host:port` value.
 
 This validation is part of the Web surface and does not replace broader network access controls.
 
@@ -100,5 +105,4 @@ As a result, the plugin has no direct model-experience effect and does not inval
 
 - [Chinese user guide](zh-CN/README.md)
 - [English user guide](en/README.md)
-- [Development and release guide](development.md)
 - [Project overview](../README.md)

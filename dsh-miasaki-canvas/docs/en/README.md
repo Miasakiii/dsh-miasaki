@@ -156,6 +156,6 @@ Does not invalidate. The plugin never changes request headers, system prompts, o
 
 ## Development and releases
 
-Contributor commands, GitHub Actions, and npm publishing are documented in the [Development and release guide](../development.md).
+This fork (`@miasaki/dsh-canvas`) publishes no npm package and has no separate CI; syntax validation and tests run through the repo-level entry `node ..\..\..\scripts\verify-all.mjs canvas` (or `corepack pnpm test` in this directory).
 
 Return to the [project overview](../../README.md).

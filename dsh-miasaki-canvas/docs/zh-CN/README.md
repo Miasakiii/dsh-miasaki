@@ -157,6 +157,6 @@ $DSH_HOME/synapse/
 
 ## 开发与发布
 
-贡献者命令、GitHub Actions 和 npm 发布流程见[开发与发布指南](../development.md)。
+本 fork（`@miasaki/dsh-canvas`）不发布 npm 包、也没有独立的 CI；语法校验与测试统一走仓库根入口 `node ..\..\..\scripts\verify-all.mjs canvas`（或在本目录执行 `corepack pnpm test`）。
 
 返回[项目主页](../../README.md)。
