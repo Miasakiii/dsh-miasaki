@@ -2,6 +2,71 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-22 · 设置页「模型」增强三件套 + 免费模型池合体（补丁 v3 / 插件 v0.2.0 / v0.3.0）
+
+**起因**：用户「设置页里的模型页优化一下，还有功能加强一下，现在配置模型会失败，查查原因」。
+
+**「配置模型失败」根因不在模型页**：经 `/api` RPC 直连实测，官方写入链路完全正常
+（`settings.mutate` 整数组 set ok、思考强度字段过 schema、目录探测 ok）。真正的崩溃是
+`@miasaki/dsh-dual-model` 控件：`props.useInput()` **无 selector 调用**触发
+`TypeError: l is not a function`（bundle 11727 行 = `useSyncExternalStoreWithSelector`
+内的 `selector(...)`；runner 的 `bindSnapshotSelector` 无 identity 兜底）。
+修复与实测见 dual-model 线 CHANGELOG 同日条目；输入状态字段名同步由 `imageIds`
+更正为 `attachmentIds`。
+
+**模型页本体三处增强**（`patches/dsh-client-ui-settings-models/`，EDITS 7 → 13 条）：
+
+| 项 | 内容 |
+|---|---|
+| 无 Key 引导 | 缺 key 行的小点 tooltip 与环境变量名（`API 密钥缺失（OPENROUTER_API_KEY）`）；编辑卡片密钥区下方一行可操作提示（点名 ref + 后果）。针对实测短板：openrouter 配了 21 个模型但 `OPENROUTER_API_KEY` 未配置，此前整页只有一个灰点 |
+| 思考强度可读化 | 「继承提供方默认」选项显示**当前生效值**（未声明 / 具体等级）——`catalogProps` 新增 `reasoningDefaultOf(id)` 解析器（按 id 查解析后命名空间值的同 id 条目），标签由模块级 `reasoningInheritLabel()` 生成。不猜用户看不见的默认值 |
+| 批量测试 + 能力徽标 | 模型列表头「获取可用模型」右侧新增「测试全部」（顺序跑探针，逐行出结果）；容量区行首渲染**视觉 / 推理**徽标。徽标数据来自 model-probe 插件新路由 `POST /model-probe-api/capabilities`（v0.2.0，读 `llm.resolveModelInfo`，零提供商请求、免凭据、缺元数据不猜），路由 404 时静默无徽标 |
+
+**免费模型池合体（C 项，零补丁改动）**：baseline 0.1.5-rc.1 的 models section 本就声明并渲染
+`settings.models.footer` 列表槽 —— `dsh-free-model-pool`（v0.3.0）改为**优先注册到那里**
+（与模型页合体、少一个设置栏），footer 注册失败（补丁缺席）才回退自有 `settings.section`；
+两目标互斥、失败日志只记一次。
+
+**踩坑记录**（都被工具链当场拦住）：① 字典新增词条后，原末行缺尾逗号、且新行的逗号必须写在
+**字符串内部**（`assertDictionaryContinued` 两连拦）；② 密钥失败段是 children 数组最后一个
+元素（无尾逗号），不能简单后插——改插它前面（`vm.Script` 语法闸门拦下 `Unexpected identifier`）；
+③ 误用 replace_all 改 options 行差点删掉整个等級数组，且留下 `',,` 稀疏空洞
+（`applyPatch` 的稀疏守卫会炸）。**教训：EDITS 的多行改动优先用「拆首行 / 插前面」，
+不要整句 replace_all。**
+
+**验证**：`node patch.mjs verify` 三行 PASS（13 条编辑，golden `7D7D8494…` 154,284 B）；
+`resync` 落安装目录后首页 bundle（rev `77f6f2945c12`）九项新功能字符串全量命中；
+`verify-all.mjs desktop` 11/11 PASS（model-probe 单测 18 → 20 例，新增 capabilityFlags 两例）。
+**待用户执行**：刷新页面（client 半 HMR 已推）；**重启 `dsh web`** 后 capabilities 路由激活、
+徽标开始显示（重启前按钮/提示/思考强度均已可用，徽标静默缺席属预期降级）。
+
+触摸点：`patches/dsh-client-ui-settings-models/{patch.mjs,README.md,baseline/client.patched.js}`、
+`plugins/dsh-model-probe/{lib/index.js,test/probe.test.js,README.md,package.json}`（v0.2.0）、
+`plugins/dsh-free-model-pool/{lib/client.js,package.json}`（v0.3.0）、`README.md`、本文件。
+另见 dual-model 线同日条目（「配置模型失败」的真正根因）。
+
+## 2026-09-22 · session-log-move v0.1.1：官方接管后停止注册冲突刷屏
+
+**起因**：排查「设置 → 模型」相关故障时发现控制台被 `dsh-session-log-move:
+header register failed` 刷屏（每次页面加载约 25+ 条，持续 30s 重试窗口）。
+
+**根因**：DSH 0.1.5-rc.1 起官方自带 `@deepseek-ai/dsh-session-log-export`（bundle 内 id `Z8`），
+已自行注册 `conversation.session.header.utilities` 的 `session-log-download` 条目——
+本插件「同 id 替换隐藏官方按钮」的做法从此**永远冲突**（`already has an entry …
+registered by Z8`）。旧代码把每次失败都 `console.error`，叠加 60 次 × 500ms 重试，
+刷屏掩盖真正的问题。
+
+**修复**（`plugins/dsh-session-log-move/lib/client.js`，v0.1.1）：
+- 「重复 id」判定为**永久失败**：`headerPermanentlyBlocked` 后不再重试；
+- 失败日志整个 fiber **只记一次**（`headerErrorLogged`），slot 未声明的短暂窗口仍允许重试；
+- 轨迹页 DOM 注入（MutationObserver + 重试）逻辑不变；官方按钮可见性随官方包，
+  本插件不再试图隐藏（也隐藏不了）。
+
+**验证**：真实 GUI 重载后该插件的错误从 ~25 条/次降至 0–1 条；bundle 内容核对
+（`headerPermanentlyBlocked` 在场）确认 host 吐出的已是新版。
+同步方式：file: 依赖在 profile 顶层是普通拷贝——已 `cp` 覆盖
+`%USERPROFILE%\.dsh\profiles\web\node_modules\dsh-session-log-move/lib/client.js`。
+
 ## 2026-09-21 · 软件头像 → 启动器图标（appearance 线跨线消费）
 
 **起因**：用户「外观设置里要可以设置软件头像，比如这个」（附图），澄清后落点是**桌面壳的启动器图标**

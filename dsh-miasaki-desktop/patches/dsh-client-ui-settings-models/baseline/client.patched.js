@@ -477,6 +477,18 @@ window.__ModuleLoader__.load({
 			if (choice === "disabled") return false;
 			return { off: null, [choice]: choice };
 		}
+		/**
+		 * The inherit option's label, naming what inherit currently resolves to
+		 * for this row. The resolver comes from the card (the resolved namespace
+		 * value); an absent resolver or an absent declaration renders as "none",
+		 * because guessing a default the user cannot see is the bug this avoids.
+		 */
+		function reasoningInheritLabel(model, props, t) {
+			const resolved = props.reasoningDefaultOf === void 0 ? "inherit" : props.reasoningDefaultOf(textOf(model, "id"));
+			if (resolved === "disabled") return `${t("modelReasoningInherit")}（${t("modelReasoningDisabled")}）`;
+			if (resolved === "inherit") return `${t("modelReasoningInherit")}（${t("modelReasoningNone")}）`;
+			return `${t("modelReasoningInherit")}（${resolved}）`;
+		}
 		/** CSS class for one connectivity result: the success or error tone. */
 		function testResultClass(ok, stylesRef) {
 			return ok ? stylesRef["savedNotice"] : stylesRef["error"];
@@ -638,6 +650,8 @@ window.__ModuleLoader__.load({
 			const [editing, setEditing] = (0, react.useState)(/* @__PURE__ */ new Map());
 			const [testing, setTesting] = (0, react.useState)(/* @__PURE__ */ new Set());
 			const [testResults, setTestResults] = (0, react.useState)(/* @__PURE__ */ new Map());
+			const [capabilities, setCapabilities] = (0, react.useState)(/* @__PURE__ */ new Map());
+			const [testingAll, setTestingAll] = (0, react.useState)(false);
 			/** Buffer key for one capacity field; the row half moves when rows do. */
 			const bufferKey = (index, field) => `${String(index)}:${field}`;
 			const editCapacity = (index, field, text) => {
@@ -776,6 +790,41 @@ window.__ModuleLoader__.load({
 					});
 				}
 			};
+			const capabilityKey = models.map((model) => textOf(model, "id").trim()).filter((id) => id.length > 0).join("\u0000");
+			const loadCapabilities = async () => {
+				if (capabilityKey.length === 0) return;
+				try {
+					const response = await fetch("/model-probe-api/capabilities", {
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: JSON.stringify({
+							provider: probe.provider === void 0 ? void 0 : probe.provider,
+							baseURL: probe.baseURL === void 0 || probe.baseURL.length === 0 ? void 0 : probe.baseURL,
+							api: probe.api === void 0 ? void 0 : probe.api,
+							models: capabilityKey.split("\u0000")
+						})
+					});
+					if (response.status !== 200) return;
+					const answer = await response.json();
+					if (answer === null || typeof answer !== "object" || answer.ok !== true || answer.models === void 0) return;
+					setCapabilities(new Map(Object.entries(answer.models)));
+				} catch {
+					/* 探测插件缺席（404/未重启）：不显示徽标，其余功能不受影响 */
+				}
+			};
+			(0, react.useEffect)(() => {
+				loadCapabilities();
+			}, [capabilityKey]);
+			const testAllModels = async () => {
+				const targets = models.map((model, at) => ({ at, id: textOf(model, "id").trim() })).filter((row) => row.id.length > 0);
+				if (targets.length === 0 || testingAll) return;
+				setTestingAll(true);
+				try {
+					for (const target of targets) await testModel(target.at, models[target.at]);
+				} finally {
+					setTestingAll(false);
+				}
+			};
 			const askable = probe.provider !== void 0 || probe.baseURL !== void 0 && probe.baseURL.length > 0;
 			return (0, react_jsx_runtime.jsxs)("section", {
 				className: ModelsSection_module_css_default["modelCatalog"],
@@ -811,6 +860,16 @@ window.__ModuleLoader__.load({
 								},
 								children: busy ? t("fetching") : t("fetchModels")
 							})
+							(0, react_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: ModelsSection_module_css_default["linkButton"],
+								disabled: disabled || busy || testingAll || !askable || props.probeBlocked !== void 0 || models.length === 0,
+								title: t("testAllModels"),
+								onClick: () => {
+									testAllModels();
+								},
+								children: testingAll ? t("testingAll") : t("testAllModels")
+							}),
 						]
 					}),
 					models.length === 0 ? (0, react_jsx_runtime.jsx)("p", {
@@ -926,6 +985,13 @@ window.__ModuleLoader__.load({
 										editCapacity(index, "maxTokens", event.target.value);
 									}
 								})]
+							}),
+							capabilities.get(textOf(model, "id")) === void 0 ? null : (0, react_jsx_runtime.jsxs)("span", {
+								className: ModelsSection_module_css_default["modelField"],
+								children: [
+									capabilities.get(textOf(model, "id")).image === true ? (0, react_jsx_runtime.jsx)("span", { className: `${ModelsSection_module_css_default["rowTag"]}`, title: t("capVisionTitle"), children: t("capVision") }) : null,
+									capabilities.get(textOf(model, "id")).reasoning === true ? (0, react_jsx_runtime.jsx)("span", { className: `${ModelsSection_module_css_default["rowTag"]}`, title: t("capReasoningTitle"), children: t("capReasoning") }) : null
+								]
 							}), (0, react_jsx_runtime.jsxs)("label", {
 								className: ModelsSection_module_css_default["modelField"],
 								children: [(0, react_jsx_runtime.jsx)("span", {
@@ -941,7 +1007,7 @@ window.__ModuleLoader__.load({
 										if (next === void 0) patch(index, { reasoningEfforts: void 0 });
 										else patch(index, { reasoningEfforts: next });
 									},
-									children: [...REASONING_LEVELS.map((level) => (0, react_jsx_runtime.jsx)("option", { key: level, value: level, children: level })), (0, react_jsx_runtime.jsx)("option", { value: "inherit", children: t("modelReasoningInherit") }), (0, react_jsx_runtime.jsx)("option", { value: "disabled", children: t("modelReasoningDisabled") })]
+									children: [...REASONING_LEVELS.map((level) => (0, react_jsx_runtime.jsx)("option", { key: level, value: level, children: level })), (0, react_jsx_runtime.jsx)("option", { value: "inherit", children: reasoningInheritLabel(model, props, t) }), (0, react_jsx_runtime.jsx)("option", { value: "disabled", children: t("modelReasoningDisabled") })]
 								})]
 							}), (0, react_jsx_runtime.jsxs)("span", {
 								children: [(0, react_jsx_runtime.jsx)("button", {
@@ -1770,6 +1836,11 @@ window.__ModuleLoader__.load({
 					onChange: (next) => {
 						setDraft((current) => schema.setPath(current, ["models"], next));
 					},
+					reasoningDefaultOf: (id) => {
+						const route = namespace !== void 0 && namespace.value !== void 0 && namespace.value.providers !== void 0 ? namespace.value.providers[props.provider] : void 0;
+						const found = route !== void 0 && Array.isArray(route.models) ? route.models.find((entry) => entry !== void 0 && entry !== null && entry.id === id) : void 0;
+						return found === void 0 ? "inherit" : reasoningChoice(found);
+					},
 					onReset: () => {
 						setDraft((current) => schema.deletePath(current, ["models"]));
 					}
@@ -1796,6 +1867,10 @@ window.__ModuleLoader__.load({
 								setKeyDraft(event.target.value);
 							}
 						}),
+						keyState !== void 0 && keyState.configured !== true && keyValue.length === 0 ? (0, react_jsx_runtime.jsx)("p", {
+							className: ModelsSection_module_css_default["advancedHint"],
+							children: `${t("credentialMissingHint")}${keyRef}${t("credentialMissingTail")}`
+						}) : null,
 						shownKeyFailure === void 0 ? null : (0, react_jsx_runtime.jsx)("p", {
 							className: ModelsSection_module_css_default["error"],
 							children: t(shownKeyFailure)
@@ -2200,7 +2275,7 @@ window.__ModuleLoader__.load({
 													className: `${ModelsSection_module_css_default["credentialDot"]} ${ModelsSection_module_css_default["credentialDotMissing"]}`,
 													role: "img",
 													"aria-label": t("credentialMissing"),
-													title: t("credentialMissing")
+													title: `${t("credentialMissing")}（${row.apiKeyEnv}）`
 												}) : null
 											]
 										}), (0, react_jsx_runtime.jsxs)("span", {
@@ -2934,7 +3009,16 @@ window.__ModuleLoader__.load({
 			testProbeNoEndpoint: "No API address configured",
 			testProbeNoModel: "Model ID is required",
 			testProbeUnknown: "Probe did not pass",
-			testCatalogFallback: " (probe service unavailable — fell back to the catalog)"
+			testCatalogFallback: " (probe service unavailable — fell back to the catalog)",
+			credentialMissingHint: "No API key configured — enter one above, or set the environment variable ",
+			credentialMissingTail: " before launch. Without it this provider's models are unusable, and a connectivity test fails for lack of a credential.",
+			modelReasoningNone: "none declared",
+			testAllModels: "Test all",
+			testingAll: "Testing…",
+			capVision: "vision",
+			capReasoning: "reasoning",
+			capVisionTitle: "This model declares image input",
+			capReasoningTitle: "This model declares selectable reasoning effort"
 		};
 		/** Chinese strings (same keys as {@link en}). */
 		const zh = {
@@ -3059,7 +3143,16 @@ window.__ModuleLoader__.load({
 			testProbeNoEndpoint: "缺少 API 地址",
 			testProbeNoModel: "模型 ID 不能为空",
 			testProbeUnknown: "探测未通过",
-			testCatalogFallback: "（探测服务未就绪，已回退目录探测）"
+			testCatalogFallback: "（探测服务未就绪，已回退目录探测）",
+			credentialMissingHint: "未配置 API Key —— 请在上方填写，或在启动前设置环境变量 ",
+			credentialMissingTail: " 。未配置时该提供方下的模型不可用，「测试连通性」也会因缺少凭据而失败。",
+			modelReasoningNone: "未声明",
+			testAllModels: "测试全部",
+			testingAll: "测试中…",
+			capVision: "视觉",
+			capReasoning: "推理",
+			capVisionTitle: "该模型声明支持图片输入",
+			capReasoningTitle: "该模型声明可调思考强度"
 		};
 		//#endregion
 		//#region lib/types/client/index.js

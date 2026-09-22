@@ -31,8 +31,28 @@
 > **两份 baseline 与三个常量均未变**（官方原版仍是 0.1.5-rc.1），legacy 分支逐字节不动，
 > `verify` 三行 PASS 照旧。实测两代真实产物上 `apply` 均成功（`0.1.5-rc.2`、`0.1.6-alpha.2`）。
 
-## 为什么是「运行时补丁」而不是插件
+> **2026-09-22（v3）：模型页三件事——无 Key 引导 / 思考强度可读化 / 批量测试与能力徽标。**
+> 用户报「配置模型会失败」。排查确认**官方写入链路本身是好的**（`settings.mutate` 整数组 set
+> 实测 ok），真正的崩溃在 dual-model 控件（另线修复，见其 CHANGELOG）。顺着这条线索把模型页
+> 本身的三处短板一并补上，全部走本补丁的既有形态（EDITS + 语法闸门 + 黄金产物）：
+>
+> | 新 edit | 内容 | 数据来自 |
+> |---|---|---|
+> | `no-key-row-hint` | 缺 key 行的小点 tooltip 点名环境变量（如 `OPENROUTER_API_KEY`） | 行上原有 `row.apiKeyEnv` |
+> | `no-key-card-hint` | 编辑卡片密钥区下方一行可操作提示（点名 ref + 后果） | `keyState` / `keyRef` |
+> | `reasoning-default-resolver` | `catalogProps` 增加 `reasoningDefaultOf(id)`：按 id 在**解析后**命名空间值里找同 id 条目 | `namespace.value` |
+> | `reasoningInheritLabel`（edit #1 助手） | 「继承」选项显示**当前生效值**（未声明 / 具体等级） | 上述解析器 |
+> | `capabilities-state` | 徽标 Map + `testingAll` 态 | — |
+> | `capabilities-effect-and-testall` | 能力加载 effect（`POST /model-probe-api/capabilities`）+ `testAllModels` 顺序跑全部行 | model-probe 插件 v0.2.0 |
+> | `test-all-button` | 模型列表头「获取可用模型」右侧「测试全部」按钮 | — |
+> | edit #5 两代变体 | 容量区行首**能力徽标**（视觉 / 推理），inherit 选项改走助手 | 徽标走 `capabilities` Map |
+>
+> **徽标是可选依赖**：路由 404（插件未装 / host 未重启）时静默无徽标，与探测降级同构。
+> **免费模型池合体（C 项）零补丁改动**：baseline 0.1.5-rc.1 的 models section 本就声明并渲染了
+> `settings.models.footer` 列表槽，插件改为优先注册到那里、失败才回退自有 section
+> （见 `plugins/dsh-free-model-pool/lib/client.js`）。
 
+## 为什么是「运行时补丁」而不是插件
 官方设置页刻意不提供逐模型思考强度控件，也不做逐模型连通性测试——上游取向是
 「effort 是 per-MODEL 能力，放在对话模型选择器里」。而本机没有 pnpm 全量重建链路
 （npm registry HTTPS 不可达 / pnpm store 被沙箱锁死 / AppData 只读），
@@ -50,10 +70,10 @@
 
 | 文件 | 作用 |
 |---|---|
-| `patch.mjs` | **补丁规范**：7 条锚点编辑规则（5 处插入 + 2 处字典替换；其中 **#5 分两代变体**，见下文「双代变体」）+ CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
+| `patch.mjs` | **补丁规范**：13 条锚点编辑规则（其中 **#5 分两代变体**，见下文「双代变体」）+ CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建两份 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
 | `baseline/client.original.js` | DSH **0.1.5-rc.1** 官方原版 client.js（138,937 B，SHA-256 `A60FD863…`）。与安装目录的 `client.js.dsh-bak` 逐字节一致 |
-| `baseline/client.patched.js` | 应用补丁后的产物（148,924 B，SHA-256 `F1717A07…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
+| `baseline/client.patched.js` | 应用补丁后的产物（154,284 B，SHA-256 `7D7D8494…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
 
 > 两份 baseline 是第三方产物而非本项目源码，但它们是不可再生的重建依据
 > （`vendor/` 不入库、安装目录会被升级覆盖），故随补丁规则一并版本化。
@@ -62,7 +82,9 @@
 > → `0.1.5-rc.1`（2026-09-10 重打，`A60FD863…` / `E602C1F1…`）
 > → `0.1.5-rc.1` + 连通性探测 v2（2026-09-19，规则升级，**官方原版未变**，产物 `C6C1DCBC…`
 > ——**该产物语法非法，勿用**，仅作事故考古留档）
-> → `0.1.5-rc.1` + v2.1 尾逗号修复（2026-09-19，**官方原版未变**，产物 `F1717A07…`）。旧基线见 git 历史。
+> → `0.1.5-rc.1` + v2.1 尾逗号修复（2026-09-19，**官方原版未变**，产物 `F1717A07…`）
+> → `0.1.5-rc.1` + v3 模型页增强（2026-09-22，**官方原版未变**，13 条编辑，产物 `7D7D8494…`）。
+> 旧基线见 git 历史。
 
 ## 用法
 
@@ -104,18 +126,26 @@ node ..\..\..\scripts\verify-all.mjs desktop
 
 ## 补丁做了什么
 
-7 条编辑，全部按「锚点唯一」定位（不唯一即报错，宁可失败也不瞎改）：
+13 条编辑，全部按「锚点唯一」定位（不唯一即报错，宁可失败也不瞎改）：
 
 | # | 位置 | 内容 |
 |---|---|---|
-| 1 | 模块级（`textOf` 前） | `REASONING_LEVELS` / `reasoningChoice()` / `reasoningPatch()` / `testResultClass()` / `describeProbe()`（结果类别 → 本地化文案）/ `probeViaHost()`（调 host 探测路由，未就绪时返回 null） |
+| 1 | 模块级（`textOf` 前） | `REASONING_LEVELS` / `reasoningChoice()` / `reasoningPatch()` / `reasoningInheritLabel()`（继承项带当前生效值）/ `testResultClass()` / `describeProbe()`（结果类别 → 本地化文案）/ `probeViaHost()`（调 host 探测路由，未就绪时返回 null） |
 | 2 | `ModelListEditor` state 区 | `testing` / `testResults` 两个 useState |
 | 3 | `askable` 前 | `testModel()`——**先** `probeViaHost`（真实可用性，六分类）；返回 null（插件未就绪）时**降级**为 `operations.discoverModels`（目录探测），并在文案尾附「探测服务未就绪」 |
 | 4 | 删除模型行处 | `testing` / `testResults` 的行号重排（防幽灵按钮） |
-| 5 | 高级编辑区（maxTokens 之后） | 思考强度 `<select>` + 测试按钮 + 结果文案。**分两代变体**（`variants` + `probe`）：`0.1.5-rc.x` 直接插入内联 JSX（1 条子编辑）；`0.1.6-alpha.2` 起改为「Editor 渲染成 ReactNode → `reasoningRow` prop → ModelRow 摆位」（2 条子编辑，成对生效） |
-| 6/7 | en / zh 字典 | 22 个词条（思考强度 / 继承提供方默认 / 不支持思考 / 测试连通性 / 测试中… / 可达·已列出 / 可达·未列出 / 探测服务未就绪 + 13 条探测类别文案） |
+| 5 | 高级编辑区（maxTokens 之后） | 思考强度 `<select>` + 测试按钮 + 结果文案 + **能力徽标**（视觉/推理）。**分两代变体**（`variants` + `probe`）：`0.1.5-rc.x` 直接插入内联 JSX（1 条子编辑）；`0.1.6-alpha.2` 起改为「Editor 渲染成 ReactNode → `reasoningRow` prop → ModelRow 摆位」（2 条子编辑，成对生效） |
+| 6/7 | en / zh 字典 | 32 个词条（思考强度 / 继承提供方默认 / 未声明 / 不支持思考 / 测试连通性 / 测试中… / 测试全部 / 可达·已列出 / 可达·未列出 / 无 Key 引导两条 / 视觉 / 推理 + 13 条探测类别文案） |
+| 8 | 缺 key 行小点 | tooltip 点名环境变量：`API 密钥缺失（OPENROUTER_API_KEY）` |
+| 9 | 编辑卡片密钥区 | 未配置且未粘 key 时一行可操作提示（点名 ref + 后果） |
+| 10 | `catalogProps` | `reasoningDefaultOf(id)` 解析器（按 id 查解析后命名空间值的同 id 条目） |
+| 11 | state 区（锚 edit #2 产物） | `capabilities` Map / `testingAll` 态 |
+| 12 | `askable` 前（锚 edit #3 之后） | 能力加载 effect（`POST /model-probe-api/capabilities`，404 静默）+ `testAllModels`（顺序跑全部行） |
+| 13 | 模型列表头 | 「测试全部」按钮（获取可用模型右侧） |
 
 语义：`inherit` = 不写字段、`disabled` = `reasoningEfforts: false`、其余 = `{off: null, [lvl]: lvl}`。
+**「继承」的显示语义（v3）**：标签带当前生效值——按模型 id 在解析后的命名空间值里找同 id 条目，
+取其声明的等级；解析不到显示「未声明」。绝不猜一个用户看不见的默认值。
 
 **连通性结果语义（v2）**：host 返回稳定的 `kind`（不是句子），文案在客户端本地化，
 两语言不会各说各话。类别：`ok`（附耗时）/ `unauthorized` / `model-missing` /

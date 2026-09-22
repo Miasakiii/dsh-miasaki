@@ -91,10 +91,19 @@ window.__ModuleLoader__.load({
 			// c) 重试循环每 500ms 再试；
 			// d) DOM 层隐藏兜底：直接 display:none 官方按钮（与轨迹页注入同款手段，
 			//    不依赖 slot 语义；[class*="sessionLogButton"] 子串锚点对 CSS hash 漂移稳健）。
+			//
+			// 2026-09-22 修复错误刷屏：DSH 0.1.5-rc.1 起官方自带
+			// `@deepseek-ai/dsh-session-log-export`，conversation.session.header.utilities
+			// 里的 `session-log-download` 条目由官方包注册——本插件的「同 id 替换」从此
+			// 永远冲突（already has an entry … registered by Z8）。旧代码把每次失败都
+			// console.error，叠加 60 次重试，页面加载后 30s 内持续刷屏、淹没真正的问题。
+			// 现在：重复 id 判定为**永久失败**（不再重试、不再刷屏），slot 未声明的短暂
+			// 窗口仍可重试，但失败日志整个 fiber 只记一次。
 			let headerRegistered = false;
-			let lastHeaderError = null;
+			let headerPermanentlyBlocked = false;
+			let headerErrorLogged = false;
 			const tryHideHeader = () => {
-				if (headerRegistered) return;
+				if (headerRegistered || headerPermanentlyBlocked) return;
 				try {
 					ctx.slots.register(
 						{ name: "conversation.session.header.utilities", id: "session-log-download" },
@@ -102,8 +111,15 @@ window.__ModuleLoader__.load({
 					);
 					headerRegistered = true;
 				} catch (err) {
-					lastHeaderError = err instanceof Error ? err.message : String(err);
-					console.error("dsh-session-log-move: header register failed - " + lastHeaderError);
+					const message = err instanceof Error ? err.message : String(err);
+					// 官方包已占同一 id：slot 语义下无法替换，重试也不会成功 —— 永久放弃。
+					if (/already has an entry with id/.test(message)) {
+						headerPermanentlyBlocked = true;
+					}
+					if (!headerErrorLogged) {
+						headerErrorLogged = true;
+						console.error("dsh-session-log-move: header register failed - " + message);
+					}
 				}
 			};
 			tryHideHeader();

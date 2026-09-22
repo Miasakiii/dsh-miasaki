@@ -268,7 +268,10 @@ desktop/
 > 才能整节通过校验（否则整节失效、免费模型池平台列表为空）。适配细节与排查记录见
 > `design/CHANGELOG.md`。
 
-检出免费模型并给出能力画像与适用性决策，Web 面板挂在 DSH「设置 → 免费模型池」：
+检出免费模型并给出能力画像与适用性决策。**2026-09-22 起面板改挂「设置 → 模型」页底部**
+（`settings.models.footer` 列表槽，模型页补丁声明并渲染的现成挂点），不再单独占一栏；
+补丁缺席（未打 / 被升级覆盖）时自动回退自有 `settings.section`「免费模型池」栏，
+两个目标互斥、失败日志只记一次（v0.3.0）：
 
 - **多平台扫描**：扫描 `llm-pi-ai.providers` 中**带 baseURL 的全部 OpenAI 兼容平台**（OpenRouter、
   自建网关、微信 chatapi 等），一个面板统一管理；新增平台只需在设置 → 模型页配置，
@@ -316,7 +319,10 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 把「Session 日志」下载按钮从**主界面会话头部**迁移到**轨迹页工具栏搜索栏左侧**：
 
 - **主界面隐藏**：`conversation.session.header.utilities` 同 id（`session-log-download`）
-  替换为空条目（平台 slot 语义：同 id 复用即替换该 cell），官方「Session 日志」胶囊不渲染；
+  替换为空条目（平台 slot 语义：同 id 复用即替换该 cell），官方「Session 日志」胶囊不渲染。
+  **2026-09-22 起为降级行为**：DSH 0.1.5-rc.1 官方自带
+  `@deepseek-ai/dsh-session-log-export` 已自行注册同一 id，本插件的替换**永远冲突**——
+  此时判定永久失败（不再重试、错误日志只记一次），官方按钮保留（v0.1.1）；
 - **轨迹页注入**：`[role=toolbar]` 内搜索框容器左侧插入同功能按钮（toolbar 无官方 slot，
   DOM 注入 + MutationObserver + 500ms 重试兜底约 30s，重渲染冲掉自动补挂）；
 - **下载链路**：复用官方 `sessionLogDownload` 服务（缺失降级 `<a download>` 触发
@@ -354,13 +360,15 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 - **降级**：路由 404（插件未装 / host 未重启）时补丁自动回退 v1 目录探测并附提示，
   因此本插件是补丁的**可选**依赖，缺失不会让按钮失效。
 
-路由：`POST /model-probe-api/probe`、`GET /model-probe-api/health`。
+路由：`POST /model-probe-api/probe`、`GET /model-probe-api/health`、
+`POST /model-probe-api/capabilities`（v0.2.0 批量能力查询：读 `llm.resolveModelInfo`，
+零提供商请求、不需要凭据，供模型页能力徽标；`llm` 缺失或 404 时徽标静默缺席）。
 
 安装：同其它 profile bundle —— `%USERPROFILE%\.dsh\profiles\web\package.json` 的
 `dependencies` + `dsh.profile.bundles` 加 `dsh-model-probe`（file: 依赖），
 profile 目录 `pnpm install`，**host 重启**后生效。
 
-自证：`node plugins/dsh-model-probe/test/probe.test.js`（18 例判定表单测，纯逻辑无网络），
+自证：`node plugins/dsh-model-probe/test/probe.test.js`（20 例判定表单测，纯逻辑无网络），
 已并入 `node scripts/verify-all.mjs desktop`。
 
 ## 设计规范

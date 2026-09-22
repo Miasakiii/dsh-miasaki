@@ -37,10 +37,13 @@ import {
 const NS = 'llm-pi-ai';
 const HEALTH_PATH = '/model-probe-api/health';
 const PROBE_PATH = '/model-probe-api/probe';
-const PLUGIN_VERSION = '0.1.0';
+const CAPABILITIES_PATH = '/model-probe-api/capabilities';
+const PLUGIN_VERSION = '0.2.0';
 
 /** A request body beyond this is refused before parsing — the client only ever sends a few fields. */
 const MAX_BODY_BYTES = 64 * 1024;
+/** Upper bound for one batch capability query — a provider catalog is small, and the loop is sequential. */
+const MAX_CAPABILITY_MODELS = 200;
 
 export const name = 'model-probe';
 export const inject = ['settings', 'webServer'];
@@ -251,6 +254,56 @@ export async function probeModel(ctx, request) {
  * @param ctx - plugin context.
  * @param config - optional `trustedHosts`.
  */
+/**
+ * The badge facts for one resolved model entry.
+ *
+ * Reads the SAME truth source the composer picker and the dual-model vision
+ * route read (`llm.resolveModelInfo`): an explicit `image` modality means the
+ * model accepts images, an adapter-declared `reasoning` block means it has
+ * selectable effort levels. Absent metadata stays `false` — the page shows no
+ * badge rather than a guess. Pure so the decision table is unit-testable.
+ * @param info - one resolved model info, or anything a broken adapter returned.
+ * @returns `{ image, reasoning }`.
+ */
+export function capabilityFlags(info) {
+  const modalities = info && Array.isArray(info.inputModalities) ? info.inputModalities : [];
+  const reasoning = info !== null && info !== undefined && info.reasoning !== undefined && info.reasoning !== null;
+  return {
+    image: modalities.some((modality) => modality === 'image'),
+    reasoning,
+  };
+}
+
+/**
+ * Batch capability query for the patched Models page badges.
+ *
+ * Costs nothing per model (adapter-local resolution, no provider call) and
+ * never needs a credential: capabilities are declared in the route's own
+ * catalog, not behind auth. `llm` is read through `ctx.get` so the probe
+ * routes keep working on a host without it — the badges simply stay absent,
+ * exactly like the 404 fallback when this whole plugin is missing.
+ * @param ctx - plugin context.
+ * @param request - `{ provider, models: [...] }`.
+ * @returns `{ models: { [id]: { image, reasoning } } }`.
+ */
+export async function describeCapabilities(ctx, request) {
+  const provider = pickString(request?.provider);
+  const ids = Array.isArray(request?.models)
+    ? request.models.map(pickString).filter((id) => id !== null).slice(0, MAX_CAPABILITY_MODELS)
+    : [];
+  const llm = ctx.get('llm');
+  if (provider === null || ids.length === 0 || !llm || typeof llm.resolveModelInfo !== 'function') return { models: {} };
+  const models = {};
+  for (const id of ids) {
+    try {
+      models[id] = capabilityFlags(await llm.resolveModelInfo(provider, id));
+    } catch {
+      models[id] = { image: false, reasoning: false };
+    }
+  }
+  return { models };
+}
+
 export function apply(ctx, config) {
   const trusted = trustedHostSet(config);
 
@@ -285,4 +338,10 @@ export function apply(ctx, config) {
   // client must be able to tell a broken plugin (HTTP 404) from a model that
   // answered 401 — collapsing them would rebuild the v1 bug in a new place.
   register(PROBE_PATH, 'POST', async (req) => ({ result: await probeModel(ctx, await readBody(req)) }));
+
+  // Badge data for the patched Models page: image / reasoning per model id,
+  // resolved from the same llm service the composer picker reads. A host
+  // without `llm` answers with an empty map, and the client renders no badge
+  // — degradation, never an error page.
+  register(CAPABILITIES_PATH, 'POST', async (req) => describeCapabilities(ctx, await readBody(req)));
 }

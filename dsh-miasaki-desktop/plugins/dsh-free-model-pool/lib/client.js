@@ -202,14 +202,58 @@ window.__ModuleLoader__.load({
 
 		/**
 		 * Client plugin body: register the settings section.
+		 *
+		 * 2026-09-22 合体（C 项）：模型页运行时补丁在「设置 → 模型」底部声明并渲染了
+		 * `settings.models.footer` 列表槽（baseline 0.1.5-rc.1 原生存在、补丁只是选中
+		 * 它作为挂点）—— 优先把面板挂到那里，与模型页合体、少一个设置栏入口。
+		 * 补丁缺席（未打 / 被 DSH 升级覆盖）时 footer 注册抛错，回退到自有
+		 * `settings.section`，行为与合体前逐字一致。两个目标互斥：挂上一个就不挂另一个。
+		 * 日志纪律：任何失败只记一次（session-log-move 的刷屏教训）。
 		 */
 		function apply(ctx) {
-			ctx.slots.inject("settings.section", () => ctx.slots.register({
-				name: "settings.section",
-				id: "free-model-pool",
-				order: 25,
-				label: "免费模型池",
-			}, FreeModelPoolPanel));
+			// 幂等守卫：DSH HMR / 重复 apply 不得叠加第二个面板（与 dual-model 同款）。
+			if (window.__DSH_FREEPOOL_BOOTED__ === true) return;
+			window.__DSH_FREEPOOL_BOOTED__ = true;
+			// 挂载目标：优先模型页底部 footer 槽（与「模型」页合体），
+			// 补丁真缺席时才回退自有 settings.section。关键细节：**不在 apply 当场回退** ——
+			// 启动期内模型页条目随时可能声明 footer（插件 apply 顺序不保证），
+			// 立刻回退会把面板永久钉在自己的栏里。改为延迟 5s 判定 + inject watcher 兜底。
+			let mounted = null;
+			let disposed = false;
+			let fallbackScheduled = false;
+			ctx.effect(() => () => { disposed = true; window.__DSH_FREEPOOL_BOOTED__ = false; }, "free-model-pool: dispose guard");
+			const mountFallback = () => {
+				if (mounted !== null || disposed) return;
+				console.error("dsh-free-model-pool: models footer slot unavailable — falling back to its own settings section");
+				try {
+					ctx.slots.register({
+						name: "settings.section",
+						id: "free-model-pool",
+						order: 25,
+						label: "免费模型池",
+					}, FreeModelPoolPanel);
+					mounted = "section";
+				} catch (error2) {
+					console.error("dsh-free-model-pool: fallback registration failed - " + (error2 && error2.message ? error2.message : String(error2)));
+				}
+			};
+			const tryMount = () => {
+				if (mounted !== null) return;
+				try {
+					ctx.slots.register({
+						name: "settings.models.footer",
+						id: "free-model-pool",
+						order: 10,
+					}, FreeModelPoolPanel);
+					mounted = "footer";
+				} catch (error) {
+					if (fallbackScheduled) return;
+					fallbackScheduled = true;
+					setTimeout(mountFallback, 5000);
+				}
+			};
+			tryMount();
+			ctx.slots.inject("settings.models.footer", tryMount);
 		}
 
 		exports.apply = apply;

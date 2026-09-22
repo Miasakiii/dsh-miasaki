@@ -21,6 +21,7 @@ import {
   shouldContinueToGenerate,
   summarizeDetail,
 } from '../lib/probe.js';
+import { capabilityFlags } from '../lib/index.js';
 
 /** A StepFun-shaped credential: long, mixed case, no `sk-` prefix. */
 const STEP_KEY = '1fa9p4EjVyNJdeB05NOgamdgnbb9cdaMz9DUMQ122e7iggbn6VnYEygQ03KVB8waX';
@@ -178,4 +179,15 @@ test('only a parameter refusal or an unexpected 2xx continues to the paid stage'
 test('the module declares a bounded budget', () => {
   assert.ok(DEFAULT_TIMEOUT_MS >= 1000 && DEFAULT_TIMEOUT_MS <= 60000);
   assert.ok(BODY_LIMIT >= 1024 && BODY_LIMIT <= 1024 * 1024);
+});
+
+test('capabilityFlags reads image modality and reasoning block from the resolved info', () => {
+  assert.deepEqual(capabilityFlags({ inputModalities: ['text', 'image'], reasoning: { efforts: [] } }), { image: true, reasoning: true });
+  assert.deepEqual(capabilityFlags({ inputModalities: ['text'] }), { image: false, reasoning: false });
+});
+
+test('capabilityFlags never guesses: absent or broken metadata is all-false', () => {
+  for (const info of [undefined, null, {}, { inputModalities: null }, { reasoning: undefined }, 'nonsense', 42]) {
+    assert.deepEqual(capabilityFlags(info), { image: false, reasoning: false }, JSON.stringify(info));
+  }
 });

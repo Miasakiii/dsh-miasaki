@@ -11,9 +11,13 @@ DSH web bundle。把「Session 日志」下载按钮从**主界面会话头部**
 
 ### 行为
 
-1. **主界面隐藏**：向 `conversation.session.header.utilities` 注册同 id
+1. **主界面隐藏**（尽力而为）：向 `conversation.session.header.utilities` 注册同 id
    `session-log-download` 空条目 —— 平台 slot 语义”同 id 复用即替换该 cell”，
    官方「Session 日志」胶囊按钮不再渲染；插件停用后官方按钮自动恢复。
+   **2026-09-22 起为降级行为**：DSH 0.1.5-rc.1 官方包
+   `@deepseek-ai/dsh-session-log-export` 已自行注册同一 id（Z8），本插件的替换
+   **永远冲突**。此时判定为永久失败：不再重试、错误日志只记一次，官方按钮保留
+   （历史上 60 次重试全部 console.error，加载后 30s 持续刷屏，已修）。
 2. **轨迹页注入**：在 `[role="toolbar"]` 内 `input[type="search"]` 的容器
    **左侧**插入同功能「Session 日志」按钮（toolbar 无官方 slot，采用 DOM 注入：
    `MutationObserver` 跟随挂载/卸载 + 500ms 重试兜底约 30s，React 重渲染冲掉后自动补挂）。

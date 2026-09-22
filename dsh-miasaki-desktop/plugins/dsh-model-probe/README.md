@@ -8,8 +8,8 @@ DSH web profile bundle，**host only**（无 client 半侧）。为设置页「�
 | 服务 id | `model-probe` |
 | 包名 | `dsh-model-probe` |
 | 平台 | host only（无 client bundle、不注册 slot） |
-| 注入服务 | `settings`、`webServer`（`credentials` 经 `ctx.get` 可选获取） |
-| 单测 | `node test/probe.test.js`（18 例，纯逻辑、无网络） |
+| 注入服务 | `settings`、`webServer`（`credentials` / `llm` 经 `ctx.get` 可选获取） |
+| 单测 | `node test/probe.test.js`（20 例，纯逻辑、无网络） |
 
 ### 为什么需要它
 
@@ -50,6 +50,24 @@ POST /model-probe-api/probe  {provider, model, baseURL?, api?, apiKey?}
 GET /model-probe-api/health
   → {ok: true, version, protocols: [...], timeoutMs}
 ```
+
+### 批量能力查询（v0.2.0，2026-09-22）
+
+```
+POST /model-probe-api/capabilities  {provider, models: ["id", ...]}
+  → {ok: true, models: {"<id>": {image: bool, reasoning: bool}, ...}}
+```
+
+为模型页补丁的**能力徽标**（视觉 / 推理）供数。读法与 composer 选模型的器、
+dual-model 的视觉路由**同一真值源**——`llm.resolveModelInfo(provider, model)`：
+`inputModalities` 含 `image` 即视觉，适配器声明了 `reasoning` 块即有可调思考强度。
+
+- **零成本**：适配器本地解析，不发任何提供商请求、不需要凭据；
+- **缺元数据不猜**：解析不到 / 适配器抛错 → `{image:false, reasoning:false}`（无徽标）；
+- **可选依赖**：`llm` 经 `ctx.get` 获取；host 没有该服务或路由 404（插件未装 / 未重启）时
+  客户端静默不渲染徽标，与探测降级同构；
+- 批量上限 200 个 id，顺序解析（适配器本地操作，无需并发）；
+- 凭据优先级与脱敏、信任栅栏同上（本路由其实不需要凭据）。
 
 ### 结果类别
 
@@ -94,7 +112,7 @@ profile 目录 `pnpm install` 后 **host 重启**生效（web bundle 图重建�
 ### 验证
 
 ```powershell
-node test/probe.test.js                 # 18 例纯逻辑单测（判定表 / URL 规则 / 脱敏）
+node test/probe.test.js                 # 20 例纯逻辑单测（判定表 / URL 规则 / 脱敏 / 能力位）
 node ../../../scripts/verify-all.mjs desktop   # 已并入 desktop 线回归
 ```
 
@@ -104,7 +122,7 @@ node ../../../scripts/verify-all.mjs desktop   # 已并入 desktop 线回归
 ### 文件
 
 - `lib/probe.js` — 纯逻辑：URL 构造、请求体构造、状态分类、脱敏（可单测、无 I/O）
-- `lib/index.js` — 插件装配：信任栅栏、路由、凭据解析、两段式探测
+- `lib/index.js` — 插件装配：信任栅栏、路由、凭据解析、两段式探测、批量能力查询
 - `lib/index.d.ts` — 类型声明
 - `test/probe.test.js` — 判定表单测
 - `cordis.patch.yml` — bundle 挂载声明
