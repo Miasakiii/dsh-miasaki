@@ -31,7 +31,9 @@
       "nsis": {
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico"
-      }
+      },
+      "certificateThumbprint": "9A849C22D97999A011E8D9863B005630E977DBD7",
+      "digestAlgorithm": "sha256"
     }
   }
 }
