@@ -6,8 +6,9 @@
 // 见 ../../design/2026-09-10-dual-model-design.md §2.6 与 §4.4。
 //
 // 缓存策略：一次全量扫描要遍历每个 provider 的模型目录（部分 provider 走端点查询，
-// 有网络开销），因此结果带 TTL 缓存，并由 `llm/adapters-updated` / `settings/updated`
-// 主动失效。并发查询共享同一次 in-flight 扫描。
+// 有网络开销），因此结果带 TTL 缓存，并由 `llm/adapters-updated` 与「设置变更」双轨事件
+// （`settings/updated` + `settings/document-updated`，见 ./invalidation.js）主动失效。
+// 并发查询共享同一次 in-flight 扫描。
 
 import { supportsImage } from './routing.js'
 

@@ -24,6 +24,7 @@ import { messagesHaveImage, deriveAgentMessages } from './lib/content.js'
 import { decideRoute, applyRoute, normalizeRoute } from './lib/routing.js'
 import { createCapabilityIndex, resolveRouteCapability } from './lib/capability.js'
 import { DualModelStore, DEFAULT_CONFIG } from './lib/store.js'
+import { watchSettingsInvalidation } from './lib/invalidation.js'
 
 export const name = 'dual-model'
 export const inject = ['webServer']
@@ -178,7 +179,9 @@ export async function apply(ctx, config) {
 
   // ---- 3. 能力目录缓存失效 --------------------------------------------------
   ctx.effect(() => ctx.on('llm/adapters-updated', () => capability.invalidate()), 'dual-model: adapters invalidation')
-  ctx.effect(() => ctx.on('settings/updated', () => capability.invalidate()), 'dual-model: settings invalidation')
+  // 设置变更：新旧事件双轨监听（0.1.5/0.1.6 的 settings/updated 与 0.1.7+ 的
+  // settings/document-updated），理由与实测依据见 lib/invalidation.js。
+  ctx.effect(() => watchSettingsInvalidation(ctx, () => capability.invalidate()), 'dual-model: settings invalidation')
 
   // ---- 4. 右下角控件的 JSON 路由 --------------------------------------------
   /** 该会话上一次请求实际使用的路由（主模型）。 */

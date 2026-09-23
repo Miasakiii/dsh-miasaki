@@ -1,5 +1,81 @@
 # 变更记录 — dsh-miasaki-dual-model
 
+## 2026-09-23
+
+### 0.1.3-miasaki.0 — DSH 0.1.7 兼容：设置失效信号新旧双轨（行为零变化）
+
+背景：DSH 0.1.7-alpha.2 重写设置机制，`settings/updated` 事件在全树移除
+（grep 两版源码：0.1.6 19 处 → 0.1.7 **0 处**），取而代之的是 RAW 文档层的
+`settings/document-updated(ns, revision)`（语义更敏感：不比较 resolved 值）。
+若不适配，本线能力目录缓存会少一路击穿信号——最坏退化是用户改 llm 设置后
+能力索引最多延迟 5 分钟（TTL）自然过期，不报错、不显示错误能力。
+影响评估见 `dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-upgrade-assessment-2026-09-23.md` §7.3。
+
+改动：
+
+- 新增 `lib/invalidation.js`：`SETTINGS_INVALIDATION_EVENTS`（旧名在前、新名在后）
+  + `watchSettingsInvalidation(ctx, invalidate)`（注册双轨、返回合并 disposer）。
+- `index.js:184`：原 `ctx.on('settings/updated', …)` 单监听改为 `ctx.effect(() => watchSettingsInvalidation(ctx, …))`。
+- `lib/capability.js` 头注、设计文档 §4.4 同步双轨描述。
+
+**为什么双轨而不是按版本探测** `[实测]`：Cordis 的 `ctx.on()` 监听一个没有任何提供方
+发出的事件是无害空操作——cordis 4.0.2（0.1.5-rc.1）与 4.0.4（0.1.7-alpha.2）实测均
+不抛错、正常返回 disposer（探针脚本验证）。因此两个名字无条件并监：0.1.5/0.1.6 上前者
+命中、0.1.7+ 上后者命中，升级前后零改动。新事件更敏感导致的多余 invalidate 只是清缓存，
+无正确性影响。
+
+测试：新增 `test/invalidation.test.js` 5 例（双注册 / 任一发出都击穿含新事件 payload 形状 /
+dispose 后不再触发 / 重复 dispose 幂等 / 事件名常量契约）。`node --test` 29 例全过，
+`node scripts/verify-all.mjs dual-model` 11/11 PASS，补丁离线自证不受影响。
+
+## 2026-09-22（晚）
+
+### 0.1.2-miasaki.0 — 右下角选择框 UI 优化（主题令牌化 + 信息设计 + 交互补全）
+
+用户反馈「双模型这个选择框优化一下」。本次只重写 `client.js` 的 UI 呈现层，
+**host 契约（`/dual-model/api/*`）与路由逻辑零改动**，刷新页面即可生效（link: bundle
+由 host 从磁盘serve，实测重载即加载新 client.js，无需重启）。
+
+**一、配色主题化（核心修复）**
+
+- 根因：旧实现的 `var(--dsw-static-surface, #1c2128)` / `--dsw-static-text` /
+  `--dsw-static-border` 三个令牌在 DSH 本体**不存在**（已逐个在
+  `dsh-client-ui-theme/lib/client.js` 取证）；面板背景因此恒回退硬编码
+  GitHub 深色 `#1c2128`，浅色主题下成为"深色孤岛"且文字为继承的深色，基本不可读。
+  状态色同样是 GitHub 硬编码三色（`#f85149` / `#3fb950` / `#58a6ff`）。
+- 修复（全部换成真实令牌，已逐个校验存在）：
+  - 弹层表面：`--dsw-specific-menu`（= `--dsw-alias-bg-layer-3`）+
+    `--dsw-elevation-stroke-color: --dsw-alias-border-l1` +
+    `box-shadow: --dsw-elevation-prominent` + 12px 圆角 + 12px/20px 字号 ——
+    与隔壁官方 ContextMeter 面板（`JObwrW_panel`，同处输入栏 trailing 区）逐项对齐；
+  - 折叠按钮：28px 高 / 999px 圆角 / `--dsw-specific-selector` 底，
+    hover 与展开态用 `--dsw-alias-interactive-bg-hover-solid` —— 对齐官方紧凑控件（`.add`）；
+  - 状态色：`--dsw-alias-state-error-primary`（无人管图）/
+    `--dsw-alias-state-success-primary`（辅助管图）/ `--dsw-static-deepseek-450`（主模型管图）；
+  - select：`appearance:none` + 官方同款 chevron SVG（`#81858C`）+
+    `--dsw-alias-bg-layer-2` 底 + `--dsw-alias-border-l2` 边框；
+  - 文字层级统一 `--dsw-alias-label-primary/secondary/tertiary`。
+- 样式改由 `ctx.effect` 注入一个 `<style>`（`.dsh-dual-model-*` 前缀，与 canvas / ssh 线
+  惯例一致），随插件生命周期移除；hover / :focus-visible / accent-color 等 inline style
+  表达不了的状态由此覆盖。
+
+**二、信息设计**
+
+- 折叠态标签：「主 ▸ 辅」双短名（补回设计文档 §5.2 的原意，此前只有辅助名且截断 22 字符、
+  挤压输入框）；短名截断收紧为 16 字符；草稿有附件时尾部追加 `·N` 计数。
+- 面板新增**主模型行**与「看图 / 纯文本」能力徽标（host 早已提供
+  `primary` / `primaryVision` / `assistVision`，此前未展示）——"图片交给谁"终于有对照。
+- 结构调整为：头部（标题 + 副标题）→ 主模型行 → 辅助模型行 → select（+ 空态提示）→
+  图片归属状态条 → 底部「启用双模型」开关 + 保存中提示。
+- 下拉 option 文案由 `name · id` 收俭为 `name`（完整 id 移至 option title）。
+
+**三、交互补全**
+
+- Esc 关闭、点击面板外关闭（mousedown capture + contains 判定），监听随 `open`
+  注册/销毁，符合 effect 可逆纪律；
+- `aria-haspopup="dialog"` + 面板 `role="dialog"` / `aria-label`；
+- 保存中在下拉、开关、提示位三处可见。
+
 ## 2026-09-22
 
 ### 0.1.1-miasaki.0 — 修复「配置模型」控件渲染崩溃（根因：标准 hook 无 selector 调用）

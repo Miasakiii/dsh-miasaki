@@ -4,7 +4,21 @@
 
 ## 状态
 
-**0.1.1-miasaki.0（2026-09-22）**：M1 的「配置模型」控件渲染崩溃已修复——
+**0.1.3-miasaki.0（2026-09-23）**：设置变更的缓存失效信号改为**新旧事件双轨监听**
+（`settings/updated` + `settings/document-updated`，见 `lib/invalidation.js`）——
+DSH 0.1.7 重写设置机制后旧事件被移除，双轨让本线在 0.1.5/0.1.6 与 0.1.7+ 上行为一致、
+升级零改动。详见 [`design/CHANGELOG.md`](design/CHANGELOG.md) 2026-09-23 条目。
+
+**0.1.2-miasaki.0（2026-09-22）**：右下角「双模型」选择框 UI 优化 —— 全部配色切换到
+DSH 真实主题令牌（旧实现引用的 `--dsw-static-surface` / `--dsw-static-text` / `--dsw-static-border`
+在本体不存在，面板背景恒回退硬编码 GitHub 深色，浅色主题下不可读），弹层表面对齐官方
+ContextMeter 面板（`--dsw-specific-menu` + `--dsw-elevation-prominent` + 12px 圆角），
+折叠按钮对齐官方紧凑控件（28px / 999px 圆角 / `--dsw-specific-selector`）；折叠态改为
+「主 ▸ 辅」双短名（设计文档 §5.2 原意），面板新增主模型行与「看图 / 纯文本」能力徽标；
+新增 Esc / 点击面板外关闭。详见 [`design/CHANGELOG.md`](design/CHANGELOG.md) 2026-09-22
+UI 优化条目。
+
+0.1.1-miasaki.0（2026-09-22）：M1 的「配置模型」控件渲染崩溃已修复——
 标准 kit hook `useInput` 必须带 selector 调用（`bindSnapshotSelector` 无 identity 兜底，
 无参调用抛 `selector is not a function`，控件被 slot error boundary 吞掉）；
 字段名由 `imageIds` 更正为 `attachmentIds`。修复后按钮 / 面板 / 下拉在真实 GUI 实测可用，
@@ -55,7 +69,7 @@ node patch.mjs apply
 ## 验证
 
 ```bash
-node ../scripts/verify-all.mjs dual-model     # 静态检查 + 24 项单测 + 补丁离线自证
+node ../scripts/verify-all.mjs dual-model     # 静态检查 + 29 项单测 + 补丁离线自证
 ```
 
 实机验证点（需运行中的 DSH host）：右下角出现「双模型」控件；配好辅助模型后拖入图片，

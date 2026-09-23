@@ -404,7 +404,9 @@ interface DualModelSettings {
 ### 4.4 能力真值源与失效
 
 - 权威：`llm.resolveModelInfo(provider, model).inputModalities`（host）
-- 失效信号：`llm/adapters-updated` 事件（"The provider topology changed"）+ `settings/updated`
+- 失效信号：`llm/adapters-updated` 事件（"The provider topology changed"）+ 设置变更。
+  设置变更自 2026-09-23 起为**双轨**：`settings/updated`（0.1.5/0.1.6）+ `settings/document-updated`
+  （0.1.7+ 的 RAW 文档层事件）—— DSH 0.1.7 移除旧事件后本线无需改动，实现见 `lib/invalidation.js`。
 - 客户端需要一条 host→client 查询通道（形态视新线的插件加载方式而定：`host.call` 或同源 JSON 路由）
 
 ---
