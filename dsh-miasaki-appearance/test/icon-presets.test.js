@@ -1,8 +1,9 @@
 // M2.7 应用图标预设：绘制器 / PNG 编码 / 预设表的一致性。
 //
-// 这套断言的意义在于「预设图标是**算出来的**」这个事实：没有二进制资源可比对，
+// 这套断言的意义在于「预设图标是**算出来的**」事实：没有二进制资源可比对，
 // 所以只能把不变量钉死 —— 圆角外必须透明、圆角内必须不透明、同一 id 必须字节可复现、
-// PNG 容器必须合法（签名 + IHDR 尺寸 + IEND）。位图预设（portrait）则断言它走另一条路。
+// PNG 容器必须合法（签名 + IHDR 尺寸 + IEND）。位图预设（portrait / illustration /
+// current）则断言它们走另一条路。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
@@ -43,8 +44,8 @@ function chunksOf(png) {
   return chunks
 }
 
-test('预设表：只有两款（默认 / 头像），id 唯一、标签非空，且每款要么可渲染要么有位图资源', () => {
-  assert.equal(ICON_PRESETS.length, 2, '预设只有「默认」与「头像」两款（用户 2026-09-21 拍板）')
+test('预设表：四款（默认 / 头像 / 立绘 / 现行），id 唯一、标签非空，且每款要么可渲染要么有位图资源', () => {
+  assert.equal(ICON_PRESETS.length, 4, '预设共四款（2026-09-23 用户拍板三款鲸鱼娘图标全进预设）')
   const ids = new Set()
   for (const preset of ICON_PRESETS) {
     assert.match(preset.id, /^[a-z][a-z0-9-]*$/, `${preset.id} 必须是合法 id（文件名要过白名单）`)
@@ -55,9 +56,8 @@ test('预设表：只有两款（默认 / 头像），id 唯一、标签非空�
     const renderable = preset.base !== undefined && preset.mark !== undefined
     assert.equal(renderable || typeof preset.asset === 'string', true, `${preset.id} 既不能渲染也没有资源`)
   }
-  // 「默认」在首位（九宫格的第一格），「头像」紧随其后
-  assert.equal(ICON_PRESETS[0].id, 'default')
-  assert.equal(ICON_PRESETS[1].id, 'portrait')
+  // 「默认」在首位（九宫格的第一格），三款鲸鱼娘位图紧随其后（头像 / 立绘 / 现行）
+  assert.deepEqual(ICON_PRESETS.map(p => p.id), ['default', 'portrait', 'illustration', 'current'])
 })
 
 test('预设文件名与 URL 往返：都落在跨线契约的白名单形态里', () => {
@@ -151,16 +151,19 @@ test('encodePng：CRC 与 zlib 流自洽（无第三方编码器可依赖，这�
   ])
 })
 
-test('位图预设：走资源不走绘制器，且资源确实在仓库里', () => {
-  const asset = presetAssetPath('portrait')
-  assert.equal(asset, 'assets/presets/portrait.png')
-  assert.equal(renderPresetPng('portrait', 64), null, '位图预设不参与程序化渲染')
+test('位图预设：走资源不走绘制器，且资源确实在仓库里（512 方图 + 标准 PNG 容器）', () => {
+  // 2026-09-23 起位图预设三款：portrait / illustration / current。
+  const bitmap = { portrait: 'assets/presets/portrait.png', illustration: 'assets/presets/illustration.png', current: 'assets/presets/current.png' }
+  for (const [id, asset] of Object.entries(bitmap)) {
+    assert.equal(presetAssetPath(id), asset)
+    assert.equal(renderPresetPng(id, 64), null, `位图预设 ${id} 不参与程序化渲染`)
+    const full = new URL(`../${asset}`, import.meta.url)
+    assert.equal(existsSync(full), true, `位图预设 ${id} 的资源必须入库`)
+    const bytes = readFileSync(full)
+    assert.deepEqual(bytes.subarray(0, 8), PNG_MAGIC, `${id} 资源必须是 PNG`)
+    const chunks = chunksOf(bytes)
+    assert.equal(chunks[0].data.readUInt32BE(0), 512, `${id} 资源必须是 512 宽`)
+    assert.equal(chunks[0].data.readUInt32BE(4), 512, `${id} 资源必须是 512 高`)
+  }
   assert.equal(presetAssetPath('default'), null)
-  const full = new URL(`../${asset}`, import.meta.url)
-  assert.equal(existsSync(full), true, '位图预设的资源必须入库')
-  const bytes = readFileSync(full)
-  assert.deepEqual(bytes.subarray(0, 8), PNG_MAGIC, '资源必须是 PNG')
-  const chunks = chunksOf(bytes)
-  assert.equal(chunks[0].data.readUInt32BE(0), 512)
-  assert.equal(chunks[0].data.readUInt32BE(4), 512)
 })

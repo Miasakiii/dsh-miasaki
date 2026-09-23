@@ -289,6 +289,8 @@ test('面板渲染冒烟：应用图标板块（预设 + 已设置 + 我的上�
       presets: [
         { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
         { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
+        { id: 'illustration', label: '立绘', file: 'preset-illustration.png', url: '/appearance/avatar/preset-illustration.png' },
+        { id: 'current', label: '现行', file: 'preset-current.png', url: '/appearance/avatar/preset-current.png' },
       ],
     },
   ]
@@ -299,11 +301,13 @@ test('面板渲染冒烟：应用图标板块（预设 + 已设置 + 我的上�
     assert.equal(texts.includes('应用图标'), true, '板块标题必须渲染')
     assert.equal(texts.includes('上传图片…'), true, '上传按钮必须渲染')
     assert.equal(texts.includes('清除'), true)
-    // 预设九宫格：名称与格子数
+    // 预设九宫格：名称与格子数（四款：默认 / 头像 / 立绘 / 现行）
     assert.equal(texts.includes('默认'), true, '预设名称必须渲染')
     assert.equal(texts.includes('头像'), true)
+    assert.equal(texts.includes('立绘'), true)
+    assert.equal(texts.includes('现行'), true)
     const cells = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className.startsWith('mia-iconCell'))
-    assert.equal(cells.length, 2, '两款预设 → 两个格子')
+    assert.equal(cells.length, 4, '四款预设 → 四个格子')
     // 我的上传：预设文件不得混进「自定义」清单（否则用户会看到一堆系统生成的条目）
     assert.equal(texts.some(t => t.includes('preset-default.png')), false, '预设文件不进「我的上传」')
     assert.equal(texts.some(t => t.includes('avatar-lz3k9q')), true, '用户自己的文件必须在清单里')

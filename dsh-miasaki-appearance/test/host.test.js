@@ -297,9 +297,8 @@ test('预设路由：GET /presets 幂等落盘到 avatars/，且能经头像文�
   const res = await callApi(ctx, '/appearance/api/presets')
   assert.equal(res.status, 200)
   assert.equal(res.body.persistent, true)
-  assert.equal(res.body.presets.length, 2, '预设只有「默认」与「头像」两款')
-  assert.equal(res.body.presets[0].id, 'default', '默认款在首位')
-  assert.equal(res.body.presets[1].id, 'portrait', '位图预设紧随其后')
+  assert.equal(res.body.presets.length, 4, '预设共四款：默认 + 三款鲸鱼娘位图')
+  assert.deepEqual(res.body.presets.map(p => p.id), ['default', 'portrait', 'illustration', 'current'], '默认款在首位，位图 preset 随后')
   // 每款文件名都必须命中跨线契约的白名单（桌面壳据此在 avatars 目录里找）
   for (const preset of res.body.presets) {
     assert.match(preset.file, /^[\w][\w.-]{0,80}\.png$/, `${preset.file} 必须过白名单`)
@@ -318,9 +317,11 @@ test('预设路由：GET /presets 幂等落盘到 avatars/，且能经头像文�
   assert.equal(again.status, 200)
   assert.deepEqual(readFileSync(defaultFile), before)
   assert.deepEqual(again.body.local, res.body.local, '清单稳定')
-  // 位图预设来自插件资源：体积明显大于程序化渲染的那几张（后者每张不过几十 KB 上限）
-  const portrait = res.body.presets.find(p => p.id === 'portrait')
-  assert.equal(existsSync(join(dir, 'avatars', portrait.file)), true)
+  // 位图预设来自插件资源：三款鲸鱼娘（头像 / 立绘 / 现行）都必须落盘
+  for (const id of ['portrait', 'illustration', 'current']) {
+    const preset = res.body.presets.find(p => p.id === id)
+    assert.equal(existsSync(join(dir, 'avatars', preset.file)), true, `${id} 必须落盘`)
+  }
 })
 
 test('预设路由：无 dataDir 时清单为空但请求不失败（面板给提示而非崩）', async () => {
