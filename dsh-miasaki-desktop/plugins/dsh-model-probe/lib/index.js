@@ -33,12 +33,13 @@ import {
   shouldContinueToGenerate,
   summarizeDetail,
 } from './probe.js';
+import { readSettingsSection } from './settings-read.js';
 
 const NS = 'llm-pi-ai';
 const HEALTH_PATH = '/model-probe-api/health';
 const PROBE_PATH = '/model-probe-api/probe';
 const CAPABILITIES_PATH = '/model-probe-api/capabilities';
-const PLUGIN_VERSION = '0.2.0';
+const PLUGIN_VERSION = '0.2.1';
 
 /** A request body beyond this is refused before parsing — the client only ever sends a few fields. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -121,6 +122,11 @@ function safeMessage(error) {
 
 /**
  * The stored llm-pi-ai profile for one provider route.
+ *
+ * The read is dual-track (lib/settings-read.js): 0.1.7 removed
+ * `ctx.settings.get(ns)`, so the stored profile now comes from the profile
+ * entry config projected by `describe()`. The try/catch stays — a settings
+ * hiccup must degrade the probe to its request-supplied fields, never throw.
  * @param ctx - plugin context.
  * @param provider - the route key.
  * @returns the profile object, or null when unknown.
@@ -129,7 +135,7 @@ function resolveProfile(ctx, provider) {
   const route = pickString(provider);
   if (route === null) return null;
   let section = null;
-  try { section = ctx.settings.get(NS); } catch { section = null; }
+  try { section = readSettingsSection(ctx, NS); } catch { section = null; }
   const providers = section && typeof section === 'object' ? (section.providers || {}) : {};
   const profile = providers[route];
   return profile && typeof profile === 'object' ? profile : null;

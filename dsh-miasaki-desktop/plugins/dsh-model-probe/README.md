@@ -9,7 +9,7 @@ DSH web profile bundle，**host only**（无 client 半侧）。为设置页「�
 | 包名 | `dsh-model-probe` |
 | 平台 | host only（无 client bundle、不注册 slot） |
 | 注入服务 | `settings`、`webServer`（`credentials` / `llm` 经 `ctx.get` 可选获取） |
-| 单测 | `node test/probe.test.js`（20 例，纯逻辑、无网络） |
+| 单测 | `node test/probe.test.js`（20 例，纯逻辑、无网络）+ `node test/settings-read.test.js`（12 例：双轨 helper 契约 + probeModel 存储档案解析接线） |
 
 ### 为什么需要它
 
@@ -97,6 +97,25 @@ host 只回稳定 `kind`，**文案在客户端本地化**（中英各一份）�
 - **无副作用**：除一次极小模型调用外，不改配置、不写文件（这与 `dsh-free-model-pool`
   的 `apply` 有本质区别）。
 
+### settings 读取双轨（v0.2.1，2026-09-23）
+
+已保存行的 `baseURL` / `api` / `apiKeyEnv` 从 `llm-pi-ai` 配置解析（请求体只带
+草稿值——Models 页对未保存的新平台才随请求发 baseURL）。DSH 0.1.7 重写设置机制：
+`ctx.settings.get(ns)` 在全树移除，服务本身还在（`inject: ['settings']` 仍过得去），
+读取改走 `describe()`（每个带 volatile Config 字段的 profile 条目一项，`ns` = 条目 id、
+`value` = 解析值）。`lib/settings-read.js` 按 `typeof settings.get === 'function'`
+探针分轨：
+
+| 宿主 | 读取 | 写路径 |
+|---|---|---|
+| ≤0.1.6 | `settings.get(ns)`（已注册命名空间） | `settings.update(ns, patch)` 同名同义 |
+| 0.1.7+ | `settings.describe().find(d => d.ns === ns).value` | 同上（只受理 volatile 字段，`providers` 正是） |
+
+双轨而非版本探测的依据与 dual-model 的失效信号双轨同源：cordis 上访问一个不存在的
+服务方法是 `undefined`，`typeof` 探针在两代宿主上各自命中。**不双轨的后果**（2026-09-23
+线上实测）：0.1.7 上 `ctx.settings.get is not a function` 被 `resolveProfile` 的
+try/catch 吞掉 → 已保存行探测静默退化成 `no-credential` / `no-endpoint`。
+
 ### 安装
 
 同其它 profile bundle —— `%USERPROFILE%\.dsh\profiles\web\package.json` 的
@@ -113,6 +132,7 @@ profile 目录 `pnpm install` 后 **host 重启**生效（web bundle 图重建�
 
 ```powershell
 node test/probe.test.js                 # 20 例纯逻辑单测（判定表 / URL 规则 / 脱敏 / 能力位）
+node test/settings-read.test.js         # 12 例双轨读取（helper 契约 + probeModel 接线）
 node ../../../scripts/verify-all.mjs desktop   # 已并入 desktop 线回归
 ```
 
@@ -122,7 +142,9 @@ node ../../../scripts/verify-all.mjs desktop   # 已并入 desktop 线回归
 ### 文件
 
 - `lib/probe.js` — 纯逻辑：URL 构造、请求体构造、状态分类、脱敏（可单测、无 I/O）
+- `lib/settings-read.js` — settings 读取双轨（≤0.1.6 `get` / 0.1.7 `describe`）
 - `lib/index.js` — 插件装配：信任栅栏、路由、凭据解析、两段式探测、批量能力查询
 - `lib/index.d.ts` — 类型声明
 - `test/probe.test.js` — 判定表单测
+- `test/settings-read.test.js` — 双轨读取单测（含 probeModel 存储档案解析接线）
 - `cordis.patch.yml` — bundle 挂载声明

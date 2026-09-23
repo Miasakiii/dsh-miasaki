@@ -3,9 +3,10 @@
  *
  * Registers /freepool-api/* JSON routes on the webServer so the client panel
  * can detect free models on ANY OpenAI-compatible platform configured under
- * llm-pi-ai.providers, write detected models into settings.yaml for that
- * provider route, and switch the three agent presets' subagent backend to a
- * chosen free model.
+ * llm-pi-ai.providers, write detected models back into that provider route's
+ * settings (settings.yaml on ≤0.1.6, the profile entry config on 0.1.7+ — see
+ * lib/settings-read.js), and switch the three agent presets' subagent backend
+ * to a chosen free model.
  *
  * Platform set is the live llm-pi-ai.providers dict: a route with a baseURL
  * (or a catalog provider whose models endpoint is known) becomes a scan
@@ -29,6 +30,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSettingsSection } from './settings-read.js';
 
 const NS = 'llm-pi-ai';
 const PRESETS = ['kurumi', 'whale', 'inverse'];
@@ -209,7 +211,7 @@ export function apply(ctx) {
 
   /** Live platform list: every llm-pi-ai provider route that exposes a models endpoint. */
   const listPlatforms = () => {
-    const section = ctx.settings.get(NS);
+    const section = readSettingsSection(ctx, NS);
     const providers = section && typeof section === 'object' ? (section.providers || {}) : {};
     const out = [];
     for (const [key, cfg] of Object.entries(providers || {})) {
@@ -311,7 +313,7 @@ export function apply(ctx) {
       .map(toConfigEntry);
     if (entries.length === 0) throw new Error('该平台没有可写入的免费模型');
 
-    const section = ctx.settings.get(NS);
+    const section = readSettingsSection(ctx, NS);
     const base = section && typeof section === 'object' ? section : {};
     const providers = Object.assign({}, base.providers || {});
     const prev = providers[platform.id] || {};
@@ -319,6 +321,8 @@ export function apply(ctx) {
       api: prev.api || 'openai-completions',
       models: entries,
     });
+    // 写路径两代同名同义：≤0.1.6 合并进 settings.yaml 用户层；0.1.7 合并进
+    // profile 条目 Config 的用户层（providers 是 llm-pi-ai 的 volatile 字段）。
     await ctx.settings.update(NS, { providers });
     return { written: entries.length, platform: platform.id, models: entries.map((e) => e.id) };
   });

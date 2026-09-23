@@ -1,6 +1,6 @@
 {
   "name": "dsh-model-probe",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "模型连通性真实探测：为设置页「测试连通性」提供两段式可用性探测（零消耗握手 + 1-token 生成确认），host 侧同源 JSON 路由。",
   "license": "MIT",
@@ -21,7 +21,7 @@
     "cordis.patch.yml"
   ],
   "scripts": {
-    "test": "node test/probe.test.js"
+    "test": "node test/probe.test.js && node test/settings-read.test.js"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",

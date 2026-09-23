@@ -184,7 +184,9 @@ function planDesktop() {
   // 「测试连通性 v2」的 host 侧能力（plugins/dsh-model-probe）：语法检查 +
   // 探测判定表单测（URL 规则 / 两段式档案 / 分类表 / 脱敏 / 截断）。全部是纯逻辑，
   // 不发起任何网络请求——真实探测属实机项，见 smoke-test-matrix.md。
-  for (const entry of ['lib/index.js', 'lib/probe.js']) {
+  // settings-read 双轨（≤0.1.6 get / 0.1.7 describe）同属该插件：helper 契约
+  // 10 例 + probeModel 接线 2 例，锁定 0.1.7 拆掉 ctx.settings.get 后的两个世界。
+  for (const entry of ['lib/index.js', 'lib/probe.js', 'lib/settings-read.js']) {
     checks.push({ line: 'desktop', name: `syntax plugins/dsh-model-probe/${entry}`, cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-model-probe', entry)], cwd: dir })
   }
   checks.push({
@@ -194,6 +196,29 @@ function planDesktop() {
     args: [join(dir, 'plugins/dsh-model-probe/test/probe.test.js')],
     cwd: join(dir, 'plugins/dsh-model-probe'),
   })
+  checks.push({
+    line: 'desktop',
+    name: 'test model-probe (settings 读取双轨)',
+    cmd: process.execPath,
+    args: [join(dir, 'plugins/dsh-model-probe/test/settings-read.test.js')],
+    cwd: join(dir, 'plugins/dsh-model-probe'),
+  })
+  // 免费模型池（plugins/dsh-free-model-pool）：与 model-probe 同一破绽的同孪生
+  // 修法——0.1.7 移除 ctx.settings.get 后，模型页面板整块报错。routes 测试用
+  // fetch 打桩驱动真实 /status 与 /apply 路由（唯一外部服务是平台 /models），
+  // 双世界各一遍；settings-read 测试锁 helper 契约。
+  for (const entry of ['lib/index.js', 'lib/settings-read.js']) {
+    checks.push({ line: 'desktop', name: `syntax plugins/dsh-free-model-pool/${entry}`, cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-free-model-pool', entry)], cwd: dir })
+  }
+  for (const file of ['test/settings-read.test.js', 'test/routes.test.js']) {
+    checks.push({
+      line: 'desktop',
+      name: `test free-model-pool (${file.replace('test/', '').replace('.test.js', '')})`,
+      cmd: process.execPath,
+      args: [join(dir, 'plugins/dsh-free-model-pool', file)],
+      cwd: join(dir, 'plugins/dsh-free-model-pool'),
+    })
+  }
   // Rust 侧单测（pulse stale 语义 + 立绘回落链）。cargo 常不在 PATH，回落到
   // rustup 默认安装位置；找不到时跳过而非报失败——非 Rust 环境仍应能跑完前几项。
   const cargo = cargoBin()
