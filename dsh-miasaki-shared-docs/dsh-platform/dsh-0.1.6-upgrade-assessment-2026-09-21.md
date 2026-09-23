@@ -5,6 +5,9 @@
 - 候选：`0.1.6-alpha.2`（`alpha` 轨）／`0.1.5-rc.2`（**`next` 与 `latest` 双轨**）
 - 上一版：[`dsh-0.1.6-upgrade-assessment-2026-09-16.md`](dsh-0.1.6-upgrade-assessment-2026-09-16.md)（09-16，alpha.1 实测）
 - 配套：[`dsh-official-repo-review-2026-09-21.md`](dsh-official-repo-review-2026-09-21.md)（alpha.2 变更清单 + 五条线 slot 逐项核对）
+- **后续（2026-09-23）**：[`dsh-0.1.7-upgrade-assessment-2026-09-23.md`](dsh-0.1.7-upgrade-assessment-2026-09-23.md)——
+  本文的 §2（settings-models 失效解剖）与 §8 建议 1（双代变体适配）**仍是当前事实并在 0.1.7 实测有效**；
+  本文的升级触发条件（`next` 出现 `0.1.6-rc.*`）已被新版 §10 更新为 `0.1.7-rc.*`，以新版为准。
 - 方法：**与上一版同法**——把目标版本的**真实 npm 产物**拉下来，对全部 6 个本体补丁逐个跑真实的 `patch.mjs apply --target … --yes`
 
 ---

@@ -6,6 +6,9 @@
 - **配套（同日实测）**：[`dsh-0.1.6-upgrade-assessment-2026-09-21.md`](dsh-0.1.6-upgrade-assessment-2026-09-21.md)
   —— 本文回答「0.1.6-alpha.2 变了什么、影响哪几条线」，该文回答「**现在就升要花多大力气**」（6 个本体补丁
   在 alpha.2 真实产物上逐个跑 `apply` 的实测结果）。
+- **后续（2026-09-23）**：[`dsh-0.1.7-upgrade-assessment-2026-09-23.md`](dsh-0.1.7-upgrade-assessment-2026-09-23.md)——
+  本文 §5（kind 裁决/遮蔽规则）经 0.1.7 源码复核**依然成立**；本文 §5 后果 2（半遮蔽态）因官方在
+  0.1.7 注释掉 `TerminalRecovery`/`TerminalCleanup` 而**消失**（新版 §6/§9）。
 - 口径：`[实测]` = 本次拉 GitHub API / 本地跑命令核到；`[推断]` = 基于证据的判断，本次未做隔离实例实测
 - **本轮的方法升级** `[实测]`：`vendor/deepseek-harness` 已同步到 `0.1.6-alpha.2`，且**旧快照（alpha.1）被并排保留**
   在 `vendor/deepseek-harness-0.1.6-alpha.1/`。因此本轮所有「两版之间变没变」都是**本地逐字节 diff**，
