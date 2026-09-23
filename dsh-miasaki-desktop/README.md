@@ -35,9 +35,60 @@ CDP target，属实机项；无 host 时会以 `CDP target not found` 失败。�
 > （2026-09-10 实测跑通；断言含第 6 节「右上角安全区」：窗控裸键组与官方右栏两处控件的
 > 矩形交叠必须为 0，且垂直中心差 ≤ 2px）。
 
+## 代码签名（本地自签，2026-09-23 落地）
+
+`tauri.conf.json` 的 `bundle.windows` 已配 `certificateThumbprint` +
+`digestAlgorithm: sha256`：**每次 `npm run tauri build` 自动签名**（tauri-bundler 调
+signtool，主 exe 与 bundle 内一级二进制均签；构建日志出现 `Successfully signed: …`
+即成功）。本机运行产物不再弹 SmartScreen「已保护你的电脑」，UAC 黄条显示发布者
+**Miasaki Dev** 而非「未知」。
+
+| 项 | 值 / 说明 |
+|---|---|
+| 证书 | 自签名代码签名证书 `CN=Miasaki Dev`（EKU 1.3.6.1.5.5.7.3.3 CodeSigning，SHA-256，RSA 2048，10 年期） |
+| 指纹 | `9A849C22D97999A011E8D9863B005630E977DBD7`（填入 `tauri.conf.json` 的 `certificateThumbprint`） |
+| 归档 | pfx/cer 存 `_refs/miasaki-codesign.pfx`（已 gitignore，**私钥不入库**） |
+| 信任库 | `Cert:\CurrentUser\{My, Root, TrustedPublisher}`（本机已导入；换机/重装系统后需重新导入） |
+| 将来换 OV 证书 | 只需替换 `certificateThumbprint` 并把新证书导入 `My` 存储，链路不变 |
+
+**能力边界（必读）**：自签只覆盖**本机**。经 IM/浏览器下载（带 Mark-of-the-Web）的文件
+在**别人**机器上首次运行仍可能弹一次 SmartScreen（措辞会变为显示发布者名）。彻底免提示
+只有两条路：① Microsoft Store MSIX（免费，官方重签）；② OV/EV CA 证书（约
+¥1000–3000/年，**2024 年起 EV 不再即时免提示**，均需积累发布者信誉）。另注：Azure
+Artifact Signing 个人账号仅限美/加地区，OV 溢价换 SmartScreen 的路线已废止——详见微软
+[代码签名选项对比](https://learn.microsoft.com/zh-cn/windows/apps/package-and-deploy/code-signing-options)。
+
+**重新生成本地证书**（`_refs/miasaki-codesign.pfx` 丢失或 10 年到期后）：
+
+```powershell
+$rsa = [System.Security.Cryptography.RSA]::Create(2048)
+$dn  = New-Object System.Security.Cryptography.X509Certificates.X500DistinguishedName("CN=Miasaki Dev")
+$req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest($dn, $rsa,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$usage = New-Object System.Security.Cryptography.OidCollection
+$usage.Add("1.3.6.1.5.5.7.3.3") | Out-Null
+$req.CertificateExtensions.Add((New-Object System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension($usage, $false)))
+$req.CertificateExtensions.Add((New-Object System.Security.Cryptography.X509Certificates.X509KeyUsageExtension([System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature, $false)))
+$cert = $req.CreateSelfSigned([System.DateTimeOffset]::Now.AddDays(-1), [System.DateTimeOffset]::Now.AddYears(10))
+$pwd  = ConvertTo-SecureString -String "<导出密码>" -Force -AsPlainText
+[System.IO.File]::WriteAllBytes("$PWD\miasaki-codesign.pfx", $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $pwd))
+# 导入信任库（My/Root/TrustedPublisher 三处）后用 certmgr.msc 取新指纹更新 tauri.conf.json
+```
+
+**构建环境三件套**（2026-09-23 实测，受限终端/沙箱里跑 `npm run tauri build` 必看）：
+
+1. `cargo` 可能不在 PATH——rustup 实际装在 `%USERPROFILE%\.cargo\bin`，先补上；
+2. Rust release 编译要 MSVC `link.exe`——没有的终端先执行
+   `"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"`
+   （`where.exe link` 可自检）；
+3. `%TEMP%` 不可写时 WiX `light.exe` 会以 `failed to run` 失败（蹭不上证书链路）——
+   构建前把 TEMP/TMP 指到可写目录（注意：`cmd /c "vcvars && set TEMP=…"` 的 `&&` 链里
+   后置 `set` 会被 setlocal 作用域吞掉，pwsh 里直接 `$env:TEMP=…` 或用 bat 逐行 call）。
+
 ## DSH 运行时补丁（本体例外）
 
-`patches/` 存放**五处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
+`patches/` 存放**六处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
 **DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件均已入库，可重建/可校验/可回退。
 
 | 补丁 | 目标包 | 做什么 |
@@ -46,10 +97,13 @@ CDP target，属实机项；无 host 时会以 `CDP target not found` 失败。�
 | [`dsh-client-ui-conversation`](patches/dsh-client-ui-conversation/README.md) | 官方会话头 | 窄宽度溢出保护：`headerActions` 改可收缩 + 横向可滚，消除右栏展开时的控件压叠 |
 | [`dsh-client-ui-trajectory`](patches/dsh-client-ui-trajectory/README.md) | 官方轨迹页 | 首 token 计时可恢复：实时 chunk 缺位时从 `assistant/message` 紧凑流恢复，修掉「首 token 时间不可用」 |
 | [`dsh-client-ui-chat`](patches/dsh-client-ui-chat/README.md) | 官方聊天区 | 同上，作用于消息气泡的「首 token 用时（TTFT）」与窗口口径兜底统计 |
+| [`dsh-client-ui-attachment`](patches/dsh-client-ui-attachment/README.md) | 官方消息图片画廊 | 多图 tile 宽高比保持：64×64 定宽 cover 方块改为按原始比例自适应（44–220）+ contain 完整显示，修「截图被裁成方块」 |
 | [`dsh-cordis-host-runner`](patches/dsh-cordis-host-runner/README.md) | 官方 host 侧 Cordis runner | `cordis_inspect_query`(client) 永久挂起修复：记下页面的拒绝原因 + 15s 兜底超时，把「无限挂起」变成「带原因的报错」 |
 
-> 前四个作用于浏览器 bundle，改完**刷新页面**即生效；第五个作用于 **host 侧 Node 包**
+> 前五个作用于浏览器 bundle，改完**刷新页面**即生效；第六个作用于 **host 侧 Node 包**
 > （`lib/index.js`），改完必须**重启 DSH host 进程**才生效（Node 已加载的模块不会热更新）。
+> 另有一件作用于 host 侧的图片准入补丁属 dual-model 线（`../dsh-miasaki-dual-model/patches/`），
+> 同样需重启 `dsh web` 才生效。
 
 ```powershell
 cd patches/<补丁目录>
@@ -60,21 +114,30 @@ node patch.mjs revert       # 还原
 node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
 ```
 
-> **当前基线：DSH 0.1.5-rc.1**。settings-models 于 2026-09-10 重打（原版 `A60FD863…` →
-> 补丁版 `E602C1F1…`；0.1.2 的 7 个锚点在新版中全部唯一命中，未改动任何 `EDITS`）；
-> conversation 于 2026-09-10 新建（原版 `81314DFD…` → 产物 `D9A841DE…`，1 条锚点唯一命中）；
-> trajectory / chat 两个计时补丁同日新建（`73A878B4…` → `C3485ADF…`、`4F9CFFF8…` → `BE4C68D5…`，
-> 各 2 条锚点唯一命中）。**两个计时补丁要一起重打**才完整（同一个 `firstTokenTime` 的两处显示）。
-> cordis-host-runner 同日新建（原版 `58EF79A0…` → 产物 `8B81500A…`，4 条锚点唯一命中）——
-> 它是本目录里**唯一作用于 host 侧 Node 包**的补丁（其余四个都是浏览器 bundle）。
-> 下次升级的流程（五个补丁**各自独立**）：`status` 报 `unknown` → `rebuild-baseline.mjs` 重建 →
+> **当前基线：DSH 0.1.7-alpha.2（2026-09-23 全量重打）**。本机全局 DSH 已实装 0.1.7-alpha.2，
+> 六个补丁（含 dual-model 线的图片准入补丁）当日全部 `rebuild-baseline` 重打、`EDITS` 零改：
+> settings-models（`B2D7D445…` → `9F2F1EE8…`，probe 自动选中 0.1.6+ 变体分支）、
+> conversation（`38326414…` → `59A185B9…`）、trajectory / chat（`E64C3D03…` → `4B577822…`、
+> `CCC14F1E…` → `1594AC3C…`）、cordis-host-runner（`AC73F866…` → `D3126110…`；
+> 图片准入补丁 `05DAAAF8…` → `450C25A2…`，见 `../dsh-miasaki-dual-model/patches/`）。
+> **两个计时补丁要一起重打**才完整（同一个 `firstTokenTime` 的两处显示）。
+> cordis-host-runner 是本目录里**唯一作用于 host 侧 Node 包**的补丁（其余都是浏览器 bundle）
+> ——host 侧两个补丁（它 + 图片准入）**需重启 `dsh web` 生效**，client 侧刷页面即生效。
+> attachment 于 2026-09-23 新建并应用（**DSH 0.1.7-alpha.2**，原版 `397B4947…` → 产物 `381D2676…`，
+> 2 条锚点唯一命中；纯 CSS，修多图 tile 64×64 cover 方块 → 比例自适应 + contain）。
+>
+> 历史基线记录（0.1.5-rc.1 时期）：settings-models 于 2026-09-10 重打（`A60FD863…` → `E602C1F1…`）；
+> conversation 于 2026-09-10 新建（`81314DFD…` → `D9A841DE…`）；
+> trajectory / chat 于 2026-09-10 新建（`73A878B4…` → `C3485ADF…`、`4F9CFFF8…` → `BE4C68D5…`）；
+> cordis-host-runner 于 2026-09-21 新建（`58EF79A0…` → `8B81500A…`）。
+> 下次升级的流程（各补丁**各自独立**）：`status` 报 `unknown` → `rebuild-baseline.mjs` 重建 →
 > 按它打印的值更新 `patch.mjs` 的常量 → `verify` → `apply`。
 
-详见五个补丁各自的 README，以及
+详见六个补丁各自的 README，以及
 [模型设置工具包设计](../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md)、
 [会话头部挤压修复设计](../dsh-miasaki-canvas/design/2026-09-10-conversation-header-crowding-fix.md)
 与[首 token 计时恢复设计](design/trajectory-ttft-restore.md)。
-除这五个补丁外，本线对 DSH 的一切改动都在令牌层，DSH 升级不受影响。
+除这些补丁外，本线对 DSH 的一切改动都在令牌层，DSH 升级不受影响。
 
 ## 三个主题
 
@@ -230,6 +293,27 @@ node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
   的 `quote_pool`）后必须重新生成**：`powershell -File scripts/gen-bubbles.ps1`（无 PowerShell 5
   时用 `pwsh`）
 
+## 拖拽上传附件到会话（2026-09-22 设计定稿，未实施）
+
+- **症状**：桌面端把文件拖进主窗口**静默无效果**（光标显示 copy、松手无反应）——
+  同一 DSH 在普通浏览器里打开则一切正常（官方本就有拖放上传）。
+- **根因**：Tauri（tauri-runtime-wry）**默认注册 drag-drop handler**，在 Windows 上先
+  `SetAllowExternalDrop(false)` 关掉 WebView2 自身外部拖放、再 `RegisterDragDrop`
+  把文件拖放拦进 OLE 层、转成 `tauri://drag-drop` 窗口事件；本壳无人监听 ⇒ drop
+  静默丢失。官方 Web 侧的拖放上传链路（`dsh-client-ui-attachment` 的 document 级
+  DnD + `DropOverlay` 遮罩 + `dsh-client-file-upload` 流式上传）毫发无损——只是
+  **被拦在壳外**，碰不到。
+- **修法**：主窗 builder 一行 `.disable_drag_drop_handler()`（tauri 官方注释：
+  Windows 上用 HTML5 DnD 的必要条件）让拖放直达页面，官方链路全量复用；**配套
+  注入层安全网** `themes/src/09-dropguard.js`——官方监听只活在对话视图，其余页面
+  （轨迹 / 用量 / 设置 / 启动页）drop 落空会触发浏览器默认 `file://` 导航炸掉 SPA，
+  安全网只拦文件拖放、官方已消费（`defaultPrevented`）的 drop 精准让位。
+- **不含**：loading 页拖文件排队自动附、自建限额判定（单一事实源在官方
+  `intakeFiles`）、Rust 侧 OLE 事件桥（仅作实机失败时的退路）。
+
+设计：`design/drag-drop-attachment-upload.md`（根因证据链 / 方案选型 / 行为规格 /
+实机验收十项）。
+
 ## 目录
 
 ```
@@ -252,7 +336,7 @@ desktop/
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
-   ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航 + fleet 脉冲看门狗（环境变量 MIASAKI_FLEET_PULSE）
+   ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航 + 后端存活看门狗 + fleet 脉冲看门狗
    ├─ src/launcher_icon.rs   # 软件头像 → 窗口/托盘图标（读 appearance 线配置，1.5s 巡检跟随）
    ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
    ├─ injected/theme-init.js # 构建产物（include_str! 注入，勿手改）
@@ -286,6 +370,13 @@ desktop/
 - **写入配置**：`ctx.settings.update('llm-pi-ai', …)` 深合并写入目标平台 `models`
   （保留其他 provider 与字段），DSH 设置系统校验 schema；`/freepool-api/subagent` 重写三预设
   `tool-subagent` / `tool-subagent-fork` 的 `agentOptions`（provider 必须是已登记路由键）。
+- **settings 读取双轨（v0.3.1，2026-09-23）**：DSH 0.1.7 重写设置机制，`ctx.settings.get(ns)`
+  在全树移除（服务还在、`inject: ['settings']` 仍过得去），读取改走 `describe()`
+  （profile 条目 Config 投影，`ns` = 条目 id）。`lib/settings-read.js` 按 `typeof get`
+  探针双轨：≤0.1.6 走 `get`、0.1.7+ 走 `describe`，写路径两代同名同义（`update` 深合并，
+  0.1.7 只受理 volatile 字段——`providers` 正是）。不双轨时 0.1.7 上面板整块报
+  `ctx.settings.get is not a function`（线上实测）；配套评估见 shared-docs
+  `dsh-0.1.7-upgrade-assessment-2026-09-23.md` §7.4。
 
 安装（host 重启后生效）：`plugins/dsh-free-model-pool` 为 `file:` 依赖，被
 `%USERPROFILE%\.dsh\profiles\web\package.json` 的 `dsh.profile.bundles` 引用；修改源码后需在
@@ -355,6 +446,13 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
   `openai-completions`、`openai-responses`；其余协议明确回 `unsupported`。
 - **凭据**：表单临时 key → `credentials.resolve(apiKeyEnv)` → 进程环境变量；
   **key 永不回传**（`detail` 两遍脱敏）。
+- **settings 读取双轨（v0.2.1，2026-09-23）**：已保存行的 `baseURL` / `api` /
+  `apiKeyEnv` 从 `llm-pi-ai` 配置解析（请求体只带草稿值）。DSH 0.1.7 移除
+  `ctx.settings.get(ns)` 后改走 `describe()`（profile 条目 Config 投影）；
+  `lib/settings-read.js` 按 `typeof get` 探针双轨（≤0.1.6 走 `get`、0.1.7+ 走
+  `describe`）。不双轨时 0.1.7 上已保存行的探测静默退化成 no-credential /
+  no-endpoint（线上实测）；配套评估见 shared-docs
+  `dsh-0.1.7-upgrade-assessment-2026-09-23.md` §7.4。
 - **信任栅栏**：Host / Origin / `sec-fetch-site` 三层（与 sidebar、canvas 的 `/api` 栅栏同构）。
 - **无副作用**：除一次极小模型调用外不改配置、不写文件。
 - **降级**：路由 404（插件未装 / host 未重启）时补丁自动回退 v1 目录探测并附提示，
@@ -368,22 +466,32 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 `dependencies` + `dsh.profile.bundles` 加 `dsh-model-probe`（file: 依赖），
 profile 目录 `pnpm install`，**host 重启**后生效。
 
-自证：`node plugins/dsh-model-probe/test/probe.test.js`（20 例判定表单测，纯逻辑无网络），
-已并入 `node scripts/verify-all.mjs desktop`。
+自证：`node plugins/dsh-model-probe/test/probe.test.js`（20 例判定表单测，纯逻辑无网络）+
+`node plugins/dsh-model-probe/test/settings-read.test.js`（12 例：双轨 helper 契约 10 +
+probeModel 存储档案解析接线 2），已并入 `node scripts/verify-all.mjs desktop`。
 
 ## 设计规范
 
 - 总体设计与三主题规范：`design/themes.md`
 - DSH 令牌面（构建校验依据）：`design/token-surface.txt`
 - 启动可靠性（失败恢复页/健康标记）：`design/bootstrap-reliability.md`
+- 启动加载 2.0（闪窗根治 + 内嵌启动终端日志流，2026-09-22 定稿）：`design/boot-loading-terminal.md`
 - 模型连通性探测 v2（两段式探测 / 分类表 / 降级策略）：`design/model-probe-v2.md`
+- 拖拽上传附件到会话（Tauri 默认拖放拦截根因 / 一行修复 + 注入层安全网，2026-09-22 定稿）：`design/drag-drop-attachment-upload.md`
 
 ## 行为约定
 
 - 关闭窗口 → 弹窗确认（标题栏 X / Alt+F4 / 托盘「退出」/ 桌宠「退出应用」统一入口，弹窗为三主题自绘）；
-  选择「关闭应用」会**同步停止由桌面端拉起的 DSH 服务**（下次双击自动重新拉起）；「取消」仅收起弹窗。
+  选择「关闭应用」会**停止由桌面端拉起的 DSH 服务**（下次双击自动重新拉起）；「取消」仅收起弹窗。
   用户**手动启动**、或端口已就绪时接入的 DSH 服务不会被停止（非本应用 spawn 的后端不触碰）。
   重复触发关闭请求仅重新显示确认弹窗；仅 Alt+F4 连击（前端无响应）时兜底强制退出、后端保持运行。
+- **后端断连自愈（2026-09-23）**：页面就绪后常驻「后端存活看门狗」（2s 探测：自拉后端进程
+  存活 + 3080 端口监听）。后端意外死亡（被外部杀掉 / 撞上正在退出的旧服务 / 采用的外部后端
+  退出）时自动重拉 `dsh web`，失败按 2s→30s 退避重试；文档从未加载成功过（错误页）时重拉后
+  补一次重新导航，活页面则由 DSH 前端自带重连静默恢复（鉴权 cookie 持久有效，无需刷新）。
+  关闭前的保险：若 3080 上仍有**本应用进程树之外的客户端**（浏览器等）连接着后端，
+  关闭应用时**保留后端不杀**（探测失败按旧语义照停，最坏不劣化）——共享后端不应被
+  「关桌面端」拖走，曾致浏览器页面断连（事故复盘见 CHANGELOG 2026-09-23）。
 - **启动画面与 DSH 页画面统一**：loading 页与 DSH 页共用同一主题标题栏（本地页不出现主题切换条/水印），
   配色与纹章随上次选择主题（pure/zafkiel/kurkuriel）；主题偏好由 DSH 页同步持久化
   `%APPDATA%\com.miasaki.desktop\prefs.json`，下次启动注入启动画面。
@@ -403,3 +511,31 @@ profile 目录 `pnpm install`，**host 重启**后生效。
 每次启动的进度落盘于 `%LOCALAPPDATA%\miasaki\bootstrap.json`（启动尝试阶段/失败原因/上次成功时间），
 下次启动若上次失败会提前提示。设计：`design/bootstrap-reliability.md`（借鉴
 deepseek-harness-desktop 启动恢复 + 健康标记 + 可靠性矩阵思路）。
+
+### 鉴权 cookie 预置注入（2026-09-22 **已实施**，实机验收待用户）
+
+**症状**：「启动后总出错，点一下刷新才能正常」——错误页是 401 纯文本页（`dsh web
+authentication required; reopen the URL printed by dsh web.`）在深色窗口里的裸露渲染。
+dsh web 每次重启都有新签名 cookie，首次 `GET /` 必然 401；9-05 的「进 401 页后自动 reload」
+恢复链对 `text/plain` 文档的文本检测无保证，漏检即停住。
+
+**修法（已落地）**：cookie 签名与写入**提前到 navigate 之前**（loading 页 Web Crypto 签名 →
+invoke → Rust 经 Tauri 2 cookie API 写入 3080 域，navigate 前 3s 超时等待、fail-open），
+首次 `GET /` 即带有效 cookie，401 不发生；00-boot.js 的检测→reload 链降级为加固兜底
+（三级文本兜底 + 四轮检查）。secret 改为从 `~/.dsh/.credentials.yaml` 动态读（失败回落
+硬编码），轮换不再要改源码。已随 release 构建（47.8s 干净通过）替换 `dist/Miasaki.exe`。
+设计与变更记录：`design/auth-cookie-prepinject.md`；验收清单见 `design/CHANGELOG.md` 同日条目。
+
+## 启动加载 2.0 · 内嵌启动终端与闪窗根治（2026-09-22 设计定稿，未实施）
+
+- **根治启动闪窗**：`cmd /C dsh web` 链路闪窗先归因（嫌疑矩阵 + Process Monitor 验证法），
+  首选**绕开 cmd 直达 `node <bin.js> web --no-open`**（npm shim 入口解析），解析失败静默回落
+  现行 cmd 链——零回归兜底；
+- **启动终端内置**：dsh stdout 从「只写 server.log」改为 tee，实时进加载页——终端风日志流
+  （默认折叠计数徽标 / 失败自动展开 / 环形缓冲）+ 探活→拉起→等待→就绪四阶段进度；
+- **视觉升级**：三主题纹章旋转、扫描线、打字机光标（reduced-motion 全降级）；
+  与失败恢复卡片 / 诊断按钮并存（日志流即失败现场）。
+
+设计：`design/boot-loading-terminal.md`。与之配套的 appearance 线「DSH 首帧启动画」
+（3080 首帧全屏 splash，2.5s 超时兜底不挡错误页）与两线契约见
+`../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md`。
