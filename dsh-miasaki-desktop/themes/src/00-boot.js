@@ -44,17 +44,28 @@
             return crypto.subtle.digest('SHA-256', new TextEncoder().encode('127.0.0.1:3080')).then(function (dig) {
               var name = 'dsh-auth-' + b64url(new Uint8Array(dig))
               document.cookie = name + '=v1.' + p.body + '.' + p.sig + '; Path=/; Max-Age=2592000; SameSite=Strict'
-              // init script 运行于 document_start，body 尚未就绪：延迟复查 401 页并重载
-              var check = function () {
+              // init script 运行于 document_start，body 尚未就绪：多轮复查 401 页并重载。
+              // 2026-09-22 加固（auth-cookie-prepinject 设计 §2.4）：401 是 text/plain
+              // 纯文本文档，body/innerText 无保证 → 三级文本兜底 + 四轮检查（漏检即永久
+              // 停住） + 文案加宽。预置注入（main.rs）生效时此链不触发，纯兜底。
+              var is401 = function () {
                 try {
-                  var txt = document.body ? (document.body.innerText || '') : ''
-                  if (txt.indexOf('authentication required') !== -1) {
-                    location.reload()
+                  if (document.body) {
+                    var t = (document.body.innerText || '') || (document.body.textContent || '')
+                    if (t && (t.indexOf('authentication required') !== -1
+                      || t.indexOf('reopen the URL printed') !== -1)) return true
                   }
+                  var r = document.documentElement
+                  if (r && r.textContent && (r.textContent.indexOf('authentication required') !== -1
+                    || r.textContent.indexOf('reopen the URL printed') !== -1)) return true
                 } catch (e2) { /* ignore */ }
+                return false
               }
+              var check = function () { if (is401()) location.reload() }
               check()
+              setTimeout(check, 100)
               setTimeout(check, 400)
+              setTimeout(check, 1200)
             })
           })
       }

@@ -184,6 +184,59 @@
         diag.style.display = 'flex';
       }
     }).catch(function () {});
+
+    // 鉴权 cookie 预置（2026-09-22，design/auth-cookie-prepinject.md）：
+    // dsh web 每次重启都有新签名 cookie，首次 GET / 必然 401（纯文本错误页）。
+    // 这里在 navigate 之前签好 cookie 经 invoke 交 Rust 写入 WebView2 cookie jar，
+    // 使首次请求即带有效 cookie —— 401 不发生（旧的「401 检测→reload」降级为兜底）。
+    // 全程静默 try/catch：失败时 Rust 3s 超时放行 + 00-boot.js 兜底链接管。
+    ;(function () {
+      var SECRET_B64 = '2h4nw6Dhj2bmzH3ATVS3MAcld_4DEW1PieSSOi_ETas' // 与 00-boot.js 同源兜底值
+      function b64url(u8) {
+        var s = ''
+        for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i])
+        return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+      }
+      function fromB64url(s) {
+        var bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'))
+        var u8 = new Uint8Array(bin.length)
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
+        return u8
+      }
+      function pinvoke(cmd, args) {
+        if (window.__TAURI__ && window.__TAURI__.core) return window.__TAURI__.core.invoke(cmd, args)
+        return Promise.reject(new Error('Tauri IPC 不可用'))
+      }
+      function start() {
+        try {
+          if (typeof crypto === 'undefined' || !crypto.subtle) return
+          pinvoke('auth_secret')
+            .catch(function () { return null })
+            .then(function (secret) {
+              var raw = (typeof secret === 'string' && secret) ? secret : SECRET_B64
+              return crypto.subtle.importKey('raw', fromB64url(raw), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+                .then(function (key) {
+                  var issued = Date.now()
+                  var expires = issued + 30 * 86400 * 1000
+                  var payload = JSON.stringify({ version: 1, authority: '127.0.0.1:3080', issuedAt: issued, expiresAt: expires })
+                  var body = b64url(new TextEncoder().encode(payload))
+                  return crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)).then(function (sig) {
+                    return crypto.subtle.digest('SHA-256', new TextEncoder().encode('127.0.0.1:3080')).then(function (dig) {
+                      return {
+                        name: 'dsh-auth-' + b64url(new Uint8Array(dig)),
+                        value: 'v1.' + body + '.' + b64url(new Uint8Array(sig))
+                      }
+                    })
+                  })
+                })
+            })
+            .then(function (c) { return pinvoke('set_auth_cookie', { name: c.name, value: c.value }) })
+            .catch(function () { /* 静默降级 */ })
+        } catch (e) { /* 静默降级 */ }
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start)
+      else start()
+    })();
   </script>
 </body>
 </html>

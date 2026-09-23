@@ -13,6 +13,8 @@ Miasaki.exe (Tauri 2, 单进程)
 │   ├─ set_mode / set_intensity(共享 Arc<Mutex<PetShared>>)
 │   └─ 33ms SetTimer → compose(帧更新 + 惰性 present)
 ├─ hash watchdog(tokio,33ms):URL fragment → 主题/强度/拖窗/命令
+├─ 后端存活看门狗(tokio,2s):后端死亡 → 自动重拉 dsh web(退避 2s→30s)+ 错误页重导航(2026-09-23)
+├─ fleet 脉冲看门狗(tokio,2s,可选):MIASAKI_FLEET_PULSE 文件 → 桌宠 fleet 指示
 ├─ 素材服务(127.0.0.1:39800,exe 旁 ui/pets|icons,CORS)
 └─ 托盘(tray-icon):显示/隐藏主窗口、退出
 ```
@@ -40,6 +42,8 @@ Miasaki.exe (Tauri 2, 单进程)
 | 桌宠气泡 = 提醒模型 `Alert`(R4/R7 2026-09-16) | 单槽 → `{ id, frame, priority, sticky, until }`;优先级 **审批(0) > 告警(1) > 状态(2) > 台词(3)**;同 id **就地更新**(不重置计时,状态抖动不闪);**按 id 精确移除**(`resolve_alert`);低优先级受 `ALERT_MIN_DWELL_MS=900ms` 最小驻留保护,审批/告警**恒可立即抢占**。未采纳参考实现的「被抢占项回队首」(我方同时只展示一个气泡) |
 | 桌宠内联审批 = 单向链 + 官方 `answer()`(R5/M3.2 2026-09-16) | **Rust 不持有任何 DSH API**:命中区(`approval.png` 固定矩形)→ `decide_approval` → 乐观收起 + 单调 `seq` → `wv.eval` 派发 `miasaki-approval-decision` → `dsh-pet-panel` 在跨会话 `pendingInteractions` 中按 `key` 匹配 → 官方 `PendingApproval.answer('allowed-once'\|'rejected')`。红线:仅用户显式点击、仅两个枚举、seq 去重、**失败不假装成功**(`DECISION_FALLBACK_MS=3000ms` 后回落「需要你的批准」);**无 `key` 不挂可交互气泡**(身份门禁) |
 | 桌宠状态扫描(DOM 兜底) = 节奏分级 + 零强制布局(2026-09-08) | 原实现每轮对每个 button 求 `offsetParent`(强制布局)、且每轮重算含 `elementFromPoint`/`getComputedStyle` 的 diag;长会话+流式输出下实测每 1.5s 出现 15~47ms 主线程尖峰,表现为输入发涩/发送无响应。改为 activity 每轮、effort/approval 每 2 轮、hidden 时每 4 轮,diag 按 10s 节流重算 |
+| 后端存活看门狗 = 2s 探测 + 自动重拉(2026-09-23) | 此前运行期无任何恢复手段:后端意外死亡(外部杀掉 / 撞上正在退出的旧服务 / 采用的外部后端退出)后 webview 永久停在死后端,只能重启整个应用。看门狗判活 = 自拉后端进程(`OpenProcess`+`GetExitCodeProcess==STILL_ACTIVE`)+ 3080 TCP 连通;重拉失败按 2s→4s→8s→16s→30s 退避;文档从未加载成功(错误页)时重拉后补一次重新导航,活页面交给 DSH 前端自带 500ms→10s 指数退避重连(cookie 持久有效,无需 reload)。主动关闭(`SHUTTING_DOWN`)即退,不与停后端抢节奏 |
+| 关闭应用 ≠ 无条件停后端(2026-09-23) | 后端是共享服务:桌面端两次关闭曾分别杀死浏览器正连着的后端 → 页面断连只能等手动重启。关闭前用 Toolhelp32 进程树 + `netstat -ano` **对端端口**判定外部客户端(WebView2 子进程与自身剔除);仍然连着 → 保留后端并落日志,没人用 → 照旧 taskkill。探测失败回落旧语义(照停),最坏不劣化 |
 
 ## 3. 数据流
 

@@ -21,6 +21,10 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
+    # 运行期后端存活看门狗（OpenProcess + GetExitCodeProcess 判活）与
+    # 外部客户端探测（Toolhelp32 进程树），见 main.rs「后端断连自愈」段。
+    "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
 
 [profile.release]

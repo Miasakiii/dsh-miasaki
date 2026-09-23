@@ -157,6 +157,10 @@ html[data-miasaki-theme="zafkiel"] body { /* 令牌重定义 */ }
 - 拉起：`cmd /C dsh web`，`CREATE_NO_WINDOW`，日志追加到 `%LOCALAPPDATA%\miasaki\server.log`；
   记录子进程 PID，用户确认关闭应用时 `taskkill /T /F` 停止（**仅限本应用拉起的后端**；
   端口已就绪时接入的后端不触碰），下次启动自动重新拉起。
+- **后端断连自愈（2026-09-23）**：关闭前探测 3080 上是否有本应用进程树之外的客户端
+  （浏览器等；Toolhelp32 进程树 + netstat 对端端口判定），有则保留后端不杀；页面就绪后
+  另有 2s 存活看门狗，后端意外死亡自动重拉（2s→30s 退避）。设计细节见 CHANGELOG
+  2026-09-23 与 ARCHITECTURE.md §2。
 - 失败路径：loading 页显示「未能唤醒 DSH —— dsh 命令不可用或服务启动失败」+ 重试按钮（重试=重新探活+拉起）。
 - loading 页为本地静态页，**随主题换肤**（色板与纹章按 pure/zafkiel/kurkuriel 三套，`__MIA_THEME__` 注入），
   标题栏与 DSH 页共用 runtime.js 的 `#miasaki-titlebar`（画面统一）；就绪后导航远程页。

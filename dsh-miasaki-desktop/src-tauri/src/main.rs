@@ -24,11 +24,23 @@ static LAUNCHING: AtomicBool = AtomicBool::new(false);
 /// 启动序列代际：retry 时 +1，旧序列检测到代际变化自行退出（避免双序列并存）。
 static BOOTSTRAP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 /// 桌面端拉起的 dsh web 进程 PID；None = 后端非本应用启动（用户手动/已在运行），关闭应用时不杀。
+/// 注意（2026-09-23）：关闭前还会探测 3080 上是否有本应用进程树之外的客户端（浏览器等）
+/// 仍连着——有则保留后端不杀，杜绝「关桌面端 → 拖走共享后端 → 浏览器断连」。
 static DSH_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
 /// 最近一次关闭请求时间：短时间内重复请求视为前端无响应，兜底强制退出（不杀后端）。
 static LAST_CLOSE_REQ: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
 /// 最近一次观察到的主题（prefs 落盘去重）。
 static LAST_THEME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+/// 鉴权 cookie 预置就绪位：`set_auth_cookie` 成功写入 WebView2 cookie jar 后置位；
+/// `start_launch_sequence` 在 navigate 前等待（3s 超时放行，fail-open）。
+static AUTH_COOKIE_READY: AtomicBool = AtomicBool::new(false);
+/// 主动关闭流程进行位：`shutdown_app` 置位 → 后端存活看门狗下一轮即退出，
+/// 不与「停后端 + 退出」抢节奏（避免关闭前一刻又把新后端拉起来）。
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+/// 3080 文档成功加载就绪位：`on_page_load` 命中远程 URL 时置位。后端看门狗重拉后端后
+/// 据此区分「活 SPA」（DSH 前端自带指数退避重连，静候即可，无需 reload）与「从未加载
+/// 成功的错误页」（WebView2 错误页不会自行重试，必须重新导航）。
+static PAGE_UP: AtomicBool = AtomicBool::new(false);
 
 fn remote_url() -> String {
     std::env::var("MIASAKI_REMOTE").unwrap_or_else(|_| REMOTE_URL.to_string())
@@ -228,9 +240,20 @@ fn save_prefs_theme(theme: &str) {
 /* ---------------- 关闭流程（确认弹窗 + 同步停止 DSH 后端） ---------------- */
 
 /// 停止由桌面端拉起的 dsh web（cmd 进程树：taskkill /T）。非本应用拉起的后端不触碰。
+/// 2026-09-23 起：关闭前探测 3080 上是否仍有本应用进程树之外的客户端（浏览器等）
+/// 连接着——后端是共享服务，「关桌面端」不应把别人正在用的连接拖走（12:14 断连事故
+/// 根因：桌面端两次关闭分别杀掉了浏览器正连着的后端）。有外部客户端 → 保留 + 落日志；
+/// 探测失败（netstat 起不来）→ 维持历史语义照停，最坏不劣化。
 fn kill_spawned_dsh() {
     let pid = DSH_PID.lock().unwrap().take();
     let Some(pid) = pid else { return };
+    if external_backend_clients() {
+        app_log_line(&format!(
+            "[{}] close: 后端 pid {pid} 仍有外部客户端（浏览器等）连接 → 保留不停止\n",
+            chrono_now()
+        ));
+        return;
+    }
     app_log_line(&format!("[{}] shutting down dsh backend pid {pid}\n", chrono_now()));
     #[cfg(target_os = "windows")]
     {
@@ -252,6 +275,8 @@ fn kill_spawned_dsh() {
 /// 确认关闭：停后端 + 退出（仅由用户确认后的入口调用，不经过重复请求兜底判定）。
 fn shutdown_app(app: &AppHandle) {
     app_log_line(&format!("[{}] shutdown confirmed\n", chrono_now()));
+    // 先告知后端看门狗「这是主动关闭」：它下一轮即退出，不会在关闭流程里重拉后端。
+    SHUTTING_DOWN.store(true, Ordering::SeqCst);
     kill_spawned_dsh();
     app.exit(0);
 }
@@ -295,12 +320,97 @@ fn request_close_with(app: &AppHandle, system: bool) {
 
 /* ---------------- DSH 启动器 ---------------- */
 
+/// dsh web 鉴权 secret：读 `~/.dsh/.credentials.yaml` 的
+/// `client-connection/browser-session.secret`（2026-09-22 预置注入配套的「secret 动态化」）。
+/// 手写行解析，零 crate 依赖：定位段 → 段内缩进行找 `secret:`；值须为 b64url 字符集。
+/// 任何失败返回 None —— 调用方（loading 页）回落硬编码常量，行为与历史版本一致。
+#[tauri::command]
+fn auth_secret() -> Option<String> {
+    let path = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .map(|h| h.join(".dsh").join(".credentials.yaml"))?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut in_section = false;
+    for line in text.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let top = !line.starts_with(' ') && !line.starts_with('\t');
+        if top {
+            in_section = line.trim_end() == "client-connection/browser-session:";
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(rest) = line.trim_start().strip_prefix("secret:") {
+            let v = rest.trim().trim_matches('"').trim_matches('\'');
+            if !v.is_empty()
+                && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Some(v.to_string());
+            }
+            return None;
+        }
+    }
+    None
+}
+
+/// 预置 dsh web 鉴权 cookie：由 loading 页 Web Crypto 签名后经 IPC 送入，在 **navigate 之前**
+/// 写入 WebView2 的 cookie jar，使首次 `GET /` 即带有效 cookie —— 401 不发生
+/// （2026-09-22「启动后总出错要点刷新」修复的主修；设计见 design/auth-cookie-prepinject.md）。
+/// async 命令：Webview2 的 cookie API 在同步命令里死锁（wry#583）。
+#[tauri::command]
+async fn set_auth_cookie(app: AppHandle, name: String, value: String) -> Result<(), String> {
+    if name.is_empty() || value.is_empty() {
+        return Err("empty cookie name/value".into());
+    }
+    use tauri::webview::Cookie;
+    let nlen = name.len();
+    let vlen = value.len();
+    // session cookie（不设 max_age）：预置每次启动执行，跨文档导航/reload 有效即够；
+    // 3080 文档内 00-boot.js 的同名写入（带 30 天 Max-Age）会把它升级为持久 cookie。
+    let cookie = Cookie::build((name, value))
+        .domain("127.0.0.1")
+        .path("/")
+        .same_site(tauri::webview::cookie::SameSite::Strict)
+        .build();
+    let wv = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    wv.set_cookie(cookie).map_err(|e| format!("set cookie failed: {e}"))?;
+    AUTH_COOKIE_READY.store(true, Ordering::SeqCst);
+    app_log_line(&format!(
+        "[{}] auth cookie pre-injected (name len {}, value len {})\n",
+        chrono_now(),
+        nlen,
+        vlen
+    ));
+    Ok(())
+}
+
+/// navigate 前等待预置 cookie 就绪（50ms 轮询 + 超时放行）。
+/// fail-open：loading 页签名失败 / IPC 失败 / WebView2 拒绝时，超时后照常 navigate，
+/// 由 00-boot.js 的「401 检测→reload」加固链兜底 —— 最坏情况不劣化。
+async fn wait_auth_cookie(timeout: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if AUTH_COOKIE_READY.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// DSH 后端端口（与 REMOTE_URL 同源；存活探测 / netstat 外部客户端枚举共用同一口径）。
+const BACKEND_PORT: u16 = 3080;
+
 fn port_ready() -> bool {
-    TcpStream::connect_timeout(
-        &"127.0.0.1:3080".parse().expect("valid socket addr"),
-        Duration::from_millis(300),
-    )
-    .is_ok()
+    let addr = format!("127.0.0.1:{BACKEND_PORT}")
+        .parse()
+        .expect("valid socket addr");
+    TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
 fn spawn_dsh() -> Result<PathBuf, String> {
@@ -363,6 +473,10 @@ fn start_launch_sequence(app: &AppHandle) {
                 return;
             }
             if port_ready() {
+                // 鉴权 cookie 预置等待：loading 页签好后经 set_auth_cookie 置位；
+                // 3s 超时放行（fail-open），401 兜底链见 themes/00-boot.js。
+                // 效果：首次 GET / 即带有效 cookie，不再出现「启动后要点刷新」。
+                wait_auth_cookie(Duration::from_secs(3)).await;
                 set_status(&app, "已就绪，正在进入…");
                 if let Some(wv) = app.get_webview_window("main") {
                     let url = tauri::Url::parse(&remote_url()).expect("valid remote url");
@@ -370,6 +484,9 @@ fn start_launch_sequence(app: &AppHandle) {
                 }
                 start_hash_watchdog(&app);
                 start_pulse_watchdog(&app);
+                // 运行期后端存活看门狗：页面就绪后常驻探测，后端意外死亡时自动重拉
+                //（断连自愈，2026-09-23；此前运行期无任何恢复手段，只能重启整个应用）。
+                start_backend_watchdog(&app);
                 return;
             }
             if !spawn_attempted {
@@ -415,6 +532,260 @@ fn start_launch_sequence(app: &AppHandle) {
                 update_bootstrap_attempt("waiting", None, None);
             }
             tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+    });
+}
+
+/* ---------------- 运行期后端存活看门狗（断连自愈，2026-09-23） ---------------- */
+
+/// 常态探测周期。启动序列把页面导航到 3080 之后才启动本看门狗（与 hash/pulse 看门狗同批）。
+const BACKEND_POLL_MS: u64 = 2000;
+/// 重拉后等待端口就绪的上限：dsh web 冷启动约 3~6s，90s 与 BOOTSTRAP_TIMEOUT 同口径。
+const BACKEND_RESPAWN_TIMEOUT: Duration = Duration::from_secs(90);
+/// `GetExitCodeProcess` 对仍活着的进程返回的退出码（Win32 STILL_ACTIVE）。
+#[cfg(target_os = "windows")]
+const STILL_ACTIVE: u32 = 259;
+/// 自拉后端「进程活着但端口没起来」（启动中/僵死）的日志降频：每 15 个周期（约 30s）一行。
+const BACKEND_BOOTWAIT_LOG_EVERY: u32 = 15;
+
+/// 连续重拉失败的退避间隔：2s → 4s → 8s → 16s → 30s 封顶（纯函数，单测覆盖）。
+fn backend_fail_backoff_ms(streak: u32) -> u64 {
+    (BACKEND_POLL_MS << streak.min(4)).min(30_000)
+}
+
+/// 进程是否仍活着：`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` +
+/// `GetExitCodeProcess == STILL_ACTIVE`。进程不存在 → OpenProcess 返回 NULL → false。
+/// 零 crate、零子进程拉起（比轮询 tasklist 轻一个量级）。
+#[cfg(target_os = "windows")]
+fn backend_process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        let _ = CloseHandle(handle);
+        ok != 0 && code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn backend_process_alive(pid: u32) -> bool {
+    let _ = pid;
+    true
+}
+
+/// 纯函数：从 `netstat -ano` 文本中提取「**对端端口** = port 且 ESTABLISHED」的连接所属
+/// PID（去重保序）——即「谁正连着这个端口上的服务」。DSH 页面持有到网关的持久
+/// WebSocket，客户端行的对端正是 3080；服务端 accepted 行（本地 3080、对端临时端口）
+/// 不计入：那既含后端自己，也会让判据恒真。netstat 文本格式只在这一处解析，格式变化
+/// 只坏这一个函数（单测覆盖典型行）。`LISTENING`/`TIME_WAIT`、UDP 行、`30801` 之类的
+/// 端口前缀误伤全部排除。
+fn parse_backend_client_pids(text: &str, port: u16) -> Vec<u32> {
+    let suffix = format!(":{port}");
+    let mut pids: Vec<u32> = Vec::new();
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // 行形态：TCP  local_addr:port  foreign_addr:port  ESTABLISHED  pid
+        if cols.len() < 5 || !cols[0].eq_ignore_ascii_case("TCP") {
+            continue;
+        }
+        if !cols[3].eq_ignore_ascii_case("ESTABLISHED") || !cols[2].ends_with(&suffix) {
+            continue;
+        }
+        if let Ok(pid) = cols[4].parse::<u32>() {
+            if !pids.contains(&pid) {
+                pids.push(pid);
+            }
+        }
+    }
+    pids
+}
+
+/// 纯函数：剔除本应用进程树内的 PID，剩下即「外部客户端」（浏览器、别的终端等）。
+fn pids_outside_tree(pids: &[u32], tree: &std::collections::BTreeSet<u32>) -> Vec<u32> {
+    pids
+        .iter()
+        .copied()
+        .filter(|p| !tree.contains(p))
+        .collect()
+}
+
+/// 本应用进程树（自身 PID + 全部后代）：Toolhelp32 全进程快照 → (pid, ppid) 表 →
+/// 从自身 PID 向下闭包（快照不保证父先进列表，闭包循环到收敛，层级浅一两趟即止）。
+/// 用途：关闭后端前，把「我们自己的 WebView2 子进程」从外部客户端里剔掉——主窗口
+/// 自己就连着后端，不剔除就会永远判「有外部客户端」。
+#[cfg(target_os = "windows")]
+fn our_process_tree() -> std::collections::BTreeSet<u32> {
+    use std::collections::BTreeSet;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let mut tree: BTreeSet<u32> = BTreeSet::new();
+    tree.insert(std::process::id());
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap == INVALID_HANDLE_VALUE {
+            return tree;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as _;
+        let mut all: Vec<(u32, u32)> = Vec::with_capacity(256);
+        if Process32FirstW(snap, &mut entry) != 0 {
+            loop {
+                let pid = entry.th32ProcessID;
+                let ppid = entry.th32ParentProcessID;
+                all.push((pid, ppid));
+                if Process32NextW(snap, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+        loop {
+            let before = tree.len();
+            for (pid, ppid) in &all {
+                if tree.contains(ppid) {
+                    tree.insert(*pid);
+                }
+            }
+            if tree.len() == before {
+                break;
+            }
+        }
+    }
+    tree
+}
+
+/// 关闭前探测：3080 上是否仍有本应用进程树之外的已连接客户端（浏览器等）。
+/// 探测失败（netstat 缺失/执行失败）→ false = 维持历史语义照停后端，最坏不劣化。
+#[cfg(target_os = "windows")]
+fn external_backend_clients() -> bool {
+    let tree = our_process_tree();
+    let Ok(out) = std::process::Command::new("netstat").arg("-ano").output() else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    !pids_outside_tree(&parse_backend_client_pids(&text, BACKEND_PORT), &tree).is_empty()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn external_backend_clients() -> bool {
+    false
+}
+
+/// 运行期后端存活看门狗（断连自愈）：页面加载后启动，专治「后端意外死亡 → webview
+/// 永久停在死后端、只能重启整个应用」的缺口（2026-09-08 排查列为待拍板项，
+/// 2026-09-12/23 断连事故后由用户拍板实施）。DSH 前端自带 500ms→10s 指数退避重连，
+/// 鉴权走持久化 HMAC cookie（secret 来自 credentials，后端重启不变）→ 服务器回来后
+/// 页面自行重连、无需 reload。本看门狗负责把后端尽快接回来；恢复分两路：自拉后端进程
+/// 退出 → 重拉；采用的外部后端消失 → 接管重拉。文档从未加载成功过（错误页）时重拉后
+/// 补一次重新导航。主动关闭不受影响：`shutdown_app` 置位 `SHUTTING_DOWN` 后本任务即退，
+/// 绝不与「停后端 + 退出」抢节奏。
+fn start_backend_watchdog(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut fail_streak: u32 = 0;
+        let mut bootwait_logs: u32 = 0;
+        loop {
+            let interval = if fail_streak == 0 {
+                BACKEND_POLL_MS
+            } else {
+                backend_fail_backoff_ms(fail_streak)
+            };
+            tokio::time::sleep(Duration::from_millis(interval)).await;
+            if SHUTTING_DOWN.load(Ordering::SeqCst) {
+                return;
+            }
+            // 自拉后端进程状态（只读拷贝；确认死亡才清除 DSH_PID）
+            let our_pid = *DSH_PID.lock().unwrap();
+            let mut respawn_reason: Option<String> = None;
+            if let Some(pid) = our_pid {
+                if !backend_process_alive(pid) {
+                    DSH_PID.lock().unwrap().take();
+                    if port_ready() {
+                        app_log_line(&format!(
+                            "[{}] backend-watchdog: 自拉后端 pid {pid} 已退出，3080 已被其他实例接管 → 转为采用\n",
+                            chrono_now()
+                        ));
+                    } else {
+                        respawn_reason = Some(format!("自拉后端 pid {pid} 退出且 3080 无监听"));
+                    }
+                } else if !port_ready() {
+                    // 进程活着但端口没起来：仍在启动或已僵死。不重复 spawn（端口占用只会
+                    // 让新进程秒退刷错误），降频记日志等下一轮。
+                    bootwait_logs += 1;
+                    if bootwait_logs % BACKEND_BOOTWAIT_LOG_EVERY == 1 {
+                        app_log_line(&format!(
+                            "[{}] backend-watchdog: 自拉后端 pid {pid} 进程在但 3080 未监听（启动中/僵死？）\n",
+                            chrono_now()
+                        ));
+                    }
+                }
+            } else if !port_ready() {
+                respawn_reason = Some("采用的外部后端已退出，3080 无监听".to_string());
+            }
+            let Some(reason) = respawn_reason else { continue };
+            // —— 恢复：重拉 dsh web 并等端口就绪 ——
+            fail_streak += 1;
+            app_log_line(&format!(
+                "[{}] backend-watchdog: {reason} → 自动重拉 dsh web（连续第 {fail_streak} 次，间隔 {interval}ms）\n",
+                chrono_now()
+            ));
+            match spawn_dsh() {
+                Ok(_) => {
+                    let started = Instant::now();
+                    loop {
+                        if SHUTTING_DOWN.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        if port_ready() {
+                            app_log_line(&format!(
+                                "[{}] backend-watchdog: 后端已恢复（pid {:?}），页面重连中\n",
+                                chrono_now(),
+                                *DSH_PID.lock().unwrap()
+                            ));
+                            fail_streak = 0;
+                            if !PAGE_UP.load(Ordering::SeqCst) {
+                                // 当前文档从没成功加载过（启动撞上正在退出的旧服务 / 导航
+                                // 中途后端死亡）——WebView2 错误页不会自行重试，重新导航。
+                                let target = remote_url();
+                                app_log_line(&format!(
+                                    "[{}] backend-watchdog: 当前文档未就绪 → 重新导航 {target}\n",
+                                    chrono_now()
+                                ));
+                                if let Some(wv) = app.get_webview_window("main") {
+                                    if let Ok(url) = tauri::Url::parse(&target) {
+                                        let _ = wv.navigate(url);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        if started.elapsed() > BACKEND_RESPAWN_TIMEOUT {
+                            app_log_line(&format!(
+                                "[{}] backend-watchdog: 重拉后 90s 端口未就绪，下轮退避重试\n",
+                                chrono_now()
+                            ));
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(400)).await;
+                    }
+                }
+                Err(e) => {
+                    app_log_line(&format!(
+                        "[{}] backend-watchdog: 自动重拉失败：{e}\n",
+                        chrono_now()
+                    ));
+                }
+            }
         }
     });
 }
@@ -1187,7 +1558,9 @@ fn main() {
             dsh_check,
             open_terminal,
             open_logs_dir,
-            export_diagnostics
+            export_diagnostics,
+            auth_secret,
+            set_auth_cookie
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" {
@@ -1251,6 +1624,7 @@ fn main() {
                     let _ = webview.show();
                     let url = payload.url().to_string();
                     if url.starts_with("http://127.0.0.1:3080") {
+                        PAGE_UP.store(true, Ordering::SeqCst);
                         record_bootstrap_up();
                         let _ = webview.eval(INIT_SCRIPT);
                         // 延迟推一次最大化状态：eval INIT_SCRIPT 后页面监听已就绪（重启后
@@ -1405,5 +1779,50 @@ mod tests {
             parse_pulse_flag(r#"{"v":2,"ts":"2026-09-04T07:40:08Z","fleet":{"running":1}}"#, now),
             Some((true, false))
         );
+    }
+
+    /// netstat 解析：只认「**对端端口**命中 + ESTABLISHED」的 TCP 行，PID 去重保序。
+    /// 服务端 accepted 行（本地 3080、对端临时端口，含后端自己）必须排除，否则判据恒真。
+    #[test]
+    fn netstat_parse_extracts_backend_clients_only() {
+        let text = concat!(
+            // 服务端 accepted 行（本地 3080 / 监听）——不是客户端，排除
+            "  TCP    127.0.0.1:3080    127.0.0.1:50826    ESTABLISHED   10688\n",
+            "  TCP    127.0.0.1:3080    127.0.0.1:50677    TIME_WAIT     0\n",
+            "  TCP    0.0.0.0:3080     0.0.0.0:0          LISTENING     10688\n",
+            // 客户端行（对端 3080）：Quark 浏览器（重复 PID 去重）与 IPv6 形态
+            "  TCP    127.0.0.1:50826   127.0.0.1:3080     ESTABLISHED   38120\n",
+            "  TCP    127.0.0.1:50843   127.0.0.1:3080     ESTABLISHED   38120\n",
+            "  TCP    127.0.0.1:52001   [::1]:3080         ESTABLISHED   777\n",
+            // 无关端口（本机素材服务 39800）
+            "  TCP    127.0.0.1:39999   127.0.0.1:39800    ESTABLISHED   4242\n",
+            "  UDP    127.0.0.1:3080    *:*                                5150\n",
+        );
+        assert_eq!(parse_backend_client_pids(text, 3080), vec![38120, 777]);
+        assert_eq!(parse_backend_client_pids(text, 39800), vec![4242]);
+        assert!(parse_backend_client_pids("garbage output\n", 3080).is_empty());
+        assert!(parse_backend_client_pids("", 3080).is_empty());
+    }
+
+    /// 外部客户端判据：进程树内的 PID（自身 + WebView2 子进程）必须被剔除，
+    /// 树外的（浏览器等）才是外部客户端。
+    #[test]
+    fn pids_outside_tree_filters_own_process_tree() {
+        use std::collections::BTreeSet;
+        let tree: BTreeSet<u32> = [100u32, 200, 300].into_iter().collect();
+        let pids = vec![200u32, 38120, 300, 999];
+        assert_eq!(pids_outside_tree(&pids, &tree), vec![38120, 999]);
+    }
+
+    /// 重拉退避：指数增长到 30s 封顶（streak 截断防移位溢出）。
+    #[test]
+    fn backend_backoff_grows_then_caps() {
+        assert_eq!(backend_fail_backoff_ms(0), 2_000);
+        assert_eq!(backend_fail_backoff_ms(1), 4_000);
+        assert_eq!(backend_fail_backoff_ms(2), 8_000);
+        assert_eq!(backend_fail_backoff_ms(3), 16_000);
+        // 2s<<4 = 32s → 30s 封顶；之后一直 30s（含极大 streak 不移位溢出）
+        assert_eq!(backend_fail_backoff_ms(4), 30_000);
+        assert_eq!(backend_fail_backoff_ms(50), 30_000);
     }
 }

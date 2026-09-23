@@ -4,6 +4,11 @@
 
 ## P0 · 稳定性阻断
 
+- [x] **后端断连自愈（运行期存活看门狗 + 关闭误伤防护）** — 2026-09-23 用户拍板实施
+  （2026-09-08 列为待拍板项）：2s 看门狗探测自拉后端进程 + 3080，意外死亡自动重拉
+  （退避 2s→30s），错误页补重新导航，活页面靠 DSH 前端自带重连静默恢复；关闭前探测
+  外部客户端（netstat 对端端口 + Toolhelp32 进程树），浏览器仍连着则保留后端不杀。
+  详见 CHANGELOG 2026-09-23。待用户实机验收（杀后端自愈 / 带浏览器关闭保留 / release 部署）
 - [x] **闪退 ** — GDI 泄漏/高频创建 → 持久表面 + 脏标记(2026-08-21 第六轮)
 - [x] **启动链路异常兜底** — bootstrap.json 健康标记 + 失败恢复页(2026-08-24,见
   `design/bootstrap-reliability.md`);GDI 侧兜底(§异常兜底)仍待做
@@ -43,11 +48,13 @@
   `.credentials.yaml` 当前值一致，cookie 名/`v1.body.sig` 格式/payload 字段/
   authority 与官方 `dsh-client-connection` 逐项一致，401 场景可复现；已随
   release 构建部署至 `dist/Miasaki.exe`，端到端目检待用户双击快捷方式）
-- [ ] **鉴权 secret 动态化** — 注入脚本硬编码 secret 改为 Rust 侧读
-  `~/.dsh/.credentials.yaml` 的 `client-connection/browser-session` 记录实时签名，
-  避免 secret 轮换后需改源码重编译（2026-09-05 黑屏修复的遗留项）
-- [ ] **401 恢复指引分支** — loading 页识别 401（`dsh web authentication
-  required`）给出「重新打开 dsh web 打印的 URL」指引，与 cookie 注入互补
+- [x] ~~**鉴权 secret 动态化**~~ — **已并入 2026-09-22「鉴权 cookie 预置注入」设计**
+  （`design/auth-cookie-prepinject.md`，与 401 恢复链失效修复同链路落地）：secret 改为
+  loading 页经 invoke 从 `~/.dsh/.credentials.yaml` 动态读取（Rust 手写 yaml 行解析，
+  失败回落硬编码），与原「401 检测→reload」兜底链分离——主修不再依赖进入错误页后自愈。
+- [ ] **401 恢复指引分支（部分保留）** — 预置注入后 401 概率极低，残余场景（硬编码 secret
+  也过期）由加固后的 00-boot.js 兜底链自愈；「指引用户重新打开 dsh web 打印的 URL」的文案
+  引导视验收结果再评是否还需要（见 `design/auth-cookie-prepinject.md` §3）
 
 - [x] 主窗口位置/大小持久化(window.json)
 - [x] 托盘菜单(显示/隐藏主窗口、退出)
@@ -70,6 +77,22 @@
 
 - [x] **桌宠设置面板** — DSH「设置 → 桌宠」:显示/隐藏(持久化)、位置重置(屏幕外找回)、
   状态回显(hash 命令通道 + eval 回推);位置屏外自动回默认(2026-08-29,见 CHANGELOG)
+- [ ] **启动加载 2.0 + cmd 闪窗根治（2026-09-22 设计定稿）** — 用户点名「太简单 / 闪过终端窗口 /
+  加载页把启动终端代码内置」。三件：① 归因后根治 `cmd /C dsh web` 闪窗（首选绕开 cmd 直达
+  `node <bin.js>`，兜底回落 cmd；先归因再修，嫌疑矩阵见设计 §3.1）；② dsh stdout tee 进 loading 页
+  （内嵌终端日志流 + 四阶段进度，`__appendLog` / `__setPhase` 新钩子，`__setStatus` 契约不变）；
+  ③ 视觉升级（纹章旋转/扫描线/打字机光标，reduced-motion 降级）。设计见
+  `design/boot-loading-terminal.md`；appearance 半（DSH 首帧启动画）与 cross 契约见
+  `../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md`。实机验收七项（闪窗 5 连发 /
+  日志流 / 失败零回归 / 兜底回退 / 性能 / 降级 / smoke 回归）见设计 §6。
+- [ ] **拖拽上传附件到会话（2026-09-22 设计定稿，未实施）** — 桌面端拖文件进主窗口
+  静默无效果。根因：tauri-runtime-wry 默认注册 drag-drop handler → WebView2
+  `SetAllowExternalDrop(false)` + `RegisterDragDrop` → 页面级 HTML5 DnD 被整体拦成
+  无人监听的 `tauri://drag-drop` 窗口事件。修法：`main.rs` 主窗 builder 加
+  `.disable_drag_drop_handler()`（官方注释指明这是 Windows 上用 HTML5 DnD 的必要条件）
+  + 注入层安全网 `09-dropguard.js`（防 composer 未挂载页面 drop 落入浏览器默认
+  `file://` 导航炸掉 SPA）+ loading 页防默认。四步实施与实机验收十项见设计
+  `design/drag-drop-attachment-upload.md`。
 - [ ] 主窗口最小化到托盘(关闭=退出保持现状,托盘已有显隐)
 - [ ] 桌宠「审批等待」状态(主页面 DOM 扫描 → 桌宠 waiting 姿态)— 2026-08-30 接入,见 CHANGELOG;桌宠内一键审批后续阶段
   - **2026-09-12 v3 M2 落地**:主信号已替换为官方契约(`SessionSnapshot.running` +
