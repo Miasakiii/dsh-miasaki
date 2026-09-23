@@ -2,6 +2,55 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-23 · 应用图标预设扩为四款（位图预设 1 → 3，鲸鱼娘三构图全进九宫格）
+
+- **起因**：用户「这两个做成你的预设应用图标」并附两张图；澄清后落点是**外观设置「应用图标」
+  预设九宫格扩容**——两张图**都是鲸鱼娘**，加上现行软件图标，要求**三款应用图标全部进预设
+  自由选换**。（核查发现其中一张正是 2026-09-21 已入库的「头像」源图：按旧配方
+  trim→裁方→512→圆角重跑，与在库 `portrait.png` 逐像素差仅 1.43/255——同图不重复劳动。）
+- **新增两款位图预设**（`assets/presets/`，管线与 M2.7 一字不差）：
+  - **立绘** `illustration.png`（62,545 B）：用户新提供的 1254×1254 方图，蓝天底竖构图，
+    满幅无黑边 → 不 trim、居中裁方即全图 → 512 → 圆角（rx 120）→ 量化；
+  - **现行** `current.png`（122,789 B）：**现行 EXE 图标同款艺术图** `src-tauri/icon-new.png`
+    （desktop 线构建链输入，1024×1024）同配方重出 —— 用户点名"和现在的软件图标并不一样"，
+    要把现在这一款也收进预设，换图后仍可一键换回。
+- **预设表**（`lib/icon-presets.js`）：默认 / 头像 / 立绘 / 现行共四款；顺序
+  default → portrait → illustration → current（「默认」居首的既有契约不变，新款追加在后）。
+- **为什么不做「随主题自动切换」**：设计文档 §10 列过该方向，但用户本次明确说"自由选择替换"——
+  手动选即可，不引入 theme→icon 的隐式绑定（也免掉桌面壳二次改动）。
+- **零跨线影响**：新款与既有款走同一条路（同目录 / 同白名单 / 同 `GET /appearance/api/presets`
+  幂等落盘），桌面壳不知道款数变化；「我的上传」pills 照旧过滤 `preset-*`。
+- **一次性脚本**：`sharp` 只在 desktop 线构建链里，生成脚本**不入库**，归档
+  `_refs/scripts-archive/make-icon-presets-2026-09-23.mjs`；配方与产物字节数记录在
+  `assets/presets/README.md`。
+- **验证**：单测 **84 例全绿**（icon-presets 7 / host 14 / client 12 / config 30 / avatar 8 /
+  fence 6 / store 7；`node --test` runner 的 spawn 在 Windows 沙箱下 EPERM，逐文件直跑替代——
+  与代码无关的环境边界）；`node --check` 七文件通过；`derive-skins --check` 两皮肤一致。
+  测试断言随款数更新（预设表四款与顺序 / 位图三款资源在位 512×512 / host 落盘四款 /
+  client 九宫格四格）。**实机待用户重启 `dsh web` 后验收**。
+- 触摸点：`assets/presets/{illustration,current}.png`（新）、`assets/presets/README.md`、
+  `lib/icon-presets.js`、`test/{icon-presets,host,client}.test.js`、`README.md`、本文件。
+
+## 2026-09-22 · Boot Splash 首帧启动画（设计定稿，跨线新增项，未实施）
+
+- **起因**：用户「现在的启动加载界面太简单不符合本项目……加载页弄酷炫一点」。同一需求的
+  desktop 半（loading.html 2.0 + dsh stdout 内嵌日志流 + `cmd /C dsh web` 闪窗根治）见 desktop 线
+  `design/boot-loading-terminal.md`；本文件只记 appearance 半，契约见
+  `../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md`。
+- **设计**：DSH 首帧（3080 HTML 到达 → shell 挂载）在 M2 防闪色底座之上叠一层全屏启动画
+  （`#mia-splash`：三主题纹章动效 + wordmark + 流动三点进度，**不出假百分比**，遵守「不假装」约定）。
+  走既有 `index-inject` 扩展三行（splash style / splash html / splash script），零新订阅点。
+- **退场双信号 + 超时兜底**：主信号 = client 装载（shell 已挂载的最可靠证据）；兜底 =
+  MutationObserver 观察 body；**2.5s 无条件淡出**——硬用例是 401/后端异常首帧不能被 splash
+  常驻挡住（与 desktop P1「401 恢复指引」互为前后置）。幂等守卫 `data-mia-splash-done`。
+- **契约**：总开关关闭 / `bootSplash:'off'` ⇒ 一行不注入（与 boot style 同门控）；
+  `prefers-reduced-motion` 全静止；配置 v2→v3 仅加默认字段（v2 壁纸先例同款低风险）。
+- **实施顺序**：S1 复测 index-inject placement 与 `__DSH_BOOT_READY__` 尾巴（半年前 spike 记录，
+  不凭记忆写码）→ S2 `lib/splash.js` 纯函数 + 单测 → S3 host 接线 → S4 client 退场钩子 → S5 实机验收。
+- 触摸点（预期）：`lib/splash.js`（新）、`lib/config.js`（motion.bootSplash 字段）、`index.js`
+  （注入点扩展）、`client.js`（退场钩子）、`test/splash.test.js`（新）、`README.md`、本文件、
+  `design/2026-09-22-appearance-boot-splash-design.md`（新）、cross 契约（新）。
+
 ## 2026-09-21 · M2.7：应用图标预设（九宫格 + 程序化生成 + 位图预设）
 
 - **起因**：M2.5 上线后用户给出参考截图，要求「像这样的预设」—— 一组**内置可选的应用图标**

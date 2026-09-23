@@ -29,6 +29,19 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > （见 [M2.7 设计](design/2026-09-21-appearance-icon-presets-design.md)）。
 > 参考截图只作**形式**参照：那套通用软件风格的多配色图标不适合本项目，初版七款已按用户意见撤掉。
 > 动效 / 会话效果分别在 M3–M4 接入同一套管线。
+>
+> **应用图标预设扩为四款（2026-09-23）**：用户追加两张鲸鱼娘图，要求**三款应用图标**
+> （现行软件图标 + 两张新图）全部进预设自由选 —— 位图预设从一款扩到三款：**头像**（原图）、
+> **立绘**（新方图）、**现行**（现行 EXE 图标同款艺术图 `src-tauri/icon-new.png`）；
+> 与程序化「默认」共四格。管线与 M2.7 完全一致（trim → 裁方 → 512 → 圆角 → 量化），
+> 跨线契约零变更，面板零改动。
+>
+> **Boot Splash 首帧启动画（2026-09-22 设计定稿，跨线新增项）**：DSH 首帧（3080 HTML 到达 →
+> shell 挂载）叠一层全屏启动画——皮肤色 / 壁纸即显 + 三主题纹章动效，shell 挂载后干净淡出，
+> 2.5s 超时兜底不挡错误页。走既有 `webserver/index-inject` 六行注入，总开关关闭即原生。
+> 与 desktop 线「Loading 2.0 + cmd 闪窗根治」为同一用户需求的两半，
+> 契约见 [cross 文档](../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md)，
+> 本线设计见 [Boot Splash 设计](design/2026-09-22-appearance-boot-splash-design.md)。
 
 ---
 
@@ -95,9 +108,9 @@ dsh-miasaki-appearance/
 
 | 能力 | 说明 |
 |---|---|
-| 设置页「应用图标」 | **两款预设**：**默认**（程序化几何徽记）/ **头像**（用户提供的图），点选即写 `avatar.source`；选中格走官方 `bg-module-platform` + `neutral-bluish-400` 描边 |
-| 预设从哪来 | `lib/icon-presets.js` **程序化生成**：手写 PNG 编码（CRC32 + `node:zlib`）+ SDF 解析式抗锯齿绘制 + 渐变/装饰层/顶部高光合成；**零第三方依赖、零图片资源** |
-| 位图预设 | 「头像」= `assets/presets/portrait.png`（用户提供的图，trim 黑边 → 居中裁方 → 圆角 → 量化；来源与参数见该目录 README） |
+| 设置页「应用图标」 | **四款预设**：**默认**（程序化几何徽记）/ **头像** / **立绘** / **现行**（三款鲸鱼娘位图，2026-09-23 追加），点选即写 `avatar.source`；选中格走官方 `bg-module-platform` + `neutral-bluish-400` 描边 |
+| 预设从哪来 | `lib/icon-presets.js` **程序化生成**：手写 PNG 编码（CRC32 + `node:zlib`）+ SDF 解析式抗锯齿绘制 + 渐变/装饰层/顶部高光合成；**零第三方依赖、零图片资源**（仅「默认」一款；位图款不走绘制器） |
+| 位图预设 | 「头像」= `assets/presets/portrait.png`、 「立绘」= `illustration.png`、 「现行」= `current.png`（用户提供的图，trim 黑边 → 居中裁方 → 圆角 → 量化；来源与参数见该目录 README） |
 | 落盘接口 | `GET /appearance/api/presets` —— **幂等落盘**（`avatars/preset-<id>.png`，内容相同则跳过写入）+ 返回清单；位图与程序化对 host 是同一个接口 |
 | 跨线影响 | **零**：预设图标与用户上传的图走同一条路（同目录 / 同白名单 / 同文件路由），桌面壳不知道"预设"的存在 |
 | 我的上传 | 「我的上传」pills 自动过滤 `preset-*`，用户只看自己的资产 |
@@ -113,6 +126,9 @@ dsh-miasaki-appearance/
   `.mia-*` 前缀 CSS 注入，行为逻辑零变化；
 - **M2.7 应用图标预设**（[设计](design/2026-09-21-appearance-icon-presets-design.md)）：九宫格预设、
   程序化 PNG 生成、位图预设，跨线契约零变更；
+- **Boot Splash 首帧启动画**（[设计](design/2026-09-22-appearance-boot-splash-design.md)，
+  跨线新增项，2026-09-22 定稿）：3080 首帧全屏启动画（纹章动效 + 退场双信号 + 2.5s 超时兜底），
+  配置面 `motion.bootSplash`，与 desktop「Loading 2.0」契约见 cross 文档；
 - **M3 动效**：CSS 动效层挂在 `[data-slot]` 稳定锚点上、三套预设、强度倍率、`prefers-reduced-motion` 强制降级；
 - **M4 会话效果**：消息密度与最大宽度、流式光标、代码块与引用样式、工具卡折叠、字体。
 
