@@ -34,7 +34,7 @@ utilities 盖在上层，于是出现「文件夹图标压住『会话布』、�
 |---|---|
 | `patch.mjs` | **补丁规范**：1 条锚点编辑（CSS 片段替换）+ CLI（verify / status / apply / revert） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
-| `baseline/client.original.js` | DSH **0.1.5-rc.1** 官方原版 client.js（647,101 B，SHA-256 `81314DFD…`） |
+| `baseline/client.original.js` | DSH **0.1.7-alpha.2** 官方原版 client.js（701,296 B，SHA-256 `38326414…`）。2026-09-23 由 0.1.5-rc.1（647,101 B，`81314DFD…`）升级重打，锚点仍唯一命中，`EDITS` 零改；产物 `59A185B9…` |
 
 > 与其他补丁的差别：**不存 patched 全文**。目标文件 632 KB，再存一份不划算；产物以
 > `PATCHED_SHA256` 常量记录，`verify` 用「由原始 baseline 重建出的 SHA 是否等于该常量」自证 ——

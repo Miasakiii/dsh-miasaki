@@ -181,6 +181,16 @@ function planDesktop() {
     args: [join(dir, 'patches/dsh-cordis-host-runner/patch.mjs'), 'verify'],
     cwd: dir,
   })
+  // 消息图片画廊多图 tile 宽高比补丁（2026-09-23 新建，基线即 0.1.7-alpha.2）的自证。
+  // 纯 CSS 两条替换，没有行为断言可跑，契约就是「由 baseline 重建 == 记录 SHA」+
+  // 两侧语法闸门。同样纯离线。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (消息画廊多图 tile 宽高比补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-client-ui-attachment/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
   // 「测试连通性 v2」的 host 侧能力（plugins/dsh-model-probe）：语法检查 +
   // 探测判定表单测（URL 规则 / 两段式档案 / 分类表 / 脱敏 / 截断）。全部是纯逻辑，
   // 不发起任何网络请求——真实探测属实机项，见 smoke-test-matrix.md。

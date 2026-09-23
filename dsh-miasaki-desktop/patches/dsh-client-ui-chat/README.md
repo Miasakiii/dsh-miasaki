@@ -38,7 +38,7 @@
 |---|---|
 | `patch.mjs` | **补丁规范**：2 条锚点编辑 + CLI（verify / status / apply / revert） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
-| `baseline/client.original.js` | DSH **0.1.5-rc.1** 官方原版 client.js（370,078 B，SHA-256 `4F9CFFF8…`） |
+| `baseline/client.original.js` | DSH **0.1.7-alpha.2** 官方原版 client.js（514,483 B，SHA-256 `CCC14F1E…`）。2026-09-23 由 0.1.5-rc.1（370,078 B，`4F9CFFF8…`）升级重打，两条锚点仍唯一命中，`EDITS` 零改；产物 `1594AC3C…` |
 
 > 与轨迹补丁同一取舍：**不存 patched 全文**（目标 361KB），产物以 `PATCHED_SHA256` 记录；
 > `verify` 除 SHA 比对，还会从重建产物里抠出注入的函数跑 8 条 fixture 行为断言，

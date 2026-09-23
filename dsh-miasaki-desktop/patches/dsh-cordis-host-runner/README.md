@@ -1,6 +1,6 @@
 # dsh-cordis-host-runner 补丁 — `cordis_inspect_query`(client) 永久挂起修复
 
-**目标包**：`@deepseek-ai/dsh-cordis-host-runner`（基线 `0.1.5-rc.1`）
+**目标包**：`@deepseek-ai/dsh-cordis-host-runner`（基线 `0.1.7-alpha.2`；2026-09-23 由 `0.1.5-rc.1` 升级重打——原版 `AC73F866…` / 产物 `D3126110…`，4 条锚点唯一命中，`EDITS` 零改）
 **目标文件**：`lib/index.js`（该包 `package.json` 的 `main`/`exports` 唯一入口）
 **生效条件**：应用后必须**重启 DSH host 进程** —— Node 已加载的模块不会热更新。
 

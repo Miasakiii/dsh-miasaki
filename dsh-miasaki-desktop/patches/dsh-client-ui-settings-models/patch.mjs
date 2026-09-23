@@ -42,9 +42,9 @@ const PATCHED_FILE = join(BASELINE, 'client.patched.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-settings-models'
 /** DSH 版本基线：锚点文本与两份 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.5-rc.1'
+export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = 'A60FD86357F9FBC6F5276ED0393682F7F2223FAEDEC4F30C719D66E99600B1BB'
+export const ORIGINAL_SHA256 = 'B2D7D44531687EDD81D6E71D88B534EA21CE51DB3F91D23D6D18B0C783D5A17C'
 /**
  * 应用本补丁后的 SHA-256（v2 连通性探测 + locale 尾逗号修复，2026-09-19 起的状态）。
  *
@@ -53,7 +53,7 @@ export const ORIGINAL_SHA256 = 'A60FD86357F9FBC6F5276ED0393682F7F2223FAEDEC4F30C
  * 产物语法错误且让整份 client bundle 不注册。它之所以能通过 `verify` 并被打进生产，
  * 是因为当时的 `verify` 只做逐字节比对（可复现 ≠ 合法）——`assertParses` 因此加入。
  */
-export const PATCHED_SHA256 = '7D7D8494C6B10641990845362740CB6FA9EC5F88540452E75F09644977E15B3B'
+export const PATCHED_SHA256 = '9F2F1EE8FB68C8189EF5FABE4A9C167351168DB6BABE5A725711C24B4238FE54'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = 'const REASONING_LEVELS = '
 

@@ -8,7 +8,7 @@
 DSH 的 `session.prompt` 在提交带图消息时按「当前会话模型是否声明支持图片」硬拒整条消息：
 
 ```js
-// dsh-api-session-controller/lib/index.js（0.1.5-rc.1 第 762-764 行）
+// dsh-api-session-controller/lib/index.js（0.1.7-alpha.2 第 779-781 行）
 const current = this.agents.selectionFor(agent).current;
 const model = await this.ctx.llm.resolveModelInfo(current.provider, current.model);
 if (model.inputModalities !== void 0 && !model.inputModalities.includes("image")) throw new RemoteError(...)
@@ -84,13 +84,20 @@ DSH 升级会覆盖 `dsh-api-session-controller`，本补丁随之失效。步�
 
 **若锚点已被上游重构**（例如校验挪进了别的函数），补丁需要重新设计插入点 —— 此时请一并复核 `design/` 里「准入委托」的契约是否仍然成立。
 
+> **实操记录（2026-09-23，实装 0.1.7-alpha.2 后重打）**：`status` 报 `unknown`。按上述
+> 步骤执行：锚点在 0.1.7 原版中仍**唯一命中**（`:780`，`expect` 断言的两行逐字未变）
+> → 以新版文件替换 `baseline/index.original.js`（`05DAAAF8…`）→ `seal` 生成新黄金产物
+> （121,625 B，`450C25A2…`）→ `verify` PASS → `apply` 成功（`.dsh-bak` 已留 0.1.7 原版）。
+> **`EDITS` 零改**。生效待重启 `dsh web`（host 半 bundle 只在启动时加载）——重启后
+> 「主模型 + 辅助模型」带图发送应放行（union 语义）。
+
 ## 基线
 
 | 项 | 值 |
 |---|---|
-| DSH 版本 | `0.1.5-rc.1` |
+| DSH 版本 | `0.1.7-alpha.2`（2026-09-23 由 `0.1.5-rc.1` 重打，`EDITS` 零改） |
 | 目标 | `@deepseek-ai/dsh-api-session-controller/lib/index.js` |
-| 原始 SHA-256 | `16ECB48F33996EFE72868F1603223214430634C5AC4C3E8FE9060BF240E990FF` |
-| 补丁后 SHA-256 | `58574E8A9BA2C31423250D1ED5FAF5503B54C973D62743EE8B10EFBC3034A930` |
+| 原始 SHA-256 | `05DAAAF854EABC9DB0E1171A55D54FA2F631CA63FE6A91FEB0D9C60D827AD79E` |
+| 补丁后 SHA-256 | `450C25A264405912D02E6EEE750E9C845DCA796EDBE3AB42FAD80FE411BD7ADA` |
 | 编辑数 | 1（`replaceRange`，2 行 → 12 行） |
 | 特征串 | `dualModelVisionRoute` |

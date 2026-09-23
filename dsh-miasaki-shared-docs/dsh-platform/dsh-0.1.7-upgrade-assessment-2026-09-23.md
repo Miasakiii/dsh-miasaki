@@ -9,6 +9,16 @@
   `vendor/deepseek-harness-0.1.7-alpha.2` 新快照（10,799 文件 / 34.4 MB zip），
   所有「两版之间变没变」为**本地逐字节 diff**；6 个补丁对 **0.1.7-alpha.2 真实 npm 产物**逐个跑 `apply`
 
+> **【实况更新 · 2026-09-23 晚】升级已实际发生，且早于本文触发条件**：本机全局 DSH 已实装
+> **0.1.7-alpha.2**（`dsh --version` 实测；`next` 轨仍为 `0.1.5-rc.3`，触发的「0.1.7-rc.*」
+> 条件并未满足，用户直接升了 alpha）。代码侧两处适配（§7.3/§7.4）均已落地；第三方
+> browser-playwright 补丁（§7.11）已 apply 并实机验证；**六个旧基线补丁当日全部
+> `rebuild-baseline` 重打至 0.1.7-alpha.2（`EDITS` 零改，`verify` 6/6 PASS，
+> live `status` 全部 `patched`）**——机械流程与逐项 SHA 见 desktop 线
+> `design/CHANGELOG.md`「2026-09-23（晚）」条。剩余事项收敛为**实机验收**
+> （host 侧两补丁需重启 `dsh web` 生效；注意重启会断开当前 harness 会话）与 §7.10 文档债。
+> 本文以下内容为升级**前**的评估记录，除本节外未回改。
+
 ---
 
 ## 0. 结论
@@ -22,12 +32,12 @@
 | 补丁 verify（离线） | 6/6 PASS | **6/6 PASS**（未再核，沿用；本次 apply 成功即证明） |
 | 槽契约 | 13 注册点零命中 | **7 个关键槽逐项核对零变化** + kind 裁决规则零变化 |
 | 事件签名 | 10 个事件 9 个逐字相同 | **9 个相同；`settings/updated` 在 0.1.7 被移除** → dual-model 命中（§7.3） |
-| 代码必改点 | 零 | **1 处小改**：dual-model `index.js:181` 监听失效（不崩，最坏 5 分钟缓存延迟，§7.3）；另 desktop 有一套 **directional** 机制迁移（预设组合包化，§7.9，不绑升级） |
+| 代码必改点 | 零 | **2 处小改**：dual-model `index.js:181` 监听失效（§7.3，`a956776` 已落地）+ desktop 两插件 settings 读取双轨（§7.4，已落地）；另 desktop 有一套 **directional** 机制迁移（预设组合包化，§7.9，不绑升级） |
 | 收益 | 零（撞卖地为主） | **首次出现净正向**（§9）：官方终端 Recovery/Cleanup 停止注册，09-21 登记的「半遮蔽」隐患消失 |
 | 触发条件 | `next` 出现 `0.1.6-rc.*` | **改为 `next` 出现 `0.1.7-rc.*`**（当前 `next = 0.1.5-rc.3`，未触发） |
 
 一句话：**升到 0.1.7-alpha.2 的成本比 0.1.6 更低（补丁 6/6 全过、槽零改、事件仅一处需适配），且消解了一个既有隐患；
-但要动 dual-model 一行监听、desktop 有一套预设机制迁移排队。alpha 轨稳定性未验、`sidebar`/`ssh` 撞卖地决策未拍板，结论仍是「等 rc」。**
+代码侧两处小改（dual-model 监听 + desktop 两插件 settings 读取）均已双轨落地，desktop 另有一套预设机制迁移排队。alpha 轨稳定性未验、`sidebar`/`ssh` 撞卖地决策未拍板，结论仍是「等 rc」。**
 
 ---
 
@@ -146,7 +156,7 @@
 | Agent 预设 | 目录式（`~/.dsh/.agent-presets/<id>/preset.yml` + `agent.cordis.yml`） | **插件组合包声明**，旧目录预设需迁移 | desktop `preset-sources/`（3 套 persona + apply-presets.ps1）需重做成插件组合包；**属 directional 迁移，不是崩溃级** |
 | 插件安装/管理 | profile `file:`/`link:` + 重启 | 官方插件管理页 + 运行时依赖解析/卸载 | 我们的 `file:`/`link:` 方式 0.1.7 仍支持（0.1.7-alpha.1 release note 明写「修复……支持 link 到本地开发中的插件」）→ 可继续用，但长期方向是迁移 |
 
-### 7.3 唯一代码破坏点：dual-model 的 `settings/updated` 监听 `[实测]`
+### 7.3 唯一代码破坏点：dual-model 的 `settings/updated` 监听 `[实测]`——**已于 a956776 适配落地（2026-09-23 13:15）**
 
 - 本仓：`dsh-miasaki-dual-model/index.js:181` —
   `ctx.effect(() => ctx.on('settings/updated', () => capability.invalidate()), 'dual-model: settings invalidation')`
@@ -158,15 +168,37 @@
 capability 索引的权威数据来自 `llm.listProviders()/llm.listModels()`（两版签名逐字相同，实测 §8），
 `settings/updated` 只是缓存击穿信号之一（另一路 `llm/adapters-updated` 两版均在）。
 最坏情况：用户改 llm 设置后能力缓存**最多延迟 5 分钟**自然过期（TTL），不会报错、不会显示错误能力。
-**适配成本：小**（换听新事件或新 settings 服务的失效信号，预计 < 1 小时，含测试）。
 
-### 7.4 desktop `file:` 插件的 `dsh-settings` peer 用法 `[实测]`
+**适配落地（commit `a956776`，版本 0.1.3-miasaki.0）**：新增 `lib/invalidation.js`
+（`SETTINGS_INVALIDATION_EVENTS = ['settings/updated', 'settings/document-updated']` +
+`watchSettingsInvalidation(ctx, invalidate)` 双轨监听、合并 disposer），`index.js` 单监听改为
+`ctx.effect(() => watchSettingsInvalidation(ctx, () => capability.invalidate()))`。
+**双轨而非版本探测的依据**：cordis 的 `ctx.on()` 监听无人发出的事件是无害空操作（实测
+cordis 4.0.2 与 4.0.4 均不抛错、正常返回 disposer）——两个名字都注册，哪套机制在场就哪套命中。
+新事件比旧事件更敏感（RAW 文档变更即触发）：多余的 invalidate 只是清一次缓存，下次快照自然重扫，
+无正确性影响。测试 5 条（`test/invalidation.test.js`：双注册/双轨触发含 0.1.7 payload 形状/
+无关事件不误触发/dispose/幂等），dual-model 全套 29/29 通过。
+
+### 7.4 desktop `file:` 插件的 `dsh-settings` peer 用法 [实测]——**已适配（2026-09-23 当日闭环）**
 
 profile 内 `node_modules` 实测：`dsh-free-model-pool`、`dsh-model-probe`、`dsh-pet-panel`
-三个插件声明 `@deepseek-ai/dsh-settings: ^0.1.2-rc.1` peer。
-0.1.7 重写 settings 机制后，这三个插件**读/写 settings 的运行时用法是否兼容待实机验证**——
-静态层无法从 peer range 得出结论（peer range 匹配 prerelease 的规则另说，DSH 运行时解析是否强制执行 peer 未知）。
-**列为升级后实机验收第一组**（与 09-21 的 L2/L3 冒烟矩阵合并）。
+三个插件声明 `@deepseek-ai/dsh-settings: ^0.1.2-rc.1` peer。其中**真正调用 settings 服务
+运行时 API 的是前两个**（pet-panel 的 host 半是空壳、client 半走 slots + 自有持久化，
+零 settings 用法）；0.1.7 重写后 `ctx.settings.get(ns)` 全树移除，两者命中：
+
+| 插件 | 旧用法 | 0.1.7 症状（线上实证） |
+|---|---|---|
+| `dsh-free-model-pool` | `ctx.settings.get(NS)` ×2 无保护（`listPlatforms` / `/apply`） | `GET /freepool-api/status` 原样返回 `ctx.settings.get is not a function`——**设置页模型栏免费模型池面板整块报错** |
+| `dsh-model-probe` | `ctx.settings.get(NS)` ×1 有 try/catch（`resolveProfile`） | 异常被吞 → 已保存行档案读不到 → 探测静默退化成 `no-credential` / `no-endpoint`（ Models 页请求体只带草稿值，已保存行全靠这次读） |
+
+**适配落地（与 dual-model 的 `a956776` 同款双轨修法）**：两插件各新增 `lib/settings-read.js`，
+`readSettingsSection(ctx, ns)` 按 `typeof settings.get === 'function'` 探针分轨——≤0.1.6 走
+`get(ns)`（逐字旧路，抛错 posture 不变），0.1.7+ 走 `describe().find(d => d.ns === ns).value`
+（profile 条目 Config 投影；已核对 0.1.7 快照 `llm-pi-ai` 的 `Config.providers` 是 volatile
+字段，写路径 `update(ns, patch)` 两代同名同义故原样保留）。版本 free-model-pool 0.3.1 /
+model-probe 0.2.1；新增 27 例单测（helper 契约 + 路由级/probeModel 接线，fetch 打桩），
+`verify-all desktop` 11 → 17 项全过。实机验收 = 重启桌面端后模型栏两项恢复（§10 第 8 项）。
+peerDeps `^0.1.2-rc.1` 声明债维持 §7.10 结论（`link:`/`file:` 安装不触发 peer 校验）。
 
 ### 7.5 内置浏览器默认关闭：零命中 `[实测]`
 
@@ -185,7 +217,7 @@ ssh 线的页面内交互连接全部走**自建 DOM iframe**（`dsh-miasaki-ssh
 | **ssh** | `header.actions` / `shell.overlay` 零变化；自建 iframe 与内置浏览器解耦；官方浏览器 tab 仅撞卖地 | 低 | 否 |
 | **dual-model** | `settings/updated` 移除 → 缓存击穿信号少一路（最坏 5 分钟 TTL 延迟）；`agent/*` 四事件 + `llm.*` 四方法签名逐字相同；图片准入补丁锚点（`resolveModelInfo().inputModalities`）**本次已在 0.1.7 真实产物 apply 成功**（§3），子代理标记的「补丁锚点待实测」闭环 | **低-中** | **是（1 处监听，< 1h）** |
 | **appearance** | `settings.section`（含 `{close}` owner）与 `webserver/index-inject` 零变化；但本线总开关/配置在 profile 插件配置迁移后需核对 | 低 | 否 |
-| **desktop** | 6 个本体补丁 apply 全过、verify 6/6；`preset-sources/` 目录式预设面临组合包化（directional）；3 个 file: 插件的 `dsh-settings` 用法待实机验收 | 中 | 否（升级时）；预设迁移另立专题 |
+| **desktop** | 6 个本体补丁 apply 全过、verify 6/6；`preset-sources/` 目录式预设面临组合包化（directional）；free-model-pool / model-probe 的 settings 读取已双轨适配（§7.4，27 例单测，实机待重启验收），pet-panel 零 settings 用法不受影响 | 中 | 否（升级时）；预设迁移另立专题 |
 | **fleet** | 多代理 CLI 编排线与 DSH web 插件面基本不相交（仓内文件总线，零 DSH 运行时依赖）；0.1.6 起 Ralph 默认关闭/Team `spawn_teammate` 已登记 | 低 | 否 |
 
 ### 7.8 本仓 settings.yaml 迁移核对（用户配置层，非插件代码） `[实测]`
@@ -230,6 +262,27 @@ settings 命名空间（`lib/store.js:1-7` 注释：schemastery 符号链接解�
 | web 五线 package.json | **零** `@deepseek-ai/*` 依赖（canvas/sidebar/ssh/dual-model/appearance 逐个 read 确认） | 无债 |
 | desktop 五插件 peerDeps | 三插件钉 `@deepseek-ai/dsh-settings: ^0.1.2-rc.1`（+host-webserver 两枚、cordis 全体）——**已陈旧于在跑的 0.1.5-rc.1**，靠 `link:` 安装不触发 peer 校验才无事 | 升级顺带 bump（desktop README:285-287 有 0.1.2 对齐记录；0.1.7-alpha.2 作为 prerelease 按 semver 不满足该 range） |
 | README 版本声明 | canvas 锁 `0.1.2-rc.1`（README:13 + zh-CN README:8，最旧）；sidebar/dual-model/desktop 五补丁 README 锁 `0.1.5-rc.1`（SHA 钉死）；ssh/appearance/fleet 无正式声明 | 升级后更新：canvas 声明 + 五补丁 README 的 baseline/SHA 段 |
+
+### 7.11 已处置：third-party `@yeesy369/dsh-browser-playwright` 0.8.1 两半全拆（本地补丁）`[实测]`
+
+**这不是本仓代码，但升级后第一个炸的就是它**——本机已在实际跑 0.1.7-alpha.2 的 profile 里命中并处置：
+
+| 半 | 坏点（0.1.7） | 后果 |
+|---|---|---|
+| client（`lib/client.js`） | `inject` 依赖已移除的 `settingsScope` 服务 | web 前端 boot loader 对任何非 active 的 client 条目**直接抛错停启动屏**（`Failed to load plugins` / `web boot: 1 entry did not activate`）——web UI 完全打不开。host 侧同款审计只 warning（`dsh-app-boot:auditStartupEntries`），**两级严重性不同** |
+| host（`lib/index.js`） | `settings.register(...)` API 没了（服务还在、inject 过得去） | `apply` 抛 TypeError，provider 纤维失败 → `ctx.browser` 不 provide → `dsh-tool-browser` 整条 pending，浏览器工具全灭 |
+
+**新机制要点**（与 §7.2 同源，补丁实现的地基）：配置即 profile entry 的 Cordis 配置；`Config` 里 `.volatile()` 字段由 `dsh-settings` 的 `describe()` 暴露；client 侧新服务 `configForms`（`get(NS)` 读、`mutate(ops)` 写）；卡片槽 `settings.plugin.item` → `plugins.item`（侧栏「插件」面板渲染）；自带页插件按 README 在**可选** `ctx.inject(['settings'])` 子 fiber 里 `configure({auto:false}, fiber)`。
+
+**踩坑记录（双轨方案的关键约束）**：cordis 语义实测——父 fiber 访问**未 inject** 的服务必然抛 `without inject`（哪怕服务在祖先 fiber 上）；`ctx.get(name)` 同样取不到。所以可选依赖必须用 `ctx.inject(names, factory)` 子 fiber 承载（缺失只挂起子 fiber），第一版 try/catch 直读方案线上静默失效（冒烟桩复现不了该语义）。
+
+**另一个坑**：profile 的 schemastery 是 3.18.1（无 `.volatile()` builder；CLI 自带 3.18.4 才有），但 `volatile()` 实现就是 `meta.volatile = true`，**结构打标即可**（`dsh-settings` 只读 `meta`/`dict`，跨副本兼容）。
+
+**处置**：本地运行时补丁（双轨：0.1.7 新路 / ≤0.1.6 老路），住处
+[`patches/dsh-browser-playwright/`](patches/dsh-browser-playwright/README.md)（patch.mjs + baseline×4 + README；
+verify 27 项含双世界 cordis 语义冒烟）。已应用到 profile 并实测：boot 日志干净、无头浏览器实载
+web UI 正常、「浏览器窗口」卡片在插件面板完整渲染可交互。npm 上 0.8.1 仍是最新（作者未发兼容版）——
+作者发版后删补丁目录、`revert`、升级即可。
 
 ---
 
@@ -283,7 +336,8 @@ settings 命名空间（`lib/store.js:1-7` 注释：schemastery 符号链接解�
 | 项 | 评估 |
 |---|---|
 | 补丁重打 | **6 个全部零改动**（apply 实测成功）；升级时仍要走 `rebuild-baseline` 同步 3 个常量 |
-| 代码适配 | **1 处小改**：dual-model `settings/updated` 监听（§7.3，< 1h） |
+| 代码适配 | **已清零**：dual-model `settings/updated` 双轨监听（§7.3，commit `a956776`，29/29 测试通过）+ desktop free-model-pool / model-probe settings 读取双轨（§7.4，27 例单测，verify-all desktop 17/17） |
+| 第三方插件补丁 | `@yeesy369/dsh-browser-playwright` 0.8.1 两半全拆（§7.11）——**已处置**（本地补丁 + 双世界冒烟 27 项），作者发兼容版后卸补丁升级 |
 | 机制迁移（directional） | desktop 预设组合包化（§7.9：apply-presets.ps1/verify-presets.cjs/agent.base.cordis.yml + free-model-pool 行补写）——**不绑升级**，0.1.7 新格式确认后另立专题 |
 | 配置迁移核对 | settings.yaml 一次性导入后逐项核对（§7.8 表格）——**本次新增的主要人工项**（用户侧配置，非插件代码） |
 | 文档债 | canvas README 的 `0.1.2-rc.1` 声明 + 五补丁 README baseline/SHA + desktop 五插件 peerDeps bump（§7.10） |
@@ -298,10 +352,12 @@ settings 命名空间（`lib/store.js:1-7` 注释：schemastery 符号链接解�
 3. 检查 `~/.dsh/settings.yaml` 的导入结果（§7.8 表格逐项）。
 4. **先跑回归矩阵里的补丁 verify**（`node scripts/verify-all.mjs` 全覆盖 dual-model ×1 + desktop ×5）——
    六个 `patch.mjs verify` 若报 `unknown`（锚点探测无变体命中）即为第一信号，停下按补丁 README 增补变体，不要继续升。
+   **另跑 profile 侧第三方补丁**：`node dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs status`
+   （期望 client/host 双 PATCHED；若插件升过版变 UNKNOWN，先 `rebuild-baseline` 再 `apply`，§7.11）。
 5. 七条线逐条 `node scripts/verify-all.mjs <line>`。
 6. 补丁机械流程（settings-models 已双代适配，`EDITS` 零改）：逐个 `rebuild-baseline.mjs` → 同步常量 → `verify` → `apply` → **刷页面确认「思考强度」「测试连通性」两个控件在位**。
-7. **dual-model 缓存失效实机验证**——改一个 llm provider 设置，确认右下角模型能力秒级刷新（最坏等 5 分钟 TTL）；同步落地 `settings/updated` 监听的适配（§7.3）。
-8. **desktop 三插件（free-model-pool / model-probe / pet-panel）设置注入实机验证**（§7.4）。
+7. **dual-model 缓存失效实机验证**——改一个 llm provider 设置，确认右下角模型能力秒级刷新（最坏等 5 分钟 TTL）。监听适配已落地（`a956776`，§7.3），本项只剩实机确认。
+8. **desktop 三插件（free-model-pool / model-probe / pet-panel）设置注入实机验证**（§7.4）。**代码适配已闭环**：free-model-pool / model-probe 的 settings 读取双轨 2026-09-23 当日落地（§7.4 表 + 27 例单测）；pet-panel host 半空壳、零 settings 用法。本项剩余 = 用户重启桌面端后模型栏两项目检（免费模型池面板列平台 / 已保存行测试连通性走真实探测）。
 9. 重跑 `preset-sources/apply-presets.ps1`（0.1.7 下若旧目录预设仍被读取则照旧；官方组合包化迁移按 §7.9 另立专题，**第一动作是拉新版 `@deepseek-ai/dsh-agent-presets` 看格式**）。
 10. 文档收尾：canvas README 版本声明、五补丁 README baseline/SHA、desktop 五插件 peerDeps bump（§7.10）。
 11. 重启 `dsh web`，按 `cross/smoke-test-matrix.md` 走 L2/L3。
