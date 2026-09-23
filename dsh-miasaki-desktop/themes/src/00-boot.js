@@ -74,15 +74,24 @@
   })()
 
   // 全局错误陷阱：异常可视化到屏幕左上角（诊断用，可被 MiMo 读取）
+  // 只保留**最新一条**（2026-09-23 修复）：早期实现每次 error 都 appendChild 一个
+  // 新 div，反复触发时红条沿屏幕向下堆叠、盖住页面内容（实机截图里红条已压住
+  // 会话区）。改为复用同一个 div 更新文本；重入场景（页面重渲染把旧节点清掉）
+  // 由 parentNode 判空兜底重建。次数由文本内 [N] 承担，ERR_COUNT 另有 hash
+  // 诊断位消费，语义不变。
   var ERR_COUNT = 0
+  var ERR_BAR = null
   window.addEventListener('error', function (e) {
     ERR_COUNT++
     try {
-      var d = document.createElement('div')
-      d.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;background:#d00;color:#fff;' +
-        'font:11px monospace;padding:5px 8px;max-width:700px;white-space:pre-wrap;border-radius:0 0 8px 0'
-      d.textContent = 'MIASAKI-ERR: ' + (e.message || e.type) + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno
-      document.body.appendChild(d)
+      if (ERR_BAR === null || ERR_BAR.parentNode === null) {
+        ERR_BAR = document.createElement('div')
+        ERR_BAR.id = 'miasaki-err'
+        ERR_BAR.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;background:#d00;color:#fff;' +
+          'font:11px monospace;padding:5px 8px;max-width:700px;white-space:pre-wrap;border-radius:0 0 8px 0'
+        document.body.appendChild(ERR_BAR)
+      }
+      ERR_BAR.textContent = 'MIASAKI-ERR[' + ERR_COUNT + ']: ' + (e.message || e.type) + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno
     } catch (e2) { /* ignore */ }
   })
 
