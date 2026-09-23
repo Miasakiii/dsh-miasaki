@@ -1,11 +1,21 @@
 // @miasaki/dsh-dual-model — Client half.
 //
 // 在输入框右下角（`conversation.input.right`，提交按钮之前的加法槽）渲染双模型控件：
-// 折叠态一个按钮 + 状态点，展开态配置辅助模型并显示"图片将由谁处理"。
+// 折叠态一个 pill 按钮（主 ▸ 辅短名 + 状态点），展开态是与官方 ContextMeter 面板
+// 同款表面的轻量配置面板（主/辅模型能力对照 + 图片归属状态条）。
 //
 // 形态说明：正式插件的 client bundle 由 `window.__ModuleLoader__.load` 装载，
 // **没有** `host.call`（那是动态插件的 builtin），因此与 Host 的通信走同源
 // JSON 路由 `/dual-model/api/*`。也不能 require 第三方包 —— 只用 `react`。
+//
+// 样式约定（2026-09-22 UI 优化）：
+//   · 弹层表面 `--dsw-specific-menu` + `--dsw-elevation-prominent`，对齐官方
+//     ContextMeter 面板（`JObwrW_panel`，与本槽位同处输入栏 trailing 区）；
+//   · 折叠按钮 28px / 999px 圆角 / `--dsw-specific-selector` 底，hover 走
+//     `--dsw-alias-interactive-bg-hover-solid`，对齐官方紧凑控件（`.add`）；
+//   · 全部配色走 `--dsw-alias-*` / `--dsw-static-*` 真实令牌（浅/深主题自适应），
+//     不再使用硬编码色（旧实现的 `--dsw-static-surface` 等令牌在 DSH 本体不存在，
+//     背景恒回退 GitHub 深色，浅色主题下不可读）。
 //
 // 设计文档：design/2026-09-10-dual-model-design.md §5
 
@@ -17,6 +27,41 @@ window.__ModuleLoader__.load({
 
     const API = '/dual-model/api'
     const BOOT_FLAG = '__DSH_DUAL_MODEL_BOOTED__'
+
+    // 面板/按钮样式：类名前缀 `dsh-dual-model-` 与 canvas / ssh 两线惯例一致。
+    // 全部使用 DSH 真实主题令牌；圆括号内 fallback 仅在令牌缺失时兜底。
+    const PANEL_CSS = [
+      '.dsh-dual-model-root{position:relative;display:inline-flex}',
+      '.dsh-dual-model-trigger{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:0;border-radius:999px;flex:none;cursor:pointer;font:inherit;font-size:12px;line-height:1;background:var(--dsw-specific-selector,rgba(127,127,127,.16));color:var(--dsw-alias-label-primary,inherit);transition:background-color .1s}',
+      '.dsh-dual-model-trigger:hover:not(:disabled),.dsh-dual-model-trigger[aria-expanded="true"]{background:var(--dsw-alias-interactive-bg-hover-solid,rgba(127,127,127,.28))}',
+      '.dsh-dual-model-trigger:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#4d6bfe);outline-offset:-1px}',
+      '.dsh-dual-model-trigger:disabled{opacity:.5;cursor:default}',
+      '.dsh-dual-model-dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 1px var(--dsw-alias-border-l3,rgba(127,127,127,.35))}',
+      '.dsh-dual-model-count{color:var(--dsw-alias-label-tertiary,#9ca3af);font-variant-numeric:tabular-nums}',
+      '.dsh-dual-model-panel{position:absolute;bottom:calc(100% + 8px);right:0;z-index:100;box-sizing:border-box;width:288px;padding:12px;border:0;border-radius:12px;background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1,#fff));--dsw-elevation-stroke-color:var(--dsw-alias-border-l1,rgba(127,127,127,.2));box-shadow:var(--dsw-elevation-prominent,0 8px 24px rgba(0,0,0,.18));color:var(--dsw-alias-label-secondary,#6b7280);font-size:12px;line-height:20px;text-align:left}',
+      '.dsh-dual-model-head{display:flex;align-items:center;gap:6px}',
+      '.dsh-dual-model-title{color:var(--dsw-alias-label-primary,#111827);font-weight:600}',
+      '.dsh-dual-model-close{margin-left:auto;width:22px;height:22px;display:grid;place-items:center;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary,#9ca3af);cursor:pointer;font:inherit;font-size:14px;line-height:1}',
+      '.dsh-dual-model-close:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.12));color:var(--dsw-alias-label-primary,#111827)}',
+      '.dsh-dual-model-sub{color:var(--dsw-alias-label-tertiary,#9ca3af);font-size:11px;margin:2px 0 10px}',
+      '.dsh-dual-model-row{display:flex;align-items:center;gap:8px;min-height:24px}',
+      '.dsh-dual-model-key{flex:0 0 52px;color:var(--dsw-alias-label-tertiary,#9ca3af)}',
+      '.dsh-dual-model-name{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary,#111827)}',
+      '.dsh-dual-model-badge{flex:none;font-size:10px;line-height:14px;padding:1px 6px;border-radius:999px;white-space:nowrap;border:1px solid var(--dsw-alias-border-l3,rgba(127,127,127,.3));color:var(--dsw-alias-label-tertiary,#9ca3af)}',
+      '.dsh-dual-model-badge.is-ok{color:var(--dsw-alias-state-success-primary,#16a34a);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary,#16a34a) 45%,transparent)}',
+      '.dsh-dual-model-block{margin:8px 0 2px}',
+      '.dsh-dual-model-select{width:100%;box-sizing:border-box;height:28px;padding:0 26px 0 8px;appearance:none;cursor:pointer;font:inherit;font-size:12px;color:var(--dsw-alias-label-primary,#111827);background-color:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.1));background-image:url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'12\' viewBox=\'0 0 12 12\' fill=\'none\'%3E%3Cpath d=\'M3 4.5L6 7.5L9 4.5\' stroke=\'%2381858C\' stroke-width=\'1.2\' stroke-linecap=\'round\' stroke-linejoin=\'round\'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:8px}',
+      '.dsh-dual-model-select:hover:not(:disabled){border-color:var(--dsw-alias-border-l3,#9ca3af)}',
+      '.dsh-dual-model-select:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#4d6bfe);outline-offset:-1px}',
+      '.dsh-dual-model-select:disabled{opacity:.55;cursor:default}',
+      '.dsh-dual-model-hint{color:var(--dsw-alias-label-tertiary,#9ca3af);font-size:11px;margin-top:6px;line-height:16px}',
+      '.dsh-dual-model-status{display:flex;align-items:flex-start;gap:6px;margin:10px 0;padding:8px;border-radius:8px;background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.1));font-size:11px;line-height:16px}',
+      '.dsh-dual-model-status-dot{flex:0 0 auto;width:7px;height:7px;margin-top:4px;border-radius:50%}',
+      '.dsh-dual-model-foot{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary,#6b7280)}',
+      '.dsh-dual-model-foot input[type="checkbox"]{accent-color:var(--dsw-static-deepseek-450,#4d6bfe);margin:0;cursor:pointer}',
+      '.dsh-dual-model-busy{margin-left:auto;color:var(--dsw-alias-label-tertiary,#9ca3af);font-size:11px}',
+      '.dsh-dual-model-error{color:var(--dsw-alias-state-error-primary,#dc2626);font-size:11px;margin-top:8px;word-break:break-word;line-height:16px}',
+    ].join('')
 
     /** 同源 JSON 请求；非 2xx 一律抛出可读错误。 */
     async function requestJson(path, init) {
@@ -36,28 +81,32 @@ window.__ModuleLoader__.load({
       return payload
     }
 
-    /** 把 provider/model 显示成人类可读的短名。 */
-    function shortName(model, fallback) {
+    /** 模型 id → 人类可读短名（折叠态「主 ▸ 辅」用，宁短勿挤）。 */
+    function shortModel(model, fallback) {
       const value = typeof model === 'string' && model !== '' ? model : fallback
-      return value.length > 22 ? `${value.slice(0, 21)}…` : value
+      return value.length > 16 ? `${value.slice(0, 15)}…` : value
     }
 
-    /** 状态点颜色：图片有人管用绿、没人管用红、未配置用黄。 */
+    /** 状态点颜色：辅助模型管图用绿、主模型管图用品牌蓝、没人管用红、未配置/关闭用灰。 */
     function statusColor(state) {
-      if (state === null) return 'var(--dsw-static-neutral-500, #8b949e)'
-      if (state.enabled !== true) return 'var(--dsw-static-neutral-500, #8b949e)'
-      if (state.imageOwner === 'none') return '#f85149'
-      if (state.imageOwner === 'assist') return '#3fb950'
-      return '#58a6ff'
+      if (state === null) return 'var(--dsw-alias-label-tertiary, #9ca3af)'
+      if (state.enabled !== true) return 'var(--dsw-alias-label-tertiary, #9ca3af)'
+      if (state.imageOwner === 'none') return 'var(--dsw-alias-state-error-primary, #dc2626)'
+      if (state.imageOwner === 'assist') return 'var(--dsw-alias-state-success-primary, #16a34a)'
+      return 'var(--dsw-static-deepseek-450, #4d6bfe)'
     }
 
-    /** 折叠态的按钮文字。 */
-    function buttonLabel(state) {
+    /** 折叠态标签：「主 ▸ 辅」双短名（设计文档 §5.2 原意）。 */
+    function triggerLabel(state) {
       if (state === null) return '双模型'
       if (state.enabled !== true) return '双模型 关'
+      const primary = state.primary && state.primary.model ? String(state.primary.model) : ''
       const assist = state.assist && state.assist.model ? String(state.assist.model) : ''
-      if (assist === '') return '双模型'
-      return `双模型 ▸ ${shortName(assist, '辅助')}`
+      const p = primary !== '' ? shortModel(primary, '') : ''
+      const a = assist !== '' ? shortModel(assist, '') : ''
+      if (a === '') return p !== '' ? `双模型 · ${p}` : '双模型'
+      if (p === '') return `双模型 ▸ ${a}`
+      return `${p} ▸ ${a}`
     }
 
     /** 状态行文案 —— 把"隐式降级"变成显式契约。 */
@@ -72,6 +121,17 @@ window.__ModuleLoader__.load({
           : `附件将交给「${assistName}」处理`
       }
       return draftAttachments > 0 ? `${draftAttachments} 个附件由主模型直接处理` : '主模型可直接读图'
+    }
+
+    /** 能力徽标：true→「看图」（语义绿）/ false→「纯文本」/ 未知→「未知」。 */
+    function visionBadge(vision) {
+      if (vision === true) {
+        return react.createElement('span', { key: 'badge', className: 'dsh-dual-model-badge is-ok' }, '看图')
+      }
+      if (vision === false) {
+        return react.createElement('span', { key: 'badge', className: 'dsh-dual-model-badge' }, '纯文本')
+      }
+      return react.createElement('span', { key: 'badge', className: 'dsh-dual-model-badge' }, '未知')
     }
 
     function DualModelControl(props) {
@@ -92,6 +152,7 @@ window.__ModuleLoader__.load({
       const [state, setState] = react.useState(null)
       const [error, setError] = react.useState(null)
       const [busy, setBusy] = react.useState(false)
+      const rootRef = react.useRef(null)
 
       const load = react.useCallback(() => {
         let cancelled = false
@@ -109,6 +170,26 @@ window.__ModuleLoader__.load({
         return load()
       }, [open, load])
 
+      // 展开态下：Esc 关闭、点击面板外关闭 —— 监听随 open 注册/销毁（effect 可逆）。
+      react.useEffect(() => {
+        if (!open) return undefined
+        const onKeyDown = (event) => {
+          if (event.key === 'Escape') setOpen(false)
+        }
+        const onMouseDown = (event) => {
+          const root = rootRef.current
+          if (root === null) return
+          const target = event.target
+          if (target instanceof Node && !root.contains(target)) setOpen(false)
+        }
+        document.addEventListener('keydown', onKeyDown)
+        document.addEventListener('mousedown', onMouseDown, true)
+        return () => {
+          document.removeEventListener('keydown', onKeyDown)
+          document.removeEventListener('mousedown', onMouseDown, true)
+        }
+      }, [open])
+
       const save = react.useCallback((patch) => {
         setBusy(true)
         requestJson(`/settings?sessionId=${encodeURIComponent(sessionId)}`, { method: 'POST', body: patch })
@@ -119,62 +200,82 @@ window.__ModuleLoader__.load({
 
       const color = statusColor(state)
       const disabled = busy || state === null
+      const title = state === null ? '双模型' : statusLine(state, draftAttachments)
 
-      const button = react.createElement('button', {
+      const trigger = react.createElement('button', {
+        key: 'trigger',
         type: 'button',
-        title: state === null ? '双模型' : statusLine(state, draftAttachments),
+        className: 'dsh-dual-model-trigger',
+        title,
+        'aria-haspopup': 'dialog',
         'aria-expanded': open,
+        disabled: state === null,
         onClick: () => setOpen(!open),
         style: {
-          display: 'inline-flex', alignItems: 'center', gap: '6px',
-          height: '28px', padding: '0 8px', margin: '0 2px',
-          background: 'transparent', border: '1px solid transparent', borderRadius: '6px',
-          color: 'inherit', font: 'inherit', fontSize: '12px', cursor: 'pointer',
           opacity: state !== null && state.enabled !== true ? 0.55 : 1,
         },
       },
         react.createElement('span', {
-          style: { width: '7px', height: '7px', borderRadius: '50%', background: color, flex: '0 0 auto' },
+          key: 'dot',
+          className: 'dsh-dual-model-dot',
+          style: { background: color },
         }),
-        react.createElement('span', null, buttonLabel(state)),
+        react.createElement('span', { key: 'label' }, triggerLabel(state)),
+        draftAttachments > 0
+          ? react.createElement('span', { key: 'count', className: 'dsh-dual-model-count' }, `·${draftAttachments}`)
+          : null,
       )
 
-      if (!open) return button
+      if (!open) {
+        return react.createElement('div', { className: 'dsh-dual-model-root', ref: rootRef }, trigger)
+      }
 
       const children = []
+
+      // ---- 头部 ----
       children.push(react.createElement('div', {
         key: 'head',
-        style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' },
+        className: 'dsh-dual-model-head',
       },
-        react.createElement('strong', { style: { fontSize: '12px' } }, '双模型'),
+        react.createElement('strong', { key: 'title', className: 'dsh-dual-model-title' }, '双模型'),
         react.createElement('button', {
+          key: 'close',
           type: 'button',
+          className: 'dsh-dual-model-close',
+          'aria-label': '关闭',
           onClick: () => setOpen(false),
-          style: { background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '14px', lineHeight: 1, opacity: 0.7 },
         }, '×'),
       ))
+      children.push(react.createElement('div', {
+        key: 'sub',
+        className: 'dsh-dual-model-sub',
+      }, '任一模型能看图，即可随消息发图；含图步骤由它处理。'))
 
-      // 启用开关
-      children.push(react.createElement('label', {
-        key: 'enabled',
-        style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' },
-      },
-        react.createElement('input', {
-          type: 'checkbox',
-          checked: state !== null && state.enabled === true,
-          disabled,
-          onChange: (event) => save({ enabled: event.target.checked }),
-        }),
-        '启用双模型',
+      // ---- 主模型行（对照的另一半：host 已提供 primary/primaryVision）----
+      const primaryModel = state !== null && state.primary && state.primary.model ? String(state.primary.model) : ''
+      children.push(react.createElement('div', { key: 'primary', className: 'dsh-dual-model-row' },
+        react.createElement('span', { key: 'key', className: 'dsh-dual-model-key' }, '主模型'),
+        react.createElement('span', {
+          key: 'name',
+          className: 'dsh-dual-model-name',
+          title: primaryModel,
+        }, primaryModel !== '' ? shortModel(primaryModel, '') : '默认模型'),
+        visionBadge(state !== null ? state.primaryVision : undefined),
       ))
 
-      // 状态行
-      children.push(react.createElement('div', {
-        key: 'status',
-        style: { fontSize: '11px', lineHeight: '1.5', color, marginBottom: '8px' },
-      }, statusLine(state, draftAttachments)))
+      // ---- 辅助模型行 ----
+      const assistModel = state !== null && state.assist && state.assist.model ? String(state.assist.model) : ''
+      children.push(react.createElement('div', { key: 'assist-row', className: 'dsh-dual-model-row' },
+        react.createElement('span', { key: 'key', className: 'dsh-dual-model-key' }, '辅助模型'),
+        react.createElement('span', {
+          key: 'name',
+          className: 'dsh-dual-model-name',
+          title: assistModel,
+        }, assistModel !== '' ? shortModel(assistModel, '') : '未配置'),
+        visionBadge(state !== null ? state.assistVision : undefined),
+      ))
 
-      // 辅助模型选择
+      // ---- 辅助模型选择 ----
       const visionModels = state !== null && Array.isArray(state.visionModels) ? state.visionModels : []
       const currentValue = state !== null && state.assist && state.assist.model
         ? `${state.assist.provider}\u0000${state.assist.model}`
@@ -192,60 +293,77 @@ window.__ModuleLoader__.load({
           models.map(model => react.createElement('option', {
             key: `${model.provider}\u0000${model.id}`,
             value: `${model.provider}\u0000${model.id}`,
-          }, `${model.name} · ${model.id}`)),
+            title: String(model.id),
+          }, `${model.name}`)),
         ))
       }
 
-      children.push(react.createElement('label', {
-        key: 'assist',
-        style: { display: 'block', fontSize: '12px', marginBottom: '4px' },
-      }, '辅助模型（支持图片的模型）'))
-      children.push(react.createElement('select', {
-        key: 'assist-select',
-        disabled,
-        value: currentValue,
-        onChange: (event) => {
-          const value = String(event.target.value)
-          if (value === '') { save({ assistProvider: '', assistModel: '' }); return }
-          const [provider, model] = value.split('\u0000')
-          save({ assistProvider: provider, assistModel: model })
-        },
-        style: {
-          width: '100%', boxSizing: 'border-box', padding: '4px 6px', fontSize: '12px',
-          background: 'transparent', color: 'inherit', borderRadius: '6px',
-          border: '1px solid var(--dsw-static-border, rgba(128,128,128,0.35))',
-        },
-      }, optionNodes))
+      children.push(react.createElement('div', { key: 'assist-block', className: 'dsh-dual-model-block' },
+        react.createElement('select', {
+          key: 'select',
+          className: 'dsh-dual-model-select',
+          disabled,
+          value: currentValue,
+          'aria-label': '辅助模型',
+          onChange: (event) => {
+            const value = String(event.target.value)
+            if (value === '') { save({ assistProvider: '', assistModel: '' }); return }
+            const [provider, model] = value.split('\u0000')
+            save({ assistProvider: provider, assistModel: model })
+          },
+        }, optionNodes),
+        visionModels.length === 0
+          ? react.createElement('div', {
+            key: 'empty',
+            className: 'dsh-dual-model-hint',
+          }, '未发现支持图片的模型 —— 请在「设置 → 模型」中配置带视觉能力的平台。')
+          : null,
+      ))
 
-      if (visionModels.length === 0) {
-        children.push(react.createElement('div', {
-          key: 'empty',
-          style: { fontSize: '11px', opacity: 0.7, marginTop: '6px' },
-        }, '未发现支持图片的模型 —— 请在「设置 → 模型」中配置带视觉能力的平台。'))
-      }
+      // ---- 图片归属状态条 ----
+      children.push(react.createElement('div', {
+        key: 'status',
+        className: 'dsh-dual-model-status',
+        style: { color },
+      },
+        react.createElement('span', {
+          key: 'dot',
+          className: 'dsh-dual-model-status-dot',
+          style: { background: color },
+        }),
+        react.createElement('span', { key: 'text' }, statusLine(state, draftAttachments)),
+      ))
+
+      // ---- 底部：启用开关 + 保存中 ----
+      children.push(react.createElement('label', { key: 'enabled', className: 'dsh-dual-model-foot' },
+        react.createElement('input', {
+          key: 'checkbox',
+          type: 'checkbox',
+          checked: state !== null && state.enabled === true,
+          disabled,
+          onChange: (event) => save({ enabled: event.target.checked }),
+        }),
+        '启用双模型',
+        busy
+          ? react.createElement('span', { key: 'busy', className: 'dsh-dual-model-busy' }, '保存中…')
+          : null,
+      ))
 
       if (error !== null) {
         children.push(react.createElement('div', {
           key: 'error',
-          style: { fontSize: '11px', color: '#f85149', marginTop: '8px', wordBreak: 'break-word' },
+          className: 'dsh-dual-model-error',
         }, error))
       }
 
       const panel = react.createElement('div', {
         key: 'panel',
-        style: {
-          position: 'absolute', bottom: 'calc(100% + 6px)', right: '0', zIndex: 40,
-          width: '300px', padding: '10px 12px',
-          background: 'var(--dsw-static-surface, #1c2128)',
-          color: 'var(--dsw-static-text, inherit)',
-          border: '1px solid var(--dsw-static-border, rgba(128,128,128,0.35))',
-          borderRadius: '10px',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
-          textAlign: 'left',
-        },
+        className: 'dsh-dual-model-panel',
+        role: 'dialog',
+        'aria-label': '双模型配置',
       }, children)
 
-      return react.createElement('div', { style: { position: 'relative', display: 'inline-flex' } }, button, panel)
+      return react.createElement('div', { className: 'dsh-dual-model-root', ref: rootRef }, trigger, panel)
     }
 
     module.exports.inject = ['slots']
@@ -254,6 +372,15 @@ window.__ModuleLoader__.load({
       // 幂等守卫：DSH HMR / 重复 apply 不得叠加第二个控件。
       if (window[BOOT_FLAG] === true) return
       window[BOOT_FLAG] = true
+
+      // 面板样式一次注入、随插件生命周期移除（effect 可逆）。
+      ctx.effect(() => {
+        const style = document.createElement('style')
+        style.setAttribute('data-dsh-dual-model', 'panel')
+        style.textContent = PANEL_CSS
+        document.head.appendChild(style)
+        return () => { style.remove() }
+      }, 'dual-model: panel styles')
 
       ctx.slots.inject('conversation.input.right', () => ctx.slots.register(
         { name: 'conversation.input.right', id: 'dual-model', order: 100, label: '双模型' },
