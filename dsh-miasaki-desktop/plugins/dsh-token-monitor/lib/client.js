@@ -156,6 +156,9 @@ window.__ModuleLoader__.load({
 			.tokmn-ov-body { padding: 14px 20px 24px; overflow-y: auto; min-height: 0; }
 			.tokmn-iconbtn { width: 30px; height: 30px; border: none; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none; padding: 0; }
 			.tokmn-iconbtn:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+			/* 头部「刷新」钮：刷新期间图标旋转（transform 动画，停止即回正） */
+			@keyframes tokmn-spin { to { transform: rotate(360deg); } }
+			.tokmn-spin { animation: tokmn-spin 0.8s linear infinite; transform-origin: 50% 50%; }
 			/* 侧栏脚部「用量统计」入口（sidebar.footer.action）：形态对齐宿主设置
 			   触发钮（settings trigger：42px 高 / 12px 圆角 / 透明底 / hover
 			   interactive-bg-hover / padding 0 10px 0 8px / 14px·22px），展开态
@@ -414,6 +417,17 @@ window.__ModuleLoader__.load({
 			return react.useSyncExternalStore(overlayStore.subscribe, overlayStore.get);
 		}
 
+		/** 浮窗「刷新」总线：头部刷新钮（GlobalUsageOverlay）跨组件通知数据组件
+		    （GlobalStatsContent）立即重拉 /global 与 /heatmap，不必等 5s / 60s
+		    轮询。fire() 汇合各订阅方返回的 Promise，供调用方驱动「刷新中」旋转态。 */
+		const refreshBus = (() => {
+			const subs = new Set();
+			return {
+				fire() { return Promise.all(Array.from(subs, (f) => Promise.resolve().then(f))); },
+				subscribe(f) { subs.add(f); return () => subs.delete(f); }
+			};
+		})();
+
 		/** 侧栏脚部「用量统计」入口按钮（sidebar.footer.action）。
 		    props.wide 为宿主传入的侧栏展开态：展开 42px 全宽钮，收起 36px 圆形图标钮。 */
 		function UsageStatsButton(props) {
@@ -593,12 +607,23 @@ window.__ModuleLoader__.load({
 		    是两个独立挂载点，任一单独挂载时样式都必须成立。 */
 		function GlobalUsageOverlay() {
 			const open = useOverlayOpen();
+			const [refreshing, setRefreshing] = react.useState(false);
+			const [lastAt, setLastAt] = react.useState(null);
 			react.useEffect(() => {
 				if (!open) return undefined;
 				const onKey = (e) => { if (e.key === "Escape") overlayStore.set(false); };
 				window.addEventListener("keydown", onKey);
 				return () => window.removeEventListener("keydown", onKey);
 			}, [open]);
+			// 头部「刷新」：立即重拉两个数据源。本地请求毫秒级、又叠 5s 自动轮询，
+			// 不做强反馈用户感知不到"点了有反应"——故保证 ≥0.5s 旋转可见，并在头部
+			// 记一笔「更新于」时间戳；失败也一并复位。
+			const doRefresh = () => {
+				setRefreshing(true);
+				const minSpin = new Promise((res) => window.setTimeout(res, 500));
+				Promise.all([refreshBus.fire().catch(() => {}), minSpin])
+					.finally(() => { setRefreshing(false); setLastAt(new Date()); });
+			};
 			if (!open) return null;
 			return [
 				react.createElement("style", { key: "css" }, CSS),
@@ -610,10 +635,26 @@ window.__ModuleLoader__.load({
 				react.createElement("div", { className: "tokmn-ov-panel", role: "dialog", "aria-modal": "true", "aria-label": "用量统计" },
 					react.createElement("div", { className: "tokmn-ov-head" },
 						react.createElement("h3", { className: "tokmn-ov-title" }, "用量统计"),
-						react.createElement("span", { className: "tokmn-meta" }, "跨会话总量 · 与当前会话无关"),
+						react.createElement("span", { className: "tokmn-meta" }, "跨会话总量 · 与当前会话无关",
+							lastAt ? " · 更新于 " + lastAt.toLocaleTimeString("zh-CN", { hour12: false }) : null),
+						// 刷新钮紧贴关闭钮左侧、关闭钮仍居最右。注意 marginLeft:auto 必须
+						// 挂在**刷新钮**上：挂在关闭钮上时，flex 把剩余空间加在关闭钮之前，
+						// 刷新钮会连同标题一起留在左端、两者被隔开（用户实测反馈）。
+						react.createElement("button", {
+							type: "button", className: "tokmn-iconbtn", "aria-label": "刷新", title: "刷新",
+							style: { marginLeft: "auto" },
+							onClick: doRefresh
+						},
+							react.createElement("svg", {
+								width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true",
+								className: refreshing ? "tokmn-spin" : undefined
+							},
+								react.createElement("path", {
+									d: "M10.5 3.5A5 5 0 1 1 3.5 3.5M4.2 4.9L3.5 3.3 2.8 4.9",
+									fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round"
+								}))),
 						react.createElement("button", {
 							type: "button", className: "tokmn-iconbtn", "aria-label": "关闭", title: "关闭（Esc）",
-							style: { marginLeft: "auto" },
 							onClick: () => overlayStore.set(false)
 						},
 							react.createElement("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" },
@@ -669,6 +710,14 @@ window.__ModuleLoader__.load({
 				const timer = window.setInterval(load, 60000);
 				return () => { alive = false; window.clearInterval(timer); };
 			}, []);
+
+			// 头部「刷新」钮：立即重拉 /global 与 /heatmap，两个轮询周期都不等
+			// （订阅随组件卸载自动取消）。
+			react.useEffect(() => refreshBus.subscribe(() => {
+				const g = loadGlobalRef.current();
+				const h = loadHeatmapRef.current();
+				return Promise.allSettled([g, h]);
+			}), []);
 
 			// 趋势图容器宽度（ResizeObserver，SVG 随浮窗伸缩）。
 			react.useEffect(() => {
