@@ -115,6 +115,28 @@ node patch.mjs rebuild-baseline  # 升级专用：以当前安装原版重建 ba
 - 只改这一个第三方包的安装产物，不动 DSH 本体、不动其他插件、不进 profile 配置。
 - 备份文件：应用后在插件 lib 目录留 `client.js.dsh-bak` / `index.js.dsh-bak`。
 
+## live 审计与沙箱注记（2026-09-24 三轮复审补）
+
+- **已进审计范围**：`scripts/patch-live-audit.mjs` 的 `PATCH_ROOTS` 新增
+  `dsh-miasaki-shared-docs/dsh-platform/patches`，本机输出由「7 个补丁」变为
+  **9 个目标 / 8 件补丁**——本件两半各占一行（`…dsh-browser-playwright (client)` /
+  `(host)`），逐半判 `patched` / `original`（=升级覆盖，web UI 会停在启动屏）/
+  `unknown`；基线版本对得上却没打上即 🔴 退出码 1。之所以必须纳入：本件被打回原版
+  的后果是**整个 web UI 打不开**，而离线 `verify` 恒 PASS，正是「离线全绿 + live 全
+  unknown 并存」的经典盲区。
+  **判据自证（实测）**：令假 profile 根的 `client.js` 为 baseline 原版 → 该行报
+  `original … 回归！`、退出码 1，而 `host` 半仍 `patched`（两半独立判定）。
+- **本文件为此补的两样**：① `import.meta.url` **CLI 守卫**——此前是八件补丁里唯一
+  漏网的，被 import 时会以调用方 argv 误跑一次 CLI（argv 为空即打印用法并可能改写调用方
+  `exitCode`）；② **`LIVE_TARGETS`** 导出（双半 ⇒ 多目标契约；`classify` 返回
+  `{ state }`，与其余七件同形同词表）。
+- **沙箱注记（环境假阴性）**：受限沙箱（`workspace-write`）禁止管道捕获子进程输出，
+  `verify` 里的 `node --check` 会以 `spawn EPERM` 结束。旧版把它打印成「语法校验失败」
+  （stderr 为空，极具误导），现改为 ⚠ 明说「未能执行 + 请在普通终端复核」，**不计 FAIL**。
+  手工判据：把 `baseline/client.patched.js` 复制为 `.js`、`index.patched.js` 复制为
+  `.mjs`，在 shell 层跑 `node --check`——2026-09-24 实测双双 exit 0。SHA 三层比对与
+  双世界冒烟不受此影响。
+
 ## 相关
 
 - 升级评估（本补丁的决策背景）：[`../dsh-0.1.7-upgrade-assessment-2026-09-23.md`](../dsh-0.1.7-upgrade-assessment-2026-09-23.md)

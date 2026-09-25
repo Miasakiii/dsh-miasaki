@@ -4,6 +4,10 @@
 - 当前运行：`@deepseek-ai/dsh@0.1.5-rc.1`
 - 候选：`0.1.7-alpha.2`（`alpha` 轨）／`0.1.5-rc.2`（`latest`）／`0.1.5-rc.3`（`next`）
 - 上一版评估：[`dsh-0.1.6-upgrade-assessment-2026-09-21.md`](dsh-0.1.6-upgrade-assessment-2026-09-21.md)（0.1.6-alpha.2 实测，补丁/槽/事件全量核对）
+- **后续（2026-09-25）**：[`dsh-0.1.7-rc2-upgrade-assessment-2026-09-25.md`](dsh-0.1.7-rc2-upgrade-assessment-2026-09-25.md)
+  —— 本文定的触发条件（`next` 出现 `0.1.7-rc.*`）**已于 09-25 满足**（`next = 0.1.7-rc.2`）；
+  7 个补丁在 rc.2 真实产物上**全部锚点命中、增量与 alpha.2 逐字节一致**，契约面零必改、代码侧零新增必改点。
+  配套复查：[`dsh-official-repo-review-2026-09-25.md`](dsh-official-repo-review-2026-09-25.md)。
 - 配套（同日官方仓库复查）：本文 §2/§6/§7 即源码级结论；`gh` 只用于拉快照与 API 元数据
 - 方法：与上两版同法并升级——`vendor/deepseek-harness`（= 0.1.6-alpha.2）**并排保留**、
   `vendor/deepseek-harness-0.1.7-alpha.2` 新快照（10,799 文件 / 34.4 MB zip），

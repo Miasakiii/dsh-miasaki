@@ -8,7 +8,7 @@
 | 层 | 内容 | 载体 | 可自动化 |
 |---|---|---|---|
 | **L0** 静态检查 | 语法（`node --check`）、令牌完备性、令牌漂移 | `node scripts/verify-all.mjs` | 是 |
-| **L1** 单线单测 | Canvas 89 项、Sidebar 62 项、SSH 113 项、双模型 24 项、外观 91 项、Fleet 108 项、Desktop 18+25 项 | `node scripts/verify-all.mjs` | 是 |
+| **L1** 单线单测 | Canvas 89 项、Sidebar 62 项、SSH 113 项、双模型 33 项、外观 95 项、Fleet 108 项、Desktop 120 例（含 2026-09-25 新增的 57 例：主题来源 8 / hash 字段级 8 / 契约 v1 11 / 窗口底色回传 10 / console 旁路 12 / 材质分层 8）+ `cargo test` **78 例** | `node scripts/verify-all.mjs` | 是 |
 | **L2** 插件加载 | 装 profile → 重启 host → 页面刷新 → 插件生效/停用可恢复 | 本文档 §2 | 否（需重启 host） |
 | **L3** 实机冒烟 | 桌面壳启动、窗口、主题、桌宠、Canvas、Sidebar、SSH、双模型、外观 | 本文档 §3 | 否（需真机） |
 | **L4** 跨线联动 | Fleet pulse → 桌宠；主题 → Canvas/Sidebar；标题栏让位 | 本文档 §4 | 否 |
@@ -20,17 +20,17 @@ node scripts/verify-all.mjs            # 七线全量
 node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）
 ```
 
-**2026-09-23 实测基线**（七线全量重跑，共 **93 项检查**；DSH **0.1.7-alpha.2** 已实装 / Node v24.15.0）：
+**2026-09-25 实测基线**（七线全量重跑，共 **105 项检查**；DSH **0.1.7-rc.2** 已实装 / Node v24.15.0）：
 
 | 线 | 项数 | 内容 | 结果 |
 |---|---:|---|---|
 | sidebar | 10 | `index.js`/`client.js` 语法 + 8 个测试文件（review-data 5 / review-view 10 / review-grouping 3 / review-view-store 6 / rightbar-guide 4 / terminal-launcher 7 / api-routing 12 / terminal-hub 15，共 62 例） | PASS |
 | canvas | 11 | 三入口语法 + 8 个测试文件共 89 例（含 mergeStale 失效、external-views 外部视图槽、header-adaptive 会话头自适应） | PASS |
 | fleet | 15 | 图与总线判定 10 项（liveness 7 例 / bus-contract 23 / bus-apply 15 / bus-integration 13 / task-graph 13 / capability-graph 17 / verifier 20，共 108 例，及 `task-ready` `agent-pick` `verifier-pick` 的 `--check`、**dispatch 能力闸门接线**）+ server.js 语法 + validate-bus + publish-pulse + validate-bus --strict | PASS |
-| desktop | 18 | gen-init（令牌校验）+ tokens:diff（无漂移）+ **patch verify ×6**（模型设置 / 会话头溢出保护 / 轨迹计时恢复 / 消息气泡计时恢复 / cordis client 查询挂起修复 / **消息画廊多图 tile 宽高比**）＋ `plugins/dsh-model-probe` 语法 3 项 + 探测判定表 20 例 + settings 读取双轨 12 例 + `plugins/dsh-free-model-pool` 语法 2 项 + settings-read 10 例 + routes 5 例 + cargo test 28 例（pulse stale + 立绘回落链 + 桌宠 Alert 3 例 + 软件头像 6 例） | PASS（MSVC 环境）※ |
-| ssh | 12 | 6 个入口语法（index / client / app / session / lib-store / lib-runtime）+ 6 个测试文件共 113 例（U0 故障注入：指纹保存失败 / 跨代确认隔离 / viewer 输入归属 / 尺寸限界 / 背压淘汰 / 重附着预算；U1：分组过滤 / 粘贴守卫 / 颜色合成 / 缓冲查找 / 主题下发 / 会话头列宽手柄隐藏；D2：顶栏消息闭环 / 浮层契约 / `ready`·`status` 帧必须喂状态模型（D-2 回归）/ `canvasAvailable` 段数双向变化（hero 两段）/ 「保存并连接」形态护栏（D-1 回归）；U2：v2 帧契约与 `VERSION_MISMATCH` / 一次性 attach 票据生命周期 / 多 shell 隔离与写权接管 / 关闭语义三分 / 工作区快照恢复与损坏降级 / 序列化快照三路恢复；**U2 实机验收回归：未绑定 shell 不发帧 / 就绪补绑 / 按 `shellSeq` 精确匹配**） | PASS |
-| dual-model | 11 | 6 个入口语法 + 4 个测试文件共 29 例（routing 10 / store 7 / content 7 / **invalidation 5**——0.1.7 双轨失效信号）+ 图片准入补丁 `patch verify` | PASS |
-| appearance | 16 | 7 个入口语法（index / client / lib-config / lib-avatar / lib-icon-presets / lib-store / lib-fence）+ 8 个测试文件共 91 例（含 M2.6 风格契约、M2.7 预设渲染与落盘）+ `derive-skins --check`（M2 皮肤表可复算） | PASS |
+| desktop | 29 | gen-init（令牌校验 + **W0 三道产物自校验**：样式 JSON 可解析且键集一致 / 目录下 `.js` 必须全部登记进 `MANIFEST.order`（漏登记＝静默不打包）/ 写盘字节一致）+ tokens:diff（无漂移）+ **注入脚本语法闸门**（`syntax injected/theme-init.js`——`themes/src/*.js` 拼接产物，WebView2 每个文档都跑）+ **鉴权 cookie 兜底链行为闸门**（6 例：已有 cookie 只按原值续期 / 401 熔断上限与可见提示 / document_start 不误清计数）+ **启动页契约**（11 例：S4a 视觉层 10——动画只准 transform/opacity、扫描线 opacity ≤ .06、零新增色、reduced-motion 全静止、类名纪律、就绪回弹 VM 驱动幂等；S3 拖放安全网 1——只拦文件拖放、官方已消费与文本链接不碰）+ **桌宠资产链完整性闸门**（frames 引用齐全 / 再生源在位 / 无孤儿派生，故障注入四分支自证）+ **patch verify ×6**（模型设置 / 会话头溢出保护 / 轨迹计时恢复 / 消息气泡计时恢复 / cordis client 查询挂起修复 / **消息画廊多图 tile 宽高比**）＋ `plugins/dsh-model-probe` 语法 3 项 + 探测判定表 20 例 + settings 读取双轨 12 例 + `plugins/dsh-free-model-pool` 语法 2 项 + settings-read 10 例 + routes 5 例 + **主题来源优先级闸门**（8 例：`__MIA_THEME__` > URL > localStorage > pure，含"非壳环境不报错"与"localStorage 抛异常不崩"两条边界——W0-T0.1）+ **hash 字段级读写闸门**（8 例：精确增删不误伤并发字段 / 保真 `%20` 原始编码 / seq 覆盖保护——W0-T0.2）+ **桌面契约 v1 闸门**（15 例：子 frame 只给空壳 / 能力表与暴露面一致 / 只读纪律不得开 hash 写通道 / **v1.1 写能力**：theme.set 与 window.controls 只派发内部事件、白名单拒绝、人话名不透 `min`/`max`、寄生侧监听静态断言——W1）+ **窗口底色回传闸门**（10 例：半透明底合成到不透明 / 拿不到不透明底即如实放弃不猜色——W4.3）+ **渲染层 console 旁路闸门**（12 例：只旁路不改原生调用 / 只顶层 frame / 环形上限 50 条 / ResizeObserver 调度噪声与红条同判据过滤——W2 收尾）+ cargo test **73 例**（launcher 图标 6 + 桌宠状态机与持久化 16 + 启动链 pulse stale / backend backoff / netstat 解析 6 + 隐藏态主题头像悬浮球 `dot.rs` 7 + **W2 新增**：diag 诊断格式化与 10 份轮转 / 看门狗状态机 / panic hook 12 + recovery sanitizeProfile 备份与中止 / 分级停机状态机 11 + Job 参数与真机 `KILL_ON_JOB_CLOSE` / hex 解析 3） | PASS（MSVC 环境）※ |
+| ssh | 12 | 6 个入口语法（index / client / app / session / lib-store / lib-runtime）+ 6 个测试文件共 117 例（U0 故障注入：指纹保存失败 / 跨代确认隔离 / viewer 输入归属 / 尺寸限界 / 背压淘汰 / 重附着预算；U1：分组过滤 / 粘贴守卫 / 颜色合成 / 缓冲查找 / 主题下发 / 会话头列宽手柄隐藏；D2：顶栏消息闭环 / 浮层契约 / `ready`·`status` 帧必须喂状态模型（D-2 回归）/ `canvasAvailable` 段数双向变化（hero 两段）/ 「保存并连接」形态护栏（D-1 回归）；U2：v2 帧契约与 `VERSION_MISMATCH` / 一次性 attach 票据生命周期 / 多 shell 隔离与写权接管 / 关闭语义三分 / 工作区快照恢复与损坏降级 / 序列化快照三路恢复；**U2 实机验收回归：未绑定 shell 不发帧 / 就绪补绑 / 按 `shellSeq` 精确匹配**；**B1/B2 launcher 判据：只在主页（`[data-slot="main.conversation"]` 锚点）**且**本线胶囊不在场（`.dsh-ssh-switch`）时才渲染 —— 与会话头胶囊结构性互斥，旧「推演官方 `useSessions.blank`」判据已删**） | PASS |
+| dual-model | 12 | 6 个入口语法 + 5 个测试文件共 33 例（routing 10 / store 7 / content 7 / **invalidation 5**——0.1.7 双轨失效信号 / **client 4**——触发钮在 `/state` 失败态不得禁用）+ 图片准入补丁 `patch verify` | PASS |
+| appearance | 16 | 7 个入口语法（index / client / lib-config / lib-avatar / lib-icon-presets / lib-store / lib-fence）+ 8 个测试文件共 95 例（含 M2.6 风格契约、M2.7 预设渲染与落盘、primitives 引用闭环与渲染树签名）+ `derive-skins --check`（M2 皮肤表可复算） | PASS |
 
 > ※ **desktop 的 `cargo test` 项在非 MSVC 环境是环境假阴性**（2026-09-11 实测）：Git Bash 的 `PATH` 中
 > `/usr/bin/link.exe`（GNU coreutils 的 `link`）会遮蔽 MSVC 链接器，报
@@ -67,10 +67,12 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 检查项 | 步骤 | 通过判据 |
 |---|---|---|
 | 安装 | `dsh plugin --profile web add link:<线目录>` | profile 出现该包 |
-| host 半生效 | 重启 `dsh web` | `GET /sidebar/api/health` 返回当前 `version`（sidebar 现为 `0.6.0-miasaki.0`） |
+| host 半生效 | 重启 `dsh web` | `GET /sidebar/api/health` 返回当前 `version`（sidebar 现为 `0.10.0-miasaki.0`） |
 | client 半生效 | 重启 host **后**刷新页面 | 会话头 / 标题栏出现按钮 |
 | 停用可恢复 | 移除插件 → 重启 host | DSH 原生界面无残留（右栏推挤复位、会话头按钮消失） |
 | 运行时补丁在位（5 个） | 对 `dsh-miasaki-desktop/patches/*/patch.mjs` 逐个 `node … status`（settings-models / conversation / trajectory / chat / cordis-host-runner） | 输出 `patched`；**DSH 升级后变 `unknown` 即需按该目录 README 重打**；trajectory 与 chat 两个计时补丁**必须一起重打**（同一个 `firstTokenTime` 的两处显示）；cordis-host-runner 是唯一作用于 **host 侧 Node 包**的补丁，改完必须**重启 host**（其余四个作用于浏览器 bundle，刷新页面即生效） |
+| 运行时补丁在位（attachment，第 6 个） | `node dsh-miasaki-desktop/patches/dsh-client-ui-attachment/patch.mjs status` | 输出 `patched`（多图 tile 宽高比保持，纯 CSS，刷新页面即生效） |
+| **补丁 live 状态一键审计（2026-09-23）** | `node scripts/patch-live-audit.mjs`（`--json` 机器可读） | 七行全部 `patched` 且退出码 0。判定分两档：**live dsh 版本 == 补丁 baseline 却未 patched → 🔴 回归（退出码 1）**；版本已漂移导致未打 → 🟡 待重打（退出码 0，属升级后预期）。存在的意义：`verify-all` 的 `patch verify` 是**离线自证**（升级覆盖后仍 PASS），回答不了「补丁此刻在不在 live 安装里」——0.1.7 升级后六个补丁曾全部静默 `unknown` 数日（dual-model 发图被拒即在位发生），本工具把这类盲区变成一条命令 |
 | 双模型准入补丁在位 | `node dsh-miasaki-dual-model/patches/dsh-api-session-controller/patch.mjs status` | 输出 `patched`；**该补丁与 dual-model 插件必须同版本上线**——补丁负责放行、插件负责真的有人能处理图片，只打前者会让图片被静默丢弃 |
 | 计时面板可恢复 | 刷新页面 → 打开任一**已结束**步骤的轨迹计时面板 / 悬停消息耗时面板 | 首 token 延迟、生成、吞吐量三行与气泡「首 token 用时（TTFT）」均为数字（修复前为「首 token 时间不可用」） |
 | 外观线 host 半生效 | 重启 `dsh web` → `curl -s http://127.0.0.1:3080/appearance/api/state` | 返回 `{"config":{…},"revision":N,"persistent":true}`；`persistent:false` 表示 `cordis.patch.yml` 的 `dataDir` 没传进 config（改动只存在于内存） |
@@ -97,6 +99,15 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 最小化 / 最大化 / 还原 / 双击顶部空白 | 状态正确，标题栏按钮同步 |
 | 顶部空白拖动 vs 点击页面按钮 | 拖动跟手；页签/输入框照常可点 |
 | 关闭确认 | 取消可回退；确认后停止本应用 spawn 的后端 |
+| 拖拽上传附件到会话（S1–S3，2026-09-24） | 对话页拖 PNG → 官方遮罩 → 松手 → composer 缩略图 → 发送成功；多文件混合拖入各自入轨；生成中/子代理视图拖文件 = 拒绝态遮罩、松手无副作用；拖选中文字/链接无反应；轨迹/用量/设置页拖文件 → SPA 不被导航走（安全网）；loading 页拖文件无导航无报错；超大图 → 官方 toast；窗口拖动/双击最大化/三主题/桌宠回归。清单十项见 desktop `design/drag-drop-attachment-upload.md` §6 |
+| 启动加载视觉层（S4a+S4a-2，2026-09-24） | 冷启动 loading 页：三主题下纹章外环 24s 缓旋 + 光晕呼吸 + 舞台扫描线（≤.06 不刺眼）；就绪瞬间（文案「已就绪，正在进入…」）纹章 1.06 回弹一次、计时收起；等待期间「已等待 N s」读数 250ms 推进；系统开「减少动画效果」后全部静止、功能不变；失败路径（恢复动作组/重试）零回归。日志流与四阶段进度（S4b）待 S3 tee 钩子，不在本项 |
+| 主题来源与桌面契约（W0/W1，2026-09-25） | ① **loading 页与进入后的 DSH 页主题一致**（把 `prefs.json` 主题设为 kurkuriel 后冷启动，两页均为浅色，无"先深后浅"闪窗；再改回 zafkiel 复验）；② 页面控制台 `window.miasakiDesktop.protocolVersion === 1`、`has('theme.onChange') === true`、`assets.baseUrl` 为 39800；③ **SSH / 画布 iframe 内**该对象只有 `protocolVersion`/`isDesktop`/`isLocalPage`（`capabilities`/`theme`/`window` 均为 `undefined`）；④ 连续快速点窗控（min/max/close）+ 切主题 + 桌宠状态上报，三者互不干扰（`location.hash` 上 `int=/act=/wait=/pet=/diag=` 字段不丢）——W0-T0.2 的竞态回归 |
+| W2 取证与可靠性（2026-09-25） | ① **挂起取证**：人为阻塞主窗消息泵（DevTools 里跑 5s+ 死循环）→ `%LOCALAPPDATA%\miasaki\` 出现 `crash-<ISO>-watchdog.log`，含心跳缺失时长 / 最后 hash / 后端存活性；② **托盘隐藏不假报**：窗口隐藏/最小化到托盘后静置 2 分钟 → **不得**生成 watchdog 报告（已加阈值防御：不可见时判定阈值 5s→90s，此条转为「确认防御生效」）；③ **恢复对话框**：失败页点「恢复选项」→ 原生三按钮；选「停用」后 `~/.dsh/profiles/web/` 出现 `cordis.patch.yml.bak-<ms>`，且 `package.json` 的 bundles 只剩 base + web-app；④ **Job 回收**：任务管理器强杀 Miasaki → 自拉后端随之消失（`tasklist` 无孤儿 node）；⑤ **报告轮转**：连造 12 次报告 → 只留 10 份，`server.log`/`pet.log` 未被动；⑥ **手动入口**：托盘右键「生成诊断报告」→ 原生信息框回显完整路径，该文件确实存在且含事实头与 `--- renderer console ---` 段；连点 11 次后目录内报告数仍为 10 |
+| W3 关闭语义（2026-09-25） | ① 点标题栏 ×（或 Alt+F4）→ 首次弹**原生**确认：**取消** → 窗口保持可见；**确定** → 窗口消失但进程仍在托盘；② 再点 × → 直接隐藏、不再询问（marker 生效）；③ 删 `%LOCALAPPDATA%\miasaki\background-close-confirmed` → 回到首次确认态（可重放）；④ 托盘「退出」→ 前端确认弹窗 → 确认后后端被停（`dsh` 进程消失）；⑤ 托盘「显示 / 隐藏主窗口」能召回被隐藏的窗口 |
+| W4 表现层（2026-09-25） | ① `MIASAKI_NO_MICA=1` 启动（等价 Win10）→ 依次切三主题，窗口边缘/半透明处底色**跟随主题**（不再停在启动时那一档）；② DevTools 确认 `location.hash` 含 `bg=xxxxxx`（6 位十六进制、无 `#`）；③ Mica 生效（不设该环境变量）时窗口材质保持透明、**不被底色覆盖**；④ `console.error('probe')` → 2s 后诊断报告出现该行；⑤ `ResizeObserver loop …` 类噪声**既不显示红条也不进报告** |
+| W4.2 材质分层（2026-09-25，跨 desktop × appearance） | ① **Win11**：外观线选 `mica` 档 → 侧栏 / 对话 / 右栏**只有一层模糊**（与 `frost` 档对比，不应更糊、更"奶"）；② `MIASAKI_NO_MICA=1` 启动 → `mica` 档回落到页面侧 `backdrop-filter`（此时它是唯一模糊来源，视觉应与改动前一致）；③ DevTools 执行 `document.documentElement.getAttribute('data-mia-native-mica')` —— 与是否设了 `MIASAKI_NO_MICA` 一致（未设且 Win11 ⇒ `"on"`）；④ 切 `light` / `frost` 两档不受影响（它们的 CSS 不含该条件）；⑤ 冷启动首帧不出现"先双层再单层"的可见跳变 |
+| W5 自更新降级方案（2026-09-25） | ① **未配置**时点托盘「检查更新」→ 提示配置文件路径（`%LOCALAPPDATA%\miasaki\update-source.json`），**不发网络请求**；② 配真实 `feed`（纯文本版本号 > 0.1.0）→ 弹「发现新版本」→ 选「是」应打开系统默认浏览器到 `page`；③ `feed` 内容写 `0.1.0` → 提示「已是最新版本」；④ 断网 / `feed` 不可达 → **可读的失败提示**（不得静默、不得假装已最新）；⑤ 全程**不出现**任何下载写盘或安装动作（本方案边界） |
+| 契约 v1.1 写能力（2026-09-25） | DevTools 里（DSH 页）执行 ① `window.miasakiDesktop.theme.set('kurkuriel')` → 应切主题（等价于点切换条）；② `window.miasakiDesktop.window.controls.minimize()` → 窗口最小化；③ `.maximize()` → 最大化/还原切换；④ `.close()` → **隐藏到托盘**（W3.1 语义，不是退出）；⑤ `theme.set('bogus')` → 返回 `false`、**无任何副作用**；⑥ `window.miasakiDesktop.window.controls.min` / `.max` 应为 `undefined`（内部协议名不外泄）；⑦ SSH / 画布 iframe 内该对象仍只有三字段（写能力不泄漏到子 frame） |
 
 ### 3.2 桌宠
 
@@ -107,19 +118,21 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 「会话布」切换按钮在会话头 actions 插槽 → 画布渲染 → 分支血缘 → 合并（选线/注入形式/执行）
 → 菱形卡长出内容 → 原线「已被吸收 ◇」标记。
 
-### 3.4 Sidebar（官方右栏 tab 类型）
+### 3.4 Sidebar（官方右栏 tab 类型 + 底部内嵌终端）
 
 > 自研壳已退役（2026-09-10 停用 / 2026-09-11 代码删除），面板的**开合、宽度、分栏、全屏、标签栏、
-> 引导页全部由官方框架负责**，本线只提供两个 tab 类型（审查 / 终端）及其正文。
+> 引导页全部由官方框架负责**。本线右栏只提供「审查」一个 tab 类型及其正文（**2026-09-25 起**：
+> 右栏终端退役——官方右栏已内置终端，本项目沿用官方策略不再自建）；内嵌终端（多标签）收敛为
+> **底部面板**单形态，由标题栏终端按钮 / Ctrl+` 唤起。
 
 | 检查项 | 通过判据 |
 |---|---|
-| 插件加载 | 重启 host 后 `GET /sidebar/api/health` 返回 `0.6.0-miasaki.0` |
-| 入口胶囊 | 官方 tab 条的「添加控件」→ 引导页出现「审查」「终端」两个胶囊；**引导页空白 = `guide` 条目契约坏了**（文本字段必须是函数，见 CHANGELOG 2026-09-10） |
+| 插件加载 | 重启 host 后 `GET /sidebar/api/health` 返回当前版本（现为 `0.10.0-miasaki.0`） |
+| 入口胶囊 | 官方 tab 条的「添加控件」→ 引导页出现「审查」**一个**胶囊（2026-09-25 前为「审查」「终端」两个）；**引导页空白 = `guide` 条目契约坏了**（文本字段必须是函数，见 CHANGELOG 2026-09-10） |
 | 审查 tab | 四视图下拉**切换即拉取**（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改；空视图显示「无改动」）、目录分组默认折叠且组统计 = 组内求和、未点名徽标、点名往返持久化、单文件 diff 行级展开 |
 | **审查视图持久化** | 切到「上一轮更改」→ 关闭 tab 或刷新页面 → 重开审查 tab 仍是「上一轮更改」（键 `miasaki-sidebar:review-view`） |
 | 窗口可见性门 | 切到别的窗口 60s+ 再回来，审查 tab 不因隐藏期间的 TTL 重复拉取 |
-| **终端 tab** | cwd 回显与复制、终端类型探测（未安装置灰）、启动到 cwd、失败显示原因 + 重试 |
+| **底部终端面板** | 标题栏终端按钮 / Ctrl+` 唤起底部面板；标签栏多开（`＋` 新建 / `×` 关闭 / 右键菜单 / `▾` 溢出）、cwd 跟随当前会话、未安装 shell 置灰、失败显示原因 + 重试；刷新后存活会话恢复为可见标签 |
 | 与 canvas 共存 | canvas 全屏 overlay 盖住右栏为预期；右栏层级现由官方框架决定，本线不再声明 z-index 约束 |
 
 ### 3.5 外观（`@miasaki/dsh-appearance`，M1）
@@ -171,6 +184,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 终端功能 | Ctrl+Shift+C/V 复制粘贴（Ctrl+C 仍中断）；查找行 Enter/Shift+Enter 导航、n/m 计数；字号 12–20 且 PTY 跟随；清屏只清本地；多行粘贴先确认 |
 | 响应式 | 官方右栏展开挤压 SSH 容器：≥960 双栏 / 720–959 紧凑 / <720 导航改抽屉（Esc 关闭、焦点归还）、无横向溢出 |
 | 围栏不回归 | 非环回 Host / 跨站请求打 `/ssh/api/*` → **403**；伪造 origin 的 WS upgrade 被拒 |
+| **入口去重（B1/B2）** | ① 任意**会话窗口**看右上角（桌面壳里即窗控左侧）：**不得**出现独立的 SSH 按钮 —— 会话内只要会话头那段胶囊就够了；② 回到首屏 / 新会话（hero）右上角：**有** SSH 且点得开浮层；③ 设置页 / 轨迹页 / 用量浮层等非主页界面：**不出现**；④ 从会话切回首屏后入口**能恢复**（判据可逆，不是被写死成"一律不显示"） |
 | **A0 · 按钮启用态** | 未连接时工具区「送往对话」按钮置灰；连上后可用；点击弹出三项菜单（送出选中内容 / 送出最近 40 行 / 让 Agent 看这个错误） |
 | **A0 · 三种意图** | ① 终端选中文本 → 「送出选中内容」→ 状态栏报字符数；粘贴到对话，**首行为 `[SSH <标签> · <用户>@<主机>:<端口>]`**，其后是选中文本，无多余空行；② 「送出最近 40 行」→ 正文为最近输出且**末尾空白行已被裁掉**；③ 「让 Agent 看这个错误」→ 首行在来源标记后追加「帮我看下这段终端输出有什么问题：」，正文为最近输出 |
 | **A0 · 右键菜单与边界** | 终端内右键弹出同一份三项菜单（不再弹浏览器默认菜单）；**空缓冲区/未选中时给出明确提示而非静默**；全程**终端内容不变、不向远端发送任何字节**（可对照远端 `history`/`echo` 验证）；复制后不自动发送，需人工粘贴 |
@@ -186,6 +200,8 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 **D4 尾项清理实机验收（2026-09-15，6 项门槛全 PASS）**：驱动 `_refs/scripts-archive/ssh-d4-accept/run-d4-accept.mjs`（同通道；**尾项①②取运行态证据**）。**①`renderBanner` 隐藏即清空**：可见态 `hidden:false / childCount:3` → 连接完成后 `hidden:true / display:none / **childCount:0**`（旧实现只设 `hidden`，节点残留）；断开后横幅再现 `childCount:4` ⇒ 清空未破坏功能。**③过渡区间落位**：1280 → rail 232 / 860 → rail 208（紧凑档）/ 600 → 抽屉 / **500 → 抽屉且 `.tools .optional` 可见（480 档未触发）** / 480 → 隐藏（480 档命中）；五档零横向溢出。**②运行态**：30 次开关零异常 + iframe 未重载 + 远端零 resize 帧；静态侧 `observe(header,{childList,subtree})`、`aria-selected` 仅剩注释。**附带**：注入样式零 `width-handle`（D3-F1 实机复核）。单测 **82 例**、`verify-all ssh` **12/12**。详见方案 §20。
 
 **U2 主体实施（2026-09-16，实机验收待跑）**：`dsh-miasaki-ssh/design/2026-09-15-ssh-u2-plan.md` §6 的 **U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复**已落地（**U2.2 SFTP** 留待真实主机补验后开工）。单测 **85 → 110 例**（runtime 22 / session 32 / http 7 重写适配 v2 契约，app 16 / client 25 / store 8 无回归）、`verify-all ssh` **12/12**；端到端探针（真 sshd × 本线 `SshRuntime`）**9/9**；**回滚演练实际执行**（基线恢复 85/85 绿 → U2 还原 110/110 绿）。上表 **U2 四行**即本轮实机验收判据，明细见 `dsh-miasaki-ssh/README.md` 与 `dsh-miasaki-ssh/design/CHANGELOG.md` 第十二批（含「规划决策 5 的 `app.js` 纯搬迁拆分未执行」的偏离登记）。
+
+**入口判据两连修（2026-09-25，B1 越界 + B2 去重）**：用户两次报障驱动 —— ①「右上角 SSH 按钮应该只在主页显示，而不是每个界面都有」（B1：`shell.overlay` 是 root 级浮层、每屏都渲染，补「在主页」这一维，锚 `[data-slot="main.conversation"]`）；②「会话窗口右上角不应该有 SSH 按钮 —— **重复了，胶囊有 SSH 按钮入口**」（B2：旧判据推演官方 `useSessions` 的 `SessionSummary.blank`，而官方决定会话头 chrome 渲不渲染的是 `blank = session === void 0 || conversation === void 0 || (session.blank && conversationPhase(...) === 'blank')` —— 两个 blank **语义不同**，summary 仍为 provisional blank 但会话阶段已不是 blank 时，官方 `hideChrome = false` ⇒ 胶囊在、旧判据也返回 hero ⇒ launcher 同时在场）。**修法**：launcher 判据收敛为 `onConversationHome() && !ownEntryPresent()`（`.dsh-ssh-switch` 不在 DOM 才渲染），探的是**本线自己的产物**（与 `syncChrome()` 用 `.dsh-canvas-switch` 算 `canvasAvailable` 同源），不受官方 blank / conversationPhase 语义漂移影响；两层组件合并为一层（不再消费官方 prop）。单测 **115 → 117 例**、`verify-all ssh` **12/12**。**实机复验即上表「入口去重（B1/B2）」行**，明细见 [CHANGELOG](../dsh-miasaki-ssh/design/CHANGELOG.md)（B1 / B2 两节）。
 
 ### 3.7 模型连通性探测（desktop 线 `plugins/dsh-model-probe/`，2026-09-19）
 
@@ -276,3 +292,10 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 2026-09-23 | **DSH 0.1.7-alpha.2 适配·dual-model 线**（commit `a956776`，版本 0.1.3-miasaki.0）：0.1.7 把 `settings/updated` 事件在全树移除（0.1.6 有 19 处 → 0.1.7 **0 处**），只剩 RAW 文档层的 `settings/document-updated`。新增 `lib/invalidation.js` 双轨监听（旧名在前、新名在后；cordis `ctx.on()` 监听无人发出的事件是无害空操作，两代宿主各自命中，无需版本探测），`index.js` 单监听改为 `ctx.effect(() => watchSettingsInvalidation(...))`。影响定级**低-中**（少一路缓存击穿信号，最坏 5 分钟 TTL 延迟，不报错）。新增 `test/invalidation.test.js` 5 例 → dual-model **10 → 11 项**、单测 24 → **29** 例。评估见 `../dsh-platform/dsh-0.1.7-upgrade-assessment-2026-09-23.md` §7.3 |
 | 2026-09-23 | **DSH 0.1.7-alpha.2 适配·desktop 两插件 settings 读取双轨**（free-model-pool 0.3.1 / model-probe 0.2.1，当日线上实证两处坏死后闭环）：0.1.7 移除 `ctx.settings.get(ns)` 后——免费模型池 `/freepool-api/status` 原样返回 `ctx.settings.get is not a function`（设置页模型栏面板整块报错）；model-probe `resolveProfile` 被 try/catch 吞错 → 已保存行档案读不到 → 探测静默退化为 `no-credential`/`no-endpoint`。两插件各新增 `lib/settings-read.js`（`typeof settings.get === 'function'` 探针分轨：≤0.1.6 走 `get(ns)` 逐字旧路，0.1.7+ 走 `describe().find(d => d.ns === ns).value` 条目 Config 投影；写路径 `update(ns, patch)` 两代同名同义原样保留）。新增单测 **27 例**（helper 契约 + routes/probeModel 接线，fetch 打桩，双世界各一遍）→ desktop **11 → 17 项**、verify-all 81 → **92** 项。**实机待用户重启桌面端后验收**（§3.7 增补两条：免费模型池面板列平台 / 已保存行测试连通性走真实探测） |
 | 2026-09-23（晚） | **六补丁全量重打至 0.1.7-alpha.2 + attachment 补丁入回归**（「各条线适配状况」核查的收口）：本机全局 DSH 已实装 0.1.7-alpha.2（早于评估文档触发的 `0.1.7-rc.*` 条件），六个旧基线补丁（desktop 五件 + dual-model 图片准入一件）在 live 安装目录全部 `unknown`（升级覆盖、从未重打）⇒ 逐个 `rebuild-baseline` → 同步三常量 → `verify` → `apply`，**`EDITS` 全部零改**（settings-models 的双代变体 probe 自动选中 0.1.6+ 分支；图片准入锚点 `:780` 唯一命中、`expect` 两行逐字未变，走 `seal` 流程）。live `status` 全部 `patched`（`.dsh-bak` 留 0.1.7 原版可回退）；第三方 `@yeesy369/dsh-browser-playwright` 0.8.1 的本地双半补丁**已在场**（client/host 双 PATCHED，不打它 web UI 连启动屏都过不去）。`verify-all.mjs` 补入 attachment 补丁检查位（此前唯一未纳入统一回归的补丁）→ desktop **17 → 18 项**、全量 **93** 项、七线全 PASS。**生效面**：client 侧四个（settings-models / conversation / trajectory / chat）刷页面即生效；**host 侧两个（cordis-host-runner + 图片准入）需重启 `dsh web`**（重启会断开当前 harness 会话，留用户方便时执行）。逐项 SHA 与机械流程见 desktop 线 `design/CHANGELOG.md` 同日条 |
+| 2026-09-23（深夜） | **补丁 live 状态一键审计 + 两处补丁缺陷修复**（本日教训的收口：离线全绿与 live 全 unknown 曾并存数日，功能静默缺失无告警）：新增 `scripts/patch-live-audit.mjs`——进程内 import 七个补丁的 `classify` 逐個分类 live 文件（不 spawn，沙箱安全），判两档：live 版本 == baseline 却未 patched → 🔴 回归（退出码 1）；版本漂移导致未打 → 🟡 待重打（退出码 0）。本机现状 7/7 patched。顺带修复：① **attachment 补丁缺 import 守卫**（`import.meta.url` 卫士，其余六件都有）——任何 import 它的工具都会以调用方 argv 误跑一次 `status`，污染输出并可能改写调用方 exitCode（本审计开发时实际踩到）；② dual-model 补丁补 `export const TARGET_RELATIVE = join('lib','index.js')`（与 host-runner 同契约，此前审计只能猜目标文件）。两补丁 `verify` 复跑 PASS、desktop 线 **19/19**（含 cargo 28 例）不变 |
+| 2026-09-24 | **启动加载 S4a 视觉层落地**（boot-loading-terminal.md §9.1，用户「太简单……酷炫一点」的无 Rust 依赖部分）：`ui/loading.html` 三纹章外环缓旋 24s + 呼吸光晕 3s（`var(--mia-accent)` 零新增色）+ 舞台扫描线 4s/opacity .06 + 就绪纹章回弹 1.06/600ms（`__setStatus` 文案派生触发，`__setReady` 显式钩子预留）+ reduced-motion 全量静止；纯 CSS transform/opacity、零 JS 动画循环。新增 `ui/test/loading-visual.test.js`（动画属性白名单 / 零字面量新色 / 降级全覆盖 / 类名纪律 / 标记结构 / VM 驱动就绪触发幂等）接入 verify-all → desktop **20 → 21 项**、全量基线 **96 → 97 项**（desktop 21/21 PASS，含并行会话 dot.rs 重构后 cargo 35 例）。§3.1 增实机判据一行（三主题目检 / 就绪回弹 / 降级 / 失败零回归）。S1–S3（闪窗根治 + stdout tee + S4b 日志流/阶段进度）未动 |
+| 2026-09-24（同日续） | **S4a-2 启动计时 + verify-themes 早死诊断**：① 冷启动 3~6s / 失败最坏 90s 只有静止文案 → 纯页面侧加 `#boot-timer`「已等待 N s」诚实读数（250ms tick、tabular-nums、就绪即停、失败继续走表；不出假百分比）→ loading 测试 8 → **10 例**；② `verify-themes.mjs` 排查「无头 Edge 起不来」归因——旧代码空转 30s 才报 `CDP target not found`，实测**环境性阻塞**（DSH 沙箱 workspace-write 限制 GUI 子进程创建：headless Edge ≈3s 退出、code 0x80000003，`--no-sandbox` 无效），改为即时诊断（0.6s 给出「普通终端或 danger-full-access 会话运行」结论），P3 该项标注为环境限制而非脚本缺陷 |
+| 2026-09-24（续） | **桌宠资产链完整性闸门**（2026-09-10「删素材静默断链」教训的常态化）：新增 `dsh-miasaki-desktop/scripts/check-pet-assets.mjs` 并入 verify-all（desktop **21 → 22 项**、全量 **97 → 98 项**）。守三事：frames.json 引用齐全（缺=运行时该姿态空白）、再生源在位（kurumi 图集 / whale idle.gif / inverse raw 立绘——源缺则下次重生成静默跳过，断链延迟暴露）、无孤儿派生（重切残留 drift）；状态覆盖缺口（R15：whale/inverse 七个姿态回退 idle）与源派生新旧只提示不判失败。故障注入四分支自证（删引用帧/删源 → FAIL exit 1；孤儿 → WARN exit 0；原样 → PASS）。**首跑即抓到两条现存问题**：① `ui/pets/whale/states/idle.png` 孤儿（v2 六帧化后的单帧残留，assets.rs 仍嵌它，全仓无引用——留待桌宠资产负责人处置，未越权删）；② kurumi 新图集（00:04 更新）比派生帧新——重切未跑的工作流提示 |
+| 2026-09-24（三轮复审） | **文档基线归位 + 两处 P3 断言修复 + live 审计纳入第八件补丁**：第三轮独立复审复跑实测 **98 项 / desktop 22 / `cargo test` 35**，与文档口径 96/20/28 矛盾且与本文档 §1 历史行自相矛盾 ⇒ §0 L1 行与 §1 表头、desktop 行同批校正为现行基线（**历史记录行的旧数字一律不改写**，只在最新基线块标注现行值）。`ui/loading.html` 就绪正则死分支码位 `\u5c31\u7ed3`（就结）→ `\u5c31\u7eea`（就绪），测试错字同步 + 新增「**仅**『已就绪』」区分力用例；`ui/test/loading-visual.test.js` 性能预算改为按花括号深度配平取**整块**（原先只截到首个 `}`，第二个及以后 stop 的布局属性全漏）。两处均做变异自证（回退即红）。**审计盲区收口**：`scripts/patch-live-audit.mjs` 新增 `shared-docs` 补丁根 + 多目标契约 `LIVE_TARGETS` + 每个 profile 的 `<profile>/node_modules` 探测 ⇒ 本机 **9 个目标 / 8 件补丁全 patched**（第八件 `@yeesy369/dsh-browser-playwright` 双半各一行；假 profile 根注入原版 → client 行判 `original … 回归！` + 退出码 1，host 仍 patched）；该补丁同批补 `import.meta.url` CLI 守卫与 `LIVE_TARGETS`，其 `verify` 的 `spawn EPERM` 由「语法校验失败」改为诚实 ⚠（shell 层 `node --check` 双半 exit 0 复核）。`00-boot` 兜底链对 `dsh-auth-*` **非 HttpOnly** 的隐式依赖，已在 desktop 线 `design/auth-cookie-prepinject.md` §3 钉为显式契约 |
+| 2026-09-24（拖拽上传实施） | **拖拽上传附件到会话 S1–S3 落地**（用户点名需求，`design/drag-drop-attachment-upload.md` 定稿后实施）：S1 `main.rs` 主窗 `.disable_drag_drop_handler()`（cargo check 通过）；S2 `themes/src/09-dropguard.js` 安全网新片 + MANIFEST.order 登记 + gen-init（10 片/87KB/令牌校验过）+ `themes/test/dropguard.test.js` 4 例（登记/产物含片/三判据/自包含形态）；S3 `ui/loading.html` 最小防默认（判据与注入层逐条一致，loading 测试 10 → **11 例**）。官方上传链路全量复用、壳侧零业务逻辑。`verify-all` desktop **22 → 23 项**、全量 **98 → 99 项**。实机验收十项（§3.1 新行）待用户重启桌面壳执行 |
+| 2026-09-25 | **sidebar 右栏终端退役（v0.10.0-miasaki.0，用户拍板「沿用官方策略」）**：0.1.7-rc 线官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目不再自建右栏终端——`client.js` 注销终端 tab 类型（kind `miasaki-terminal`）、删除 `TerminalTab` 组件与 `.dsh-sidebar-term*` 样式、跨容器移位菜单与右栏 `×`，`active` 收敛为 `{ bottom }`，React 快照机制随唯一消费者一并删除；**host 半零改动**（TerminalHub / WS / 路由与容器无关）。§3.4 标题与表项改版：「入口胶囊」由两个改一个、「终端 tab」行改为「底部终端面板」行（含多标签与刷新恢复判据）、「插件加载」版本号改为跟随现行版。sidebar 单测 **57 通过 / 5 环境跳过**（62 项总数不变）、`verify-all sidebar` **10/10**。**实机待重启 `dsh web` 验收**：引导页只剩「审查」；底部面板全能力不变；历史 localStorage 旧终端 tab 记录恢复时落官方终端（一次性，关掉重开） |

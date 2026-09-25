@@ -47,7 +47,7 @@
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { copyFile, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -59,6 +59,27 @@ const BASELINE = join(HERE, 'baseline')
 export const TARGET_PACKAGE = '@yeesy369/dsh-browser-playwright'
 export const TARGET_VERSION = '0.8.1'
 export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
+
+/**
+ * live 审计契约（`scripts/patch-live-audit.mjs`）：本补丁有 **两半**，各有独立目标文件，
+ * 故除 `TARGET_PACKAGE` 外再自报 `LIVE_TARGETS`（多目标形态；其余七件补丁是单目标）。
+ * `classify(liveText)` 回 `{ state: 'patched' | 'original' | 'unknown' }`（与其余七件补丁
+ * **同形同词表**，审计工具直接解构 `state`）——基准是 baseline 里登记的 original / patched
+ * 两版字节，逐字节比对，不做模糊匹配。
+ * 2026-09-24 三轮复审补：此前本件是唯一不在 live 审计内的补丁，而它被打回原版会让
+ * web UI 连启动屏都过不去（见 README 症状表），属真实盲区。
+ */
+const classifyHalf = (half, live) => {
+  const baselineFile = (suffix) => join(BASELINE, half === 'client' ? `client.${suffix}.js` : `index.${suffix}.js`)
+  if (live === readFileSync(baselineFile('patched'), 'utf8')) return { state: 'patched' }
+  if (live === readFileSync(baselineFile('original'), 'utf8')) return { state: 'original' }
+  return { state: 'unknown' }
+}
+
+export const LIVE_TARGETS = [
+  { label: 'client', rel: join('lib', 'client.js'), classify: (live) => classifyHalf('client', live) },
+  { label: 'host', rel: join('lib', 'index.js'), classify: (live) => classifyHalf('host', live) },
+]
 
 /** 补丁特征串：出现即视为已应用（幂等判定）。 */
 const CLIENT_MARKER = 'mountCard'
@@ -623,8 +644,17 @@ async function cmdVerify() {
     await writeFile(tmp, patched, 'utf8')
     const syntax = spawnSync(process.execPath, ['--check', tmp], { encoding: 'utf8' })
     await rm(tmp, { force: true })
-    if (syntax.status !== 0) { console.log(`✗ [${half}] 语法校验失败:\n` + syntax.stderr); ok = false }
-    else console.log(`[${half}] 语法校验 (node --check): ✓`)
+    if (syntax.error) {
+      // 受限沙箱（workspace-write / read-only）禁止管道捕获子进程输出 ⇒ EPERM。这是
+      // **环境假阴性**，不是产物语法错——报清楚，别伪装成「语法校验失败」（否则读者会去
+      // 怀疑一个 SHA 三层比对全过的产物）。手工判据（2026-09-24 实测）：把
+      // `baseline/client.patched.js` 复制为 `.js`、`index.patched.js` 复制为 `.mjs` 后
+      // 在 shell 层跑 `node --check`，双双 exit 0 即通过。
+      console.log(`[${half}] 语法校验 (node --check): ⚠ 未能执行（spawn ${syntax.error.code}）——`
+        + '受限沙箱禁止捕获子进程输出；请在普通终端或 danger-full-access 会话复核本项')
+    } else if (syntax.status !== 0) {
+      console.log(`✗ [${half}] 语法校验失败:\n` + syntax.stderr); ok = false
+    } else console.log(`[${half}] 语法校验 (node --check): ✓`)
   }
 
   const clientPatched = await readFile(join(BASELINE, 'client.patched.js'), 'utf8').catch(() => null)
@@ -738,14 +768,20 @@ async function cmdRebuildBaseline() {
   console.log('下一步：检查 transform 锚点是否仍命中（node patch.mjs freeze 会大声报错），再同步 patched 常量与 README。')
 }
 
-const commands = {
-  verify: cmdVerify, freeze: cmdFreeze, status: cmdStatus,
-  apply: cmdApply, revert: cmdRevert, 'rebuild-baseline': cmdRebuildBaseline,
-}
-const cmd = positional[0]
-if (!cmd || !commands[cmd]) {
-  console.log('用法: node patch.mjs <verify|status|apply|revert|freeze|rebuild-baseline> [--yes] [--target-dir <lib 目录>]')
-  process.exitCode = cmd ? 1 : 0
-} else {
-  await commands[cmd]()
+// 被 import 时绝不执行 CLI：`scripts/patch-live-audit.mjs` 直接 import 本模块取 classify /
+// LIVE_TARGETS。缺这道守卫会以**调用方 argv** 误跑一次（argv 为空即打印用法并可能改写调用方
+// exitCode），与其余七件补丁同契约 —— 2026-09-24 三轮复审补齐，此前本件是唯一漏网的一件
+// （2026-09-23 已为 attachment 补丁修过同类问题）。
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const commands = {
+    verify: cmdVerify, freeze: cmdFreeze, status: cmdStatus,
+    apply: cmdApply, revert: cmdRevert, 'rebuild-baseline': cmdRebuildBaseline,
+  }
+  const cmd = positional[0]
+  if (!cmd || !commands[cmd]) {
+    console.log('用法: node patch.mjs <verify|status|apply|revert|freeze|rebuild-baseline> [--yes] [--target-dir <lib 目录>]')
+    process.exitCode = cmd ? 1 : 0
+  } else {
+    await commands[cmd]()
+  }
 }

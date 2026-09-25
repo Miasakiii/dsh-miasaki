@@ -9,6 +9,10 @@
 - **后续（2026-09-23）**：[`dsh-0.1.7-upgrade-assessment-2026-09-23.md`](dsh-0.1.7-upgrade-assessment-2026-09-23.md)——
   本文 §5（kind 裁决/遮蔽规则）经 0.1.7 源码复核**依然成立**；本文 §5 后果 2（半遮蔽态）因官方在
   0.1.7 注释掉 `TerminalRecovery`/`TerminalCleanup` 而**消失**（新版 §6/§9）。
+- **后续（2026-09-25）**：[`dsh-official-repo-review-2026-09-25.md`](dsh-official-repo-review-2026-09-25.md)——
+  官方已发 `0.1.7-rc.2`（`next` 轨），**升级触发条件首次满足**；本文 §5 的 kind 裁决/遮蔽关系在 rc.2 上
+  复核**依然成立**，但官方终端新增 `multiple: true`（多标签），**遮蔽的机会成本上升**，需复评（新版 §5）。
+  配套升级评估：[`dsh-0.1.7-rc2-upgrade-assessment-2026-09-25.md`](dsh-0.1.7-rc2-upgrade-assessment-2026-09-25.md)。
 - 口径：`[实测]` = 本次拉 GitHub API / 本地跑命令核到；`[推断]` = 基于证据的判断，本次未做隔离实例实测
 - **本轮的方法升级** `[实测]`：`vendor/deepseek-harness` 已同步到 `0.1.6-alpha.2`，且**旧快照（alpha.1）被并排保留**
   在 `vendor/deepseek-harness-0.1.6-alpha.1/`。因此本轮所有「两版之间变没变」都是**本地逐字节 diff**，
