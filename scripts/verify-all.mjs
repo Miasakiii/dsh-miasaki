@@ -132,6 +132,119 @@ function planDesktop() {
   // deliberately excluded: it attaches to a live CDP target (real-machine only).
   checks.push({ line: 'desktop', name: 'gen-init (token 完备性)', cmd: process.execPath, args: [join(dir, 'scripts/build-init.mjs')], cwd: dir })
   checks.push({ line: 'desktop', name: 'tokens:diff (漂移)', cmd: process.execPath, args: [join(dir, 'scripts/diff-tokens.mjs')], cwd: dir })
+  // themes/src/*.js 拼接产物是 WebView2 **每个文档**都跑的注入脚本（含鉴权 cookie 兜底
+  // 与 401 熔断），分片本身不是独立语法单元（IIFE 跨片闭合），只有拼好的产物能整体解析。
+  // gen-init 只验令牌完备性、不验语法，故单独补一条 —— 注入脚本语法错=实机整屏黑，
+  // 这是最廉价的前置闸门（2026-09-23 加，配套 00-boot 加固）。
+  checks.push({
+    line: 'desktop',
+    name: 'syntax injected/theme-init.js',
+    cmd: process.execPath,
+    args: ['--check', join(dir, 'src-tauri', 'injected', 'theme-init.js')],
+    cwd: dir,
+  })
+  // 鉴权 cookie 兜底链的**行为**闸门：从 themes/src/00-boot.js 的 @slice:auth-cookie 段截出
+  // IIFE，在 VM 里用假浏览器（cookie jar / sessionStorage / crypto.subtle / location.reload）
+  // 驱动，钉死 2026-09-23 的两条契约 ——「已有 cookie 只按原值续期、绝不覆写」与「401 reload
+  // 有跨文档上限、超限停止并显示提示」。实机复现要造 secret 漂移 + 预置失败，成本高且危险。
+  checks.push({
+    line: 'desktop',
+    name: 'test themes (鉴权 cookie 兜底链)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'auth-cookie.test.js')],
+    cwd: dir,
+  })
+  // 启动页 S4a 视觉层契约（design/boot-loading-terminal.md §4.2 的无 Rust 依赖部分）：
+  // 动画属性只准 transform/opacity（性能预算）、扫描线 opacity ≤ .06、零新增色、
+  // reduced-motion 全量静止、类名 .mia-boot-* 前缀；行为侧 VM 驱动就绪回弹触发。
+  // S4b（日志流 / 阶段进度）待 S3 stdout tee 钩子，落地时同批补行为断言。
+  checks.push({
+    line: 'desktop',
+    name: 'test loading (S4a 视觉层契约)',
+    cmd: process.execPath,
+    args: [join(dir, 'ui', 'test', 'loading-visual.test.js')],
+    cwd: dir,
+  })
+  // 拖拽上传安全网（design/drag-drop-attachment-upload.md）：09-dropguard.js 分片登记 /
+  // 生成产物含片 / 三判据（dragover 阻止、只认 Files、defaultPrevented 放行）/ 自包含形态。
+  checks.push({
+    line: 'desktop',
+    name: 'test dropguard (拖放安全网注入分片)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'dropguard.test.js')],
+    cwd: dir,
+  })
+  // W0（2026-09-25）主题来源优先级：壳经 `__MIA_THEME__` 注入 prefs 主题（main.rs:1647-1649），
+  // 但此前 themes/src 全片零读取 ⇒ 本地唤醒页（tauri.localhost，localStorage 为空）退化成
+  // 'pure'，而该页 :root 默认色板是 zafkiel ⇒ 启动闪窗。截段在 VM 里钉死
+  // `__MIA_THEME__ > URL > localStorage > pure`，并覆盖「非壳环境不报错」「localStorage 抛异常不崩」。
+  checks.push({
+    line: 'desktop',
+    name: 'test theme-source (主题来源优先级)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'theme-source.test.js')],
+    cwd: dir,
+  })
+  // W0（2026-09-25）hash 字段级读写：location.hash 是页面→Rust 的唯一上行通道，此前有两个
+  // 写者（02-core.syncHash / 05-sensors.petHashCmd），后者从零构造并在 1600ms 后整体清空，
+  // 会抹掉并发字段。截段钉死「精确增删 + 保真原始编码（%20 不得变 +）+ seq 覆盖保护」。
+  checks.push({
+    line: 'desktop',
+    name: 'test hash-fields (hash 字段级读写)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'hash-fields.test.js')],
+    cwd: dir,
+  })
+  // W1（2026-09-25）桌面壳↔渲染层契约 v1：`window.miasakiDesktop` 给七线插件一个
+  // 有版本号、可探测、可降级的能力面（对齐官方 dshDesktop 的 frame 降级语义）。闸门钉住
+  // 三条纪律：子 frame 只给空壳、能力表与暴露面一致、契约内不得开写通道（否则立刻造出
+  // 第三个 hash 写者——W0-T0.2 刚修掉的竞态）。
+  checks.push({
+    line: 'desktop',
+    name: 'test contract (壳↔渲染层契约 v1)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'contract.test.js')],
+    cwd: dir,
+  })
+  // W4.3（2026-09-25）窗口底色回传：Rust 侧窗口底/Mica 回退色是硬编码两档、只在窗口创建时
+  // 算一次，运行期切主题不更新（Win10 露旧色）。本闸门钉住解析与合成，尤其两条边界——
+  // 半透明底必须合成到不透明、拿不到不透明底必须**如实放弃**（不猜颜色）。
+  checks.push({
+    line: 'desktop',
+    name: 'test native-bg (窗口底色回传)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'native-bg.test.js')],
+    cwd: dir,
+  })
+  // W2 收尾（2026-09-25）渲染层 console 旁路：诊断报告的 `--- renderer console ---` 段
+  // 此前恒为空（Rust 侧 diag_console 早已就位但无写者），而挂起类 P0 的线索正在渲染层。
+  // 闸门钉住三条纪律：只旁路不改变原生行为、只顶层 frame、有界环形 + 2s 节流。
+  checks.push({
+    line: 'desktop',
+    name: 'test console-hook (渲染层 console 旁路)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'console-hook.test.js')],
+    cwd: dir,
+  })
+  // W4.2（2026-09-25）材质分层：外观线 `mica` 档的语义是「用系统云母」，而实现是页面侧
+  // backdrop-filter —— Win11 上原生 Mica 同时生效 ⇒ 两层模糊。分工是「壳说事实、页面选分支」：
+  // 本闸门钉住注入层只搬运事实（不做决策）、拿不到预判一律按 off（保守）、广播能推翻预判。
+  checks.push({
+    line: 'desktop',
+    name: 'test material (原生材质事实落地)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'material.test.js')],
+    cwd: dir,
+  })
+  // 桌宠资产链完整性（2026-09-10 删素材静默断链教训的常态化）：frames.json 引用齐全 /
+  // 再生源（图集/gif/raw 立绘）在位 / 无孤儿派生；状态覆盖缺口与源派生新旧只提示不判失败。
+  checks.push({
+    line: 'desktop',
+    name: 'pet assets (资产链完整性)',
+    cmd: process.execPath,
+    args: [join(dir, 'scripts/check-pet-assets.mjs')],
+    cwd: dir,
+  })
   // 模型设置运行时补丁的自证：由 baseline 原始文件重建补丁产物并逐字节比对。
   // 纯离线、不碰安装目录——DSH 升级覆盖补丁后这一项仍应 PASS，它证明的是
   // 「补丁规则与基线自洽」，而不是「补丁此刻在安装目录里」。
