@@ -25,6 +25,19 @@ _refs/
 # ---- 发布产物（dsh-miasaki-desktop 构建链路产出）----
 dist/
 
+# ---- 密钥与证书（2026-09-25 加固：按**类型**兜底，不依赖所在目录）----
+# 由来：代码签名私钥 miasaki-codesign.pfx 当前落在 _refs/（已被上面的目录规则挡住），
+# 但目录规则只保护"那一个位置" —— 私钥若被脚本输出到别处（临时目录、各线目录、根目录），
+# 就会被 git add . 带进仓库；而私钥一旦进历史就无法真正撤回（只能重签 + 改写历史）。
+# 已核对：仓库当前无任何被跟踪的 pfx/p12/pem/key/jks/keystore 文件，本条不会误伤现有内容。
+# （.cer 是公钥证书，通常可入库，刻意不在本列。）
+*.pfx
+*.p12
+*.pem
+*.key
+*.jks
+*.keystore
+
 # ---- Rust 构建产物（src-tauri）----
 dsh-miasaki-desktop/src-tauri/target/
 dsh-miasaki-desktop/src-tauri/gen/
