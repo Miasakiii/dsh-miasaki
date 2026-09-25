@@ -389,11 +389,18 @@ window.__ModuleLoader__.load({
       })
     }
 
-    /** 明暗立方：与官方「通用 → 外观」同一控件（图标 + 文案，选中态平台底）。 */
+    /**
+     * 明暗立方：与官方「通用 → 外观」同一控件（图标 + 文案，选中态平台底）。
+     * 图标名必须跟前端壳 primitives seed 的实际导出一致：seed 的命名是
+     * `Icon<名称>Outline<Medium|Regular>`（尺寸走 props，不在名字里）——
+     * 2026-09-23 实机空白事故：误用旧版 `*Outline16` 名字 → undefined →
+     * createElement(undefined) 首渲染即抛 → 整栏被槽位机制罚下。对照见
+     * `@deepseek-ai/dsh-client-ui-theme` 的 AppearanceRow（同一套立方）。
+     */
     const SCHEME_CUBES = [
-      { id: 'light', label: '浅色', Icon: primitives.IconLightOutline16 },
-      { id: 'dark', label: '深色', Icon: primitives.IconDarkOutline16 },
-      { id: 'system', label: '跟随系统', Icon: primitives.IconFollowsystemOutline16 },
+      { id: 'light', label: '浅色', Icon: primitives.IconLightOutlineMedium },
+      { id: 'dark', label: '深色', Icon: primitives.IconDarkOutlineMedium },
+      { id: 'system', label: '跟随系统', Icon: primitives.IconFollowsystemOutlineMedium },
     ]
 
     function schemeCubes(preference, onPick, disabled) {
@@ -424,11 +431,11 @@ window.__ModuleLoader__.load({
           react.createElement('button', {
             key: 'up', type: 'button', className: 'mia-arrow', 'aria-label': `增大${label}`,
             disabled: off || value >= max, onClick: () => onStep(Math.min(max, value + step)),
-          }, react.createElement(primitives.IconChevronUpOutline14, { key: 'i', size: 9 })),
+          }, react.createElement(primitives.IconChevronUpOutlineRegular, { key: 'i', size: 9 })),
           react.createElement('button', {
             key: 'down', type: 'button', className: 'mia-arrow', 'aria-label': `减小${label}`,
             disabled: off || value <= min, onClick: () => onStep(Math.max(min, value - step)),
-          }, react.createElement(primitives.IconChevronDownOutline14, { key: 'i', size: 9 })),
+          }, react.createElement(primitives.IconChevronDownOutlineRegular, { key: 'i', size: 9 })),
         ]),
       ])
     }

@@ -2,6 +2,101 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-25 · 玻璃 `mica` 档与原生材质分层（消除双层模糊，规划 W4.2）
+
+- **问题**：`mica` 档的产品语义是「**用系统云母**」，但实现是页面侧 `backdrop-filter: blur(40px) saturate(1.6)`。Win11 上壳的原生 Mica（`DWMWA_SYSTEMBACKDROP_TYPE`）同时生效 ⇒ 两层模糊叠在一起：更糊、更耗电，且与档位语义自相矛盾（M2 设计文档里那句"web 近似、非 Win11 真 Mica"正是这个矛盾的注脚）。此前 `data-mia-glass` 与壳的 `MIASAKI_NO_MICA` **互不知情**。
+- **修法**（跨线契约：**壳说事实、页面选分支**）：`lib/config.js` 的 `buildGlassBootCss` 里，`mica` 档的选择器加条件
+  `html[data-mia-glass="mica"]:not([data-mia-native-mica="on"])` —— 原生云母生效时**不输出**页面侧模糊。
+  事实来源：壳注入预判值（Win11 且未禁用 ⇒ true）+ 页面就绪后用 DWM 实际结果广播修正，
+  由 `dsh-miasaki-desktop/themes/src/12-material.js` 落到 `html[data-mia-native-mica]`。
+- **为什么首帧即正确**：该属性在 `document_start` 就位，**早于** boot style 的解析期 —— 不需要"先叠一层再撤"的过渡。
+- **不波及 `light`/`frost`**：它们是「页面自己做玻璃」的独立档位，与原生材质叠加属用户选择，语义不冲突；测试显式断言这两个档位的 CSS **不含** `data-mia-native-mica`。
+- **回归**：`verify-all appearance` **16/16**（`test/config.test.js` 新增 W4.2 断言：mica 档必须带 `:not(...)`、light/frost 不得带）。
+- **待实机**：Win11 选 `mica` 档应只有一层模糊；`MIASAKI_NO_MICA=1` 时应回落页面侧模糊。详见 desktop 线 CHANGELOG 同日 W4.2 条目。
+
+## 2026-09-25 · 首帧注入行加官方 kind 白名单（规划 W4.1）
+
+- **由来**：官方 `dsh-host-webserver`（实测 0.1.7-rc.2）的 `renderRow` 只认六种注入行
+  （`global` / `script` / `script-src` / `script-preload` / `style` / `html`），而 DSH 前端应用注入行时
+  对未知 kind 是 **`throw new Error("web boot: unknown index injection row")`** —— 这是
+  **启动期抛错、整页起不来**，不是静默降级。产出侧写错一个字符串，代价是前端白屏。
+- **修法**：`index.js` 的 `webserver/index-inject` 订阅里改为经 `pushRow()` 产出，
+  kind 不在白名单即 `ctx.logger.error` 并**丢弃该行**（宁可少注入一层样式，不可让前端启动失败）。
+  白名单常量与官方 `renderRow` 六种行一一对应，注释里写明对应关系。
+- **闸门**：`test/host.test.js` 新增「注入行 kind 必须落在官方六种行白名单内」——
+  正向断言每次实际产出的每一行都合法，另断言 `style` 行不得自带与官方冲突的 `placement`。
+- **回归**：`node scripts/verify-all.mjs appearance` **16/16 PASS**。
+- **依据**：[`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §4 W4/T4.1
+  与 [`dsh-official-desktop-analysis-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-desktop-analysis-2026-09-25.md) §1.1（injections kind 白名单实测）。
+
+## 2026-09-23 · 修：`renderPreset` 对位图预设静默画黑徽记（二轮复审 P3）
+
+- **发现**（第二轮独立复审报出，核实**属实**）：`lib/icon-presets.js` 的
+  `renderPreset(preset, size)` 是底层渲染器，`compileFill(undefined)` 会落到末行
+  `return () => [0, 0, 0]` 兜底 —— 位图预设（`portrait` / `illustration` / `current`，
+  只有 `asset` 没有 `mark`）被直调时会画出一张「黑徽记」脏图。公开入口 `renderPresetPng`
+  已提前 `return null`（并已有单测），故仅**越过公开入口的直调**可达 —— 防御性瑕疵，
+  非当前缺陷，但静默画错比崩溃更难发现。
+- **修法**：`renderPreset` 开头三分支显式拒绝 —— 非对象预设 / 位图预设（`asset !== undefined`）
+  / 缺 `mark` 字段，一律抛 `TypeError`（**响亮失败**）。公开入口的 `null` 契约不变。
+- **回归闸门**：`test/icon-presets.test.js` 新增 1 例 —— 三款位图预设逐个断言抛错 +
+  缺 `mark` 的合成预设 + `null`；单测 94 → **95 例**（icon-presets 7 → 8）。
+- 触摸点：`lib/icon-presets.js`、`test/icon-presets.test.js`、`README.md`、本文件。
+
+## 2026-09-23 · 修：外观设置页整栏空白（primitives 图标名漂移，实机首崩）
+
+- **现象**（用户 21:58 重启 `dsh web` 后报告）：设置页「外观」栏点开是**空白**的；同泳道的
+  「自定义 agent」也不见踪影（后者是 0.1.7  preset 机制变更，见下节「关联发现」）。
+- **根因**：`client.js` 引用 5 个**前端壳 seed 里不存在**的 primitives 图标导出——
+  明暗立方用 `IconLightOutline16` / `IconDarkOutline16` / `IconFollowsystemOutline16`，
+  字号/旋钮步进器用 `IconChevronUpOutline14` / `IconChevronDownOutline14`。当前
+  primitives 的唯一运行时来源是前端壳 staticModules seed
+  （`dsh-web-frontend/dist/assets/index-*.js` 的冻结导出表），其命名约定是
+  **`Icon<名称>Outline<Medium|Regular>`（尺寸走 props，不进名字）**——官方
+  `dsh-client-ui-theme` 的 AppearanceRow / FontSizeRow 用的就是这套名字。
+  上述 5 个名字求值为 `undefined` → `React.createElement(undefined, …)` 在面板
+  **首渲染即抛** → 槽位错误边界把 `settings.section` 的 appearance entry 罚下
+  （abdicate）→ 内容区只剩一个空 `data-slot-error` stub（导航行仍在，因为 nav 读的是
+  原始账本 `entries()` 而非投影 `entriesOfSlot()`）。
+- **为什么测试全绿却没拦住**：与 2026-09-12 那次空白事故同型——`test/client.test.js`
+  的 primitives stub 用**同错名**字符串顶替（`IconLightOutline16: 'IconLightOutline16'`），
+  stub 冒烟永远绿；注册期契约测试又不执行 `slots.inject` 回调。M2.6 引入官方原语改名后
+  「实机视觉待验收」一直没验收，直到本次重启第一次真机渲染才爆。
+- **修法**：5 处图标名改为 seed 实际导出——`IconLightOutlineMedium` /
+  `IconDarkOutlineMedium` / `IconFollowsystemOutlineMedium` /
+  `IconChevronUpOutlineRegular` / `IconChevronDownOutlineRegular`（chevron 的
+  `size: 9`  props 与官方 FontSizeRow 逐字一致）。
+- **回归闸门**（三条新测试，把盲区堵死）：
+  1. **引用闭环**——client.js 里每个 `primitives.X` 都必须在 stub 白名单里（白名单即
+     seed 导出名的本仓镜像）；
+  2. **命名合规**——stub 里每个图标名必须匹配 `/^Icon\w+Outline(?:Medium|Regular)$/`，
+     尺寸后缀名（`*Outline16` / `*Outline14`）直接红；
+  3. **渲染树签名**——驱动到「配置已加载 + 图标板块就绪」完整路径后走查整棵元素树，
+     出现 `undefined`/`null` 元素类型即失败（React 整棵抛错的直接签名）。
+- **验证**：单测 **94 例全绿**（config 30 / client 15 / host 14 / icon-presets 7 / avatar 8 /
+  skins 7 / fence 6 / store 7；runner spawn 在 Windows 沙箱 EPERM，逐文件直跑）。
+  并行会话同期为 `lib/icon-presets.js` 补 1 例 fail-loud 守卫测试（见上条），全文件现 **95 例**；
+  `node --check` 七文件通过。**待用户硬刷新（Ctrl+F5）后验收**——外观栏应恢复完整面板
+  （启用/主题/壁纸/应用图标四组 + 契约状态条）。
+- 触摸点：`client.js`、`test/client.test.js`、本文件。
+
+### 关联发现：0.1.7 的「自定义 agent」改由 bundle 声明，不再扫目录
+
+- 0.1.7-alpha.2 的 `@deepseek-ai/dsh-agent-preset-registry` README 原话：**「注册表不扫描
+  目录，也不接受 preset 路径」**——Web 内置定义（standard / ptc / minimal / cordis 四款）
+  来自 `dsh-web-app` 的 `presets/*.patch.yml`；**新建/覆盖 preset 一律是 profile 补丁行**
+  （`preset-<id>` → `@deepseek-ai/dsh-agent-preset`，Web 编辑器保存时写入
+  `~/.dsh/profiles/web/cordis.patch.yml`）。
+- `~/.dsh/.agent-presets/{inverse,kurumi,whale}`（8 月 27 日）是**桌宠线**的预设Store
+  （`apply-presets.ps1` 同步目标），0.1.7 的 Web 注册表**不读它**——若用户的自定义 agent
+  是旧机制（目录扫描 / 桌宠同步）建的，升级后自然从 Web 设置里消失；数据仍在盘上，
+  需要以 bundle 补丁行重新声明才能回 Web。
+- 现状核对：`~/.dsh/profiles/web/cordis.patch.yml` 当前只有 4 条配置覆盖
+  （ui-settings-general / agent-default-model / ui-theme / llm-pi-ai），**没有任何
+  `preset-*` 行**——即 Web 侧当前只有四款内置 preset。若用户曾在 0.1.7 的 Web 编辑器里
+  建过自定义 agent，那些行应出现在此文件；不见即被 22:20 那次设置回写冲掉或是旧机制数据，
+  需用户确认「自定义 agent 是在哪个界面、什么时候建的」再决定恢复路径。
+
 ## 2026-09-23 · 应用图标预设扩为四款（位图预设 1 → 3，鲸鱼娘三构图全进九宫格）
 
 - **起因**：用户「这两个做成你的预设应用图标」并附两张图；澄清后落点是**外观设置「应用图标」

@@ -364,10 +364,22 @@ function buildGlassBootCss(safe) {
   if (glass === 'off') return ''
   const blur = { light: 'blur(8px)', frost: 'blur(20px) saturate(1.4)', mica: 'blur(40px) saturate(1.6)' }[glass]
   if (blur === undefined) return ''
+  // W4.2（2026-09-25）材质分层：`mica` 档的语义是「**用系统云母**」，而它此前一直用页面侧
+  // backdrop-filter 模拟。Win11 上原生 Mica 同时生效 ⇒ Chromium 模糊叠在 DWM 材质之上
+  // = **两层模糊**（更糊、更耗电，且与档位语义自相矛盾 —— 外观线自己文档里标注的
+  // "web 近似" 就是这个矛盾的注脚）。
+  // 处置：`mica` 档只在**原生未生效**时输出页面侧模糊。事实由壳广播（预判值随
+  // initialization_script 注入、页面就绪后用 DWM 实际结果修正），
+  // `themes/src/12-material.js` 落到 `html[data-mia-native-mica]` —— 该属性在 document_start
+  // 就位，早于本段 CSS 的解析期，故首帧即选对分支，不需要"先叠一层再撤"。
+  // `light` / `frost` 是「页面自己做玻璃」的独立档位，与原生材质叠加属用户选择，保持原样。
+  const sel =
+    `html[data-mia-glass=${JSON.stringify(glass)}]` +
+    (glass === 'mica' ? ':not([data-mia-native-mica="on"])' : '')
   return (
-    `html[data-mia-glass=${JSON.stringify(glass)}] [data-slot="sidebar"] > *,\n` +
-    `html[data-mia-glass=${JSON.stringify(glass)}] [data-slot="main.conversation"] > *,\n` +
-    `html[data-mia-glass=${JSON.stringify(glass)}] [data-slot="rightbar"] > * {\n` +
+    `${sel} [data-slot="sidebar"] > *,\n` +
+    `${sel} [data-slot="main.conversation"] > *,\n` +
+    `${sel} [data-slot="rightbar"] > * {\n` +
     `  backdrop-filter: ${blur};\n` +
     `}`
   )

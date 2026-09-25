@@ -42,6 +42,16 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > 与 desktop 线「Loading 2.0 + cmd 闪窗根治」为同一用户需求的两半，
 > 契约见 [cross 文档](../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md)，
 > 本线设计见 [Boot Splash 设计](design/2026-09-22-appearance-boot-splash-design.md)。
+>
+> **修：外观栏整栏空白（2026-09-23，primitives 图标名漂移）**：M2.6 复用官方 primitives 时
+> 误用旧版图标名（`IconLightOutline16` 等带尺寸后缀），而前端壳 seed 的实际导出是
+> `Icon<名称>Outline<Medium|Regular>`（尺寸走 props）——引用为 `undefined`，面板首渲染即抛、
+> 被槽位机制罚下成空 stub。已改为 seed 实际名（`IconLightOutlineMedium` /
+> `IconChevronUpOutlineRegular` 等，对照官方 `dsh-client-ui-theme` 的 AppearanceRow/FontSizeRow），
+> 并加三条回归闸门（引用闭环 / 命名合规 / 渲染树无 undefined 元素类型）。
+> **教训**：官方 seed 模块的导出名以 `dsh-web-frontend` 的 `index-*.js` 冻结表为准，
+> 单测 stub 必须用真实名——用同错名顶替会让冒烟永远绿、实机永远白。
+> 详见 [变更记录](design/CHANGELOG.md) 同日条目。
 
 ---
 
@@ -72,7 +82,7 @@ dsh-miasaki-appearance/
 │   ├── icon-presets.js    # 应用图标预设：手写 PNG 编码 + SDF 绘制 + 预设表（程序化生成）
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 91 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
+├── test/                  # 95 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
 ├── design/                # 规划设计 + M1/M2/M2.5/M2.6/M2.7 实施 + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
@@ -163,7 +173,7 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test --test-isolation=none "test/*.test.js"     # 91 例（8 个测试文件）
+node --test --test-isolation=none "test/*.test.js"     # 95 例（8 个测试文件）
 node ../scripts/verify-all.mjs appearance              # 统一回归入口（16 项）
 ```
 
@@ -193,3 +203,4 @@ factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条�
 - [M2.7 应用图标预设设计](design/2026-09-21-appearance-icon-presets-design.md) —— 为什么程序化生成、
   渲染管线（PNG 编码 / SDF / 合成）、骨架四版目检、位图预设的黑边坑、为什么跨线契约零变更；
 - [变更记录](design/CHANGELOG.md)。
+

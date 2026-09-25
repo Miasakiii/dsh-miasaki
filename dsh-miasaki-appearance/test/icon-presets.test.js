@@ -167,3 +167,14 @@ test('位图预设：走资源不走绘制器，且资源确实在仓库里（51
   }
   assert.equal(presetAssetPath('default'), null)
 })
+
+test('renderPreset：位图预设与缺 mark 的预设都响亮拒绝，不得静默画黑徽记（2026-09-23 复审 P3）', () => {
+  // 旧行为：直调 renderPreset(位图预设) → compileFill(undefined) 落到末行兜底 [0,0,0]
+  // → 画出一张「黑徽记」脏图（公开入口 renderPresetPng 已提前 return null，只有直调可达）。
+  // 现契约：越过公开入口的直调必须抛错 —— 静默画错比崩溃更难发现。
+  for (const id of ['portrait', 'illustration', 'current']) {
+    assert.throws(() => renderPreset(presetById(id), 64), /位图预设/, `${id} 必须拒绝程序化渲染`)
+  }
+  assert.throws(() => renderPreset({ id: 'broken', base: '#123456' }, 64), /mark/, '缺 mark 必须拒绝而非画黑')
+  assert.throws(() => renderPreset(null, 64), TypeError, '非预设对象必须拒绝')
+})

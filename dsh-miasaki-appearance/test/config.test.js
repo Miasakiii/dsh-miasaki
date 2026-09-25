@@ -281,6 +281,28 @@ test('buildBootScript：glass 属性随配置写入、关闭时恒 off', () => {
   assert.notEqual(on, closed)
 })
 
+// W4.2（2026-09-25）材质分层：`mica` 档 = 「用系统云母」，原生生效时必须撤掉页面侧模糊，
+// 否则 Chromium 的 backdrop-filter 与 DWM 材质叠成两层；`light`/`frost` 是页面自己玻璃的
+// 独立档位，与原生叠加属用户选择，**不得**被这条规则波及。
+test('W4.2：mica 档挂在「原生未生效」条件上，light/frost 不受影响', () => {
+  const mica = buildBootStyle({ enabled: true, wallpaper: { glass: 'mica' } }, null, {})
+  assert.match(
+    mica,
+    /html\[data-mia-glass="mica"\]:not\(\[data-mia-native-mica="on"\]\) \[data-slot="sidebar"\] > \*/,
+    'mica 档必须带 :not([data-mia-native-mica="on"]) 条件'
+  )
+  assert.match(mica, /backdrop-filter: blur\(40px\) saturate\(1\.6\)/)
+
+  const frost = buildBootStyle({ enabled: true, wallpaper: { glass: 'frost' } }, null, {})
+  assert.doesNotMatch(
+    frost,
+    /data-mia-native-mica/,
+    'light/frost 是页面侧档位，不得掺入原生材质条件'
+  )
+  const light = buildBootStyle({ enabled: true, wallpaper: { glass: 'light' } }, null, {})
+  assert.doesNotMatch(light, /data-mia-native-mica/)
+})
+
 test('evaluateContract：glass 非 off 且锚点全未命中 → glass-anchor-miss', () => {
   const base = {
     services: { theme: true, slots: true },

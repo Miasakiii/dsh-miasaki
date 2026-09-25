@@ -58,16 +58,21 @@ const react = {
   useEffect: () => {},
 }
 // 官方 primitives stub：前端壳 staticModules 的 seed 模块（M2.6 起面板复用）。
+// 名字必须与 seed 的实际导出一致（Icon<名称>Outline<Medium|Regular>，尺寸走 props）——
+// 2026-09-23 实机空白事故：client 用旧版 *Outline16/*Outline14 名字，seed 里是
+// undefined，createElement(undefined) 首渲染即抛、整栏被罚下。stub 若继续用错名，
+// 冒烟测试会一直绿而实机一直白屏，故此处钉死真实名字（对照 dsh-web-frontend 的
+// index-*.js seed 表与 dsh-client-ui-theme 的 AppearanceRow/FontSizeRow）。
 // react stub 的 createElement 只把组件当 type 记录、不会真调用，占位即可。
 const primitivesStub = {
   Button: 'Button',
   Switch: 'Switch',
   Pill: 'Pill',
-  IconLightOutline16: 'IconLightOutline16',
-  IconDarkOutline16: 'IconDarkOutline16',
-  IconFollowsystemOutline16: 'IconFollowsystemOutline16',
-  IconChevronUpOutline14: 'IconChevronUpOutline14',
-  IconChevronDownOutline14: 'IconChevronDownOutline14',
+  IconLightOutlineMedium: 'IconLightOutlineMedium',
+  IconDarkOutlineMedium: 'IconDarkOutlineMedium',
+  IconFollowsystemOutlineMedium: 'IconFollowsystemOutlineMedium',
+  IconChevronUpOutlineRegular: 'IconChevronUpOutlineRegular',
+  IconChevronDownOutlineRegular: 'IconChevronDownOutlineRegular',
 }
 const requireStub = name => {
   if (name === 'react') return react
@@ -317,8 +322,7 @@ test('面板渲染冒烟：应用图标板块（预设 + 已设置 + 我的上�
   }
 })
 
-test('面板渲染冒烟：九宫格按 avatar.source 点亮选中格', () => {
-  const { descriptor } = capture()
+test('面板渲染冒烟：九宫格按 avatar.source 点亮选中格', () => {  const { descriptor } = capture()
   const ctx = fakeCtx()
   descriptor.factory(requireStub).apply(ctx)
   const view = ctx.registered[0].view
@@ -391,6 +395,75 @@ test('面板渲染冒烟：host 未下发 avatar 字段时给重启提示而非�
     const texts = collectText(element)
     assert.equal(texts.some(t => t.includes('重启 dsh web')), true, '必须给出重启提示')
     assert.equal(texts.includes('上传图片…'), false, 'host 未更新时不渲染会写不进去的上传按钮')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+// ── 2026-09-23 实机空白事故的回归闸门 ────────────────────────────────────────
+// 事故：client.js 用旧版 primitives 图标名（`IconLightOutline16` 等带尺寸后缀），
+// 而前端壳 seed 的导出是 `Icon<名称>Outline<Medium|Regular>`（尺寸走 props）——
+// 引用拿到 undefined，`React.createElement(undefined, …)` 在面板首渲染即抛，
+// 槽位错误边界把整个外观栏罚下（abdicate），设置页留下一个空 stub。
+// 注册期契约测试抓不到（slots.inject 回调不执行），stub 冒烟也抓不到
+// （stub 用同错名顶替）。下面两条把这两个盲区都堵死。
+
+test('primitives 引用闭环：client.js 用到的每个名字都在 stub 白名单里', () => {
+  // stub 白名单即「seed 导出名」的本仓镜像；新增/改名 primitives 引用必须同步这里。
+  const used = [...new Set([...source.matchAll(/primitives\.(\w+)/g)].map(m => m[1]))]
+  assert.ok(used.length > 0, 'client.js 必须经 primitives 官方原语构造控件')
+  const missing = used.filter(name => !Object.hasOwn(primitivesStub, name))
+  assert.deepEqual(missing, [], `这些 primitives 引用不在白名单里（seed 未导出即为 undefined，首渲染即崩）：${missing.join(', ')}`)
+})
+
+test('primitives 图标命名合规：无尺寸后缀（seed 只有 Medium/Regular 两档）', () => {
+  for (const name of Object.keys(primitivesStub)) {
+    if (!name.startsWith('Icon')) continue
+    assert.match(name, /^Icon\w+Outline(?:Medium|Regular)$/,
+      `图标名 ${name} 不符合 seed 命名约定 Icon<名称>Outline<Medium|Regular>（尺寸后缀名在 seed 里不存在）`)
+  }
+})
+
+test('渲染树无 undefined/null 元素类型（空白色事故的直接签名）', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  // 驱动到「配置已加载 + 图标板块就绪」的完整渲染路径（立方/步进器/九宫格全经过）。
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'pure', scheme: 'dark', accent: '', fontSize: 14 },
+        wallpaper: {
+          source: 'builtin:dusk', light: '', dark: '', blur: 0, scrim: 20,
+          fit: 'cover', focus: 'center', glass: 'frost', vignette: 0,
+          surface: { sidebar: 75, conversation: 70, composer: 80, overlay: 90 },
+        },
+        avatar: { source: '/appearance/avatar/preset-default.png' },
+        motion: { enabled: false, preset: 'fluid', scale: 1 },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 6,
+      persistent: true,
+    },
+    null, null, null, false, null, { local: [] },
+    { presets: [{ id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' }] },
+  ]
+  try {
+    const element = view()
+    assert.notEqual(element, null)
+    const bad = []
+    const walk = (node) => {
+      if (node === null || node === undefined || typeof node === 'boolean' || typeof node === 'string' || typeof node === 'number') return
+      if (Array.isArray(node)) { for (const child of node) walk(child); return }
+      if (typeof node !== 'object') return
+      const type = node.type
+      if (type === undefined || type === null) bad.push(JSON.stringify(node.props?.className ?? node.props?.['aria-label'] ?? '(anonymous)'))
+      if (Array.isArray(node.children)) for (const child of node.children) walk(child)
+    }
+    walk(element)
+    assert.deepEqual(bad, [], `渲染树里出现 undefined/null 元素类型（React 会整棵抛错）：${bad.join(' | ')}`)
   } finally {
     react.stateQueue = null
   }

@@ -214,6 +214,19 @@ export function presetIdFromUrl(url) {
  * @returns {{width: number, height: number, rgba: Uint8ClampedArray}} 渲染结果。
  */
 export function renderPreset(preset, size) {
+  if (preset === null || typeof preset !== 'object') {
+    throw new TypeError('renderPreset：preset 必须是 ICON_PRESETS 里的一项')
+  }
+  // 位图预设（`asset` 型）没有程序化几何：直调本函数只会让 compileFill(undefined)
+  // 落到末行的 `[0,0,0]` 兜底，画出一张「黑徽记」脏图（2026-09-23 复审 P3）。
+  // 公开入口 renderPresetPng 已提前 return null，这里再挡一道，让越过公开入口的
+  // 直调**响亮失败**而不是静默画错 —— 静默错误比崩溃更难发现。
+  if (preset.asset !== undefined) {
+    throw new TypeError(`renderPreset：位图预设 ${preset.id} 不走程序化渲染（应走 presetAssetPath 取 PNG）`)
+  }
+  if (preset.mark === undefined) {
+    throw new TypeError(`renderPreset：预设 ${preset.id} 缺 mark 字段（缺了会画成黑徽记）`)
+  }
   const px = Math.max(16, Math.min(2048, Math.floor(size)))
   const pixel = 1 / px
   const rgba = new Uint8ClampedArray(px * px * 4)

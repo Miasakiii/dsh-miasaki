@@ -125,12 +125,30 @@ export function apply(ctx, config) {
   }, 'appearance: load config')
 
   // ---------------------------------------------------------------- 首帧注入
+  // W4.1（2026-09-25）官方 index-inject 行类型白名单。由来：DSH 前端应用注入行时对未知
+  // kind 是 `throw new Error("web boot: unknown index injection row")` —— **启动期抛错**，
+  // 会让整个前端起不来（不是静默降级）。产出侧先把关，别把构建期就能发现的错误留到运行期。
+  // 白名单与官方 `dsh-host-webserver` 的 `renderRow` 六种行一一对应（实测 0.1.7-rc.2）。
+  const INJECTION_KINDS = new Set(['global', 'script', 'script-src', 'script-preload', 'style', 'html'])
+  const pushRow = (table, row) => {
+    if (!INJECTION_KINDS.has(row.kind)) {
+      ctx.logger?.error?.(
+        new Error(
+          `appearance: 非法 index-inject 行类型 ${JSON.stringify(row.kind)}；` +
+          `官方白名单：${[...INJECTION_KINDS].join(' / ')}（写错会让 DSH 前端启动期抛错）`
+        )
+      )
+      return
+    }
+    table.push(row)
+  }
+
   ctx.on('webserver/index-inject', (table) => {
     if (!Array.isArray(table)) return
-    table.push({ kind: 'script', placement: 'body', text: buildBootScript(current) })
+    pushRow(table, { kind: 'script', placement: 'body', text: buildBootScript(current) })
     const mod = SKIN_MODULES[current.theme.skin]
     const style = buildBootStyle(current, mod === undefined ? null : mod.tokens, BUILTIN_WALLPAPERS)
-    if (style !== '') table.push({ kind: 'style', text: style })
+    if (style !== '') pushRow(table, { kind: 'style', text: style })
   })
 
   /** 本地壁纸目录（dataDir 之下；无 dataDir 时图源路由降级 404）。 */

@@ -68,6 +68,34 @@ test('首帧注入订阅 webserver/index-inject，注入脚本行来自配置', 
   assert.equal(table[0].placement, 'body')
 })
 
+// W4.1（2026-09-25）：官方六种行白名单。DSH 前端应用注入行时对未知 kind 是
+// `throw new Error("web boot: unknown index injection row")` —— **启动期抛错**，整页起不来，
+// 不是静默降级。所以产出侧必须自证"我发的每一行都是官方认识的"。
+test('W4.1：注入行 kind 必须落在官方六种行白名单内', () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const table = []
+  ctx.taps[0].callback(table)
+  assert.equal(table.length >= 1, true, '必须至少注入一条 script 行')
+
+  const ALLOWED = new Set(['global', 'script', 'script-src', 'script-preload', 'style', 'html'])
+  for (const row of table) {
+    assert.equal(
+      ALLOWED.has(row.kind),
+      true,
+      `非法 kind ${JSON.stringify(row.kind)}——DSH 前端会在启动期抛错（web boot: unknown index injection row）`
+    )
+  }
+  // 官方 renderRow 把 style 行固定为 head；产出侧不应自带 placement 与之冲突
+  for (const row of table.filter(r => r.kind === 'style')) {
+    assert.equal(
+      row.placement === undefined || row.placement === 'head',
+      true,
+      'style 行的位置由官方固定为 head，产出侧不得指定其他 placement'
+    )
+  }
+})
+
 test('inject 声明 webServer 为硬依赖', () => {
   assert.deepEqual([...host.inject], ['webServer'])
   assert.equal(host.name, 'appearance')
