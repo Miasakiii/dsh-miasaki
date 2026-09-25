@@ -42,12 +42,14 @@ const ORIGINAL_FILE = join(BASELINE, 'index.original.js')
 const PATCHED_FILE = join(BASELINE, 'index.patched.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-api-session-controller'
+/** 目标文件在包内的相对路径：host 侧补丁打 lib/index.js（与 dsh-cordis-host-runner 同一契约）。 */
+export const TARGET_RELATIVE = join('lib', 'index.js')
 /** DSH 版本基线：锚点文本与两份 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
+export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
 /** 官方原版 index.js 的 SHA-256（与安装目录的 index.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '05DAAAF854EABC9DB0E1171A55D54FA2F631CA63FE6A91FEB0D9C60D827AD79E'
+export const ORIGINAL_SHA256 = 'FB0F7B96130F595DB20809EEB77A195B05F4A039F931D1E67692F1F74A4DD269'
 /** 应用本补丁后的 SHA-256（由 `seal` 生成并回填）。 */
-export const PATCHED_SHA256 = '450C25A264405912D02E6EEE750E9C845DCA796EDBE3AB42FAD80FE411BD7ADA'
+export const PATCHED_SHA256 = '40A032EF7123CA975BBF9DFD4C6CA680FAF978748A8EC0EBA5C6880E1787ABA0'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = 'dualModelVisionRoute'
 

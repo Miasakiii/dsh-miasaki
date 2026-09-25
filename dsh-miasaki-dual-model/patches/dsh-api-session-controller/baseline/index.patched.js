@@ -7,6 +7,7 @@ import { SessionQueryError } from "@deepseek-ai/dsh-session-query";
 import { Remote, RemoteError, TypertRemoteService, remoteErrorOf } from "@deepseek-ai/dsh-typert-protocol";
 import { mkdir } from "node:fs/promises";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
+import { credentialRef } from "@deepseek-ai/dsh-credentials";
 import { randomUUID } from "node:crypto";
 import { brandString } from "@deepseek-ai/dsh-brand";
 import { AttachmentError } from "@deepseek-ai/dsh-attachment";
@@ -488,6 +489,103 @@ function agentModelSelection(selection) {
 	};
 }
 //#endregion
+//#region lib/types/catalog.js
+/** Shared projection of the live LLM registry into the browser model catalog. */
+/**
+* Build the browser model catalog without requiring a Session.
+* @param ctx - Host context carrying the live LLM registry.
+* @param defaultSelection - deployment default used before a Session selects a model.
+* @returns successful non-empty provider groups and isolated provider failures.
+*/
+async function buildModelCatalog(ctx, defaultSelection = ctx.agentDefaultModel.currentSelection()) {
+	const providers = ctx.llm.listProviders();
+	const catalog = await Promise.all(providers.map(async (provider) => {
+		try {
+			const models = await ctx.llm.listModels(provider.id);
+			const entries = await Promise.all(models.map(async (model) => {
+				const resolved = await ctx.llm.resolveModelInfo(provider.id, model.id);
+				const reasoning = resolved.reasoning === void 0 ? void 0 : {
+					efforts: resolved.reasoning.efforts.map((effort) => ({
+						id: effort.id,
+						name: effort.name,
+						...effort.description === void 0 ? {} : { description: effort.description }
+					})),
+					...resolved.reasoning.defaultEffort === void 0 ? {} : { defaultEffort: resolved.reasoning.defaultEffort }
+				};
+				return {
+					id: model.id,
+					name: model.name,
+					...model.description === void 0 ? {} : { description: model.description },
+					...reasoning === void 0 ? {} : { reasoning }
+				};
+			}));
+			return {
+				kind: "group",
+				group: {
+					id: provider.id,
+					name: provider.name,
+					models: entries
+				}
+			};
+		} catch (error) {
+			return {
+				kind: "failure",
+				failure: {
+					id: provider.id,
+					name: provider.name,
+					message: error instanceof Error ? error.message : String(error)
+				}
+			};
+		}
+	}));
+	const groups = catalog.flatMap((item) => item.kind === "group" ? [item.group] : []).filter((group) => group.models.length > 0);
+	return {
+		default: { ...defaultSelection },
+		routableProviders: groups.map((group) => group.id),
+		groups,
+		failures: catalog.flatMap((item) => item.kind === "failure" ? [item.failure] : [])
+	};
+}
+/**
+* Check a GUI selection against the current available provider catalog.
+* @param ctx - Host LLM registry.
+* @param selection - stored or explicitly requested selection.
+* @returns whether the exact model is currently advertised as available.
+*/
+async function modelAvailable(ctx, selection) {
+	if (!ctx.llm.listProviders().some((provider) => provider.id === selection.provider)) return false;
+	let models;
+	try {
+		models = await ctx.llm.listModels(selection.provider);
+	} catch (error) {
+		throw new RemoteError("session/model-unavailable", error instanceof Error ? error.message : String(error), {
+			provider: selection.provider,
+			model: selection.model
+		});
+	}
+	return models.some((model) => model.id === selection.model);
+}
+/**
+* Check configured provider API-key references independently of model availability.
+* @param ctx - Host registry, settings, and credential services.
+* @returns whether any API-key provider has a configured credential.
+*/
+async function hasProviderApiKey(ctx) {
+	const settings = ctx.get("settings");
+	const credentials = ctx.get("credentials");
+	if (settings === void 0 || credentials === void 0) throw new RemoteError("session/provider-credentials-unavailable", "provider credentials are unavailable", {});
+	const namespaces = settings.describe({ redactSecrets: true });
+	for (const provider of ctx.llm.listConfigurableProviders()) {
+		if (provider.provider === "deepseek-account") continue;
+		let profile = namespaces.find((namespace) => namespace.ns === provider.settingsNs)?.value;
+		for (const key of provider.settingsPath) profile = typeof profile === "object" && profile !== null ? Reflect.get(profile, key) : void 0;
+		if (typeof profile !== "object" || profile === null) continue;
+		const ref = Reflect.get(profile, "apiKeyEnv");
+		if (typeof ref === "string" && ref.length > 0 && (await credentials.describe(credentialRef(ref))).configured) return true;
+	}
+	return false;
+}
+//#endregion
 //#region lib/types/commands.js
 /** Session commands whose activation policy is explicit at each Remote method. */
 var __addDisposableResource$3 = function(env, value, async) {
@@ -615,14 +713,15 @@ var SessionCommandController = class {
 		};
 	}
 	/**
-	* Validate and install one Session-local model selection.
+	* Validate and install one Session-local model selection; save the default in the background.
 	* @param request - Session identity and requested model selection.
-	* @returns the normalized selection installed for the Session.
+	* @returns the normalized selection installed for the Session, without waiting for default persistence.
 	*/
 	async selectModel(request) {
 		const agent = await this.resolveAgent(request.sessionId);
 		return this.agents.serializeImageAdmission(agent, async () => {
 			try {
+				await this.requireModel(request);
 				const resolved = await this.ctx.llm.resolveCallConfig({
 					provider: request.provider,
 					model: request.model,
@@ -634,11 +733,9 @@ var SessionCommandController = class {
 					...resolved.reasoningEffort === void 0 ? {} : { reasoningEffort: resolved.reasoningEffort }
 				};
 				this.agents.selectForNextRequest(agent, selected);
-				try {
-					await this.ctx.agentDefaultModel.saveSelection(selected);
-				} catch (error) {
+				this.ctx.agentDefaultModel.saveSelection(selected).catch((error) => {
 					this.ctx.logger.warn(`session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`);
-				}
+				});
 				return { selected: { ...selected } };
 			} catch (error) {
 				if (remoteErrorOf(error) !== void 0) throw error;
@@ -756,11 +853,6 @@ var SessionCommandController = class {
 		if (request.clientTimeZone !== void 0 && clientTimeZone === void 0) throw new RemoteError("session/invalid-time-zone", "clientTimeZone must be UTC or a valid IANA Area/Location name", { value: request.clientTimeZone });
 		const agent = await this.resolveAgent(request.sessionId);
 		if (hasPromptRequest(agent, request.requestId)) return { accepted: true };
-		const selection = this.agents.selectionFor(agent).current;
-		if (!routeServed(this.ctx, selection.provider)) throw new RemoteError("session/model-unavailable", `no adapter serves provider "${selection.provider}"; select a model for this session`, {
-			provider: selection.provider,
-			model: selection.model
-		});
 		const source = {
 			kind: "user",
 			rpcId: request.requestId,
@@ -814,6 +906,12 @@ var SessionCommandController = class {
 			return { accepted: true };
 		};
 		return hasImage ? this.agents.serializeImageAdmission(agent, admit) : admit();
+	}
+	async requireModel(selection) {
+		if (!await modelAvailable(this.ctx, selection)) throw new RemoteError("session/model-unavailable", "Select an available model before sending a message.", {
+			provider: selection.provider,
+			model: selection.model
+		});
 	}
 	/**
 	* Read one durable image after proving the Session log references it.
@@ -1035,9 +1133,6 @@ function referencedImage(events, attachmentId) {
 		const found = imageInEvent(event, (ref) => String(ref.attachmentId) === attachmentId);
 		if (found !== void 0) return found;
 	}
-}
-function routeServed(ctx, provider) {
-	return ctx.llm.listProviders().some((entry) => entry.id === provider);
 }
 //#endregion
 //#region lib/types/control.js
@@ -1963,63 +2058,6 @@ function listFields(header) {
 	};
 }
 //#endregion
-//#region lib/types/catalog.js
-/** Shared projection of the live LLM registry into the browser model catalog. */
-/**
-* Build the browser model catalog without requiring a Session.
-* @param ctx - Host context carrying the live LLM registry.
-* @param defaultSelection - deployment default used before a Session selects a model.
-* @returns successful non-empty provider groups and isolated provider failures.
-*/
-async function buildModelCatalog(ctx, defaultSelection = ctx.agentDefaultModel.currentSelection()) {
-	const providers = ctx.llm.listProviders();
-	const catalog = await Promise.all(providers.map(async (provider) => {
-		try {
-			const models = await ctx.llm.listModels(provider.id);
-			const entries = await Promise.all(models.map(async (model) => {
-				const resolved = await ctx.llm.resolveModelInfo(provider.id, model.id);
-				const reasoning = resolved.reasoning === void 0 ? void 0 : {
-					efforts: resolved.reasoning.efforts.map((effort) => ({
-						id: effort.id,
-						name: effort.name,
-						...effort.description === void 0 ? {} : { description: effort.description }
-					})),
-					...resolved.reasoning.defaultEffort === void 0 ? {} : { defaultEffort: resolved.reasoning.defaultEffort }
-				};
-				return {
-					id: model.id,
-					name: model.name,
-					...model.description === void 0 ? {} : { description: model.description },
-					...reasoning === void 0 ? {} : { reasoning }
-				};
-			}));
-			return {
-				kind: "group",
-				group: {
-					id: provider.id,
-					name: provider.name,
-					models: entries
-				}
-			};
-		} catch (error) {
-			return {
-				kind: "failure",
-				failure: {
-					id: provider.id,
-					name: provider.name,
-					message: error instanceof Error ? error.message : String(error)
-				}
-			};
-		}
-	}));
-	return {
-		default: { ...defaultSelection },
-		routableProviders: providers.map((provider) => provider.id),
-		groups: catalog.flatMap((item) => item.kind === "group" ? [item.group] : []).filter((group) => group.models.length > 0),
-		failures: catalog.flatMap((item) => item.kind === "failure" ? [item.failure] : [])
-	};
-}
-//#endregion
 //#region lib/types/model-selection-projection.js
 /** Durable model-selection intent and request-use projection. */
 const modelSelectionSchema = z$1.object({
@@ -2532,6 +2570,7 @@ let SessionController = (() => {
 	let _search_decorators;
 	let _create_decorators;
 	let _selectModel_decorators;
+	let _initializeDefaultModel_decorators;
 	let _modelCatalog_decorators;
 	let _canOpenWorkspacePath_decorators;
 	let _openWorkspacePath_decorators;
@@ -2553,6 +2592,7 @@ let SessionController = (() => {
 			_search_decorators = [Remote("search")];
 			_create_decorators = [Remote("create")];
 			_selectModel_decorators = [Remote("selectModel")];
+			_initializeDefaultModel_decorators = [Remote];
 			_modelCatalog_decorators = [Remote("modelCatalog")];
 			_canOpenWorkspacePath_decorators = [Remote];
 			_openWorkspacePath_decorators = [Remote("openWorkspacePath")];
@@ -2608,6 +2648,17 @@ let SessionController = (() => {
 				access: {
 					has: (obj) => "selectModel" in obj,
 					get: (obj) => obj.selectModel
+				},
+				metadata: _metadata
+			}, null, _instanceExtraInitializers);
+			__esDecorate(this, null, _initializeDefaultModel_decorators, {
+				kind: "method",
+				name: "initializeDefaultModel",
+				static: false,
+				private: false,
+				access: {
+					has: (obj) => "initializeDefaultModel" in obj,
+					get: (obj) => obj.initializeDefaultModel
 				},
 				metadata: _metadata
 			}, null, _instanceExtraInitializers);
@@ -2931,12 +2982,28 @@ let SessionController = (() => {
 			return this.commands.create(request);
 		}
 		/**
-		* Select one Session-local model after explicitly resuming the Session.
+		* Select one Session-local model after explicitly resuming the Session; save the default in the background.
 		* @param request - Session identity and requested model selection.
-		* @returns the normalized selection installed for the Session.
+		* @returns the normalized selection installed for the Session, without waiting for default persistence.
 		*/
 		selectModel(request) {
 			return this.commands.selectModel(request);
+		}
+		/**
+		* Select the first available account model after login when no provider API key is configured.
+		* @returns after saving the first available model or retaining the existing default.
+		*/
+		async initializeDefaultModel() {
+			const provider = "deepseek-account";
+			if (await hasProviderApiKey(this.ctx)) return;
+			const model = (await buildModelCatalog(this.ctx)).groups.find((group) => group.id === provider)?.models[0];
+			if (model === void 0) throw new RemoteError("session/provider-models-unavailable", `provider "${provider}" has no available models`, { provider });
+			const selection = {
+				provider,
+				model: model.id,
+				...model.reasoning?.defaultEffort === void 0 ? {} : { reasoningEffort: ReasoningEffortId(model.reasoning.defaultEffort) }
+			};
+			await this.ctx.agentDefaultModel.saveSelection(selection);
 		}
 		/**
 		* Describe every currently routable model for Host-generation selectors.

@@ -69,8 +69,12 @@ node patch.mjs apply
 ## 验证
 
 ```bash
-node ../scripts/verify-all.mjs dual-model     # 静态检查 + 29 项单测 + 补丁离线自证
+node ../scripts/verify-all.mjs dual-model     # 静态检查 + 33 项单测 + 补丁离线自证
 ```
+
+单测不碰 DSH 运行时：`routing` / `store` / `content` / `invalidation` 是纯逻辑，`client` 在
+**无 `module` 的 VM 上下文**里跑 factory 并驱动真实渲染路径（含 `/state` 失败态 —— 触发钮
+必须可用，否则错误只渲染在面板里、控件会变死件；见 `design/CHANGELOG.md` 2026-09-23 二轮复审条）。
 
 实机验证点（需运行中的 DSH host）：右下角出现「双模型」控件；配好辅助模型后拖入图片，
 状态行显示「图片将由「X」处理」；切换主模型到纯文本模型后仍可发送带图消息且模型能读到图。

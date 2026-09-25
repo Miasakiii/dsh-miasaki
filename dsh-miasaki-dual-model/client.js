@@ -199,8 +199,17 @@ window.__ModuleLoader__.load({
       }, [sessionId])
 
       const color = statusColor(state)
-      const disabled = busy || state === null
-      const title = state === null ? '双模型' : statusLine(state, draftAttachments)
+      // 触发器禁用条件（2026-09-23 回归修复）：只禁「保存中」与「首次加载尚未落定」。
+      // 原实现是 `state === null`，而 load() 失败路径只 setError、**state 恒为 null**
+      // （见上方 catch），于是 `/state` 一失败按钮就永久 disabled → 面板打不开 →
+      // 面板内的错误行（error 只渲染在面板里）永远不可见 → 控件成死件，只能刷新页面。
+      // 判据改为「state 与 error 皆空」＝仍在加载；出错即放行，点开面板既能看到错误，
+      // 也会顺带触发 open 时的重新 load（重试入口）。
+      const loading = state === null && error === null
+      const disabled = busy || loading
+      const title = state !== null
+        ? statusLine(state, draftAttachments)
+        : error !== null ? `双模型 · 读取失败：${error}` : '双模型'
 
       const trigger = react.createElement('button', {
         key: 'trigger',
@@ -209,7 +218,7 @@ window.__ModuleLoader__.load({
         title,
         'aria-haspopup': 'dialog',
         'aria-expanded': open,
-        disabled: state === null,
+        disabled: loading,
         onClick: () => setOpen(!open),
         style: {
           opacity: state !== null && state.enabled !== true ? 0.55 : 1,

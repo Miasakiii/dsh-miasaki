@@ -1,5 +1,37 @@
 # 变更记录 — dsh-miasaki-dual-model
 
+## 2026-09-23（二轮复审）
+
+### Client 半回归修复 — 触发钮死件（`/state` 失败后错误面板不可达）+ client 契约测试
+
+**发现**：第二轮独立复审报出 P2-A —— 触发钮被写成 `disabled: state === null`
+（UI 令牌化批次 `8583adf` 引入，旧版 button 无 `disabled`），而 `load()` 的失败路径只
+`setError`、**`state` 保持 null**，错误行又只渲染在**面板内部**。链条：
+
+> `/state` 请求失败 → `state=null` + `error≠null` → 触发钮 disabled → 面板打不开 →
+> 错误永远不可见 → 控件成死件（只能刷新页面）
+
+旧实现失败时至少能点开看到错误 —— 属 UI 改版引入的功能回归。核实**属实**。
+
+**修复**：判据改为 `loading = state === null && error === null`（**加载中才禁、出错放行**），
+`disabled = busy || loading`；同时把失败原因带上 `title`（`双模型 · 读取失败：<msg>`），
+悬停即可见。展开面板本就会重新 `load()`（`useEffect` 依赖 `open`），故点开即等于重试入口。
+
+**回归闸门**：新增 `test/client.test.js` 4 例（本线首个 client 半测试）：
+
+1. 装载契约 —— 在**无 `module` 的 VM 上下文**里跑 factory，控件注册在
+   `conversation.input.right`（与 appearance 线同一范式，钉死「module is not defined」那类整包失败）；
+2. 失败态触发钮**不得**被禁用 + 失败原因进 `title`；
+3. 失败态展开后 `.dsh-dual-model-error` 真的渲染（死件链条末端）；
+4. 成功态可点 + 折叠标签走「主 ▸ 辅」。
+
+react stub 支持跨渲染 state 槽位与手动 flush 的 effect，故能驱动「挂载 → fetch 失败 →
+重渲染」这条真实路径。**区分力已验证**：临时把判据回退成 `state === null` → 用例 2 变红；
+还原 → 4/4 绿。
+
+**验证**：`node test/client.test.js` 4/4；`node scripts/verify-all.mjs dual-model` **12/12**
+（6 语法 + 5 个测试文件共 **33 例** + 补丁自证）；本线 README 与根 README 的项数/例数同步。
+
 ## 2026-09-23
 
 ### 0.1.3-miasaki.0 — DSH 0.1.7 兼容：设置失效信号新旧双轨（行为零变化）
