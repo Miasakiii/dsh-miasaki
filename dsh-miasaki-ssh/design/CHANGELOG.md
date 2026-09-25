@@ -2,6 +2,45 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-25（B2：launcher 与会话头胶囊结构性互斥 —— 修「会话窗口右上角多一颗 SSH」）
+
+- **用户报障**：「右上角 SSH 按钮优化一下」→ 随即澄清「**会话窗口右上角不应该有 SSH 按钮**」＋「**重复了，胶囊有 SSH 按钮入口**」，并附桌面壳窗口截图（红框标出右上角那颗）。
+- **现象**：会话窗口里**同时**存在两个 SSH 入口 —— 会话头第一行的三段胶囊「对话｜会话布｜SSH」，以及右上角（窗控左侧）那颗独立 `SSH`（`shell.overlay` 的 launcher）。放大截图逐像素确认：红框内那颗是粗体 `SSH` 文字（launcher 的 `font:600 12px`），与胶囊里的 SSH 段是两处独立 DOM。
+- **根因（判据推演 ≠ 官方渲染条件）**：D1.1 的 launcher 判据读官方 `useSessions` 的 `SessionSummary.blank`（`blank === true` ⇒ 当作 hero ⇒ 显示），但官方真正决定会话头 chrome（含 `conversation.session.header.actions` 槽）渲不渲染的是
+  `blank = session === void 0 || conversation === void 0 || (session.blank && conversationPhase(session, conversation) === "blank")`
+  （`dsh-client-ui-conversation/lib/client.js` 的 `ConversationHeader` → `renderSlot("conversation.session.header", { hideChrome: blank })`，`hideChrome` 正是那坨 titleRow chrome 的开关）。**两个 blank 语义不同**：`SessionSummary.blank` 仍为真、而 `conversationPhase` 已经不是 blank 时，官方 `hideChrome = false` ⇒ 会话头**带 chrome 渲染、胶囊出现**，旧判据却照样返回 hero ⇒ launcher 同时渲染 ⇒ 双入口。旧判据里的「摘要未就绪 ⇒ 保守显示」是同一类误判的第二个入口（`byId[current]` 取不到时一律显示）。
+- **修（`client.js`，只认 DOM 事实）**：
+  - 新增 `OWN_ENTRY_SELECTOR = '.dsh-ssh-switch'` 与 `ownEntryPresent()`；判据收敛成一条 `launcherShouldRender() = onConversationHome() && !ownEntryPresent()` ——「**在主页**」**且**「**本线胶囊不在场**」；
+  - hook 更名 `useOnConversationHome` → `useLauncherVisible`（MutationObserver 观察 body 子树 + rAF 节流、只在布尔翻转时 setState，均不变）；
+  - `SshLauncher` 与 `LauncherButton` **合并为一层**：本组件不再消费任何官方 prop（`useSessions`），「React 规则：hook 不能条件调用」的拆层前提随之消失；
+  - **为什么这里可以用 DOM 探测**：探的是**本线自己的产物**（`.dsh-ssh-switch` 是本线注册的胶囊），不是官方内部结构 —— 与本线既有手法同源（`syncChrome()` 用 `.dsh-canvas-switch` 的存在性算 `canvasAvailable`，那条注释写的就是「判据必须来自真实 DOM 查询」）；它也**不受官方 blank / conversationPhase 语义漂移影响**（本次事故的根因正是语义漂移）。降级方向同样安全：胶囊真不在场（注册失败 / 会话头未渲染）时 launcher 顶上兜底。
+  - **顺带修掉首帧闪**：会话头与本线 launcher 是**两棵不同的 fiber**（前者在 `conversation` 面板、后者在 root 的 `shell.overlay`），而 React 的 render 阶段不改 DOM ⇒ 首次渲染时 launcher 读到的 DOM 还没有胶囊，判据必然先返回 true。订阅原先挂在 `react.useEffect`（**paint 之后**）⇒ 刷新时停在会话窗口会**先画出一帧多余的 SSH**。改为 `usePaintEffect`（= `useLayoutEffect` 优先，commit 后 / paint 前执行，其 setState 补偿渲染在同一帧内完成）；单测的 react 桩没有 `useLayoutEffect` ⇒ 退回 `useEffect`（行为不变）。
+- **测试**：`test/client.test.js` 27 → **29 例** ——
+  - 判据用例重写为「① 主页 + 无胶囊 ⇒ 渲染；② 胶囊在场 ⇒ 不渲染；③ 胶囊退场 ⇒ 恢复（**可逆**，证明不是被写死成一律不显示）」；
+  - 新增 `D1.1e`：复刻事故组合（胶囊已在 DOM ⇒ launcher 必须为 `null`，**与会话 store 报什么状态无关**）；
+  - 新增 `D1.1f`：静态断言 —— 判据必须锚定 `OWN_ENTRY_SELECTOR`、必须是 `onConversationHome() && !ownEntryPresent()`、订阅必须走 `usePaintEffect`（`useLayoutEffect` 优先），且 `useOnConversationHome` / `LauncherButton` 不得回来（防止判据被改回「推演官方 blank 字段」）；
+  - 断言口径随组件合并从「两层求值（`outer.type(outer.props)`）」改为「单层直接调用」，另 4 处用例的 launcher 调用同步改写。
+- **回归**：单测 **115 → 117 例**（app 16 / client 29 / http 7 / runtime 23 / session 34 / store 8）；`node scripts/verify-all.mjs ssh` **12/12 PASS**（6 个 `--check` + 6 个测试文件）。**环境注记**：本机受限沙箱下 `node --test test/*.test.js`（node test runner 的进程隔离经管道 spawn）会以 `spawn EPERM` 失败 —— 环境限制而非代码缺陷；单测因此另用 `node <file>` 直接执行逐项复核，与 `verify-all` 结果一致。
+- **生效方式**：`@miasaki/dsh-ssh` 以 junction 链入 web profile，改的是 `client.js`（client bundle，不经 `index.js` 的 `cachedAsset`）⇒ **浏览器刷新即可**（被缓存则硬刷新，或重启 `dsh web`）。
+- **相邻场景已排除（层级取证，不是推断）**：自然会问「那画布浮层 / SSH 浮层打开时，右上角是不是又叠一颗」。查官方 `dsh-client-ui-layout` 的样式：`shell.overlay` 所在层是 `.pI_x6G_overlayLayer{z-index:20;pointer-events:none;position:absolute;inset:0}`，而本线 SSH 浮层与 canvas 浮层都是 `position:fixed;z-index:100;inset:0` ⇒ **全屏浮层必定完整盖住 launcher**（z-index 100 > 20），不存在「浮层之上还压着一颗 SSH」的重复；指针事件也随之被浮层接管，那一颗点不到。
+- **实机复验待办**：① 会话窗口右上角**不再**出现 SSH（只剩胶囊那一段）；② hero（首屏 / 新会话）仍能从右上角进入；③ 设置页 / 轨迹页仍不出现；④ 从会话切回 hero（或返回首屏）时入口**能恢复**（可逆性）；⑤ 刷新时**不闪**一颗多余的 SSH（首帧防闪）。
+
+## 2026-09-25（B1：launcher 越界修复 —— SSH 入口只在主页显示）
+
+- **用户报障**：「右上角这个 SSH 按钮应该只在主页显示，而不是每个界面都有」。
+- **根因（两维判据缺了一维）**：hero 态常驻入口注册在官方 `shell.overlay`，而它是 **root 级浮层、每一屏都会渲染**；D1.1 的判据却只有「会话是否空白（hero）」这一维，**在设置页 / 轨迹页等非会话界面上同样成立**（那些界面下当前会话依旧是空白、或摘要未就绪 ⇒ 判据保守返回 true）⇒ 入口跟着浮层出现在**每一屏的右上角**。会话头胶囊那条入口（`conversation.session.header.actions`）不受影响 —— 它本来就只在会话面板渲染。
+- **修（`client.js`）**：补第二维判据「**在不在主页**」——
+  - `CONVERSATION_PANEL_SELECTOR = '[data-slot="main.conversation"]'`：官方隔离契约里该锚点**只在会话面板激活时存在**（其它主面板激活时它不存在）。取中栏仍首选 `[data-slot="main"]`，本处只判「激活与否」；
+  - `useOnConversationHome()`：面板切换由官方 React 增删 DOM 完成、**没有可读信号**（`ctx.uiWorkspace` 只给导航动作，不给「当前 main 是谁」），故用 `MutationObserver` 观察 body 子树，**rAF 节流**合并流式输出期的高频变动，只在布尔值真正翻转时 `setState`；
+  - `LauncherButton` 判据改为 `if (!hero || !onHome) return null`（hook 无条件调用，守 React 规则）。**hero 那一维仍走官方 `useSessions`** —— 这不是把「有没有会话」改回 DOM 探测。
+- **测试**：`test/client.test.js` 25 → **27 例**——
+  - `D1.1c` 非主页不渲染：`capture({ home: false })` 模拟设置页，无会话 / 空白会话两种输入**都不得渲染**；随后补上锚点**恢复渲染**，证明判据读的是锚点而不是被写死成「一律不显示」；
+  - `D1.1d` 锚点与官方契约一致 + 靠 `MutationObserver` 跟随切换。
+  - **夹具修复（桩缺陷，非产品）**：DOM 桩的选择器解析器在整段上匹配 `.`，把 `[data-slot="main.conversation"]` 属性值里的 `.conversation` 误当成类选择器 ⇒ 改为**先剥属性段再取类名 / id**。真实 DOM 无此问题，影响面仅测试文件。
+- **回归**：`node --test test/*.test.js` **115/115**；`node scripts/verify-all.mjs ssh` **12/12 PASS**。
+- **生效方式**：`@miasaki/dsh-ssh` 以 junction 链入 web profile，`client.js` 改动即时落到 profile；**浏览器刷新页面**即加载新 bundle（若被缓存则硬刷新，或重启 `dsh web`）。
+- **实机验收待办**：① 主页（首屏）入口仍在；② 设置页 / 轨迹页 / 用量浮层等界面**不再出现**右上角 SSH；③ 会话内胶囊入口不受影响。
+
 ## 2026-09-16（第十三批：U2 实机验收 —— 4 处回归定位并修复）
 
 - **U2 实机验收：自动化全绿，实机在「首次连接」即被挡住。共发现 4 处真实缺陷（2 阻断 / 1 高危 / 1 中危），全部已定位并修复（含 3 条新增回归断言）；单测 110 → 113 例、`verify-all ssh` 12/12。**完整报告：[U2 实机验收报告](2026-09-16-ssh-u2-acceptance-report.md)；通道同 D2/D3/D4（真 Edge × 真实 DSH GUI × 真实鼠标/键盘 × 本地假 sshd 真协议），驱动与结果归档 `_refs/scripts-archive/ssh-u2-accept/`。

@@ -15,6 +15,17 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const react = require('react')
 
+    // ---- 首帧防闪（B2 附带）--------------------------------------------------
+    // 会话头与本线 launcher 是**两棵不同的 fiber**（前者在 `conversation` 面板里，后者在
+    // root 的 `shell.overlay` 里）。React 的 render 阶段不改 DOM ⇒ 首次渲染时 launcher
+    // 读到的 DOM **还没有**胶囊（commit 之后才有），判据必然先返回 true。若订阅放在
+    // `useEffect`（paint **之后**）里，刷新时停在会话窗口就会**先画出一帧多余的 SSH**。
+    // `useLayoutEffect` 在 commit 后、paint 前执行，其 setState 的补偿渲染也在同一帧内
+    // 完成 ⇒ 那一帧不会被画出来。单测的 react 桩没有 useLayoutEffect，退回 useEffect。
+    const usePaintEffect = typeof react.useLayoutEffect === 'function'
+      ? react.useLayoutEffect
+      : react.useEffect
+
     // ---- 会话头部窄宽度自适应（2026-09-10）----------------------------------
     // 与 canvas 线同款判据（阈值、滞回、观察对象都一致），但**各自实现、不共享代码**
     // —— 六线零耦合。官方会话头里 titleCluster 可被压到 0，而 headerActions 是
@@ -402,46 +413,104 @@ window.__ModuleLoader__.load({
           }, compact ? terminalGlyph() : VIEW_LABEL))
       }
 
+      // ---- 「在不在主页」判据（2026-09-25 修）---------------------------------
+      // 用户报「右上角 SSH 按钮应该只在主页显示，而不是每个界面都有」。
+      // 根因：`shell.overlay` 是 **root 级浮层，每一屏都会渲染**，而 launcher 的判据只看
+      // 「会话是否空白（hero）」—— 在设置页 / 轨迹页等**非会话界面**上，当前会话同样可能是
+      // 空白或摘要未就绪，判据成立 ⇒ 那颗按钮就跟着浮层出现在每一屏的右上角。
+      // 官方没有「当前 main 是哪一个」的读取接口（`ctx.uiWorkspace` 只给导航动作），
+      // 故叠一层面板锚点：`[data-slot="main.conversation"]` **只在会话面板激活时存在**
+      // （隔离契约：其它主面板激活时它不存在；定位首选 `[data-slot="main"]`，判激活用它）。
+      // 注意：这**不是**把「有没有会话」改回 DOM 探测 —— hero 判据仍走官方 `useSessions`，
+      // 这里只补「在不在主页」这一维。
+      const CONVERSATION_PANEL_SELECTOR = '[data-slot="main.conversation"]'
+      const onConversationHome = () => {
+        try {
+          return document.querySelector(CONVERSATION_PANEL_SELECTOR) !== null
+        } catch {
+          return false // 极少数读不到 DOM 的宿主：宁可不显示，也不要每屏都冒出来
+        }
+      }
+
+      // ---- 「本线胶囊在不在场」判据（2026-09-25 B2 修）-------------------------
+      // 用户报「会话窗口右上角不应该有 SSH 按钮 —— 重复了，胶囊有 SSH 按钮入口」。
+      // 根因：旧判据把「会话头会不会渲染」**推断**成了「会话是不是 blank session」，
+      // 而官方真正决定会话头 chrome（含 actions 槽）渲不渲染的是：
+      //   blank = session === void 0 || conversation === void 0
+      //           || (session.blank && conversationPhase(session, conversation) === 'blank')
+      //   sessionId === void 0 ? <空 titleRow/> : renderSlot('conversation.session.header', { hideChrome: blank })
+      // （`dsh-client-ui-conversation/lib/client.js`）。两个 blank **语义不同**：
+      // `SessionSummary.blank` 仍为真、但 conversationPhase 已经不是 blank 时，官方
+      // `hideChrome = false` ⇒ **会话头带 chrome 渲染、胶囊出现**，而旧判据照样返回
+      // 「hero」⇒ launcher 与胶囊同时在场（就是用户看到的重复）。
+      // 现在只认事实：**本线的胶囊在不在 DOM 里**。它探测的不是官方内部结构，而是本线
+      // 自己的产物 —— 同类手法本线早已在用（`syncChrome()` 用 `.dsh-canvas-switch` 的
+      // 存在性算 canvasAvailable），因此不受官方 blank / conversationPhase 语义漂移影响。
+      // 降级方向也是对的：万一胶囊真不在场（注册失败 / 会话头没渲染），launcher 顶上兜底。
+      const OWN_ENTRY_SELECTOR = '.dsh-ssh-switch'
+      const ownEntryPresent = () => {
+        try {
+          return document.querySelector(OWN_ENTRY_SELECTOR) !== null
+        } catch {
+          return false // 读不到 DOM ⇒ 当作「不在场」，交给「在不在主页」那一维兜底
+        }
+      }
+
+      /** launcher 的唯一显隐判据：在主页 **且** 本线胶囊不在场。 */
+      const launcherShouldRender = () => onConversationHome() && !ownEntryPresent()
+
+      /**
+       * 订阅 launcher 的显隐判据。面板切换、会话头挂载 / 卸载都由官方 React 增删 DOM 完成，
+       * 没有可读信号，因此用 MutationObserver 观察；rAF 节流合并流式输出期间的高频 DOM 变动
+       * （只在布尔值真正翻转时才 setState，避免无谓重渲染）。
+       *
+       * 订阅用 `usePaintEffect`（= useLayoutEffect，见文件头）：首次 `sync()` 必须跑在
+       * paint 之前，否则刷新时会先闪一帧多余的 SSH。
+       */
+      function useLauncherVisible() {
+        const [visible, setVisible] = react.useState(launcherShouldRender)
+        usePaintEffect(() => {
+          let scheduled = false
+          const sync = () => {
+            const next = launcherShouldRender()
+            setVisible(prev => (prev === next ? prev : next))
+          }
+          const raf = typeof requestAnimationFrame === 'function'
+            ? requestAnimationFrame
+            : fn => (typeof setTimeout === 'function' ? setTimeout(fn, 16) : fn())
+          const schedule = () => {
+            if (scheduled) return
+            scheduled = true
+            raf(() => { scheduled = false; sync() })
+          }
+          sync()
+          const observer = new MutationObserver(schedule)
+          observer.observe(document.body, { childList: true, subtree: true })
+          return () => observer.disconnect()
+        }, [])
+        return visible
+      }
+
       /**
        * D1.1 无会话头时的常驻入口（方案 §14）：注册到 `shell.overlay`（frame 级浮层）。
        *
-       * 判据 —— 为什么「没有当前会话」等于「没有入口」：DSH 在 sessionId 为 undefined 时
-       * **根本不渲染会话头**（`ConversationRoot`：`sessionId === void 0 ? null :
-       * renderSlot('conversation.session.header', …)`），而本线的胶囊入口正注册在那个槽里
-       * ⇒ hero 态（首屏）没有 SSH 入口。这里顶上。
+       * 存在意义：会话头的入口胶囊注册在 `conversation.session.header.actions` 槽里，而官方
+       * `ConversationHeader` 在 `sessionId === void 0` 时**只渲染一个空的 titleRow 占位**
+       * （`sessionId === void 0 ? <div className={titleRow}/> :
+       * renderSlot('conversation.session.header', …)`）⇒ hero 态（首屏）没有胶囊，这里顶上。
        *
-       * **有会话就 `return null`** —— 结构性杜绝双入口（验收用
+       * **判据（2026-09-25 B2 重写）**：`在主页` **且** `本线胶囊不在场`
+       * （见上方 `launcherShouldRender()`）。旧判据靠推演官方 `useSessions` 的 blank 字段，
+       * 它与「会话头会不会渲染」**不等价** ⇒ 会话窗口里 launcher 与胶囊同时在场
+       * （用户报「重复了，胶囊有 SSH 按钮入口」）。
+       * 现在只认 DOM 事实，**结构性杜绝双入口**（验收用
        * `document.querySelectorAll('.dsh-ssh-launcher').length === 0` 锁死）。
-       * 判据走 `useSessions` 这个官方 standard prop（`shell.overlay` 契约里已声明），
-       * **不要改成 DOM 探测**。
+       *
+       * 不再消费任何官方 prop ⇒ **不必再拆两层**判「有没有 useSessions」（React 规则里
+       * 「hook 不能条件调用」的前提消失了）；hook 在这里无条件调用。
        */
-      function SshLauncher(props) {
-        const useSessions = props.useSessions
-        // React 规则：hook 不能条件调用 ⇒ 该 prop 缺失时整体不渲染（安全降级，
-        // 不是回退到 DOM 探测）。官方将来若调整 standard props，最坏是少一个入口。
-        if (typeof useSessions !== 'function') return null
-        return react.createElement(LauncherButton, { useSessions })
-      }
-
-      /** 读会话状态的那半边：hook 在这里**无条件**调用。 */
-      function LauncherButton(props) {
-        // ⚠ 判据不能只看 `state.current`（D1.1 首版就是这么写错的：实机首屏上入口不出现）：
-        // 进入首屏时工作区**已经建好一个 blank session**，`current` 是有值的，但会话头
-        // 照样不渲染 —— `ConversationRoot` 看的是 `main.conversation` 绑定的 sessionId，
-        // 那里是 undefined。两者语义不同：这里要问的是「会话头会不会出现」，
-        // 所以**空白会话也必须算 hero**。官方字段 `SessionSummary.blank`
-        // （`client-ui-workspace/lib/types/client/tree.d.ts`："The provisional blank session"）。
-        // 判据不确定时一律返回 true（显示）：**没有入口比短暂双入口更糟**。
-        const hero = props.useSessions(state => {
-          if (state === null || state === undefined) return true
-          const current = state.current
-          if (current === undefined) return true
-          const byId = state.byId
-          const summary = byId === null || byId === undefined ? undefined : byId[current]
-          if (summary === undefined) return true // 摘要未就绪：保守显示
-          return summary.blank === true
-        })
-        if (!hero) return null
+      function SshLauncher() {
+        if (!useLauncherVisible()) return null
         // 视觉与入口胶囊同款（同令牌 / 同圆角 / 同 28px），只显示文字 —— 与胶囊非紧凑态一致。
         return react.createElement('div', { className: 'dsh-ssh-launcher' },
           react.createElement('button', {

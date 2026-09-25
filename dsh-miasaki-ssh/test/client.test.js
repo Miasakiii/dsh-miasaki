@@ -28,7 +28,7 @@ function dispatchOverlayMessage(win, token, data, sourceWin) {
  * The document stub supports the overlay host path: innerHTML builds a small
  * queryable tree (section > loading + iframe), so overlay contracts are assertable.
  */
-function capture() {
+function capture(options = {}) {
   let descriptor = null
   const styles = []
   const makeNode = tag => {
@@ -104,10 +104,14 @@ function capture() {
     // 桩不支持后代组合器：取选择器**最后一段**做匹配（对测试断言足够；
     // 复合选择器的祖先约束由真实 DOM 里的 client.js 行为覆盖）。
     const lastSeg = sel.trim().split(/\s+/).pop() ?? sel
-    const cls = lastSeg.match(/\.([\w-]+)/g)?.map(s => s.slice(1)) ?? []
-    const id = lastSeg.match(/#([\w-]+)/)?.[1] ?? null
+    // 先剥掉属性段再取类名 / id：`[data-slot="main.conversation"]` 的属性值里带点号，
+    // 若在整段上匹配 `.` 会把 `main.conversation` 里的 `.conversation` 误当成类选择器
+    // （2026-09-25：launcher 的「在不在主页」判据用的正是这个选择器，踩到过）。
+    const withoutAttr = lastSeg.replace(/\[[^\]]*\]/g, '')
+    const cls = withoutAttr.match(/\.([\w-]+)/g)?.map(s => s.slice(1)) ?? []
+    const id = withoutAttr.match(/#([\w-]+)/)?.[1] ?? null
     const attr = lastSeg.match(/\[([\w-]+)="([^"]*)"\]/) // 支持 [attr="value"]
-    const tag = lastSeg.replace(/\[[^\]]*\]/g, '').replace(/[#.][\w-]+/g, '').trim().toLowerCase()
+    const tag = withoutAttr.replace(/[#.][\w-]+/g, '').trim().toLowerCase()
     if (tag !== '' && node.tagName !== tag.toUpperCase()) return false
     if (id !== null && node.id !== id) return false
     if (attr !== null && node.attributes.get(attr[1]) !== attr[2]) return false
@@ -141,6 +145,14 @@ function capture() {
   document.children.push(document.head, document.body)
   document.head.parent = document
   document.body.parent = document
+  // 会话面板锚点：`[data-slot="main.conversation"]` 只在会话面板激活时存在，
+  // launcher 的「在不在主页」判据读它。默认挂上（= 停在主页，既有用例的前提不变）；
+  // 传 `capture({ home: false })` 模拟设置页 / 轨迹页等其它主面板激活的界面。
+  if (options.home !== false) {
+    const panel = makeNode('div')
+    panel.setAttribute('data-slot', 'main.conversation')
+    document.body.append(panel)
+  }
   const rawHeadAppend = document.head.append.bind(document.head)
   document.head.append = node => { styles.push(node); rawHeadAppend(node) }
   const window = {
@@ -464,8 +476,9 @@ test('D2 顶栏消息闭环：ssh:close → 关闭 + 记忆归 0 + 焦点归还�
 
   // 错 token 必须被拒（防伪）：先用 launcher 真实重开浮层，再发错 token 的 close，不得关闭。
   const launcher = ctx.registered.find(row => row.name === 'shell.overlay')
-  const launcherNode = launcher.view({ useSessions: selector => selector({ current: undefined }) })
-  launcherNode.type(launcherNode.props).children[0].props.onClick()
+  // 2026-09-25 B2：launcher 合并为单层组件，view 直接调用即求值（判据只认 DOM 事实）。
+  const launcherNode = launcher.view({})
+  launcherNode.children[0].props.onClick()
   assert.ok(!overlay.className.includes('is-closed'), '前置：launcher 重开浮层')
   for (const l of window.__msgListeners) l({ origin: 'http://dsh.local', source: fakeFrameWin, data: { source: 'dsh-ssh', overlayToken: 'wrong-token', type: 'ssh:close' } })
   assert.ok(!overlay.className.includes('is-closed'), '错 token 的 ssh:close 必须被拒（防伪）')
@@ -503,8 +516,8 @@ test('D2 顶栏消息：ssh:view canvas → 关自己 + 委托点击 canvas 胶�
   assert.equal(mapClicked, true, '必须委托点击 canvas 的「会话布」段（激活态同步）')
   // 非法 view 值不得动作：先用 launcher 真实重开，再发非法 view，浮层不得被关、也不得跳转。
   const launcher18 = ctx.registered.find(row => row.name === 'shell.overlay')
-  const launcherNode18 = launcher18.view({ useSessions: selector => selector({ current: undefined }) })
-  launcherNode18.type(launcherNode18.props).children[0].props.onClick()
+  const launcherNode18 = launcher18.view({})
+  launcherNode18.children[0].props.onClick()
   assert.ok(!overlay.className.includes('is-closed'), '前置：launcher 重开浮层')
   for (const l of window.__msgListeners) {
     l({ origin: 'http://dsh.local', source: fakeFrameWin, data: { source: 'dsh-ssh', overlayToken: token, type: 'ssh:view', view: 'nope' } })
@@ -514,9 +527,11 @@ test('D2 顶栏消息：ssh:view canvas → 关自己 + 委托点击 canvas 胶�
 })
 
 // ---- D1.1 无会话头时的常驻入口（shell.overlay，方案 §14）-------------------
-// 判据那条是核心：DSH 在没有当前会话时**根本不渲染会话头**，而胶囊入口注册在那个槽里
-// ⇒ hero 态（首屏）没有 SSH 入口。launcher 顶上；**有会话时必须消失**，否则就是
-// 「同一个 SSH 两个入口」。
+// 判据是核心：会话头的胶囊入口注册在 `conversation.session.header.actions` 槽里，而官方在
+// **没有当前会话**（`sessionId === void 0`）时只渲染一个空的 titleRow 占位 ⇒ hero 态
+// （首屏）没有 SSH 入口，launcher 顶上。
+// **反向同样硬**：只要本线的胶囊在 DOM 里，launcher 就必须消失 —— 否则就是
+// 「同一个 SSH 两个入口」（2026-09-25 用户报「重复了，胶囊有 SSH 按钮入口」，见 B2 修复）。
 test('D1.1 入口注册到 shell.overlay：自有 id、order 40、不替换既有条目', () => {
   const { descriptor } = capture()
   const ctx = fakeCtx()
@@ -528,45 +543,96 @@ test('D1.1 入口注册到 shell.overlay：自有 id、order 40、不替换既�
   assert.equal(launcher.meta.order, 40, 'order 40：排在 usage-stats-overlay 之后')
 })
 
-test('D1.1 判据：有会话不渲染、无会话才渲染（结构性杜绝双入口）', () => {
-  const { descriptor } = capture()
+test('D1.1 判据：本线胶囊在场即不渲染（只有 hero 态才顶上，结构性杜绝双入口）', () => {
+  const { descriptor, document } = capture()
   const ctx = fakeCtx()
   descriptor.factory(requireStub).apply(ctx)
   const launcher = ctx.registered.find(row => row.name === 'shell.overlay').view
 
-  // 组件是两层的：外层只判「有没有 useSessions 这个 hook」（React 规则：hook 不能条件调用），
-  // 内层才读会话状态。所以断言必须落到内层的返回值上。
-  const render = props => {
-    const outer = launcher(props)
-    return outer === null ? null : outer.type(outer.props)
-  }
+  // 2026-09-25 B2：launcher 合并为**单层**组件（不再消费任何官方 prop），view 直接调用即求值
+  // ——`react.createElement` 桩返回 `{ type, props, children }`。
+  const render = () => launcher({})
 
-  // 有当前会话且**非空白** ⇒ 会话头会渲染 ⇒ 胶囊入口已在 ⇒ 内层必须返回 null
-  assert.equal(
-    render({ useSessions: selector => selector({ current: 'sess-1', byId: { 'sess-1': { blank: false } } }) }),
-    null,
-    '有会话（非空白）时不得渲染（否则胶囊 + launcher 双入口）',
-  )
-
-  // 无当前会话 ⇒ hero ⇒ 顶上
-  assert.notEqual(render({ useSessions: selector => selector({ current: undefined }) }), null,
-    '无会话时必须渲染入口')
-
-  // **空白会话也是 hero** —— 首屏正是这个状态：`current` 有值，但会话头不渲染。
-  // D1.1 首版只判 `current === undefined`，于是在真实首屏上什么都不显示（实机验证发现）。
-  const node = render({ useSessions: selector => selector({ current: 'blank-1', byId: { 'blank-1': { blank: true } } }) })
-  assert.notEqual(node, null, '空白会话（首屏）必须渲染入口 —— 这正是 D1.1 要补的缺口')
+  // ① 主页 + 胶囊不在场 ⇒ 渲染（hero 态 / 首屏正是这个状态）
+  const node = render()
+  assert.notEqual(node, null, 'hero 态（没有胶囊）必须渲染入口')
   assert.equal(node.props.className, 'dsh-ssh-launcher')
   const button = node.children[0]
   assert.equal(button.props['aria-label'], 'SSH')
 
-  // 摘要未就绪 / 状态缺失 ⇒ 保守显示（没有入口比短暂双入口更糟）
-  assert.notEqual(render({ useSessions: selector => selector({ current: 'x', byId: {} }) }), null,
-    '摘要未就绪时保守显示')
-  assert.notEqual(render({ useSessions: selector => selector(null) }), null, '状态缺失时保守显示')
+  // ② 胶囊在场 ⇒ 必须消失（**不论会话 store 是什么状态**）
+  const capsule = document.createElement('div')
+  capsule.className = 'dsh-ssh-switch'
+  document.body.append(capsule)
+  assert.equal(render(), null, '本线胶囊在场时 launcher 不得渲染（这就是「重复」的源头）')
 
-  // standard prop 缺失 ⇒ 外层直接返回 null（安全降级，且不得回退成 DOM 探测）
-  assert.equal(launcher({}), null, '缺 useSessions 时不渲染')
+  // ③ 胶囊退场（会话头卸载 / 回到 hero）⇒ 恢复 —— 可逆，不是被写死成「一律不显示」
+  capsule.remove()
+  assert.notEqual(render(), null, '胶囊退场后 launcher 必须恢复（可逆）')
+})
+
+// 2026-09-25 B2 回归锁定：旧判据**推演**官方 `useSessions` 的 blank 字段，而官方决定会话头
+// chrome（含 actions 槽）渲不渲染的是
+// `blank = session === void 0 || conversation === void 0 || (session.blank && conversationPhase(...) === 'blank')`
+// —— 两者**不等价**：summary 还是 provisional blank、但会话已经开始时，官方 `hideChrome = false`
+// ⇒ 会话头带 chrome 渲染（胶囊在场），旧判据却照样返回 hero ⇒ 右上角多出一颗 SSH。
+// 这条把那个组合钉死：**与会话 store 状态无关，只看胶囊在不在**。
+test('D1.1e 回归：官方 blank 与会话头渲染条件不一致时，也不得双入口', () => {
+  const { descriptor, document } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const launcher = ctx.registered.find(row => row.name === 'shell.overlay').view
+
+  // 复刻事故现场：胶囊已经在 DOM 里 ⇒ 无论会话 store 报什么，launcher 都必须不在场。
+  const capsule = document.createElement('div')
+  capsule.className = 'dsh-ssh-switch'
+  document.body.append(capsule)
+  assert.equal(launcher({}), null, '胶囊在场 ⇒ launcher 必须为 null（判据与会话 store 状态无关）')
+})
+
+test('D1.1f 判据只认 DOM 事实：不得退回「推演官方 blank 字段」', async () => {
+  assert.match(source, /const OWN_ENTRY_SELECTOR = '\.dsh-ssh-switch'/,
+    '互斥判据必须锚定本线自己的入口选择器')
+  assert.match(source, /onConversationHome\(\) && !ownEntryPresent\(\)/,
+    'launcher 判据 = 在主页 **且** 胶囊不在场')
+  assert.doesNotMatch(source, /useOnConversationHome|LauncherButton/,
+    '旧 hook 与两层组件必须已删除（留着就可能被改回推演判据）')
+  // 首帧防闪：会话头与 launcher 是两棵 fiber，首次 render 时判据必然先为 true ⇒
+  // 首次 sync 必须跑在 paint 之前（useLayoutEffect），否则刷新时先画一帧多余的 SSH。
+  assert.match(source, /usePaintEffect\(\(\) => \{/, 'hook 必须用 usePaintEffect（paint 前）订阅')
+  assert.match(source, /typeof react\.useLayoutEffect === 'function'[\s\S]{0,80}: react\.useEffect/,
+    'usePaintEffect = useLayoutEffect 优先，桩环境退回 useEffect')
+})
+
+// 2026-09-25 修：用户报「右上角 SSH 按钮应该只在主页显示，而不是每个界面都有」。
+// `shell.overlay` 是 root 级浮层、**每一屏都渲染**，而当时那条判据在设置页 / 轨迹页
+// 等非会话界面同样成立 ⇒ 入口跟着浮层出现在每一屏的右上角。这里锁死「在不在主页」那一维
+// （B2 之后它是两维判据里的一维，另一维是「本线胶囊不在场」）。
+test('D1.1c 非主页不渲染：设置页 / 轨迹页等界面不得出现 SSH 入口', () => {
+  const { descriptor, document } = capture({ home: false }) // 无面板锚点 = 其它主面板激活
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const launcher = ctx.registered.find(row => row.name === 'shell.overlay').view
+  const render = () => launcher({})
+
+  assert.equal(render(), null, '非主页（无面板锚点）⇒ 不渲染，这正是用户报的「每个界面都有」')
+
+  // 反向：锚点补上后立即恢复渲染 —— 证明判据读的确实是「会话面板激活」，
+  // 而不是被写死成「一律不显示」。
+  const panel = document.createElement('div')
+  panel.setAttribute('data-slot', 'main.conversation')
+  document.body.append(panel)
+  assert.notEqual(render(), null, '回到主页（面板锚点出现）⇒ 入口恢复')
+})
+
+test('D1.1d 面板锚点与官方隔离契约一致，且靠 MutationObserver 跟随切换', async () => {
+  const text = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  assert.match(text, /\[data-slot="main\.conversation"\]/,
+    '必须锚定官方 [data-slot="main.conversation"]（其它主面板激活时它不存在）')
+  assert.match(text, /const observer = new MutationObserver\(schedule\)/,
+    '面板切换 / 会话头挂载没有官方读取接口，须由 MutationObserver 跟随')
+  assert.match(text, /document\.body, \{ childList: true, subtree: true \}/,
+    '观察 body 子树（面板与会话头都是官方 React 增删节点）')
 })
 
 test('D1.1 点击走与胶囊同一条路径：打开浮层 + 写记忆', () => {
@@ -578,8 +644,7 @@ test('D1.1 点击走与胶囊同一条路径：打开浮层 + 写记忆', () => 
   const overlay = document.querySelector('.dsh-ssh-overlay')
   assert.ok(overlay.className.includes('is-closed'), '前置：初始关闭态')
 
-  const element = launcher({ useSessions: selector => selector({ current: undefined }) })
-  const node = element.type(element.props)
+  const node = launcher({})
   node.children[0].props.onClick()
 
   assert.ok(!overlay.className.includes('is-closed'), '点击 launcher 必须打开浮层（与胶囊同一路径）')
@@ -617,8 +682,8 @@ test('每次打开浮层都重发 chrome 消息（canvasAvailable 随打开时�
   descriptor.factory(requireStub).apply(ctx)
   const before = (window.__chromeMessages ?? []).length
   const launcher = ctx.registered.find(row => row.name === 'shell.overlay').view
-  const element = launcher({ useSessions: selector => selector({ current: undefined }) })
-  element.type(element.props).children[0].props.onClick()
+  const node = launcher({})
+  node.children[0].props.onClick()
   const after = (window.__chromeMessages ?? []).length
   assert.ok(after > before, 'openOverlay 必须重发 chrome 消息，否则顶栏段数不随形态刷新')
   assert.ok(!document.querySelector('.dsh-ssh-overlay').className.includes('is-closed'))

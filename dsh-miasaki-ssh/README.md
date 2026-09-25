@@ -96,7 +96,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 
 | 维度 | 决策 |
 |---|---|
-| 入口 | ① 会话头第一行的三段胶囊：注册官方 `conversation.session.header.actions` 槽（id `ssh-view-switch`，order 26），与 canvas 的「对话 / 会话布」**合成为同一个控件**（纯 CSS 覆盖，canvas 文件未改）；② **画布页面内部**那组「对话 / 会话布」旁的一个 SSH 按钮：走 canvas 提供的通用「外部视图槽」（页面级注册表 `window.__DSH_CANVAS_VIEW_ITEMS__` + `canvas:view` 广播，canvas 侧不认识 SSH）。页面本身由 `conversation.view`（id `ssh`，order 20）托管，该 tab 收起不再显示（2026-09-10 调整，见[设计文档 §5.5](design/2026-09-09-ssh-design.md)） |
+| 入口 | ① 会话头第一行的三段胶囊：注册官方 `conversation.session.header.actions` 槽（id `ssh-view-switch`，order 26），与 canvas 的「对话 / 会话布」**合成为同一个控件**（纯 CSS 覆盖，canvas 文件未改）；② **画布页面内部**那组「对话 / 会话布」旁的一个 SSH 按钮：走 canvas 提供的通用「外部视图槽」（页面级注册表 `window.__DSH_CANVAS_VIEW_ITEMS__` + `canvas:view` 广播，canvas 侧不认识 SSH）。页面本身由 `conversation.view`（id `ssh`，order 20）托管，该 tab 收起不再显示（2026-09-10 调整，见[设计文档 §5.5](design/2026-09-09-ssh-design.md)）；③ **主页右上角**的常驻入口：注册官方 `shell.overlay`（id `ssh-launcher`，order 40），补「hero 态没有会话头 ⇒ 没有胶囊入口」的缺口。**③ 是两维判据**——「当前停在主页（`[data-slot="main.conversation"]` 锚点存在）」**且**「**本线胶囊不在场**（`.dsh-ssh-switch` 不在 DOM 里）」：第一维是必需的（`shell.overlay` 是 root 级浮层、**每一屏都会渲染**，只判「会话空白」会让入口出现在设置页 / 轨迹页，2026-09-25 B1 修）；第二维把 launcher 与会话头胶囊做成**结构性互斥**（2026-09-25 B2 修 —— 旧判据推演官方 `useSessions` 的 `blank` 字段，与「会话头会不会渲染」**不等价**，会话窗口里会出现「胶囊 + 右上角」两个 SSH，详见 [CHANGELOG](design/CHANGELOG.md)） |
 | 页面 | `/ssh/` iframe 内嵌在视图组件中（样式隔离；client bundle 无法 `require` 第三方包） |
 | SSH 实现 | **方案 A**：host 侧 `ssh2` + `ws`，前端 `@xterm/xterm` + `addon-fit` |
 | 终端桥 | `ctx.webServer.registerUpgrade('/ssh/ws')` —— DSH 官方 WebSocket 注册 API |
