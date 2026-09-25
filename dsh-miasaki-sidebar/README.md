@@ -1,28 +1,30 @@
 # @miasaki/dsh-sidebar
 
-DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献审查、终端两类实在工具（辅助对话待 M2）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码已删除，不再留死代码）。
+DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献「审查」一个右栏 tab 类型（辅助对话待 M2）；内嵌终端自 **2026-09-25（v0.10.0-miasaki.0）起收敛为底部面板单形态**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建右栏终端，决策记录见 [design/CHANGELOG.md](design/CHANGELOG.md) 当日条。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码已删除，不再留死代码）。
 
 - 路线 D（2026-09-06 拍板）：不安装 `dsh-better-sidebar` 基座，完全自研；与 canvas 线同构技术栈，零代码耦合；
 - 产品理念参考：Codex `/side` 侧边对话、GitHub Copilot 右栏范式、CHI'25 常显侧面板研究（详见设计文档 §2 调研来源）；
 - 红线沿用 canvas：不改系统提示/模型请求/工具 schema；DSH 原生会话是唯一事实来源；插件不直接调模型。
-- **当前待办（2026-09-19）：内嵌终端「标签栏多开」已实施（v0.9.0-miasaki.0），待重启 `dsh web` 实机验证** ——
-  参考 Windows Terminal 标签栏，把单 pty 会话改为多会话标签（帧协议 v2 + 每容器独立活动标签 + 最小尺寸仲裁 +
-  会话上限 8 + 刷新后孤儿会话接管）；见 [补充设计](design/2026-09-19-terminal-multi-tab-plan.md) 与
-  [可视原型](design/2026-09-19-terminal-tabs-mockup.html)。
-- **上一轮待办：P0/P1 + P2 内嵌终端已落地（2026-09-12，待重启 `dsh web` 实机验证）** —— 审查 tab 数据一致性
-  修复 + diff 阅读器重做（v0.7.0）；**内嵌终端两形态**（v0.8.0：底部面板 + 右栏 tab 共享同一 pty 会话，
+- **当前待办（2026-09-25）：右栏终端退役（v0.10.0-miasaki.0），待重启 `dsh web` 实机验证** ——
+  右栏 tab 类型只保留「审查」（终端类型 `@miasaki/dsh-sidebar/terminal` / kind `miasaki-terminal` 注销）；
+  内嵌终端（多标签、Ctrl+`、标题栏按钮）全部收敛底部面板，host 半（TerminalHub / WS / 路由）**零改动**。
+  另有两笔历史待验项随本次重启一并复验：v0.8.1 两形态实机反馈修复（已并入底部面板）、v0.9.0 多标签行为。
+- **上一轮待办：停止遮蔽官方终端（2026-09-25，v0.9.0-miasaki.0 之后的同日决策）** —— 见
+  [design/CHANGELOG.md](design/CHANGELOG.md)；该决策已被本次「直接退役右栏终端」取代（官方终端即右栏终端的归宿）。
+- **更早待办：P0/P1 + P2 内嵌终端已落地（2026-09-12，待重启 `dsh web` 实机验证）** —— 审查 tab 数据一致性
+  修复 + diff 阅读器重做（v0.7.0）；内嵌终端两形态（v0.8.0：底部面板 + 右栏 tab 共享同一 pty 会话，
   node-pty 路线 B 已过 T2 spike）；点名交互重排待实机确认。
   见 [优化规划](design/2026-09-12-rightbar-optimization-plan.md) §6 拍板记录 与
-  [界面示意](design/2026-09-12-rightbar-mockup.html)。
+   [界面示意](design/2026-09-12-rightbar-mockup.html)。
 
 ## 状态
 
-**当前形态：官方右栏的两个 tab 类型**（2026-09-11 第二阶段清理完成）
+**当前形态：官方右栏的「审查」一个 tab 类型 + 底部面板内嵌终端**（2026-09-25 右栏终端退役后）
 
 | 维度 | 事实 |
 |---|---|
-| 接入方式 | `ctx.sidebarRightTabs.register`（类型声明 + `guide` 入口胶囊 + **显式 `priority: 'extension'`**）+ `ctx.slots.register({ name: 'sidebar.right.pane.tab', key })`（正文）。<br>`priority` 与官方默认值相同（2026-09-21 起显式写出）：我们的终端 kind 与官方内置终端**同为 `terminal`**、官方声明 `builtin`，而 registry 的规则是「extension 压过 builtin，且一个 kind 最多容纳这两条」——写显式值让这条依赖可见，也防官方改默认值或第三方撞 kind 时无声异常 |
-| 打开入口 | 官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊（审查 / 终端） |
+| 接入方式 | `ctx.sidebarRightTabs.register`（类型声明 + `guide` 入口胶囊 + **显式 `priority: 'extension'`**）+ `ctx.slots.register({ name: 'sidebar.right.pane.tab', key })`（正文）。<br>2026-09-25 起只注册「审查」一个类型（kind `review`，与官方改动审阅的 `changes-review` 不撞）：终端类型 `@miasaki/dsh-sidebar/terminal`（kind `miasaki-terminal`）已注销——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建，右栏终端形态（含 `＋` 右键「在右栏显示此终端」/ 状态条「在底部打开 ↧」/ 标签栏最右 × 等右栏专属交互）全部删除；内嵌终端收敛为底部面板单形态（Ctrl+` / 标题栏按钮），host 半（TerminalHub / WS / 路由）零改动。`priority: 'extension'` 仍显式写出（2026-09-21 起）—— 保留显式声明的可读性 |
+| 打开入口 | 官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊（审查） |
 | 状态归属 | 面板开合 / 宽度 / 分栏 / 全屏 / 标签栏**全部由官方框架负责**，本线不介入 |
 | 自研持久化 | 只剩一处：审查视图（`miasaki-sidebar:review-view`，全局单值）。官方不持久化 tab 状态，且 `tabActions` 只有 openResource / openTab / close，**没有**「更新当前 tab 参数」通道，故视图选择自管 |
 | 窗口可见性 | 官方 `tab.visible` 与本插件记录的窗口可见性**相与**，隐藏时跳过 60s TTL 轮询 |
@@ -43,6 +45,13 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
   壳常量与壳样式），退役 `test/drawer-gesture.test.js`（9 项）与 `test/client-tabs.test.js` 的持久化部分（7 项），
   并把审查视图从「壳的 tabs 数组」迁到自管存储 —— 这**修复了一个迁移遗留缺陷**：
   修复前 `setTabView` 写的是壳的 tabs 数组，而该数组在官方右栏下恒为空，**视图下拉点了没有反应**。
+- **2026-09-25 右栏终端退役（v0.10.0-miasaki.0）**：官方右栏已内置终端（0.1.7-rc 线具备多标签 /
+  Shell 选择 / 刷新恢复），用户拍板「沿用官方策略，本项目不再做右侧边栏终端」。注销终端 tab 类型
+  （`@miasaki/dsh-sidebar/terminal`，kind `miasaki-terminal`），删除 `TerminalTab` 组件、右栏专属样式
+  （`.dsh-sidebar-term*`）、跨容器移位菜单（`showInRight` / 「在底部打开 ↧」）与右栏 `×`；内嵌终端
+  （多标签 / Ctrl+` / 标题栏按钮）全部收敛底部面板，**host 半零改动**（TerminalHub / WS / 路由与容器无关）。
+  当日先行的「停止遮蔽官方终端」（kind 改独占命名空间）随之被本决策取代。决策记录见
+  [design/CHANGELOG.md](design/CHANGELOG.md) 2026-09-25 条。
 
 ### 历史（M1，2026-09-09，v0.5.1-miasaki.1）
 
@@ -64,11 +73,11 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 | 组件 | 定位 | 里程碑 | 状态 |
 |---|---|---|---|
 | 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff（v0.7.0 重做：双行号 / hunk 头 / 换行默认开 / 上下文档位 / 变更跳转 / 分段渲染；详情基线随视图，主点击展开、点名移行首） | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 复验通过）；2026-09-10 迁移为官方右栏 tab 类型；**v0.7.0 P0/P1 重做待实机验证**（2026-09-12） |
-| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08）；v0.8.0 起收进终端 tab 折叠区，**2026-09-19 起收进 `＋` 右键菜单**（折叠区随「下半部分」一并移除，能力不变） |
-| 内嵌终端（两形态） | **底部面板 + 右栏 tab 共享同一 pty 会话**（node-pty 路线 B + WS + xterm；保活 + 重连回放 + restart 语义；标题栏终端按钮 + Ctrl+`） | M3 / v0.8.0 | **已实机验证**（2026-09-12 拍板两形态并存，见优化规划 §6；T2 spike 通过：预编译命中 + resize 生效） |
-| 内嵌终端多标签（多会话） | **标签栏多开**：会话集合（上限 8）+ 每容器独立活动标签 + 最小尺寸仲裁 + 帧协议 v2；实例身份每 mount 唯一（右栏**分栏 / 浮窗**可同时开多个终端标签页，同类实例共享会话集合与活动项）；`＋`/`×`/中键/双击重命名/右键菜单/`▾` 溢出 + `Ctrl+Shift+`` / `Ctrl+PageUp·Down` / `Alt+1..8`；右栏 `×` 走官方 `tabActions.close()`，跨容器移位走 `ctx.sidebarRight.openTab`；**终端是一整块**（标签栏 + xterm，无下半部分），状态条只在报错/退出/工作区变更时出现；`＋` 右键选 shell / 开系统终端 | M3.1 / v0.9.0 | **已实施，待实机验证**（2026-09-19；见[补充设计](design/2026-09-19-terminal-multi-tab-plan.md)与[可视原型](design/2026-09-19-terminal-tabs-mockup.html)；单测 54 → 62 项全绿，前端 DOM 桩冒烟 52 断言全过） |
+| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08）；v0.8.0 起收进终端 tab 折叠区，**2026-09-19 起收进底部面板 `＋` 右键菜单**（原右栏终端 tab 的折叠区随「下半部分」一并移除，能力不变；2026-09-25 右栏终端退役后入口即在底部面板） |
+| 内嵌终端（底部面板单形态） | **底部横贯面板**（node-pty 路线 B + WS + xterm；保活 + 重连回放 + restart 语义；标题栏终端按钮 + Ctrl+`）；多标签多会话（上限 8）。右栏 tab 形态（v0.8.0–v0.9.0）已于 **2026-09-25 退役**：官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建右栏终端（决策见 [design/CHANGELOG.md](design/CHANGELOG.md) 当日条） | M3 / v0.8.0 → 收敛于 v0.10.0 | **已实机验证**（2026-09-12 拍板两形态并存，见优化规划 §6；T2 spike 通过：预编译命中 + resize 生效）；**单形态收敛待重启后实机确认**（2026-09-25） |
+| 内嵌终端多标签（多会话） | **标签栏多开**：会话集合（上限 8）+ 活动标签记忆 + 最小尺寸仲裁 + 帧协议 v2；`＋`/`×`/中键/双击重命名/右键菜单/`▾` 溢出 + `Ctrl+Shift+`` / `Ctrl+PageUp·Down` / `Alt+1..8`；标签栏最右 `×` = 收起底部面板；**终端是一整块**（标签栏 + xterm，无下半部分），状态条只在报错/退出/工作区变更时出现；`＋` 右键选 shell / 开系统终端 | M3.1 / v0.9.0 | **已实施，待实机验证**（2026-09-19；见[补充设计](design/2026-09-19-terminal-multi-tab-plan.md)与[可视原型](design/2026-09-19-terminal-tabs-mockup.html)——两文中「右栏 tab 容器」的表述以 2026-09-25 退役为准；单测 57 通过 / 5 环境跳过，前端 DOM 桩冒烟 52 断言全过） |
 | 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成（待实现后再注册官方 tab 类型） |
-| 标题栏启动器组 | ~~底部内嵌终端面板（xterm + node-pty + WS 回放）~~ → **已按 2026-09-12 拍板落地为「内嵌终端两形态」**（见上）；外部程序跳转按钮（explorer / VS Code 菜单）仍为未实现残留 | M3（已部分落地） | 终端部分 = **v0.8.0 已实现**；外部跳转按钮未实现（前提已随壳退役重建，待另立项） |
+| 标题栏启动器组 | ~~底部内嵌终端面板（xterm + node-pty + WS 回放）~~ → **已按 2026-09-12 拍板落地为「内嵌终端底部面板」**（见上；2026-09-25 起为唯一形态）；外部程序跳转按钮（explorer / VS Code 菜单）仍为未实现残留 | M3（已部分落地） | 终端部分 = **v0.8.0 已实现**；外部跳转按钮未实现（前提已随壳退役重建，待另立项） |
 | ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉 / 桌面壳让位~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线） |
 
 ## 目录结构
@@ -82,9 +91,9 @@ dsh-miasaki-sidebar/
 ├── index.js                # host 半：/sidebar/api 路由族（review + terminal + health）
 │                           #   + /sidebar/ws/terminal（内嵌终端 WS，一次性 token + 三道围栏）
 │                           #   + /sidebar/asset/terminal/*（xterm UMD 静态 serve）
-├── client.js               # client 半：官方右栏 tab 类型注册（审查 / 终端）+ 两个 tab 的正文实现
-│                           #   + 内嵌终端（TerminalView / 底部面板 / 标题栏按钮 / Ctrl+`）
-│                           #   壳层已于 2026-09-11 全部删除，不再留死代码
+├── client.js               # client 半：官方右栏 tab 类型注册（2026-09-25 起只注册「审查」）
+│                           #   + 审查 tab 正文 + 内嵌终端（底部面板 / 标题栏按钮 / Ctrl+`，多标签）
+│                           #   壳层已于 2026-09-11 全部删除；右栏终端（TerminalTab 等）2026-09-25 删除，不再留死代码
 ├── test/
 │   ├── review-data.test.js      # diff 解析器（含 hunk header）/ 文档同步检测 / checklists 持久化单测（5 项）
 │   ├── review-view.test.js      # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（10 项）
@@ -142,10 +151,11 @@ dsh-miasaki-sidebar/
 
 ## 内嵌终端（v0.8.0）与 WS 安全边界
 
-终端 tab 主体与底部面板（Ctrl+` / 桌面壳标题栏按钮）是**同一个 pty 会话**的两个 viewer：
+内嵌终端的形态是**底部横贯面板**（Ctrl+` / 桌面壳标题栏按钮；2026-09-25 右栏 tab 形态退役，见上）：
 node-pty@1.2.0-beta.15（路线 B，T2 实测预编译命中 + resize 生效）→ WS 帧协议
 （attach/input/resize → ready/replay/output/status/error）→ xterm 5 UMD 懒加载（host 路由 serve）。
-单实例纪律沿用旧 §4.3：pty 只在 [重启] / 换 shell / 移动工作区时重启；viewer 全部消失**不杀会话**；
+host 侧保持容器无关（一会话可绑多个 viewer、定向广播），但产品入口只有底部面板一个。
+多标签纪律沿用 v0.9.0：pty 只在 [重启] / 换 shell / 移动工作区时重启；viewer 全部消失**不杀会话**；
 重连凭 1MB 回放环补齐。spawn 纪律在启动器四条之上再加一条（T2 教训）：**conpty 拒绝裸名，
 spawn 前必须 `where` 解析绝对路径**（`resolvePtyBin`，仍是查 PATH 不执行）。
 
@@ -184,7 +194,7 @@ node ..\scripts\verify-all.mjs sidebar
 改完 `index.js` / `client.js` 后**必须重启 `dsh web`**——本线以 `link:` 装入 profile，源码即时落盘，
 但 host 半与 client bundle 都在启动时载入内存，刷新/强刷页面均无效。`GET /sidebar/api/health` 的
 `version` 字段是判断 host 是否已加载新 bundle 的可靠信号——它现在**直接读 `package.json`**（不再手抄，
-2026-09-10 修正），当前应为 `0.9.0-miasaki.0`。
+2026-09-10 修正），当前应为 `0.10.0-miasaki.0`。
 
 ## 规划来源
 

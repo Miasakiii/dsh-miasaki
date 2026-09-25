@@ -6,7 +6,8 @@ window.__ModuleLoader__.load({
 
     // 自研右栏壳已于 2026-09-10 退役、2026-09-11 完成**第二阶段清理**：推挤 /
     // 抽屉手势 / 自研 tab 栏 / 空态选择页 / 桌面壳让位全部删除，只保留内容层
-    // （审查 UI、终端启动器、popover）与官方右栏 tab 类型注册。
+    // （审查 UI、内嵌终端底部面板、终端启动器、popover）与官方右栏 tab 类型注册
+    // （自 2026-09-25 起只剩「审查」一个类型，右栏终端退役见 design/CHANGELOG.md）。
     // 见 design/2026-09-10-migrate-to-official-rightbar.md §3。
 
     // Popover 层级：低于 canvas 的全屏浮层（z-index 100）—— 画布盖住右栏是预期行为。
@@ -71,17 +72,15 @@ window.__ModuleLoader__.load({
       },
     }
 
-    // --- 内嵌终端控制器（2026-09-19 多标签：会话集合 + 每容器活动标签）------
+    // --- 内嵌终端控制器（2026-09-19 多标签：会话集合 + 活动标签）----------
     // host 的 TerminalHub.sessions 是唯一事实源；这里是它的前端镜像。
     // 每个「viewer」= 一个 xterm 实例 + 一条 WS，**绑定一个 sessionId**：输出 /
     // 输入 / 尺寸都按 sessionId 隔离（host 定向广播），多标签不串台。
-    // 两个容器（底部面板 / 右栏 tab）共享会话集合，各自记住自己的活动标签——
-    // 同一 sessionId 在两个容器同时显示，即 2026-09-12 §6 的「同一个终端移位」。
+    // 当前唯一容器是**底部面板**（Ctrl+` / 标题栏按钮）：右栏终端 tab 已于
+    // 2026-09-25 退役——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），
+    // 本项目沿用官方策略不再自建，决策记录见 design/CHANGELOG.md 当日条。
     const TERMINAL_LIMIT = 8
-    // 官方右栏服务句柄：ctx 只有 apply(ctx) 才拿得到，而下面的 terminalTabs 定义在
-    // apply 之前，故用模块级占位、apply 时赋值（软依赖：宿主没这个服务就是 null）。
-    let sidebarRightService = null
-    // 每容器记住自己的活动标签（sessionStorage：刷新保留、关标签页即忘，
+    // 活动标签按容器记忆（sessionStorage：刷新保留、关标签页即忘，
     // 与 ssh 线 U2.3 工作区快照同档）。
     const TERMINAL_ACTIVE_KEY = 'miasaki-sidebar:terminal-active'
     // 标签标题是**前端记忆**（host 不管标题）：按 sessionId 存，避免同名
@@ -93,8 +92,10 @@ window.__ModuleLoader__.load({
         const raw = sessionStorage.getItem(TERMINAL_ACTIVE_KEY)
         const parsed = raw === null ? {} : JSON.parse(raw)
         const pick = value => (typeof value === 'string' && value !== '' ? value : null)
-        return { bottom: pick(parsed.bottom), right: pick(parsed.right) }
-      } catch { return { bottom: null, right: null } }
+        // 右栏终端 2026-09-25 退役后只剩底部面板一个容器；旧记录里的 `right`
+        // 字段直接忽略（一次性影响，无害）。
+        return { bottom: pick(parsed.bottom) }
+      } catch { return { bottom: null } }
     }
     const readStoredTitles = () => {
       try {
@@ -117,7 +118,7 @@ window.__ModuleLoader__.load({
     const terminalClient = {
       sessions: new Map(), // sid → { id, shell, bin, pid, cwd, title, live, exited, exitCode, error, pending? }
       order: [], // sid，标签顺序（新建追加）
-      active: readStoredActive(), // { bottom, right } 每容器独立
+      active: readStoredActive(), // { bottom }：底部面板的活动标签（右栏终端已退役）
       lastError: '', // 全局错误（token 签发失败 / 协议不匹配）
       wantedShell: null, // **新建标签的默认 shell**（懒探测一次）
       shellProbed: false,
@@ -128,25 +129,10 @@ window.__ModuleLoader__.load({
       assetsPromise: null,
       viewers: new Map(), // sid → Set<viewer>
 
-      // useSyncExternalStore 的 getSnapshot 必须返回**缓存引用**：每次构造新
-      // 对象会让 React 18 判定快照永不稳定 → 无限重渲染 → 抛错卸载整个 tab
-      // 子树（2026-09-12 实机「终端空白」的根因——审查 tab 的 store 都返回
-      // 稳定值所以无恙）。快照只在 emit() 时重建一次。
-      _snapshot: { tabs: [], active: { bottom: null, right: null }, limit: TERMINAL_LIMIT, lastError: '' },
-      get snapshot() { return terminalClient._snapshot },
       subscribe(listener) { terminalClient.listeners.add(listener); return () => terminalClient.listeners.delete(listener) },
       emit() {
-        terminalClient._snapshot = {
-          tabs: terminalClient.order
-            .map(sid => terminalClient.sessions.get(sid))
-            .filter(session => session !== undefined)
-            .map(session => ({ ...session })),
-          active: { ...terminalClient.active },
-          limit: terminalClient.limit,
-          lastError: terminalClient.lastError,
-        }
         for (const listener of terminalClient.listeners) listener()
-        // 命令式标签栏不经过 React：在这里统一重绘（重命名进行中除外）。
+        // 标签栏是命令式 DOM（不经 React）：在这里统一重绘（重命名进行中除外）。
         renderAllTabs()
       },
 
@@ -367,9 +353,7 @@ window.__ModuleLoader__.load({
           terminalClient.viewers.delete(tmpId)
           terminalClient.viewers.set(sessionId, set)
         }
-        for (const key of ['bottom', 'right']) {
-          if (terminalClient.active[key] === tmpId) terminalClient.active[key] = sessionId
-        }
+        if (terminalClient.active.bottom === tmpId) terminalClient.active.bottom = sessionId
         for (const inst of terminalTabs.instances.values()) {
           const pane = inst.panes.get(tmpId)
           if (pane !== undefined) {
@@ -437,10 +421,7 @@ window.__ModuleLoader__.load({
         }
         terminalClient.sessions.delete(sessionId)
         terminalClient.order = terminalClient.order.filter(sid => sid !== sessionId)
-        for (const key of ['bottom', 'right']) {
-          if (terminalClient.active[key] !== sessionId) continue
-          terminalClient.active[key] = terminalClient.order[0] ?? null
-        }
+        if (terminalClient.active.bottom === sessionId) terminalClient.active.bottom = terminalClient.order[0] ?? null
         terminalClient.persistActive()
         terminalClient.emit()
         for (const inst of terminalTabs.instances.values()) renderPanes(inst)
@@ -628,26 +609,23 @@ window.__ModuleLoader__.load({
       },
     }
 
-    // --- 标签栏 + pane 栈（底部面板与右栏 tab 共用的命令式 DOM）----------
+    // --- 标签栏 + pane 栈（命令式 DOM，容器无关）--------------------------
     // 一个容器 = 一个实例：tabHost 挂标签栏、paneHost 挂 xterm pane 栈。
-    // 会话集合共享（terminalClient.sessions），活动标签各记各的（§4.2）：
-    // 同一 sessionId 被两个容器同时打开，就是「同一个终端的两个 viewer」。
+    // 会话集合共享（terminalClient.sessions），活动标签按容器记（active[key]）。
+    // 右栏终端 2026-09-25 退役后实际只有一个容器（底部面板）；框架保持容器无关，
+    // 多实例能力（实例 id 唯一、按 id 卸载）保留，供将来新增 surface 直接复用。
     const terminalTabs = {
-      instances: new Map(), // id → inst。id 唯一：同一 kind 可挂多个实例（如右栏分栏/浮窗）
+      instances: new Map(), // id → inst。id 唯一：同一 kind 也可挂多个实例
       seq: 0,
 
       /**
-       * 挂载一个容器；返回卸载函数。**实例 id 唯一**（`kind#N`），不再按 kind 键控 ——
-       * 否则右栏里开出第二个终端标签页时，第二次 mount 会把第一个实例顶掉
-       * （`unmount` 清空它的标签栏并销毁它的 xterm/WS，那个标签页直接白掉）。
-       * 活动标签仍按 kind 记（`active.bottom` / `active.right`），同类实例共享同一活动项。
+       * 挂载一个容器；返回卸载函数。**实例 id 唯一**（`kind#N`），unmount 按 id
+       * 精确拆卸，不会波及同类其他实例。活动标签按 kind 记（`active[key]`）。
        */
       mount(kind, tabHost, paneHost, options = {}) {
         const id = `${kind}#${++terminalTabs.seq}`
         const inst = {
           id, key: kind, tabHost, paneHost, panes: new Map(), emptyEl: null, fittedSid: null,
-          // 右栏形态的「关闭整个 tab」由官方 tabActions 完成（原型 §2 的 ×）。
-          onCloseContainer: options.onCloseContainer ?? null,
         }
         terminalTabs.instances.set(id, inst)
         const key = kind
@@ -696,7 +674,7 @@ window.__ModuleLoader__.load({
         terminalTabs.instances.delete(id)
       },
 
-      /** 某个 kind 的主实例（底部面板 / 右栏第一个 tab；分栏出来的实例走自己的 DOM）。 */
+      /** 某个 kind 的主实例（当前即底部面板；将来新增 surface 时各自取首个）。 */
       primaryOf(kind) {
         for (const inst of terminalTabs.instances.values()) if (inst.key === kind) return inst
         return null
@@ -759,11 +737,9 @@ window.__ModuleLoader__.load({
       addBtn.addEventListener('contextmenu', event => { event.preventDefault(); openNewTabMenu(event.currentTarget, inst) })
       bar.append(addBtn)
       bar.append(iconButton('▾', '全部标签', event => { event.stopPropagation(); openTabListMenu(event.currentTarget, inst) }))
-      // 右栏形态：整个 tab 归官方右栏管，× 经 tabActions 关掉它（原型 §2 最右那个 ×）；
-      // 底部形态：× = 收起面板。
-      if (inst.onCloseContainer !== null) {
-        bar.append(iconButton('×', '关闭右栏终端 tab', inst.onCloseContainer))
-      } else if (inst.key === 'bottom') {
+      // 最右 × = 收起底部面板（Ctrl+`）。右栏形态的 ×（经官方 tabActions 关 tab）
+      // 随 2026-09-25 右栏终端退役一并删除。
+      if (inst.key === 'bottom') {
         bar.append(iconButton('×', '收起底部终端面板（Ctrl+`）', () => bottomPanel.close()))
       }
       host.append(bar)
@@ -1045,38 +1021,7 @@ window.__ModuleLoader__.load({
         { label: '关闭此标签', act: () => terminalClient.closeTab(sid) },
         { label: '关闭其他标签', act: () => closeOthers(inst, sid) },
         { label: '关闭全部标签', act: () => { if (confirmCloseAll()) terminalClient.closeAllTabs() } },
-        { sep: true },
-        // 跨容器移位：会话集合共享，换容器只是换一个 viewer（原型 §7.1）。
-        inst.key === 'right'
-          ? { label: '在底部面板显示此终端', act: () => showInBottom(sid) }
-          : { label: '在右栏显示此终端', act: () => showInRight(sid) },
       ])
-    }
-
-    /** 同一个 pty 交给底部面板显示（第二个 viewer）。 */
-    function showInBottom(sid) {
-      bottomPanel.show()
-      const inst = terminalTabs.primaryOf('bottom')
-      if (inst !== null) activate(inst, sid)
-    }
-
-    /** 同一个 pty 交给右栏 tab 显示：经官方 sidebarRight.openTab 打开 / 聚焦。 */
-    function showInRight(sid) {
-      const service = sidebarRightService
-      if (service === null || typeof service.openTab !== 'function') {
-        terminalToast('当前宿主版本不支持从底部面板打开右栏终端，请用官方「添加控件」')
-        return
-      }
-      // 先记住活动项：右栏 tab 首次打开时 mount() 会读它，天然落在该会话上。
-      terminalClient.active.right = sid
-      terminalClient.persistActive()
-      try { service.openTab('terminal') } catch {
-        terminalToast('打开右栏终端失败：请用官方「添加控件」')
-        return
-      }
-      // 已经开着就直接切活动项；首次打开则等 React effect 挂载后由 mount 承接。
-      const inst = terminalTabs.primaryOf('right')
-      if (inst !== null) activate(inst, sid)
     }
 
     /**
@@ -1145,9 +1090,9 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 活动标签的状态行：底部面板命令式渲染与右栏 React 渲染共用同一取数。
-     * `visible` 只在**有话说**时为真（报错 / 已退出 / 工作区变更）——正常情况下
-     * 终端是「标签栏 + 内容」的一整块，不额外分出一条状态栏（用户 2026-09-19 反馈）。
+     * 活动标签的状态行：底部面板命令式渲染的取数口（`visible` 只在**有话说**时
+     * 为真：报错 / 已退出 / 工作区变更）——正常情况下终端是「标签栏 + 内容」
+     * 的一整块，不额外分出一条状态栏（用户 2026-09-19 反馈）。
      * 常规信息（shell / pid / 会话数）进 tooltip 与标签栏标题，不占常驻行。
      */
     function terminalStatus(key) {
@@ -1380,7 +1325,6 @@ window.__ModuleLoader__.load({
         const items = [
           { label: '底部终端面板', act: () => bottomPanel.show() },
           { label: '新建终端标签（Ctrl+Shift+`）', act: () => { bottomPanel.show(); const inst = terminalTabs.primaryOf('bottom'); if (inst !== null) addTab(inst) } },
-          { label: '右栏终端（新 tab）', disabled: true, note: '经官方「添加控件」打开' },
         ]
         if (cwd !== null && cwd !== undefined) {
           items.push({ sep: true })
@@ -1457,10 +1401,6 @@ window.__ModuleLoader__.load({
       // instance's DOM/listeners are still alive (canvas lesson).
       if (window.__DSH_SIDEBAR_BOOTED__) return
       window.__DSH_SIDEBAR_BOOTED__ = true
-
-      // 官方右栏服务（软依赖，不进 inject）：只给「在右栏显示此终端」用，宿主没有
-      // 这个服务时保持 null，由 showInRight 降级为提示（不阻塞其余功能）。
-      sidebarRightService = typeof ctx.get === 'function' ? ctx.get('sidebarRight') ?? null : null
 
       const closeNativeDetails = () => {
         // One-way concession: opening the sidebar folds the native details
@@ -1566,17 +1506,6 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-dmore:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-diffnote{padding:8px;font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
         `.dsh-sidebar-emptyhint{padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary,#9ca3af);font:var(--dsw-font-xxs-12,12px/18px system-ui)}`,
-        // --- 终端 tab（2026-09-19 多标签；三次调整：**整块化**）
-        // 用户反馈「侧边栏终端应该是一整块，不需要分下半部分」：外壳承担唯一的一圈边框
-        // 与圆角，标签栏 / xterm / 状态条不再各自成盒（gap:0、无各自边框与圆角）。
-        // 状态条只在「有话说」（报错 / 已退出 / 工作区变更）时出现，正常情况下终端就是
-        // 标签栏 + 内容的一整块（对齐 Windows Terminal 的观感）。
-        `.dsh-sidebar-term{flex:1;min-height:0;display:flex;flex-direction:column;gap:0;overflow:hidden;border:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));border-radius:8px;background:var(--dsw-alias-bg-layer-1,#fff)}`,
-        `.dsh-sidebar-term-tabbar{flex:none;min-width:0}`,
-        `.dsh-sidebar-term-panes{flex:1;min-height:200px;position:relative;overflow:hidden;background:var(--dsw-alias-bg-layer-1,#fff)}`,
-        `.dsh-sidebar-term-statusbar{display:flex;align-items:center;gap:8px;padding:4px 8px;border-top:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));background:var(--dsw-alias-bg-layer-2,#f4f5f7);font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af);flex:none}`,
-        `.dsh-sidebar-term-link{border:0;background:transparent;padding:2px 6px;border-radius:6px;color:var(--dsw-alias-label-secondary,#6b7280);cursor:pointer;font:var(--dsw-font-xxxs-strong-11,500 11px/14px system-ui)}`,
-        `.dsh-sidebar-term-link:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
       ].join('')
       document.head.append(style)
 
@@ -1597,7 +1526,7 @@ window.__ModuleLoader__.load({
         `#miasaki-bottomterm .miasaki-bottomterm-btn:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         // 推挤消费规则（能力检测命中时由 JS 注入生效，失败则保持浮层）。
         `#root>[data-slot="root"]>div{padding-bottom:var(--miasaki-terminal-height,0px)}`,
-        // --- 标签栏 + pane 栈（底部面板与右栏 tab 共用同一套类名）---
+        // --- 标签栏 + pane 栈（命令式 DOM 的类名）---
         // 视觉对齐参考图：左标题 + 活动标签胶囊（含 ×）+ 右侧 ＋/×，
         // 全部走 --dsw-* 令牌（三主题无硬编码第二套色）。
         `.miasaki-term-tabs{display:flex;align-items:center;gap:6px;height:32px;padding:0 6px 0 10px;background:var(--dsw-alias-bg-layer-2,#f4f5f7);border-bottom:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:none;min-width:0}`,
@@ -2176,71 +2105,12 @@ window.__ModuleLoader__.load({
           }, `还有 ${(totalLines - renderedLines).toLocaleString()} 行——显示更多`))
       }
 
-      // 官方右栏正文（2026-09-19 多标签；同日二次调整：**去掉下半部分配置区**）：
-      // 标签栏与 pane 栈都是**命令式 DOM**，与底部面板共用 terminalTabs 的同一套实现。
-      // 视图只剩三块：标签栏 / xterm pane 栈 / 细状态条 —— 工作目录、默认 shell、
-      // 外部系统终端入口收进 `＋` 的右键菜单（用户反馈下半部分用不上）。
-      function TerminalTab(props) {
-        void props
-        // cwd 变化要重渲染（状态条的「会话工作区已变更」提示）；值本身由 terminalStatus 读。
-        react.useSyncExternalStore(store.subscribe, () => store.get().reviewCwd)
-        const snap = react.useSyncExternalStore(terminalClient.subscribe, () => terminalClient.snapshot)
-        const tabsRef = react.useRef(null)
-        const panesRef = react.useRef(null)
-        // 官方右栏经 slot 的 inject face 注入 useTabInfo（与 ReviewTab 同款）：
-        // 标签栏最右的 × 靠 tab.actions.close() 关掉整个右栏 tab。
-        const tabInfoRef = react.useRef(null)
-        tabInfoRef.current = typeof props.useTabInfo === 'function' ? props.useTabInfo() : null
-
-        react.useEffect(() => {
-          const tabs = tabsRef.current
-          const panes = panesRef.current
-          if (tabs === null || panes === null) return undefined
-          return terminalTabs.mount('right', tabs, panes, {
-            onCloseContainer: () => {
-              const info = tabInfoRef.current
-              if (info === null || typeof info.actions?.close !== 'function') {
-                terminalToast('请用官方右栏标签栏关闭此 tab')
-                return
-              }
-              try { info.actions.close() } catch { terminalToast('关闭右栏 tab 失败') }
-            },
-          })
-        }, [])
-
-        const status = terminalStatus('right')
-
-        return react.createElement('div', { className: 'dsh-sidebar-term' },
-          react.createElement('div', { className: 'dsh-sidebar-term-tabbar', ref: tabsRef }),
-          react.createElement('div', { className: 'dsh-sidebar-term-panes', ref: panesRef }),
-          // 状态条只在「有话说」时出现（报错 / 已退出 / 工作区变更）：正常时终端
-          // 就是标签栏 + 内容的一整块（2026-09-19 三次调整）。
-          status.visible
-            ? react.createElement('div', { className: 'dsh-sidebar-term-statusbar' },
-              react.createElement('span', null, status.text),
-              status.actions.map((action, index) => react.createElement('button', {
-                key: `${action.label}-${index}`,
-                type: 'button',
-                className: 'dsh-sidebar-term-link',
-                onClick: action.act,
-              }, action.label)),
-              react.createElement('button', {
-                type: 'button',
-                className: 'dsh-sidebar-term-link',
-                style: { marginLeft: 'auto' },
-                title: '在底部面板显示同一个终端（会话共用，Ctrl+`）',
-                onClick: () => {
-                  const sid = snap.active.right
-                  bottomPanel.show()
-                  const inst = terminalTabs.primaryOf('bottom')
-                  if (inst !== null && sid !== null) activate(inst, sid)
-                },
-              }, '在底部打开 ↧'))
-            : null)
-      }
-
       // --- 官方右栏 tab 类型注册（自研壳 2026-09-10 退役）-------------------
-      // 审查与终端改为官方右栏的 tab 类型；辅助对话待 M2 实现后再注册类型。
+      // 只注册审查一个 tab 类型。终端曾是第二个类型，2026-09-25 退役：
+      // 官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方
+      // 策略不再自建右栏终端，内嵌终端收敛为底部面板单形态（Ctrl+` / 标题栏
+      // 按钮）；决策记录见 design/CHANGELOG.md 2026-09-25 条。
+      // 辅助对话待 M2 实现后再注册类型。
       // 打开入口：官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊。
       const RIGHT_BAR_TABS = [
         {
@@ -2251,14 +2121,6 @@ window.__ModuleLoader__.load({
           order: 10,
           Body: ReviewTab,
         },
-        {
-          id: '@miasaki/dsh-sidebar/terminal',
-          kind: 'terminal',
-          title: '终端',
-          description: '把系统终端打开到当前会话的工作目录',
-          order: 20,
-          Body: TerminalTab,
-        },
       ]
       ctx.effect(() => {
         const disposers = []
@@ -2267,11 +2129,7 @@ window.__ModuleLoader__.load({
           // guide 条目的 title / description 必须是**函数**（见 rightBarGuideEntry）。
           //
           // priority 显式写 'extension'（2026-09-21）：与官方默认值相同，写出来是**为了让它可见**。
-          // 我们的终端 kind 与官方内置终端（@deepseek-ai/dsh-client-ui-sidebar-terminal）**同为
-          // 'terminal'**，官方声明 'builtin'；registry 的裁决是「extension 压过 builtin，且一个 kind
-          // 最多容纳这两条」——所以我们恰好遮蔽官方终端（引导页不会出现两个入口），换成任一默认值
-          // 变化或第三方也注册 'terminal' 的 extension，就会当场抛错。见
-          // dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md §5。
+          // 说明：审查 tab 的 kind 是 'review'，官方的改动审阅用 'changes-review'，二者不撞。
           disposers.push(ctx.sidebarRightTabs.register({
             id: tab.id,
             kind: tab.kind,
@@ -2302,11 +2160,7 @@ window.__ModuleLoader__.load({
       // 同样生效（stopPropagation 让 xterm 的 textarea 收不到这些组合键）。
       // 注：Windows Terminal 默认的 Ctrl+Shift+T/W 是**浏览器保留键**，页面拿不到，
       // 故不采用（设计 §7.3 的可拦截性矩阵）。
-      const terminalPaneKey = () => {
-        if (terminalTabs.hasKind('bottom')) return 'bottom'
-        if (terminalTabs.hasKind('right')) return 'right'
-        return null
-      }
+      const terminalPaneKey = () => (terminalTabs.hasKind('bottom') ? 'bottom' : null)
       const stepTab = (key, delta) => {
         const inst = terminalTabs.primaryOf(key)
         if (inst === null || terminalClient.order.length === 0) return

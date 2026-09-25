@@ -2,6 +2,69 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-25
+
+- **v0.10.0-miasaki.0：右栏终端退役——沿用官方策略，右栏只留「审查」一个 tab 类型（用户拍板）** ——
+  触发点是 0.1.7-rc 线官方右栏**已内置终端**（`multiple: true` 多标签 + Shell 选择 + 刷新后恢复，见
+  [`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §5）。
+  同日先行决策「停止遮蔽官方终端」（kind 改独占 `miasaki-terminal`、与官方并存）让官方终端重新可见后，
+  用户进一步拍板：**右栏终端直接用官方的，本项目不再做右侧边栏终端**；内嵌终端价值收敛到底部面板
+  （Ctrl+` / 标题栏按钮唤起，跟随会话 cwd、多标签多会话），与官方右栏终端形成互补而非重复。
+  - **client 半改了什么**：① `RIGHT_BAR_TABS` 只留审查——终端类型 `@miasaki/dsh-sidebar/terminal`
+    （kind `miasaki-terminal`）注销，注册处注释改为「只注册审查 + 退役记录」；② 删除 `TerminalTab`
+    组件（右栏正文的 React 半）；其 `useSyncExternalStore` 订阅是 `terminalClient.snapshot` 的**唯一**
+    消费者，快照机制（`_snapshot` / `get snapshot()` / emit 里的重建）随之删除——`emit()` 仍驱动命令式
+    `renderAllTabs()`；③ 右栏专属交互全删：标签栏最右 `×`（原走官方 `tabActions.close()`）、状态条
+    「在底部打开 ↧」、右键菜单的跨容器移位（`showInRight` / `showInBottom`）、标题栏菜单里的
+    「右栏终端（新 tab）」占位项；④ 样式删除 `.dsh-sidebar-term*` 11 条（右栏外壳专属），底部面板在用的
+    `.miasaki-term-*` 共享类名保留；⑤ `sidebarRightService` 软依赖句柄删除（`apply` 不再 `ctx.get('sidebarRight')`）；
+    ⑥ 活动标签 `active: { bottom, right }` → `{ bottom }`，`readStoredActive` 只读 bottom 键
+    （sessionStorage 里的旧 `right` 字段被忽略，一次性影响，无害）；`adoptPending` / `removeTab` 的
+    `['bottom','right']` 遍历改为单键；⑦ `terminalTabs` 框架保留容器无关（mount / 实例 id 唯一 /
+    `primaryOf` / `hasKind`），仅去掉右栏专属的 `onCloseContainer` 选项，快捷键 `terminalPaneKey()`
+    收敛为 bottom 单检。
+  - **host 半零改动**（已逐条核对）：`TerminalHub` 会话集合 / 帧协议 v2 / WS 三道围栏 + 一次性 token /
+    `/sidebar/api/terminal/*` 路由与**容器无关**——底部面板单形态照常工作；`node-pty` / `ws` / `@xterm`
+    依赖不动，宿主多 viewer 能力保留（定向广播 + 最小尺寸仲裁），只是产品入口不再有第二个容器。
+  - **触摸点**：`client.js`、`package.json`（0.10.0-miasaki.0 + description 订正）、`README.md`
+    （导语 / 待办 / 状态表 / 组件蓝图 / 时间线 / 内嵌终端段 / 版本信号）、本文件、
+    `design/2026-09-19-terminal-multi-tab-plan.md`（补退役注记）、
+    [`../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md)
+    §4 W3（补「已被取代」注记）、根 `README.md` 与 `AGENTS.md` 的 sidebar 线描述。
+  - **回归**：`node --check index.js` / `client.js` 均通过；单测 **57 pass / 5 skip / 0 fail**（62 项总数不变，
+    skip 的 5 项是**既有**的 `canCaptureGit()` 环境跳过——受限沙箱无法捕获 git 子进程输出，与本改动无关）。
+  - **待实机（需重启 `dsh web`）**：① 引导页只剩「审查」一个入口胶囊；② 底部面板终端全能力不变
+    （多标签 / Ctrl+` / 标题栏按钮 / `＋` 右键菜单 / 刷新恢复）；③ 历史 `localStorage` 里的旧终端 tab 记录
+    （官方 persistence 的 `kind: 'terminal'` 或 `'miasaki-terminal'`）恢复时会落到**官方终端**上——
+    属一次性影响，关掉重开即可。**不做**存储迁移：那是宿主内部格式，且我们**无法区分**官方与自己的
+    `terminal` 记录，盲改会把官方的记录也改成我们的，更糟。
+
+- **停止遮蔽官方终端：终端 tab 的 `kind` 由 `'terminal'` 改为 `'miasaki-terminal'`（用户拍板）** ——
+  接续 09-21 那条「未做（押后）」的决策。触发点是官方仓库 09-25 复查
+  （[`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §5）：
+  rc 线的官方终端已具备 **`multiple: true`（多标签）+ Shell 选择 + 刷新后恢复** ——
+  遮蔽它 = 主动放弃官方这些能力；且**脆性照旧**（第三方再注册一个 `terminal` 的 extension 会当场抛错、插件加载失败）。
+  - **改了什么**：① `RIGHT_BAR_TABS` 里终端类型的 `kind` → `'miasaki-terminal'`（独占命名空间）；
+    ② `showInRight()` 的 `openTab('terminal')` **同步改**为 `openTab('miasaki-terminal')` ——
+    这一处**漏改会打开官方终端（另起一个 pty）**，直接破坏「同一 pty 两个 viewer」的核心设计；
+    ③ 注册处注释重写为两次决策的完整记录；
+    ④ 标题改「**内嵌终端**」、描述订正为「与底部面板共享同一 pty 会话，跟随当前会话的工作目录」
+    （原描述写的「把系统终端打开到当前会话的工作目录」指的是**终端启动器**，那是终端 tab 内 `＋` 右键菜单里的能力之一，不是本 tab 的定位）。
+  - **没有改的**：正文派发 `sidebar.right.pane.tab` 的 key 仍是**类型 id**（与 kind 无关）；
+    `priority: 'extension'` 保留 —— 它不再有「压过官方」的含义，但显式声明本身仍有价值。
+  - **一次性影响（已确认，非推测）**：右栏持久化的 tab 记录形如 `{ id, kind, contentId, title }`，
+    **`kind` 会被写进 `localStorage`**（官方 `ui-sidebar-right/src/client/persistence.ts:20`，
+    命名空间 `dsh.sidebar-right.v1.<sessionId>`）。改名后**旧的终端 tab 恢复时会落到官方终端上** ——
+    关掉重开即可。**不做**存储迁移：那是宿主内部格式，且我们**无法区分**官方与自己的 `terminal` 记录，盲改会更糟。
+  - 触摸点：`client.js`（kind / openTab / 注释）、`README.md`（「接入方式」行）、本文件。
+  - 回归：`node --check index.js` / `client.js` 均通过；单测 **62 项（57 pass / 5 skip / 0 fail）** ——
+    其中 skip 的 5 项是**既有**的 `canCaptureGit()` 环境跳过（受限沙箱无法捕获 git 子进程输出），与本改动无关。
+  - **待实机（需重启 `dsh web`）**：① 引导页出现**两个**终端入口，我们的显示为「内嵌终端」；
+    ② 底部面板「在右栏打开 ↧」显示的是**同一个 pty**（不是新会话）；③ 官方终端独立可用（多标签 / Shell 选择 / 刷新恢复）。
+  - 规划依据：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §4（W3）。
+  - **同日后续（历史注记）**：本条「并存」形态仅存在数小时——用户随即拍板**直接退役右栏终端**
+    （见本日第一条），kind `miasaki-terminal` 的类型已注销，官方终端成为右栏终端的唯一提供方。
+
 ## 2026-09-21
 
 - **右栏 tab 类型显式声明 `priority: 'extension'`（零行为变化，把一条隐式依赖变成显式契约）** ——

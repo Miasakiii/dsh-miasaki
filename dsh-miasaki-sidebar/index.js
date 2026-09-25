@@ -612,9 +612,10 @@ export async function launchTerminal({ shellId, cwd, logger }) {
 
 // --- Embedded terminal (design 2026-09-12 §4; route B — decision §6) --------
 // In-panel PTY terminal: node-pty under the same argv/enum discipline as the
-// launcher above, one shared session (bottom panel and right-bar tab are two
-// viewers of the SAME terminal — move between them without losing state),
-// scrollback replay for re-attach, and a one-shot token gate on the WS.
+// launcher above, one shared session set with any number of viewers (the
+// bottom panel is the product surface since the right-bar terminal retired on
+// 2026-09-25; the host stays container-agnostic), scrollback replay for
+// re-attach, and a one-shot token gate on the WS.
 
 /** PTY-capable shells. wt.exe is a window CONTAINER, not a stream shell — never enters this table (launcher §6.1 discipline). */
 export const PTY_SHELLS = [
@@ -846,10 +847,10 @@ export class TerminalHub {
   }
 
   /**
-   * Size arbitration (design §5.4): a pty has ONE size but may be watched from
-   * two containers at once (bottom panel + right tab). Take the minimum across
-   * bound viewers so no viewer ever wraps early — the others just get padding.
-   * Only issue `pty.resize` when the result actually changes (TUI churn).
+   * Size arbitration (design §5.4): a pty has ONE size but may have several
+   * viewers bound at once (host stays container-agnostic). Take the minimum
+   * across bound viewers so no viewer ever wraps early — the others just get
+   * padding. Only issue `pty.resize` when the result actually changes (TUI churn).
    */
   arbitrate(session) {
     if (session === null || session.pty === null || session.exited) return
