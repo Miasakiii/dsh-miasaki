@@ -269,7 +269,8 @@
               var root = document.documentElement
               root.setAttribute('data-mia-appearance', 'on')
               root.setAttribute('data-mia-skin', target)
-              try { notifyPet(target) } catch (e2) { /* 桌宠联动失败不阻断 */ }
+              // W0-T0.3：原此处 try { notifyPet(target) } —— notifyPet 及其 set_pet_mode
+              // invoke 已删除（命令从未注册）；桌宠联动由 hash `miasaki-theme` 统一驱动。
             }).catch(function () {})
           } catch (e) { /* fetch 不可用（本地页）时静默 */ }
           return

@@ -25,6 +25,17 @@ windows-sys = { version = "0.59", features = [
     # 外部客户端探测（Toolhelp32 进程树），见 main.rs「后端断连自愈」段。
     "Win32_System_Threading",
     "Win32_System_Diagnostics_ToolHelp",
+    # 孤儿回收（T2.4）：CreateJobObjectW 需要 Win32_Security 的 SECURITY_ATTRIBUTES，
+    # 其余（AssignProcessToJobObject / SetInformationJobObject / KILL_ON_JOB_CLOSE）在
+    # JobObjects 模块。用途：自拉后端纳入 Job → 壳异常消亡时由 OS 回收整棵进程树。
+    "Win32_System_JobObjects",
+    "Win32_Security",
+    # 诊断报告事实头（T2.1）：系统版本读注册表 BuildLabEx（GetVersionExW 在未声明
+    # 兼容性的进程里会撒谎），locale 走 GetUserDefaultLocaleName。
+    "Win32_System_Registry",
+    "Win32_Globalization",
+    # W5 自更新降级方案：ShellExecuteW 打开下载页（交给系统默认浏览器）。
+    "Win32_UI_Shell",
 ] }
 
 [profile.release]

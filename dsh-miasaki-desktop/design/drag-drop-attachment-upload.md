@@ -1,10 +1,27 @@
-# 桌面端拖拽上传附件到会话（设计定稿，未实施）
+# 桌面端拖拽上传附件到会话（设计定稿，2026-09-24 已实施，待实机验收）
 
 > 需求原话：「桌面端现在缺少拖拽上传附件到会话」。
 > 结论先行：**这不是「缺功能」，是「壳把官能的入口关在门外」**——官方 Web 端早就有完整的
 > 拖放上传链路；桌面壳的 Tauri 默认拖放处理器在 Windows/WebView2 上把页面级 HTML5
 > 拖放整体拦截，drop 事件被转成无人监听的 `tauri://drag-drop` 窗口事件，**静默丢失**
 > （光标显示 copy、松手无任何效果）。修法是一行构建器调用 + 一个注入层安全网。
+
+---
+
+## 实施记录（2026-09-24）
+
+| 步 | 内容 | 状态 |
+|---|---|---|
+| S1 | `main.rs` 主窗 builder `.disable_drag_drop_handler()`（§4.1） | ✅ 已落（`cargo check --bin miasaki` 通过；并行会话同期在同一文件的工作未冲突） |
+| S2 | `themes/src/09-dropguard.js` 新片 + MANIFEST.order 追加 + `npm run gen-init` | ✅ 已落（10 片拼接、87KB、令牌校验过；`themes/test/dropguard.test.js` 4 例入回归） |
+| S3 | `ui/loading.html` 最小防默认（§4.3） | ✅ 已落（判据与注入层逐条一致：只认 Files / defaultPrevented 放行；`ui/test/loading-visual.test.js` 11 例，新增 S3 行为例） |
+| S4 | 实机验收（§6 十项）+ smoke §0b + verify-all desktop | ⏳ 待用户重启桌面壳后执行 |
+| S5 | 文档回填（本文件 / README / CHANGELOG / TODO） | ✅ 本文档 + CHANGELOG + TODO；README 小节见 desktop README「拖拽上传」 |
+
+**回归**：`node scripts/verify-all.mjs` **99/99**（desktop 23/23，含 cargo 35 例）。
+**说明**：loading 页的 S3 是独立第二道——注入层 09-dropguard.js 经
+`initialization_script` 本就覆盖启动页，S3 让本地页不依赖注入链（两处判据一致，
+未来若启动页出现拖放消费方也不会被误伤）。
 
 ---
 

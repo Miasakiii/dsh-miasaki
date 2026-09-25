@@ -67,7 +67,7 @@ window.__ModuleLoader__.load({
 				setHidden(next); // 乐观更新，真实状态以桌面端回推为准
 				const ok = sendPetCmd(next ? "pet-hide" : "pet-show");
 				if (ok) {
-					setNote(next ? "已发送「隐藏」命令…（右下角圆点可点击恢复）" : "已发送「显示」命令…");
+					setNote(next ? "已发送「隐藏」命令…（主题头像悬浮球可点击恢复）" : "已发送「显示」命令…");
 					setErr(null);
 				} else {
 					setErr("命令发送失败。");
@@ -99,7 +99,7 @@ window.__ModuleLoader__.load({
 				react.createElement("div", { style: rowStyle },
 					react.createElement("label", { style: { display: "flex", gap: 8, alignItems: "center", cursor: "pointer", fontSize: 13.5 } },
 						react.createElement("input", { type: "checkbox", checked: !hidden, onChange: onToggle, disabled: !isDesktop }),
-						hidden ? "桌宠当前为隐藏状态（右下角圆点可点击恢复）" : "桌宠当前为显示状态")),
+						hidden ? "桌宠当前为隐藏状态（主题头像悬浮球可点击恢复）" : "桌宠当前为显示状态")),
 				react.createElement("div", { style: rowStyle },
 					react.createElement("button", { onClick: onReset, disabled: !isDesktop }, "重置位置"),
 					react.createElement("span", { style: dim }, "桌宠跑到屏幕外 / 更换显示器后丢失时，一键回到默认位置 (1200, 500)。也可直接拖动桌宠到任意位置，位置自动记忆。")),

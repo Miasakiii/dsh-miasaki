@@ -2,6 +2,478 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-25（晚）· 排查：MSI 打包失败（结论＝会话环境限制，非项目配置）
+
+**现象**：`npm run build` 的 exe 环节成功、MSI 环节失败，而 tauri 只给出一句
+`failed to run …\light.exe` —— **light 的 stderr 没有被转发**，这就是此前只能"挂账"的原因。
+
+**排查**：改用 `npx tauri build --verbose`（会打印被调用的完整命令行与子进程输出），
+两层报错先后暴露：
+
+1. `LGHT0001 … 对路径"%LOCALAPPDATA%\Temp\xxxx.tmp"的访问被拒绝`（`UnauthorizedAccessException`，
+   调用栈含 `TempFileCollection.EnsureTempNameCreated`）—— light 需要一个**可写的 `%TEMP%`**；
+2. 把 `TEMP`/`TMP` 指到 `target/tmp` 后，立刻撞上 `LGHT0217 : Error executing ICE action 'ICE01' …
+   The Windows Installer Service could not be accessed` —— 而当时 **`msiserver` 实为 `Running`**。
+
+**结论**：两层都是**执行会话的环境限制**（受限令牌 / 沙箱挡住了 `%TEMP%` 写入与服务访问），
+**与项目配置无关**。三条取证：① 手动给 light 加 `-sval`（跳过 ICE）后**成功产出 37.62 MiB MSI**；
+② `bundle/msi/` 里那份 **2026-09-04** 的 MSI 证明这条链在正常桌面会话里是通的；
+③ 先做过"旧 MSI 被占用"的假设检验 —— 独占读写试开通过，**已排除**。
+
+**同一根因的既有影响**（当时误判为 cargo 特有）：受限会话里 `cargo test` 的测试进程写系统
+`%TEMP%` 得到 os error 5（10 例假红）。当时的处置是把测试临时目录统一改到 `target/test-tmp/`
+—— 那是本项目侧的**真实改进**（测试不再依赖系统 TEMP），与本次排查结论互相印证。
+
+**落地**：排查路径 + 两条变通写进 `README.md` 新增的「打包（MSI）失败排查」章节。
+**未改任何构建配置** —— 不为环境问题给项目加复杂度；发布用 MSI 仍应在正常桌面会话里走完整 ICE 校验。
+
+## 2026-09-25（晚）· 契约 v1.1：受控写能力（事件驱动，不新增 hash 写者）
+
+**新增**：`window.miasakiDesktop` 加 `theme.set(name)` 与 `window.controls.{minimize,maximize,close}`。
+
+**关键设计：契约自己不写 hash**。契约分片是独立 IIFE，拿不到寄生 IIFE 里的 `apply` / `petHashCmd`；若在那里直接实现写通道，会立刻造出**第三个 hash 写者**（正是 W0-T0.2 刚修掉的竞态）。因此写能力一律**派发内部事件**：
+
+- `theme.set` → `miasaki-theme-set` → `02-core.js`（寄生）执行 `apply()`；
+- `window.controls.*` → `miasaki-window-command` → `06-titlebar.js`（寄生）映射为 `petHashCmd('min'|'max'|'close')` —— **复用唯一写者**，写者数量不变。
+
+**两条纪律**：
+
+1. **双向校验**：契约侧白名单（且只暴露 `minimize`/`maximize`/`close` 这些人话名，内部协议名 `min`/`max` **不透出**），执行侧（寄生分片）**再校验一次** —— 事件可被任意页面脚本派发，不能只靠发起方自觉；
+2. **返回值语义写清**：`true` = 已派发，**不代表已生效**（Rust 侧 33ms 轮询消费并按 `seq` 去重）；需要回执请订阅既有通道（如 `window.onMaxStateChange`）。
+
+**同批修正文档的一处不一致**：原文写"新增能力要提升 `protocolVersion`"，但那与 `has()` 探测机制重叠。现明确：`protocolVersion` **只在破坏性变更时提升**，增量能力只追加 `capabilities` 条目 —— 旧插件完全不受影响。本次 v1.1 **`protocolVersion` 仍为 1**。
+
+**验证**：契约闸门 11 → **15 例**（新增：派发与白名单拒绝 / 人话名不透内部协议名 / 只派发不写 hash / 寄生侧监听的静态断言）；`verify-all` 七线全绿、desktop 29/29；`cargo test` 78 例。已构建部署（exe 哈希 `1C4D41812F1D4A45`）。
+
+**待实机验收**：DevTools 里执行 `window.miasakiDesktop.theme.set('kurkuriel')` 应切主题；`window.miasakiDesktop.window.controls.minimize()` 应最小化窗口；`theme.set('bogus')` 应返回 `false` 且无任何副作用。
+
+## 2026-09-25（晚）· W5 自更新降级方案：只查、只提示、只打开下载页
+
+**边界写死**：真正的自更新需要三样本项目目前没有的东西 —— **签名密钥的保管链**、**CI 产线**、**安装前的任务准入**（官方 Electron 用 `update-tasks lock` 排空在途请求才敢 `quitAndInstall`；本项目的停机准入在 `recovery.rs::stop_decision`）。缺这些还做静默安装，风险很直接：**更新到一半打断用户正在跑的会话**。所以 `src-tauri/src/update.rs` 的边界是：**能查、能提示、能打开下载页，绝不自己下载或安装**。
+
+**更新源由用户自管**（不猜默认值）：`%LOCALAPPDATA%\miasaki\update-source.json`（与 `server.log`、诊断报告同目录，点「打开日志目录」即可见）
+
+```json
+{ "feed": "https://example.com/miasaki/version.txt", "page": "https://example.com/miasaki/" }
+```
+
+- `feed` 返回**纯文本版本号**（如 `0.2.0`）—— 刻意不用 JSON 响应：少一层解析就少一类失败面，用户自己维护时也更容易写对；
+- 缺文件 / 缺键 / 非 http(s) URL ⇒ **明确的中文错误（含路径）**，不猜、不回落默认源（一个假的默认源比没有更糟）；
+- 非 http(s) scheme 一律拒绝（这两个值分别交给 `curl` 与系统浏览器，放行 `file:`/`javascript:` 没有正当用途）。
+
+**零新依赖**：用系统 `curl.exe`（Win10 1803+ 随系统提供，本机实测 8.21.0）而不是引入 HTTP 客户端（ureq + rustls ≈ +1.5 MB 与一段编译时间）；打开下载页用 `ShellExecuteW`（比 `cmd /C start` 少一次 shell 解析链）；`windows-sys` 加 `Win32_UI_Shell` 特性。
+
+**交互**：托盘「检查更新」→ **后台线程**跑（curl 最长 15s，绝不阻塞托盘菜单处理线程）→ 原生对话框：有新版本则问「现在打开下载页吗」（Yes/No），文案显式写明「本应用不会自动下载或安装」；已最新给一句确认；失败给可读原因 + 配置文件路径。
+
+**版本比较**（纯函数，单测覆盖）：允许 `v` 前缀；截断预发布/构建元数据（`0.2.0-rc.1` → `0.2.0`）；按段比较且补零（`0.2.1 > 0.2`、`10.0.0 > 9.9.9` 不按字符串比）；**任一侧无法解析 ⇒ 一律不报新版**（宁可漏报 —— 一个假的新版本提示会把用户推去装不该装的包）。
+
+**验证**：`cargo test` **78 passed / 0 failed**（update 模块 5 例）；`verify-all` 七线全绿、desktop 29/29。已构建部署（exe 哈希 `2EAF2F8FEEF9D376`）。
+
+**待实机验收**：① 未配置更新源时点「检查更新」→ 提示配置路径（不发网络请求）；② 配一个真实 `feed`（内容版本号大于 0.1.0）→ 弹「发现新版本」并可打开下载页；③ `feed` 内容改成 `0.1.0` → 提示已是最新；④ 断网 → 可读的失败提示（不是静默、不是假装已最新）。
+
+## 2026-09-25（晚）· W4.2 材质分层：壳说事实、页面选分支（消除双层模糊）
+
+**问题**（跨线评审实测）：外观线的玻璃档位 `mica` 语义是「**用系统云母**」，但实现是页面侧 `backdrop-filter: blur(40px) saturate(1.6)`。Win11 上原生 Mica 同时生效 ⇒ Chromium 的模糊叠在 DWM 材质之上 = **两层模糊**：更糊、更耗电，而且与档位语义自相矛盾（外观线自己文档里标注的"web 近似、非 Win11 真 Mica"正是这个矛盾的注脚）。且 `data-mia-glass` 与 `MIASAKI_NO_MICA` 此前**互不知情**。
+
+**分工**（本次定的契约）：**壳负责说事实，页面负责选分支**。
+
+- 壳：`initialization_script` 前缀注入**预判值** `window.__MIA_NATIVE_MICA__`（Win11 = 系统 build ≥ 22000 且未设 `MIASAKI_NO_MICA`）；页面就绪后（600ms）用 DWM 的**实际结果**广播 `miasaki-native-material`（`push_native_material`，与 `push_max_state` 同构）；
+- 注入层：`themes/src/12-material.js`（新分片，独立 IIFE）把事实落到 `html[data-mia-native-mica="on|off"]`；
+- 外观线：`mica` 档的玻璃规则改挂 `:not([data-mia-native-mica="on"])` —— 原生生效时**不加**页面侧模糊，只留 alpha tint。
+
+**为什么首帧就是对的**：外观线的 boot style 写在 index.html 文本里（**解析期**生效），而 `12-material.js` 在 `document_start` 就跑（`initialization_script`）——**比解析期更早**。因此那条 `:not(...)` 选择器首帧即命中正确分支，不存在"先叠一层再撤"的闪烁。预判只在 DWM 实际拒绝材质时失准，由 600ms 的广播修正。
+
+**边界**：`light` / `frost` 是「页面自己做玻璃」的独立档位，与原生材质叠加属用户选择，**不掺入**该条件（测试钉死）；注入层**只搬运事实、不做决策**（不读外观线配置、不读 `data-mia-glass`），拿不到预判一律按 `off`（保守 —— 宁可让页面侧玻璃兜住视觉，也不要"以为有原生材质、结果什么都没有"的裸窗口）。
+
+**改动面**：`main.rs`（`native_mica_expected` + `push_native_material` + init 前缀）· `diag.rs`（抽出 `windows_build_number()` 供预判复用）· `themes/src/12-material.js`（新）· `appearance/lib/config.js`（`buildGlassBootCss` 条件化）· 两侧各加闸门。
+
+**验证**：`cargo test` 73 例全过；`verify-all` 七线全绿、**desktop 29/29**（新增 material 闸门 8 例）；appearance 16/16（`config.test.js` 加 W4.2 断言）。已构建部署（exe 哈希 `5DBF81ED812E1177`）。
+
+**待实机验收**：① Win11 下选 `mica` 档 → 侧栏 / 对话 / 右栏**只有一层模糊**（与 `frost` 档对比质感，不应更糊）；② `MIASAKI_NO_MICA=1` 启动 → `mica` 档回落到页面侧模糊（此时它是唯一模糊来源）；③ DevTools 里 `document.documentElement.getAttribute('data-mia-native-mica')` 与环境变量设置一致；④ 切 `light` / `frost` 不受影响。
+
+## 2026-09-25（晚）· W2 取证与可靠性 + W3 关闭语义 + W4 表现层（官方桌面端借鉴第二批）
+
+**背景**：同 [`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) 的 W2–W4。
+Rust 侧（W2）由子代理实施、Lead 复核并修正两处判据；全部经 `cargo test` 与七线回归验证。
+
+### W2 · 取证与可靠性（对症 P0「偶发全黑无响应」）
+
+| 模块 | 内容 |
+|---|---|
+| `src-tauri/src/diag.rs`（新增 ~1160 行） | **诊断报告**：事实头（时间/版本/平台/WebView2 版本读注册表/locale）+ `--- error ---` + `--- renderer console (error level, oldest first) ---`（64 KiB 最近优先）+ `--- host tail ---`；文件名 `crash-<ISO8601>-<source>.log`（source ∈ main/host/renderer/web-boot/watchdog），**保留最近 10 份**且只删匹配自身模式的文件（`server.log`/`pet.log` 永不误伤）。**`panic = "abort"` 下走 `std::panic::set_hook`** —— 该配置 `catch_unwind` 抓不到任何东西，panic 点即唯一取证点。<br>**进程内看门狗**：独立 OS 线程 500ms 一拍，读**主窗 UI 线程**心跳（`wv.url()` 是派发到主线程的同步 COM 调用，返回即证明主窗消息泵在转）；5s 无心跳 → 落盘现场（缺失时长 + 最后 hash + 关键状态 + 后端存活性 + server.log 尾），30s 才请求恢复对话框；恢复后落 `recovered` 并重置。**桌宠线程自持 `GetMessageW` 消息泵，不属本判据、也不背锅**。 |
+| `src-tauri/src/recovery.rs`（新增 ~680 行） | **原生恢复对话框**（Win32 `MessageBoxW`，不依赖 WebView2 健康度）：退出 / 重启 / **停用第三方插件后重启**。「停用」= 备份 `cordis.patch.yml` 为同目录 `.bak-<unix_ms>`（冲突追加序号、**绝不覆盖既有备份**）+ 把 `package.json` 的 `dsh.profile.bundles` 重置为基线（**失败即中止、原文件逐字保留**）；profile 名有路径穿越硬闸门。端口占用降级两按钮。<br>**分级停机状态机** + `stop_backend_tiered`（软杀 → 等 → 强杀 → 等 → 再强杀 → 记录未退出 PID）。 |
+| `main.rs` | **Job Object**（`KILL_ON_JOB_CLOSE`）把自拉后端纳入 Job，壳崩溃时由 OS 回收整棵进程树。**停机判据一行未动** —— 「3080 上仍有本进程树外的客户端 → 保留后端」（2026-09-23 断线事故修复）原样保留并配断言单测。 |
+
+**两处必须记住的事实**：
+
+1. **Job 与「保留后端」的冲突及取舍**（Lead 复核结论）：判定 Retain 时 `retain_job_until_exit()` 把 Job 句柄永久摘除（等价于「本进程没有 Job」），代价是此后壳崩溃**不再回收那个后端**。**认账**：该场景下它本就有别的用户在用，按既有语义不该被杀 —— **保「外部客户端不断连」优先于「崩溃时回收」**。
+2. **`taskkill` 不带 `/F` 杀不掉控制台进程**（只发 WM_CLOSE，而 `cmd.exe`/`node.exe` 没有消息循环）⇒ 软杀阶段对后端注定白等，真正生效的是强杀。已钉进注释与回归测试，**防止后人误以为「软杀成功了」而裁掉强杀级**。
+
+### W3 · 关闭语义改为「关闭 = 隐藏到托盘」（对齐官方）
+
+- `CloseRequested`（含 Alt+F4 / 任务栏关闭）与标题栏 ×（hash `cmd=close`）**不再退出**，统一走 `hide_to_tray()`：首次弹**一次性原生确认**，确认后写 marker（`%LOCALAPPDATA%\miasaki\background-close-confirmed`）；取消则窗口保持可见、下次仍会问。marker 让交互**可重放、可测试**（删文件即回到首次态）。
+- **真退出只经托盘「退出」/ 桌宠「退出应用」** → 前端确认弹窗 → `cmd=shutdown` → 分级停机停后端。5s 内重复请求仍是「强制退出（不杀后端）」兜底。
+- `ui/loading.html` 失败页加「恢复选项」按钮，把 W2 的原生三按钮暴露到页面侧。
+
+### W4 · 表现层
+
+- **W4.1**（appearance 线，另见该线 CHANGELOG）：首帧注入行加官方六种 kind 白名单 —— 前端对未知 kind 是**启动期抛错**（整页起不来），产出侧必须自证每一行都合法。
+- **W4.3 窗口底色回传**：`02-core.js` 新增 `resolveNativeBg()`（半透明底与 `html` 底合成到不透明；**拿不到不透明底就如实放弃上报**，绝不猜颜色），经 hash `bg=RRGGBB` 回传；Rust 侧 `parse_fragment` 校验 6 位十六进制（脏值不透传）、`apply_window_bg` 消费 —— **仅 Mica 未生效时**（`MICA_ACTIVE`），否则会盖掉系统材质。窗口底至此不再只是「创建时算一次的硬编码两档」。
+- **W2 收尾 · 渲染层 console 旁路**（`themes/src/11-console.js`，新增）：诊断报告的 `--- renderer console ---` 段此前**恒为空**（Rust 侧 `diag_console`/`push_console_line` 早已就位但无写者），而挂起类 P0 的线索恰在渲染层。旁路 `console.error` + `error`/`unhandledrejection`，环形缓冲（50 条 / 16 KiB，丢最旧）+ 2s 批量 `invoke('diag_console')`；**只旁路不改变**（原生调用照常、记录失败不影响原调用）、**只顶层 frame**（避免 iframe 重复灌）。
+
+### 同批修正（复核子代理产物时发现）
+
+- **`taskkill` 结局判据**：Windows 控制台程序的错误串是**系统 OEM 代码页**（简体中文 GBK），`from_utf8_lossy` 后中文成 U+FFFD ⇒ 原「文本匹配 `denied`/`拒绝访问`」判据把**权限拒绝误判成 `Failed`**（回归假红）。改为：用法错误（ASCII）→ `Failed`；否则以**目标进程是否仍存活**为准（活着 = 系统拒绝；已死 = 其实成功）。
+- **测试临时目录**：`diag`/`recovery` 的 4 处测试原用 `std::env::temp_dir()`，本机受限环境下 `create_dir_all` 返回 os error 5 ⇒ 统一改为 `target/test-tmp/`（cargo 自己可写，测试产物不再进系统 TEMP）。
+
+### 追加防御：隐藏/最小化时放宽看门狗阈值（同日复核）
+
+`wv.url()` 虽是 Rust 侧发起的同步 COM 调用，但 WebView2/Windows 对**不可见宿主**存在节流与遮挡（occlusion）处理的可能 —— 若此时仍按 5s 判据，会把「节流导致的调用变慢」**误报成挂起**。**假报告比漏报更伤诊断的可信度**（报告的价值全在信得过）。
+
+处置：主窗 UI 线程喂心跳时一并上报 `is_visible() && !is_minimized()`，看门狗按可见性选阈值 —— 可见 **5s**（快速取证）/ 不可见 **90s**（容忍节流）。**放宽不是取消**：隐藏态真挂死仍在 90s 后落盘（用户此时看不到窗口，晚一点取证可接受）。可见性原子量默认 `true`（判据未就绪时按最严格阈值走，宁可多报不可漏报）。
+
+单测覆盖三条：同一 gap 可见报 / 不可见不报；阈值收紧立即生效（窗口被重新打开）；隐藏态超 90s 仍报。
+
+### 手动生成诊断报告（托盘入口，同日）
+
+托盘菜单新增「生成诊断报告」：与自动路径**同一套** `collect_facts` + `format_report` + `write_report`（含轮转），仅来源标记为 `Source::Manual`、原因写"用户手动触发"。点击后原生信息框回显**完整路径**（成功与失败都回显 —— 取证模块的唯一价值就是"可诊断"，静默成功或静默失败都会毁掉它）。
+
+为什么要它：取证链路此前只能在崩溃 / 挂起时被触发，用户想验证"它到底工作不工作"得人为阻塞消息泵，日常怀疑卡顿时更是无门。这个入口把诊断从"出事才跑"变成"随手可跑"。
+
+配套三处：`Source::Manual` 同时进 `as_str` / `parse` / **`is_report_file_name` 白名单**（漏最后一处会让手动报告**永远轮转不掉**、点几次堆一堆）；`recovery::show_info` 用 Win32 `MessageBoxW`，与恢复对话框同一条纪律 —— 不依赖 WebView2 健康度；单测覆盖「命名与轮转识别成对」+「manual 与其它来源共享配额且不误伤 `server.log`/`pet.log`」。
+
+**验证**：`cargo test` **73 passed / 0 failed**（含 3 例真机进程级测试）；`node scripts/verify-all.mjs` 七线全绿、**desktop 28/28**（W1 后 26 → W4.3 后 27 → console 钩子后 28）。
+
+**待实机验收**：① 人为阻塞主窗消息泵 → 5s 内生成 `crash-*-watchdog.log`；② 隐藏/最小化到托盘静置 2 分钟**不应**产生报告（已加阈值防御，此条转为「确认防御生效」）；③ release（`panic="abort"`）下人为 panic 是否真落盘；④ 关闭 → 隐藏 → 托盘召回全链路 + 首次确认与 marker 重放；⑤ `MIASAKI_NO_MICA=1`（Win10 等价）下切主题窗口底色跟随。
+
+## 2026-09-25（晚）· 红条过滤 ResizeObserver 调度产物（注入层缺陷误报修复）
+
+**起因**：用户实机截图，桌面壳注入层红条常亮
+`MIASAKI-ERR[1]: ResizeObserver loop completed with undelivered notifications.`，
+`@` 后跟的既非脚本路径而是**文档 URL（含 hash）**（红条文案把 `e.filename` 末段
++ `e.lineno` 拼在消息后；该事件无脚本来源，filename 落回页面 URL）。
+实机 hash 快照同时用于交叉验证：`pet=thinking&pettool=&petts=…&petkey=&diag=603.1.1.1.0.1.727.793.DIV.fixed%2F9999…`——
+hash 字段本身拼装正确（`pettool=` 为空即无工具名），非格式缺陷。
+
+**根因判定**（环不在注入层，修不了也不该我们修）：Chrome/WebView2 在 RO 回调引发
+观察元素尺寸反复变化、超过单帧派发上限时抛此 ErrorEvent（Firefox 措辞为
+`ResizeObserver loop limit exceeded`）。逐处核查四条 RO 链：
+① 注入层唯一自建 RO（`runtime.js` 侧栏几何 `watchSidebarEl`）——回调只读布局、
+只写 `position:fixed` 的 `#miasaki-titlebar`（`--ms-sidebar-w` / `--ms-details-left`），
+**结构上不可能自反馈**；② DSH 本体 `conversation` 的 `seatResizeRef`（观察 scroller
+却往 scroller 写 `--dsh-composer-height` / `--dsh-conversation-viewport-height`）——
+两变量唯一消费方是 chat 包两个浮层（`contain:layout` + absolute/sticky，不回流尺寸），
+收敛；③ chat `follow.bind` 流式跟滚 / 虚拟列表、attachment `updateEdges`、
+trajectory `measure`——均无「观察即写自身尺寸」模式。结论：触发者是宿主页自身
+观察器（流式输出 / 布局过渡期间的经典 Chrome 行为），误报会让红条与 `ERR_COUNT`
+（hash diag `errCount` → Rust 日志）长期「狼来了」。
+
+**实施**：`themes/src/00-boot.js` + legacy 回退 `themes/runtime.js` 的 error trap
+新增 `isBrowserArtifactError(e)` 双重判据过滤——消息必须命中
+`ResizeObserver loop (completed with undelivered notifications.|limit exceeded.)`
+两个浏览器既有变体之一，**且** `e.lineno` 为 0/缺失（真实脚本异常必有行号）。
+过滤事件不进红条、不计入 `ERR_COUNT`；其余行为（单例红条 / `[N]` 计数 /
+parentNode 判空重建）不变。
+
+**验证**：过滤判据单测 11 例 + vm harness 行为验证 8 例（产物两措辞均不渲染；
+真实异常仍进红条且计数从 1 起；单例与重建语义不回退）全 PASS；`npm run gen-init`
+重建通过（10 片、令牌校验 + 三道自校验）。**注意**：`main.rs:19` 以
+`include_str!` 把 `src-tauri/injected/theme-init.js` 编译进二进制，须重新
+`npm run tauri build`（或 dev）后重启桌面壳生效，热刷新不够。
+
+- 触摸点：`themes/src/00-boot.js`、`themes/runtime.js`、本文件。
+  构建产物 `src-tauri/injected/theme-init.js` 已随 gen-init 更新（gitignore 覆盖）。
+- 用户待执行：重新构建并启动桌面端（`npm run tauri dev` 或 `build`），复现场景
+  （agent 流式输出期间）红条不再出现；若仍有红条，按消息文本定位真实脚本异常。
+
+### 实机验收（2026-09-25 22:16–22:30 · 上文「用户待执行」的闭环）
+
+- **构建/部署**：`npm run build`（MSVC x64 开发者环境 + cargo 1.95）→ exe 编译与本地证书
+  签名成功（SHA256 `AF14DA12…`），复制到 `dist/` 后 `npm run deploy` →
+  `C:\ProgramData\MiasakiApp`（8/8 PASS，两端哈希一致）。**MSI 打包未过**：`light.exe` 报
+  `LGHT0001`「访问路径 `%LOCALAPPDATA%\Temp\*.tmp` 被拒绝」，把 TEMP/TMP 指向可写目录后
+  **仍复现** ⇒ 本机 WiX 环境限制（非代码问题，见 README §构建环境三件套的新补注）；
+  exe 本体已产出，安装包可在普通终端重跑 `npm run tauri build` 补齐。
+- **二进制自证（"刷新页面不够"的闭环）**：直接在 exe 内检索到 `isBrowserArtifactError`、
+  `MIASAKI-ERR[` 与 RO 产物判据注释段 —— `include_str!` 内嵌的注入脚本确已随二进制更新。
+- **验证①·受控真实触发（真实 WebView2，11/11 PASS）**：壳以 `MIASAKI_REMOTE` 指向本地探针页
+  （`_refs/scripts-archive/redbar-probe.mjs`）：真实 RO 调度产物被**真实抛出**（独立监听器
+  见证 `lineno=0`、filename 落文档 URL —— 与实机红条截图的 `@` 后缀同形），红条全程 `null`、
+  diag `errCount` 恒 0；期间累计 8690 条 error 事件（绝大多数是 RO 产物）无一污染红条/计数；
+  随后注入真实未捕获异常 ⇒ 红条 `MIASAKI-ERR[1]: Uncaught Error: …` 亮起、errCount=1
+  （**防过滤过度**）、单例语义不回退；142 段落 / 6s 流式渲染压力期间红条文本逐字节不变。
+- **验证②·真实 DSH 页面 + 真实模型流式输出（5/5 PASS）**：无头 Edge + CDP 打开
+  `127.0.0.1:3080`（注入**同一份** `theme-init.js` + 壳同款鉴权 cookie），真发一条消息 ⇒
+  流式 20 次 DOM 增长（630 → 1366 字符）+ 视口每 1.5s 抖动强制重排，红条全程 `null`、
+  `errCount ∈ [0,0]`。**诚实注记**：该场景本次**未自然触发** RO 产物（监听器计数 0），
+  故它证明的是「真实流式期无红条 / 无虚增」；**过滤生效的直接证据来自验证①**。
+- **验证③·壳内真实页面交叉印证**：正常模式壳的 `hash-diag`（变化才落盘）在真实 DSH 页面
+  窗口内 errCount 恒 0；同一份日志里探针注入真实异常的两次运行精确落盘 errCount=1。
+- **复跑**：首次验证在 11 片产物（`EDD01B15…`）上完成；部署**含并行新增 `11-console.js`
+  的 12 片产物**（`AF14DA12…`）后同样 **11/11 PASS**。
+- 截图证据（`_refs/`，已 gitignore）：`shot-A-ro-loop-filtered.png`（产物期无红条）、
+  `shot-B-real-exception.png`（真实异常红条）、`shot-C-real-dsh-page.png` 与
+  `shot-D-final-normal-mode.png`（真实 DSH 页面无红条）。
+- 遗留：验证在 3080 后端留下 2 个探针会话（"数到 60"、"雨夜的图书馆"短文），可在侧栏删除。
+- **观察（未定因、非本次改动引入，记录备查）**：其中一次正常模式启动（22:30:31）出现
+  「主窗空白 + 期间无任何 hash 上报（`pet.log` 无 `hash-diag`/`set_mode` 行）」；同一产物
+  重启后恢复正常（启动 5s 即落盘 `hash-diag`、3080 两条持久连接、errCount=0）。
+  与红条修复无因果关系，未复现，暂不作为缺陷立案。
+
+## 2026-09-25 · W0 顺手修复 + W1 桌面契约 v1（官方桌面端借鉴第一批）
+
+**背景**：官方桌面端（Electron，0.1.7-rc.2）实测分析 → 跨线落地规划，见
+[`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md)。
+本轮落地 **W0（既有缺陷修复）** 与 **W1（契约层）**；Rust 侧 W2/W3 另行。
+
+### W0 · 四处既有缺陷修复（零风险，先做）
+
+| # | 问题（实测） | 处置 | 闸门 |
+|---|---|---|---|
+| T0.1 | 壳注入 `window.__MIA_THEME__`（`main.rs:1647-1649`），但 `themes/src` **全片零读取** ⇒ 本地唤醒页（`tauri.localhost`，localStorage 为空）主题退化成 `pure`，而该页 `:root` 默认色板是 zafkiel ⇒ **启动闪窗** | `02-core.js` 主题来源新增最高优先级 `__MIA_THEME__`（`> URL 参数 > localStorage > pure`） | `themes/test/theme-source.test.js`（8 例） |
+| T0.2 | `05-sensors.petHashCmd` 写入时**从零构造 hash**、1600ms 后又**整体清空** ⇒ 抹掉 `02-core.syncHash` 与 pet-panel 并发写入的字段（"hash 单写者"约定实际不成立） | 改为**字段级精确增删**（`hashPairs`/`readHashField`/`setHashFields`）；保留其它字段**原始编码**（不用 `URLSearchParams.toString()`，避免 `%20`→`+` 打乱 Rust percent-decode 口径）；TTL 清理加 **seq 覆盖保护** | `themes/test/hash-fields.test.js`（8 例） |
+| T0.3 | ① `notifyPet` invoke 的 `set_pet_mode` **命令从未注册**（注册表 `main.rs:1607-1618` 仅 10 个），恒失败并被 `.catch()` 静默吞掉；② 仅供它使用的 `PET_MODES` 与 Rust `main.rs:947 pet_mode_for` 重复定义 | 删除 `notifyPet` + 3 个调用点（`02-core` / `08-ready` / `03-switcher`）+ `PET_MODES`。桌宠联动本来就走 hash `miasaki-theme` → `main.rs:1191-1204` | 语法闸门 + 全量回归 |
+| T0.4 | `build-init` 产物（JSON 字面量 + JS 分片拼接）**无自校验**；官方同类 manifest 恰是"尾部 `}` 被截断仍被打包" | 三道自校验：样式 JSON 可解析且键集 == THEMES、**目录下 `.js` 必须全部登记进 `MANIFEST.order`**（漏登记＝静默不打包）、写盘字节一致 | `build-init.mjs` 自证 + 全量回归 |
+
+同批：`themes/src/MANIFEST.json` 删除已过期的 `slices` 行段（与 legacy `runtime.js` 早已非逐字节一致）。
+
+### W1 · 桌面壳 ↔ 渲染层契约 v1
+
+新增独立分片 `themes/src/10-contract.js`，暴露 `window.miasakiDesktop`：
+`protocolVersion: 1` / `isDesktop` / `isLocalPage` / `capabilities` + `has()` /
+`theme.current|onChange` / `window.onMaxStateChange` / `assets.baseUrl`。
+
+三条纪律（闸门逐条钉死）：**只暴露确实实现的能力**、**只读 + 订阅、不开写通道**
+（否则立刻造出第三个 hash 写者——正是 T0.2 刚修掉的竞态）、**子 frame 只给空壳**
+（`initialization_script` 注入每个文档，`08-ready.js:3-8` 有"iframe 里浮出两套假窗控"的实机教训）。
+
+设计文档：[`design/desktop-contract.md`](desktop-contract.md)。
+
+**T1.1 结论（推翻规划初稿）**：官方后端 `dsh-host-webserver` 在 index.html 末尾注入
+`(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()` —— 它**复用我们的 deferred
+后立刻 resolve**，故壳无法把 DSH 前端挡在 `onReady()` 之后；首帧就位的正确通道是
+`webserver/index-inject`（appearance 线既有做法）。
+
+**验证**：`node scripts/verify-all.mjs desktop` = **26/26 PASS**（W0 前 23 → W0 后 25 → W1 后 26），含 `cargo test` 35 例。
+**待实机验收**：① loading 页与 DSH 页主题一致（无闪窗）；② 连续点窗控 / 切主题 / 桌宠上报互不干扰；③ 页面内 `window.miasakiDesktop` 可探测。
+
+## 2026-09-25 · 三个插件的 dsh peer 上界放宽（拆掉 0.2.0 定时炸弹）
+
+**起因**：官方 0.1.7-rc.1 引入**插件 peer 兼容性硬闸门**
+（`packages/boot/app-boot/src/plugin-compatibility.ts`）：只校验 `peerDependencies` 中
+`@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的条目，按 `semver.satisfies(本体版本, 范围, { includePrerelease: true })`
+判定，不满足即**拒绝加载**（需 `dsh plugin allow-version` 做精确版本豁免）。
+
+**问题**：`dsh-pet-panel` / `dsh-model-probe` / `dsh-free-model-pool` 声明的是 `^0.1.2-rc.1`，
+其隐含上界为 `<0.2.0` —— 即 **dsh 一进入 0.2.0，这三个插件就会被直接拒载**（当前 0.1.7-rc.2 尚在范围内，属定时炸弹）。
+
+**处置**：5 处范围改为 `>=0.1.2-rc.1 <0.3.0` —— 覆盖 0.1.x / 0.2.x，同时保留 0.3.0 的挡板。
+
+| 文件 | 行 | 字段 |
+|---|---|---|
+| `plugins/dsh-pet-panel/package.json` | 26 | `@deepseek-ai/dsh-settings` |
+| `plugins/dsh-model-probe/package.json` | 28–29 | `dsh-settings` + `dsh-host-webserver` |
+| `plugins/dsh-free-model-pool/package.json` | 26–27 | `dsh-settings` + `dsh-host-webserver` |
+
+`@deepseek-ai/cordis: ^4.0.2` **不动** —— 不以 `@deepseek-ai/dsh` 开头，**不进闸门检查**。
+
+**验证**（逐字复刻闸门逻辑后跑**真实 package.json**）：
+
+| 插件 | 0.1.5-rc.3 | 0.1.7-alpha.2 | 0.1.7-rc.2 | 0.2.0 | 0.2.5-rc.1 | 0.3.0 |
+|---|---|---|---|---|---|---|
+| dsh-pet-panel | PASS | PASS | PASS | **PASS** | PASS | DENIED |
+| dsh-model-probe | PASS | PASS | PASS | **PASS** | PASS | DENIED |
+| dsh-free-model-pool | PASS | PASS | PASS | **PASS** | PASS | DENIED |
+| dsh-token-monitor（对照，未改） | PASS | PASS | PASS | PASS | PASS | PASS |
+
+（PASS = 闸门放行；DENIED = 拒载。`dsh-token-monitor` 只声明 `@deepseek-ai/cordis`，不进检查故全 PASS。）
+
+**回归**：`plugins/dsh-model-probe` 单测 **12 例全过**，其中含 `probeModel resolves the stored profile on ≤0.1.6 (get world)`
+与 `… on 0.1.7 (describe world)` 两条 —— 正是 0.1.7 设置机制重写后的双轨用例。
+
+**依据**：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §3（W2）
+与 [`dsh-official-repo-review-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §4。
+
+## 2026-09-24（三轮复审）· 文档基线归位 + 两处 P3 断言修复 + live 审计补第八件
+
+**起因**：第三轮独立复审（纯审查、未改文件）复跑出实测基线 **98 项 / desktop 22/22 /
+`cargo test` 35 例**，与文档口径（96 / 20 / 28）矛盾且与同文件历史记录行自相矛盾。
+逐条核实后：**P2 一处 + P3 两处全部属实**，本轮修完；观察项两条一并收口。
+
+| 编号 | 问题 | 处置 |
+|---|---|---|
+| P2 | 基线数字过时（根 `README.md` 最新基线块、`smoke-test-matrix.md` 表头与 desktop 行、本线 `README.md` 命令注释、本文件 09-24 条）：S4a 视觉闸门 + 桌宠资产闸门（+2 项）与 `dot.rs`（+7 例）未回写 | 四处同步为 **98 项 / desktop 22 / cargo 35**；`smoke-test-matrix.md` 的 §0 L1 行（双模型 24→**33**、外观 91→**95**、Desktop 18+25→**63 项 + cargo 35 例**）同批校正。**历史条目里的旧数字不改写**（那是当时快照），改为加括注指向现行基线——文档要能区分「当时」与「现在」 |
+| P3 | `ui/loading.html` 就绪正则首分支码位写错：`\u5c31\u7ed3`（就**结**）是永不命中的死分支，真实文案靠第二分支「正在进入」侥幸兜住；测试字符串又把「就绪」写成 `\u5c31\u7ed2`（就**绒**）——同样靠第二分支通过，断言无区分力 | 正则改 `\u5c31\u7eea`（就绪）；测试三处字符串同步；新增「**仅**『已就绪』（不带第二分支）」用例单独钉第一分支 |
+| P3 | `ui/test/loading-visual.test.js` 性能预算只截到首个 `}`——CSS `@keyframes` 是嵌套花括号，第二个及以后 stop 里写 `width:` 之类布局属性不会被抓 | 抽出 `blockBody()` 按花括号深度配平取**整块**；把「breathe 的 50% 分支（`scale(1.09)`）必须落在被检查的正文里」钉在 `body` 上（不另取一次）；reduced-motion 段改用同一 helper 去重 |
+
+**区分力双向验证**（`_refs/` 下变异副本，跑完即删）：① 把正则码位回退成 `\u5c31\u7ed3`
+→ 「仅『已就绪』」用例红（`fail 1`）；② 把截取回退成「首个 `}`」→ 性能预算用例红
+（`fail 1`）；还原 → **10/10 绿**。
+
+**观察项收口**：
+- `scripts/patch-live-audit.mjs` 只审计 desktop 六件 + dual-model 一件，`shared-docs` 的
+  第八件（`@yeesy369/dsh-browser-playwright` 双半补丁）在审计之外——而它被打回原版会让
+  **web UI 连启动屏都过不去**，属真实盲区。本轮：审计工具支持补丁自报 `LIVE_TARGETS`
+  （多目标，每半一行）+ 补 `shared-docs` 补丁根 + profile 布局探测扩到每个
+  `~/.dsh/profiles/<name>/node_modules`；该补丁补 `LIVE_TARGETS` 导出与 **CLI 守卫**
+  （此前 import 它会以调用方 argv 误跑 CLI，与 09-23 修掉的 attachment 同类）。
+  判据自证：假 profile 根注入 `client.js` 原版 → 报 `original … 回归！` + 退出码 1，
+  `host` 半仍 `patched`。顺带把该补丁 `verify` 里 `spawn EPERM` 的**环境假阴性**从
+  「语法校验失败」改成诚实 ⚠（shell 层 `node --check` 双半 exit 0 实测通过）。
+- 00-boot 兜底链依赖 `dsh-auth-*` cookie **非 HttpOnly**（靠 JS 可读来区分「已有 cookie
+  只续期」）：已在 `design/auth-cookie-prepinject.md` §3 钉为显式契约——预置侧一旦加
+  `HttpOnly`，`readAuthCookie()` 恒空 ⇒ 每文档重签兜底值 ⇒ secret 漂移 401 循环回归。
+
+**并行会话协作（同一工作区，如实记录）**：本轮执行期间**另一个会话**正在落 S3「拖放安全网」
+（新分片 `themes/src/09-dropguard.js` + 重生成 `injected/theme-init.js`，并在 `ui/loading.html`
+与 `ui/test/loading-visual.test.js` 同步补第 11 例），两次与本轮验证发生竞态：
+① 该分片末尾 `;((function () { … })()` **少一个 `)`** ⇒ 拼接产物在末尾 `Unexpected end of input`
+⇒ verify-all 的注入语法闸门红（闸门按设计拦住，判据：分片 `parens diff = +1`）——已补为
+`})())` 并复跑转绿，**该分片的归属与设计记录仍在原会话**（`design/drag-drop-attachment-upload.md`）；
+② 其 `loading.html` / 测试文件的中间态一度让 loading 项红，落定后 **11/11**。若两条线并行编辑
+同一批文件，请以本条为界：本轮只碰了 `09-dropguard.js` 的**那一个字符**与 loading 测试的
+三处字符串 + 两处断言。
+
+**验证**：`node scripts/verify-all.mjs` 七线 **98 项全过**（desktop 22/22，含启动页契约 11 例）、
+`cargo test` **35/35**、`node scripts/patch-live-audit.mjs` **9 个目标全 patched**、
+第八件补丁 `verify` PASS（语法项因沙箱 EPERM 降级为 ⚠，已 shell 层人工复核）。
+**实机项不变**：appearance 图标名、S4a 启动页视觉、`SameSite=Strict` 首载、悬浮球三主题目视、
+`verify-themes`（需普通终端）。
+
+## 2026-09-24 · 故障定位：桌面端「打不开」= WebView2 运行时被系统更新打断（非本线代码）
+
+**现象**：双击 `Miasaki-dsh.lnk`（或任何入口）只出现桌宠（`MiasakiPetWin`）+ 托盘，**主窗口
+永不出现**；`pet.log`/`bootstrap.json` 无新写入（setup 走到 pet spawn，webview 早已失败）。
+
+**根因（探针实测，非推测）**：`WebviewWindowBuilder::build()` 内部 `create_controller`
+（`CreateCoreWebView2ControllerWithOptions`）失败 → **WebView2 浏览器进程
+（`msedgewebview2.exe` 153.0.4234.48）启动即以 `STATUS_BREAKPOINT`（0x80000003）崩在
+`msedge.dll+0x3806213`**（WER Report.wer 实锤，fault bucket `e728eff3…`）。已逐项排除：
+配置文件（全新 UDD 同样崩）、沙箱（计划任务无沙箱同样崩）、GPU（`--disable-gpu` 同样崩）、
+磁盘空间（清出 5GB 同样崩）、运行应用内上下文（独立 Rust 探针同样崩）。**环境创建
+（`CreateCoreWebView2EnvironmentWithOptions`）是好的，坏的只是控制器/浏览器进程**；
+机器在 21:19 有 Windows 更新暂存、21:48 因此重启，19:55 之前本功能正常——断点即该更新之后。
+
+**已做**：重装 WebView2 运行时（UAC 修复安装 exit 0）——**无效**；本线代码零改动。
+部署侧已把**签名版**产物覆盖为 `dist/Miasaki.exe`（旧未签名版备份
+`_refs/bin-archive/`），桌面快捷方式随之获得 Authenticode 签名（`CN=Miasaki Dev`）。
+
+**待办（需用户侧执行/观察）**：①再重启一次（更新批处理未完全收尾，尚有 40 条
+`PendingFileRenameOperations`）；②仍不行则回滚 9/23 这台机器的 Windows 更新，或改用
+**固定版（Fixed Version）运行时**挂 HKCU（免管理员）；③持续则向 WebView2Feedback 提
+issue（附 WER bucket `e728eff3e06d4f6d5d9e3d4f6593c497`）。诊断脚本与输出归档：
+`_refs/scripts-archive/2026-09-23-webview2-breakpoint-diagnosis.log`、`_refs/wv2-probe/`。
+
+## 2026-09-24 · 隐藏态恢复入口：硬编码紫点 → 主题头像悬浮球
+
+**起因**：桌宠隐藏后只剩一个硬编码紫色实心圆（`0xB36AD9`，`DOT_SIZE = 30`）——与三主题毫无
+关联，且小到看不清。改为**当前主题的头像悬浮球**。
+
+**视觉规格**（`pet_native/dot.rs`，纯 CPU 逐像素**预乘**合成，零 GDI 绘图/字体调用，与桌宠
+合成同一纪律）：
+
+| 元素 | 取值 |
+|---|---|
+| 窗口 / 球面 | 56px 方窗，球面半径 19（直径 38），球心恒在窗口中心 |
+| 球面素材 | `ui/icons/theme-*.png` 三张 96px 徽章（与设置「主题」选择器**同一批图**，编译期内嵌）；再放大 `DOT_AVATAR_ZOOM = 1.09` —— 1:1 映射时素材自带的环落在球面内侧，与我们画的主题色环之间留一圈暗缝（读作「甜甜圈」）；放大后该环正好被球缘裁掉，球面内只剩头像本体 |
+| 主题色环 | 球缘外 2px 描边，色取自各主题徽章环：pure 银 `#A6A0B2` / zafkiel 鎏金 `#D9B36A` / kurkuriel 破血红 `#C23A2E`（徽章原色 `#9E1B1B` 作发光过暗，提亮） |
+| 外发光 | 环外 4px 二次衰减，峰值 alpha 96 |
+| 球面高光 | 左上 45°，半径系数 0.52，峰值 alpha 34（玻璃球质感；46 在 38px 球上压脸） |
+| 底部落影 | 圆心下移 1.8px，**只作用球体下半个环带**（上半权重 0）——上半加灰会把发光读成脏雾 |
+| 悬停态 | 整体 ×1.08、发光与高光 ×1.45；**离散两态，不做插值动画** |
+
+**接线**：
+- `PetShared.theme` + `NativePet::set_theme`（白名单 `pure/zafkiel/kurkuriel`，hash 字段不可信）；
+  `main.rs` 的 `miasaki-theme=` 分支在 `set_mode` 之外再喂一次主题。`spawn` 直接用
+  `load_prefs()`（该函数提为 `pub(crate)`）——**冷启动恢复隐藏态时第一帧就是正确球面**，
+  不必等页面 hash 上报，否则肉眼可见一次「换脸」。
+- 窗口线程在 `compose` 里比对 `dot_theme`：变化且球可见（= 桌宠隐藏）时立即重绘；球不可见时
+  只更新字段，交给显隐切换那次渲染带上新主题（省一次不可见的 ULW）。
+- `draw_dot(hwnd, pos)` 自由函数 → `PetWin::render_dot()` 方法：渲染结果留在 `dot_buf`，
+  **画面与命中共据同源**（球面即 mask，与 R2 主窗「查最终合成缓冲」同一范式）。
+- 尺寸 30 → 56（`DOT_SIZE`），`CreateWindowExW` 与 ULW 尺寸常量同源，无第二处硬编码。
+
+**为什么必须配穿透（「隐形挡板」）**：球从 30px 涨到 38px 后，方窗四角约占 26% 面积、发光外沿
+一圈半透明。照收鼠标的话，隐藏态会在桌面上多出一片**看不见却吃点击**的区域。故复刻 R2 范式
+给 dot 窗口配**自己的 10ms 命中轮询**（`dot_proc` 的 `IDT_HIT` → `update_dot_hit`）：查
+`dot_buf` 的 alpha（阈值 16，与主窗同常量）决定 `WS_EX_TRANSPARENT`，**同一命中**同时驱动悬停
+放大——用户看到能点的地方就有放大反馈，反之亦然；球隐藏时恒不穿透并清悬停态。
+
+**兜底与不变量**：
+- 素材缺失 / 主题未知 → 主题色实心球（`avatar_key` / `palette` 未知一律按 pure），**绝不空白、
+  更不回退成紫点**；
+- **位置语义不变**：dot 窗口仍以 `pos`（桌宠窗口左上角）定位，不补偿尺寸差 —— 补偿虽能让球心
+  与旧圆心重合，但贴边时会因窗口出屏把球裁角，收益不足 9px；M1.4 的四处同步点（显隐切换 /
+  散步自然结束 / 散步撞墙 / 拖动结束）全部改调 `render_dot()`；
+- 单测 7 例钉死不变量：主题→素材键映射（**`kurkuriel` 用 `theme-inverse.png`** 的命名陷阱）、
+  配色兜底、球心不透明 + 四角全透、**悬停放大后发光半径不越窗口**（越界即被方窗硬裁出直边）、
+  球缘抗锯齿存在半透明过渡、环色随主题变化、素材缺失兜底。
+
+**验证**：`cargo test` **35/35**（新增 7 例：`dot.rs` 渲染契约）、`node scripts/verify-all.mjs` **98 项全过**
+（desktop 22/22）。离线目视：`dot::render` 三主题 × 常态/悬停输出 1×（桌面实尺寸观感）与 4×
+（像素细节）预览图，核对球面 / 色环 / 发光 / 落影 / 悬停放大（临时预览测试**跑完即删**，不入库；
+预览图落 `_refs/` 后清理）。**实机待验**：隐藏桌宠出现主题头像球、悬停放大、点击恢复、
+主题切换即时换面、球外区域点击穿透到下层窗口。
+
+## 2026-09-23（二轮复审）· 注入链 cookie 契约与 401 熔断 + 三项 P3 收口
+
+**起因**：第二轮独立复审在工作区 4 文件之外再扫近 15 个已提交提交，报出 2 项 P2 回归 + 3 项 P3
+瑕疵（dual-model 触发钮死件归 dual-model 线处理）。逐条核实**全部属实**，本轮修完。
+
+| 编号 | 问题 | 处置 |
+|---|---|---|
+| P2-B | `themes/src/00-boot.js` 每次 3080 文档加载都用**硬编码 secret 无条件覆写** `dsh-auth-*` cookie。预置注入（9-22 主修）签入的是 `credentials.yaml` 里的**真** secret，两者一旦漂移就被兜底值盖掉：首次导航成功 → 下次整页导航 401 → reload → 新文档再签错 → **无限 reload**（四轮检查只管单文档内停检，跨文档无次数上限） | ① 已有 `dsh-auth-*` 时**只按原值续写** `Max-Age`（保留「session → 持久 cookie」升级意图，值一个字节不动），无 cookie 才走兜底签名；② 401 → reload 加 `sessionStorage` 跨文档熔断（上限 3 次；到上限前清一次已失效 cookie，给兜底签名最后自愈机会），超限停止重载并在页面显示可见提示；计数只在确认到达非 401 文档时复位（document_start 时 `is401()` 恒 false，据此复位等于无熔断） |
+| P3 | 可见性兜底日志把 `is_visible()` 的 `Err`（窗口已销毁）与 `Ok(false)`（真不可见）混为一谈：用户 800ms 内关窗会留下「on_page_load 未触发？」的误导归因 | `match` 三态分明：`Ok(true)` 不动作 / `Ok(false)` 记「仍不可见」+ `show()` / `Err(e)` 记「可见性查询失败（e）」+ 仍尝试 `show()`（兜底目的与幂等性不变） |
+| P3 | token-monitor 全局浮窗刷新钮把 `setLastAt` 放在 `finally`：刷新失败也推进「更新于」时间戳，谎称刚更新过（`refreshBus.fire()` 会如实 reject，无内部吞错） | 改为**成功才推进**（`fire()` 的 resolve 分支），失败保留上一次成功时刻；≥0.5s 旋转反馈不变 |
+
+**回归闸门（desktop 项 18 → 20）**：
+
+1. `syntax injected/theme-init.js` —— `themes/src/*.js` 是 WebView2 **每个文档**都跑的注入
+   脚本，分片不是独立语法单元（IIFE 跨片闭合），而 `gen-init` 只验令牌完备性、不验语法；
+   注入脚本语法错＝实机整屏黑，这是最廉价的前置闸门；
+2. `themes/test/auth-cookie.test.js` **6 例行为闸门** —— 从 `themes/src/00-boot.js` 的
+   `@slice:auth-cookie` 标记段截出 IIFE，在 VM 里用假浏览器（cookie jar / sessionStorage /
+   真 `crypto.subtle` / `location.reload`）驱动，钉死本轮两条新契约与一条时序契约：
+   已有 cookie 只按原值续期、无 cookie 才兜底签名、401 未超限 reload 一次、超限停止并显示
+   可见提示、正常文档复位计数、**document_start（body 未解析）不得误清计数**。
+   区分力双向验证：回退「不覆写」判据 → 用例 1 红；把上限改 999 → 用例 4 红；还原 → 6/6 绿
+   （连跑 5 次稳定）。`themes/test/package.json` 只为 Node 声明 ESM（与 `plugins/*/test` 同约定）。
+
+**验证**：`cargo check --bin miasaki --tests` 通过、无 warning；`node scripts/verify-all.mjs`
+七线 **96 项全过**（sidebar 10 / canvas 11 / fleet 15 / desktop **20** / ssh 12 /
+dual-model **12** / appearance 16），desktop 内含 `cargo test` 28 例与 6 个补丁自证。
+（※ 上列数字是该批次运行时的快照，**不随基线推进改写**；09-24 起现行基线为全量 **98 项**、
+desktop **22/22**、`cargo test` **35 例**——见本文件顶部 09-24 各条。）
+实机项：熔断行为与兜底日志语义见 `design/auth-cookie-prepinject.md` §5 验收第 6 条。
+
+## 2026-09-23 · 启动链容错加固（可见性兜底转正 + 导航失败可见化）
+
+**起因**：一轮「主窗口不显示 / 黑屏」排查在 `main.rs` 留下 22 处 `[PROBE] eprintln!` 探针 +
+一处 800ms 强制 `show()` 兜底。代码审查判定「探针不得入库」，并指出兜底判据用错变量。本轮
+逐条核实审查结论（**全部属实**）后收口：探针全清、有价值的一处转正、顺带修掉三处容错缺口。
+
+**核实与处置**：
+
+| 审查结论 | 核实 | 处置 |
+|---|---|---|
+| 兜底判据借用 `PAGE_UP`，口径错误 | 属实：`PAGE_UP` 语义是「3080 文档加载成功」（`on_page_load` 命中远程 URL 才置位），后端冷启动 3~6s → 800ms 时必为 false，每次启动都误入「强制 show」分支、观测数据失真 | 判据改为 `!is_visible().unwrap_or(false)`（审查建议的字面写法 `!is_visible()` 不成立：该方法返回 `Result`）；触发时写一行 `pet.log` |
+| `eprintln!` 在 release 无控制台，探针整体不可见 | 属实：`#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` | 随探针删除消解；转正后的兜底改走 `app_log_line`（`pet.log`），release 亦可观测 |
+| 22 处探针不可入库 | 属实 | 全删；含 WebView2 运行时探测（手写 `extern` 声明 + 返回串未 `CoTaskMemFree`） |
+| `port_ready()` 落在 setup 同步路径 | 属实：探针在 `start_launch_sequence` 的 spawn 之前同步调用，最坏给启动加 300ms | 随探针删除消解 |
+| 导航处 `.expect` × `panic = "abort"` 可杀整个进程 | 属实：`MIASAKI_REMOTE` 非法 → release 直接 abort；同文件后端看门狗却是 `if let Ok(url)` | 抽出 `navigate_main() -> Result<(), String>`；失败 → 落盘 + 状态栏反馈 + `__setRetry(true)` |
+| `navigate` 结果仅记日志，失败无反馈 | 属实：失败后界面永远停在「已就绪，正在进入…」 | 同上，纳入 `navigate_main()` 的错误分支 |
+| 90s 超时文案把「进程秒退」误归因为端口占用 | 属实：`spawn_dsh` 成功 ≠ 进程存活，而该阶段只试拉一次 | 文案与 `bootstrap.json` detail 并列补上「或 dsh 拉起后立即退出」 |
+
+**转正项**：主窗口可见性兜底（建窗后 800ms 判 `is_visible()`）。其余排查物一律不留——
+`run_on_main_thread` 事件循环存活探针、`bootstrap.json` 落盘探针、WebView2 运行时探测等。
+
+**验证**：`[PROBE]` / `eprintln!` 在 `main.rs` 中已归零；`cargo check --bin miasaki --tests`
+（MSVC x64 环境）通过，无 warning。实机验收（正常启动窗口显示、`MIASAKI_REMOTE` 非法值不崩、
+失败时「重试」按钮可见）待用户执行。
+
+**归档**：探针批次完整差异留在 `_refs/_probe/main-rs-probe-batch-2026-09-23.patch`
+（`_refs/` 已 ignore，不入库）；如需继续采样 `git apply` 即复原。
+
 ## 2026-09-23 · 构建产物接入代码签名（本地自签 `CN=Miasaki Dev`，SmartScreen 不再拦本机运行）
 
 **起因**：用户双击 `dist/Miasaki.exe` 被 Windows Defender SmartScreen 拦下
@@ -3178,3 +3650,153 @@ agentOptions),本轮把该能力固化为可重复使用的 DSH web profile bund
 
 - Tauri 2 薄壳 + 三主题(纯色/刻刻帝/狂狂帝)+ 原生 Win32 分层窗桌宠(鲸鱼娘/狂三/反转狂三)。
 - 用户验收通过("好了")。
+
+## 2026-09-24 · 拖拽上传附件到会话 S1–S3 落地（design/drag-drop-attachment-upload.md 实施）
+
+**起因**：用户点名「桌面端现在缺少拖拽上传附件到会话」。核查结论（设计 2026-09-22 定稿）：
+不是缺功能，是壳把官能入口关在门外——tauri-runtime-wry 默认 drag-drop handler 在
+WebView2 上 `SetAllowExternalDrop(false)` + `RegisterDragDrop`，页面级 HTML5 拖放被
+整体拦成无人监听的 `tauri://drag-drop`（本壳零监听）→ drop 静默丢失。
+
+**实施**（壳侧零业务逻辑，官方链路全量复用）：
+
+- **S1** `main.rs` 主窗 builder 追加 `.disable_drag_drop_handler()`——wry 不再注册
+  `IDropTarget`、不再关 `AllowExternalDrop` → WebView2 原生拖放直达页面。`cargo check
+  --bin miasaki` 通过（与并行会话同文件的在途工作未冲突，其探针已还原）。
+- **S2** 注入层安全网 `themes/src/09-dropguard.js`（自包含 IIFE，拼在 08-ready.js
+  闭合大 IIFE 之后）+ MANIFEST.order 登记 + `npm run gen-init`（10 片、87KB、令牌
+  校验过）。三判据：dragover 一律阻止（否则 drop 不触发）/ drop 只认 Files（文本链接
+  不干预，与官方同判据）/ `defaultPrevented` 放行（官方已消费的精准让位）。
+- **S3** `ui/loading.html` 独立第二道最小防默认（注入层本就走 initialization_script
+  覆盖启动页，S3 让本地页不依赖注入链；两处判据逐条一致）。
+
+**回归**：新增 `themes/test/dropguard.test.js` 4 例（order 登记 / 生成产物含片 /
+三判据 / 自包含无常驻状态）；`ui/test/loading-visual.test.js` 10 → 11 例（S3 行为：
+文件拖放阻止 / 官方已消费放行 / 文本链接不碰 / dragover 阻止）；`node scripts/verify-all.mjs`
+**99/99**（desktop 23/23，含 cargo 35 例）。**实机验收十项待用户重启桌面壳**
+（§3.1 新行：对话页拖图全链路 / 生成中拒绝态 / 轨迹设置页不炸 SPA / loading 无导航 /
+超大图官方 toast / 窗口手势与桌宠回归）。
+
+## 2026-09-24 · 启动加载 S4a-2 启动计时（诚实的「已等待」读数）
+
+**起因**：S4a 视觉层落地后复查启动体验——Rust 阶段词汇齐（正在唤醒/正在拉起/仍在等待/已就绪），
+但冷启动 3~6s、重拉等待最坏 90s 期间页面只有一行静止文案，用户对「卡了还是在走」没有判断依据。
+
+**实施**（`ui/loading.html`，纯页面侧零 Rust 依赖）：`#boot-timer` 读数——250ms tick、
+`tabular-nums` 等宽防跳动、小于 10s 给一位小数；**就绪即停并隐藏**（马上退场）；
+失败路径继续走表（超时文案旁挂着的耗时就是排查线索）。**纪律**：只读 elapsed，
+不出假百分比（§4.1「不假装」同款）；纯文本读数无动效，reduced-motion 零影响。
+不抢占 S4b（日志流 / 阶段进度仍随 S3 stdout tee 钩子落地）。
+
+**回归**：`ui/test/loading-visual.test.js` 8 → 10 例（计时即时读数 / 250ms 推进 /
+就绪停表且读数冻结 / 无百分比形态 / 无动画）；VM 上下文注入 `setInterval/clearInterval`
+（vm 不继承 Node 全局，缺了整段页面脚本会求值崩）。`verify-all` desktop 22/22 不变
+（同一测试文件扩例，不增检查位）。
+
+## 2026-09-24 · 启动加载 S4a 视觉层（boot-loading-terminal §4.2 无 Rust 依赖部分）
+
+**起因**：用户点名启动加载界面「太简单不符合本项目……加载页弄酷炫一点」。设计 2026-09-22
+已定稿（`design/boot-loading-terminal.md`），其 S4 页面半依赖 S3 的 stdout tee 钩子
+（`__appendLog` / `__setPhase`，Rust 半未做）；本轮先落地**不需要数据钩子**的视觉层，
+日志流与四阶段进度（S4b）留待 S3 同批接。
+
+**实施**（全部在 `ui/loading.html`，纯 CSS transform/opacity、零 JS 动画循环、零新增色）：
+
+- 纹章外环缓旋 24s + 呼吸光晕 3s（三枚主题纹章 SVG 各加 `mia-boot-halo` 圆——
+  `fill: var(--mia-accent)` 跟主题换色，blur 静态施加、动画只碰 opacity/scale；
+  外环组装进 `<g class="mia-boot-ring">`，`transform-box: fill-box` 绕自身中心）；
+- 舞台扫描线：88px 窄带 4s 自上而下，opacity .06（design 上限），pointer-events:none；
+- 就绪纹章回弹 1.06/600ms：`__setStatus` 按就绪文案派生触发（Rust 侧 `__setPhase('ready')`
+  落地后改显式钩子，`__setReady` 已预留且幂等）；
+- `prefers-reduced-motion: reduce` 全量静止（设计 §6-6 降级项）。
+
+**回归**：新增 `ui/test/loading-visual.test.js`（8 例 ESM，`ui/test/package.json` 指定模块类型）——
+动画属性白名单（只准 transform/opacity）/ 扫描线上限 / 零字面量新色 / reduced-motion 全覆盖 /
+`.mia-boot-*` 类名纪律 / 标记结构（三 halo + 三旋转组 + SVG 组配平）/ VM 驱动就绪触发与幂等；
+接入 `verify-all` desktop 线（20 → 21 项）。`node scripts/verify-all.mjs desktop` 21/21 PASS
+（含并行会话 dot.rs 重构后的 cargo 35 例）。
+
+**待实机验收**：冷启动三主题目检（亮主题 kurkuriel 扫描线对比度重点）/ 就绪回弹 /
+减少动画效果降级 / 失败路径零回归。S1–S3（闪窗根治 + stdout tee）未动，见 TODO 同项拆分。
+
+## 2026-09-25 · 启动失败可见化（「桌宠出来了、主界面一直不出来」根治性定位）
+
+**起因**：用户报「桌面端还是打不开」——现象是**桌宠正常出现、主界面窗口永不出现**，且全程无任何提示。
+
+**定位过程（现场实测，非推断）**：
+
+1. **主窗确实被创建过，但句柄随即消失**。在 `setup` 逐点埋桩得到：
+   `setup: main window built` → `hwnd 获取失败: the underlying handle is not available`
+   —— `WebviewWindowBuilder::build()` **返回 Ok 且不 panic**，但窗口 HWND 已被回收，
+   于是主窗不显示、`on_page_load` 的 `show()` 与 800ms 兜底 `show()` 全部静默失败。
+   桌宠是原生 Win32 分层窗（纯 GDI、不依赖 WebView2）→ 照常显示，形成「只剩桌宠」的现象。
+2. **上游诱因：进程写不了用户数据目录**。同一进程里埋点能写工作区文件，
+   但写 `%LOCALAPPDATA%\miasaki\*` 与 `%LOCALAPPDATA%\com.miasaki.desktop\EBWebView\*`
+   一律 `os error 5（拒绝访问）` → WebView2 环境创建失败 → 主窗报废。
+3. **决定性判据：进程完整性级别**（`TokenIntegrityLevel`，同一二进制换位置对比）：
+
+   | 位置 | 完整性 | 结果 |
+   |---|---|---|
+   | `…\dsh-miasaki-desktop\dist\Miasaki.exe`（用户目录） | `0x1000` = **Low** | 写不了 `%LOCALAPPDATA%` → 主窗不出 |
+   | `C:\ProgramData\MiasakiApp\Miasaki.exe` | `0x2000` = Medium | **正常打开（`bootstrap.phase=up`）** |
+   | `C:\MiasakiApp\Miasaki.exe` | `0x2000` = Medium | 同上 |
+
+   同一份 `node.exe` 复制进用户目录也变 Low、放回 `C:\Program Files` 即 Medium
+   —— 证明**降权由路径（用户可写目录）触发，与文件名、签名、二进制内容都无关**。
+   本机 `HKCU\…\AppCompatFlags\Layers` 与 IFEO 均无 miasaki 条目、`__COMPAT_LAYER` 为空，
+   排除兼容性层；低完整性进程无权写 Medium 完整性的用户目录，这就是「打不开」的机理。
+
+**实施（`src-tauri/src/main.rs`，只增不改语义）**：
+
+- 新增 `show_native_error()` —— 用 `MessageBoxW` 弹原生框，**刻意不依赖 WebView2**
+  （调用场景正是 WebView2 起不来，用页面弹提示等于让哑巴喊话）；
+- 兜底 `show()` 之后再复查一次（2.6s）：窗口仍不可见即判定 WebView2 初始化失败 →
+  写 `pet.log` + 弹原生框，给出「加白名单 / 结束残留进程 / 日志路径」三条排查指引。
+  **正常路径不受影响**（窗口已可见 → 直接 return，幂等）。
+
+**规避与交付**：可用版本已部署到 `C:\ProgramData\MiasakiApp\Miasaki.exe`（系统目录，逃脱降权），
+桌面生成 `Miasaki 桌面端.lnk` 指向它；原 `Miasaki-dsh.lnk` 仍指向用户目录下的
+`dist\Miasaki.exe`，**本机上该位置必然被降权，不要再作入口**。
+
+**回归**：`cargo check --release` 通过；实机以系统目录版本启动 → 主窗
+`class='Tauri Window' title='Miasaki · DSH'` 可见 + `bootstrap.json` 写入 `phase=up`。
+**注**：本机 `cargo build --release` 偶发 rustc `0xc0000409 / 0xc0000005`（重跑即过，
+与本次代码无关，疑似环境侧干扰），遇到时重跑即可。
+
+## 2026-09-25 · 启动失败复发的防呆加固（构建产物 → 系统目录一键同步）
+
+**起因**：21:22 用户再报同一个弹窗。现场取证确认是**当日已定位问题的复发**，不是新故障：
+
+| 证据 | 观察 |
+|---|---|
+| 启动路径 | `…\dsh-miasaki-desktop\dist\Miasaki.exe`（用户可写目录 → 本机必降权） |
+| `pet.log` | 停在 20:20:40，21:22 之后**一行未增**（低权写不进 `%LOCALAPPDATA%\miasaki`） |
+| `EBWebView` | 20:20:41 之后零文件变更；21:22 实例未拉起任何新的 `msedgewebview2` |
+| 窗口枚举 | 该进程只有 `MiasakiPetWin` / `MiasakiPetDot` / 托盘窗口，**无** `Tauri Window` |
+| 对照 | dist 与 `C:\ProgramData\MiasakiApp\Miasaki.exe` **SHA256 相同**（`DDA711…57CD`），差别只在目录 |
+
+顺带排除两个误判方向：18:47/19:02 启动的 3 个孤儿 `msedgewebview2`（20:05 那次成功运行时它们已在跑，
+且本轮未触碰 `EBWebView`）与 C 盘剩余 5.5 GB，均非诱因。
+
+**根因（工程侧而非代码侧）**：`Miasaki-dsh.lnk`（2026-09-06 建立）仍指向 `dist\Miasaki.exe`，
+而构建产物没有任何落地环节——「构建完顺手双击 dist」必然踩降权陷阱，这就是复发路径。
+
+**实施**：
+
+- **新增 `scripts/deploy-local.ps1`**：把 `dist\{Miasaki.exe, ui\}` 同步到系统目录
+  （默认 `C:\ProgramData\MiasakiApp`；`ui` 走 `robocopy /MIR` 防旧帧残留），带 exe 占用检测
+  （`-Force` 自动结束运行中实例）、SHA256 一致性校验、`-FixShortcuts` 修正桌面仍指向用户目录的
+  旧快捷方式；`package.json` 增 `npm run deploy`。
+- **弹窗文案分流**（`main.rs`「启动失败可见化」段，仅改失败分支文案）：按启动位置判断，exe 在
+  `%USERPROFILE%` 之下时直接点名「改用 `C:\ProgramData\MiasakiApp\Miasaki.exe`」并说明
+  「加白名单 / 换文件名 / 换副本皆无效」；非用户目录时保留原安全软件排查方向。文案新增
+  **启动位置**一栏与「被降权时日志写不进去」的说明。
+- **README §启动失败排查**增「构建后必做」小节。
+
+**自检（临时目标目录，不碰在用实例）**：以 `-Target $env:TEMP\…` 跑完整流程 8 项 PASS、退出码 0；
+重复跑第二遍（robocopy 无变化）仍 `8 通过 / 0 失败`、退出码 0；目标不可写时给出
+`FAIL 目标目录可写` + `abort`、退出码 1。自检暴露并修掉两处问题：
+① robocopy 退出码 1（=有文件被复制，属成功语义）会**泄漏成脚本退出码**，使成功部署返回 1 —— 已显式
+归零并在成功末尾 `exit 0`；② 占用判据从「有 Miasaki 在跑」收紧为「**跑的就是目标 exe**」，
+避免跑在别处的实例无谓挡住部署。
+

@@ -11,12 +11,33 @@
 
   // DSH web 鉴权 cookie 注入（v2026-09-05 修复「桌面端黑屏」）：
   // dsh web 重启后旧 cookie 失效 → 401 纯文本页（深色底 = 黑屏）。
-  // 此处用持久 secret 动态签一个 30 天 cookie，并在 401 页自动重载。
+  //
+  // 本段是**兜底链**：主路径是 loading 页用 `~/.dsh/.credentials.yaml` 里的
+  // browser-session.secret 签好 cookie、经 IPC 预置进 WebView2（main.rs set_auth_cookie），
+  // 使首次 `GET /` 即带有效 cookie，401 不发生。
+  //
+  // 2026-09-23 加固（复审 P2-B，两处）：
+  //  ① **绝不改写已有 `dsh-auth-*` cookie 的值**：init script 无 IPC，本段只有硬编码
+  //     兜底 secret，而预置 cookie 用的是 credentials 里的真 secret。两者一旦漂移，
+  //     无条件覆写会把**有效**cookie 换成无效的 —— 首次导航成功，下一次整页导航即 401，
+  //     正是「预置注入」要防的场景被兜底链自己制造出来。现在只在**无 cookie**时签名；
+  //     有 cookie 时仅按**原值**续写 Max-Age（保留「预置 session cookie → 持久 cookie」
+  //     的原设计意图，但不动值）。
+  //  ② 401 → reload 补**跨文档熔断**：原实现只在单个文档内做四轮停检，跨文档可无限
+  //     reload（每次新文档都重签/重判）。现用 sessionStorage 记次数，超过上限停止重载
+  //     并显示可见错误提示；第 MAX 次前若「有 cookie 却仍 401」，清掉这份无效 cookie，
+  //     给兜底签名最后一次自愈机会。
+  /* @slice:auth-cookie:begin —— themes/test/auth-cookie.test.js 按此标记截段做行为闸门，勿删/勿改本行 */
   ;(function () {
     try {
       if (location.origin !== 'http://127.0.0.1:3080') return
       if (typeof crypto === 'undefined' || !crypto.subtle) return
-      var SECRET_B64 = '2h4nw6Dhj2bmzH3ATVS3MAcld_4DEW1PieSSOi_ETas'
+      var SECRET_B64 = '2h4nw6Dhj2bmzH3ATVS3MAcld_4DEW1PieSSOi_ETas' // 仅无 cookie 时使用
+      var AUTHORITY = '127.0.0.1:3080'
+      var COOKIE_PREFIX = 'dsh-auth-'
+      var COOKIE_TAIL = '; Path=/; Max-Age=2592000; SameSite=Strict'
+      var RELOAD_KEY = 'miasaki.auth.reloads'
+      var MAX_RELOADS = 3
       var b64url = function (u8) {
         var s = ''
         for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i])
@@ -28,50 +49,141 @@
         for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
         return u8
       }
-      var run = function () {
-        var secret = fromB64url(SECRET_B64)
-        return crypto.subtle.importKey('raw', secret, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+
+      // ---- 已有鉴权 cookie 的读写（cookie 名固定为 dsh-auth-<sha256(authority)>） ----
+      var readAuthCookie = function () {
+        var jar = String(document.cookie || '').split(';')
+        for (var i = 0; i < jar.length; i++) {
+          var item = jar[i].replace(/^\s+/, '')
+          if (item.indexOf(COOKIE_PREFIX) !== 0) continue
+          var eq = item.indexOf('=')
+          if (eq <= 0) continue
+          var value = item.slice(eq + 1)
+          if (value !== '') return { name: item.slice(0, eq), value: value }
+        }
+        return null
+      }
+      var dropAuthCookie = function (name) {
+        try { document.cookie = name + '=; Path=/; Max-Age=0' } catch (e) { /* ignore */ }
+      }
+
+      // ---- 兜底签名（只在无 cookie 时执行） ----
+      var signFallback = function () {
+        return crypto.subtle.importKey('raw', fromB64url(SECRET_B64), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
           .then(function (key) {
             var issued = Date.now()
             var expires = issued + 30 * 86400 * 1000
-            var payload = JSON.stringify({ version: 1, authority: '127.0.0.1:3080', issuedAt: issued, expiresAt: expires })
+            var payload = JSON.stringify({ version: 1, authority: AUTHORITY, issuedAt: issued, expiresAt: expires })
             var body = b64url(new TextEncoder().encode(payload))
             return crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)).then(function (sig) {
-              return { body: body, sig: b64url(new Uint8Array(sig)) }
+              return body + '.' + b64url(new Uint8Array(sig))
             })
           })
-          .then(function (p) {
-            return crypto.subtle.digest('SHA-256', new TextEncoder().encode('127.0.0.1:3080')).then(function (dig) {
-              var name = 'dsh-auth-' + b64url(new Uint8Array(dig))
-              document.cookie = name + '=v1.' + p.body + '.' + p.sig + '; Path=/; Max-Age=2592000; SameSite=Strict'
-              // init script 运行于 document_start，body 尚未就绪：多轮复查 401 页并重载。
-              // 2026-09-22 加固（auth-cookie-prepinject 设计 §2.4）：401 是 text/plain
-              // 纯文本文档，body/innerText 无保证 → 三级文本兜底 + 四轮检查（漏检即永久
-              // 停住） + 文案加宽。预置注入（main.rs）生效时此链不触发，纯兜底。
-              var is401 = function () {
-                try {
-                  if (document.body) {
-                    var t = (document.body.innerText || '') || (document.body.textContent || '')
-                    if (t && (t.indexOf('authentication required') !== -1
-                      || t.indexOf('reopen the URL printed') !== -1)) return true
-                  }
-                  var r = document.documentElement
-                  if (r && r.textContent && (r.textContent.indexOf('authentication required') !== -1
-                    || r.textContent.indexOf('reopen the URL printed') !== -1)) return true
-                } catch (e2) { /* ignore */ }
-                return false
-              }
-              var check = function () { if (is401()) location.reload() }
-              check()
-              setTimeout(check, 100)
-              setTimeout(check, 400)
-              setTimeout(check, 1200)
+          .then(function (signed) {
+            return crypto.subtle.digest('SHA-256', new TextEncoder().encode(AUTHORITY)).then(function (dig) {
+              document.cookie = COOKIE_PREFIX + b64url(new Uint8Array(dig)) + '=v1.' + signed + COOKIE_TAIL
             })
           })
       }
-      run().catch(function () {})
+      var ensureCookie = function () {
+        var existing = readAuthCookie()
+        if (existing !== null) {
+          // 同值续写：把预置的 session cookie 升级为持久 cookie（原设计意图），
+          // 值一个字节都不动 —— 见段首 ①。
+          try { document.cookie = existing.name + '=' + existing.value + COOKIE_TAIL } catch (e) { /* ignore */ }
+          return Promise.resolve()
+        }
+        return signFallback()
+      }
+
+      // ---- 401 检测（原逻辑保持不变：text/plain 文档 body/innerText 无保证，三级兜底） ----
+      var is401 = function () {
+        try {
+          if (document.body) {
+            var t = (document.body.innerText || '') || (document.body.textContent || '')
+            if (t && (t.indexOf('authentication required') !== -1
+              || t.indexOf('reopen the URL printed') !== -1)) return true
+          }
+          var r = document.documentElement
+          if (r && r.textContent && (r.textContent.indexOf('authentication required') !== -1
+            || r.textContent.indexOf('reopen the URL printed') !== -1)) return true
+        } catch (e2) { /* ignore */ }
+        return false
+      }
+
+      // ---- 跨文档熔断计数（sessionStorage：同标签页跨导航保留，新窗口自然归零） ----
+      var readCount = function () {
+        try {
+          var n = parseInt(sessionStorage.getItem(RELOAD_KEY) || '0', 10)
+          return isNaN(n) || n < 0 ? 0 : n
+        } catch (e) { return 0 }
+      }
+      var writeCount = function (n) {
+        try { sessionStorage.setItem(RELOAD_KEY, String(n)) } catch (e) { /* ignore */ }
+      }
+      var clearCount = function () {
+        try { sessionStorage.removeItem(RELOAD_KEY) } catch (e) { /* ignore */ }
+      }
+      // 复位只在**确实到达正常文档**时做：本段跑在 document_start，那时 body 尚不存在，
+      // is401() 必然为 false —— 若据此复位，熔断计数永远归零、等于没有熔断。
+      var resetIfDocumentSettled = function () {
+        try {
+          var rs = document.readyState
+          if (rs === 'interactive' || rs === 'complete') clearCount()
+        } catch (e) { /* ignore */ }
+      }
+      var showHalt = function (tries) {
+        var paint = function () {
+          try {
+            if (!document.body || document.getElementById('miasaki-auth-halt') !== null) return
+            var el = document.createElement('div')
+            el.id = 'miasaki-auth-halt'
+            el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;background:#7f1d1d;'
+              + 'color:#fff;font:12px/1.7 monospace;padding:8px 12px;white-space:pre-wrap'
+            el.textContent = 'MIASAKI: 鉴权 cookie 注入失败 —— 已连续重载 ' + tries + ' 次仍返回 401，停止自动重载。\n'
+              + '可能原因：~/.dsh/.credentials.yaml 的 client-connection/browser-session.secret 与 00-boot 兜底常量不一致'
+              + '（桌面端重启会用真 secret 自动预置，可先重启）。\n'
+              + '处理：重启桌面端；仍不行则清除 127.0.0.1:3080 的站点数据 / cookie 后重开。'
+            document.body.appendChild(el)
+          } catch (e) { /* ignore */ }
+        }
+        try {
+          if (document.body) paint()
+          else document.addEventListener('DOMContentLoaded', paint)
+        } catch (e) { /* ignore */ }
+      }
+
+      var reloading = false
+      var check = function () {
+        if (reloading) return
+        if (!is401()) { resetIfDocumentSettled(); return }
+        var n = readCount() + 1
+        writeCount(n)
+        if (n > MAX_RELOADS) { showHalt(MAX_RELOADS); return }
+        // 最后一次机会：已有 cookie 却仍是 401 → 这份 cookie 已无效，清掉它，
+        // 让 reload 后的文档走「无 cookie → 兜底签名」路径。
+        if (n === MAX_RELOADS) {
+          var stale = readAuthCookie()
+          if (stale !== null) dropAuthCookie(stale.name)
+        }
+        reloading = true
+        location.reload()
+      }
+      var armChecks = function () {
+        // 四轮检查（2026-09-22 加固）：401 是 text/plain 文档，body/innerText 到位时机
+        // 无保证，漏检即永久停住。文档解析完成时再挂一次（此时判定最可靠）。
+        check()
+        setTimeout(check, 100)
+        setTimeout(check, 400)
+        setTimeout(check, 1200)
+      }
+      try { document.addEventListener('DOMContentLoaded', check) } catch (e) { /* ignore */ }
+
+      // 签名失败也必须挂上 401 兜底检查（原来整段在 .then 里，失败即静默停摆）。
+      ensureCookie().then(armChecks, armChecks)
     } catch (e) { /* ignore */ }
   })()
+  /* @slice:auth-cookie:end */
 
   // 全局错误陷阱：异常可视化到屏幕左上角（诊断用，可被 MiMo 读取）
   // 只保留**最新一条**（2026-09-23 修复）：早期实现每次 error 都 appendChild 一个
@@ -79,9 +191,31 @@
   // 会话区）。改为复用同一个 div 更新文本；重入场景（页面重渲染把旧节点清掉）
   // 由 parentNode 判空兜底重建。次数由文本内 [N] 承担，ERR_COUNT 另有 hash
   // 诊断位消费，语义不变。
+  //
+  // 2026-09-25 过滤浏览器调度产物：Chrome/WebView2 在 ResizeObserver 回调引起
+  // 观察元素尺寸反复变化、超过单帧派发上限时，会以 ErrorEvent 形式向 window 抛
+  // "ResizeObserver loop completed with undelivered notifications."
+  // （Firefox 措辞 "ResizeObserver loop limit exceeded"）。该事件**没有脚本来源**
+  // （filename 落文档 URL、lineno 为 0），触发者是宿主页面自身的观察器（DSH 本体的
+  // 流式跟滚 / 布局过渡 / 虚拟列表），与注入层无关：注入层全部覆盖物均为
+  // position:fixed，唯一自建 RO（侧栏几何同步）只读布局、只写 fixed 标题栏，
+  // 结构上不可能自反馈成环（2026-09-25 实机截图复现后逐环路核查确认）。
+  // 这类事件若照单全收：①红条误报注入层缺陷；②ERR_COUNT 随宿主页每次布局过渡
+  // 虚增，污染 hash diag 的 errCount 诊断位与 Rust 日志。故按「消息变体 + 无脚本
+  // 来源」双重判据直接忽略——宁可漏显示一条无法定位的浏览器内部提示，也不让
+  // 诊断通道长期「狼来了」。
+  function isBrowserArtifactError(e) {
+    try {
+      var m = String((e && e.message) || '').replace(/^\s+|\s+$/g, '')
+      if (!/^ResizeObserver loop (completed with undelivered notifications\.|limit exceeded\.?)$/.test(m)) return false
+      // 真实脚本异常必有行号；调度产物类事件 lineno 为 0/缺失
+      return !e.lineno
+    } catch (e3) { return false }
+  }
   var ERR_COUNT = 0
   var ERR_BAR = null
   window.addEventListener('error', function (e) {
+    if (isBrowserArtifactError(e)) return
     ERR_COUNT++
     try {
       if (ERR_BAR === null || ERR_BAR.parentNode === null) {
@@ -132,5 +266,7 @@
     var bs = localStorage.getItem('miasaki.bright')
     if (bs === 'light' || bs === 'dark' || bs === 'system') BRIGHT = bs
   } catch (e) { /* ignore */ }
-  var PET_MODES = { pure: 'whale', zafkiel: 'kurumi', kurkuriel: 'inverse' }
+  // W0-T0.3（2026-09-25）删除 PET_MODES：它与 Rust 侧 main.rs:947 `pet_mode_for` 是重复定义，
+  // 且唯一使用者 notifyPet 已随 `set_pet_mode`（未注册命令）一并删除。主题→桌宠角色的
+  // 事实源在 Rust 侧，改映射时只改 main.rs:947 与 pet_native/dot.rs:34（两者互相标注）。
 

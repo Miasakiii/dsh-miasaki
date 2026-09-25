@@ -65,7 +65,7 @@
 | spawn_dsh 前 | `dshAvailable = where dsh 结果`；失败 → `phase: spawn, detail: 错误原文` |
 | spawn 后轮询 | 每 3s 更新 `phase: waiting`（轻量，避免每 400ms 写盘） |
 | 导航 3080 成功（on_page_load 匹配） | `phase: up` + 更新 `lastOk` |
-| 轮询超时（90s 未就绪） | `phase: waiting` + detail「端口 3080 长时间未就绪，可能被其他程序占用」 |
+| 轮询超时（90s 未就绪） | `phase: waiting` + detail「端口 3080 长时间未就绪：可能被其他程序占用，或 dsh 拉起后立即退出」（2026-09-23 补第二种归因） |
 
 - 损坏处理：JSON 解析失败 / version ≠ 1 / 字段缺失 → **删除文件重建默认**（不静默零值）。
 - 原子写：`write temp → rename`（借鉴 window.json 的既有风险点顺手修正：save_window_state 同步改造）。
@@ -90,7 +90,8 @@
 ```
 
 - 视觉：沿用现有暗紫风格；失败卡片为红色提示（#c23a2e 已有品牌色），按钮样式复用 #retry。
-- 加载中不展示卡片；90s 超时后 `__setRetry(true)` + 状态文本说明端口占用排查方法。
+- 加载中不展示卡片；90s 超时后 `__setRetry(true)` + 状态文本说明排查方法（并列「端口被占用」
+  与「dsh 拉起后立即退出」两种归因——spawn 成功不代表进程存活）。
 
 ### 4.3 dsh 检测与语义化错误
 
@@ -98,7 +99,7 @@
 |---|---|---|
 | dsh 未安装 | `where dsh` 无结果 | 「未检测到 dsh，请安装 DeepSeek Harness……（附安装指引）」，提供检查/打开终端 |
 | spawn 失败（其他） | 错误原文 | 失败卡片 + 打开日志目录 |
-| 端口占用 | 90s 未就绪但 spawn 成功 | 「端口 3080 长时间未就绪」+ netstat 排查指引（打开终端按钮） |
+| 端口占用 / 进程秒退 | 90s 未就绪但 spawn 成功 | 「端口 3080 长时间未就绪」+ netstat 排查指引（打开终端按钮）；文案并列两种归因（2026-09-23） |
 | 单实例冲突 | tauri-plug-in-single-instance（现状已处理） | 二次启动仅唤起（不变） |
 
 ### 4.4 新增/修改命令
@@ -112,6 +113,25 @@
 | `export_diagnostics` | 聚合 server.log + pet.log + bootstrap.json + window.json + pet.json → `diagnostics-<ts>.txt`（≤1MB 截断），返回路径 | 只读副本 |
 
 导出 v1 为聚合文本（零 crate 依赖守则）；v2 若需 zip 再评估手写 stored-ZIP 或 `Compress-Archive`。
+
+### 4.5 主窗口可见性与导航容错（2026-09-23 加固）
+
+- **主窗口可见性兜底**：主窗口以 `.visible(false)` 建出、靠 `on_page_load` 回调 `show()`
+  （避免加载期白闪）。WebView2 对不可见宿主有可见性优化，极端情况下首帧页面根本不加载 →
+  回调永不触发 → `show()` 永不执行 → **主窗口永久不可见**。兜底：建窗后 800ms 检查一次
+  `is_visible()`，仍不可见则补一次 `show()` + 写 `pet.log`，`on_page_load` 随后照常走原流程。
+  **判据只能是可见性本身**：`PAGE_UP` 的语义是「3080 文档加载成功」（与 §4.1 的 `phase: up`
+  同源，`on_page_load` 命中远程 URL 才置位），后端冷启动 3~6s，800ms 时必为 false——
+  用它做判据会让兜底每次启动都误触发、观测数据失真。
+  **三态分明（2026-09-23 二轮复审 P3）**：`is_visible()` 返回 `Result`，`Err`（窗口已销毁，
+  例如用户在 800ms 内关窗）与 `Ok(false)`（真不可见）是两件事。原实现 `unwrap_or(false)` 把
+  两者混为一谈，会在关窗场景留下「`on_page_load` 未触发？」的误导归因。现改为 `match`：
+  `Ok(true)` 不动作 / `Ok(false)` 记「仍不可见」+ `show()` / `Err(e)` 记「可见性查询失败（e）」
+  + 仍尝试 `show()`（兜底目的与幂等性不变，只是日志各说各的）。
+- **导航容错**：导航地址来自 `remote_url()`（可被环境变量 `MIASAKI_REMOTE` 覆盖），解析失败
+  或 WebView 拒绝导航时统一走 `navigate_main()` 的 `Result` 分支：落盘 + 状态栏可见反馈 +
+  `__setRetry(true)`。不再用 `expect`（release 是 `panic = "abort"`，一处配置写错会终止整个
+  桌面端进程），也不再 `let _ =`（失败后界面永远停在「已就绪，正在进入…」，用户无从判断）。
 
 ## 5. 分级清单
 

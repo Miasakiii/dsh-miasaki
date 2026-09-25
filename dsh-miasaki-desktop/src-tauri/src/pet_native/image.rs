@@ -55,6 +55,9 @@ pub(crate) struct Frames {
     /// R5(2026-09-16):审批气泡（240x84，含「拒绝 / 允许一次」两个按钮）。
     /// 独立于 22 帧精灵表（帧高不同），由 `scripts/gen-bubbles.ps1` 一并生成。
     pub(crate) approval: Option<Image>,
+    /// 2026-09-24:隐藏态悬浮球的球面素材——主题头像徽章（96×96，键见 `dot::avatar_key`）。
+    /// 与设置面板主题选择器同一批图（`scripts/make-icons.mjs` 产出，编译期内嵌）。
+    pub(crate) avatars: HashMap<String, Image>,
 }
 
 impl Frames {
@@ -136,6 +139,19 @@ pub(crate) fn load_frames() -> Frames {
     // 素材缺失 → Frames.approval = None → 运行时不画审批气泡（宁可不显示，也不画空按钮）。
     if let Some(bytes) = crate::assets::read("pets/approval.png") {
         f.approval = load_png(&bytes);
+    }
+    // 2026-09-24:隐藏态悬浮球的主题头像徽章（键与 `dot::avatar_key` 对齐；素材名 ≠ 主题名，
+    // kurkuriel 用 theme-inverse.png）。缺失 → 运行期回落为主题色实心球，不影响其余功能。
+    for (key, rel) in [
+        ("pure", "icons/theme-pure.png"),
+        ("zafkiel", "icons/theme-zafkiel.png"),
+        ("inverse", "icons/theme-inverse.png"),
+    ] {
+        if let Some(bytes) = crate::assets::read(rel) {
+            if let Some(img) = load_png(&bytes) {
+                f.avatars.insert(key.to_string(), img);
+            }
+        }
     }
     if let Some(bytes) = crate::assets::read("pets/frames.json") {
         if let Ok(txt) = String::from_utf8(bytes) {

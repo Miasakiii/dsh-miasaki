@@ -11,6 +11,13 @@
     pure（中性暗）/ zafkiel（暗夜鎏金）/ kurkuriel（骨白血绯）三套色板 + 主题纹章。
   · 当前主题由 Rust 启动时经 __MIA_THEME__ 注入（持久化于 DSH 页主题选择，见 main.rs prefs）。
 -->
+<!--
+  S4a visual layer (2026-09-24, design/boot-loading-terminal.md 4.2, the no-Rust half):
+  crest ring slow spin + breathing halo / stage scanline / ready crest rebound — all pure
+  CSS (transform+opacity), zero JS animation loops; prefers-reduced-motion stills everything.
+  The log stream and phase progress (S4b) land with the S3 stdout-tee hooks
+  (__appendLog / __setPhase); contract in that design 4.1.
+-->
 <style>
   /* —— 主题变量：默认 = zafkiel（刻刻帝 · 永夜钟阁，保持原观感）—— */
   :root {
@@ -68,6 +75,9 @@
   .wordmark { font-size: 22px; font-weight: 600; letter-spacing: .45em; text-indent: .45em; }
   .tag { font-size: 12px; color: var(--mia-muted); letter-spacing: .2em; }
   #status { font-size: 13px; color: var(--mia-muted); margin-top: 8px; max-width: 680px; text-align: center; }
+  /* S4a-2 启动计时：诚实读数（不出假百分比），文本级无动效 */
+  #boot-timer { display: none; font-size: 12px; color: var(--mia-hint); margin-top: 2px;
+                font-variant-numeric: tabular-nums; letter-spacing: .05em; }
   #retry {
     display: none; margin-top: 6px; padding: 7px 22px; font-size: 13px;
     border: 1px solid var(--mia-accent); border-radius: 6px; background: transparent;
@@ -91,36 +101,74 @@
   .diag-btns button:hover { background: var(--mia-accent-soft); }
   .hint { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center;
           font-size: 11px; color: var(--mia-hint); }
+  /* —— S4a 视觉层（设计 §4.2）：纯 CSS， transform/opacity only，零 JS 动画循环 —— */
+  /* 舞台扫描线：88px 窄带 4s 自上而下一循环，opacity ≤ .06（亮主题同参数，目检对比度） */
+  .mia-boot-scan {
+    position: fixed; left: 0; right: 0; top: 0; height: 88px; z-index: 0;
+    pointer-events: none; opacity: .06; will-change: transform;
+    background: linear-gradient(to bottom, transparent, var(--mia-accent-soft) 55%, transparent);
+    animation: mia-boot-scan 4s linear infinite;
+  }
+  @keyframes mia-boot-scan { from { transform: translateY(-88px); } to { transform: translateY(100vh); } }
+  /* 纹章外环缓旋：24s/圈（transform-box: fill-box 让 SVG 子组绕自身中心） */
+  .mia-boot-ring { transform-box: fill-box; transform-origin: center; animation: mia-boot-spin 24s linear infinite; }
+  @keyframes mia-boot-spin { to { transform: rotate(360deg); } }
+  /* 呼吸光晕：3s 明暗+微缩放（blur 静态施加，动画只碰 opacity/transform） */
+  .mia-boot-halo { transform-box: fill-box; transform-origin: center; filter: blur(9px);
+                   animation: mia-boot-breathe 3s ease-in-out infinite; }
+  @keyframes mia-boot-breathe {
+    0%, 100% { opacity: .18; transform: scale(1); }
+    50% { opacity: .5; transform: scale(1.09); }
+  }
+  /* 就绪回弹：纹章 1.06 缩放 600ms（贯穿金线的阶段进度属 S4b，此处只做纹章） */
+  .stage { position: relative; z-index: 1; }
+  body.mia-boot-ready .crest { animation: mia-boot-pop .6s ease-out; }
+  @keyframes mia-boot-pop { 0% { transform: scale(1); } 55% { transform: scale(1.06); } 100% { transform: scale(1); } }
+  /* 降级：系统「减少动画效果」→ 全部静止、功能不变（设计 §6-6） */
+  @media (prefers-reduced-motion: reduce) {
+    .mia-boot-scan { display: none; }
+    .mia-boot-ring, .mia-boot-halo, body.mia-boot-ready .crest { animation: none; }
+  }
 </style>
 </head>
 <body>
+  <div class="mia-boot-scan" aria-hidden="true"></div>
   <div class="stage">
     <div class="crest">
       <!-- 刻刻帝 · 永夜钟阁（默认） -->
       <svg class="cr-zafkiel" viewBox="0 0 96 96" aria-hidden="true">
+        <circle class="mia-boot-halo" cx="48" cy="48" r="44" fill="var(--mia-accent)"/>
+        <g class="mia-boot-ring">
         <circle cx="48" cy="48" r="44" fill="none" stroke="#d9b36a" stroke-width="2"/>
         <circle cx="48" cy="48" r="36" fill="none" stroke="rgba(217,179,106,.5)" stroke-width="1" stroke-dasharray="3 3"/>
         <g stroke="#d9b36a" stroke-width="1.4">
           <path d="M48 6v7"/><path d="M48 83v7"/><path d="M6 48h7"/><path d="M83 48h7"/>
           <path d="M18 18l5 5"/><path d="M78 18l-5 5"/><path d="M18 78l5-5"/><path d="M78 78l-5-5"/>
         </g>
+        </g>
         <path d="M48 48 L48 18" stroke="#c23a2e" stroke-width="2.6" stroke-linecap="round" transform="rotate(-42 48 48)"/>
         <circle cx="48" cy="48" r="2.4" fill="#d9b36a"/>
       </svg>
       <!-- 狂狂帝 · 白夜逆钟 -->
       <svg class="cr-kurkuriel" viewBox="0 0 96 96" aria-hidden="true">
+        <circle class="mia-boot-halo" cx="48" cy="48" r="40" fill="var(--mia-accent)"/>
+        <g class="mia-boot-ring">
         <path d="M14 48 A34 34 0 0 1 55 18" fill="none" stroke="#5e6572" stroke-width="2.6"/>
         <path d="M61 17 A34 34 0 0 1 82 53" fill="none" stroke="#5e6572" stroke-width="2.6" stroke-dasharray="8 5"/>
         <path d="M82 60 A34 34 0 0 1 48 82" fill="none" stroke="#5e6572" stroke-width="2.6"/>
         <path d="M44 82 A34 34 0 0 1 14 55" fill="none" stroke="#5e6572" stroke-width="2.6" stroke-dasharray="3 7"/>
+        </g>
         <path d="M42 36 L50 28 L44 40 L52 38 L46 50" fill="none" stroke="#9e1b1b" stroke-width="2.2" stroke-linejoin="round"/>
         <path d="M48 48 L48 26" stroke="#9e1b1b" stroke-width="2.6" stroke-linecap="round" transform="rotate(168 48 48)"/>
         <circle cx="48" cy="48" r="2.4" fill="#9e1b1b"/>
       </svg>
       <!-- 原版 · 简约纯净 -->
       <svg class="cr-pure" viewBox="0 0 96 96" aria-hidden="true">
+        <circle class="mia-boot-halo" cx="48" cy="48" r="42" fill="var(--mia-accent)"/>
+        <g class="mia-boot-ring">
         <circle cx="48" cy="48" r="42" fill="none" stroke="#9aa1ac" stroke-width="2"/>
         <circle cx="48" cy="48" r="34" fill="none" stroke="rgba(140,150,165,.45)" stroke-width="1" stroke-dasharray="2.5 4"/>
+        </g>
         <path d="M48 48 L48 20" stroke="#3964fe" stroke-width="2.4" stroke-linecap="round"/>
         <circle cx="48" cy="48" r="2.2" fill="#9aa1ac"/>
       </svg>
@@ -128,6 +176,7 @@
     <div class="wordmark">MIASAKI</div>
     <div class="tag">专属 DSH 桌面端</div>
     <div id="status">正在唤醒 DSH…</div>
+    <div id="boot-timer" aria-live="off"></div>
     <button id="retry" onclick="retry()">重试</button>
     <div id="diag">
       <div id="diag-note"></div>
@@ -136,6 +185,10 @@
         <button onclick="diag('open_terminal')">打开终端</button>
         <button onclick="diag('open_logs_dir')">打开日志目录</button>
         <button onclick="diag('export_diagnostics')">导出诊断</button>
+        <!-- W2（2026-09-25）：把原生「恢复选项」三按钮（退出 / 重启 / 停用第三方插件后重启）
+             暴露到失败页。命令由 Rust 侧 recovery.rs 注册，弹的是 Win32 MessageBox ——
+             不依赖 WebView2 健康度，这正是本页存在的意义。 -->
+        <button onclick="diag('recovery_dialog')">恢复选项</button>
       </div>
     </div>
   </div>
@@ -150,7 +203,39 @@
     window.__setStatus = function (t) {
       var el = document.getElementById('status');
       if (el) el.textContent = t;
+      // S4a：就绪回弹触发。Rust 就绪态当前只体现在状态文案（「已就绪，正在进入…」），
+      // 先按文案派生；S3 的 __setPhase('ready') 落地后改由显式钩子驱动（__setReady 已预留）。
+      // 第一分支即「就绪」（\u5c31\u7eea）：2026-09-24 三轮复审修掉一处写错的码位
+      // （曾写作 \u5c31\u7ed3 =「就结」，是永不命中的死分支，全靠第二分支侥幸兜住）。
+      if (/\u5c31\u7eea|\u6b63\u5728\u8fdb\u5165/.test(String(t))) window.__setReady();
     };
+    window.__setReady = function () {
+      if (document.body && !document.body.classList.contains('mia-boot-ready')) {
+        document.body.classList.add('mia-boot-ready');
+      }
+      window.__bootStopTimer();
+    };
+    // S4a-2 启动计时（2026-09-24）：冷启动 3~6s、重拉等待最坏 90s——给一个诚实的
+    // 「已等待」读数（不出假百分比，与设计 §4.1「不假装」同纪律）。就绪即停（马上退场）；
+    // 失败路径继续走表（超时文案旁挂着的耗时就是排查线索）。纯文本读数、无动效，
+    // reduced-motion 不受影响。
+    window.__bootStopTimer = function () {
+      if (window.__bootTimer) { clearInterval(window.__bootTimer); window.__bootTimer = null; }
+      var el = document.getElementById('boot-timer');
+      if (el) el.style.display = 'none';
+    };
+    (function () {
+      var el = document.getElementById('boot-timer');
+      if (!el) return;
+      var t0 = Date.now();
+      var render = function () {
+        var s = (Date.now() - t0) / 1000;
+        el.textContent = '已等待 ' + (s < 10 ? s.toFixed(1) : Math.floor(s)) + ' s';
+        el.style.display = 'block';
+      };
+      render();
+      window.__bootTimer = setInterval(render, 250);
+    })();
     window.__setRetry = function (show) {
       var el = document.getElementById('retry');
       if (el) el.style.display = show ? 'inline-block' : 'none';
@@ -184,6 +269,26 @@
         diag.style.display = 'flex';
       }
     }).catch(function () {});
+
+    // 拖放安全网（design/drag-drop-attachment-upload.md §4.3）：主窗已禁用 tauri 拖放
+    // handler（main.rs .disable_drag_drop_handler()），WebView2 原生拖放直达页面；
+    // 启动页拖入文件时阻止浏览器默认导航到 file://（会把启动页本身换掉）。注入层
+    // 09-dropguard.js 在本页同样生效，此处是独立第二道（本地页不依赖注入链）。
+    // 启动期没有会话，「排队等就绪再附」按设计 §7 不做。
+    ;(function () {
+      var isFileDrag = function (e) {
+        try {
+          return !!(e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.indexOf('Files') !== -1)
+        } catch (err) { return false }
+      }
+      var stop = function (e) { if (e.cancelable) e.preventDefault() }
+      document.addEventListener('dragover', stop, false)
+      document.addEventListener('drop', function (e) {
+        if (!isFileDrag(e)) return
+        if (e.defaultPrevented) return
+        stop(e)
+      }, false)
+    })();
 
     // 鉴权 cookie 预置（2026-09-22，design/auth-cookie-prepinject.md）：
     // dsh web 每次重启都有新签名 cookie，首次 GET / 必然 401（纯文本错误页）。

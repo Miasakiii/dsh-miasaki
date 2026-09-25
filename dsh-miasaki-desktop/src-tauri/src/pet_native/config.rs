@@ -2,7 +2,37 @@
 pub(crate) const WIN_W: i32 = 286;
 pub(crate) const WIN_H: i32 = 390;
 pub(crate) const CELL_H: usize = 270;
-pub(crate) const DOT_SIZE: i32 = 30;
+/// 隐藏态恢复入口悬浮球的窗口边长（2026-09-24 由 30 提到 56）。
+/// 旧值是 30px 实心紫圆——够点不够看；新值 = 球面（直径 38）+ 主题色环（2）
+/// + 外发光（4）+ 悬停放大余量（≈3），球心恒在窗口中心。
+pub(crate) const DOT_SIZE: i32 = 56;
+/// 球面（主题头像圆）半径。头像素材 96px 方形徽章缩放到直径 38。
+pub(crate) const DOT_FACE_R: f32 = 19.0;
+/// 头像素材相对球面的放大系数。
+///
+/// 不是「填满即可」：素材本身自带一圈主题环（`make-icons.mjs` 的 ringSvg，位于其半径的
+/// 91.7% 处），1:1 映射时它会落在球面内侧、与我们画的主题色环之间留一条暗缝（读作
+/// 「甜甜圈」）。放大 1.09 让素材自带环正好被球缘裁切、由主题色环接管，球面内只剩头像本体。
+pub(crate) const DOT_AVATAR_ZOOM: f32 = 1.09;
+/// 主题色环宽度（自球面外沿起算，紧贴球缘作描边）。
+pub(crate) const DOT_RING_W: f32 = 2.0;
+/// 外发光跨度（自环外沿起算，二次衰减到 0）。
+pub(crate) const DOT_GLOW_SPAN: f32 = 4.0;
+/// 悬停放大倍率：光标落在球上整体放大（离散两态，不做插值动画）。
+pub(crate) const DOT_HOVER_SCALE: f32 = 1.08;
+/// 悬停时外发光/高光的强度增益。
+pub(crate) const DOT_HOVER_BOOST: f32 = 1.45;
+/// 外发光峰值 alpha（悬停时乘 `DOT_HOVER_BOOST`，上限 255）。
+pub(crate) const DOT_GLOW_ALPHA: f32 = 96.0;
+/// 球面左上高光峰值 alpha（玻璃球质感）。实测 46 在 34px 球上过大，压到 34。
+pub(crate) const DOT_SPEC_ALPHA: f32 = 34.0;
+/// 球面高光斑半径系数（× 球面半径）。
+pub(crate) const DOT_SPEC_R: f32 = 0.52;
+/// 底部落影峰值 alpha（黑色，营造「悬浮」而非「贴屏」）——只作用在球体下半个环带，
+/// 上半不加权：否则球顶也会蒙一层灰，发光变成「脏雾」。
+pub(crate) const DOT_SHADOW_ALPHA: f32 = 72.0;
+/// 落影圆心下移量（球心坐标系，随悬停倍率缩放）。
+pub(crate) const DOT_SHADOW_DY: f32 = 1.8;
 // 预渲染气泡帧:生成于 scripts/gen-bubbles.ps1(系统字体在构建期出图,
 // 运行时只做像素叠加 —— 规避 Win11 多线程 GDI 字体堆损坏导致 CreateFontW 崩溃)
 pub(crate) const BUBBLE_W: i32 = 240;

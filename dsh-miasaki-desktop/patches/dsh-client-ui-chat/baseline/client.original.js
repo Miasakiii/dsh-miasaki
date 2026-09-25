@@ -76,6 +76,18 @@ window.__ModuleLoader__.load({
 			return path.startsWith("/") || isWindowsStylePath(path);
 		}
 		/**
+		* Resolve a Workspace-relative path into the Host-facing spelling used by path operations.
+		* @param cwd - Session Workspace root, when known.
+		* @param path - Absolute or Workspace-relative path.
+		* @returns an absolute path when a Workspace root is available, otherwise the original path.
+		*/
+		function resolveWorkspacePath(cwd, path) {
+			if (isAbsoluteWorkspacePath(path)) return path;
+			if (cwd === void 0 || cwd === "") return path;
+			const separator = isWindowsStylePath(cwd) && cwd.includes("\\") ? "\\" : "/";
+			return `${cwd.replace(/[/\\]+$/, "")}${separator}${path.replace(/^[/\\]+/, "")}`;
+		}
+		/**
 		* The address for a path as a caller holds it: a relative path, or an absolute
 		* path inside the Session's workspace, becomes a `session`-scoped address; an
 		* absolute path outside it, or one whose workspace root is unknown, keeps its
@@ -92,6 +104,16 @@ window.__ModuleLoader__.load({
 			if (root !== "" && normalized === root) return sessionFileAddress(sessionId, "");
 			if (root !== "" && normalized.startsWith(`${root}/`)) return sessionFileAddress(sessionId, normalized.slice(root.length + 1));
 			return sessionFileAddress(sessionId, normalized);
+		}
+		/**
+		* Address a decoded absolute file path through the authenticated file route.
+		* @param base - HTTP(S) application base, including its deployment prefix, or `dsh-app://app/`.
+		* @param path - Native file path; URL escapes in authored Markdown must already be decoded.
+		* @returns File URL, or undefined for unsupported transports and non-absolute paths.
+		*/
+		function fileMediaUrl(base, path) {
+			if (!/^https?:/u.test(base) && !base.startsWith("dsh-app://app/") || !isAbsoluteWorkspacePath(path) || /^[/\\]{2}/u.test(path) || /[\u0000-\u001f\u007f]/u.test(path)) return void 0;
+			return new URL(`api/file?path=${encodeURIComponent(path)}`, base).href;
 		}
 		//#endregion
 		//#region lib/types/client/contract/snapshot.js
@@ -161,7 +183,7 @@ window.__ModuleLoader__.load({
 			return useChat((snapshot) => {
 				for (const node of snapshot.nodes.values()) {
 					const root = node.kind === "tool-call" ? node.data.root : void 0;
-					if (root !== void 0 && root.callId === callId && !("kind" in root)) return commandOf(root);
+					if (root !== void 0 && root.callId === callId && !("kind" in root) && root.phase === "start") return commandOf(root);
 				}
 			}) ?? null;
 		}
@@ -189,7 +211,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/MessageItem.module.css.mjs
-		const css$17 = ".Sixlwa_userRow{flex-direction:column;align-items:flex-end;gap:6px;display:flex}.Sixlwa_userStack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702), 82%);flex-direction:column;align-items:flex-end;gap:8px;display:flex}.Sixlwa_bubble{background:var(--dsw-specific-bubble);max-width:100%;font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;border-radius:22px;padding:10px 16px}.Sixlwa_referenceSummary{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_contextRow{padding:2px 0}.Sixlwa_compactionRow{--dsh-compaction-header-height:calc(24px + var(--dsh-content-font-delta,0px));padding:2px 0}.Sixlwa_compactionButton{width:100%;height:var(--dsh-compaction-header-height);min-width:0;color:inherit;font:inherit;text-align:left;background:0 0;border:none;border-radius:6px;align-items:center;padding:0;display:flex}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton{z-index:7;background:var(--dsw-alias-bg-base);border-radius:0;position:sticky;top:0}.Sixlwa_compactionBody :has(>[data-code-block-banner]){top:var(--dsh-compaction-header-height)}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.Sixlwa_compactionButton:not(:disabled){cursor:pointer}.Sixlwa_compactionButton:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}.Sixlwa_compactionLeading{width:calc(16px + var(--dsh-content-font-delta,0px));height:calc(16px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-secondary);flex:none;place-items:center;margin-right:6px;display:inline-grid}.Sixlwa_compactionLeading svg{width:calc(14px + var(--dsh-content-font-delta,0px));height:calc(14px + var(--dsh-content-font-delta,0px))}.Sixlwa_compactionContextIcon,.Sixlwa_compactionDisclosureIcon{grid-area:1/1;justify-content:center;align-items:center;display:inline-flex}.Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionContextIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionContextIcon{opacity:0}.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionDisclosureIcon{opacity:1}.Sixlwa_compactionTitle{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary-dimmed);flex:none}.Sixlwa_compactionSep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.Sixlwa_compactionSummary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.Sixlwa_compactionBody{padding:4px 0 4px calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px))}.Sixlwa_retryRow{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_retrySummary{width:fit-content;color:inherit;cursor:pointer;user-select:none;border-radius:3px;align-items:center;gap:7px;padding:2px 0;list-style:none;display:inline-flex}.Sixlwa_retrySummary::-webkit-details-marker{display:none}.Sixlwa_retrySummary:after{content:\"\";opacity:.8;border-bottom:1.5px solid;border-right:1.5px solid;width:6px;height:6px;transition:transform .12s;transform:rotate(-45deg)}.Sixlwa_retrySummary:hover{color:var(--dsw-alias-label-secondary)}.Sixlwa_retrySummary:focus-visible{outline:1.5px solid var(--dsw-alias-button-info-fill);outline-offset:2px}.Sixlwa_retryText{color:inherit}.Sixlwa_retryRow[data-active] .Sixlwa_retryText{background:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-tertiary) 40%, var(--dsw-alias-label-secondary) 50%, var(--dsw-alias-label-tertiary) 60%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-position:100%;background-size:200% 100%;background-clip:text;animation:1.6s ease-in-out infinite Sixlwa_retry-shimmer}.Sixlwa_retryRow[open] .Sixlwa_retrySummary:after{transform:rotate(45deg)}.Sixlwa_retryDetails{overflow-wrap:anywhere;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px));gap:2px;margin-top:3px;padding-left:14px;display:grid}.Sixlwa_retryDetailLabel{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorRow{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));grid-template-columns:10px minmax(0,1fr) auto;align-items:start;gap:8px;padding:2px 0;display:grid}.Sixlwa_turnErrorDot{margin-top:5px}.Sixlwa_turnErrorCopy{overflow-wrap:anywhere;min-width:0}.Sixlwa_turnErrorTitle{color:var(--dsw-alias-state-error-primary);margin-right:6px;font-weight:600}.Sixlwa_turnErrorMessage{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorCode{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-markdown-code-block-small)}.Sixlwa_maxTokensTitle{color:var(--dsw-alias-state-warn-primary);margin-right:6px;font-weight:600}@keyframes Sixlwa_retry-shimmer{0%{background-position:100%}to{background-position:0}}@media (prefers-reduced-motion:reduce){.Sixlwa_retryRow[data-active] .Sixlwa_retryText{color:inherit;background:0 0;animation:none}}.Sixlwa_attachmentRow{flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:100%;display:flex}.Sixlwa_fileCard{border:.5px solid var(--dsw-alias-border-l2,#0000001f);background:var(--dsw-specific-input-major,transparent);box-sizing:border-box;border-radius:16px;flex:0 0 240px;align-items:center;gap:10px;width:240px;min-height:64px;padding:8px 12px;display:inline-flex}.Sixlwa_fileIcon{flex:none;width:28px;height:28px}.Sixlwa_fileContent{flex-direction:column;flex:1;min-width:0;display:flex}.Sixlwa_fileName{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:22px;overflow:hidden}.Sixlwa_fileMeta{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-tertiary,#00000073);font-size:12px;line-height:15px;overflow:hidden}";
+		const css$17 = ".Sixlwa_userRow{flex-direction:column;align-items:flex-end;gap:6px;display:flex}.Sixlwa_userStack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702), 82%);flex-direction:column;align-items:flex-end;gap:8px;display:flex}.Sixlwa_bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:100%;font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}.Sixlwa_referenceSummary{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_contextRow{padding:2px 0}.Sixlwa_compactionRow{--dsh-compaction-header-height:calc(24px + var(--dsh-content-font-delta,0px));padding:2px 0}.Sixlwa_compactionButton{width:100%;height:var(--dsh-compaction-header-height);border-radius:var(--dsw-radius-sm);min-width:0;color:inherit;font:inherit;text-align:left;background:0 0;border:none;align-items:center;padding:0;display:flex}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton{z-index:7;background:var(--dsw-alias-bg-base);border-radius:0;position:sticky;top:0}.Sixlwa_compactionBody :has(>[data-code-block-banner]){top:var(--dsh-compaction-header-height)}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.Sixlwa_compactionButton:not(:disabled){cursor:pointer}.Sixlwa_compactionButton:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}.Sixlwa_compactionLeading{width:calc(16px + var(--dsh-content-font-delta,0px));height:calc(16px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-secondary);flex:none;place-items:center;margin-right:6px;display:inline-grid}.Sixlwa_compactionLeading svg{width:calc(14px + var(--dsh-content-font-delta,0px));height:calc(14px + var(--dsh-content-font-delta,0px))}.Sixlwa_compactionContextIcon,.Sixlwa_compactionDisclosureIcon{grid-area:1/1;justify-content:center;align-items:center;display:inline-flex}.Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionContextIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionContextIcon{opacity:0}.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionDisclosureIcon{opacity:1}.Sixlwa_compactionTitle{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary-dimmed);flex:none}.Sixlwa_compactionSep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.Sixlwa_compactionSummary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.Sixlwa_compactionBody{padding:4px 0 4px calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px))}.Sixlwa_retryRow{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_retrySummary{border-radius:var(--dsw-radius-sm);width:fit-content;color:inherit;cursor:pointer;user-select:none;align-items:center;gap:7px;padding:2px 0;list-style:none;display:inline-flex}.Sixlwa_retrySummary::-webkit-details-marker{display:none}.Sixlwa_retrySummary:after{content:\"\";opacity:.8;border-bottom:1.5px solid;border-right:1.5px solid;width:6px;height:6px;transition:transform .12s;transform:rotate(-45deg)}.Sixlwa_retrySummary:hover{color:var(--dsw-alias-label-secondary)}.Sixlwa_retrySummary:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}.Sixlwa_retryText{color:inherit}.Sixlwa_retryRow[data-active] .Sixlwa_retryText{background:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-tertiary) 40%, var(--dsw-alias-label-secondary) 50%, var(--dsw-alias-label-tertiary) 60%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-position:100%;background-size:200% 100%;background-clip:text;animation:1.6s ease-in-out infinite Sixlwa_retry-shimmer}.Sixlwa_retryRow[open] .Sixlwa_retrySummary:after{transform:rotate(45deg)}.Sixlwa_retryDetails{overflow-wrap:anywhere;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px));gap:2px;margin-top:3px;padding-left:14px;display:grid}.Sixlwa_retryDetailLabel{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorRow{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));grid-template-columns:10px minmax(0,1fr) auto;align-items:start;gap:8px;padding:2px 0;display:grid}.Sixlwa_turnErrorDot{margin-top:5px}.Sixlwa_turnErrorCopy{overflow-wrap:anywhere;min-width:0}.Sixlwa_turnErrorTitle{color:var(--dsw-alias-state-error-primary);margin-right:6px;font-weight:600}.Sixlwa_turnErrorMessage{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorCode{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-markdown-code-block-small)}.Sixlwa_maxTokensTitle{color:var(--dsw-alias-state-warn-primary);margin-right:6px;font-weight:600}@keyframes Sixlwa_retry-shimmer{0%{background-position:100%}to{background-position:0}}@media (prefers-reduced-motion:reduce){.Sixlwa_retryRow[data-active] .Sixlwa_retryText{color:inherit;background:0 0;animation:none}}.Sixlwa_attachmentRow{flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:100%;display:flex}.Sixlwa_fileCard{border:.5px solid var(--dsw-alias-border-l2,#0000001f);border-radius:var(--dsw-radius-xl);background:var(--dsw-specific-input-major,transparent);box-sizing:border-box;flex:0 0 240px;align-items:center;gap:10px;width:240px;min-height:64px;padding:8px 12px;display:inline-flex}.Sixlwa_fileIcon{flex:none;width:28px;height:28px}.Sixlwa_fileContent{flex-direction:column;flex:1;min-width:0;display:flex}.Sixlwa_fileName{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:22px;overflow:hidden}.Sixlwa_fileMeta{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-tertiary,#00000073);font-size:12px;line-height:15px;overflow:hidden}";
 		const tagId$17 = "@deepseek-ai/dsh-client-ui-chat/MessageItem.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$17) + "]") === null) {
 			const tag = document.createElement("style");
@@ -854,7 +876,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/ContextInjectionRow.module.css.mjs
-		const css$15 = ".XrJvXW_root{min-width:0}.XrJvXW_root[data-open]{padding-bottom:4px}.XrJvXW_chevron{color:var(--dsw-alias-label-secondary)}.XrJvXW_sep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.XrJvXW_source{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:none;overflow:hidden}.XrJvXW_summary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.XrJvXW_body{box-sizing:border-box;width:calc(100% - 22px - var(--dsh-content-font-delta,0px));max-height:141px;margin:4px 0 0 calc(22px + var(--dsh-content-font-delta,0px));background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-tertiary);font:400 11px/16px var(--ds-font-family-code);border:none;border-radius:8px;padding:10px 16px 12px 12px;overflow:auto}";
+		const css$15 = ".XrJvXW_root{min-width:0}.XrJvXW_root[data-open]{padding-bottom:4px}.XrJvXW_chevron{color:var(--dsw-alias-label-secondary)}.XrJvXW_sep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.XrJvXW_source{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:none;overflow:hidden}.XrJvXW_summary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.XrJvXW_body{box-sizing:border-box;width:calc(100% - 22px - var(--dsh-content-font-delta,0px));max-height:141px;margin:4px 0 0 calc(22px + var(--dsh-content-font-delta,0px));border-radius:var(--dsw-radius-md);background:var(--dsw-alias-markdown-code-block);color:var(--dsw-alias-label-tertiary);font:400 11px/16px var(--ds-font-family-code);border:none;padding:10px 16px 12px 12px;overflow:auto}.XrJvXW_toolChanges{white-space:nowrap}";
 		const tagId$15 = "@deepseek-ai/dsh-client-ui-chat/ContextInjectionRow.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$15) + "]") === null) {
 			const tag = document.createElement("style");
@@ -869,7 +891,8 @@ window.__ModuleLoader__.load({
 			"root": "XrJvXW_root",
 			"sep": "XrJvXW_sep",
 			"source": "XrJvXW_source",
-			"summary": "XrJvXW_summary"
+			"summary": "XrJvXW_summary",
+			"toolChanges": "XrJvXW_toolChanges"
 		};
 		//#endregion
 		//#region lib/types/client/chat/ContextInjectionRow.js
@@ -891,15 +914,29 @@ window.__ModuleLoader__.load({
 				source,
 				t
 			});
+			const toolBlocks = content.length > 0 && content.every((block) => block.type === "tool-addition" || block.type === "tool-removal") ? content : void 0;
+			const added = toolBlocks?.flatMap((block) => block.type === "tool-addition" ? [block.toolName] : []) ?? [];
+			const removed = toolBlocks?.flatMap((block) => block.type === "tool-removal" ? [block.toolName] : []) ?? [];
+			const single = toolBlocks?.length === 1 ? toolBlocks[0] : void 0;
+			const toolSummary = toolBlocks === void 0 || single !== void 0 ? null : added.length > 0 && removed.length > 0 ? t("message.toolsChanged", {
+				added: added.length,
+				removed: removed.length
+			}) : added.length > 0 ? t("message.toolsAddedCount", { count: added.length }) : t("message.toolsRemovedCount", { count: removed.length });
 			return (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.DisclosureRow, {
 				className: ContextInjectionRow_module_css_default.root,
-				icon: producer.role === "recall" ? (0, react_jsx_runtime.jsx)("span", {
+				icon: toolBlocks !== void 0 ? (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBrowseOutlineRegular, { size: 14 }) : producer.role === "recall" ? (0, react_jsx_runtime.jsx)("span", {
 					"data-context-recall-icon": true,
 					children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.ReferenceIconRegular, { kind: "session" })
 				}) : (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconContextInjectionOutlineRegular, { size: 14 }),
 				chevronClassName: ContextInjectionRow_module_css_default.chevron,
-				title: t(producer.role === "recall" ? "message.contextRecall" : "message.contextInjection"),
-				collapsedContent: producer.label === null ? void 0 : (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
+				title: single !== void 0 ? t(single.type === "tool-addition" ? "message.toolAdded" : "message.toolRemoved", { name: single.toolName }) : t(toolBlocks !== void 0 ? "message.toolsUpdated" : producer.role === "recall" ? "message.contextRecall" : "message.contextInjection"),
+				collapsedContent: toolSummary !== null ? (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("span", {
+					className: ContextInjectionRow_module_css_default.sep,
+					"aria-hidden": true
+				}), (0, react_jsx_runtime.jsx)("span", {
+					className: ContextInjectionRow_module_css_default.summary,
+					children: toolSummary
+				})] }) : toolBlocks !== void 0 || producer.label === null ? void 0 : (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [
 					(0, react_jsx_runtime.jsx)("span", {
 						className: ContextInjectionRow_module_css_default.sep,
 						"aria-hidden": true
@@ -919,8 +956,8 @@ window.__ModuleLoader__.load({
 					})] })
 				] }),
 				keepContentWhenOpen: true,
-				open,
-				expandable: true,
+				open: open && single === void 0,
+				expandable: single === void 0,
 				expandOnRowClick: true,
 				onToggle: () => {
 					setOpen((value) => !value);
@@ -929,7 +966,10 @@ window.__ModuleLoader__.load({
 					className: ContextInjectionRow_module_css_default.body,
 					"data-context-injection-body": true,
 					"data-context-form": rendered ?? void 0,
-					children: body
+					children: toolBlocks === void 0 ? body : (0, react_jsx_runtime.jsxs)("div", {
+						className: ContextInjectionRow_module_css_default.toolChanges,
+						children: [added.length > 0 && (0, react_jsx_runtime.jsx)("div", { children: t("message.toolsAdded", { names: added.join(", ") }) }), removed.length > 0 && (0, react_jsx_runtime.jsx)("div", { children: t("message.toolsRemoved", { names: removed.join(", ") }) })]
+					})
 				})
 			});
 		}
@@ -1060,7 +1100,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/MessageIconActions.module.css.mjs
-		const css$14 = ".xzv4MW_actions{height:calc(28px + var(--dsh-content-font-delta,0px));align-items:center;gap:8px;display:flex}.xzv4MW_timeStart{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);white-space:nowrap;padding-right:12px}.xzv4MW_timeEnd{font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:inherit;white-space:nowrap}.xzv4MW_endInfo{min-width:0;color:var(--dsw-alias-label-tertiary);align-items:center;gap:8px;margin-left:8px;display:inline-flex}@media (hover:hover){[data-actions-reveal=hover] .xzv4MW_actions,:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering]):has(~:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering])) .xzv4MW_actions{opacity:0;transition:opacity 80ms}[data-actions-reveal=hover]:hover .xzv4MW_actions,[data-actions-reveal=hover]:focus-within .xzv4MW_actions,:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering]):has(~:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering])):hover .xzv4MW_actions,:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering]):has(~:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering])):focus-within .xzv4MW_actions{opacity:1}}.xzv4MW_action{width:calc(28px + var(--dsh-content-font-delta,0px));height:calc(28px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:28px;justify-content:center;align-items:center;padding:6px;display:inline-flex}.xzv4MW_action svg{width:calc(15px + var(--dsh-content-font-delta,0px));height:calc(15px + var(--dsh-content-font-delta,0px))}.xzv4MW_actions[data-clock=end] .xzv4MW_action svg{width:calc(17px + var(--dsh-content-font-delta,0px));height:calc(17px + var(--dsh-content-font-delta,0px))}.xzv4MW_action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.xzv4MW_action[data-unavailable]{cursor:default;opacity:.4}.xzv4MW_action[data-unavailable]:hover{color:var(--dsw-alias-label-tertiary);background:0 0}.xzv4MW_visuallyHidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}";
+		const css$14 = ".xzv4MW_actions{height:calc(28px + var(--dsh-content-font-delta,0px));align-items:center;gap:8px;display:flex}.xzv4MW_timeStart{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);white-space:nowrap;padding-right:12px}.xzv4MW_timeEnd{font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:inherit;white-space:nowrap}.xzv4MW_endInfo{min-width:0;color:var(--dsw-alias-label-tertiary);align-items:center;gap:8px;margin-left:8px;display:inline-flex}@media (hover:hover){[data-actions-reveal=hover] .xzv4MW_actions,:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering]):has(~:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering])) .xzv4MW_actions{opacity:0;transition:opacity 80ms}[data-actions-reveal=hover]:hover .xzv4MW_actions,[data-actions-reveal=hover]:focus-within .xzv4MW_actions,:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering]):has(~:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering])):hover .xzv4MW_actions,:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering]):has(~:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering])):focus-within .xzv4MW_actions{opacity:1}}.xzv4MW_action{width:calc(28px + var(--dsh-content-font-delta,0px));height:calc(28px + var(--dsh-content-font-delta,0px));border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;justify-content:center;align-items:center;padding:6px;display:inline-flex}.xzv4MW_action svg{width:calc(15px + var(--dsh-content-font-delta,0px));height:calc(15px + var(--dsh-content-font-delta,0px))}.xzv4MW_actions[data-clock=end] .xzv4MW_action svg{width:calc(17px + var(--dsh-content-font-delta,0px));height:calc(17px + var(--dsh-content-font-delta,0px))}.xzv4MW_action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.xzv4MW_action[data-unavailable]{cursor:default;opacity:.4}.xzv4MW_action[data-unavailable]:hover{color:var(--dsw-alias-label-tertiary);background:0 0}.xzv4MW_visuallyHidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}";
 		const tagId$14 = "@deepseek-ai/dsh-client-ui-chat/MessageIconActions.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$14) + "]") === null) {
 			const tag = document.createElement("style");
@@ -1187,6 +1227,9 @@ window.__ModuleLoader__.load({
 			return Math.max(1, Math.ceil(milliseconds / 1e3));
 		}
 		function failureMessage(message, code, t) {
+			if (code === "ACCOUNT_SIGNED_OUT") return t("message.failure.accountSignedOut");
+			if (code === "ACCOUNT_SIGN_IN_REQUIRED") return t("message.failure.accountSignInRequired");
+			if (code === "QUOTA" || code === "ACCOUNT_QUOTA") return t("message.failure.quota");
 			return code === "AUTH" ? t("message.failure.auth") : message;
 		}
 		function ModelRetryItem({ node, active, t }) {
@@ -1259,7 +1302,7 @@ window.__ModuleLoader__.load({
 						className: MessageItem_module_css_default.turnErrorCopy,
 						children: [(0, react_jsx_runtime.jsx)("span", {
 							className: MessageItem_module_css_default.turnErrorTitle,
-							children: t("message.turnError")
+							children: node.code === "ACCOUNT_SIGNED_OUT" ? t("message.accountStopped") : t("message.turnError")
 						}), (0, react_jsx_runtime.jsx)("span", {
 							className: MessageItem_module_css_default.turnErrorMessage,
 							children: failureMessage(node.message, node.code, t)
@@ -1584,7 +1627,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/ChatView.module.css.mjs
-		const css$13 = ".EvIC1a_frame{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;container-type:inline-size}.EvIC1a_root{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;overflow:visible clip}.EvIC1a_scroll{min-height:0;padding:16px calc(var(--dsh-composer-side-clearance) + 16px);flex:auto;overflow-y:auto;container-type:inline-size}.EvIC1a_root[data-chat-following-tail] .EvIC1a_scroll,[data-conversation-scroll]:has(.EvIC1a_root[data-chat-following-tail]){overflow-anchor:none}[data-conversation-scroll] .EvIC1a_frame,[data-conversation-scroll] .EvIC1a_root{flex:none;height:auto;min-height:auto}[data-conversation-scroll] .EvIC1a_scroll{flex:none;min-height:auto;overflow:visible}.EvIC1a_column{max-width:var(--dsh-chat-content-width);flex-direction:column;width:100%;margin:0 auto;display:flex}.EvIC1a_column>:not([hidden]):not(.EvIC1a_flowItem:empty)~:not([hidden]):not(.EvIC1a_flowItem:empty){margin-top:var(--dsh-chat-flow-gap,16px)}.EvIC1a_flowItem{min-width:0}.EvIC1a_flowItem[data-turn-process-answer]{--dsh-chat-flow-gap:8px}.EvIC1a_flowItem:empty{height:0}.EvIC1a_callRow{border-radius:6px}.EvIC1a_hint{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_openError{color:var(--dsw-alias-state-error-primary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_older{justify-content:center;display:flex}.EvIC1a_older button{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover-solid);cursor:pointer;border:none;border-radius:14px;padding:4px 12px;font-size:12px}.EvIC1a_older button:disabled{cursor:default;opacity:.6}.EvIC1a_toBottomSlot{z-index:8;height:0;padding-right:max(calc(var(--dsh-composer-side-clearance) + 16px), calc((100% - var(--dsh-chat-content-width)) / 2));pointer-events:none;justify-content:flex-end;display:flex;position:absolute;bottom:16px;left:0;right:0}[data-conversation-scroll] .EvIC1a_toBottomSlot{bottom:calc(var(--dsh-composer-height,152px) + 16px);position:sticky}.EvIC1a_toBottom{--dsw-elevation-stroke-color:var(--dsw-alias-border-l3);corner-shape:round;width:34px;height:34px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-button-floating-fill);box-shadow:var(--dsw-elevation-panel);cursor:pointer;pointer-events:auto;border:0;border-radius:100px;justify-content:center;align-items:center;margin-top:-34px;padding:0;display:flex}.EvIC1a_toBottom:hover{background:var(--dsw-alias-button-floating-hover)}.EvIC1a_modalAction{min-width:72px}";
+		const css$13 = ".EvIC1a_frame{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;container-type:inline-size}.EvIC1a_root{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;overflow:visible clip}.EvIC1a_scroll{min-height:0;padding:16px calc(var(--dsh-composer-side-clearance) + 16px);flex:auto;overflow-y:auto;container-type:inline-size}.EvIC1a_root[data-chat-following-tail] .EvIC1a_scroll,[data-conversation-scroll]:has(.EvIC1a_root[data-chat-following-tail]){overflow-anchor:none}[data-conversation-scroll] .EvIC1a_frame,[data-conversation-scroll] .EvIC1a_root{flex:none;height:auto;min-height:auto}[data-conversation-scroll] .EvIC1a_scroll{flex:none;min-height:auto;overflow:visible}.EvIC1a_column{max-width:var(--dsh-chat-content-width);flex-direction:column;width:100%;margin:0 auto;display:flex}.EvIC1a_column>:not([hidden]):not(.EvIC1a_flowItem:empty)~:not([hidden]):not(.EvIC1a_flowItem:empty){margin-top:var(--dsh-chat-flow-gap,16px)}.EvIC1a_flowItem{min-width:0}.EvIC1a_flowItem[data-turn-process-answer]{--dsh-chat-flow-gap:8px}.EvIC1a_flowItem:empty{height:0}.EvIC1a_callRow{border-radius:var(--dsw-radius-sm)}.EvIC1a_hint{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_openError{color:var(--dsw-alias-state-error-primary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_older{justify-content:center;display:flex}.EvIC1a_older button{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover-solid);cursor:pointer;border:none;padding:4px 12px;font-size:12px}.EvIC1a_older button:disabled{cursor:default;opacity:.6}.EvIC1a_toBottomSlot{z-index:8;height:0;padding-right:max(calc(var(--dsh-composer-side-clearance) + 16px), calc((100% - var(--dsh-chat-content-width)) / 2));pointer-events:none;justify-content:flex-end;display:flex;position:absolute;bottom:16px;left:0;right:0}[data-conversation-scroll] .EvIC1a_toBottomSlot{bottom:calc(var(--dsh-composer-height,152px) + 16px);position:sticky}.EvIC1a_toBottom{--dsw-elevation-stroke-color:var(--dsw-alias-border-l3);corner-shape:round;width:34px;height:34px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-button-floating-fill);box-shadow:var(--dsw-elevation-panel);cursor:pointer;pointer-events:auto;border:0;border-radius:100px;justify-content:center;align-items:center;margin-top:-34px;padding:0;display:flex}.EvIC1a_toBottom:hover{background:var(--dsw-alias-button-floating-hover)}.EvIC1a_modalAction{min-width:72px}";
 		const tagId$13 = "@deepseek-ai/dsh-client-ui-chat/ChatView.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$13) + "]") === null) {
 			const tag = document.createElement("style");
@@ -1661,7 +1704,7 @@ window.__ModuleLoader__.load({
 				processPresentation?.hasExternalProcess,
 				setOpen
 			]);
-			const controllerInactive = routedNode?.kind === "turn-process" && !foldable;
+			const controllerInactive = routedNode?.kind === "turn-process" && foldCompleted && !foldable;
 			const compactAnswer = processAnswer && foldable && processPresentation.compactAnswer && !processOpen;
 			const processHidden = controllerInactive || foldable && processMember && !processOpen;
 			const wrapperRef = useSearchableHidden(processHidden, (0, react.useCallback)(() => {
@@ -2143,8 +2186,10 @@ window.__ModuleLoader__.load({
 		const PROCESS_ICONS = {
 			thinking: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconThinkOutlineRegular, {}),
 			read: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBrowseOutlineRegular, { size: 14 }),
+			readImage: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconBrowseOutlineRegular, { size: 14 }),
 			search: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSearchOutlineRegular, { size: 14 }),
 			edit: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, { size: 14 }),
+			write: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconEditOutlineRegular, { size: 14 }),
 			commands: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconApiOutlineRegular, {}),
 			code: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconCodeOutlineRegular, { size: 14 }),
 			webSearch: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconGlobeOutlineRegular, {}),
@@ -2155,7 +2200,7 @@ window.__ModuleLoader__.load({
 			tools: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconSparkleRegular, { size: 14 })
 		};
 		function sameLiveProcessTitle(left, right) {
-			return left.activity === right.activity && left.detail === right.detail;
+			return left.activity === right.activity && left.detail === right.detail && left.preparing === right.preparing;
 		}
 		function useStableLiveProcessTitle(desired, active) {
 			const [displayed, setDisplayed] = (0, react.useState)(desired);
@@ -2183,7 +2228,8 @@ window.__ModuleLoader__.load({
 			}, [
 				active,
 				desired.activity,
-				desired.detail
+				desired.detail,
+				desired.preparing
 			]);
 			return active ? displayed : desired;
 		}
@@ -2200,10 +2246,11 @@ window.__ModuleLoader__.load({
 			const detailed = usePresentation((policy) => data?.closed === false && policy.liveProcessDetail);
 			const live = useStableLiveProcessTitle({
 				activity: data?.summary.running ?? "thinking",
-				detail: data?.summary.runningDetail ?? ""
+				detail: data?.summary.runningDetail ?? "",
+				preparing: data?.summary.preparing === true
 			}, data !== void 0 && !data.closed);
 			if (data === void 0) return null;
-			const label = data.closed ? processTitle(data.summary, t) : t(`message.stepProcess.${live.activity}`);
+			const label = data.closed ? processTitle(data.summary, t) : live.preparing ? t(`message.stepProcess.prepare.${live.activity === "thinking" ? "tools" : live.activity}`) : t(`message.stepProcess.${live.activity}`);
 			const detail = detailed && !data.closed ? live.detail : "";
 			const title = detail === "" ? label : `${label}${t("message.turnProcess.separator")}${detail}`;
 			const activity = data.closed ? data.summary.counts[0]?.kind ?? "thinking" : live.activity;
@@ -2249,7 +2296,7 @@ window.__ModuleLoader__.load({
 				const location = node?.location;
 				return location?.kind === "turn" || location?.kind === "step" ? location.turn : void 0;
 			});
-			const grouped = props.usePresentation((policy) => turnLocation?.status !== "open" || policy.stepGrouping !== "none");
+			const grouped = props.usePresentation((policy) => policy.stepGrouping === "collapsed" || policy.stepGrouping === "history" && turnLocation?.status !== "open");
 			const reason = turnLocation?.end?.data.reason.kind;
 			const alwaysOpen = presentation?.turnClosed === false || presentation?.hasInterleavedInput === true || reason === "aborted" || reason === "error";
 			const spec = presentation?.spec;
@@ -3514,7 +3561,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/TurnNavigator.module.css.mjs
-		const css$11 = ".eGxaPq_slot{z-index:7;height:0;padding-inline:calc(var(--dsh-composer-side-clearance) + 16px);pointer-events:none;position:absolute;top:0;left:0;right:0;container-type:inline-size}[data-conversation-scroll] .eGxaPq_slot{position:sticky}.eGxaPq_frame{--turn-rail-band:calc(var(--dsh-conversation-viewport-height,100dvh) - var(--dsh-composer-height,152px));--turn-preview-height:100px;top:calc(var(--turn-rail-band) / 2);width:28px;max-height:min(max(0px, calc(var(--turn-rail-band) - 64px)), 420px);contain:layout;cursor:pointer;pointer-events:auto;position:absolute;right:12px;transform:translateY(-50%)}.eGxaPq_scroller{max-height:inherit;overscroll-behavior:contain;scrollbar-width:none;position:relative;overflow-y:auto}.eGxaPq_scroller::-webkit-scrollbar{display:none}.eGxaPq_fadeTop{mask-image:linear-gradient(#0000 0,#000 24px 100%)}.eGxaPq_fadeBottom{mask-image:linear-gradient(#000 0 calc(100% - 24px),#0000 100%)}.eGxaPq_fadeTop.eGxaPq_fadeBottom{mask-image:linear-gradient(#0000 0,#000 24px calc(100% - 24px),#0000 100%)}.eGxaPq_marks{position:relative}.eGxaPq_mark{cursor:pointer;background:0 0;border:0;border-radius:8px;height:10px;padding:0;position:absolute;top:0;left:0;right:0}.eGxaPq_mark:before{background:var(--dsw-alias-border-l4);content:\"\";transform-origin:100%;border-radius:2px;width:20px;height:2px;transition:transform .14s,background-color .14s;position:absolute;top:50%;right:0;transform:translateY(-50%)scaleX(.6)}.eGxaPq_markUnloaded:before{opacity:.6;transform:translateY(-50%)scaleX(.4)}.eGxaPq_markPreview:before{background:var(--dsw-alias-label-tertiary);transform:translateY(-50%)scaleX(.9)}.eGxaPq_markBusy:before{animation:1s ease-in-out infinite eGxaPq_dsh-turn-mark-busy}.eGxaPq_markActive:before{background:var(--dsw-alias-label-primary);transform:translateY(-50%)scaleX(1)}.eGxaPq_mark:focus-visible:before{background:var(--dsw-alias-state-business-primary);transform:translateY(-50%)scaleX(1)}.eGxaPq_mark:focus-visible{outline:none}.eGxaPq_mark:focus-visible:after{border-radius:inherit;outline:1px solid var(--dsw-alias-state-business-primary);outline-offset:2px;content:\"\";width:20px;position:absolute;inset:0 0 0 auto}.eGxaPq_preview{top:clamp(0px, calc(var(--turn-preview-center) - var(--turn-preview-height) / 2), calc(100% - var(--turn-preview-height)));box-sizing:border-box;width:min(300px,100cqw - 120px);max-height:var(--turn-preview-height);color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-panel);pointer-events:none;border:0;border-radius:10px;padding:10px 12px;transition:top .14s cubic-bezier(.2,.8,.2,1);animation:.12s ease-out eGxaPq_dsh-turn-preview-enter;position:absolute;right:calc(100% + 10px);overflow:hidden}.eGxaPq_previewPrompt,.eGxaPq_previewResponse{-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}.eGxaPq_previewPrompt{font:var(--dsw-font-xs-strong-13);-webkit-line-clamp:1}.eGxaPq_previewResponse{color:var(--dsw-alias-label-caption);font:var(--dsw-font-xxs-12);-webkit-line-clamp:3;margin-top:4px}@keyframes eGxaPq_dsh-turn-preview-enter{0%{opacity:0;transform:translate(4px)}to{opacity:1;transform:translate(0)}}@keyframes eGxaPq_dsh-turn-mark-busy{0%,to{opacity:1}50%{opacity:.35}}@container (width<=900px){.eGxaPq_frame{display:none}}@media (prefers-reduced-motion:reduce){.eGxaPq_frame,.eGxaPq_scroller,.eGxaPq_mark:before,.eGxaPq_markBusy:before,.eGxaPq_preview{scroll-behavior:auto;transition:none;animation:none}}";
+		const css$11 = ".eGxaPq_slot{z-index:7;height:0;padding-inline:calc(var(--dsh-composer-side-clearance) + 16px);pointer-events:none;position:absolute;top:0;left:0;right:0;container-type:inline-size}[data-conversation-scroll] .eGxaPq_slot{position:sticky}.eGxaPq_frame{--turn-rail-band:calc(var(--dsh-conversation-viewport-height,100dvh) - var(--dsh-composer-height,152px));--turn-preview-height:100px;top:calc(var(--turn-rail-band) / 2);width:28px;max-height:min(max(0px, calc(var(--turn-rail-band) - 64px)), 420px);contain:layout;cursor:pointer;pointer-events:auto;position:absolute;right:12px;transform:translateY(-50%)}.eGxaPq_scroller{max-height:inherit;overscroll-behavior:contain;scrollbar-width:none;position:relative;overflow-y:auto}.eGxaPq_scroller::-webkit-scrollbar{display:none}.eGxaPq_fadeTop{mask-image:linear-gradient(#0000 0,#000 24px 100%)}.eGxaPq_fadeBottom{mask-image:linear-gradient(#000 0 calc(100% - 24px),#0000 100%)}.eGxaPq_fadeTop.eGxaPq_fadeBottom{mask-image:linear-gradient(#0000 0,#000 24px calc(100% - 24px),#0000 100%)}.eGxaPq_marks{position:relative}.eGxaPq_mark{cursor:pointer;background:0 0;border:0;border-radius:8px;height:10px;padding:0;position:absolute;top:0;left:0;right:0}.eGxaPq_mark:before{background:var(--dsw-alias-border-l4);content:\"\";transform-origin:100%;border-radius:2px;width:20px;height:2px;transition:transform .14s,background-color .14s;position:absolute;top:50%;right:0;transform:translateY(-50%)scaleX(.6)}.eGxaPq_markUnloaded:before{opacity:.6;transform:translateY(-50%)scaleX(.4)}.eGxaPq_markPreview:before{background:var(--dsw-alias-label-tertiary);transform:translateY(-50%)scaleX(.9)}.eGxaPq_markBusy:before{animation:1s ease-in-out infinite eGxaPq_dsh-turn-mark-busy}.eGxaPq_markActive:before{background:var(--dsw-alias-label-primary);transform:translateY(-50%)scaleX(1)}.eGxaPq_mark:focus-visible:before{background:var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));transform:translateY(-50%)scaleX(1)}.eGxaPq_mark:focus-visible{outline:none}.eGxaPq_mark:focus-visible:after{border-radius:inherit;outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-1px;content:\"\";width:20px;position:absolute;inset:0 0 0 auto}.eGxaPq_preview{top:clamp(0px, calc(var(--turn-preview-center) - var(--turn-preview-height) / 2), calc(100% - var(--turn-preview-height)));box-sizing:border-box;width:min(300px,100cqw - 120px);max-height:var(--turn-preview-height);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-panel);pointer-events:none;border:0;padding:10px 12px;transition:top .14s cubic-bezier(.2,.8,.2,1);animation:.12s ease-out eGxaPq_dsh-turn-preview-enter;position:absolute;right:calc(100% + 10px);overflow:hidden}.eGxaPq_previewPrompt,.eGxaPq_previewResponse{-webkit-box-orient:vertical;display:-webkit-box;overflow:hidden}.eGxaPq_previewPrompt{font:var(--dsw-font-xs-strong-13);-webkit-line-clamp:1}.eGxaPq_previewResponse{color:var(--dsw-alias-label-caption);font:var(--dsw-font-xxs-12);-webkit-line-clamp:3;margin-top:4px}@keyframes eGxaPq_dsh-turn-preview-enter{0%{opacity:0;transform:translate(4px)}to{opacity:1;transform:translate(0)}}@keyframes eGxaPq_dsh-turn-mark-busy{0%,to{opacity:1}50%{opacity:.35}}@container (width<=900px){.eGxaPq_frame{display:none}}@media (prefers-reduced-motion:reduce){.eGxaPq_frame,.eGxaPq_scroller,.eGxaPq_mark:before,.eGxaPq_markBusy:before,.eGxaPq_preview{scroll-behavior:auto;transition:none;animation:none}}";
 		const tagId$11 = "@deepseek-ai/dsh-client-ui-chat/TurnNavigator.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$11) + "]") === null) {
 			const tag = document.createElement("style");
@@ -5006,6 +5053,16 @@ window.__ModuleLoader__.load({
 			const railItems = (0, react.useMemo)(() => mergeTurnRailItems(turnNavigationItems, turnOutline), [turnNavigationItems, turnOutline]);
 			const inbox = useProjection("inbox");
 			const cwd = useSessions((s) => s.byId[sessionId]?.cwd);
+			const fileImages = (0, react.useMemo)(() => ({
+				resolve: (path) => fileMediaUrl(document.baseURI, resolveWorkspacePath(cwd, path)),
+				labels: {
+					open: t("image.open"),
+					loading: t("image.loading"),
+					failed: t("image.failed"),
+					dialog: t("image.dialog"),
+					close: t("image.close")
+				}
+			}), [cwd, t]);
 			const running = useSession((s) => s.running);
 			const openState = useSession((s) => s.openState);
 			const openError = useSession((s) => s.openError);
@@ -5131,6 +5188,7 @@ window.__ModuleLoader__.load({
 									(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.MarkdownDelegateProvider, {
 										openExternalLink,
 										openFile: requestOpenFile,
+										fileImages,
 										children: (0, react_jsx_runtime.jsx)(ChatNodeList, {
 											entries,
 											pendingInputs,
@@ -5211,25 +5269,42 @@ window.__ModuleLoader__.load({
 		const zh = {
 			"message.stepProcess.thinking": "正在分析请求",
 			"message.stepProcess.read": "正在读取文件",
+			"message.stepProcess.readImage": "正在读取图片",
+			"message.stepProcess.write": "正在写入文件",
 			"message.stepProcess.search": "正在搜索代码",
 			"message.stepProcess.edit": "正在编辑文件",
 			"message.stepProcess.commands": "正在运行命令",
 			"message.stepProcess.code": "正在运行代码",
 			"message.stepProcess.webSearch": "正在搜索网页",
 			"message.stepProcess.webFetch": "正在访问网页",
-			"message.stepProcess.subagents": "正在协调子任务",
+			"message.stepProcess.subagents": "正在协调子智能体",
 			"message.stepProcess.plan": "正在更新计划",
 			"message.stepProcess.questions": "等待你的操作",
 			"message.stepProcess.tools": "正在调用工具",
+			"message.stepProcess.prepare.read": "准备读取文件",
+			"message.stepProcess.prepare.readImage": "准备读取图片",
+			"message.stepProcess.prepare.write": "准备写入文件",
+			"message.stepProcess.prepare.search": "准备搜索代码",
+			"message.stepProcess.prepare.edit": "准备编辑文件",
+			"message.stepProcess.prepare.commands": "准备运行命令",
+			"message.stepProcess.prepare.code": "准备运行代码",
+			"message.stepProcess.prepare.webSearch": "准备搜索网页",
+			"message.stepProcess.prepare.webFetch": "准备访问网页",
+			"message.stepProcess.prepare.subagents": "准备协调子智能体",
+			"message.stepProcess.prepare.plan": "准备更新计划",
+			"message.stepProcess.prepare.questions": "准备提问",
+			"message.stepProcess.prepare.tools": "准备调用工具",
 			"message.stepProcess.done.thinking": "已完成分析",
 			"message.stepProcess.done.read": "已读取文件",
+			"message.stepProcess.done.readImage": "已读取图片",
+			"message.stepProcess.done.write": "已写入文件",
 			"message.stepProcess.done.search": "已搜索代码",
 			"message.stepProcess.done.edit": "修改了文件",
 			"message.stepProcess.done.commands": "执行了命令",
 			"message.stepProcess.done.code": "运行了代码",
 			"message.stepProcess.done.webSearch": "已搜索网页",
 			"message.stepProcess.done.webFetch": "已访问网页",
-			"message.stepProcess.done.subagents": "已协调子任务",
+			"message.stepProcess.done.subagents": "已协调子智能体",
 			"message.stepProcess.done.plan": "更新了计划",
 			"message.stepProcess.done.questions": "向用户提出了问题",
 			"message.stepProcess.done.tools": "已调用工具",
@@ -5253,6 +5328,11 @@ window.__ModuleLoader__.load({
 			"message.turnProcess.took": "用时 {duration}",
 			"message.turnProcess.failed": "处理失败",
 			"view.chat": "对话",
+			"image.open": "查看大图",
+			"image.loading": "加载图片…",
+			"image.failed": "图片无法预览",
+			"image.dialog": "图片预览",
+			"image.close": "关闭图片预览",
 			"number.groupSeparator": ",",
 			"duration.compactSeconds": "{seconds}秒",
 			"duration.compactMinutes": "{minutes}分{seconds}秒",
@@ -5282,16 +5362,25 @@ window.__ModuleLoader__.load({
 			"settings.links.description": "对话中网页链接的打开位置",
 			"settings.links.sidebar": "应用内侧边栏",
 			"settings.links.newTab": "默认浏览器",
-			"settings.transcript.title": "工作过程展示",
-			"settings.transcript.description": "控制轮次和步骤的默认展开方式",
+			"settings.transcript.title": "工作步骤展示",
+			"settings.transcript.description": "选择希望看到多少工具调用细节",
 			"settings.transcript.compact": "简洁",
+			"settings.transcript.standard": "标准",
 			"settings.transcript.detailed": "详细",
-			"settings.transcript.expanded": "完全展开",
+			"settings.transcript.verbose": "完全展开",
 			"fileOpen.title": "无法打开文件",
 			"fileOpen.unknown": "无法打开此文件",
 			"message.extraBlock": "附加内容块",
 			"message.systemPrompt": "系统提示词",
 			"message.systemPromptUpdate": "系统提示词更新",
+			"message.toolAdded": "已添加工具：{name}",
+			"message.toolRemoved": "已移除工具：{name}",
+			"message.toolsAdded": "新增：{names}",
+			"message.toolsAddedCount": "新增 {count} 个",
+			"message.toolsChanged": "新增 {added} 个，移除 {removed} 个",
+			"message.toolsRemoved": "移除：{names}",
+			"message.toolsRemovedCount": "移除 {count} 个",
+			"message.toolsUpdated": "工具已更新",
 			"message.contextInjection": "上下文注入",
 			"message.contextRecall": "跨会话召回",
 			"message.referenceSummary": "引用会话 · {labels}",
@@ -5334,6 +5423,10 @@ window.__ModuleLoader__.load({
 			"message.retry.delay": "重试延迟：",
 			"message.retry.failure": "失败原因：",
 			"message.failure.auth": "API 密钥无效",
+			"message.accountStopped": "任务已停止",
+			"message.failure.accountSignedOut": "任务已因退出 DeepSeek 登录而停止。",
+			"message.failure.accountSignInRequired": "请先登录 DeepSeek，并确认请求地址支持账号认证。",
+			"message.failure.quota": "当前请求的额度已用尽",
 			"message.turnError": "本轮运行失败",
 			"message.maxTokens": "已达到输出 token 上限",
 			"message.maxTokens.hint": "回答被截断，已有输出保留在对话中。发送“继续”可让模型接着输出。",
@@ -5365,6 +5458,8 @@ window.__ModuleLoader__.load({
 		const en = {
 			"message.stepProcess.thinking": "Analyzing the request",
 			"message.stepProcess.read": "Reading files",
+			"message.stepProcess.readImage": "Reading images",
+			"message.stepProcess.write": "Writing files",
 			"message.stepProcess.search": "Searching code",
 			"message.stepProcess.edit": "Editing files",
 			"message.stepProcess.commands": "Running commands",
@@ -5375,8 +5470,23 @@ window.__ModuleLoader__.load({
 			"message.stepProcess.plan": "Updating the plan",
 			"message.stepProcess.questions": "Waiting for your action",
 			"message.stepProcess.tools": "Calling tools",
+			"message.stepProcess.prepare.read": "Preparing to read files",
+			"message.stepProcess.prepare.readImage": "Preparing to read images",
+			"message.stepProcess.prepare.write": "Preparing to write files",
+			"message.stepProcess.prepare.search": "Preparing to search code",
+			"message.stepProcess.prepare.edit": "Preparing to edit files",
+			"message.stepProcess.prepare.commands": "Preparing to run commands",
+			"message.stepProcess.prepare.code": "Preparing to run code",
+			"message.stepProcess.prepare.webSearch": "Preparing to search the web",
+			"message.stepProcess.prepare.webFetch": "Preparing to visit web pages",
+			"message.stepProcess.prepare.subagents": "Preparing to coordinate subagents",
+			"message.stepProcess.prepare.plan": "Preparing to update the plan",
+			"message.stepProcess.prepare.questions": "Preparing questions",
+			"message.stepProcess.prepare.tools": "Preparing tool calls",
 			"message.stepProcess.done.thinking": "Analysis completed",
 			"message.stepProcess.done.read": "Read files",
+			"message.stepProcess.done.readImage": "Read images",
+			"message.stepProcess.done.write": "Wrote files",
 			"message.stepProcess.done.search": "Searched code",
 			"message.stepProcess.done.edit": "Edited files",
 			"message.stepProcess.done.commands": "Ran commands",
@@ -5407,6 +5517,11 @@ window.__ModuleLoader__.load({
 			"message.turnProcess.took": "Took {duration}",
 			"message.turnProcess.failed": "Failed",
 			"view.chat": "Chat",
+			"image.open": "View full image",
+			"image.loading": "Loading image…",
+			"image.failed": "Image preview unavailable",
+			"image.dialog": "Image preview",
+			"image.close": "Close image preview",
 			"number.groupSeparator": ",",
 			"duration.compactSeconds": "{seconds}s",
 			"duration.compactMinutes": "{minutes}m{seconds}s",
@@ -5437,15 +5552,24 @@ window.__ModuleLoader__.load({
 			"settings.links.sidebar": "In-App Sidebar",
 			"settings.links.newTab": "Default Browser",
 			"settings.transcript.title": "Work details",
-			"settings.transcript.description": "Controls how turns and steps expand by default",
+			"settings.transcript.description": "Choose how much detail to show for tool calls",
 			"settings.transcript.compact": "Compact",
+			"settings.transcript.standard": "Standard",
 			"settings.transcript.detailed": "Detailed",
-			"settings.transcript.expanded": "Expanded",
+			"settings.transcript.verbose": "Verbose",
 			"fileOpen.title": "Couldn’t open file",
 			"fileOpen.unknown": "Couldn’t open this file",
 			"message.extraBlock": "Extra content block",
 			"message.systemPrompt": "System prompt",
 			"message.systemPromptUpdate": "System prompt update",
+			"message.toolAdded": "Tool added: {name}",
+			"message.toolRemoved": "Tool removed: {name}",
+			"message.toolsAdded": "Added: {names}",
+			"message.toolsAddedCount": "{count} added",
+			"message.toolsChanged": "{added} added, {removed} removed",
+			"message.toolsRemoved": "Removed: {names}",
+			"message.toolsRemovedCount": "{count} removed",
+			"message.toolsUpdated": "Tools updated",
 			"message.contextInjection": "Context injection",
 			"message.contextRecall": "Session recall",
 			"message.referenceSummary": "Referenced session · {labels}",
@@ -5488,6 +5612,10 @@ window.__ModuleLoader__.load({
 			"message.retry.delay": "Retry delay: ",
 			"message.retry.failure": "Failure reason: ",
 			"message.failure.auth": "API key is invalid",
+			"message.accountStopped": "Task stopped",
+			"message.failure.accountSignedOut": "Stopped because you signed out of DeepSeek.",
+			"message.failure.accountSignInRequired": "Sign in to DeepSeek and ensure the request destination supports account authentication.",
+			"message.failure.quota": "Request quota exhausted.",
 			"message.turnError": "This turn failed",
 			"message.maxTokens": "Output token limit reached",
 			"message.maxTokens.hint": "The reply was cut off; earlier output is preserved in the conversation. Send \"continue\" to let the model resume.",
@@ -5645,7 +5773,7 @@ window.__ModuleLoader__.load({
 		});
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/AssistantMarkdown.module.css.mjs
-		const css$8 = ".hWmORq_root{font-size:var(--dsh-content-font-size,14px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);flex-direction:column;display:flex}.hWmORq_body{flex-direction:column;gap:16px;display:flex}.hWmORq_body .md-table-wide{--dsh-table-spare:max(0px, calc((100cqw - var(--dsh-chat-content-width)) / 2));--dsh-table-lead:calc(var(--dsh-table-spare) + min(var(--dsh-chat-content-width), 100cqw) - 100%);box-sizing:border-box;width:calc(100% + var(--dsh-table-lead) + var(--dsh-table-spare));max-width:none;margin-left:calc(-1 * var(--dsh-table-lead));padding-left:var(--dsh-table-lead)}.hWmORq_body .md-table-wide>table{z-index:1;position:relative}.hWmORq_body>[data-turn-process-inline][hidden]{margin-bottom:-16px}.hWmORq_stopped{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);border-radius:6px;align-self:flex-start;padding:0 6px;font-size:11px;line-height:18px}.hWmORq_actions{margin-top:16px;margin-left:-6px}";
+		const css$8 = ".hWmORq_root{font-size:var(--dsh-content-font-size,14px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);flex-direction:column;display:flex}.hWmORq_body{flex-direction:column;gap:16px;display:flex}.hWmORq_body .md-table-wide{--dsh-table-spare:max(0px, calc((100cqw - var(--dsh-chat-content-width)) / 2));--dsh-table-lead:calc(var(--dsh-table-spare) + min(var(--dsh-chat-content-width), 100cqw) - 100%);box-sizing:border-box;width:calc(100% + var(--dsh-table-lead) + var(--dsh-table-spare));max-width:none;margin-left:calc(-1 * var(--dsh-table-lead));padding-left:var(--dsh-table-lead)}.hWmORq_body .md-table-wide>table{z-index:1;position:relative}.hWmORq_body>[data-turn-process-inline][hidden]{margin-bottom:-16px}.hWmORq_stopped{border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary);align-self:flex-start;padding:0 6px;font-size:11px;line-height:18px}.hWmORq_actions{margin-top:16px;margin-left:-6px}";
 		const tagId$8 = "@deepseek-ai/dsh-client-ui-chat/AssistantMarkdown.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$8) + "]") === null) {
 			const tag = document.createElement("style");
@@ -5663,16 +5791,23 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region lib/types/client/chat/AssistantMarkdown.js
 		/**
-		* Resolve an authored POSIX image path against the document's file API.
+		* Standalone fallback for image destinations (query/fragment suffixes are ignored).
+		* Chat fileImages resolves decoded file references against cwd; pathImages also
+		* serves this component outside that provider and accepts legacy image URL suffixes.
+		* Resolve an authored absolute image path against the document's file API.
 		* @param base - canonical `document.baseURI` at render time.
-		* @param value - authored markdown destination.
-		* @returns an absolute HTTP(S) file-API URL, or undefined for unsupported
+		* @param value - authored Markdown destination; URL escapes are decoded once.
+		* @returns an absolute Web or Desktop file-API URL, or undefined for unsupported
 		* protocols and non-local paths.
 		*/
 		function localPathMediaUrl(base, value) {
-			if (!value.startsWith("/") || value.startsWith("//")) return void 0;
-			if (!base.startsWith("http:") && !base.startsWith("https:")) return void 0;
-			return new URL(`api/file?path=${encodeURIComponent(value)}`, base).href;
+			let path;
+			try {
+				path = decodeURIComponent(value.split(/[?#]/u)[0] ?? "");
+			} catch {
+				return;
+			}
+			return fileMediaUrl(base, path);
 		}
 		/** Reasoning block as the Think variant summary row (figma 39:28304). */
 		const AssistantMarkdown = (0, react.memo)(function AssistantMarkdown({ blocks, streaming, interrupted, renderMessageImages, groupPart, useDisclosure, reasoningHidden = false, usePresentation, revealProcess, mentions, t }) {
@@ -5796,7 +5931,7 @@ window.__ModuleLoader__.load({
 		});
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/GenericCommandCard.module.css.mjs
-		const css$7 = "._5OnbHa_root{flex-direction:column;display:flex}._5OnbHa_leading{flex-shrink:0}._5OnbHa_chevron{color:var(--dsw-alias-label-secondary)}._5OnbHa_title{font-weight:400;transition:color .1s}._5OnbHa_separator{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}._5OnbHa_summary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;transition:color .1s;overflow:hidden}._5OnbHa_row:hover ._5OnbHa_title,._5OnbHa_row:hover ._5OnbHa_summary:not([data-error]){color:var(--dsw-alias-label-primary)}._5OnbHa_summary[data-error],._5OnbHa_body[data-error]{color:var(--dsw-alias-state-error-primary)}._5OnbHa_body{border:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-markdown-code-block);max-height:260px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-markdown-code-block-small);white-space:pre-wrap;border-radius:12px;margin:4px 0 4px 4px;padding:12px 16px;overflow:auto}";
+		const css$7 = "._5OnbHa_root{flex-direction:column;display:flex}._5OnbHa_leading{flex-shrink:0}._5OnbHa_chevron{color:var(--dsw-alias-label-secondary)}._5OnbHa_title{font-weight:400;transition:color .1s}._5OnbHa_separator{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}._5OnbHa_summary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;transition:color .1s;overflow:hidden}._5OnbHa_row:hover ._5OnbHa_title,._5OnbHa_row:hover ._5OnbHa_summary:not([data-error]){color:var(--dsw-alias-label-primary)}._5OnbHa_summary[data-error],._5OnbHa_body[data-error]{color:var(--dsw-alias-state-error-primary)}._5OnbHa_body{border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-markdown-code-block);max-height:260px;color:var(--dsw-alias-label-primary);font:var(--dsw-font-markdown-code-block-small);white-space:pre-wrap;margin:4px 0 4px 4px;padding:12px 16px;overflow:auto}";
 		const tagId$7 = "@deepseek-ai/dsh-client-ui-chat/GenericCommandCard.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$7) + "]") === null) {
 			const tag = document.createElement("style");
@@ -6011,10 +6146,10 @@ window.__ModuleLoader__.load({
 		/** Turn-level process disclosure controller. */
 		const TurnProcessNodeView = (0, react.memo)(function TurnProcessNodeView({ node, turnProcess, t }) {
 			if (turnProcess === void 0) throw new Error("turn-process node requires Turn process owner state");
-			const open = turnProcess.open;
+			const open = !turnProcess.foldable || turnProcess.open;
 			const turn = node.location.kind === "turn" || node.location.kind === "step" ? node.location.turn : void 0;
 			const [now, setNow] = (0, react.useState)(Date.now);
-			const ticking = turnProcess.foldable && turn?.status === "open";
+			const ticking = turn?.status === "open" && turn.start !== void 0;
 			(0, react.useEffect)(() => {
 				if (!ticking) return;
 				setNow(Date.now());
@@ -6025,11 +6160,11 @@ window.__ModuleLoader__.load({
 					clearInterval(timer);
 				};
 			}, [ticking]);
-			if (!turnProcess.foldable) return null;
-			const canCollapse = turnProcess.hasContent && !turnProcessAlwaysOpen(node);
-			const running = turn?.status === "open";
-			const reason = turn?.end?.data.reason.kind;
-			const elapsedMs = turn?.start === void 0 ? void 0 : Math.max(1e3, (turn.end?.time ?? now) - turn.start.time);
+			if (turn?.start === void 0 && turn?.status !== "closed") return null;
+			const canCollapse = turnProcess.foldable && turnProcess.hasContent && !turnProcessAlwaysOpen(node);
+			const running = turn.status === "open";
+			const reason = turn.end?.data.reason.kind;
+			const elapsedMs = turn.start === void 0 ? void 0 : Math.max(1e3, (turn.end?.time ?? now) - turn.start.time);
 			const duration = elapsedMs === void 0 ? void 0 : running ? formatLiveRunDuration(elapsedMs, t) : formatRunDuration(elapsedMs, t);
 			const label = running ? duration === void 0 ? t("chat.deepDiving") : t("message.turnProcess.deepDivingFor", { duration }) : reason === "aborted" ? t("message.stopped") : reason === "error" ? t("message.turnProcess.failed") : duration === void 0 ? t("message.turnProcess.worked") : t("message.turnProcess.took", { duration });
 			const announcement = running ? t("chat.deepDiving") : reason === "aborted" ? t("message.stopped") : reason === "error" ? t("message.turnProcess.failed") : t("message.turnProcess.worked");
@@ -6196,7 +6331,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/TurnUsagePanel.module.css.mjs
-		const css$5 = ".Q51KRG_root{min-width:0;display:inline-flex}.Q51KRG_root+.Q51KRG_root{margin-left:-6px}.Q51KRG_trigger{min-width:0;height:calc(28px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);font-variant-numeric:tabular-nums;line-height:calc(24px + var(--dsh-content-font-delta,0px));white-space:nowrap;cursor:pointer;background:0 0;border:none;border-radius:28px;align-items:center;gap:4px;padding:6px 8px;display:inline-flex}.Q51KRG_label{text-overflow:ellipsis;min-width:0;overflow:hidden}.Q51KRG_trigger svg{width:calc(15px + var(--dsh-content-font-delta,0px));height:calc(15px + var(--dsh-content-font-delta,0px));flex:none}.Q51KRG_trigger:hover,.Q51KRG_trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary)}@media (width<=480px){.Q51KRG_trigger{width:calc(28px + var(--dsh-content-font-delta,0px));justify-content:center;padding:6px}.Q51KRG_trigger .Q51KRG_label{display:none}.Q51KRG_root+.Q51KRG_root{margin-left:0}}";
+		const css$5 = ".Q51KRG_root{min-width:0;display:inline-flex}.Q51KRG_root+.Q51KRG_root{margin-left:-6px}.Q51KRG_trigger{min-width:0;height:calc(28px + var(--dsh-content-font-delta,0px));border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);font-variant-numeric:tabular-nums;line-height:calc(24px + var(--dsh-content-font-delta,0px));white-space:nowrap;cursor:pointer;background:0 0;border:none;align-items:center;gap:4px;padding:6px 8px;display:inline-flex}.Q51KRG_label{text-overflow:ellipsis;min-width:0;overflow:hidden}.Q51KRG_trigger svg{width:calc(15px + var(--dsh-content-font-delta,0px));height:calc(15px + var(--dsh-content-font-delta,0px));flex:none}.Q51KRG_trigger:hover,.Q51KRG_trigger[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-tertiary)}@media (width<=480px){.Q51KRG_trigger{width:calc(28px + var(--dsh-content-font-delta,0px));justify-content:center;padding:6px}.Q51KRG_trigger .Q51KRG_label{display:none}.Q51KRG_root+.Q51KRG_root{margin-left:0}}";
 		const tagId$5 = "@deepseek-ai/dsh-client-ui-chat/TurnUsagePanel.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$5) + "]") === null) {
 			const tag = document.createElement("style");
@@ -6212,7 +6347,7 @@ window.__ModuleLoader__.load({
 		};
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/stat-dialog.module.css.mjs
-		const css$4 = ".bRhRbq_panel{z-index:1100;box-sizing:border-box;background:var(--dsw-specific-menu);width:max-content;min-width:min(300px,100vw - 24px);max-width:min(440px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;border-radius:12px;padding:16px;font-size:12px;line-height:18px;position:fixed}.bRhRbq_title{color:var(--dsw-alias-label-primary);justify-content:space-between;gap:16px;margin-bottom:8px;font-weight:500;display:flex}.bRhRbq_titleRule{border-top:.5px solid var(--dsw-alias-border-l2);margin-bottom:10px}.bRhRbq_titleValue{font-variant-numeric:tabular-nums}.bRhRbq_titleLabel{align-items:center;gap:6px;min-width:0;display:inline-flex}.bRhRbq_titleLabel svg{flex:none;width:14px;height:14px}.bRhRbq_details{color:var(--dsw-alias-label-tertiary);grid-template-columns:minmax(76px,auto) minmax(0,1fr);gap:6px 16px;margin:0;display:grid}.bRhRbq_details dt,.bRhRbq_details dd{min-width:0;margin:0}.bRhRbq_details dd{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;text-align:right}.bRhRbq_details .bRhRbq_route{overflow-wrap:anywhere}.bRhRbq_reasoning{color:var(--dsw-alias-label-tertiary);white-space:nowrap}";
+		const css$4 = ".bRhRbq_panel{z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:max-content;min-width:min(300px,100vw - 24px);max-width:min(440px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:16px;font-size:12px;line-height:18px;position:fixed}.bRhRbq_title{color:var(--dsw-alias-label-primary);justify-content:space-between;gap:16px;margin-bottom:8px;font-weight:500;display:flex}.bRhRbq_titleRule{border-top:.5px solid var(--dsw-alias-border-l2);margin-bottom:10px}.bRhRbq_titleValue{font-variant-numeric:tabular-nums}.bRhRbq_titleLabel{align-items:center;gap:6px;min-width:0;display:inline-flex}.bRhRbq_titleLabel svg{flex:none;width:14px;height:14px}.bRhRbq_details{color:var(--dsw-alias-label-tertiary);grid-template-columns:minmax(76px,auto) minmax(0,1fr);gap:6px 16px;margin:0;display:grid}.bRhRbq_details dt,.bRhRbq_details dd{min-width:0;margin:0}.bRhRbq_details dd{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;text-align:right}.bRhRbq_details .bRhRbq_route{overflow-wrap:anywhere}.bRhRbq_reasoning{color:var(--dsw-alias-label-tertiary);white-space:nowrap}";
 		const tagId$4 = "@deepseek-ai/dsh-client-ui-chat/stat-dialog.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$4) + "]") === null) {
 			const tag = document.createElement("style");
@@ -6470,7 +6605,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/TurnTriggerNodeView.module.css.mjs
-		const css$2 = ".oz9t_a_root{border:.5px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-markdown-code-block);border-radius:16px;min-width:0;transition:background-color .1s}.oz9t_a_root:hover{background:var(--dsw-alias-interactive-bg-hover)}.oz9t_a_header{width:100%;color:var(--dsw-alias-label-primary);font:inherit;text-align:left;cursor:pointer;background:0 0;border:0;align-items:center;gap:10px;padding:12px 16px;display:flex}.oz9t_a_icon{color:var(--dsw-alias-label-tertiary);flex:none;display:inline-flex}.oz9t_a_title{font:var(--dsw-font-xs-13);flex:none}.oz9t_a_time{color:var(--dsw-alias-label-caption);font:var(--dsw-font-xxs-12);flex:none;margin-left:auto}.oz9t_a_chevron,.oz9t_a_openChevron{color:var(--dsw-alias-label-tertiary);flex:none}.oz9t_a_openChevron{transform:rotate(180deg)}.oz9t_a_body{padding:0 16px 12px 40px}.oz9t_a_explanation{color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);margin:8px 0}.oz9t_a_content{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;font:var(--dsw-font-xxs-12);overflow:auto}@media (prefers-reduced-motion:reduce){.oz9t_a_root{transition:none}}";
+		const css$2 = ".oz9t_a_root{border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-markdown-code-block);min-width:0;transition:background-color .1s}.oz9t_a_root:hover{background:var(--dsw-alias-interactive-bg-hover)}.oz9t_a_header{width:100%;color:var(--dsw-alias-label-primary);font:inherit;text-align:left;cursor:pointer;background:0 0;border:0;align-items:center;gap:10px;padding:12px 16px;display:flex}.oz9t_a_icon{color:var(--dsw-alias-label-tertiary);flex:none;display:inline-flex}.oz9t_a_title{font:var(--dsw-font-xs-13);flex:none}.oz9t_a_time{color:var(--dsw-alias-label-caption);font:var(--dsw-font-xxs-12);flex:none;margin-left:auto}.oz9t_a_chevron,.oz9t_a_openChevron{color:var(--dsw-alias-label-tertiary);flex:none}.oz9t_a_openChevron{transform:rotate(180deg)}.oz9t_a_body{padding:0 16px 12px 40px}.oz9t_a_explanation{color:var(--dsw-alias-label-secondary);font:var(--dsw-font-xxs-12);margin:8px 0}.oz9t_a_content{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;font:var(--dsw-font-xxs-12);overflow:auto}@media (prefers-reduced-motion:reduce){.oz9t_a_root{transition:none}}";
 		const tagId$2 = "@deepseek-ai/dsh-client-ui-chat/TurnTriggerNodeView.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$2) + "]") === null) {
 			const tag = document.createElement("style");
@@ -6687,7 +6822,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/StatsPills.module.css.mjs
-		const css$1 = ".bOPqQW_root{box-sizing:border-box;min-width:0;max-width:100%;font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));justify-content:center;gap:12px;display:flex}.bOPqQW_anchor{min-width:0;display:inline-flex}.bOPqQW_pill{box-sizing:border-box;max-width:100%;color:var(--dsw-alias-label-tertiary);font:inherit;font-variant-numeric:tabular-nums;line-height:inherit;white-space:nowrap;background:0 0;border:none;border-radius:24px;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}.bOPqQW_pill svg{flex:none;width:14px;height:14px}button.bOPqQW_pill{cursor:pointer}button.bOPqQW_pill:hover,button.bOPqQW_pill[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.bOPqQW_label{text-overflow:ellipsis;min-width:0;overflow:hidden}.bOPqQW_sep{color:var(--dsw-alias-separator-primary);margin:0 6px}";
+		const css$1 = ".bOPqQW_root{box-sizing:border-box;min-width:0;max-width:100%;font-size:calc(var(--dsh-content-font-size-secondary,13px) - 1px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));justify-content:center;gap:12px;display:flex}.bOPqQW_anchor{min-width:0;display:inline-flex}.bOPqQW_pill{box-sizing:border-box;corner-shape:round;max-width:100%;color:var(--dsw-alias-label-tertiary);font:inherit;font-variant-numeric:tabular-nums;line-height:inherit;white-space:nowrap;background:0 0;border:none;border-radius:999px;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}.bOPqQW_pill svg{flex:none;width:14px;height:14px}button.bOPqQW_pill{cursor:pointer}button.bOPqQW_pill:hover,button.bOPqQW_pill[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}.bOPqQW_label{text-overflow:ellipsis;min-width:0;overflow:hidden}.bOPqQW_sep{color:var(--dsw-alias-separator-primary);margin:0 6px}";
 		const tagId$1 = "@deepseek-ai/dsh-client-ui-chat/StatsPills.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$1) + "]") === null) {
 			const tag = document.createElement("style");
@@ -7397,7 +7532,7 @@ window.__ModuleLoader__.load({
 			const blocks = settled?.blocks ?? compactBlocks(state.blocks);
 			const visible = settled === void 0 ? state.visibleBlocks > 0 : hasVisibleContent(blocks);
 			const status = settled?.interrupted === true ? "interrupted" : settled === void 0 ? "running" : "settled";
-			const anchorSeq = settled?.seq ?? state.firstVisibleSeq ?? context.matches[0]?.event.seq ?? 0;
+			const anchorSeq = (settled?.interrupted === true ? settled.seq : state.firstVisibleSeq ?? settled?.seq) ?? context.matches[0]?.event.seq ?? 0;
 			const time = settled?.time ?? state.firstVisibleTime ?? context.matches[0]?.event.time ?? 0;
 			return {
 				anchorSeq,
@@ -7476,7 +7611,7 @@ window.__ModuleLoader__.load({
 				const settled = data.finalNode;
 				const visible = settled === void 0 ? state.visibleBlocks > 0 : hasVisibleContent(data.blocks);
 				if (settled === void 0 && !visible && current == null) return null;
-				return chatNode(context, "assistant-step", settled?.seq ?? state.firstVisibleSeq ?? context.matches[0]?.event.seq ?? 0, data, { visibility: settled?.interrupted === true || visible ? "visible" : "hidden" });
+				return chatNode(context, "assistant-step", (settled?.interrupted === true ? settled.seq : state.firstVisibleSeq ?? settled?.seq) ?? context.matches[0]?.event.seq ?? 0, data, { visibility: settled?.interrupted === true || visible ? "visible" : "hidden" });
 			}
 		};
 		/**
@@ -7508,11 +7643,12 @@ window.__ModuleLoader__.load({
 		//#region lib/types/client/contract/chat-visibility.js
 		/**
 		* Exclude system prompts, ordinary Context, and permission commands from visible Chat rows.
+		* Context containing tool changes retains its notice row.
 		* @param node - projected Chat node.
 		* @returns whether the node contributes a visible Chat row.
 		*/
 		function isVisibleChatNode(node) {
-			return node.visibility === "visible" && node.kind !== "system-prompt" && node.kind !== "context" && !(node.kind === "command" && node.data.name === "permission");
+			return node.visibility === "visible" && node.kind !== "system-prompt" && (node.kind !== "context" || node.data.content.some((block) => block.type === "tool-addition" || block.type === "tool-removal")) && !(node.kind === "command" && node.data.name === "permission");
 		}
 		//#endregion
 		//#region lib/types/client/conversation-nodes/turn-navigation.js
@@ -9043,6 +9179,18 @@ window.__ModuleLoader__.load({
 			if (event.type !== "user/message" || !isReplacementSurfaceEvent(event)) return false;
 			return event.data.source.kind === "compact-checkpoint";
 		}
+		/** Context presentation shared by user-role injections and developer messages. */
+		function contextMessage(event, message) {
+			return {
+				kind: "context",
+				seq: event.seq,
+				time: event.time,
+				content: message.content,
+				source: message.source,
+				producer: contextProducer(message.source),
+				form: contextForm(message.source)
+			};
+		}
 		/** User, steering, and injected-context message classification Definition. */
 		const messageDefinition = {
 			kind: "input-message",
@@ -9052,12 +9200,11 @@ window.__ModuleLoader__.load({
 					id: String(event.data.id),
 					role: "start"
 				} : null;
-				if (event.type === "developer/message") throw new Error("Chat developer messages are not supported yet");
 				return null;
 			},
 			start: (_context, match, reader) => {
-				if (match.event.type !== "user/message") throw new Error("input-message start requires user/message");
 				const event = match.event;
+				if (event.type !== "user/message") throw new Error("input-message start requires user/message");
 				if (event.data.source.kind !== "user") {
 					const nextTurn = reader.previous("inbox-next-turn")?.state;
 					const nextStep = reader.previous("inbox-next-step")?.state;
@@ -9065,14 +9212,8 @@ window.__ModuleLoader__.load({
 					const turnStart = location.kind === "step" ? location.turn.start?.seq : void 0;
 					const idleSteer = location.kind === "step" && location.step.step === 1 && turnStart !== void 0 && (nextStep?.claimSeq ?? -1) > turnStart && (nextTurn?.claimSeq ?? -1) < turnStart && nextStep?.claimedHuman === false && nextStep.currentClaimed.has(String(event.data.id));
 					return {
-						kind: "context",
-						waking: nextTurn?.currentClaimed.has(String(event.data.id)) === true || idleSteer,
-						seq: event.seq,
-						time: event.time,
-						content: event.data.content,
-						source: event.data.source,
-						producer: contextProducer(event.data.source),
-						form: contextForm(event.data.source)
+						...contextMessage(event, event.data),
+						waking: nextTurn?.currentClaimed.has(String(event.data.id)) === true || idleSteer
 					};
 				}
 				return reader.previous("inbox-next-step")?.state.currentClaimed.has(String(event.data.id)) === true ? {
@@ -9096,12 +9237,27 @@ window.__ModuleLoader__.load({
 				return chatNode(context, context.state.kind === "context" && context.start?.event.type === "user/message" && context.state.waking === true ? "turn-trigger" : context.state.kind, context.state.seq, context.state);
 			}
 		};
+		/** Developer history uses the input-message lifecycle and context presentation. */
+		const developerMessageDefinition = {
+			...messageDefinition,
+			kind: "developer-message",
+			match: (event) => event.type === "developer/message" ? {
+				id: String(event.data.message.id),
+				role: "start"
+			} : null,
+			start: (_context, match) => {
+				const event = match.event;
+				if (event.type !== "developer/message") throw new Error("developer-message start requires developer/message");
+				return contextMessage(event, event.data.message);
+			}
+		};
 		/**
-		* Register the user, steering, and injected-context message contribution.
+		* Register user, steering, injected-context, and developer message contributions.
 		* @param ctx - owning UI Conversation context.
 		*/
 		function registerMessageConversationNode(ctx) {
 			ctx.uiConversation.events.register(messageDefinition);
+			ctx.uiConversation.events.register(developerMessageDefinition);
 		}
 		//#endregion
 		//#region lib/types/client/conversation-nodes/request-prompt.js
@@ -9137,6 +9293,7 @@ window.__ModuleLoader__.load({
 					role: "start"
 				} : null,
 				start: (_context, match, reader) => {
+					if (match.event.type === "assistant/live-chunk") throw new Error("system-message requires a durable event");
 					return inspect(reader.previous("system-message")?.state, match.event);
 				},
 				update: (context) => context.state,
@@ -9301,8 +9458,23 @@ window.__ModuleLoader__.load({
 			return JSON.stringify(value);
 		}
 		function rootCall(match) {
+			const event = match.event;
+			if (event.type === "assistant/live-chunk") {
+				const chunk = event.data.chunk;
+				if (chunk.type !== "tool-call-delta" || !chunk.name) throw new Error("tool preparation requires a named call delta");
+				return {
+					phase: "preparing",
+					callId: String(chunk.id),
+					name: chunk.name,
+					turn: event.data.turn,
+					step: event.data.step,
+					time: event.time,
+					subCalls: []
+				};
+			}
 			if (match.event.type !== "tool/call") throw new Error("tool-call start requires tool/call");
 			return {
+				phase: "start",
 				callId: String(match.event.data.callId),
 				name: match.event.data.name,
 				argsRaw: match.event.data.arguments,
@@ -9334,6 +9506,7 @@ window.__ModuleLoader__.load({
 		}
 		function childCall(match, data) {
 			return {
+				phase: "start",
 				callId: data.subCallId,
 				parentCallId: data.parentCallId,
 				name: data.name,
@@ -9429,6 +9602,7 @@ window.__ModuleLoader__.load({
 			};
 		}
 		function projectBlock(block, state, interruptedAt, visited = /* @__PURE__ */ new Set(), depth = 1) {
+			if (!("kind" in block) && block.phase === "preparing") return block;
 			if (visited.has(block.callId) || depth > MAX_DEPTH) return {
 				...block,
 				subCalls: []
@@ -9490,11 +9664,18 @@ window.__ModuleLoader__.load({
 			for (const candidate of context.matches) state = updateDispatch(state, candidate);
 			return state;
 		}
-		/** Root Tool lifecycle and nested PTC dispatch Definition. */
+		/** Root Tool preparation, dispatch, result, and nested PTC calls. */
 		const toolDefinition = {
 			kind: "tool-call",
 			target: "chat",
 			match: (event) => {
+				if (event.type === "assistant/live-chunk") {
+					const chunk = event.data.chunk;
+					return chunk.type === "tool-call-delta" && chunk.name ? {
+						id: String(chunk.id),
+						role: "start"
+					} : null;
+				}
 				if (event.type === "tool/call") return {
 					id: String(event.data.callId),
 					role: "start"
@@ -9518,8 +9699,13 @@ window.__ModuleLoader__.load({
 				parents: /* @__PURE__ */ new Map()
 			}),
 			update: (context, match) => {
+				if (match.event.type === "tool/call") return {
+					...context.state,
+					root: rootCall(match)
+				};
 				if (match.event.type === "tool/result") {
-					const result = rootResult(match, "kind" in context.state.root ? void 0 : context.state.root);
+					const root = context.state.root;
+					const result = rootResult(match, !("kind" in root) && root.phase === "start" ? root : void 0);
 					return result === void 0 ? context.state : {
 						...context.state,
 						root: result
@@ -9527,11 +9713,25 @@ window.__ModuleLoader__.load({
 				}
 				return updateDispatch(context.state, match);
 			},
+			publication: (match) => match.event.type === "assistant/live-chunk" ? "animation-frame" : "immediate",
 			buildViewNode: (context) => {
+				const current = context.current.get("chat");
 				const state = context.state ?? fallbackState$2(context);
-				if (state === void 0) return null;
-				const projected = projectBlock(state.root, state, interruption(context));
-				return chatNode(context, "tool-call", context.start?.event.seq ?? ("kind" in state.root ? state.root.seq : context.matches[0]?.event.seq ?? 0), { root: projected });
+				if (state === void 0) return current == null ? null : current.visibility === "hidden" ? current : {
+					...current,
+					visibility: "hidden"
+				};
+				const interruptedAt = interruption(context);
+				const projected = projectBlock(state.root, state, interruptedAt);
+				const anchor = context.start?.event.seq ?? ("kind" in state.root ? state.root.seq : context.matches[0]?.event.seq ?? 0);
+				const visibility = !("kind" in projected) && projected.phase === "preparing" && interruptedAt !== void 0 ? "hidden" : "visible";
+				const location = contextLocation(context);
+				const data = current?.data.root === projected ? current.data : { root: projected };
+				if (current?.data === data && current.anchorSeq === anchor && current.visibility === visibility && current.location === location) return current;
+				return chatNode(context, "tool-call", anchor, data, {
+					visibility,
+					location
+				});
 			}
 		};
 		/**
@@ -9549,8 +9749,13 @@ window.__ModuleLoader__.load({
 			return location.turn.steps.at(-1)?.step ?? 0;
 		}
 		function failureFrom(match) {
-			if (match.event.type !== "turn/end" || match.event.data.reason.kind !== "error") return void 0;
-			const failure = match.event.data.reason.error;
+			if (match.event.type !== "turn/end") return void 0;
+			const reason = match.event.data.reason;
+			const failure = reason.kind === "error" ? reason.error : reason.kind === "aborted" && reason.reason.kind === "hook" && reason.reason.reason === "deepseek-account/signed-out" ? {
+				message: "Stopped because you signed out of DeepSeek.",
+				code: "ACCOUNT_SIGNED_OUT"
+			} : void 0;
+			if (failure === void 0) return void 0;
 			const display = displayFailure(failure);
 			return {
 				seq: match.event.seq,
@@ -9582,7 +9787,7 @@ window.__ModuleLoader__.load({
 					id: String(event.data.turn),
 					role: "start"
 				};
-				if (event.type === "turn/end" && event.data.reason.kind === "error") return {
+				if (event.type === "turn/end" && (event.data.reason.kind === "error" || event.data.reason.kind === "aborted" && event.data.reason.reason.kind === "hook" && event.data.reason.reason.reason === "deepseek-account/signed-out")) return {
 					id: String(event.data.turn),
 					role: "update"
 				};
@@ -10219,19 +10424,11 @@ window.__ModuleLoader__.load({
 		//#endregion
 		//#region lib/types/client/conversation-nodes/process-activity.js
 		function activity(name) {
-			if ([
-				"read",
-				"read_image",
-				"list_mcp_resources",
-				"list_mcp_resource_templates",
-				"read_mcp_resource"
-			].includes(name)) return "read";
+			if (name === "read") return "read";
+			if (name === "read_image") return "readImage";
 			if (name === "grep" || name === "glob" || name.endsWith("_inspect")) return "search";
-			if ([
-				"write",
-				"edit",
-				"apply_patch"
-			].includes(name)) return "edit";
+			if (name === "write") return "write";
+			if (name === "edit" || name === "apply_patch") return "edit";
 			if ([
 				"bash",
 				"pwsh",
@@ -10333,6 +10530,7 @@ window.__ModuleLoader__.load({
 			let running;
 			let runningDetail = "";
 			let runningTime = -Infinity;
+			let preparing;
 			const visit = (tool) => {
 				if (seen.has(tool.callId)) return;
 				seen.add(tool.callId);
@@ -10341,7 +10539,8 @@ window.__ModuleLoader__.load({
 					const kind = activity(call.name);
 					if (isRunningTool(tool) && tool.time >= runningTime) {
 						running = kind;
-						runningDetail = liveToolDetail(tool.name, tool.argsRaw);
+						preparing = tool.phase === "preparing";
+						runningDetail = tool.phase === "preparing" ? kind === "tools" ? tool.name : "" : liveToolDetail(tool.name, tool.argsRaw);
 						runningTime = tool.time;
 					}
 					counts.set(kind, (counts.get(kind) ?? 0) + 1);
@@ -10356,7 +10555,8 @@ window.__ModuleLoader__.load({
 					count
 				})).sort((a, b) => b.count - a.count),
 				running,
-				runningDetail
+				runningDetail,
+				...preparing ? { preparing: true } : {}
 			};
 		}
 		//#endregion
@@ -10382,7 +10582,7 @@ window.__ModuleLoader__.load({
 			return node.kind === "assistant-step" && hasAssistantReplyContent(node.data.blocks);
 		}
 		function sameSummary(left, right) {
-			return left.running === right.running && left.runningDetail === right.runningDetail && left.counts.length === right.counts.length && left.counts.every((value, index) => value.kind === right.counts[index]?.kind && value.count === right.counts[index].count);
+			return left.running === right.running && left.runningDetail === right.runningDetail && left.preparing === right.preparing && left.counts.length === right.counts.length && left.counts.every((value, index) => value.kind === right.counts[index]?.kind && value.count === right.counts[index].count);
 		}
 		function sameMembers(left, right) {
 			return left.length === right.length && left.every((value, index) => value.key === right[index]?.key && value.groupPart === right[index].groupPart);
@@ -10427,7 +10627,7 @@ window.__ModuleLoader__.load({
 				const previous = this.snapshot.data;
 				const activity = unchanged && previous.closed === closed ? previous.summary : processActivity(nodes);
 				const summary = closed ? {
-					...activity,
+					counts: activity.counts,
 					running: void 0,
 					runningDetail: ""
 				} : activity;
@@ -10707,6 +10907,32 @@ window.__ModuleLoader__.load({
 			registerUnknownConversationFallback(ctx);
 			registerChatConversationView(ctx);
 			ctx.uiConversation.groups.register(processGroupDefinition);
+		}
+		//#endregion
+		//#region lib/types/client/chat/QuotaNoticeHost.js
+		/**
+		* The frame-wide `shell.overlay` host for quota notices. It holds the one live
+		* notice for the whole app, so leaving the Chat panel does not drop it. A
+		* `shell.quota-notice` entry may replace the generic Toast for codes it claims.
+		*/
+		/**
+		* @param props - the live notice, its dismissal, the chain outlet, and the locale seat.
+		* @returns the notice on display, or null while none is live.
+		*/
+		function QuotaNoticeHost({ useNotice, dismissNotice, keepNoticeOpen, renderSlotChain, t }) {
+			const notice = useNotice((current) => current);
+			if (notice === null) return null;
+			const owner = {
+				code: notice.code,
+				message: t("message.failure.quota"),
+				dismiss: dismissNotice,
+				keepOpen: keepNoticeOpen
+			};
+			return (0, react_jsx_runtime.jsx)(react.Fragment, { children: renderSlotChain("shell.quota-notice", owner, { fallback: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Toast, {
+				text: owner.message,
+				icon: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconWarningOutlineRegular, { size: 18 }),
+				onDone: dismissNotice
+			}) }) }, `quota-notice-${String(notice.seq)}`);
 		}
 		//#endregion
 		//#region ../../../vendor/cosmokit/lib/index.js
@@ -11605,18 +11831,25 @@ window.__ModuleLoader__.load({
 		/** Work-details presentation modes a user can choose. */
 		const TRANSCRIPT_VIEW_MODES = [
 			"compact",
+			"standard",
 			"detailed",
-			"expanded"
+			"verbose"
 		];
 		/**
-		* Saved value from the two-mode generation of this setting. Read as `detailed`;
+		* Saved value from the two-mode generation of this setting. Read as `standard`;
 		* never offered as a choice and never written back.
 		*/
 		const LEGACY_TRANSCRIPT_VIEW_MODE = "normal";
-		/** Every value the durable field accepts: current modes plus the legacy saved value. */
-		const TRANSCRIPT_VIEW_SETTING_VALUES = [...TRANSCRIPT_VIEW_MODES, LEGACY_TRANSCRIPT_VIEW_MODE];
-		/** Default preserves the compact process disclosure introduced by Chat. */
-		const DEFAULT_TRANSCRIPT_VIEW_MODE = "compact";
+		/** Saved `expanded` values read as `detailed`, without being offered or written back. */
+		const LEGACY_EXPANDED_TRANSCRIPT_VIEW_MODE = "expanded";
+		/** Every value the durable field accepts: current modes plus legacy saved values. */
+		const TRANSCRIPT_VIEW_SETTING_VALUES = [
+			...TRANSCRIPT_VIEW_MODES,
+			LEGACY_TRANSCRIPT_VIEW_MODE,
+			LEGACY_EXPANDED_TRANSCRIPT_VIEW_MODE
+		];
+		/** Standard process summaries for users without an explicit preference. */
+		const DEFAULT_TRANSCRIPT_VIEW_MODE = "standard";
 		/** Performance and usage detail levels accepted by user settings. */
 		const PERFORMANCE_USAGE_MODES = ["compact", "detailed"];
 		/** Preserve detailed accounting for users without an explicit preference. */
@@ -11625,12 +11858,12 @@ window.__ModuleLoader__.load({
 		const ChatSettingsFields = {
 			linkOpening: Schema.union(["sidebar", "new-tab"]).default("sidebar"),
 			performanceUsage: Schema.union([...PERFORMANCE_USAGE_MODES]).default(DEFAULT_PERFORMANCE_USAGE),
-			[TRANSCRIPT_VIEW_FIELD]: Schema.union([...TRANSCRIPT_VIEW_SETTING_VALUES]).default(DEFAULT_TRANSCRIPT_VIEW_MODE)
+			[TRANSCRIPT_VIEW_FIELD]: Schema.union([...TRANSCRIPT_VIEW_SETTING_VALUES]).default(DEFAULT_TRANSCRIPT_VIEW_MODE).loose()
 		};
 		Schema.object(ChatSettingsFields);
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/settings/PreferenceRow.module.css.mjs
-		const css = "._2XZxNq_row{border-bottom:.5px solid var(--dsw-alias-border-l2);align-items:center;gap:8px;padding:16px 0;display:flex}._2XZxNq_rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px;display:flex}._2XZxNq_title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}._2XZxNq_desc{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400;line-height:18px}._2XZxNq_selector{background:var(--dsw-alias-bg-module-platform);height:36px;font:inherit;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;border-radius:18px;align-items:center;gap:12px;padding:0 14px;font-size:14px;line-height:22px;display:inline-flex}._2XZxNq_selector:hover{background:var(--dsw-alias-interactive-bg-hover)}._2XZxNq_chevron{flex:none}";
+		const css = "._2XZxNq_row{border-bottom:.5px solid var(--dsw-alias-border-l2);align-items:center;gap:8px;padding:16px 0;display:flex}._2XZxNq_rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px;display:flex}._2XZxNq_title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}._2XZxNq_desc{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400;line-height:18px}._2XZxNq_selector{border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-module-platform);height:36px;font:inherit;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;align-items:center;gap:12px;padding:0 14px;font-size:14px;line-height:22px;display:inline-flex}._2XZxNq_selector:hover{background:var(--dsw-alias-interactive-bg-hover)}._2XZxNq_chevron{flex:none}";
 		const tagId = "@deepseek-ai/dsh-client-ui-chat/PreferenceRow.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
 			const tag = document.createElement("style");
@@ -11704,8 +11937,9 @@ window.__ModuleLoader__.load({
 		//#region lib/types/client/settings/TranscriptViewRow.js
 		const LABELS = {
 			compact: "settings.transcript.compact",
+			standard: "settings.transcript.standard",
 			detailed: "settings.transcript.detailed",
-			expanded: "settings.transcript.expanded"
+			verbose: "settings.transcript.verbose"
 		};
 		/**
 		* Render the work-details mode selector.
@@ -11735,7 +11969,7 @@ window.__ModuleLoader__.load({
 		var TranscriptViewPolicy = class {
 			host;
 			unsubscribe;
-			/** Reactive current mode; defaults to Compact before Host settings arrive. */
+			/** Reactive current mode; defaults to Standard before Host settings arrive. */
 			mode = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(DEFAULT_TRANSCRIPT_VIEW_MODE);
 			/**
 			* @param host - durable Chat settings scope.
@@ -11753,7 +11987,7 @@ window.__ModuleLoader__.load({
 			}
 			/**
 			* Publish and persist one explicit user choice.
-			* @param mode - Compact, Detailed, or Expanded work details.
+			* @param mode - Compact, Standard, Detailed, or Verbose work details.
 			*/
 			setMode(mode) {
 				if (this.mode.getSnapshot() === mode) return;
@@ -11764,7 +11998,8 @@ window.__ModuleLoader__.load({
 			adopt() {
 				const section = this.host.getSnapshot().value;
 				if (section === void 0) return;
-				const mode = section.transcriptView === "normal" ? "detailed" : section.transcriptView;
+				const saved = section.transcriptView;
+				const mode = saved === "normal" ? "standard" : saved === "expanded" ? "detailed" : saved;
 				if (this.mode.getSnapshot() !== mode) this.mode.set(mode);
 			}
 		};
@@ -11783,18 +12018,25 @@ window.__ModuleLoader__.load({
 				liveProcessDetail: false,
 				settledReasoningPreview: false
 			},
-			detailed: {
-				mode: "detailed",
+			standard: {
+				mode: "standard",
 				foldCompletedTurns: true,
 				stepGrouping: "collapsed",
 				liveProcessDetail: true,
 				settledReasoningPreview: true
 			},
-			expanded: {
-				mode: "expanded",
+			detailed: {
+				mode: "detailed",
 				foldCompletedTurns: true,
-				stepGrouping: "none",
+				stepGrouping: "history",
 				liveProcessDetail: true,
+				settledReasoningPreview: true
+			},
+			verbose: {
+				mode: "verbose",
+				foldCompletedTurns: false,
+				stepGrouping: "none",
+				liveProcessDetail: false,
 				settledReasoningPreview: true
 			}
 		};
@@ -11943,10 +12185,38 @@ window.__ModuleLoader__.load({
 		* @param ctx - Client root context.
 		*/
 		function apply(ctx) {
+			const quotaNotice = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(null);
+			let quotaNoticeSeq = 0;
+			const quotaNoticeHolds = /* @__PURE__ */ new Set();
 			const chatSources = /* @__PURE__ */ new WeakMap();
+			const quotaSubscriptions = /* @__PURE__ */ new Set();
+			ctx.effect(() => async () => {
+				await Promise.all([...quotaSubscriptions].map((dispose) => dispose()));
+			}, "ui-chat: live quota notices");
 			const chatSource = (binding) => {
 				let source = chatSources.get(binding);
 				if (source === void 0) {
+					const dispose = binding.ctx.effect(() => {
+						const stop = binding.eventSource.subscribe(() => {
+							const { change } = binding.eventSource.getSnapshot();
+							if (change.kind !== "append") return;
+							for (const { event } of change.entries) {
+								if (event.type !== "turn/end" || event.data.reason.kind !== "error") continue;
+								const { code } = event.data.reason.error;
+								if (quotaNoticeHolds.size > 0 || code !== "QUOTA" && code !== "ACCOUNT_QUOTA") continue;
+								quotaNotice.set({
+									code,
+									seq: ++quotaNoticeSeq
+								});
+							}
+						});
+						return () => {
+							stop();
+							chatSources.delete(binding);
+							quotaSubscriptions.delete(dispose);
+						};
+					}, "ui-chat: Provider binding quota notices");
+					quotaSubscriptions.add(dispose);
 					const target = ctx.uiConversation.binding(binding).target("chat");
 					source = {
 						getSnapshot: () => target.getSnapshot() ?? EMPTY_CHAT_SNAPSHOT,
@@ -12104,6 +12374,30 @@ window.__ModuleLoader__.load({
 					}
 				}, ChatView);
 			});
+			ctx.slots.inject("shell.overlay", () => ctx.slots.register({
+				name: "shell.overlay",
+				id: "chat.quota-notice",
+				locale: NS,
+				children: { "shell.quota-notice": {
+					kind: "chain",
+					scope: "root"
+				} },
+				inject: () => ({
+					hooks: { notice: quotaNotice },
+					dismissNotice: () => {
+						quotaNoticeHolds.clear();
+						quotaNotice.set(null);
+					},
+					keepNoticeOpen: () => {
+						if (quotaNotice.getSnapshot() === null) return () => {};
+						const token = Symbol("ui-chat quota notice hold");
+						quotaNoticeHolds.add(token);
+						return () => {
+							quotaNoticeHolds.delete(token);
+						};
+					}
+				})
+			}, QuotaNoticeHost));
 			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
 				name: "conversation.composer.dock",
 				id: "stats",

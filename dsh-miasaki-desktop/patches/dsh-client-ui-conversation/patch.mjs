@@ -40,9 +40,9 @@ const ORIGINAL_FILE = join(BASELINE, 'client.original.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-conversation'
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
+export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '38326414ADF15B1C8BE88F95755DDAA313F4A0F3AD103AD056C6AB4D053D6B29'
+export const ORIGINAL_SHA256 = '40EF6D13AC73E06289CFC42EA941BD96739884F1727E0FACDEDC2E896495E960'
 /**
  * 应用本补丁后的 SHA-256。
  *
@@ -50,7 +50,7 @@ export const ORIGINAL_SHA256 = '38326414ADF15B1C8BE88F95755DDAA313F4A0F3AD103AD0
  * 改存产物 SHA —— `verify` 用「由原始 baseline 重建后的 SHA 是否等于本常量」自证，
  * 与逐字节比对等价（SHA 相等即逐字节相等），锚点失配时仍会响亮报错。
  */
-export const PATCHED_SHA256 = '59A185B9199934CB04BED75A3EAC9F810C4FCE3036AFC969824B288DDD4EF607'
+export const PATCHED_SHA256 = '727C86DDC6157A1232B038D33D3FFA8343C456A52B0929E2A9D34D611F8D23E0'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = '.wSkVaW_headerActions{flex:0 1 auto'
 

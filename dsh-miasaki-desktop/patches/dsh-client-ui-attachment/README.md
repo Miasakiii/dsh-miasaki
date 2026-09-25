@@ -81,6 +81,11 @@ node patch.mjs rebuild           # 改过 EDITS 后：由 baseline 原始文件�
 > 验证：三张实测截图 tile 分别由 62×62 变为 220×64 / 165×64 / 123×64，
 > `object-fit` 全部 `contain`，无新增 console/page 错误。
 
+> **守卫修复（2026-09-23 深夜）**：本补丁初版漏了 `import.meta.url` 执行守卫（其余补丁都有），
+> 任何 import 本文件的工具都会以调用方 argv 误跑一次 `status`——`scripts/patch-live-audit.mjs`
+> 开发时实际踩到（审计输出被一段 `[patch] 目标…` 污染）。已补齐守卫并与其余补丁对齐
+> try/catch 兜底；`verify` 复跑 PASS，产物 SHA 不变（守卫在 CLI 段，不进 EDITS）。
+
 ## 相关文档
 
 - 用户反馈物证：本仓会话「修复图片显示问题」的三张实机截图（红条 ResizeObserver 提示、

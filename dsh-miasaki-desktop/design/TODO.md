@@ -28,11 +28,20 @@
   （Event Name 为 `AppHangB1` 且 `P6` 空）、cookie 401、dsh 后端、GPU TDR、待机冻结。
   取证脚本 `_refs/scripts-archive/`：`read-wer-hang.ps1`（自提权读 WER；09-10 升级为导出完整
   Report.wer 供离线分析）/ `watch-miasaki-hang.ps1`（常驻）/ `diag-miasaki-hang.ps1`（单次）。
-- [ ] **挂起现场取证能力（根因定位的真正瓶颈）** — **2026-09-10 提权取证已确认：四次挂起
+- [~] **挂起现场取证能力（根因定位的真正瓶颈）** — **2026-09-10 提权取证已确认：四次挂起
   `Report.wer` 全部无 dump，且 `LoadedModule entries: 0`**，拿不到挂起瞬间的全线程栈、
   也拿不到 hung module，只能靠排除法。**结论：WER 通道已榨干，不要再等它。**
   需二选一：进程内看门狗（检测消息循环心跳超时即落盘线程栈 + 可选自动恢复）或外部监控在
   `Responding=False` 时抓 dump；否则根因无法收敛（2026-09-10 评估）。
+  **2026-09-25 已实施（规划 W2）**：`src-tauri/src/diag.rs`（诊断报告 + 进程内看门狗）+ 
+  `src-tauri/src/recovery.rs`（原生三按钮恢复 + sanitizeProfile + 分级停机）+ Job Object 孤儿回收，
+  `cargo test` 69 例含真机 Job 回收；设计见
+  [`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §4 W2。
+  **剩余 = 待实机验收**（不是待实现）：① 人为阻塞消息泵是否真落 `crash-*-watchdog.log`；
+  ② **隐藏/最小化到托盘时 `wv.url()` 是否被 WebView2 节流**（若节流会假报挂起 —— 需回来改判据）；
+  ③ release（`panic="abort"`）下 panic hook 是否真落盘。三项清单见
+  [`smoke-test-matrix.md`](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.1。
+  **`Cargo.toml` 是 `panic = "abort"`**：诊断落盘挂在 `std::panic::set_hook`（已落地）。
 - [ ] **长时间稳定性观察** — 用户连续运行 ≥1h 无崩溃(第六轮修复验证)
 - [x] **GDI 异常兜底** — ULW 连续失败计数（首失败+每 300 次日志，10 连败销毁表面）
   + 表面无效每 ~30 compose 重试重建（2026-09-04，`pet_native/window.rs`；
@@ -77,7 +86,7 @@
 
 - [x] **桌宠设置面板** — DSH「设置 → 桌宠」:显示/隐藏(持久化)、位置重置(屏幕外找回)、
   状态回显(hash 命令通道 + eval 回推);位置屏外自动回默认(2026-08-29,见 CHANGELOG)
-- [ ] **启动加载 2.0 + cmd 闪窗根治（2026-09-22 设计定稿）** — 用户点名「太简单 / 闪过终端窗口 /
+- [~] **启动加载 2.0 + cmd 闪窗根治（2026-09-22 设计定稿）** — 用户点名「太简单 / 闪过终端窗口 /
   加载页把启动终端代码内置」。三件：① 归因后根治 `cmd /C dsh web` 闪窗（首选绕开 cmd 直达
   `node <bin.js>`，兜底回落 cmd；先归因再修，嫌疑矩阵见设计 §3.1）；② dsh stdout tee 进 loading 页
   （内嵌终端日志流 + 四阶段进度，`__appendLog` / `__setPhase` 新钩子，`__setStatus` 契约不变）；
@@ -85,15 +94,30 @@
   `design/boot-loading-terminal.md`；appearance 半（DSH 首帧启动画）与 cross 契约见
   `../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md`。实机验收七项（闪窗 5 连发 /
   日志流 / 失败零回归 / 兜底回退 / 性能 / 降级 / smoke 回归）见设计 §6。
-- [ ] **拖拽上传附件到会话（2026-09-22 设计定稿，未实施）** — 桌面端拖文件进主窗口
+  - **[x] S4a 视觉层已落地（2026-09-24）**：§4.2 无需数据钩子的部分全做——外环缓旋 24s /
+    呼吸光晕 3s / 舞台扫描线 4s（opacity .06）/ 就绪纹章回弹 / reduced-motion 全量静止，
+    纯 CSS（transform+opacity）、零 JS 动画循环、零新增色（`var(--mia-accent)`）。
+    回归 `ui/test/loading-visual.test.js` 10 例接入 verify-all（desktop 20 → 21 项）。
+    实机验收（三主题目检 / 就绪回弹 / 降级 / 失败路径零回归）待用户。
+  - **[x] S4a-2 启动计时（同日）**：冷启动 3~6s / 失败最坏 90s 期间加「已等待 N s」诚实
+    读数（250ms tick、tabular-nums、就绪即停、失败继续走表；不出假百分比）。
+  - **[ ] S1–S3 未动**：闪窗归因与根治、stdout tee 钩子（Rust）；完成后 S4b（日志流 +
+    四阶段进度点）随钩子同批接 loading 页，`__setReady` 已预留。
+- [x] **拖拽上传附件到会话（2026-09-22 设计定稿，2026-09-24 实施）** — 桌面端拖文件进主窗口
   静默无效果。根因：tauri-runtime-wry 默认注册 drag-drop handler → WebView2
   `SetAllowExternalDrop(false)` + `RegisterDragDrop` → 页面级 HTML5 DnD 被整体拦成
   无人监听的 `tauri://drag-drop` 窗口事件。修法：`main.rs` 主窗 builder 加
-  `.disable_drag_drop_handler()`（官方注释指明这是 Windows 上用 HTML5 DnD 的必要条件）
-  + 注入层安全网 `09-dropguard.js`（防 composer 未挂载页面 drop 落入浏览器默认
-  `file://` 导航炸掉 SPA）+ loading 页防默认。四步实施与实机验收十项见设计
-  `design/drag-drop-attachment-upload.md`。
-- [ ] 主窗口最小化到托盘(关闭=退出保持现状,托盘已有显隐)
+  `.disable_drag_drop_handler()`（S1）+ 注入层安全网 `themes/src/09-dropguard.js`
+  （S2，MANIFEST.order 登记 + gen-init）+ loading 页最小防默认（S3）。官方上传链路
+  （ComposerAttachments / intakeFiles / fileUpload）全量复用，壳侧零业务逻辑。
+  回归 `verify-all` 99/99（desktop 23/23）；实机验收十项见设计 §6，待用户重启桌面壳。
+  四步实施与验收清单见 `design/drag-drop-attachment-upload.md`。
+- [x] **关闭 = 隐藏到托盘**（2026-09-25，规划 W3）— 语义变更：点 × / Alt+F4 / 任务栏关闭**不再退出**，
+  统一走 `hide_to_tray()`；首次弹**一次性原生确认** + marker
+  （`%LOCALAPPDATA%\miasaki\background-close-confirmed`，**删文件即回到首次态**，可重放可测试）；
+  真退出只经托盘「退出」/ 桌宠「退出应用」→ 前端确认弹窗 → `cmd=shutdown` → 分级停机停后端。
+  同批把「恢复选项」按钮加到 `ui/loading.html` 失败页。待实机验收五项见
+  [`smoke-test-matrix.md`](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.1。
 - [ ] 桌宠「审批等待」状态(主页面 DOM 扫描 → 桌宠 waiting 姿态)— 2026-08-30 接入,见 CHANGELOG;桌宠内一键审批后续阶段
   - **2026-09-12 v3 M2 落地**:主信号已替换为官方契约(`SessionSnapshot.running` +
     `uiSession.pendingInteractions`,dsh-pet-panel 经 hash `pet=` 上报),DOM 扫描降级为
@@ -140,7 +164,19 @@
 
 ## P3 · 工程
 
-- [ ] 正式 IPC(如 tauri 自定义协议 / postMessage)替代 hash 通道(收益有限,hash 已验证可靠)
+- [x] **桌宠资产链完整性闸门**（2026-09-24）：`scripts/check-pet-assets.mjs` 入 verify-all
+  （desktop 22 项）——frames.json 引用齐全 / 再生源（kurumi 图集、whale idle.gif、
+  inverse raw 立绘）在位 / 无孤儿派生；删素材曾致静默断链（2026-09-10 教训），
+  状态覆盖缺口（R15）与源派生新旧只提示不判失败
+- [~] 正式 IPC / 契约替代 hash 通道 — **2026-09-25 部分落地（规划 W1）**：新增
+  `window.miasakiDesktop` 契约 v1（`design/desktop-contract.md`，独立分片 `themes/src/10-contract.js`），
+  提供 `protocolVersion` / 能力探测 `has()` / `theme.current|onChange` / `window.onMaxStateChange` /
+  `assets.baseUrl`，子 frame 只给空壳。**hash 通道保留为唯一写通道**——契约明确不开写口
+  （再开一套会造出第三个 hash 写者，正是 W0-T0.2 刚修掉的竞态）。
+  协议层（自定义 scheme 取代 3080 origin）经评估列**远期**：真实成本在五处 origin 硬编码
+  （`main.rs:1688`/`405`、`00-boot.js:33`/`36`、`loading.html:322`）+ cookie `SameSite=Strict`
+  + WS 无法走 Tauri 自定义协议，见
+  [`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §2.2。
 - [ ] verify-themes.mjs 沙箱运行方案(无头 Edge 被命名管道限制;可换 WebView2 实例化)
 - [ ] 测试自动化(单元:parse_fragment 纯函数;集成:smoke-test 扩展)
   - 注 2026-09-04：Rust `Frames::kurumi_row` 单测（harness `cargo test` 通过）、

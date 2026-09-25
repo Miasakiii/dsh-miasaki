@@ -26,10 +26,33 @@ const edge = spawn(EDGE, [
   'about:blank'
 ], { stdio: 'ignore' })
 
+// 早死诊断（2026-09-24）：Edge 起不来时旧代码空转 30s 才报 `CDP target not found`，
+// 把「环境不允许跑 GUI 子进程」误读成脚本缺陷。两种死法都**不是本脚本的问题**：
+//   ① spawn error（ENOENT）—— Edge 路径不存在（没装 / 装在别处，改 EDGE 常量）；
+//   ② 进程秒退（实测本机 DSH 沙箱 workspace-write 下 ≈3s、退出码 0x80000003，
+//      `--no-sandbox` 也救不了）→ 在**普通终端**或 danger-full-access 会话里跑本脚本。
+// 即时抛出可读结论，替代 30s 盲等。
+let edgeDeath = null
+edge.on('error', (error) => {
+  edgeDeath = `spawn 失败：${error.message}（Edge 路径不存在？${EDGE}）`
+})
+edge.on('exit', (code, signal) => {
+  edgeDeath = `进程提前退出（code=${code}${signal ? ` signal=${signal}` : ''}，≈3s 内）`
+})
+function dieIfEdgeDead() {
+  if (edgeDeath === null) return
+  throw new Error(
+    `headless Edge 无法启动——${edgeDeath}。`
+    + `若在 DSH 沙箱会话内运行：GUI 子进程创建被限（容器类环境可试给启动参数加 --no-sandbox），`
+    + `请改用普通终端或 danger-full-access 会话；脚本本身无需修改。`,
+  )
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function getPageTarget() {
   for (let i = 0; i < 60; i++) {
+    dieIfEdgeDead()
     try {
       const res = await fetch(`http://127.0.0.1:${PORT}/json/list`)
       const targets = await res.json()
@@ -38,6 +61,7 @@ async function getPageTarget() {
     } catch {}
     await sleep(500)
   }
+  dieIfEdgeDead()
   throw new Error('CDP target not found')
 }
 

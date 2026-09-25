@@ -3,6 +3,7 @@ use std::os::raw::c_void;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use super::config::*;
+use super::dot;
 use super::ffi::*;
 use super::image::*;
 use super::model::*;
@@ -58,6 +59,15 @@ pub(crate) struct PetWin {
     click_through: bool,
     /// R2:穿透样式切换累计次数（诊断；每 CLICK_THROUGH_LOG_EVERY 次打一行）
     ct_switches: u32,
+    /// 2026-09-24:隐藏态悬浮球的球面缓冲（`DOT_SIZE²` 预乘，`dot::render` 的最终合成结果）。
+    /// 同时是悬浮球的命中共据——hover 与鼠标穿透都直接查它（与 R2 主窗同范式）。
+    dot_buf: Vec<u32>,
+    /// 悬浮球当前已渲染的主题名：与 `shared.theme` 比对，变化即重绘（隐藏态可见时立即换面）。
+    dot_theme: String,
+    /// 光标是否悬停在悬浮球上（悬停 → 放大 + 光晕增强；离散两态，不做插值动画）。
+    dot_hover: bool,
+    /// 悬浮球窗口当前是否已置位穿透（与主窗 `click_through` 各自独立——两个 hwnd 各自持有样式）。
+    dot_click_through: bool,
 }
 impl PetWin {
     fn compose(&mut self) {
@@ -68,20 +78,31 @@ impl PetWin {
 
         // —— 外部命令消费（设置面板 hash 通道 → shared 标志；UI 仅在窗口线程执行）——
         {
-            let (want_hide, do_reset) = {
+            let (want_hide, do_reset, want_theme) = {
                 let mut s = self.shared.lock().unwrap();
                 let h = s.hide;
                 let r = s.pending_reset;
+                let t = s.theme.clone();
                 s.pending_reset = false;
-                (h, r)
+                (h, r, t)
             };
+            // 2026-09-24:主题变化 → 悬浮球换面（球面头像 + 主题色环/发光）。
+            // 先于 reset/显隐切换落地：这样随后那两处的 render_dot 直接带上新主题，
+            // 不会先画一帧旧球面再被覆盖。仅当球当前可见（= 桌宠隐藏）时才立即重绘；
+            // 球不可见时只更新 dot_theme，留给显隐切换那次渲染。
+            if want_theme != self.dot_theme {
+                self.dot_theme = want_theme;
+                if !self.shown {
+                    self.render_dot();
+                }
+            }
             if do_reset {
                 let p = default_pos();
                 self.pos = p;
                 unsafe {
                     MoveWindow(self.hwnd, p.0, p.1, WIN_W, WIN_H, 1);
-                    draw_dot(self.dot_hwnd, p);
                 }
+                self.render_dot();
                 pet_log_line(&format!("[native-pet] position reset -> {},{}\n", p.0, p.1));
                 save_pet_pos(p, want_hide);
                 self.last_tick = now - std::time::Duration::from_secs(10); // 强制重绘
@@ -102,8 +123,8 @@ impl PetWin {
                     }
                 }
                 self.shown = !want_hide;
-                // M1.4:显隐切换同步圆点(want_hide=true 时 dot 即将可见,必须先定位到当前 pos)
-                draw_dot(self.dot_hwnd, self.pos);
+                // M1.4:显隐切换同步悬浮球(want_hide=true 时 dot 即将可见,必须先定位到当前 pos)
+                self.render_dot();
                 pet_log_line(&format!(
                     "[native-pet] {} (hide persisted)\n",
                     if want_hide { "hidden" } else { "shown" }
@@ -167,8 +188,8 @@ impl PetWin {
                         });
                     }
                     Action::Wander { .. } => {
-                        // M1.4:散步自然结束同步圆点,隐藏后恢复入口不脱节
-                        draw_dot(self.dot_hwnd, self.pos);
+                        // M1.4:散步自然结束同步悬浮球,隐藏后恢复入口不脱节
+                        self.render_dot();
                     }
                     _ => {}
                 }
@@ -256,8 +277,8 @@ impl PetWin {
                     self.action = None;
                 }
                 if self.action.is_none() {
-                    // M1.4:散步撞墙中断同步圆点(本段结尾统一置 dirty,present 会应用新 pos)
-                    draw_dot(self.dot_hwnd, self.pos);
+                    // M1.4:散步撞墙中断同步悬浮球(本段结尾统一置 dirty,present 会应用新 pos)
+                    self.render_dot();
                 }
             }
             // 清空画布只在帧更新时进行,避免 33ms 心跳把中间帧清成空白
@@ -645,6 +666,75 @@ impl PetWin {
         }
     }
 
+    /* ---------------- 2026-09-24:隐藏态「主题头像悬浮球」 ---------------- */
+
+    /// 重绘悬浮球并推到 dot 分层窗口。
+    ///
+    /// `dot_buf` 既是画面也是命中共据（hover 与穿透都查它），故「渲染 + blit」必须成对：
+    /// 任何改动球面外观的路径（主题切换 / 悬停 / 位置变化 / 显隐切换）都走这里，别单独 blit。
+    fn render_dot(&mut self) {
+        // frames 加载后不可变 → 裸指针解引用安全，且规避 `&mut self` 与 `&self.frames`
+        // 的借用冲突（与 blit_approval 同一范式）。
+        let avatar_ptr = self
+            .frames
+            .avatars
+            .get(dot::avatar_key(&self.dot_theme))
+            .map(|i| i as *const Image);
+        let avatar = avatar_ptr.map(|p| unsafe { &*p });
+        self.dot_buf = dot::render(&self.dot_theme, avatar, self.dot_hover);
+        blit_dot(self.dot_hwnd, self.pos, &self.dot_buf);
+    }
+
+    /// 悬浮球局部坐标处是否「透明」（= 让鼠标穿透到下层窗口）。
+    /// 判据与 R2 主窗同口径（查最终合成缓冲 / 阈值 `CLICK_THROUGH_ALPHA`）——56px 方窗的
+    /// 四角与发光外沿因此不吃点击，球从 30px 紫点放大后不会长出一片「隐形挡板」。
+    fn dot_transparent_at(&self, x: i32, y: i32) -> bool {
+        if x < 0 || y < 0 || x >= DOT_SIZE || y >= DOT_SIZE {
+            return true;
+        }
+        let a = (self.dot_buf[(y * DOT_SIZE + x) as usize] >> 24) & 0xFF;
+        a < CLICK_THROUGH_ALPHA
+    }
+
+    /// 悬浮球命中轮询（由 dot 窗口自己的 10ms 定时器驱动，与主窗 R2 同频同范式）。
+    ///
+    /// 规则：桌宠可见（球隐藏）恒不穿透——不留一个看不见却吃点击的方窗；
+    /// 球可见时按命中切换穿透，并用**同一命中**更新悬停态（悬停 → 放大 + 光晕增强）。
+    fn update_dot_hit(&mut self) {
+        if self.shown {
+            self.set_dot_click_through(false);
+            self.dot_hover = false; // 球不可见：清态即可，不必重绘
+            return;
+        }
+        let mut p = Point { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut p);
+        }
+        let transparent = self.dot_transparent_at(p.x - self.pos.0, p.y - self.pos.1);
+        let hover = !transparent;
+        if hover != self.dot_hover {
+            self.dot_hover = hover;
+            self.render_dot();
+        }
+        self.set_dot_click_through(transparent);
+    }
+
+    /// 切换悬浮球窗口的穿透样式位（与主窗 `set_click_through` 同构；两个 hwnd 各自缓存，
+    /// 互不干扰）。
+    fn set_dot_click_through(&mut self, on: bool) {
+        if self.dot_click_through == on {
+            return;
+        }
+        unsafe {
+            let cur = GetWindowLongPtrW(self.dot_hwnd, GWL_EXSTYLE) as u32;
+            let next = if on { cur | WS_EX_TRANSPARENT } else { cur & !WS_EX_TRANSPARENT };
+            if next != cur {
+                SetWindowLongPtrW(self.dot_hwnd, GWL_EXSTYLE, next as isize);
+            }
+        }
+        self.dot_click_through = on;
+    }
+
     /// R4:按 id **精确移除**一条提醒（审批 resolved / 决策失败回落时调用）。
     /// 只清匹配项——多会话并发审批时不会误伤别人的提醒（参考实现 `resolve_alert` 的核心价值）。
     /// 返回是否命中。
@@ -1015,8 +1105,8 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             } else {
                 let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
                 save_pet_pos((*pet).pos, hide);
-                // M1.4:拖动结束同步圆点(隐藏后恢复入口与桌宠位置不脱节,D6)
-                draw_dot((*pet).dot_hwnd, (*pet).pos);
+                // M1.4:拖动结束同步悬浮球(隐藏后恢复入口与桌宠位置不脱节,D6)
+                (*pet).render_dot();
             }
             0
         }
@@ -1050,6 +1140,11 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
     }
 }
 
+/// 悬浮球窗口过程。
+///
+/// - 左键抬起 = 恢复桌宠（只写 `shared.hide`，显隐与落盘由 compose 在窗口线程统一执行）；
+/// - `IDT_HIT` 定时器 = 悬停 / 穿透轮询（R2 范式：命中球面即放大，透明处即穿透）；
+/// - 其余消息交默认处理（`WM_PAINT` 无意义——内容全由 ULW 推送）。
 unsafe extern "system" fn dot_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) -> isize {
     let pet = get_pet(hwnd);
     if pet.is_null() {
@@ -1058,6 +1153,18 @@ unsafe extern "system" fn dot_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) 
     match msg {
         WM_LBUTTONUP => {
             (*pet).show_self();
+            0
+        }
+        WM_TIMER => {
+            if wp == IDT_HIT {
+                (*pet).update_dot_hit();
+                0
+            } else {
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
+        }
+        WM_DESTROY => {
+            KillTimer(hwnd, IDT_HIT); // 命中轮询随本窗口一起停
             0
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
@@ -1073,20 +1180,12 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn draw_dot(dot_hwnd: isize, pos: (i32, i32)) {
+/// 把整块预乘缓冲推到悬浮球分层窗口（`UpdateLayeredWindow`，ULW_ALPHA）。
+///
+/// GDI 绘制不写 alpha，故球面一律手工逐像素合成（`dot::render`）后整块 blit（预乘金）；
+/// 窗口位置即 `pos`（与桌宠窗口左上角对齐，M1.4 跟随语义不变）。
+fn blit_dot(dot_hwnd: isize, pos: (i32, i32), buf: &[u32]) {
     unsafe {
-        // GDI 绘制不写 alpha，恢复圆点改手工逐像素填充（预乘金）
-        let mut buf = vec![0u32; (DOT_SIZE * DOT_SIZE) as usize];
-        let r = DOT_SIZE / 2;
-        for y in 0..DOT_SIZE {
-            for x in 0..DOT_SIZE {
-                let dx = x - r;
-                let dy = y - r;
-                if dx * dx + dy * dy <= r * r {
-                    buf[(y * DOT_SIZE + x) as usize] = (255 << 24) | (0xB3 << 16) | (0x6A << 8) | 0xD9;
-                }
-            }
-        }
         let dc = CreateCompatibleDC(0);
         if dc == 0 {
             return;
@@ -1187,6 +1286,8 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         // 显式按监视器 DPI 感知，保证窗口物理尺寸正确
         SetProcessDpiAwarenessContext(-4);
         let (x, y, restore_hide) = initial_pet_state();
+        // 悬浮球球面初值 = 当前主题（spawn 时从 prefs.json 载入）→ 隐藏态冷启动第一帧即正确球面
+        let theme0 = shared.lock().map(|s| s.theme.clone()).unwrap_or_else(|_| "pure".to_string());
         let mut pet = Box::new(PetWin {
             hwnd: 0,
             dot_hwnd: 0,
@@ -1220,6 +1321,10 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             surface_rebuilds: 0,
             click_through: false,
             ct_switches: 0,
+            dot_buf: vec![0u32; (DOT_SIZE * DOT_SIZE) as usize],
+            dot_theme: theme0,
+            dot_hover: false,
+            dot_click_through: false,
         });
         let pet_ptr = &mut *pet as *mut PetWin;
         let inst = GetModuleHandleW(std::ptr::null());
@@ -1272,6 +1377,9 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         // R2:透明的光标轮询定时器（独立于 compose；穿透状态下窗口收不到鼠标消息，
         // 只能靠主动轮询恢复可点击判定）
         SetTimer(hwnd, IDT_HIT, HIT_POLL_MS, 0);
+        // 2026-09-24:悬浮球自己的命中轮询（悬停放大 + 透明处穿透）——与主窗同频的独立定时器，
+        // 挂在 dot 窗口上，由 dot_proc 消费
+        SetTimer(dot_hwnd, IDT_HIT, HIT_POLL_MS, 0);
 
         // 持久 GDI 表面(创建一次,终身复用;避免高频 CreateDIBSection 触发 gdi32full 崩溃)
         // D3:失败不致命 → present() 低频重试重建（surface_fail_streak 路径）
@@ -1293,10 +1401,10 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             pet_log_line(&format!("[native-pet] window created at {},{}, {}x{}\n", r.left, r.top, r.right - r.left, r.bottom - r.top));
         }
 
-        draw_dot(dot_hwnd, (x, y));
+        pet.render_dot();
         pet.compose();
         pet_log_line("[native-pet] first compose done\n");
-        // 启动恢复隐藏状态：主窗隐藏、圆点可见；否则仅显示主窗（圆点留隐藏，等待首次显示切换）
+        // 启动恢复隐藏状态：主窗隐藏、悬浮球可见；否则仅显示主窗（球留隐藏，等待首次显示切换）
         if restore_hide {
             ShowWindow(dot_hwnd, SW_SHOW);
             pet_log_line("[native-pet] restored hidden state (dot shown)\n");

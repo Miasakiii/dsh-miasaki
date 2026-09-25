@@ -14,9 +14,24 @@
   // 每次 error 都 appendChild 新 div，反复触发时红条沿屏幕向下堆叠盖住页面。
   // 改为复用同一 div 更新文本；重入场景（页面重渲染清掉旧节点）由 parentNode
   // 判空兜底重建。次数由文本内 [N] 承担，ERR_COUNT 另有 hash 诊断位消费。
+  //
+  // 2026-09-25 过滤浏览器调度产物（与 00-boot.js 同步）：ResizeObserver 回调引发
+  // 观察元素尺寸反复变化、超过单帧派发上限时，浏览器抛 "ResizeObserver loop
+  // completed with undelivered notifications."（无脚本来源：filename 落文档 URL、
+  // lineno 为 0）。触发者是宿主页面自身的观察器，与注入层无关（注入层覆盖物均
+  // position:fixed，自建 RO 只读布局、只写 fixed 标题栏，不成环）。照单全收会
+  // 误报缺陷并污染 errCount 诊断位，故按「消息变体 + 无脚本来源」忽略。
+  function isBrowserArtifactError(e) {
+    try {
+      var m = String((e && e.message) || '').replace(/^\s+|\s+$/g, '')
+      if (!/^ResizeObserver loop (completed with undelivered notifications\.|limit exceeded\.?)$/.test(m)) return false
+      return !e.lineno
+    } catch (e3) { return false }
+  }
   var ERR_COUNT = 0
   var ERR_BAR = null
   window.addEventListener('error', function (e) {
+    if (isBrowserArtifactError(e)) return
     ERR_COUNT++
     try {
       if (ERR_BAR === null || ERR_BAR.parentNode === null) {

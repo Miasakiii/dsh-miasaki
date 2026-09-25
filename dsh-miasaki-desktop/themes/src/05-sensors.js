@@ -1,13 +1,66 @@
 
+  /* @slice:hash-fields:begin —— themes/test/hash-fields.test.js 按此标记截段做字段级行为闸门，勿删/勿改本行 */
+
+  /* W0-T0.2（2026-09-25）hash 字段级读写：保真其它字段的原始编码，只动调用方指定的键。
+
+     背景：02-core.syncHash（主题/强度/活动/审批/diag）与本节 petHashCmd（窗控命令）
+     都在写 location.hash，而原实现 ① 写入时从零构造（丢弃 int/act/wait/pet/diag）
+     ② 1600ms 后把 hash 整体清成只剩 miasaki-theme —— 都会抹掉并发写者刚写的字段
+     （pet-panel 也经 URLSearchParams 追加 cmd+seq）。现改为按字段精确增删。 */
+  function hashPairs() {
+    var raw = String(location.hash || '').replace(/^#/, '')
+    if (raw === '') return []
+    return raw.split('&').filter(function (s) { return s !== '' }).map(function (s) {
+      var i = s.indexOf('=')
+      return i < 0 ? { k: s, raw: s } : { k: s.slice(0, i), raw: s }
+    })
+  }
+  function readHashField(name) {
+    var pairs = hashPairs()
+    for (var i = 0; i < pairs.length; i++) {
+      if (pairs[i].k !== name) continue
+      var j = pairs[i].raw.indexOf('=')
+      return j < 0 ? '' : pairs[i].raw.slice(j + 1)
+    }
+    return null
+  }
+  function setHashFields(patch) {
+    var pairs = hashPairs()
+    var anchor = false
+    for (var a = 0; a < pairs.length; a++) { if (pairs[a].k === 'miasaki-theme') anchor = true }
+    if (!anchor) pairs.push({ k: 'miasaki-theme', raw: 'miasaki-theme=' + current })
+    for (var k in patch) {
+      var v = patch[k]
+      var found = false
+      for (var n = 0; n < pairs.length; n++) {
+        if (pairs[n].k !== k) continue
+        found = true
+        if (v === null) pairs.splice(n, 1)
+        else pairs[n] = { k: k, raw: k + '=' + v }
+        break
+      }
+      if (!found && v !== null) pairs.push({ k: k, raw: k + '=' + v })
+    }
+    var out = []
+    for (var m = 0; m < pairs.length; m++) out.push(pairs[m].raw)
+    history.replaceState(null, '', '#' + out.join('&'))
+  }
+  var HASH_CMD_TTL_MS = 1600
   function petHashCmd(cmd) {
     try {
       if (!history.replaceState) return
-      history.replaceState(null, '', '#miasaki-theme=' + current + '&cmd=' + cmd + '&seq=' + Date.now())
+      var seq = String(Date.now())
+      setHashFields({ cmd: cmd, seq: seq })
       setTimeout(function () {
-        try { history.replaceState(null, '', '#miasaki-theme=' + current) } catch (e) {}
-      }, 1600)
+        try {
+          // 仅当本函数写入的 seq 未被其他人覆盖时才清除：既避免抹掉后写的命令，
+          // 也让「重复点同一按钮」因 seq 不同而各自生效（Rust 侧按 seq 去重，main.rs:1241）
+          if (readHashField('seq') === seq) setHashFields({ cmd: null, seq: null })
+        } catch (e) {}
+      }, HASH_CMD_TTL_MS)
     } catch (e) {}
   }
+  /* @slice:hash-fields:end */
 
 
   /* 思考强度：跟随 DSH 模型选择器的推理等级（用户手动选择 → 稳定不抖动）

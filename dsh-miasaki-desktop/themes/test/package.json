@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "themes/ 下的离线测试是 ESM（与 plugins/*/test 同一约定）；本文件只为 Node 指定模块类型，不参与打包"
+}

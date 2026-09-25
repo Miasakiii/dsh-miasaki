@@ -79,11 +79,21 @@ DOMContentLoaded:
 
 - 检测文本兜底链：`document.body?.innerText` → `document.body?.textContent` →
   `document.documentElement.textContent`（覆盖 text/plain 文档形态）；
-- 检查四轮：立即 / 100ms / 400ms / 1200ms（漏检即永久失败是现状最大痛点）；
-- 文案匹配加宽：`authentication required` **或** `dsh web authentication`（dsh 换措辞时不至于
+- 检查四轮：立即 / 100ms / 400ms / 1200ms，外加 `DOMContentLoaded`（漏检即永久失败是现状最大痛点）；
+- 文案匹配加宽：`authentication required` **或** `reopen the URL printed`（dsh 换措辞时不至于
   静默失效）；
-- 预置成功时此链自然不触发（页面已是 200 正常页，纯兜底）。**双写幂等**：00-boot.js 在 3080
-  文档里仍会签同一份 cookie（值相同，重复写无害），不为省这一次写引入跨文档状态标记（过度设计）。
+- **不覆写已有 cookie**（2026-09-23 二轮复审 P2-B 修正，原「双写幂等」假设被证伪）：
+  init script 没有 IPC，只能拿硬编码兜底 secret，而预置 cookie 用的是 `credentials.yaml` 里的
+  真 secret；两者一旦漂移，无条件重签会把**有效** cookie 换成无效的 —— 等于兜底链自己制造出
+  401 循环。现契约：`document.cookie` 里已有 `dsh-auth-*` → **按原值续写**
+  `Max-Age=2592000`（保留「预置 session cookie 升级为持久 cookie」的原意，值一个字节不动）；
+  没有 cookie 时才用兜底 secret 签名；
+- **401 → reload 加跨文档熔断**（同轮加固）：`sessionStorage` 记 `miasaki.auth.reloads`，
+  上限 3 次；第 3 次前若「有 cookie 却仍 401」先清掉这份已失效的 cookie（给兜底签名最后一次
+  自愈机会），超过上限则**停止重载**并在页面上显示可见提示（原因 + 处理指引）。
+  计数只在**确实到达非 401 文档**（`readyState` 为 interactive/complete，或 `DOMContentLoaded`
+  后判定非 401）时复位 —— 本段跑在 document_start，那时正文尚未解析、`is401()` 必然为 false，
+  据此复位等于没有熔断。
 
 ## 3. 失败与边界
 
@@ -91,10 +101,13 @@ DOMContentLoaded:
 |---|---|
 | crypto.subtle 不可用（旧 WebView2） | JS 签失败静默 → Rust 3s 超时放行 → 00-boot.js 兜底链（今天的行为，不劣化） |
 | `credentials.yaml` 缺失 / 损坏 / secret 不合字符集 | `auth_secret` 返 null → 回落硬编码 secret（与今天一致） |
-| 硬编码 secret 也过期（credentials 轮换过） | 仍 401 → 兜底链兜底；至少动态读取路径让「轮换后必须改源码」成为历史 |
+| 硬编码 secret 也过期（credentials 轮换过） | 仍 401 → 兜底链熔断：清一次无效 cookie 后重试，最多 3 次 reload，超限停止重载并显示提示（不再无限刷新；动态读取路径已让「轮换后必须改源码」成为历史） |
+| 预置 cookie 有效，但 00-boot 兜底常量与 credentials 漂移 | 不再覆写（原实现的覆写会把这枚有效 cookie 换成无效值）⇒ 预置路径继续生效，这正是 9-22 预置注入要防的场景 |
+| 已有 cookie 但已失效（陈旧 / 轮换前签的） | 401 → 计数 + 到上限前清掉该 cookie → 下一文档走兜底签名自愈；仍失败则停在上限并显示提示 |
 | dsh 已在运行（热启动，port 早已就绪） | 正常走预置流程；签名通常 100ms 级，3s 窗口充裕 |
 | cookie API 写入失败 | 仅 pet.log 记一条；超时放行 + 兜底链 |
 | dsh 未安装 / spawn 失败 | 与本设计正交（loading 失败卡片照旧） |
+| **预置 cookie 被改成 `HttpOnly`** | **打破本设计——两条链之间的隐式契约**：`00-boot.js` 的 `readAuthCookie()` 只能从 `document.cookie` 取值，用它区分「已有 cookie 只按原值续期」与「无 cookie 才兜底签名」。一旦预置侧给 `dsh-auth-*` 加上 `HttpOnly`，该函数**恒返回 null** ⇒ 每个文档都重签硬编码兜底 secret ⇒ `credentials.yaml` 一漂移就回到「401 → reload → 再签错」循环（跨文档熔断只把次数封顶 3 次，功能仍是坏的）。**故预置侧必须保持非 HttpOnly**（当前 Rust `set_auth_cookie` 未设该属性，与设计一致）；要改这里，等于同时改兜底链的前提，须同步评审 `themes/src/00-boot.js`（2026-09-24 三轮复审钉为显式契约） |
 
 ## 4. 触摸点与落地
 
@@ -119,3 +132,6 @@ DOMContentLoaded:
    00-boot.js 加固链应在 ≤1.2s 内自恢复，不出现「停住不动」；
 5. **回归**：smoke-test.ps1 §0b 三用例通过；正常启动路径功能不变；
    `node ../scripts/verify-all.mjs desktop` 全过。
+6. **熔断可见（2026-09-23 新增）**：把 00-boot 兜底常量改成错值并清掉站点 cookie（模拟 secret
+   漂移且预置失败）→ 启动最多 reload 3 次即停下，页面顶部出现红色提示条，**不再无限刷新**；
+   改回正确值后正常页会自动复位计数（下次仍可自愈）。

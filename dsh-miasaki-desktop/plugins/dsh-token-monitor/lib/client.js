@@ -616,13 +616,18 @@ window.__ModuleLoader__.load({
 				return () => window.removeEventListener("keydown", onKey);
 			}, [open]);
 			// 头部「刷新」：立即重拉两个数据源。本地请求毫秒级、又叠 5s 自动轮询，
-			// 不做强反馈用户感知不到"点了有反应"——故保证 ≥0.5s 旋转可见，并在头部
-			// 记一笔「更新于」时间戳；失败也一并复位。
+			// 不做强反馈用户感知不到"点了有反应"——故保证 ≥0.5s 旋转可见。
+			// 「更新于」只在**成功**后推进（2026-09-23 复审 P3 修复）：原实现把
+			// setLastAt 放在 finally，刷新失败也照改时间戳，等于谎称"刚更新过"，
+			// 用户会以为屏上还是新数据。失败时宁可保留上一次成功的时刻。
 			const doRefresh = () => {
 				setRefreshing(true);
 				const minSpin = new Promise((res) => window.setTimeout(res, 500));
-				Promise.all([refreshBus.fire().catch(() => {}), minSpin])
-					.finally(() => { setRefreshing(false); setLastAt(new Date()); });
+				const fired = refreshBus.fire().then(() => true, () => false);
+				Promise.all([fired, minSpin]).then(([ok]) => {
+					if (ok) setLastAt(new Date());
+					setRefreshing(false);
+				});
 			};
 			if (!open) return null;
 			return [

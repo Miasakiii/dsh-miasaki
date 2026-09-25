@@ -212,3 +212,29 @@ S1 若坐实 S3（孙进程）：S2 照常做（消除 cmd 层无害），F2 单
 与 appearance 线 Boot Splash 的接力约定（loading 退场 ↔ splash 淡入的时间与信号）见
 `../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md`；本线默认策略：各自干净退场，
 不做跨页动画接力（除非 cross 契约评审后追加）。
+
+## 9. 实施记录
+
+### 9.1 S4a 视觉层已落地（2026-09-24，无 Rust 依赖部分）
+
+- **范围**：§4.2 表格里不需要数据钩子的三件 + 就绪回弹（「纹章外环缓旋 24s / 呼吸光晕 3s /
+  舞台扫描线 4s·opacity .06 / reduced-motion 全量静止」），全部落在 `ui/loading.html`：
+  三枚纹章 SVG 各加 `<circle class="mia-boot-halo">`（走 `var(--mia-accent)`，零新增色）
+  与外环 `<g class="mia-boot-ring">`（`transform-box: fill-box` 绕自身中心，静态 blur 光晕 +
+  opacity/scale 呼吸），body 首位加 88px 扫描线带（z-index 0，`.stage` 提 z-index 1 垫背）。
+- **就绪回弹的触发**：Rust 就绪态当前只体现在状态文案（「已就绪，正在进入…」），
+  `__setStatus` 按文案派生触发（并预留显式钩子 `__setReady`）；S3 的 `__setPhase('ready')`
+  落地后触发改走钩子，文案派生作为兜底保留。
+- **没做的（等 S3）**：日志流（`#log-stream` / `__appendLog`）与四阶段进度点（`__setPhase`）——
+  没有 Rust tee 钩子它们是无数据死 UI，按设计 §5 的实施顺序跟随 S3 同批落地。
+- **回归**：`ui/test/loading-visual.test.js`（10 例，ESM）钉死设计契约——动画属性只准
+  transform/opacity、扫描线 opacity ≤ .06、零字面量新色、reduced-motion 全覆盖、
+  `.mia-boot-*` 类名纪律、标记结构（三 halo + 三旋转组 + SVG 组配平）；行为侧 VM 驱动
+  `__setStatus` 验证就绪触发与幂等。已接入 `verify-all` desktop 线（20 → 21 项）。
+- **S4a-2 启动计时（同日增量）**：Rust 阶段词汇已齐（正在唤醒/正在拉起/仍在等待/已就绪），
+  但冷启动 3~6s、重拉等待最坏 90s 期间页面只有一行静止文案。纯页面侧加「已等待 N s」读数
+  （`#boot-timer`，250ms tick、tabular-nums、就绪即停；失败路径继续走表——超时文案旁的
+  耗时就是排查线索）。**纪律**：只读 elapsed，不出假百分比（与 §4.1「不假装」一致）；
+  纯文本读数无动效，reduced-motion 零影响。不抢占 S4b（日志流/阶段进度仍随 S3 落地）。
+- **待实机验收**：冷启动目检三主题各自动效（亮主题 kurkuriel 扫描线对比度重点看）、
+  就绪瞬间纹章回弹、系统「减少动画效果」下全部静止、失败路径（重试卡片/诊断按钮）零回归。

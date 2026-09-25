@@ -39,6 +39,49 @@
     return d
   }
 
+  /* W4.3（2026-09-25）窗口底色回传：把「页面实际底色」经 hash 报给壳。
+     Rust 侧的窗口底 / Mica 回退色是**硬编码两档**（main.rs:1652-1655：kurkuriel→浅、
+     其余→深）、**只在窗口创建时算一次**，运行期切主题或换皮肤时不会更新 —— Win10
+     （Mica 不可用）下会露出旧主题的实色底。
+     只在 apply() / 首帧算一次：`getComputedStyle` 是强制同步布局，不可放进高频路径
+     （diag 段 1.5s 一轮曾造成 15–47ms 尖峰的教训见本文件顶部）。
+     取不到不透明底就返回空串 —— **不上报**，壳保持既有硬编码，不引入新的错误来源。 */
+  /* @slice:native-bg:begin —— themes/test/native-bg.test.js 按此标记截段做底色解析行为闸门，勿删/勿改本行 */
+  var CUR_BG = ''
+  function parseCssColor(value) {
+    var m = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/.exec(String(value || ''))
+    if (!m) return null
+    var a = m[4] === undefined ? 1 : (m[4].slice(-1) === '%' ? parseFloat(m[4]) / 100 : parseFloat(m[4]))
+    if (!(a >= 0 && a <= 1)) return null
+    return { r: +m[1], g: +m[2], b: +m[3], a: a }
+  }
+  function toHexColor(color) {
+    var h = function (n) {
+      var s = Math.max(0, Math.min(255, Math.round(n))).toString(16)
+      return s.length === 1 ? '0' + s : s
+    }
+    return h(color.r) + h(color.g) + h(color.b)
+  }
+  function resolveNativeBg() {
+    try {
+      if (!window.getComputedStyle) return ''
+      var body = document.body || document.documentElement
+      if (!body) return ''
+      var top = parseCssColor(getComputedStyle(body).backgroundColor)
+      if (!top || top.a === 0) return ''
+      if (top.a >= 1) return toHexColor(top)
+      var under = parseCssColor(getComputedStyle(document.documentElement).backgroundColor)
+      if (!under || under.a < 1) return '' // 拿不到不透明底 → 放弃上报
+      var a = top.a
+      return toHexColor({
+        r: top.r * a + under.r * (1 - a),
+        g: top.g * a + under.g * (1 - a),
+        b: top.b * a + under.b * (1 - a)
+      })
+    } catch (e) { return '' }
+  }
+  /* @slice:native-bg:end */
+
   // force=true：主题切换/启动等样式层刚变的时机，立即重算 diag（不等节流窗口）
   function syncHash(force) {
     try {
@@ -63,34 +106,43 @@
               '&petts=' + pp.ts + '&petkey=' + encodeURIComponent(pp.key || '')
           }
         } catch (e) { /* ignore */ }
-        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + petPart + '&diag=' + DIAG_CACHE)
+        // W4.3：窗口底色（6 位十六进制，不带 `#`——`#` 会截断 fragment）。空串即不上报。
+        var bgPart = CUR_BG === '' ? '' : '&bg=' + CUR_BG
+        history.replaceState(null, '', '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + petPart + bgPart + '&diag=' + DIAG_CACHE)
       }
     } catch (e) { /* ignore */ }
   }
 
-  function notifyPet(forTheme) {
-    try {
-      var targetTheme = forTheme || current
-      if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
-        window.__TAURI__.core.invoke('set_pet_mode', {
-          mode: PET_MODES[targetTheme] || 'whale'
-        }).catch(function () {})
-      }
-    } catch (e) { /* 非 Tauri 环境（普通浏览器）忽略 */ }
-  }
+  // W0-T0.3（2026-09-25）删除 notifyPet：它 invoke 的 `set_pet_mode` 命令**从未注册**
+  // （注册表 main.rs:1607-1618 共 10 个命令，无此名），调用恒失败并被 .catch() 静默吞掉，
+  // 只留下"IPC 通道存在"的假象。桌宠主题联动实际由 hash 通道完成：
+  // syncHash 写 `miasaki-theme` → Rust 消费点（main.rs:1191-1204）→ pet.set_mode/set_theme
+  // （映射口径见 main.rs:947 `pet_mode_for`）。连同删除 00-boot.js 中仅供它使用的 PET_MODES。
 
   // 本地唤醒页判定：Windows 上 Tauri 2 本地页协议为 http://tauri.localhost，
   // 单协议判定(location.protocol === 'tauri:')恒 false → 本地页出现切换条/水印/
   // 光晕等"画面不统一"回归(2026-08-29 修过,后于重构中丢失)。protocol + hostname 双重判定。
   var IS_LOCAL = location.protocol === 'tauri:' || /^tauri\.localhost$/i.test(location.hostname || '')
 
+  // 主题来源优先级（W0-T0.1 2026-09-25 修复断链）：
+  //   ① 壳注入的 window.__MIA_THEME__ —— Rust 在窗口创建时读 prefs.json 注入（main.rs:1647-1649），
+  //      是**权威值**，也是唯一能跨「本地唤醒页(tauri.localhost) ↔ DSH 页(127.0.0.1:3080)」的通道
+  //      （两页不同源，localStorage 不互通）。
+  //   ② URL 参数 miasaki-theme（外部直达/调试）
+  //   ③ localStorage（页面内切换后的持久值）
+  // 修复前：壳注入了 __MIA_THEME__ 但 themes/src 全片零读取 → loading 页 localStorage 为空
+  // ⇒ current 退化成 'pure'，而该页 :root 默认色板是 zafkiel ⇒ 启动画面与 DSH 页主题不一致（闪窗）。
+  /* @slice:theme-source:begin —— themes/test/theme-source.test.js 按此标记截段做优先级行为闸门，勿删/勿改本行 */
   var current = 'pure'
   try {
     var saved = localStorage.getItem(KEY)
     if (ORDER.indexOf(saved) >= 0) current = saved
     var qp = new URLSearchParams(location.search).get('miasaki-theme')
     if (ORDER.indexOf(qp) >= 0) current = qp
+    // 非壳环境（普通浏览器）为 undefined → indexOf 返回 -1，天然不生效
+    if (ORDER.indexOf(window.__MIA_THEME__) >= 0) current = window.__MIA_THEME__
   } catch (e) { /* ignore */ }
+  /* @slice:theme-source:end */
 
   var styleEl = null
   function ensureStyle() {
@@ -202,11 +254,26 @@
     try { localStorage.setItem(KEY, t) } catch (e) { /* ignore */ }
     // 核心同步优先:桌宠 hash 通道 / 切换条图标 / 标题栏 —— 装饰层失败不得阻断
     // force=true：样式层刚换，diag 需立即反映新主题（不等节流窗口）
+    // W4.3：样式层刚换 → 先重算窗口底色，再同步（顺序即契约：syncHash 读 CUR_BG）
+    CUR_BG = resolveNativeBg()
     syncHash(true)
-    notifyPet()
     refreshSwitcher()
     updateTitlebar()
     try { updateWatermark() } catch (e) { /* 装饰失败由自愈巡检恢复 */ }
     try { updateAurora() } catch (e) { /* 同上 */ }
   }
+
+  /* 契约 v1.1（2026-09-25）受控写能力：**主题切换**。
+     契约分片是独立 IIFE、拿不到本作用域的 `apply`/`current`，故以**内部事件**为界：
+     契约只派发 `miasaki-theme-set`，这里执行。
+     **双向校验**（事件可被任意页面脚本派发）：白名单 + 与当前值不同才动 ——
+     重复 apply 会白跑一整轮样式重算与自愈巡检。 */
+  try {
+    window.addEventListener('miasaki-theme-set', function (e) {
+      try {
+        var t = e && e.detail && e.detail.theme
+        if (ORDER.indexOf(t) >= 0 && t !== current) apply(t)
+      } catch (e2) { /* 执行失败不影响页面其它逻辑 */ }
+    })
+  } catch (e) { /* ignore */ }
 

@@ -8,45 +8,11 @@
     "05-sensors.js",
     "06-titlebar.js",
     "07-dialog.js",
-    "08-ready.js"
+    "08-ready.js",
+    "09-dropguard.js",
+    "10-contract.js",
+    "11-console.js",
+    "12-material.js"
   ],
-  "slices": {
-    "00-boot.js": [
-      1,
-      46
-    ],
-    "01-persona.js": [
-      47,
-      124
-    ],
-    "02-core.js": [
-      125,
-      272
-    ],
-    "03-switcher.js": [
-      273,
-      534
-    ],
-    "04-deco.js": [
-      535,
-      637
-    ],
-    "05-sensors.js": [
-      638,
-      786
-    ],
-    "06-titlebar.js": [
-      787,
-      899
-    ],
-    "07-dialog.js": [
-      900,
-      1045
-    ],
-    "08-ready.js": [
-      1046,
-      1100
-    ]
-  },
-  "note": "order = 拼接顺序（source of truth）；slices 行段为 legacy themes/runtime.js 的切分参考，runtime 自 2026-09-05 标题栏改版后与 legacy 已非逐字节一致，行段仅供考古"
+  "note": "order = 拼接顺序（唯一事实源；build-init 只按它拼接，不扫描目录）。结构约定：00-boot 开启大 IIFE，01–08 寄生其中、由 08-ready 末尾 })() 闭合，分片之间共享作用域；09–12 是各自独立的 IIFE，不共享作用域。2026-09-25：删除已过期的 slices 行段（与 legacy themes/runtime.js 早已非逐字节一致，纯考古价值，见 W0 清理）；同日 build-init 起对「src 目录下有 .js 但未登记进 order」判失败（W0-T0.4 漏登记防护）。"
 }

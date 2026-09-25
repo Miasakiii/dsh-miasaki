@@ -22,7 +22,7 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 
 ```bash
-node ../scripts/verify-all.mjs desktop   # gen-init + tokens:diff + patch verify + cargo test
+node ../scripts/verify-all.mjs desktop   # 22 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链行为闸门 + 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×6 / 插件单测 / cargo test（35 例）
 ```
 
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
@@ -85,6 +85,78 @@ $pwd  = ConvertTo-SecureString -String "<导出密码>" -Force -AsPlainText
 3. `%TEMP%` 不可写时 WiX `light.exe` 会以 `failed to run` 失败（蹭不上证书链路）——
    构建前把 TEMP/TMP 指到可写目录（注意：`cmd /c "vcvars && set TEMP=…"` 的 `&&` 链里
    后置 `set` 会被 setlocal 作用域吞掉，pwsh 里直接 `$env:TEMP=…` 或用 bat 逐行 call）。
+   > **2026-09-25 补注（不要把这条当成"改 TEMP 就能过"）**：本轮在 DSH 会话里把 TEMP/TMP
+   > 显式指到可写目录后**仍在同一处失败**，且 `light.exe` 单独跑会打印更精确的原因——
+   > `error LGHT0001: 对路径"C:\Users\<用户>\AppData\Local\Temp\*.tmp"的访问被拒绝`
+   > （`UnauthorizedAccessException`），即失败点不是 TEMP 变量、而是**受限会话里 WiX 拿不到
+   > 用户临时目录**（同一会话里 pwsh 自己写该目录是成功的）。现象是：`Running light to
+   > produce …msi` → `failed to bundle project`，**exe 编译与签名早已成功**。
+   > 处置：需要 MSI/NSIS 安装包时在**普通终端**（非 DSH 会话）重跑 `npm run tauri build`，
+   > 或先 `npm run build -- --no-bundle` 拿到已签名 exe 再手工分发（`npm run deploy`）。
+
+## 启动失败排查（「桌宠出来了、主界面一直不出来」）
+
+**现象**：双击后桌宠（悬浮球 / 立绘）正常出现，主界面窗口始终不出现，且全程没有提示。
+
+**机理**：主窗以 `visible(false)` 建出，靠页面加载回调 `show()` 显示；而 WebView2 的环境创建
+必须能写 `%LOCALAPPDATA%\com.miasaki.desktop\EBWebView` 这个用户数据目录。一旦进程写不了它
+（最常见的原因是**程序被以低完整性级别运行**：本机实测「用户可写目录下的 exe」会以
+`0x1000 = Low` 启动，而同一条命令下 `C:\Program Files`、`C:\ProgramData` 下的 exe 是
+`0x2000 = Medium`），WebView2 就起不来——此时 `WebviewWindowBuilder::build()` **仍返回 Ok**，
+只是窗口句柄随即被回收，于是主窗既不显示、`show()` 也静默失败。桌宠是原生 Win32 窗口、
+不依赖 WebView2，照常显示，最终表现就是「只剩桌宠」。
+
+**处置顺序**：
+
+1. **换到非用户目录运行**（本机已实测可解）：把 exe 放到 `C:\ProgramData\<目录>\` 或
+   `C:\Program Files\` 下再双击。桌面 / 文档 / `%LOCALAPPDATA%` 等**用户可写目录**下的 exe
+   在本机一律被降权，换名字、换签名、换副本都没用。
+2. **先结束所有残留 Miasaki 进程**：它持有单实例锁，会让新实例**静默退出**——表现同样是
+   「双击没反应」。任务管理器里搜 `Miasaki` 全部结束即可。
+3. **看弹窗与日志**：2026-09-25 起，启动 2.6s 后主窗仍不可见会弹原生「Miasaki · 启动失败」
+   对话框并写明原因与指引；日志在 `%LOCALAPPDATA%\miasaki\pet.log`，其中
+   `bootstrap.json` 的 `phase` 为 `up` 表示页面已成功加载。
+
+> 判据速查：任务管理器「详细信息」标签页加一列**「完整性级别」**——显示`低`即命中本问题；
+> 正常应为`中`。
+
+**构建后必做（2026-09-25 21:22 复发教训）**：`dist\Miasaki.exe` 是本机必被降权的构建产物，
+**不要双击它**——哪怕它与系统目录里的版本 SHA256 逐字节相同，决定完整性级别的是**路径**而非内容。
+每次构建后跑一次同步：
+
+```powershell
+npm run deploy                                                                   # → C:\ProgramData\MiasakiApp
+powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -FixShortcuts   # 顺带修正桌面旧快捷方式
+```
+
+再用桌面「Miasaki 桌面端」快捷方式验证。失败弹窗自本次起按启动位置**分流**：exe 在
+`%USERPROFILE%` 之下时直接点名「改用 `C:\ProgramData\MiasakiApp\Miasaki.exe`」，不再给
+「加安全软件白名单」这类无效建议；同时打印**启动位置**，并说明低权进程连 `pet.log` 都写不进去
+（21:22 那场复发的日志一行未增，正是判据而非异常）。
+
+## 打包（MSI）失败排查
+
+`npm run build` 里 **exe 环节与 MSI 环节是分开的**：exe 成功、MSI 失败时，入口（exe）不受影响，
+`npm run deploy` 照常可用。MSI 失败多数是**执行环境**问题，不是项目配置。
+
+`light.exe`（WiX 3.14，.NET Framework）的报错会**被 tauri 的输出截断**（只留一句
+`failed to run …light.exe`）。要看完整信息必须用 `npx tauri build --verbose` —— 它会打印
+light 的完整命令行与 stderr。
+
+| 报错 | 含义 | 处置 |
+|---|---|---|
+| `LGHT0001 … 对路径"C:\Users\…\AppData\Local\Temp\xxxx.tmp"的访问被拒绝`（`UnauthorizedAccessException`，调用栈含 `TempFileCollection.EnsureTempNameCreated`） | light 需要**一个可写的 `%TEMP%`** 放中间文件 | 把 `TEMP`/`TMP` 指到工作区内可写目录再构建：`$env:TEMP="$PWD\src-tauri\target\tmp"; $env:TMP=$env:TEMP; npm run build` |
+| `LGHT0217 : Error executing ICE action 'ICE01' … The Windows Installer Service could not be accessed` | light 的 ICE 校验要连 **Windows Installer 服务**（`msiserver`） | 先确认：`Get-Service msiserver`。服务显示 `Running` 却仍报此错 ⇒ 当前会话（沙箱 / 受限令牌）挡住了服务访问，换普通桌面会话构建，或临时加 `-sval` 跳过 ICE |
+
+**关于 `-sval`（跳过 ICE）**：ICE 是安装包的**最佳实践校验**（组件引用、升级路径等），
+不是编译必需。跳过它能出包，但**发布用的安装包不该跳过** —— 除非已确认失败只是"连不上服务"，
+而非真正的 ICE 违规。
+
+> 2026-09-25 实测（受限会话内）：两类报错**先后**出现 —— 绕过 TEMP 后撞 ICE；再加 `-sval`
+> 手动跑 light 产出 37.62 MiB 的 MSI，而当时 `msiserver` 是 `Running`。故两者都是**会话环境
+> 限制**，与项目配置无关；`bundle/msi/` 里那份 2026-09-04 的 MSI 即证明这条链在正常桌面会话里
+> 是通的。同一限制也体现在 `cargo test`：受限会话里测试进程写系统 `%TEMP%` 会得到 os error 5，
+> 故测试临时目录统一改用 `target/test-tmp/`。
 
 ## DSH 运行时补丁（本体例外）
 
@@ -111,27 +183,46 @@ node patch.mjs verify       # 离线自证（已并入 verify-all）
 node patch.mjs status       # 检查安装目录状态
 node patch.mjs apply        # 备份 + 应用（幂等）
 node patch.mjs revert       # 还原
-node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
+node patch.mjs rebuild      # A 类：同步 baseline 原版 + ORIGINAL_SHA256 后重建 golden
+node patch.mjs seal         # 同上（api-session-controller 的该命令名为 seal）
 ```
 
-> **当前基线：DSH 0.1.7-alpha.2（2026-09-23 全量重打）**。本机全局 DSH 已实装 0.1.7-alpha.2，
-> 六个补丁（含 dual-model 线的图片准入补丁）当日全部 `rebuild-baseline` 重打、`EDITS` 零改：
-> settings-models（`B2D7D445…` → `9F2F1EE8…`，probe 自动选中 0.1.6+ 变体分支）、
-> conversation（`38326414…` → `59A185B9…`）、trajectory / chat（`E64C3D03…` → `4B577822…`、
-> `CCC14F1E…` → `1594AC3C…`）、cordis-host-runner（`AC73F866…` → `D3126110…`；
-> 图片准入补丁 `05DAAAF8…` → `450C25A2…`，见 `../dsh-miasaki-dual-model/patches/`）。
+> **当前基线：DSH 0.1.7-rc.2（2026-09-25 升级重打，EDITS 零改）**。本机全局 DSH 已实装
+> `0.1.7-rc.2`（`next` 轨；`latest` 仍是 0.1.5-rc.3，勿用）。七个本体补丁当日全部重打，
+> **7/7 增量与升级评估文档给出的预期值逐字节一致**，是锚点未漂移的强证据：
+> attachment `45064→45175`（+111）、chat `530699→532563`（+1864）、
+> conversation `712829→712954`（+125）、settings-models `186454→201924`（+15470）、
+> trajectory `421649→423513`（+1864）、cordis-host-runner `102835→103592`（+757；**其 rc.2
+> 原版与 alpha.2 逐字节相同**，故常量未变）、图片准入 `124151→124896`（+745，
+> 见 `../dsh-miasaki-dual-model/patches/`）。
 > **两个计时补丁要一起重打**才完整（同一个 `firstTokenTime` 的两处显示）。
 > cordis-host-runner 是本目录里**唯一作用于 host 侧 Node 包**的补丁（其余都是浏览器 bundle）
 > ——host 侧两个补丁（它 + 图片准入）**需重启 `dsh web` 生效**，client 侧刷页面即生效。
-> attachment 于 2026-09-23 新建并应用（**DSH 0.1.7-alpha.2**，原版 `397B4947…` → 产物 `381D2676…`，
-> 2 条锚点唯一命中；纯 CSS，修多图 tile 64×64 cover 方块 → 比例自适应 + contain）。
+>
+> **升级重打的实际流程（与下方历史记录里的表述不同，已按实测修正）**：
+> ① `status` 报 `unknown`（新版覆盖）→ ② 把安装目录的新版原版复制为 `baseline/*.original.js`
+> 并同步 `ORIGINAL_SHA256` + `BASELINE_DSH_VERSION` → ③ `rebuild`（A 类）或 `seal`
+> （api-session-controller）重建 golden 产物并回填 `PATCHED_SHA256`；B 类补丁（chat /
+> conversation / trajectory / cordis-host-runner）**不存 patched 全文**，其 `verify` 在常量
+> 未同步时会以 FAIL **打印**重建 SHA，据此回填即可 → ④ `verify`（须 PASS）→ ⑤ `apply`。
+> **本目录不存在 `rebuild-baseline.mjs`**（历史文档中的该命令名有误）。
+>
+> 历史基线记录（0.1.7-alpha.2 时期，2026-09-23 全量重打）：六个补丁（含 dual-model 线的图片准入
+> 补丁）当日全部重打、`EDITS` 零改：settings-models（`B2D7D445…` → `9F2F1EE8…`，probe 自动选中
+> 0.1.6+ 变体分支）、conversation（`38326414…` → `59A185B9…`）、trajectory / chat
+> （`E64C3D03…` → `4B577822…`、`CCC14F1E…` → `1594AC3C…`）、cordis-host-runner
+> （`AC73F866…` → `D3126110…`；图片准入补丁 `05DAAAF8…` → `450C25A2…`）。
+> attachment 于 2026-09-23 新建并应用（`397B4947…` → `381D2676…`，2 条锚点唯一命中；
+> 纯 CSS，修多图 tile 64×64 cover 方块 → 比例自适应 + contain）。
 >
 > 历史基线记录（0.1.5-rc.1 时期）：settings-models 于 2026-09-10 重打（`A60FD863…` → `E602C1F1…`）；
 > conversation 于 2026-09-10 新建（`81314DFD…` → `D9A841DE…`）；
 > trajectory / chat 于 2026-09-10 新建（`73A878B4…` → `C3485ADF…`、`4F9CFFF8…` → `BE4C68D5…`）；
 > cordis-host-runner 于 2026-09-21 新建（`58EF79A0…` → `8B81500A…`）。
-> 下次升级的流程（各补丁**各自独立**）：`status` 报 `unknown` → `rebuild-baseline.mjs` 重建 →
-> 按它打印的值更新 `patch.mjs` 的常量 → `verify` → `apply`。
+> 下次升级的流程（各补丁**各自独立**）：`status` 报 `unknown` → 用新版原版刷新
+> `baseline/*.original.js` 与 `ORIGINAL_SHA256` → `rebuild`／`seal` 重建产物并按打印值回填
+> `PATCHED_SHA256` → `verify` → `apply`。**注意：本目录不存在 `rebuild-baseline.mjs`**，
+> 旧记载中的该命令名有误（2026-09-25 实测修正）。
 
 详见六个补丁各自的 README，以及
 [模型设置工具包设计](../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md)、
@@ -189,6 +280,15 @@ node rebuild-baseline.mjs   # 升级后：用新的官方原版重建 baseline
   查**当前合成缓冲**的 alpha（阈值 16，与显示逐像素一致），命中透明像素即置位 `WS_EX_TRANSPARENT`
   把点击交给下层窗口，光标回到角色本体立即恢复可点；隐藏 / 拖拽中恒不穿透（保证跟手）。
   只改扩展样式位、不重建窗口（无闪烁）；切换日志按 500 次节流
+- **隐藏态恢复入口 = 主题头像悬浮球**（2026-09-24，取代原 30px 硬编码紫圆）：桌宠隐藏后显示的是
+  **当前主题的头像徽章**（`ui/icons/theme-pure|zafkiel|inverse.png`，与设置「主题」选择器同一批素材，
+  编译期内嵌；**素材名 ≠ 主题名**——`kurkuriel` 用 `theme-inverse.png`）+ 主题色环（银 / 鎏金 / 破血红）
+  + 外发光 + 球面左上高光 + 底部落影，56px 方窗内球面直径 38。**主题切换即换面**
+  （`set_theme` → compose 比对 `dot_theme` 后重绘；冷启动直接用 `prefs.json` 里的主题，无「换脸」帧）；
+  光标**悬停整体放大 1.08 并增强光晕**（离散两态，无插值动画）。
+  命中判据 = 球面合成缓冲的 alpha（阈值 16，与 R2 同范式，独立 10ms 轮询）——方窗四角与发光外沿
+  照样穿透，球放大后不会长出一片「隐形挡板」；`hide` 仍持久化于 `pet.json`，位置仍随桌宠拖动同步
+  （M1.4 不变）。素材缺失 / 主题未知 → 回落为主题色实心球，绝不空白
 - **桌宠内联审批（R5 / M3.2，2026-09-16）**：审批等待时气泡升级为**含「拒绝 / 允许一次」两个按钮**
   的交互气泡（`ui/pets/approval.png`，240×84，构建期 `gen-bubbles.ps1` 出图、运行时零字体调用；
   两按钮间留 8px 间隙防误触）。点按钮 → 桌面端记单调 `seq` 并经 `eval` 派发
@@ -333,6 +433,7 @@ desktop/
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
 ├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）
+├─ scripts/deploy-local.ps1  # 构建产物同步到系统目录（`npm run deploy`；用户目录下的 exe 在本机必被降权）
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
@@ -389,7 +490,8 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 桌宠的配置入口，挂在 DSH「设置 → 桌宠」（`settings.section`，order 26）：
 
 - **显示 / 隐藏开关**：桌面端原生分层窗口的显隐控制，状态持久化（pet.json `hide`），
-  重启保持；隐藏后右下角圆点可点击恢复。
+  重启保持；隐藏后以**主题头像悬浮球**（当前主题头像 + 主题色环/外发光，悬停放大）作为恢复入口，
+  点击即显示。
 - **位置重置**：一键回到默认位置 (1200, 500) —— 桌宠被拖丢到屏幕外 / 拔掉副屏后找回。
 - **状态回显**：面板挂载时发 `cmd=pet-state`，桌面端 eval `miasaki-pet-state`
   CustomEvent 回推当前 `hidden`，与显示/隐藏联动保持同步。
@@ -512,6 +614,45 @@ probeModel 存储档案解析接线 2），已并入 `node scripts/verify-all.mj
 下次启动若上次失败会提前提示。设计：`design/bootstrap-reliability.md`（借鉴
 deepseek-harness-desktop 启动恢复 + 健康标记 + 可靠性矩阵思路）。
 
+**启动链容错加固（2026-09-23）**：
+
+- **主窗口可见性兜底**：窗口以 `visible(false)` 建出、由 `on_page_load` 回调 `show()` 显示；
+  若 WebView2 对不可见宿主的加载优化导致回调始终不触发，窗口将永不显示。现于建窗后 800ms
+  检查一次「窗口是否可见」（判据是 `is_visible()` 本身，**不是**页面就绪位 `PAGE_UP`），
+  仍不可见则补一次 `show()` 并写 `pet.log`；正常路径判据为假、不动作，天然幂等；
+- **导航失败不再静默**：`MIASAKI_REMOTE` 非法或 WebView 拒绝导航时，原实现（`expect` / `let _ =`）
+  会让 release 直接 abort（`Cargo.toml` 的 `panic = "abort"`）、或让加载页永远停在
+  「已就绪，正在进入…」。现统一走容错分支：落盘 + 状态栏可见反馈 + 放出「重试」按钮
+  （与后端看门狗 `if let Ok(url)` 同一口径）；
+- **90s 未就绪提示**：文案不再只归因端口占用，并列提示「dsh 拉起后立即退出」
+  （spawn 成功 ≠ 进程存活）。
+
+**第二轮复审修复（2026-09-23，P2-B + 三项 P3）**：
+
+- **兜底链不再覆写预置 cookie**：`themes/src/00-boot.js` 原实现每次文档加载都用硬编码 secret
+  重签 `dsh-auth-*`，会把 loading 页用 `credentials.yaml` 真 secret 预置的有效 cookie 换成
+  无效值（secret 漂移时）⇒ 401 → reload → 新文档再签错 → **无限刷新**。现在：已有 cookie 则
+  **按原值续写 `Max-Age`**（保留「session → 持久 cookie」升级，值一字节不动），无 cookie 时
+  才用兜底 secret 签名；
+- **401 熔断**：`sessionStorage` 跨文档计数，最多 reload 3 次，超限**停止重载**并在页面上
+  显示可见提示（原因 + 处理指引）；到上限前先清掉已失效的 cookie，给兜底签名最后一次
+  自愈机会；计数只在确认到达非 401 文档时复位；
+- **兜底日志三态**：`is_visible()` 的 `Err`（窗口已销毁，如 800ms 内关窗）不再被记成
+  「仍不可见」，消除误导归因；
+- **token-monitor 刷新时间戳**：全局浮窗「更新于」只在刷新**成功**后推进（失败不再谎称
+  刚更新过）；
+- **新增语法闸门**：`verify-all desktop` 现含 `syntax injected/theme-init.js`（注入脚本是
+  每个文档都跑的代码，语法错＝实机整屏黑；分片跨片闭合，只有拼接产物能整体解析）；
+- **新增行为闸门**：`themes/test/auth-cookie.test.js` 6 例 —— 从 `themes/src/00-boot.js` 的
+  `@slice:auth-cookie` 段截出 IIFE，在 VM 里用假浏览器（cookie jar / sessionStorage /
+  `crypto.subtle` / `location.reload`）驱动，钉死「已有 cookie 只按原值续期、绝不覆写」
+  「401 reload 有跨文档上限、超限停止并显示提示」「document_start 不误清计数」三条契约
+  （实机复现要造 secret 漂移 + 预置失败，成本高且危险）。**区分力已双向验证**：回退覆写判据
+  → 用例 1 红；把上限改成 999 → 用例 4 红；还原 → 6/6 绿。
+
+设计与验收见 `design/auth-cookie-prepinject.md` §2.4 / §3 / §5 第 6 条，变更记录见
+`design/CHANGELOG.md` 同日「二轮复审」条。
+
 ### 鉴权 cookie 预置注入（2026-09-22 **已实施**，实机验收待用户）
 
 **症状**：「启动后总出错，点一下刷新才能正常」——错误页是 401 纯文本页（`dsh web
@@ -522,8 +663,9 @@ dsh web 每次重启都有新签名 cookie，首次 `GET /` 必然 401；9-05 �
 **修法（已落地）**：cookie 签名与写入**提前到 navigate 之前**（loading 页 Web Crypto 签名 →
 invoke → Rust 经 Tauri 2 cookie API 写入 3080 域，navigate 前 3s 超时等待、fail-open），
 首次 `GET /` 即带有效 cookie，401 不发生；00-boot.js 的检测→reload 链降级为加固兜底
-（三级文本兜底 + 四轮检查）。secret 改为从 `~/.dsh/.credentials.yaml` 动态读（失败回落
-硬编码），轮换不再要改源码。已随 release 构建（47.8s 干净通过）替换 `dist/Miasaki.exe`。
+（三级文本兜底 + 四轮检查 + 跨文档熔断，且**不再覆写**预置 cookie）。secret 改为从
+`~/.dsh/.credentials.yaml` 动态读（失败回落硬编码），轮换不再要改源码。已随 release 构建
+（47.8s 干净通过）替换 `dist/Miasaki.exe`。
 设计与变更记录：`design/auth-cookie-prepinject.md`；验收清单见 `design/CHANGELOG.md` 同日条目。
 
 ## 启动加载 2.0 · 内嵌启动终端与闪窗根治（2026-09-22 设计定稿，未实施）

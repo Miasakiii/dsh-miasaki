@@ -56,7 +56,7 @@ export const TARGET_PACKAGE = '@deepseek-ai/dsh-cordis-host-runner'
 /** 该包 package.json 的 main/exports 唯一入口。 */
 export const TARGET_RELATIVE = join('lib', 'index.js')
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
+export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
 /** 官方原版 lib/index.js 的 SHA-256（与安装目录的 index.js.dsh-bak 逐字节一致）。 */
 export const ORIGINAL_SHA256 = 'AC73F8669B536CF0F5E1728F7F64EAD820DD37FEB784E80A9EF600F95F680839'
 /**

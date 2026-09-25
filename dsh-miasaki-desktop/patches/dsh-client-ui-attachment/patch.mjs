@@ -50,11 +50,11 @@ const PATCHED_FILE = join(BASELINE, 'client.patched.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-attachment'
 /** DSH 版本基线：CSS 锚点与两份 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
+export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
 /** 官方原版 client.js 的 SHA-256。 */
-export const ORIGINAL_SHA256 = '397B4947D2FA5844DB5AA20FBD7F625211D59CD2D0AA6ACE2E9D0A802BC70E23'
+export const ORIGINAL_SHA256 = '538711EF1FD7CBEDD7C80817AFB878A2568868F7EF7E0E23D56843C32CF5E969'
 /** 应用本补丁后的 SHA-256。 */
-export const PATCHED_SHA256 = '381D2676DC1B4E0D601643D1D8C79BFA33E730AEA4D8CC255C587C452F2F2DEF'
+export const PATCHED_SHA256 = 'DDDBFA9495CAEAA6EDCE46010CA95BE3D4F3DA799E10E198FBECC6A4DC78B69F'
 /** 补丁特征串：出现即视为已应用（幂等与状态判定）。 */
 const PATCH_MARKER = '.R_Yw7q_frame[data-variant=tile] img{object-fit:contain'
 
@@ -309,11 +309,23 @@ async function cmdRebuild() {
 
 const COMMANDS = { verify: cmdVerify, status: cmdStatus, apply: cmdApply, resync: cmdResync, revert: cmdRevert, rebuild: cmdRebuild }
 
-const args = parseArgs(process.argv.slice(2))
-const command = COMMANDS[args.mode]
-if (command === undefined) {
-  console.error(`[patch] 未知命令：${args.mode}（可用：${Object.keys(COMMANDS).join(' / ')}）`)
-  process.exitCode = 2
-} else {
-  await command(args)
+// 仅在直接执行时跑 CLI（被 import 时不执行）——与其余补丁同一契约。
+// 缺了这道守卫，任何 import 本文件的工具（如 scripts/patch-live-audit.mjs 的
+// live 状态审计）都会以调用方的 argv 误跑一次 status：污染审计输出，还可能
+// 把调用方的 exitCode 一起改掉。
+if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const args = parseArgs(process.argv.slice(2))
+  const command = COMMANDS[args.mode]
+  if (command === undefined) {
+    console.error(`[patch] 未知命令：${args.mode}（可用：${Object.keys(COMMANDS).join(' / ')}）`)
+    process.exitCode = 2
+  } else {
+    try {
+      await command(args)
+    } catch (error) {
+      console.error(`[patch] 失败：${error instanceof Error ? error.message : String(error)}`)
+      console.error('[patch] 提示   锚点失效通常意味着 DSH 已升级；请按 README「升级后怎么办」核对锚点并更新 EDITS 与 baseline。')
+      process.exitCode = 1
+    }
+  }
 }

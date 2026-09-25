@@ -9,7 +9,8 @@
     "verify": "node scripts/verify-themes.mjs",
     "tauri": "tauri",
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "deploy": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/deploy-local.ps1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

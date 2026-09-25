@@ -5,6 +5,8 @@ use tauri::AppHandle;
 
 #[path = "pet_native/config.rs"]
 pub(crate) mod config;
+#[path = "pet_native/dot.rs"]
+pub(crate) mod dot;
 #[path = "pet_native/ffi.rs"]
 pub(crate) mod ffi;
 #[path = "pet_native/image.rs"]
@@ -32,6 +34,9 @@ pub struct PetShared {
     pub mode: String,
     pub intensity: String,
     pub hide: bool,
+    /// 2026-09-24:当前主题名（`pure` / `zafkiel` / `kurkuriel`）。
+    /// `mode` 决定桌宠素材，本字段决定**隐藏态悬浮球的球面头像与配色**（`pet_native::dot`）。
+    pub theme: String,
     /// 面板「位置重置」请求：窗口线程 compose 消费后清 false。
     pub pending_reset: bool,
     /// 总指挥活动状态(v2026-08-30):"busy" = 生成中,"idle" = 等待（DOM 兜底源,M2 后仅官方通道静默时生效）
@@ -64,10 +69,14 @@ pub struct NativePet {
 impl NativePet {
     pub fn spawn(app: AppHandle) -> Self {
         let restore_hide = persist::load_hide();
+        // 冷启动即取持久化主题：隐藏态重启时悬浮球第一帧就是正确球面
+        // （否则要等页面 hash 主题上报到达才换面，肉眼可见一次「换脸」）。
+        let theme = crate::load_prefs().theme;
         let shared = Arc::new(Mutex::new(PetShared {
             mode: "whale".to_string(),
             intensity: "idle".to_string(),
             hide: restore_hide,
+            theme,
             pending_reset: false,
             activity: "idle".to_string(),
             waiting_approval: false,
@@ -95,6 +104,22 @@ impl NativePet {
         window::pet_log_line(&format!("[native-pet] set_mode {mode}\n"));
         if let Ok(mut s) = self.shared.lock() {
             s.mode = mode.to_string();
+        }
+    }
+
+    /// 2026-09-24:当前主题（`pure` / `zafkiel` / `kurkuriel`）。
+    /// 只服务隐藏态悬浮球：**球面头像与主题色**随主题切换，白名单外一律忽略
+    /// （防 hash 篡改把球面换成任意素材，与 `save_prefs_theme` 同一口径）。
+    /// 窗口线程在 compose 里比对 `dot_theme`，变化才重绘（隐藏态可见时立即换面）。
+    pub fn set_theme(&self, theme: &str) {
+        if !["pure", "zafkiel", "kurkuriel"].contains(&theme) {
+            return;
+        }
+        if let Ok(mut s) = self.shared.lock() {
+            if s.theme != theme {
+                window::pet_log_line(&format!("[native-pet] set_theme {theme}\n"));
+                s.theme = theme.to_string();
+            }
         }
     }
 

@@ -49,6 +49,22 @@
     try { petHashCmd('want-max') } catch (e) { /* ignore */ }
   }
 
+  /* 契约 v1.1（2026-09-25）受控写能力：**窗控**。
+     与标题栏那三枚按钮走**同一个** `petHashCmd`（hash 的唯一写者 —— 保持 W0-T0.2 的结论，
+     不新增写者）；契约侧只暴露 `minimize`/`maximize`/`close` 这些人话名，内部协议名
+     `min`/`max` 的映射留在这里。
+     **双向校验**：白名单外的值一律忽略（事件可被任意页面脚本派发）。 */
+  try {
+    window.addEventListener('miasaki-window-command', function (e) {
+      try {
+        var c = e && e.detail && e.detail.command
+        if (c === 'minimize') petHashCmd('min')
+        else if (c === 'maximize') petHashCmd('max')
+        else if (c === 'close') petHashCmd('close')
+      } catch (e2) { /* 命令派发失败不影响其它逻辑 */ }
+    })
+  } catch (e) { /* ignore */ }
+
   /* ---------- 空白拖动（V3）：页面零占位后没有自绘拖动条 ----------
    * document 级捕获 mousedown：落在窗口顶部 36px 且事件路径上无「可交互元素」
    * （复用 tauri 内置 drag-region 的判定口径：可点击标签 / contenteditable /
