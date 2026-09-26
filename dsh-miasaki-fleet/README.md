@@ -270,3 +270,22 @@ node ../scripts/verify-all.mjs fleet
 设计决策与协议变更记录在
 [docs/multi-agent-cli-orchestrator-design.md](docs/multi-agent-cli-orchestrator-design.md)
 头部「变更记录」。
+
+### 2026-09-26 · 死代码清理（零行为变更）
+
+仓库级死代码审计后删掉 `tests/m3-acp/` 下两个**一次性探针脚本**（全仓零引用、无断言、不在 `package.json`
+的 test 链、也不在 `scripts/verify-all.mjs` 的 fleet 15 项回归内）：
+
+- `inspect-raw.mjs`（13 行）：查「zstd 帧后是否跟着原始 JSONL 事件」；
+- `inspect-session.mjs`（24 行）：流式解压全部 zstd 帧找 usage/token 事件（M3.5 计量接通时用，使命已完成，
+  其唯一输入目录现为空）。
+
+同目录的 `plan.md` **保留**（`docs/m35-rc7-regression-smoke-2026-08-17.md`、`state/events.jsonl` 仍引用它，
+是 M3 回归结论的可追溯锚点）。验证：`node scripts/verify-all.mjs fleet` **15/15 PASS**。
+
+> 审计同时确认了本线几处「看起来可疑但必须保留」的结构，**后续清理勿误删**：
+> `workers/lib/` 的 5 对同名 `.cjs`/`.mjs`（`.mjs` 是 ESM 转发门面，两侧各有真实消费者）；
+> `agents/archive/`（G2 能力断层结论与 G4 选型的**活输入**）；`schemas/*.schema.json`（人类可读契约镜像，
+> 权威实现在 `bus-contract.cjs`，`schemas/README.md:21-31` 有此设计的理由）；
+> `tasks/t-0003|t-0004/result.json`（G0 机器契约首例，被 `validate-bus.mjs` 校验、被 `bus-apply` 写白名单覆盖）。
+> 详见 [`../dsh-miasaki-shared-docs/repo-review-2026-09-26.md`](../dsh-miasaki-shared-docs/repo-review-2026-09-26.md) §七。
