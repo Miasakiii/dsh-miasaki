@@ -2,6 +2,23 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-26（深夜·续）· 修：`package.json` 的 `files` 缺 `assets/` —— 位图预设会在安装时静默丢失
+
+**缺陷**（由同批新落地的仓库级闸门 `scripts/check-silent-guards.mjs` 的 **R4「声明清单缺口」首跑抓出**）：
+`lib/icon-presets.js` 的三款位图预设引用 `assets/presets/{portrait,illustration,current}.png`，
+而 `package.json` 的 `files` 白名单里**没有 `assets/`** —— 仓库里文件在、`test/icon-presets.test.js`
+也断言了「位图预设的资源必须入库」，但**按 `files` 打包 / 安装时这三个文件不会进包**：
+L0 回归全绿、单测全绿，症状只会在「装进 profile 后预设格退化成程序化几何图案」时才出现。
+
+**为什么此前没有任何检查发现它**：`files` 与代码引用是两份互不相干的事实 ——
+前者只在 npm 打包时被消费，`node --check` 与任何单测都不读它；而 `icon-presets.test.js` 查的是
+**仓库磁盘**（`existsSync(join(root, ...))`），查的是另一半。**两半都对，中间空了。**
+
+**修法**：`files` 补 `"assets/"`。闸门侧 R4 做的正是两向校验 ——
+正向「`files` 列了就必须在磁盘上」与反向「host 半代码引用的资源必须被 `files` 覆盖」，本例命中反向那条。
+
+**验证**：`node scripts/verify-all.mjs repo` → R4 由 3 处归零、`repo` 2/2 PASS；`appearance` 16/16 不变。
+
 ## 2026-09-26（深夜）· 修：配置写盘失败被吞掉却回报 200 成功（用户改动静默回滚）
 
 **缺陷**（2026-09-14 评审点名、本次修复）：`POST /appearance/api/config` 的写盘链是
