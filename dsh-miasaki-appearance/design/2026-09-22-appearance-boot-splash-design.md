@@ -1,6 +1,8 @@
 # Boot Splash 首帧启动画 设计（appearance 线半）
 
-> 状态：**设计定稿（2026-09-22），待用户拍板实施**。用户原点名需求（跨线）：「现在的启动
+> 状态：**已实施（2026-09-26，S1–S4 完成；S5 实机验收待用户重启 `dsh web` 后执行）**。
+> 设计 2026-09-22 定稿；实施记录见 `CHANGELOG.md` 同日「P2 Boot Splash 实施」条。
+> 用户原点名需求（跨线）：「现在的启动
 > 加载界面太简单不符合本项目」「加载页弄酷炫一点」——本文件是 **appearance 线半**：DSH 首帧
 > （3080 HTML 到达 → shell 挂载）的启动画。desktop 线半（loading.html 2.0 + 内嵌启动日志流 +
 > cmd 闪窗根治）见 `../../dsh-miasaki-desktop/design/boot-loading-terminal.md`；
@@ -87,13 +89,30 @@
 
 ## 6. 实施顺序
 
-| 步 | 内容 | 产出 |
-|---|---|---|
-| S1 | 复测 index-inject 六行 placement 与 `__DSH_BOOT_READY__` 尾巴形态（§3 注记） | 取证记录 |
-| S2 | `lib/splash.js`（纯函数：`buildSplashStyle` / `buildSplashHtml` / `buildSplashScript`）+ 单测 | host 半逻辑 |
-| S3 | index.js 注入点扩展（第 3/4/5 行）+ 门控 | host 半接线 |
-| S4 | client 半退场钩子（装载后执行幂等退场） | client 半 |
-| S5 | 实机验收（§7） | 验收记录 |
+| 步 | 内容 | 产出 | 状态 |
+|---|---|---|---|
+| S1 | 复测 index-inject 六行 placement 与 `__DSH_BOOT_READY__` 尾巴形态（§3 注记） | 取证记录 | ✅ 2026-09-26：与 2026-09-11 spike 记录一致——六种 kind、head 行紧跟 `<head>`、body 行紧跟 `<body>`、各组按 table 顺序、`READY_MARKUP` 在最后一个 body 行后（vendor `injections.ts` 逐行核对）；并用官方同款渲染逻辑离线端到端验证本线五行的落点与行序（splash DOM 先于退场脚本、splash script 先于 READY_MARKUP） |
+| S2 | `lib/splash.js`（纯函数：`buildSplashStyle` / `buildSplashHtml` / `buildSplashScript`）+ 单测 | host 半逻辑 | ✅ `test/splash.test.js` 8 例 |
+| S3 | index.js 注入点扩展（第 3/4/5 行）+ 门控 | host 半接线 | ✅ `test/host.test.js` 新增行序 + 门控 2 例 |
+| S4 | client 半退场钩子（装载后执行幂等退场） | client 半 | ✅ `apply()` 内调 `globalThis.__miaSplashExit()`，try/catch 包裹 |
+| S5 | 实机验收（§7） | 验收记录 | ⏳ 待用户重启 `dsh web` |
+
+### 6.1 实施期对设计的偏离（都更保守，无行为风险）
+
+- **颜色不走皮肤 token 表，改 var() 继承**：设计 §3.1 说「`--mia-bs-*` 变量驱动的皮肤底色」，
+  初版从 token 表取 `--dsw-static-neutral-bluish-950` 当底色——**静态色阶是明度中立的调色板**
+  （M2 §2 已确证：明暗语义全由 alias 层选端点承载），该端恒为最深色，浅色模式下变成
+  「墨夜底 + 墨夜字」的不可见组合；表里 6 个半透明 alias 也是两端同值，同样推导不出明暗。
+  正解：`background:var(--dsw-alias-bg-base,…)`、`--mia-bs-fg:var(--dsw-alias-label-primary,…)`
+  ——boot style 把皮肤 token 定义在 `body` 上，`#mia-splash` 是 body 子节点直接继承，
+  明暗由官方 `body[data-ds-dark-theme]` 切换端点，**本行因此不需要双段规则**，且皮肤运行期
+  被换掉时启动画跟着变。踩坑记录同步写在 `lib/splash.js` 头部注释。
+- **纹章外环内圈由 `mia-bs-ring-inner` 反向自转**替代类名切换——同一元素两个圆环各带
+  animation-direction，皮肤差异只覆盖一条规则（kurkuriel 反向 / pure 静止）；
+- **退场脚本内 `setTimeout` 用裸调用**（不写 `window.`）：VM/异常环境下 `window` 缺失时
+  整段已在 try 里，但裸名在浏览器与测试桩里都可解析；
+- **首次启用官方 `html` 注入行 kind**（此前只用 script/style）：W4.1 的六种行白名单与
+  host 测试的「kind 白名单」闸门因此多覆盖一个真实分支。
 
 ## 7. 验收标准
 

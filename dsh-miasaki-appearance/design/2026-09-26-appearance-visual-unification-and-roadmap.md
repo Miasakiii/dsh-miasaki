@@ -134,8 +134,8 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
 
 | # | 事项 | 内容 | 依赖 |
 |---|---|---|---|
-| P1 | **M3 动效** | 配置 `motion.*`（enabled/preset/scale）已在 v4；补：面板板块（总开关 Switch + 预设选择丸 + 强度 stepper）、CSS 动效层挂 `[data-slot]` 锚点 + `.mia-*` 前缀、`prefers-reduced-motion` 强制降级 | V1 的选择丸；M1 规划 §5.5 设计 |
-| P2 | **Boot Splash 实施** | 设计已定稿未动工：`lib/splash.js` 纯函数 + 单测 → host `index-inject` 三行（kind 白名单已就位）→ client 退场钩子（双信号 + 2.5s 兜底）→ 实机 | 跨线契约 `cross/boot-loading-2026-09-22.md` |
+| P1 | **M3 动效** | ✅ **已实施（2026-09-27）**：面板三控件（Switch + 预设选择丸 + 强度步进器，masterSwitch label 参数化）+ 纯 CSS 动效层（`--mia-mo-*` 变量、时长梯 160/300/420、位移+缩放入场、禁 linear、reduced-motion 降级 100ms 淡入、关闭即整层移除、**不碰官方 transition**）；消息级错峰贴类器留 M3.1（`.mia-mo-tagged` 槽位 CSS 已在层内，贴类器待实机锚点取证） | V1 的选择丸；M1 规划 §5.5 设计 |
+| P2 | **Boot Splash 实施** | ✅ **已实施（2026-09-26，§5.1）**：`lib/splash.js` 三纯函数 + host `index-inject` 三行（首次启用官方 `html` 行 kind）+ client 退场钩子（双信号 + 2.5s 兜底 + 幂等）；配置 v5 `motion.bootSplash`；S5 实机待验收 | 跨线契约 `cross/boot-loading-2026-09-22.md` |
 | P3 | **M4 会话效果** | 密度 / 最大宽度 / 流式光标 / 代码块与引用样式 / 工具卡折叠 / 字体；面板每行一个选择丸或步进器；密度与宽度**不得**与通用页「会话视图」混淆（那是视图模式） | V1；M3 的注入与锚点纪律 |
 | P4 | **每板块恢复默认** | models `linkButton` 形态（h28/r14/12px tertiary）；按板块重置（theme/wallpaper/avatar/motion/conversation） | V1 |
 | P5 | **配置导入 / 导出** | M5 规划项：一段 JSON 下载/上传，sanitize 全量收窄后整体替换；导入前二次确认 | V1 |
@@ -158,7 +158,26 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
    类型」走查全路径（Menu anchor 在 props.anchor 上，新增 `collectMenuAnchors` 遍历）。
    单测 **100 → 101 例**（client 15 → 17）；`verify-all appearance` **16/16**、
    `repo` **2/2**。**实机待用户重启 `dsh web` 验收**。
-2. **S2 P1 M3 动效** → **S3 P2 Boot Splash** → **S4 P3 M4**，各自带单测与 CHANGELOG。
+2. **S2 P1 M3 动效** → ~~**S3 P2 Boot Splash**~~ ✅ **已实施（2026-09-26，见 §5.1）** → **S4 P3 M4**，各自带单测与 CHANGELOG。
+
+### 5.1 P2 Boot Splash 实施记录（2026-09-26）
+
+- **S1 取证**：vendor `packages/host/webserver/src/injections.ts` 逐行核对（六 kind / head·body
+  两组按 table 顺序 / 官方 `READY_MARKUP` 在最后一个 body 行后），并用官方同款渲染逻辑离线
+  端到端验证本线五行落点（splash DOM 先于退场脚本、splash script 先于 READY_MARKUP）。
+- **S2 产出** `lib/splash.js`（新）：`buildSplashStyle` / `buildSplashHtml` / `buildSplashScript`
+  三纯函数 + `splashEnabled` 门控；容器 `#mia-splash`（fixed / z-index 2147483000 /
+  pointer-events:none）、**颜色全部 var() 经 body 继承**（不读皮肤 token 表——静态色阶明度中立，
+  踩坑与正解见设计 §6.1）、纹章双环旋转（zafkiel 顺 / kurkuriel 逆 / pure 静止）+ 呼吸 +
+  三点流动、`prefers-reduced-motion` 全静止；退场双信号（client 主信号 / MutationObserver 兜底）
+  + 2.5s 超时 + `dataset.miaSplashDone` 幂等。
+- **S3 host**：`index.js` 既有 `webserver/index-inject` 订阅内追加三行；配置 **v4 → v5**
+  `motion.bootSplash`；`verify-all.mjs` 语法清单 + `package.json` build 同步补 `lib/splash.js`。
+- **S4 client**：`apply()` 内 `window.__miaSplashExit()`（try/catch）。
+- **验证**：`test/splash.test.js` **8 例** + host **+2 例**（行序 / off 门控）+ config 迁移断言；
+  单测 **101 → 111 例**；`verify-all appearance` **16 → 18 项**、`repo` **2/2**。
+- **S5 实机待用户重启 `dsh web` 验收**（判据：出现 / ≤400ms 淡出无三段跳 / 关掉即原生
+  diff=0 / 401 硬用例 2.5s 让位 / reduced-motion 静止 / 三主题 × 明暗）。
 3. 每步落地后更新回归矩阵 §3.5（D 组台账同步加项）。
 
 ## 6. 风险

@@ -246,6 +246,8 @@ test('migrateConfig：旧版本抬到当前版本（新增字段由 sanitize 补
   assert.deepEqual(safe.wallpaper.surface, { sidebar: 100, conversation: 100, composer: 100, overlay: 100 })
   // M2.5：v2 配置升到 v3 后 avatar 补成「未设置」，桌面壳继续用出厂图标。
   assert.deepEqual(safe.avatar, { source: '' })
+  // P2：旧配置升到 v5 后 bootSplash 补默认 'auto'（首帧启动画，纯新增字段）。
+  assert.equal(safe.motion.bootSplash, 'auto')
 })
 
 test('migrateConfig：v3 配置升到 v4 时丢弃 scheme/accent/fontSize 死字段', () => {

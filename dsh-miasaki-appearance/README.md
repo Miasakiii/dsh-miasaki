@@ -41,12 +41,16 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > 与程序化「默认」共四格。管线与 M2.7 完全一致（trim → 裁方 → 512 → 圆角 → 量化），
 > 跨线契约零变更，面板零改动。
 >
-> **Boot Splash 首帧启动画（2026-09-22 设计定稿，跨线新增项）**：DSH 首帧（3080 HTML 到达 →
-> shell 挂载）叠一层全屏启动画——皮肤色 / 壁纸即显 + 三主题纹章动效，shell 挂载后干净淡出，
-> 2.5s 超时兜底不挡错误页。走既有 `webserver/index-inject` 六行注入，总开关关闭即原生。
+> **Boot Splash 首帧启动画（2026-09-22 设计定稿，2026-09-26 P2 实施，S5 实机待验收）**：
+> DSH 首帧（3080 HTML 到达 → shell 挂载）叠一层全屏启动画——皮肤色即显 + 三主题纹章动效
+> （刻刻帝顺时针 / 狂狂帝逆时针 / 纯净静止）+ wordmark + 流动三点，shell 挂载后 300ms 干净淡出，
+> 2.5s 超时兜底不挡错误页（401 硬用例）。走既有 `webserver/index-inject` 追加三行
+> （splash style / splash html / splash script），**首次启用官方 `html` 行 kind**；退场双信号
+> （client 装载即退 + MutationObserver 兜底）+ 幂等守卫；配置 `motion.bootSplash`（v5），
+> 总开关关闭或 `off` ⇒ 一行不注入（关掉即原生）。
 > 与 desktop 线「Loading 2.0 + cmd 闪窗根治」为同一用户需求的两半，
 > 契约见 [cross 文档](../dsh-miasaki-shared-docs/cross/boot-loading-2026-09-22.md)，
-> 本线设计见 [Boot Splash 设计](design/2026-09-22-appearance-boot-splash-design.md)。
+> 本线设计与实施记录见 [Boot Splash 设计](design/2026-09-22-appearance-boot-splash-design.md)。
 >
 > **修：外观栏整栏空白（2026-09-23，primitives 图标名漂移）**：M2.6 复用官方 primitives 时
 > 误用旧版图标名（`IconLightOutline16` 等带尺寸后缀），而前端壳 seed 的实际导出是
@@ -78,6 +82,14 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > 逐名核实。行为逻辑与配置零变化，单测 **101 例**、静态回归 16/16；
 > 功能路线（M3 动效 → Boot Splash 实施 → M4 会话效果 → 恢复默认/导入导出）见
 > [视觉统一与功能路线](design/2026-09-26-appearance-visual-unification-and-roadmap.md)。
+>
+> **2026-09-27 · M3 动效已实施（P1）**：用户「p2 开工」后继续推。「动效」板块从占位灰字升级为
+> **真控件**：总开关（官方 Switch）+ 预设选择丸（流畅 / 优雅 / 极简）+ 强度倍率步进器（0.5×–1.5×）。
+> 动效层是**纯 CSS**（@keyframes + CSS 变量，配置只改变量值、不重写规则）：会话大表面（medium
+> 420 档）/ 侧栏 / 右栏 / 设置面板的容器入场（位移 + 缩放，禁「只有 opacity」与 linear 缓动）；
+> `prefers-reduced-motion` 一律降级 100ms 淡入；关闭即整层移除（与总开关同门控）。
+> 同批落地 **「无可见效果」提示**——纯净皮 + 全不透明表面 + 云母档走系统材质时告诉用户改哪里
+> （此前三叠加 = 「开启了没什么效果」）。消息级错峰贴类器（M3.1）待实机锚点取证后补。
 
 ---
 
@@ -99,17 +111,18 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 
 ```
 dsh-miasaki-appearance/
-├── index.js               # Host 半：/appearance/api/* 路由 + 首帧注入
-├── client.js              # Client 半：设置页「外观」（官方通用设置页风格）+ 契约自检 + 应用管线
+├── index.js               # Host 半：/appearance/api/* 路由 + 首帧注入（boot script/style + splash 三行）
+├── client.js              # Client 半：设置页「外观」（官方通用设置页风格）+ 契约自检 + 应用管线 + splash 退场
 ├── assets/presets/        # 位图预设图标（portrait.png + 来源/处理链 README）
 ├── lib/
 │   ├── config.js          # 配置模型：默认值 / 收窄钳制 / 深合并 / 迁移 / 首帧脚本 / 契约判定
+│   ├── splash.js          # Boot Splash 首帧启动画：style/html/script 三个纯函数 + 门控（P2）
 │   ├── avatar.js          # 软件头像：PNG 魔数 / data URL 解析 / 文件名白名单（跨线契约的 JS 半）
 │   ├── icon-presets.js    # 应用图标预设：手写 PNG 编码 + SDF 绘制 + 预设表（程序化生成）
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 101 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
-├── design/                # 规划设计 + M1/M2/M2.5/M2.6/M2.7 实施 + 变更记录
+├── test/                  # 114 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host / splash 契约）
+├── design/                # 规划设计 + M1/M2/M2.5/M2.6/M2.7 + 去重/视觉统一路线 + P2 Boot Splash + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
 
@@ -150,6 +163,17 @@ dsh-miasaki-appearance/
 | 跨线影响 | **零**：预设图标与用户上传的图走同一条路（同目录 / 同白名单 / 同文件路由），桌面壳不知道"预设"的存在 |
 | 我的上传 | 「我的上传」pills 自动过滤 `preset-*`，用户只看自己的资产 |
 
+### M3 动效（2026-09-27 实施）
+
+| 能力 | 说明 |
+|---|---|
+| 面板控件 | 总开关（官方 Switch）+ 预设选择丸（流畅 / 优雅 / 极简）+ 强度倍率步进器（0.5×–1.5×，作用于所有时长）；总开关关闭时三条禁用并注明 |
+| 动效层 | **纯 CSS**（`@keyframes mia-mo-rise` + `--mia-mo-*` 变量）：会话大表面 medium 420 档、侧栏 / 右栏 / 设置面板 standard 300 档；位移 4–12px + 缩放 0.97–0.99（禁「只有 opacity」与 linear）；写入即改变量值、零重建 |
+| 降级 | `prefers-reduced-motion: reduce` ⇒ 全部入场改 100ms 淡入、无位移无错峰 |
+| 门控 | 与总开关同源：`enabled && motion.enabled` 才注入整层；关闭即移除（含变量清理） |
+| 锚点纪律 | 只挂 `[data-slot]` 稳定锚点 + 自有 `.mia-mo-*` 前缀，不碰官方 transition、不改官方类名 |
+| 未含（M3.1） | 消息级错峰贴类器（`min(i*40,320)ms`）——槽位 CSS（`.mia-mo-tagged`）已在层内，贴类器待实机锚点取证后补 |
+
 ### 里程碑
 
 - **M2 主题 + 壁纸**（[设计已定稿](design/2026-09-12-appearance-m2-design.md)）：刻刻帝 / 狂狂帝皮肤
@@ -166,9 +190,11 @@ dsh-miasaki-appearance/
   删除 `config.theme` 的 scheme / accent / fontSize 镜像字段（配置 v4），定下「上新设项先过
   通用页对照」纪律；
 - **Boot Splash 首帧启动画**（[设计](design/2026-09-22-appearance-boot-splash-design.md)，
-  跨线新增项，2026-09-22 定稿）：3080 首帧全屏启动画（纹章动效 + 退场双信号 + 2.5s 超时兜底），
-  配置面 `motion.bootSplash`，与 desktop「Loading 2.0」契约见 cross 文档；
-- **M3 动效**：CSS 动效层挂在 `[data-slot]` 稳定锚点上、三套预设、强度倍率、`prefers-reduced-motion` 强制降级；
+  跨线新增项）：2026-09-22 定稿、**2026-09-26 P2 实施**（S5 实机待验收）——`lib/splash.js` 三纯函数 + `index-inject` 三行（splash style / html / script，首次启用官方 `html` 行 kind）+ client 退场钩子；纹章动效 + 退场双信号（client 装载 / MutationObserver）+ 2.5s 超时兜底；
+  配置 v5 `motion.bootSplash`（`auto` / `off`），与 desktop「Loading 2.0」契约见 cross 文档；
+- **M3 动效**（2026-09-27 实施）：CSS 动效层（`--mia-mo-*` 变量 + `mia-mo-rise` 入场）挂
+  `[data-slot]` 锚点、三套预设（流畅 / 优雅 / 极简）+ 强度倍率 + `prefers-reduced-motion`
+  强制降级；消息级错峰（M3.1）待实机锚点取证；
 - **M4 会话效果**：消息密度与最大宽度、流式光标、代码块与引用样式、工具卡折叠、字体。
 
 ## 两个关键决策（为什么这么做）
@@ -206,7 +232,7 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test --test-isolation=none "test/*.test.js"     # 101 例（8 个测试文件）
+node --test --test-isolation=none "test/*.test.js"     # 114 例（9 个测试文件）
 node ../scripts/verify-all.mjs appearance              # 统一回归入口（16 项）
 ```
 
@@ -241,5 +267,8 @@ factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条�
 - [视觉统一与功能完善路线](design/2026-09-26-appearance-visual-unification-and-roadmap.md)
   —— 官方设计语言取证表（行/选择丸/立方/卡片/dashed 空态，逐条带 CSS 值）、现状差距对照、
   V1 控件替换规格（已实施）、功能完善 P1–P6 路线、实装 seed 可用性核对；
+- [Boot Splash 首帧启动画设计](design/2026-09-22-appearance-boot-splash-design.md) —— 跨线新增项：
+  2026-09-22 定稿、2026-09-26 P2 实施（S1 index-inject 取证 / S2 `lib/splash.js` 三纯函数 /
+  S3 host 三行注入 / S4 client 退场钩子；实施期偏离点 §6.1）；S5 实机验收判据见该文 §7；
 - [变更记录](design/CHANGELOG.md)。
 

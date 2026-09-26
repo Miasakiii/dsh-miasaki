@@ -7,13 +7,16 @@
 import { avatarFileFromSource } from './avatar.js'
 
 /** 配置版本；结构不兼容变更时 +1，并在 migrateConfig 里补一条迁移分支。 */
-export const CONFIG_VERSION = 4
+export const CONFIG_VERSION = 5
 
 /** 皮肤白名单。M1 只有「纯净」；M2 下沉 desktop 线的刻刻帝 / 狂狂帝。 */
 export const SKINS = Object.freeze(['pure', 'zafkiel', 'kurkuriel'])
 
 /** 动效预设（M3）。 */
 export const MOTION_PRESETS = Object.freeze(['fluid', 'elegant', 'minimal'])
+
+/** Boot Splash 开关（P2 首帧启动画）：auto = 总开关开启时注入；off = 永不注入。 */
+export const BOOT_SPLASH_MODES = Object.freeze(['auto', 'off'])
 
 /** 会话密度（M4）。 */
 export const DENSITIES = Object.freeze(['comfortable', 'compact'])
@@ -72,7 +75,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   // 除本线设置面板外，**桌面壳也读同一份配置**（窗口 / 任务栏 / 托盘图标），
   // 因此这里的字段是跨线契约，改动需同步 dsh-miasaki-desktop 的 launcher_icon 模块。
   avatar: Object.freeze({ source: '' }),
-  motion: Object.freeze({ enabled: false, preset: 'fluid', scale: 1 }),
+  motion: Object.freeze({ enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' }),
   conversation: Object.freeze({ density: 'comfortable', maxWidth: 0 }),
 })
 
@@ -161,6 +164,8 @@ export function migrateConfig(raw) {
   // v3 → v4：**去重**——theme 的 scheme / accent / fontSize 三个字段移除（明暗与字号归
   // 官方「通用」设置页，本线不再做第二入口与镜像）。删除字段不需要搬运：sanitizeConfig
   // 不认识它们、直接丢弃，抬版本号让旧配置在下次写入时清净落盘。
+  // v4 → v5：motion.bootSplash（Boot Splash 首帧启动画开关，'auto' | 'off'）——
+  // 纯新增字段，旧配置补默认 'auto'（总开关关闭仍不注入，见 lib/splash.js 门控）。
   return { ...source, version: CONFIG_VERSION }
 }
 
@@ -207,6 +212,7 @@ export function sanitizeConfig(raw) {
       enabled: toBoolean(motion.enabled, DEFAULT_CONFIG.motion.enabled),
       preset: pickEnum(motion.preset, MOTION_PRESETS, DEFAULT_CONFIG.motion.preset),
       scale: clampNumber(motion.scale, SCALE_MIN, SCALE_MAX, DEFAULT_CONFIG.motion.scale),
+      bootSplash: pickEnum(motion.bootSplash, BOOT_SPLASH_MODES, DEFAULT_CONFIG.motion.bootSplash),
     },
     conversation: {
       density: pickEnum(conversation.density, DENSITIES, DEFAULT_CONFIG.conversation.density),

@@ -25,6 +25,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join, basename, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildSurfaceTokens, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
+import { buildSplashHtml, buildSplashScript, buildSplashStyle } from './lib/splash.js'
 import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
 import { ICON_PRESETS, presetAssetPath, presetFileName, presetUrl, renderPresetPng } from './lib/icon-presets.js'
 import { AppearanceStore } from './lib/store.js'
@@ -149,6 +150,19 @@ export function apply(ctx, config) {
     const mod = SKIN_MODULES[current.theme.skin]
     const style = buildBootStyle(current, mod === undefined ? null : mod.tokens, BUILTIN_WALLPAPERS)
     if (style !== '') pushRow(table, { kind: 'style', text: style })
+    // P2 Boot Splash（2026-09-26 实施，设计 2026-09-22-appearance-boot-splash-design.md）：
+    // 叠在 boot style 之上的独立一层，共用总开关门控（enabled=false 或 bootSplash='off'
+    // 时三个函数全返回空串 ⇒ 一行不注入，「关掉即原生」）。行序即官方 table 顺序：
+    // style(splash) → html(splash) → script(splash)，全部落在官方 __DSH_BOOT_READY__ 之前。
+    // splash 样式不读皮肤 token 表——颜色走 var() 经 body 继承（boot style 把皮肤 token
+    // 定义在 body 上），明暗由官方 body[data-ds-dark-theme] 自动切换；这样皮肤在运行期
+    // 被换掉时启动画跟着变，且浅色模式下不会拿到「静态最深色当底色」的不可见组合
+    // （踩坑记录见 lib/splash.js 头部）。
+    const splashStyle = buildSplashStyle(current)
+    if (splashStyle !== '') pushRow(table, { kind: 'style', text: splashStyle })
+    const splashHtml = buildSplashHtml(current)
+    if (splashHtml !== '') pushRow(table, { kind: 'html', placement: 'body', html: splashHtml })
+    if (splashHtml !== '') pushRow(table, { kind: 'script', placement: 'body', text: buildSplashScript() })
   })
 
   /** 本地壁纸目录（dataDir 之下；无 dataDir 时图源路由降级 404）。 */

@@ -434,11 +434,12 @@ async function planDualModel() {
 
 async function planAppearance() {
   const dir = join(ROOT, 'dsh-miasaki-appearance')
-  // 本线 M1 的 L0/L1：语法检查 + 四组纯逻辑单测（配置模型：归一化/合并/迁移/
+  // 本线 M1 的 L0/L1：语法检查 + 纯逻辑单测（配置模型：归一化/合并/迁移/
   // 首帧脚本/契约判定；围栏；持久化；client 半装载契约 —— 在无 `module` 的 VM 上下文里
-  // 跑 factory，钉死「module is not defined」那类整包加载失败）。都不碰网络与 DSH 运行时，
+  // 跑 factory，钉死「module is not defined」那类整包加载失败；P2 起另有 lib/splash.js 的
+  // 首帧启动画契约）。都不碰网络与 DSH 运行时，
   // 任意机器可复现；实机项（插件加载 / 设置栏出现 / 「关掉即原生」）见 smoke-test-matrix.md。
-  for (const entry of ['index.js', 'client.js', 'lib/config.js', 'lib/avatar.js', 'lib/icon-presets.js', 'lib/store.js', 'lib/fence.js']) {
+  for (const entry of ['index.js', 'client.js', 'lib/config.js', 'lib/splash.js', 'lib/avatar.js', 'lib/icon-presets.js', 'lib/store.js', 'lib/fence.js']) {
     checks.push({ line: 'appearance', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
   for (const file of await testFiles(dir)) {

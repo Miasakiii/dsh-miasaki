@@ -26,7 +26,18 @@ const PANEL_CSS_SOURCE = (() => {
   return source.slice(start, end)
 })()
 
-/** 在 VM 里执行 client.js，捕获装载器收到的描述符。上下文刻意不提供 `module`。 */
+/** 动效层 CSS 正文：从 bundle 源里截出 MOTION_CSS 模板字面量（M3 合规断言用）。 */
+const MOTION_CSS_SOURCE = (() => {
+  const start = source.indexOf('const MOTION_CSS = `')
+  assert.notEqual(start, -1, 'client.js 必须定义 MOTION_CSS 模板字面量')
+  const end = source.indexOf('`\n    /** 取（按 id 去重）动效层', start)
+  assert.notEqual(end, -1)
+  return source.slice(start, end)
+})()
+
+/** 在 VM 里执行 client.js，捕获装载器收到的描述符。上下文刻意不提供 `module`。
+ *  documentElement.getAttribute 对 data-mia-native-mica 返回 'on'——桌面壳 Win11 的
+ *  真实广播形态（「无可见效果」提示的 mica 分支据此判定；其它属性仍返回 null）。 */
 function capture() {
   let descriptor = null
   const window = { __ModuleLoader__: { load(d) { descriptor = d } } }
@@ -35,7 +46,11 @@ function capture() {
     // dataset 供面板 CSS 注入打 data-plugin-css 标记（官方 client 插件同一注入式）。
     createElement: () => ({ style: {}, dataset: {}, append() {}, remove() {}, setAttribute() {} }),
     head: { append() {}, appendChild() {} },
-    documentElement: { getAttribute: () => null, hasAttribute: () => false, setAttribute() {} },
+    documentElement: {
+      getAttribute: name => (name === 'data-mia-native-mica' ? 'on' : null),
+      hasAttribute: () => false,
+      setAttribute() {},
+    },
     querySelector: () => null,
     querySelectorAll: () => [],
   }
@@ -233,10 +248,10 @@ test('V1：单选设置行走官方选择丸 + Menu， Pill 排整类退场', ()
     const element = view()
     // Menu 原语本体与它的 anchor 触发器（选择丸按钮在 props.anchor 上）
     const menus = collectNodes(element, node => node.type === primitivesStub.Menu)
-    // 皮肤 / 壁纸图源 / 玻璃档位 = 3 个（我的上传此时无文件不渲染）
-    assert.equal(menus.length, 3, '皮肤/图源/玻璃三个单选行都必须是官方 Menu')
+    // 皮肤 / 壁纸图源 / 玻璃档位 / 动效预设 = 4 个（我的上传此时无文件不渲染）
+    assert.equal(menus.length, 4, '四个单选行都必须是官方 Menu')
     const selectButtons = collectMenuAnchors(element).filter(node => node.type === 'button')
-    assert.equal(selectButtons.length, 3, '三个选择丸触发器')
+    assert.equal(selectButtons.length, 4, '四个选择丸触发器')
     for (const button of selectButtons) {
       assert.equal(button.props.className, 'mia-select', '触发器必须是官方 selector 规格的选择丸')
       assert.equal(button.props['aria-haspopup'], 'menu', '选择丸必须挂官方 Menu')
@@ -255,6 +270,7 @@ test('V1：单选设置行走官方选择丸 + Menu， Pill 排整类退场', ()
       ['', 'builtin:aurora', 'builtin:dusk', 'builtin:ember', '/appearance/wallpaper/local/aurora-2026.png'],
       '图源菜单 = 无 + 三内置 + 本地文件',
     )
+    assert.deepEqual(idsOf(itemsOf('elegant')), ['fluid', 'elegant', 'minimal'], '动效三套预设必须全在菜单里')
     const pickers = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className.includes('mia-picker'))
     assert.equal(pickers.length, 0, 'Pill 排不得复活')
   } finally {
@@ -392,13 +408,140 @@ test('与官方「通用」设置页不重复：面板不再渲染明暗偏好�
     const cubes = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className.includes('mia-cube'))
     assert.equal(cubes.length, 0, '明暗立方控件必须移除')
     const units = collectNodes(element, node => node.type === 'span' && node.props.className === 'mia-unit')
-    assert.equal(units.length, 0, '字号单位（px）只服务于字号行')
+    assert.equal(units.filter(u => u.children.includes('px')).length, 0, 'px 单位只服务于字号行（已随去重移除）')
     // 官方通用页没有的能力必须仍在：皮肤是 overrideTokens 层，官方三立方管不了
     assert.equal(texts.includes('皮肤'), true, '皮肤是本线独有能力，必须保留')
     assert.equal(texts.includes('外观定制总开关'), true)
     // V1 起皮肤行走选择丸（控件形态随去重后的信息架构一起定型）
     const skinSelect = collectMenuAnchors(element).filter(node => node.type === 'button' && node.props.className === 'mia-select')
     assert.equal(skinSelect.length >= 1, true, '皮肤行必须是官方选择丸')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('M3 动效层 CSS 合规：只动 transform/opacity、禁 linear、reduced-motion 降级', () => {
+  // M1 规划 §5.5 的禁止清单（硬约束）：无意义 opacity 0→1、线性缓动、全页统一 0.3s ease。
+  assert.match(MOTION_CSS_SOURCE, /@keyframes mia-mo-rise\{from\{opacity:0;transform:translateY/, '入场必须带位移+缩放，不允许只有 opacity')
+  assert.match(MOTION_CSS_SOURCE, /calc\(var\(--mia-mo-d-std\) \* var\(--mia-mo-dur-scale\)\)/, '时长走变量×强度倍率（切预设只改变量值）')
+  assert.match(MOTION_CSS_SOURCE, /\[data-slot="main.conversation"\] > \*\{animation:mia-mo-rise calc\(var\(--mia-mo-d-med\)/, '会话大表面走 medium 档（规格表 420ms 级）')
+  assert.match(MOTION_CSS_SOURCE, /@media \(prefers-reduced-motion: reduce\)/, '降级媒体查询')
+  assert.match(MOTION_CSS_SOURCE, /animation:mia-mo-fade 100ms ease/, 'reduced-motion 统一 100ms 淡入')
+  assert.match(MOTION_CSS_SOURCE, /\.mia-mo-tagged\{animation-delay:calc\(var\(--mia-mo-i, 0\) \* var\(--mia-mo-stagger\)\)\}/, '错峰槽位（M3.1 贴类器消费）')
+  assert.doesNotMatch(MOTION_CSS_SOURCE, /linear/, '禁 linear 缓动')
+  assert.doesNotMatch(MOTION_CSS_SOURCE, /transition/, '动效层只做 animation，不抢官方 transition')
+  // 门控与去重在源码层可见（行为由面板渲染测试覆盖）
+  assert.match(source, /const MOTION_CSS_ID = '@miasaki\/dsh-appearance\/motion\.css'/)
+  assert.match(source, /tag\.dataset\.pluginCss = MOTION_CSS_ID/, '动效层注入与 PANEL_CSS 同构（data-plugin-css 去重）')
+})
+
+test('M3 动效板块：总开关 + 预设选择丸 + 强度步进器（不再是一行占位灰字）', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'pure' },
+        wallpaper: {
+          source: '', light: '', dark: '', blur: 0, scrim: 0,
+          fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: '' },
+        motion: { enabled: true, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 9,
+      persistent: true,
+    },
+    null, null, false, null, { local: [] }, { presets: [] }, null,
+  ]
+  try {
+    const element = view()
+    const texts = collectText(element)
+    assert.equal(texts.includes('动效'), true, '板块标题必须在')
+    const switches = collectNodes(element, node => node.type === primitivesStub.Switch)
+    assert.equal(switches.length, 2, '总开关 + 动效开关都是官方 Switch')
+    const master = switches.find(node => node.props.label === '外观定制总开关')
+    const motionSwitch = switches.find(node => node.props.label === '动效')
+    assert.notEqual(master, undefined, '总开关必须有无障碍名')
+    assert.notEqual(motionSwitch, undefined, '动效开关必须有无障益名（不复用总开关的 label）')
+    assert.equal(motionSwitch.props.checked, true)
+    // 预设走选择丸 + Menu（与其它单选项同一控件语言）
+    const presetMenu = collectNodes(element, node => node.type === primitivesStub.Menu
+      && Array.isArray(node.props.items)
+      && node.props.items.some(item => item.id === 'elegant'))
+    assert.equal(presetMenu.length, 1, '预设必须是官方选择丸')
+    assert.deepEqual([...presetMenu[0].props.items].map(item => item.id), ['fluid', 'elegant', 'minimal'], '三套预设必须在菜单里')
+    assert.equal(presetMenu[0].props.selectedId, 'fluid')
+    // 强度步进器（官方 stepper 规格）+ × 单位（壁纸另有 6 枚旋钮，按 aria-label 找强度那枚）
+    const steppers = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className === 'mia-stepper')
+    assert.equal(steppers.length, 7, '6 枚壁纸/表面旋钮 + 1 枚强度倍率')
+    const scaleStepper = steppers.find(node => collectNodes(node, n => n.props['aria-label'] === '增大强度倍率').length > 0)
+    assert.notEqual(scaleStepper, undefined, '强度倍率必须是步进器（官方 stepper 规格）')
+    assert.equal(texts.includes('×'), true, '倍率单位')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('「无可见效果」提示：纯净皮 + 全不透明 + mica 走系统材质时出现，换皮肤即消失', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  // 用户实机配置的形状：pure + 壁纸 + surface 全 100 + glass=mica（stub 广播 native-mica=on）
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'pure' },
+        wallpaper: {
+          source: 'builtin:aurora', light: '', dark: '', blur: 0, scrim: 10,
+          fit: 'cover', focus: 'center', glass: 'mica', vignette: 10,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: '' },
+        motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 10,
+      persistent: true,
+    },
+    null, null, false, null, { local: [] }, { presets: [] }, null,
+  ]
+  try {
+    const texts = collectText(view())
+    assert.equal(texts.some(t => t.includes('当前配置下外观没有可见变化')), true, '零变化配置必须给指引')
+  } finally {
+    react.stateQueue = null
+  }
+  // 换成皮肤 ⇒ 提示消失（有可见效果）
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'zafkiel' },
+        wallpaper: {
+          source: 'builtin:aurora', light: '', dark: '', blur: 0, scrim: 10,
+          fit: 'cover', focus: 'center', glass: 'mica', vignette: 10,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: '' },
+        motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+        conversation: { density: 'comfortable', maxWidth: 0 },
+      },
+      revision: 11,
+      persistent: true,
+    },
+    null, null, false, null, { local: [] }, { presets: [] }, null,
+  ]
+  try {
+    const texts = collectText(view())
+    assert.equal(texts.some(t => t.includes('当前配置下外观没有可见变化')), false, '换皮肤后不得再提示')
   } finally {
     react.stateQueue = null
   }

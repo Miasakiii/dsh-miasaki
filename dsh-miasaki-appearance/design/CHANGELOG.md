@@ -2,6 +2,89 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-27 · P1 M3 动效实施 + 「无可见效果」提示
+
+- **起因**：用户「p2 开工」后「继续推吧」——按 [视觉统一与功能路线](2026-09-26-appearance-visual-unification-and-roadmap.md)
+  §4 的 P1 开工；同批根治上一轮实机反馈的「开启了没什么效果」。
+- **M3 面板（`client.js`）**：「动效」组从 dashed 占位升级为真控件——总开关（官方 Switch，
+  顺手把 `masterSwitch` 的 label 参数化：两态开关必须各带无障碍名，不再共用「外观定制总开关」）+
+  预设选择丸（流畅 / 优雅 / 极简，走 V1 的选择丸 + 官方 Menu）+ 强度倍率步进器（0.5–1.5、
+  步进 0.1，回调里 `Math.round(v*10)/10` 防浮点漂移落盘）；总开关关闭时三条禁用并注明。
+- **M3 动效层（`client.js`，纯 CSS）**：`MOTION_CSS` + `MOTION_PRESETS` + `applyMotion()`。
+  规则只引用 `--mia-mo-*` 变量，**配置改变量值、不重写规则**（规划 §5.5）；时长梯三档
+  （fast 160 / standard 300 / medium 420——会话大表面走 medium，侧栏/右栏/设置面板走 standard）；
+  入场 = 位移 4–12px + 缩放 0.97–0.99（禁「只有 opacity」与 linear 缓动，禁止清单进测试）；
+  `prefers-reduced-motion` 一律降级 100ms 淡入；门控 `enabled && motion.enabled`，关闭即
+  移除整层；注入与 PANEL_CSS 同构（`data-plugin-css` 去重）。锚点只用 `[data-slot]` 与
+  `.mia-mo-*`，**不碰官方 transition**（动效层只做 animation）。
+- **消息级错峰留 M3.1**：`.mia-mo-tagged{animation-delay:calc(var(--mia-mo-i)*var(--mia-mo-stagger))}`
+  槽位已在层内，但贴类器需要实机锚点取证（官方消息行的 DOM 形状未知，错贴会让流式输出
+  每帧重放动画）——不做没把握的 JS，写进文档作为下一个子步。
+- **「无可见效果」提示（`client.js`）**：`enabled && skin==='pure' && 壁纸非空 && 四旋钮全 ≥100
+  && (glass==='off' || (glass==='mica' && data-mia-native-mica==='on'))` ⇒ 面板顶部给一行官方
+  notice 规格的指引（换皮肤 / 玻璃换磨砂·轻 / 表面透明度降到 60–80）。诊断过程与复算证据见
+  回归矩阵 §3.5 注记。
+- **回归闸门**：client.test.js +3 例——① 动效层 CSS 合规（位移+缩放入场、禁 linear、
+  不抢 transition、reduced-motion 100ms 淡入、错峰槽位在位、会话大表面走 medium 档）；
+  ② 动效板块控件（两个 Switch 各带无障碍名、预设 Menu 三项、强度步进器按 aria-label 定位）；
+  ③ 「无可见效果」提示出现/消失两态。V1 闸门与去重闸门随新控件同步更新（Menu 3→4 个、
+  `×` 单位不再判「零单位」而判「无 px 单位」）。
+- **验证**：单测 **111 → 114 例**（client 17 → 20）；`verify-all appearance` **18/18**、
+  `repo` **2/2**。
+- **实机待用户重启 `dsh web` 后验收**：动效面板三控件、容器入场是否可感且无「橡皮筋」、
+  reduced-motion（系统设置开「减少动画效果」）下只剩淡入、「无可见效果」提示在其当前配置下
+  应出现（照指引改一项后消失）。
+- 触摸点：`client.js`（动效层 + 板块 + 提示 + masterSwitch label 参数化）、
+  `test/client.test.js`（+3 例 / 2 例更新）、`README.md`、本文件、设计文档 §4/§5、
+  回归矩阵 §3.5 + 日志、根 README。
+
+## 2026-09-27 · P2 Boot Splash 首帧启动画实施（S1–S4）
+
+- **设计**：[2026-09-22-appearance-boot-splash-design.md](2026-09-22-appearance-boot-splash-design.md)
+  （2026-09-22 定稿，本条为实施记录；实施期偏离点记在设计 §6.1）。
+- **S1 取证**（不凭半年前记录写码）：vendor `packages/host/webserver/src/injections.ts` 逐行核对——
+  六种 kind、head 行紧跟 `<head>`、body 行紧跟 `<body>`、**各组按 table 顺序**、
+  官方 `READY_MARKUP`（`__DSH_BOOT_READY__`）在最后一个 body 行之后。用官方同款渲染逻辑
+  离线端到端验证本线五行落点：boot script → boot style → **splash style → splash html →
+  splash script** → READY_MARKUP，且 splash DOM 先于退场脚本（脚本执行时可直接
+  `getElementById`）。
+- **S2 `lib/splash.js`（新，纯函数）**：
+  - `buildSplashStyle(config)`：`#mia-splash` 容器（fixed/inset0/z-index
+    2147483000/pointer-events:none）+ **颜色全部 var() 经 body 继承**（`background:
+    var(--dsw-alias-bg-base,…)` / `--mia-bs-fg:var(--dsw-alias-label-primary,…)` /
+    accent 取品牌静态端 `--dsw-static-deepseek-450`）——明暗由官方
+    `body[data-ds-dark-theme]` 切换端点，本行不分双段；纹章双环旋转（zafkiel 顺 /
+    kurkuriel 逆 / pure 静止）+ 呼吸光晕 + 三点流动进度 +
+    `prefers-reduced-motion` 全静止；
+  - `buildSplashHtml(config)`：容器 DOM（内联 SVG 纹章——骨架与本线「默认」应用图标同语言，
+    零外部资产）+ MIASAKI wordmark + 「专属 DSH 桌面端」+ 三点；
+  - `buildSplashScript()`：退场生命周期——**主信号** `globalThis.__miaSplashExit()`（client 半
+    装载即挂载完成）、**兜底** MutationObserver 观察 body 出现 splash 之外的子节点、
+    **超时** 2.5s 无条件淡出（401/错误页硬用例）；幂等守卫 `dataset.miaSplashDone`；
+    淡出 300ms 后 remove；整段 try/catch（首帧脚本不得抛错——会阻断后续注入行与官方 READY 尾巴）。
+- **实施期踩坑（重要，勿复发）**：颜色初版从皮肤 token 表取 `--dsw-static-neutral-bluish-950`
+  当底色——**静态色阶是明度中立的调色板**（M2 §2 已确证），该端恒最深，浅色模式下
+  「墨夜底 + 墨夜字」不可见；表里 6 个半透明 alias 两端同值也推导不出明暗。改为 var()
+  继承后两题皆消（记录同时写进 `lib/splash.js` 头部与 boot-splash 设计 §6.1）。
+- **S3 host 接线**（`index.js`）：既有 `webserver/index-inject` 订阅内追加三行，**门控与 boot
+  style 同源**（`enabled=false` 或 `motion.bootSplash='off'` ⇒ 三函数全空串 ⇒ 一行不注入）。
+  配置 **v4 → v5**：`motion.bootSplash: 'auto' | 'off'`（纯新增；M3 动效落地时统一在面板暴露，
+  不提前制造 UI 债）。`verify-all.mjs` 的 appearance 语法清单补 `lib/splash.js`。
+- **S4 client 钩子**（`client.js` `apply()`）：`syncSkin(false)` 之后调
+  `window.__miaSplashExit()`（try/catch 包裹；函数不存在=未注入或已退场，静默跳过）。
+- **回归闸门**：`test/splash.test.js` **8 例**（门控三形态 / 白名单与 v4→v5 迁移 / style 规格与
+  皮肤色注入与降级 / 三皮肤旋转方向 / html 安全 / script 幂等双信号超时 / **无 document 的 VM
+  环境执行不抛错** / DOM 桩驱动完整退场链路——幂等 + 节点移除）；`test/host.test.js` +2 例
+  （**五行行序** + bootSplash off 门控）；`test/config.test.js` 迁移用例补 bootSplash 断言。
+- **验证**：单测 **101 → 111 例**（splash 8 / host 16 → 18）；`verify-all appearance`
+  **16 → 18 项**（+`lib/splash.js` 语法 + `splash.test.js`）、`repo` **2/2**；`files` 已在 `lib/`
+  内无需改动（`build` 脚本同步补 splash 语法检查）。
+- **S5 实机验收待用户重启 `dsh web` 后执行**（判据：出现 / 淡出 ≤400ms 无三段跳 / 关掉即原生
+  diff=0 / 401 硬用例 2.5s 内让位 / reduced-motion 全静止 / 三主题 × 明暗）。
+- 触摸点：`lib/splash.js`（新）、`lib/config.js`（v5 + bootSplash）、`index.js`（注入三行）、
+  `client.js`（退场钩子）、`test/{splash,host,config}.test.js`、`package.json`（build）、
+  `../scripts/verify-all.mjs`（语法清单）、`README.md`、本文件、设计文档 §6/§6.1。
+
 ## 2026-09-26 · V1 视觉统一实施（选择丸 + 官方 Menu；官方卡片语言；dashed 占位）
 
 - **起因**：用户「外观设计页现在不够美观，和 dsh 设置页面的设计语言不够统一」。方案见

@@ -296,6 +296,7 @@ window.__ModuleLoader__.load({
 .mia-select:disabled{cursor:default;opacity:.5}
 .mia-selectLabel{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
 .mia-selectChevron{flex:none;color:var(--dsw-alias-label-caption)}
+.mia-unit{color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}
 .mia-stepper{background:var(--dsw-alias-bg-module-platform);border-radius:18px;justify-content:center;align-items:center;min-width:72px;height:36px;display:inline-flex;position:relative}
 .mia-value{text-align:center;font-variant-numeric:tabular-nums;min-width:18px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}
 .mia-arrows{opacity:0;flex-direction:column;gap:2px;display:flex;position:absolute;right:8px}
@@ -334,6 +335,90 @@ window.__ModuleLoader__.load({
       tag.dataset.pluginCss = PANEL_CSS_ID
       tag.textContent = PANEL_CSS
       document.head.appendChild(tag)
+    }
+
+    // ------------------------------------------------------- 动效层（M3）
+    // 设计：M1 规划 §5.5（时长梯 / 缓动 / 位移缩放 / 错峰 / 强度倍率 / reduced-motion 降级）。
+    // 形态纪律：**纯 CSS**（@keyframes + CSS 变量），配置改的是变量值而不是重写规则 ⇒
+    // 切预设零重建；只动 transform/opacity；禁 linear 缓动与「只有 opacity」的入场。
+    // 注入式与 PANEL_CSS 同构（factory 体内按 id 去重）；门控 = 总开关 && motion.enabled，
+    // 关闭即移除整层（「关掉即原生」）。锚点只用 [data-slot] 与自有 .mia-* / .mia-mo-*。
+    const MOTION_CSS_ID = '@miasaki/dsh-appearance/motion.css'
+    /** 三套预设的变量值（id 与 lib/config.js 的 MOTION_PRESETS 一致，host 白名单最终把关）。 */
+    const MOTION_PRESETS = {
+      fluid: { dFast: 160, dStd: 300, dMed: 420, move: '8px', scale: '0.98', stagger: 40, ease: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+      elegant: { dFast: 220, dStd: 420, dMed: 620, move: '12px', scale: '0.97', stagger: 60, ease: 'cubic-bezier(0.34, 1.56, 0.64, 1)' },
+      minimal: { dFast: 120, dStd: 200, dMed: 280, move: '4px', scale: '0.99', stagger: 0, ease: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+    }
+    /** 预设选项表（选择丸菜单项；id 与 MOTION_PRESETS 同键）。 */
+    const MOTION_PRESET_OPTIONS = [
+      { id: 'fluid', label: '流畅' },
+      { id: 'elegant', label: '优雅' },
+      { id: 'minimal', label: '极简' },
+    ]
+    const MOTION_CSS = `
+.mia-mo-rise{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
+/* 时长梯（规划 §5.5）：会话大表面 medium 420 / 侧栏·右栏·设置面板 standard 300 */
+[data-slot="main.conversation"] > *{animation:mia-mo-rise calc(var(--mia-mo-d-med) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
+[data-slot="rightbar"] > *,[data-slot="sidebar"] > *{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
+.mia-panel{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
+@keyframes mia-mo-rise{from{opacity:0;transform:translateY(var(--mia-mo-move)) scale(var(--mia-mo-scale))}to{opacity:1;transform:none}}
+/* 错峰（M3.1 消息贴类器消费）：tagged 元素按文档序 min(i*stagger, 320ms) */
+.mia-mo-tagged{animation-delay:calc(var(--mia-mo-i, 0) * var(--mia-mo-stagger))}
+@media (prefers-reduced-motion: reduce){
+.mia-mo-rise,[data-slot="main.conversation"] > *,[data-slot="rightbar"] > *,[data-slot="sidebar"] > *,.mia-panel{animation:mia-mo-fade 100ms ease}
+@keyframes mia-mo-fade{from{opacity:0}to{opacity:1}}
+}
+`
+    /** 取（按 id 去重）动效层 style 节点；不存在则创建。 */
+    function motionStyleTag() {
+      if (typeof document === 'undefined') return null
+      const existing = document.querySelector(`style[data-plugin-css="${MOTION_CSS_ID}"]`)
+      if (existing !== null) return existing
+      const tag = document.createElement('style')
+      tag.dataset.plugin = '@miasaki/dsh-appearance'
+      tag.dataset.pluginCss = MOTION_CSS_ID
+      tag.textContent = MOTION_CSS
+      document.head.appendChild(tag)
+      return tag
+    }
+
+    /**
+     * 应用动效层：注入/移除样式 + 写预设变量与强度倍率。
+     * 门控与 boot style 同源——总开关关闭或动效关闭时整层移除（零影响）。
+     * @param {object} config - 已归一化配置（/state 或 save 响应里的 config）。
+     */
+    function applyMotion(config) {
+      if (config === null || config === undefined || typeof document === 'undefined') return
+      const motion = config.motion
+      const live = config.enabled === true && motion !== undefined && motion.enabled === true
+      if (!live) {
+        const tag = document.querySelector(`style[data-plugin-css="${MOTION_CSS_ID}"]`)
+        if (tag !== null) tag.remove()
+        return
+      }
+      const preset = MOTION_PRESETS[motion.preset] ?? MOTION_PRESETS.fluid
+      const scale = Number.isFinite(motion.scale) ? motion.scale : 1
+      const tag = motionStyleTag()
+      if (tag === null) return
+      // 只写变量值、不重写规则（规划 §5.5）：切预设/强度 = 一次 setProperty。
+      const root = document.documentElement
+      root.style.setProperty('--mia-mo-d-fast', `${preset.dFast}ms`)
+      root.style.setProperty('--mia-mo-d-std', `${preset.dStd}ms`)
+      root.style.setProperty('--mia-mo-d-med', `${preset.dMed}ms`)
+      root.style.setProperty('--mia-mo-move', preset.move)
+      root.style.setProperty('--mia-mo-scale', preset.scale)
+      root.style.setProperty('--mia-mo-stagger', `${preset.stagger}ms`)
+      root.style.setProperty('--mia-mo-ease', preset.ease)
+      root.style.setProperty('--mia-mo-dur-scale', String(scale))
+    }
+
+    /** 动效同步（页面加载与每次保存后调用）：配置经 /state 取，失败静默（不影响面板）。 */
+    async function syncMotion() {
+      try {
+        const state = await requestJson('/state', { method: 'GET' })
+        applyMotion(state.config)
+      } catch { /* 动效层应用失败保持原生观感 */ }
     }
 
     // ------------------------------------------------------------- 行构造
@@ -420,13 +505,16 @@ window.__ModuleLoader__.load({
       return react.createElement(Button, { key: text, variant: 'ghost', size: 'sm', disabled: disabled === true, onClick }, text)
     }
 
-    /** 官方 Switch 原语：总开关（role=switch + aria-checked，样式随皮肤）。 */
-    function masterSwitch(enabled, onClick, disabled) {
+    /**
+     * 官方 Switch 原语：两态开关（role=switch + aria-checked，样式随皮肤）。
+     * label 必填——官方 Switch 的可访问名，不传即是无名控件。
+     */
+    function masterSwitch(enabled, onClick, disabled, label, title) {
       return react.createElement(Switch, {
         checked: enabled === true,
         disabled: disabled === true,
-        label: '外观定制总开关',
-        title: '关闭时本线对页面零影响',
+        label,
+        title,
         onChange: (next) => onClick(next === true),
       })
     }
@@ -520,6 +608,8 @@ window.__ModuleLoader__.load({
           void syncSkin(patch != null && typeof patch === 'object'
             && patch.theme != null && typeof patch.theme === 'object'
             && patch.theme.skin !== undefined)
+          // M3：动效层随写随生效（只更新变量值/整层移除，不重写规则）。
+          try { applyMotion(next.config) } catch { /* 动效应用失败不影响面板 */ }
           setError(null)
         } catch (e) {
           if (e && e.status === 409) {
@@ -569,6 +659,25 @@ window.__ModuleLoader__.load({
         children.push(react.createElement('div', { key: 'error', className: 'mia-error' }, error))
       }
 
+      // ---- 「无可见效果」提示（2026-09-27 用户实机反馈「开启了没什么效果」的根治）：
+      // 总开关开了但皮肤=纯净（原生配色）+ 壁纸被不透明确表面挡住 + 玻璃档位在当前环境
+      // 不出效果（off，或 mica 走系统云母时页面侧模糊被 W4.2 关掉）⇒ 三层叠加后界面零变化。
+      // 提醒用户改哪里，而不是让用户以为功能坏了。
+      const noVisible = state !== null && state.config.enabled === true
+        && state.config.theme.skin === 'pure'
+        && state.config.wallpaper.source !== ''
+        && [state.config.wallpaper.surface.sidebar, state.config.wallpaper.surface.conversation,
+          state.config.wallpaper.surface.composer, state.config.wallpaper.surface.overlay].every(v => v >= 100)
+        && (state.config.wallpaper.glass === 'off'
+          || (state.config.wallpaper.glass === 'mica' && document.documentElement.getAttribute('data-mia-native-mica') === 'on'))
+      if (noVisible) {
+        children.push(react.createElement('div', { key: 'novisible', className: 'mia-notice' },
+          '当前配置下外观没有可见变化：皮肤是「纯净」（= 原生配色）、壁纸被 100% 不透明的表面挡住、' +
+          '「云母」档在 Win11 桌面壳下走系统材质（页面侧不模糊）。任选其一即可看到效果——皮肤换「刻刻帝 / 狂狂帝」、' +
+          '玻璃换「磨砂 / 轻」、或把「表面不透明度」的会话 / 侧栏 / 输入框降到 60–80。',
+        ))
+      }
+
       // ---- 启用（总开关）
       children.push(group('启用', [
         row(
@@ -576,7 +685,7 @@ window.__ModuleLoader__.load({
           '关闭时本线对页面零影响：不覆盖任何 token、不注入任何样式。',
           masterSwitch(state !== null && state.config.enabled === true, (next) => {
             save({ enabled: next })
-          }, state === null || busy),
+          }, state === null || busy, '外观定制总开关', '关闭时本线对页面零影响'),
         ),
       ]))
 
@@ -676,11 +785,41 @@ window.__ModuleLoader__.load({
         ),
       ]))
 
-      // ---- 后续板块占位（V1：官方 models「添加」先例的 dashed 卡，取代一行灰字）
-      children.push(group('动效', [dashedPlaceholder(
-        '动效（M3，未实现）',
-        '会话入场 / 侧栏 / 新会话 / 设置面板，三套预设 + 强度倍率 + 减弱动态降级。',
-      )]))
+      // ---- 动效（M3：总开关 + 预设 + 强度倍率；prefers-reduced-motion 强制降级在 CSS 侧）
+      const motion = state === null ? null : state.config.motion
+      const motionLive = state !== null && state.config.enabled === true
+      children.push(group('动效', motion === null ? [hint('配置未加载。')] : [
+        row(
+          '动效',
+          '会话表面 / 视图切换 / 设置面板的过渡动效：纯 transform + opacity，系统「减少动画效果」时自动降级为 100ms 淡入。' +
+            (motionLive ? '' : '（总开关关闭时本条不生效）'),
+          masterSwitch(motion.enabled === true, (next) => {
+            save({ motion: { enabled: next } })
+          }, !motionLive || busy, '动效', '关闭时本线不注入任何动效层'),
+        ),
+        row(
+          '预设',
+          '流畅 = 轻快位移（8px / 300ms）；优雅 = 长程柔缓带轻过冲（12px / 420ms）；极简 = 微位移快进快出（4px / 200ms）。',
+          selectControl(
+            'motion-preset',
+            motion.preset,
+            MOTION_PRESET_OPTIONS,
+            id => save({ motion: { preset: id } }),
+            openMenu, setOpenMenu,
+            !motionLive || busy || motion.enabled !== true,
+          ),
+        ),
+        row(
+          '强度倍率',
+          '0.5×–1.5×，作用于所有动效时长（改的是时长倍率，不改位移与缓动）。',
+          [
+            stepper(motion.scale, 0.5, 1.5, 0.1, v => save({ motion: { scale: Math.round(v * 10) / 10 } }), !motionLive || busy || motion.enabled !== true, '强度倍率'),
+            react.createElement('span', { key: 'u', className: 'mia-unit' }, '×'),
+          ],
+        ),
+      ]))
+
+      // ---- 会话效果占位（M4；V1 起用官方 dashed 卡形态）
       children.push(group('会话效果', [dashedPlaceholder(
         '会话效果（M4，未实现）',
         '消息密度与最大宽度 / 流式光标 / 代码块与引用样式 / 工具卡折叠 / 字体。',
@@ -812,6 +951,16 @@ window.__ModuleLoader__.load({
       }
       // 页面加载即按配置接管皮肤（不等面板打开）。
       void syncSkin(false)
+      // M3：页面加载即按配置应用动效层（与皮肤同步的时机）。
+      void syncMotion()
+
+      // P2 Boot Splash 退场主信号（2026-09-26）：client 半装载 ⇒ shell 已挂载，
+      // 调首帧脚本挂到 globalThis 的退场函数。兜底（MutationObserver + 2.5s 超时）
+      // 在注入的 splash script 里，双信号都幂等——谁先到谁执行，本调用只是最快的那条。
+      // 函数不存在（未注入 splash / 已退场）时静默跳过。
+      try {
+        if (typeof window.__miaSplashExit === 'function') window.__miaSplashExit()
+      } catch { /* 退场失败不阻断面板（兜底信号仍会收尾） */ }
 
       ctx.slots.inject('settings.section', () => ctx.slots.register(
         { name: 'settings.section', id: 'appearance', order: 5, label: '外观' },

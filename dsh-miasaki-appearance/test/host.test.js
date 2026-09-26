@@ -68,6 +68,57 @@ test('首帧注入订阅 webserver/index-inject，注入脚本行来自配置', 
   assert.equal(table[0].placement, 'body')
 })
 
+// ---------------------------------------------------------------------------
+// P2 Boot Splash（2026-09-26 实施）：注入行序、门控与六种行白名单。
+// 设计：design/2026-09-22-appearance-boot-splash-design.md §3；行序依据官方
+// renderIndexInjections——head/body 两组各自按 table 顺序，READY_MARKUP 在最后一个 body 行后。
+test('P2 注入行序：boot script → boot style → splash style → splash html → splash script', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  await writeConfig(ctx, { patch: { enabled: true, theme: { skin: 'zafkiel' } } })
+  const table = []
+  ctx.taps[0].callback(table)
+  const kinds = table.map(row => `${row.kind}${row.placement === undefined ? '' : `:${row.placement}`}`)
+  assert.deepEqual(kinds, [
+    'script:body',      // 既有：门控属性
+    'style',            // 既有：boot style（皮肤/壁纸/玻璃防闪色）
+    'style',            // 新增：splash 样式（head，官方固定）
+    'html:body',        // 新增：splash 容器 DOM
+    'script:body',      // 新增：splash 退场生命周期
+  ], 'splash 三行必须紧邻 boot style 之后，且都落在官方 READY_MARKUP 之前')
+  const splashStyle = table[2]
+  assert.match(splashStyle.text, /#mia-splash\{/, 'splash 样式行')
+  assert.doesNotMatch(splashStyle.text, /<\/style/, 'style 行不得含 </style')
+  const splashHtml = table[3]
+  assert.match(splashHtml.html, /id="mia-splash"/, 'splash DOM 行')
+  const splashScript = table[4]
+  assert.match(splashScript.text, /__miaSplashExit/, '退场脚本行（client 主信号入口）')
+  assert.doesNotMatch(splashScript.text, /<\/script/, 'script 行不得含 </script')
+  // W4.1：三行都必须落在官方六种行白名单内（html 行是 2026-09-26 首次启用的 kind）
+  const ALLOWED = new Set(['global', 'script', 'script-src', 'script-preload', 'style', 'html'])
+  for (const row of table) assert.equal(ALLOWED.has(row.kind), true, `非法 kind ${row.kind}`)
+})
+
+test('P2 门控：总开关关闭 / bootSplash=off ⇒ splash 三行一行不注入', async () => {
+  // 出厂配置（enabled=false）：只有 boot script 一行
+  const closed = fakeCtx()
+  host.apply(closed, {})
+  const closedTable = []
+  closed.taps[0].callback(closedTable)
+  assert.equal(closedTable.filter(row => row.kind === 'html').length, 0, '关闭时不注入 splash DOM')
+  assert.equal(closedTable.filter(row => row.kind === 'style').length, 0, '关闭时不注入任何 style')
+
+  // 开启但 bootSplash=off：boot style 在、splash 三行不在
+  const off = fakeCtx()
+  host.apply(off, {})
+  await writeConfig(off, { patch: { enabled: true, theme: { skin: 'zafkiel' }, motion: { bootSplash: 'off' } } })
+  const offTable = []
+  off.taps[0].callback(offTable)
+  assert.equal(offTable.filter(row => row.kind === 'style').length, 1, 'boot style 仍注入（与 splash 无关）')
+  assert.equal(offTable.filter(row => row.kind === 'html').length, 0, 'bootSplash=off 不注入 splash DOM')
+  assert.equal(offTable.filter(row => row.kind === 'script').length, 1, '只有 boot script，没有 splash script')
+})
+
 // W4.1（2026-09-25）：官方六种行白名单。DSH 前端应用注入行时对未知 kind 是
 // `throw new Error("web boot: unknown index injection row")` —— **启动期抛错**，整页起不来，
 // 不是静默降级。所以产出侧必须自证"我发的每一行都是官方认识的"。

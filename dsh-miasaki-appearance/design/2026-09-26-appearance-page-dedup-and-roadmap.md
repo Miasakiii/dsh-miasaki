@@ -150,8 +150,8 @@ M1 规划设计（`2026-09-11-appearance-settings-plan.md` §1.2）当时的决�
 
 | # | 事项 | 要点 | 前置 / 依赖 |
 |---|---|---|---|
-| P1 | **M3 动效** | CSS 动效层挂 `[data-slot]` 稳定锚点 + `.mia-*` 前缀；三套预设 + 强度倍率；`prefers-reduced-motion` 强制降级；配置 `motion.*`（v4 已含字段，本次去重未动） | 无（设计在 M1 规划 §5.5 已定稿） |
-| P2 | **Boot Splash 首帧启动画** | 设计已定稿（`2026-09-22-appearance-boot-splash-design.md`），尚未实施：S1 复测 index-inject placement 与 `__DSH_BOOT_READY__` → S2 `lib/splash.js` 纯函数 + 单测 → S3 host 接线（kind 白名单已就位）→ S4 client 退场钩子 → S5 实机 | 跨线契约 `cross/boot-loading-2026-09-22.md` |
+| P1 | **M3 动效** | ✅ **已实施（2026-09-27）**：纯 CSS 动效层（`--mia-mo-*` 变量 + `mia-mo-rise` 入场）挂 `[data-slot]` 锚点，三套预设 + 强度倍率 + `prefers-reduced-motion` 强制降级（100ms 淡入）；消息级错峰贴类器留 M3.1 | 无（设计在 M1 规划 §5.5 已定稿） |
+| P2 | **Boot Splash 首帧启动画** | ✅ **已实施（2026-09-26）**：`lib/splash.js` 三纯函数 + `index-inject` 三行（splash style / html / script，首次启用官方 `html` 行 kind）+ client 退场钩子；退场双信号（client 装载 / MutationObserver）+ 2.5s 超时 + 幂等守卫；配置 v5 `motion.bootSplash`。S5 实机待验收（实施记录见 [视觉统一与功能路线](2026-09-26-appearance-visual-unification-and-roadmap.md) §5.1） | 跨线契约 `cross/boot-loading-2026-09-22.md` |
 | P3 | **M4 会话效果** | 消息密度 / 最大宽度 / 流式光标 / 代码块与引用样式 / 工具卡折叠 / 字体；**密度与宽度不得与通用页的「会话视图」行混淆**（那是视图模式，不是密度） | M3 的动效层管线（同一注入与锚点纪律） |
 | P4 | **实机验收清偿** | 去重后的面板 + M2 视觉矩阵 + M2.5/M2.7 图标链，一次 `dsh web` + 桌面壳重启同批验完（`cross/smoke-test-matrix.md` §3.0 D 组 + §3.5 更新后的判据） | 用户执行 |
 | P5 | （观察项）**壁纸亮暗双图 / URL 图源** | 配置面早已支持（`wallpaper.light` / `dark` / http(s) 源），面板入口按 M1 D5 暂缓；若 P4 验收中用户提出再开 | — |
