@@ -87,6 +87,20 @@
 - **仍未实测**：B 阶段的对话流 SSH 工具卡；官方 `approval/asked|decided` 审计对仍不可用（§7.3
   方案 A 的已知代价，现由落盘台账承担）。**`ssh_session_read` 已随第三轮验完**（见上）。
 
+### 部署口径（2026-09-26 用户拍板）
+
+- **仓库默认仍是 `off`**（D2「关掉即原生」不动）。**`miasaki` 桌面端**（自制壳 `dsh --profile miasaki`）
+  的 profile 补丁层设 `agentTools: true` **长期开启**，三工具随后端启动常驻 —— 该文件是**启动时读取**，
+  改完必须重启后端（关掉自制壳再打开）。覆盖时注意 dsh 的 patch 语义是 **config 整体替换而非深合并**，
+  必须抄全 `dataDir` / `trustedHosts` / `scrollbackBytes`（漏 `dataDir` 等于「主机库搬家」）。
+- **web profile 只用于实测**：起独立实例时用
+  `--patch _refs/scripts-archive/ssh-a1-live/a1-live.patch.yml`（隔离 dataDir），既不动用户 profile，
+  也不碰真实连接库 `~/.dsh/miasaki-ssh/`。
+- **主机授权仍默认拒绝**：`agentAccess` 未设置的主机对 Agent 不可见，要在「编辑主机 → Agent 访问」
+  里显式选「只读 / 完整」才会出现在 `ssh_hosts` 里。
+- 注册自证：`~/.dsh/miasaki-ssh/agent-tools.json` 记录本次启动是否注册成功、注册了哪几条 —— 
+  重启后一眼可查（静默失败不再靠猜）。
+
 ## 2026-09-26 · P2 落地：U3 跳板/本地转发 + A1 ssh_exec 工具面 + 双栈边界 + 真协议探针
 
 **背景**：用户「p2开工」——对标方案 §5 的 P2 四项全部实施（D4=② 跳板走 runtime 复用路线）。

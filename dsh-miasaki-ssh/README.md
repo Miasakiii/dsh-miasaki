@@ -122,7 +122,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 
 - **U3 本地端口转发**：`lib/forward.js` 在 127.0.0.1 起真监听，每入连接经 `forwardOut`（direct-tcpip）送达远端视角地址；编辑器配置（上限 8 条）、连上即建、断开即撤、端口关闭即释放；EADDRINUSE/服务端拒绝逐连接上报不撤监听；
 - **U3 跳板（D4=②）**：目标连接经跳板 runtime 的 forwardOut 通道作 `sock` 注入——凭据/TOFU/票据全复用；跳板从未连过或缺指纹 ⇒ `JUMP_UNAVAILABLE` 前置拒绝（TOFU 确认窗口无 UI 附着点）；password 跳板不隐式建连；
-- **A1 工具面（D2 默认 off）**：`ssh_hosts` / `ssh_exec` / `ssh_session_read` 三工具；命令服务端分级 L0/L1/L2（命令头判 `rm -rf`、`docker rm -f` 不误伤；未识别保守 L1）；readonly 主机 L1/L2 连审批机会都不给；full 的 L1/L2 走 `userQuestions` 审批四态（unavailable 失败关闭）；key/agent 隐式建连、password 不；`exec.signal` 取消、双预算截断、cwd POSIX 引用前置；审计台账（内存环 200 条 + **追加落盘 `dataDir/exec-audit.jsonl`**，重启可查）+「Agent 执行记录」浮层；
+- **A1 工具面（D2 默认 off）**：`ssh_hosts` / `ssh_exec` / `ssh_session_read` 三工具；命令服务端分级 L0/L1/L2（命令头判 `rm -rf`、`docker rm -f` 不误伤；未识别保守 L1）；readonly 主机 L1/L2 连审批机会都不给；full 的 L1/L2 走 `userQuestions` 审批四态（unavailable 失败关闭）；key/agent 隐式建连、password 不；`exec.signal` 取消、双预算截断、cwd POSIX 引用前置；审计台账（内存环 200 条 + **追加落盘 `dataDir/exec-audit.jsonl`**，重启可查）+「Agent 执行记录」浮层；**部署口径**：仓库默认 `off` 不动，**`miasaki` 桌面端 profile 补丁层已设 `agentTools: true` 长期开启**（该文件启动时读取，改完须重启后端），web profile 只用于隔离实例实测（`--patch`，不碰真实连接库）；主机授权仍**默认拒绝**（`agentAccess` 未设的主机对 Agent 不可见）；
 - **P2-3 双栈边界**：exec 假定 `/bin/sh`（远端 Windows 给可照做提示）；SFTP 路径按 POSIX 归一；
 - **P2-4 真协议探针**（归档 `_refs/scripts-archive/ssh-p2-probes/`）**8/8 PASS**：真 direct-tcpip 字节往返 + **经跳板 sock 注入完成真协议握手** + 真 exec（motd 跳过）；
 - 单测 **225 → 276 例**、`verify-all ssh` **20/20 → 31/31**；**A1 工具面已于 2026-09-26 单独完成实机验收**（本机真协议 sshd，工具面可见 / L0 直通 / L1 审批双向，见 [CHANGELOG](design/CHANGELOG.md) 顶部；基座 `_refs/scripts-archive/ssh-a1-live/`）；真跳板建连与本地转发实机仍待验。
