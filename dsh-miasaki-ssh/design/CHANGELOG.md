@@ -2,6 +2,87 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-26 · zcode 对标方案落地：P0 三件套 + U2.2 SFTP + P1-1 ssh config 导入
+
+**背景**：用户对[对标调研与方案](2026-09-26-ssh-zcode-benchmark-plan.md)拍板「按建议开工」——
+D1②（P0 三件套全做）、D5②（降级链并进 U2.2）、D2①（ssh config 只导直连 alias）。
+
+### P0-1 连接健壮性三件套（`lib/runtime.js`）
+
+| 子项 | 落地 |
+|---|---|
+| keepalive | 连接配置加 `keepaliveInterval 15s × keepaliveCountMax 3`（zcode 同款口径）：NAT/防火墙静默断开时不再挂在 `connected` |
+| 连接配置可测 | 提取纯函数 `buildConnectConfig(record, creds, env)`：三条口径（60s 握手预算与指纹窗口同源 / keepalive / agent 只认显式选择）全部可单测 |
+| 错误词汇 | `classifyError()` 新增 ssh2 `level` 分级（`client-authentication`→AUTH_FAILED、`client-timeout`→TIMEOUT 带预算口径）与加密私钥口令两码（`KEY_PASSPHRASE_MISSING` / `KEY_PASSPHRASE_INVALID`） |
+| error 监听复核 | `ready` 前后 `error` 常驻 + dispose 后 no-op 既有实现经复核保持，补单测锁定 |
+
+**真协议探针**（归档 `_refs/scripts-archive/ssh-keepalive-probe/`）：真 `ssh2.Server` 握手完成后吞掉服务端全部外发字节（只进不出 = 静默断开）⇒ **60043ms（=15s×4）收到 `Keepalive timeout`（level `client-timeout`）**，`classifyError` 归 `TIMEOUT`；对照组（keepalive 缺席）20s 窗口内零错误 ⇒ 非环境噪声。6/6 PASS，进程干净退出。
+
+### P0-3 exec 前置（`lib/exec.js`，A1 `ssh_exec` 地基）
+
+- `buildPosixShellExecCommand()` / `quotePosixShellArg()`：一律包 `/bin/sh -c`（fish 等非 POSIX 默认 shell 下语义一致）；
+- `execCommand()`：**只在 `close` 收尾 + `exit` 码优先 + close 后 50ms 排空窗口**（迟到 stdout data 不丢）；客户端侧超时结束 channel；输出封顶截断；
+- `scanJsonLine()`：协议行逐行扫描，banner/motd/欢迎行自然跳过（A1 handshake 同款思想）。
+
+### U2.2 SFTP（`lib/paths.js` / `lib/sftp.js` / `lib/limits.js` + REST 八端点 + `sftp-ui.js` 抽屉）
+
+- **路径安全一处**：`normalizeRemotePath()` 词法归一 `//`/`.`/`..`（根处 `..` 停根）、`~` 展开、拒 NUL/控制字符/超长；与 A1 共用的口径（规划决策 7）。`limits.js` 收拢全部上限（512MiB / 10min 票据 / 进度节流 1s·5% / 并发 2）。
+- **zcode 降级链**（`uploadResilient` + `uploadViaExecPipe`）：目录在 sftp 视图不存在（网关/跳板把 exec 与 sftp 落到两个文件系统视图）⇒ **零字节消耗直降 `mkdir -p && cat >`**；sftp 会话打不开同样降级；失败瞬间停两端流不刷虚假进度；进度节流 1s/5%/终点带速度；`AbortSignal` 取消一致。
+- **偏离登记（单次 HTTP 源流不可回放）**：mid-stream 写失败**不就地降级**——连接标记 `execOnlyUpload`，错误明示「请重试（将自动改用命令通道上传）」；新连接记忆自然清零（zcode `execUploadOnly` 同款语义）。
+- **票据族**：`POST /ssh/api/sftp/ticket`（10 分钟可续期 Bearer，renew 端点；与 WS attach 的 30s 一次性是两种生命周期）；teardown 同批作废。
+- **REST**：list / stat / download（带头流式）/ upload（流式 + 上限双重校验）/ op（mkdir·rename·unlink·rmdir）+ renew/ticket；错误映射 `NO_SUCH_FILE→404 / PERMISSION_DENIED→403 / TARGET_EXISTS→409`；`Content-Disposition` 带 UTF-8 文件名。
+- **前端**（`sftp-ui.js`，自包含 IIFE）：右抽屉 = 面包屑 + 列表 + 传输队列（并发 2、XHR 浏览器侧进度、单项取消）；下载走标签 click；上传/变更操作过同一个 `ensureTicket()`（超 4 分钟才续期）；窄屏（≤720）整幅覆盖；断开即收起。
+- **端到端**：12 例走真实 HTTP + 故障注入 rc（`config.runtime` 测试缝，与 diagnose.js 的 deps 注入同一惯例）——票据失效/teardown 作废、`..` 归一、409/413、execOnly 直降、会话打不开自动降级、op 全分支、fence 先于票据。
+
+### P1-1 `~/.ssh/config` 别名导入（`lib/sshConfig.js`，D2=①）
+
+- **双通道**：`ssh -G` 优先（Windows ssh.exe 四级发现 + PATH、并发 3、1.5s 超时、ASKPASS 清空防挂起），失败回退自研解析器（Include glob / 注释 / 引号 / 转义 / 深度 8 / 上限 200 / 30s 按路径缓存）；
+- **两条 zcode 教训落地**：privateKeyPath 只信 config 显式 `IdentityFile`（不信 `ssh -G` 默认值——否则密码登录被误判成密钥登录）；Windows 路径的 `\` 仅在确为转义分隔符/引号时解义；
+- **只导直连**：含 `ProxyJump`/`ProxyCommand` 的 alias 标 `direct:false` 禁选，**不静默丢弃**（用户在 ssh 里就是用别名连的）；`*`/`!`/通配 Host 不是别名；
+- **UI**：新建/编辑主机弹窗加「SSH 配置导入」下拉（懒加载），选中回填 host/port/user，显式带 IdentityFile 才切「私钥」并填路径；`GET /ssh/api/ssh-config/aliases` 过同一道 fence。
+
+### 测试与闸门
+
+- 单测 **153 → 225 例**（runtime +5 / exec +11 / paths +12 / sftp +14 / http-sftp +12 / sftp-ui +9 / sshConfig +9；其中 http-sftp 定位并修复一处真 bug：SFTP 操作错误未映射状态码会落 500）；
+- `verify-all ssh` **14/14 → 26/26**（13 个入口语法含 6 个新模块 + 13 个测试文件）；`npm run build` 全文件语法检查通过；
+- **重启 `dsh web` 后待实机验收**：文件面板真实主机读写往返、exec pipe 降级实机路径、ssh config 导入回填、keepalive 长连接场景。
+
+## 2026-09-26 · 对标 zcode（zai-org/ZCode）调研与后续方案设计（无代码变更）
+
+**动机**：用户定向「SSH 线可以参考 zcode 的官方仓库做，去看看 zcode 怎么做的」。调研对象为智谱
+[zai-org/ZCode](https://github.com/zai-org/ZCode)（v3.14.3，agent harness，SSH 子系统用于「把 agent
+runtime 部署到远程机器」，参考克隆 `_refs/zcode/`，归档区不入库）。产出
+[对标调研与方案](2026-09-26-ssh-zcode-benchmark-plan.md)（v1.0，**待用户拍板 D1–D5，未开工**）。
+
+**核心结论**：
+
+1. **形态不同、底层同源**：zcode 是「本机 IDE ↔ 远程 agent」，本线是「浏览器 ↔ 远程 shell」；
+   双方同为 ssh2 + Node，**独立踩中同一批坑** ⇒ 互相印证：tryKeyboard 不开则新装 Ubuntu/Debian
+   密码登录必失败（本线 2026-09-26 已修，zcode 同样开着）、短命令 `exit` 早于 stdout `data`
+   （zcode `execSimple` 只在 `close` 收尾、preflight 另给 50ms 排空窗口）、ssh2 默认 readyTimeout
+   20s 太短（双方均显式 60s）、client 无常驻 `error` 监听会在连接抖动时炸 host。
+2. **我们更强**：TOFU + known_hosts —— zcode **产品代码零 host key 校验**（仅测试脚本
+   `StrictHostKeyChecking=no`；`buildSshRemoteHostKey` 是连接复用身份键、非校验）。保持不动。
+3. **识别的差距**（→ 11 项候选，P0×3 / P1×4 / P2×4）：
+   - P0：keepalive 15s×3 + 错误词汇对齐 + error 常驻监听复核；**U2.2 SFTP 注入 zcode 的
+     SFTP→exec pipe 降级链**（网关/跳板把 exec 与 sftp 落到不同文件系统视图 ⇒ `mkdir -p` 成功但
+     SFTP 写报 `NO_SUCH_FILE`，需降级 `cat > file` 并记忆 exec-only）、进度节流 1s/5%、`~` 经
+     `printf %s "$HOME"` 展开；exec 前置（POSIX `/bin/sh` 包装防 fish、close 收尾 + exit 码优先、
+     banner/motd 跳过）——A1 `ssh_exec` 地基。
+   - P1：`~/.ssh/config` 别名导入（`ssh -G` 优先 + 708 行自研解析回退 + Windows ssh.exe 四级发现；
+     privateKeyPath 只信显式 IdentityFile）；连接向导借尸（分阶段日志 / **收起≠关闭** / requestId
+     取消 / 并发入口守卫）；诊断扩展远端能力速览（preflight 同款 `command -v` 探测）；连接取消语义
+     对齐注册表（connecting 取消即退休旧 entry，防重连等已 aborted 的 readiness 并沿用旧凭据）。
+   - P2：**U3 跳板/端口转发 zcode 无参考、完全自研**（建议跳板机也建模成 runtime，复用三层身份 +
+     票据；只做本地转发）；A1 `ssh_exec`（借 handshake 的 banner 跳过与 deploy lock 的串行治理）；
+     验证基建升级（借 zcode「docker sshd + 一次性密钥 + `ssh -L` 真隧道」骨架改造成转发验收探针）。
+4. **明确不做**（附理由）：agent-over-ssh 部署链（超出本线「人的终端」定位与红线）、去掉 host key
+   校验（安全红线）、WSL/Docker backend（DSH web 插件形态下价值低）、远程目录+skill 同步向导
+   （U2.2 SFTP 已覆盖文件诉求）。
+
+**无代码变更**：本轮只交付设计文档 + README/CHANGELOG 同步；P0/P1/P2 是否开工、按哪个组合走，
+等用户对 D1–D5 拍板。
+
 ## 2026-09-26 · 修复：「只读：另一个窗口正在此终端输入」在未连接时常驻
 
 **现象**（用户截图）：主机未连接、状态栏写着「未连接」，页面顶部却挂着黄色只读条 +「接管写入」，用户原话「一直都有」。

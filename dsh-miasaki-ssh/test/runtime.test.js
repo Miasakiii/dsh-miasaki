@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateKeyPairSync } from 'node:crypto'
 import ssh2 from 'ssh2'
-import { classifyError, SshRuntime, RuntimeConn, ShellChannel, MAX_SHELLS_PER_RUNTIME, MAX_SNAPSHOT_BYTES } from '../lib/runtime.js'
+import { classifyError, SshRuntime, RuntimeConn, ShellChannel, MAX_SHELLS_PER_RUNTIME, MAX_SNAPSHOT_BYTES, buildConnectConfig } from '../lib/runtime.js'
 import { SshStore, fingerprintOf } from '../lib/store.js'
 
 // ssh2 是 CommonJS 包：命名导入只对 lexer 认出的成员可用，Server 要走默认导入再解构。
@@ -737,5 +737,62 @@ test('BACKPRESSURE: a viewer that stops draining is dropped instead of buffering
     assert.equal(Buffer.from(healthy.sentBinary.at(-1)).toString(), 'tick', 'other viewers unaffected')
   } finally {
     await cleanup()
+  }
+})
+
+// ---- P0-1：连接健壮性三件套（对标 zcode 2026-09-26-ssh-zcode-benchmark-plan.md §4-P0-1）----
+const baseRecord = (auth) => ({
+  id: 'c1', label: 'box', host: 'example.com', port: 22, username: 'u', auth,
+})
+
+test('P0-1 buildConnectConfig：keepalive 与握手超时恒定在位', () => {
+  const built = buildConnectConfig(baseRecord({ method: 'password' }), { password: 'pw' })
+  assert.equal(built.error, undefined)
+  assert.equal(built.cfg.readyTimeout, 60_000, '握手预算与指纹确认窗口同一口径')
+  assert.equal(built.cfg.keepaliveInterval, 15_000, 'NAT/防火墙静默断开时不能挂在 connected')
+  assert.equal(built.cfg.keepaliveCountMax, 3)
+})
+
+test('P0-1 buildConnectConfig：agent 只认显式选择，绝不隐式带 SSH_AUTH_SOCK', () => {
+  // 密码场景：即使环境里有 agentSock 也不带上 —— 否则公钥阶段先耗尽 MaxAuthTries，
+  // 密码永远进不了认证（zcode sshAuth.ts 同款口径）。
+  const withSock = buildConnectConfig(baseRecord({ method: 'password' }), { password: 'pw' }, { agentSock: '/tmp/ssh-agent.sock' })
+  assert.equal(withSock.cfg.agent, undefined)
+  assert.equal(withSock.cfg.tryKeyboard, true)
+  assert.equal(withSock.keyboardPassword, 'pw')
+  // 隐式 agent 也不该出现在私钥场景
+  const keyed = buildConnectConfig(baseRecord({ method: 'key', keyPath: '/k' }), { privateKey: Buffer.from('KEY') }, { agentSock: '/tmp/ssh-agent.sock' })
+  assert.equal(keyed.cfg.agent, undefined)
+  // 显式选择 agent：可用则透传，不可用即错
+  const explicit = buildConnectConfig(baseRecord({ method: 'agent' }), {}, { agentSupported: true, agentSock: '/tmp/a.sock' })
+  assert.equal(explicit.cfg.agent, '/tmp/a.sock')
+  const missing = buildConnectConfig(baseRecord({ method: 'agent' }), {}, { agentSupported: true, agentSock: undefined })
+  assert.equal(missing.error.code, 'AGENT_UNAVAILABLE')
+  const unsupported = buildConnectConfig(baseRecord({ method: 'agent' }), {}, { agentSupported: false, agentSock: '/tmp/a.sock' })
+  assert.equal(unsupported.error.code, 'AGENT_UNAVAILABLE')
+})
+
+test('P0-1 buildConnectConfig：缺密码 / 私钥内容缺失 / 未知认证方式各自成错', () => {
+  assert.equal(buildConnectConfig(baseRecord({ method: 'password' }), {}).error.code, 'CREDENTIAL_MISSING')
+  assert.equal(buildConnectConfig(baseRecord({ method: 'key', keyPath: '/k' }), {}).error.code, 'KEY_READ_FAILED')
+  assert.equal(buildConnectConfig(baseRecord({ method: 'carrier-pigeon' }), {}).error.code, 'AUTH_UNSUPPORTED')
+})
+
+test('P0-1 classifyError：ssh2 level 分级优先于文案', () => {
+  // level 是协议层事实：不同服务端/格式下同一语义的文案并不稳定。
+  const auth = classifyError(Object.assign(new Error('All configured authentication methods failed'), { level: 'client-authentication' }))
+  assert.equal(auth.code, 'AUTH_FAILED')
+  assert.match(auth.message, /请检查用户名、密码或私钥/)
+  const timeout = classifyError(Object.assign(new Error('Handshake timeout'), { level: 'client-timeout' }))
+  assert.equal(timeout.code, 'TIMEOUT')
+  assert.match(timeout.message, /60 秒/)
+})
+
+test('P0-1 classifyError：加密私钥的口令问题与认证失败分开成码', () => {
+  const missing = classifyError(new Error('Encrypted private key detected, but no passphrase given'))
+  assert.equal(missing.code, 'KEY_PASSPHRASE_MISSING')
+  assert.match(missing.message, /提供私钥口令/)
+  for (const text of ['bad passphrase', 'key integrity check failed', 'unable to authenticate data']) {
+    assert.equal(classifyError(new Error(text)).code, 'KEY_PASSPHRASE_INVALID', text)
   }
 })

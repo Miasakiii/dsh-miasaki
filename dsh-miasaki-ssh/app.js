@@ -128,6 +128,7 @@ const ICON_PATHS = {
   focus: 'M9 4H4v5m11-5h5v5M4 15v5h5m11-5v5h-5',
   close: 'm6 6 12 12M6 18 18 6',
   shield: 'M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z',
+  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z',
   copy: 'M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3',
   edit: 'm14 5 5 5M4 20l5-1L20 8a2 2 0 0 0-4-4L5 15l-1 5Z',
   disconnect: 'M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-6 6v4M3 3l18 18',
@@ -690,6 +691,59 @@ function openEditor(conn = null) {
   method.addEventListener('change', syncKeyField)
   syncKeyField()
 
+  // P1-1：从 ~/.ssh/config 导入别名（host 半解析并判直连；含跳板的 alias 禁选不静默丢）
+  const aliasSelect = el('select')
+  aliasSelect.id = 'edit-alias'
+  aliasSelect.disabled = true
+  const aliasPlaceholder = el('option', '', '从 ~/.ssh/config 导入…')
+  aliasPlaceholder.value = ''
+  aliasSelect.append(aliasPlaceholder)
+  const loadAliases = async () => {
+    if (aliasSelect.dataset.loaded === '1') return
+    aliasSelect.dataset.loaded = '1'
+    try {
+      const { aliases } = await api('/ssh/api/ssh-config/aliases')
+      if (aliases.length === 0) {
+        const empty = el('option', '', '（本机 ~/.ssh/config 里没有可导入的别名）')
+        empty.disabled = true
+        aliasSelect.append(empty)
+        return
+      }
+      for (const alias of aliases) {
+        const opt = el('option', '', alias.direct === false ? `${alias.alias}（经跳板连接，暂不支持导入）` : alias.alias)
+        opt.value = alias.alias
+        opt.disabled = alias.direct === false
+        opt.dataset.host = alias.host
+        if (alias.port !== undefined) opt.dataset.port = String(alias.port)
+        if (alias.username !== undefined) opt.dataset.user = alias.username
+        if (alias.privateKeyPath !== undefined) opt.dataset.keypath = alias.privateKeyPath
+        aliasSelect.append(opt)
+      }
+    } catch (err) {
+      const failed = el('option', '', `读取 ssh config 失败：${err.message}`)
+      failed.disabled = true
+      aliasSelect.append(failed)
+    } finally {
+      aliasSelect.disabled = false
+    }
+  }
+  aliasSelect.addEventListener('focus', () => void loadAliases())
+  aliasSelect.addEventListener('mousedown', () => void loadAliases())
+  aliasSelect.addEventListener('change', () => {
+    const opt = aliasSelect.selectedOptions[0]
+    if (opt === undefined || opt.value === '') return
+    if (opt.dataset.host !== undefined) host.value = opt.dataset.host
+    if (opt.dataset.port !== undefined) port.value = opt.dataset.port
+    if (opt.dataset.user !== undefined) username.value = opt.dataset.user
+    // 别名显式带了 IdentityFile 才切「私钥」并填路径；没有就不动认证方式
+    if (opt.dataset.keypath !== undefined) {
+      keyPath.value = opt.dataset.keypath
+      method.value = 'key'
+      syncKeyField()
+    }
+    aliasSelect.value = ''
+  })
+
   const error = el('p', 'form-error', '')
   error.hidden = true
   const form = el('form')
@@ -700,7 +754,7 @@ function openEditor(conn = null) {
     notice.textContent = '该主机当前有活跃连接。编辑只影响下一次连接，正在运行的终端保持原身份、原标题。'
   }
   form.append(
-    fieldNode('名称', name), grid, fieldNode('用户名', username),
+    fieldNode('名称', name), fieldNode('SSH 配置导入', aliasSelect), grid, fieldNode('用户名', username),
     fieldNode('认证方式', method), keyField, fieldNode('分组', group),
     notice, error,
   )
@@ -1186,6 +1240,7 @@ function renderIdentity() {
     : `${conn.username}@${conn.host}:${conn.port} · ${{ password: '密码认证', key: '私钥认证', agent: 'SSH agent' }[conn.auth?.method] ?? conn.auth?.method}`
   const live = conn !== null && isLive(liveOf(conn.id))
   $('#btn-search').disabled = !live
+  $('#btn-files').disabled = !live
   $('#btn-send').disabled = !live
   $('#btn-focus').disabled = false
   $('#btn-more').disabled = conn === null
@@ -1415,6 +1470,8 @@ async function disconnectHost(id) {
   try {
     await api(`/ssh/api/connections/${encodeURIComponent(id)}/disconnect`, { method: 'POST' })
   } catch { /* 断开失败也不阻塞 UI，状态帧会跟上 */ }
+  // U2.2：文件面板属于连接级资源（票据与 SFTP 会话都随 teardown 作废）⇒ 断开即收起
+  window.SshFiles?.isOpenFor(id) === true && window.SshFiles.close()
   state.live.set(id, 'closed')
   await refreshConnections()
   renderAll()
@@ -1535,6 +1592,10 @@ function hostMenuItems(conn) {
   }
   if (live) {
     items.push({ icon: 'plus', label: '新建 shell 标签', run: () => openNewShellTab(conn.id) })
+  }
+  if (live) {
+    // U2.2：文件面板（SFTP 抽屉；传输走 host 编排的 REST 端点）
+    items.push({ icon: 'folder', label: '远程文件面板', run: () => window.SshFiles?.open(conn.id, conn.label) })
   }
   items.push({ icon: 'edit', label: '编辑主机', run: () => openEditor(conn) })
   // 连接诊断：连不上时看这一条 —— DNS / TCP / banner / 认证方式 + 本机出口 IP（点了才查）
@@ -1975,6 +2036,18 @@ function buildSkeleton(root) {
   searchBtn.disabled = true
   searchBtn.appendChild(icon('search'))
   searchBtn.onclick = () => toggleSearchLine()
+  // U2.2：远程文件面板（右抽屉；窗口窄时 optional 隐藏，仍可从「更多」菜单进）
+  const filesBtn = el('button', 'icon-btn optional')
+  filesBtn.type = 'button'
+  filesBtn.id = 'btn-files'
+  filesBtn.title = '远程文件面板'
+  filesBtn.disabled = true
+  filesBtn.appendChild(icon('folder'))
+  filesBtn.onclick = () => {
+    const conn = state.selection !== null ? (byId(state.selection) ?? null) : null
+    if (conn === null) return
+    window.SshFiles?.open(conn.id, conn.label)
+  }
   const focusBtn = el('button', 'icon-btn optional')
   focusBtn.type = 'button'
   focusBtn.id = 'btn-focus'
@@ -2011,7 +2084,7 @@ function buildSkeleton(root) {
     openMenuAt(sendBtn.getBoundingClientRect(), sendMenuItems(conn))
     sendBtn.setAttribute('aria-expanded', 'true')
   }
-  tools.append(searchBtn, sendBtn, focusBtn, divider, moreBtn)
+  tools.append(searchBtn, filesBtn, sendBtn, focusBtn, divider, moreBtn)
   toolbar.append(toggleRailBtn, identity, tools)
 
   const searchLine = el('div', 'search-line')

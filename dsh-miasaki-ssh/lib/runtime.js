@@ -16,12 +16,19 @@ import { Client } from 'ssh2'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { hostKeyOf, fingerprintOf, splitHostPort } from './store.js'
+import { openSftpSession, resolveRemoteHome } from './sftp.js'
+import { SFTP_TICKET_TTL_MS } from './limits.js'
 
 // One time budget shared by the ssh2 handshake (readyTimeout) and the
 // fingerprint confirm window: while hostVerifier is pending the handshake
 // clock keeps ticking, so the two windows MUST be the same or a user who
 // confirms at t=30s would confirm a connection that died at t=15s (plan §5.3).
 const HANDSHAKE_BUDGET_MS = 60_000
+// SSH 级 keepalive（对标 zcode sshAuth.ts 同款口径）：NAT / 防火墙 / 服务端静默断开时
+// stdio channel 不一定立刻 close —— 没有 keepalive，连接会一直挂在 'connected'，
+// 终端不再有任何输出，用户只能手动重连。15s 探一次、连续 3 次无响应即报错。
+const KEEPALIVE_INTERVAL_MS = 15_000
+const KEEPALIVE_COUNT_MAX = 3
 const DEFAULT_COLS = 120
 const DEFAULT_ROWS = 32
 const MAX_COLS = 1000
@@ -46,6 +53,23 @@ function clampDim(value, min, max, fallback) {
 export function classifyError(error) {
   const message = String(error?.message ?? error ?? '')
   const text = message.toLowerCase()
+  // ssh2 的 level 分级优先于文案匹配（对标 zcode normalizeSSHConnectError）：
+  // 不同私钥格式 / 服务端配置下同一个语义的文案并不稳定，level 是协议层事实。
+  if (error?.level === 'client-authentication') {
+    return { code: 'AUTH_FAILED', message: `SSH 认证失败：请检查用户名、密码或私钥（${message}）` }
+  }
+  if (error?.level === 'client-timeout') {
+    return { code: 'TIMEOUT', message: `${message} —— SSH 握手未在 ${HANDSHAKE_BUDGET_MS / 1000} 秒内完成：请检查网络质量、服务器 SSH 服务是否正常，以及本机与服务器的 SSH 配置差异` }
+  }
+  // 加密私钥的口令问题单独成码：与「认证失败」的排查动作完全不同（一个是补口令、
+  // 一个是改账号密码）。模式匹配而非单一字符串 —— ssh2 对不同私钥格式
+  // （OpenSSH 旧/新格式、PPK）报的文案并不一致（zcode 同款教训）。
+  if (text.includes('encrypted') && text.includes('private') && text.includes('no passphrase')) {
+    return { code: 'KEY_PASSPHRASE_MISSING', message: `这个私钥有口令保护：请提供私钥口令后再连接（${message}）` }
+  }
+  if (text.includes('bad passphrase') || text.includes('key integrity check failed') || text.includes('unable to authenticate data')) {
+    return { code: 'KEY_PASSPHRASE_INVALID', message: `私钥口令错误：无法解密私钥，请检查口令是否正确（${message}）` }
+  }
   if (text.includes('all configured authentication methods failed') || text.includes('authentication failed')) {
     return { code: 'AUTH_FAILED', message }
   }
@@ -74,6 +98,59 @@ export function classifyError(error) {
   return { code: 'ERROR', message }
 }
 
+/**
+ * 组装 ssh2 连接配置（纯函数，便于单测；凭据副作用留在 connect()）。
+ * 三条口径来对标 zcode（zai-org/ZCode packages/server/src/remote/sshAuth.ts，
+ * 见 design/2026-09-26-ssh-zcode-benchmark-plan.md §4-P0-1）：
+ *  1. readyTimeout 与指纹确认窗口同一预算 —— hostVerifier 挂起期间握手时钟仍在走，
+ *     两个窗口必须一致，否则 t=30s 确认的用户确认的是一条 t=15s 就死掉的连接。
+ *  2. SSH 级 keepalive 15s×3 —— NAT / 防火墙静默断开时 stdio channel 不一定立刻
+ *     close，没有它连接会挂在 'connected' 直到用户手动重连。
+ *  3. agent 只认显式选择（auth.method === 'agent'）—— 带密码时隐式带上
+ *     SSH_AUTH_SOCK 会让公钥阶段先耗尽 MaxAuthTries，密码永远进不了认证。
+ * tryKeyboard：只开 keyboard-interactive 的服务器（新装 Ubuntu / Debian、部分云镜像
+ * 的默认 `PasswordAuthentication no` + `KbdInteractiveAuthentication yes`）需要客户端
+ * 显式打开它，ssh2 才把该方法列入 authsAllowed（`ssh2/lib/client.js:843`）；不开的
+ * 话密码再对也只会收到 `All configured authentication methods failed`（实机反馈
+ * 2026-09-26）。回填的就是本次连接的密码（PAM 单提示）；服务端若拿这个通道做二次
+ * 验证，回填密码自然不通过 —— 与不说谎的失败一致，不额外猜测。
+ *
+ * @returns {{ cfg: object, keyboardPassword: string|null } | { error: { code: string, message: string } }}
+ */
+export function buildConnectConfig(record, { password, passphrase, privateKey } = {}, { agentSupported = true, agentSock } = {}) {
+  const cfg = {
+    host: record.host,
+    port: record.port,
+    username: record.username,
+    readyTimeout: HANDSHAKE_BUDGET_MS,
+    keepaliveInterval: KEEPALIVE_INTERVAL_MS,
+    keepaliveCountMax: KEEPALIVE_COUNT_MAX,
+  }
+  let keyboardPassword = null
+  if (record.auth.method === 'password') {
+    if (typeof password !== 'string' || password.length === 0) {
+      return { error: { code: 'CREDENTIAL_MISSING', message: '需要密码：尝试在新会话中为连接输入密码' } }
+    }
+    cfg.password = password
+    cfg.tryKeyboard = true
+    keyboardPassword = password
+  } else if (record.auth.method === 'key') {
+    if (privateKey === undefined || privateKey === null) {
+      return { error: { code: 'KEY_READ_FAILED', message: '私钥读取失败：未读到私钥内容' } }
+    }
+    cfg.privateKey = privateKey
+    if (typeof passphrase === 'string' && passphrase.length > 0) cfg.passphrase = passphrase
+  } else if (record.auth.method === 'agent') {
+    if (!agentSupported || typeof agentSock !== 'string' || agentSock.length === 0) {
+      return { error: { code: 'AGENT_UNAVAILABLE', message: '当前环境检测不到 SSH agent（SSH_AUTH_SOCK）' } }
+    }
+    cfg.agent = agentSock
+  } else {
+    return { error: { code: 'AUTH_UNSUPPORTED', message: `不支持的认证方式: ${record.auth.method}` } }
+  }
+  return { cfg, keyboardPassword }
+}
+
 export class SshRuntime {
   constructor(store, {
     scrollbackBytes = 256 * 1024,
@@ -90,6 +167,7 @@ export class SshRuntime {
     this.byProfile = new Map()  // connId -> runtimeId（同主机仍限一运行连接）
     this.pending = new Map()    // fingerprint token -> PendingFingerprint
     this.tickets = new Map()    // attach ticket -> { connId, expiresAt, timer }
+    this.sftpTickets = new Map() // sftp ticket -> { connId, expiresAt, timer }（U2.2：长 TTL 可续期）
   }
 
   async init() {
@@ -124,6 +202,100 @@ export class SshRuntime {
       clearTimeout(item.timer)
       this.tickets.delete(ticket)
     }
+  }
+
+  // ------------------------------------------------------------------ SFTP 票据（U2.2，方案 §4.2.4）
+  // 与 WS attach 票据是两种生命周期：
+  //   attach  = 30s 一次性（WS 建连即消费）
+  //   sftp    = 10 分钟可续期 Bearer（一次列目录/传输会话内多次 REST 调用）
+  // 共用同一道 fence（index.js 的 api handler），teardown 同批作废。
+  issueSftpTicket(connId, { ttlMs = SFTP_TICKET_TTL_MS } = {}) {
+    const ticket = randomUUID()
+    const item = { connId, expiresAt: this.now() + ttlMs, timer: null }
+    const arm = () => {
+      if (item.timer !== null) clearTimeout(item.timer)
+      item.timer = setTimeout(() => {
+        if (this.sftpTickets.get(ticket) === item) this.sftpTickets.delete(ticket)
+      }, Math.max(0, item.expiresAt - this.now()) + 1000)
+    }
+    arm()
+    this.sftpTickets.set(ticket, item)
+    return { ticket, expiresAt: item.expiresAt }
+  }
+
+  /** 校验（不消费）：未知/过期 ⇒ null。 */
+  checkSftpTicket(ticket) {
+    if (typeof ticket !== 'string' || ticket.length === 0) return null
+    const item = this.sftpTickets.get(ticket)
+    if (item === undefined) return null
+    if (this.now() > item.expiresAt) {
+      clearTimeout(item.timer)
+      this.sftpTickets.delete(ticket)
+      return null
+    }
+    return item
+  }
+
+  /** 续期（长传输排队中用）；未知/已过期 ⇒ null。 */
+  renewSftpTicket(ticket, { ttlMs = SFTP_TICKET_TTL_MS } = {}) {
+    const item = this.checkSftpTicket(ticket)
+    if (item === null) return null
+    item.expiresAt = this.now() + ttlMs
+    if (item.timer !== null) clearTimeout(item.timer)
+    item.timer = setTimeout(() => {
+      if (this.sftpTickets.get(ticket) === item) this.sftpTickets.delete(ticket)
+    }, ttlMs + 1000)
+    return { expiresAt: item.expiresAt }
+  }
+
+  expireSftpTicketsFor(connId) {
+    for (const [ticket, item] of [...this.sftpTickets.entries()]) {
+      if (item.connId !== connId) continue
+      clearTimeout(item.timer)
+      this.sftpTickets.delete(ticket)
+    }
+  }
+
+  /** connId（profile id）→ 当前 RuntimeConn；没有运行中的连接返回 null。 */
+  runtimeOf(connId) {
+    const runtimeId = this.byProfile.get(connId)
+    return runtimeId !== undefined ? this.conns.get(runtimeId) ?? null : null
+  }
+
+  // ------------------------------------------------------------------ SFTP 会话（U2.2，连接级惰性共享）
+  /** 惰性打开并缓存连接的 SFTP 会话；失败清缓存（下次重试重新打开）。 */
+  async sftpSession(rc) {
+    if (rc.disposed) throw Object.assign(new Error('连接已关闭'), { code: 'NOT_CONNECTED' })
+    if (rc.sftp !== null && rc.sftp !== undefined) return rc.sftp
+    if (rc.sftpPromise !== null) return rc.sftpPromise
+    rc.sftpPromise = openSftpSession(rc.client).then(sftp => {
+      rc.sftp = sftp
+      rc.sftpPromise = null
+      return sftp
+    }).catch(error => {
+      rc.sftp = null
+      rc.sftpPromise = null
+      throw error
+    })
+    return rc.sftpPromise
+  }
+
+  /** 远端 home（realpath('.')，缓存）；失败回落 '/'，不猜不写死。 */
+  async sftpHome(rc) {
+    if (rc.homeDir !== null && rc.homeDir !== undefined) return rc.homeDir
+    const sftp = await this.sftpSession(rc)
+    const home = await resolveRemoteHome(sftp)
+    rc.homeDir = home
+    return home
+  }
+
+  /**
+   * 记住「这台机器的 SFTP 写不通」：mid-stream 失败后（单次 HTTP 源流不可回放，
+   * 不能就地降级），下一次上传直接走 exec pipe（zcode execUploadOnly 同款记忆）。
+   * 新连接是新 RuntimeConn ⇒ 记忆自然清零。
+   */
+  markExecOnlyUpload(rc) {
+    rc.execOnlyUpload = true
   }
 
   // ------------------------------------------------------------------ state
@@ -174,47 +346,29 @@ export class SshRuntime {
     this.byProfile.set(id, rc.id)
 
     // password/key material flows only from the caller (one-time), never stored
-    const cfg = {
-      host: record.host,
-      port: record.port,
-      username: record.username,
-      readyTimeout: HANDSHAKE_BUDGET_MS,
-    }
-    // 只开 keyboard-interactive 的服务器（新装 Ubuntu / Debian、部分云镜像的默认
-    // `PasswordAuthentication no` + `KbdInteractiveAuthentication yes`）需要客户端显式
-    // 打开 tryKeyboard：ssh2 仅在 `tryKeyboard === true` 时把该方法列入 authsAllowed
-    // （`ssh2/lib/client.js:843`）。不开的话，密码再对也只会收到
-    // `All configured authentication methods failed`（实机反馈 2026-09-26）。
-    // 回填的就是本次连接的密码（PAM 的单密码提示）；服务端若拿这个通道做二次验证，
-    // 回填密码自然不通过 —— 与不说谎的失败一致，不额外猜测。
-    let keyboardPassword = null
-    if (record.auth.method === 'password') {
-      if (typeof options.password !== 'string' || options.password.length === 0) {
-        this.bail(rc, { code: 'CREDENTIAL_MISSING', message: '需要密码：尝试在新会话中为连接输入密码' })
-        return { id, error: 'CREDENTIAL_MISSING' }
-      }
-      cfg.password = options.password
-      cfg.tryKeyboard = true
-      keyboardPassword = options.password
-    } else if (record.auth.method === 'key') {
+    let privateKey
+    if (record.auth.method === 'key') {
       try {
-        cfg.privateKey = await readFile(record.auth.keyPath)
-        if (typeof options.passphrase === 'string' && options.passphrase.length > 0) cfg.passphrase = options.passphrase
+        privateKey = await readFile(record.auth.keyPath)
       } catch (error) {
         this.bail(rc, { code: 'KEY_READ_FAILED', message: `私钥读取失败：${error.message}` })
         return { id, error: 'KEY_READ_FAILED' }
       }
-    } else if (record.auth.method === 'agent') {
-      const sockvar = process.platform === 'win32' ? WINDOWS_AGENT_PIPE : process.env.SSH_AUTH_SOCK
-      if (!this.agentSupported || !sockvar) {
-        this.bail(rc, { code: 'AGENT_UNAVAILABLE', message: '当前环境检测不到 SSH agent（SSH_AUTH_SOCK）' })
-        return { id, error: 'AGENT_UNAVAILABLE' }
-      }
-      cfg.agent = sockvar
-    } else {
-      this.bail(rc, { code: 'AUTH_UNSUPPORTED', message: `不支持的认证方式: ${record.auth.method}` })
-      return { id, error: 'AUTH_UNSUPPORTED' }
     }
+    const built = buildConnectConfig(
+      record,
+      { password: options.password, passphrase: options.passphrase, privateKey },
+      {
+        agentSupported: this.agentSupported,
+        agentSock: process.platform === 'win32' ? WINDOWS_AGENT_PIPE : process.env.SSH_AUTH_SOCK,
+      },
+    )
+    if (built.error !== undefined) {
+      this.bail(rc, built.error)
+      return { id, error: built.error.code }
+    }
+    const cfg = built.cfg
+    const keyboardPassword = built.keyboardPassword
 
     rc.connKey = hostKeyOf(record.host, record.port)
 
@@ -706,6 +860,8 @@ export class SshRuntime {
   teardown(rc) {
     this.expirePendingFor(rc) // a discarded connection cannot keep a confirm window open
     this.expireTicketsFor(rc.connId)
+    this.expireSftpTicketsFor(rc.connId)
+    try { rc.sftp?.end?.() } catch { /* ignore */ }
     try { rc.client && rc.client.end() } catch { /* ignore */ }
     for (const sh of rc.shells.values()) {
       try { sh.stream && sh.stream.end() } catch { /* ignore */ }
@@ -718,6 +874,7 @@ export class SshRuntime {
 
   async shutdown() {
     for (const rc of [...this.conns.values()]) {
+      try { rc.sftp?.end?.() } catch { /* ignore */ }
       try { rc.client && rc.client.end() } catch { /* ignore */ }
       rc.sockets.clear()
       rc.dispose()
@@ -731,6 +888,8 @@ export class SshRuntime {
     this.pending.clear()
     for (const item of this.tickets.values()) clearTimeout(item.timer)
     this.tickets.clear()
+    for (const item of this.sftpTickets.values()) clearTimeout(item.timer)
+    this.sftpTickets.clear()
   }
 
   // Accepts either a raw Error (classified here) or an already-classified
@@ -780,6 +939,12 @@ export class RuntimeConn {
     // 三层身份：一个连接多个 shell，各自独立的 stream / 尺寸 / 回放环 / 写入权
     this.shells = new Map()   // shellId -> ShellChannel
     this.shellSeq = 0
+
+    // U2.2 SFTP：连接级惰性会话 + home 缓存 + exec-only 记忆（zcode 降级链）
+    this.sftpPromise = null
+    this.sftp = null
+    this.homeDir = null
+    this.execOnlyUpload = false
 
     this.label = record.label
   }

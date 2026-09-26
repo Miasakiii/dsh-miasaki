@@ -116,6 +116,16 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **连带（刻意）**：`ready` 帧带 `mode:'read'` 现在会触发一次 `onModeChange`（pending → read 是真实变化），旧实现被 `setMode` 去抖吃掉 —— 对应断言已按新语义改写。
 - **测试 + 实测**：session 2 例改写 + app 契约 1 例 ⇒ 全线 **153 例**、`verify-all ssh` **14/14**；探针新增 `H-idle-write-bar-hidden`（未连接态量到 `hidden:true / display:none`），8 景全过。
 
+**2026-09-26 对标 zcode 调研完成**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户定向「参考 zcode 官方仓库做」）：对象为智谱 [zai-org/ZCode](https://github.com/zai-org/ZCode)（v3.14.3，agent harness，其 SSH 子系统用于「把 agent runtime 部署到远程」，参考克隆 `_refs/zcode/`）。**双方独立踩中同一批 ssh2 坑**（tryKeyboard 不开则新装 Ubuntu/Debian 密码必失败——本线 2026-09-26 已修；短命令 exit 早于 stdout data；readyTimeout 20s 太短；client 无常驻 error 监听会炸 host）⇒ 互相印证。**我们更强项**：TOFU + known_hosts（zcode 产品代码零 host key 校验，保持不动）。**识别的差距与候选**：keepalive 15s×3、**SFTP→exec pipe 降级链**（网关/跳板把 exec 与 sftp 落到不同文件系统视图）、`~/.ssh/config` 别名导入（`ssh -G` 优先 + 自研解析回退）、连接向导「实时阶段日志 + 收起≠关闭」、远端能力 preflight、docker sshd + `ssh -L` 真隧道验证基建；跳板/端口转发（U3）zcode 无参考、需自研。产出 **P0×3 / P1×4 / P2×4 共 11 项候选 + 5 项待用户拍板决策（D1–D5）**，另有「明确不做」清单（agent-over-ssh 部署链、WSL/Docker backend 等，各附理由）。
+
+**2026-09-26 对标方案落地：P0 三件套 + U2.2 SFTP + P1-1 ssh config 导入**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户拍板「按建议开工」D1②/D5②/D2①，实施记录见 [CHANGELOG](design/CHANGELOG.md)）：
+
+- **P0-1 连接健壮性**：keepalive 15s×3（NAT/防火墙静默断开不再挂死，真协议探针 6/6 PASS 归档 `_refs/scripts-archive/ssh-keepalive-probe/`：60043ms 报 `Keepalive timeout` 归 `TIMEOUT`）；连接配置提取为纯函数 `buildConnectConfig()`；`classifyError()` 新增 ssh2 `level` 分级与私钥口令两码（`KEY_PASSPHRASE_MISSING/INVALID`）；
+- **P0-3 exec 前置**（`lib/exec.js`）：POSIX `/bin/sh -c` 包装、close 收尾 + exit 码优先 + 50ms 排空、banner/motd 跳过 —— A1 `ssh_exec` 地基；
+- **U2.2 SFTP**（`lib/paths.js` / `lib/sftp.js` + 8 个 REST 端点 + `sftp-ui.js` 右抽屉）：列目录 / 流式下载 / 上传队列（并发 2、浏览器侧进度、可取消）/ 新建·重命名·删除；**zcode 降级链**——目录在 sftp 视图不存在或会话打不开 ⇒ 零字节消耗直降 `mkdir -p && cat >`，mid-stream 失败记 `execOnlyUpload` 下次直走命令通道；票据族 10 分钟可续期；路径穿越/NUL/超长拒于 `lib/paths.js` 一处；**偏离登记**：单次 HTTP 源流不可回放 ⇒ mid-stream 不就地降级；
+- **P1-1 ssh config 导入**（`lib/sshConfig.js`）：`ssh -G` 优先 + 自研解析回退，编辑器下拉一键回填；只导直连 alias（含 ProxyJump 的禁选不静默丢）；privateKeyPath 只信 config 显式 `IdentityFile`；
+- 单测 **153 → 225 例**、`verify-all ssh` **14/14 → 26/26**（新模块同批进静态语法闸门）；**重启 `dsh web` 后待实机验收**（真实主机 SFTP 往返 / 降级实机路径 / 导入回填）。
+
 **2026-09-16 U2 主体落地：多 shell / 工作区记忆 / 精确恢复**（[U2 规划](design/2026-09-15-ssh-u2-plan.md) §6 顺序 U2.1 → U2.3 → U2.4；交接文档 [实施验收包](design/2026-09-16-ssh-u2-implementation-report.md)）：
 
 - **U2.1 身份分层 + 多 shell**：`lib/runtime.js` 重写为三层身份（`connId → runtimeId → shellId`）——连接按 `runtimeId` 键控 + `byProfile` 映射，`ShellChannel` 承载独立 stream / 尺寸 / 回放环 / viewer 集合 / 写入所有权；**shell 结束 ≠ 连接结束**，同 runtime 上限 **8** 个 shell。**安全前置**：WS attach 帧必须持 `POST /ssh/api/attach` 签发的**一次性 30s 票据**（消费即废，重放 / 过期 / teardown 全拒 `TICKET_INVALID`），落实规划 §8「不得把运行连接 ID 当授权证明」。**写入所有权**：单写多读 + 显式接管（`shell.takeover`，原 owner 即时转只读收 `write.revoked`），非 owner 的 input / resize 一律拒收 ⇒ 堵死「最后一个 resize 获胜」。**协议**：WS 全帧 `v:2`，旧帧拒收并提示刷新（`VERSION_MISMATCH`，不做双栈）；标签栏「+」新建 shell，关闭对话框区分「仅关闭查看 / 关闭此 shell / 断开整个连接」。
@@ -155,8 +165,8 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 | **M1** | 纯终端 + 连接管理：`conversation.view` 入口、`/ssh/` 页面、密码/私钥/agent 三种认证、xterm 交互终端、known_hosts、三道围栏、连接保活 | **代码完成，待实机验收** |
 | **U0+U1**（工作区规划） | U0 可靠性闭环（二进制输出 / 查看器实例 / 恢复 attach / 指纹闭环 / 输入归属）+ U1 统一工作区（主机导航 / 多标签 / 编辑抽屉 / 三主题桥接 / 复制粘贴 / 查找 / 字号 / 响应式） | **已实施，待实机验收** |
 | **A0**（Agent 化规划 §8.2/§17） | 上下文桥：送往对话（选区 / 最近 40 行 / 错误追问）+ 来源主机标记 + 剪贴板通道 | **已实施（2026-09-14），待实机验收**（单测 63 例、`verify-all ssh` 12/12） |
-| M2 | SFTP、系统终端打开、空白会话备用入口（多标签 / 断线重连 / 主题跟随 / 分组收藏已随 U1 交付） | **U2 主体已实施（2026-09-16）：[U2 规划](design/2026-09-15-ssh-u2-plan.md) §6 的 U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复已落地并过 **113 例单测** + 端到端探针（见[实施验收包](design/2026-09-16-ssh-u2-implementation-report.md)）；同轮实机验收发现并修复 4 处回归（2 阻断 / 1 高危 / 1 中危，见[验收报告](design/2026-09-16-ssh-u2-acceptance-report.md)）⇒ **待重启复验**；U2.2 SFTP 留待真实主机补验后开工** |
-| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划（对应 U3）；**细化方案见 [Agent 化规划](design/2026-09-14-ssh-agent-driven-plan.md)（已定稿：D1 做「Agent 的 SSH 手」/ D2 总开关默认 `off` / D3 确认在对话页 / D4 允许 key·agent 主机隐式建连；A1–B 待做）** |
+| M2 | SFTP、系统终端打开、空白会话备用入口（多标签 / 断线重连 / 主题跟随 / 分组收藏已随 U1 交付） | **U2 主体已实施（2026-09-16）：[U2 规划](design/2026-09-15-ssh-u2-plan.md) §6 的 U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复已落地并过 **113 例单测** + 端到端探针（见[实施验收包](design/2026-09-16-ssh-u2-implementation-report.md)）；同轮实机验收发现并修复 4 处回归（2 阻断 / 1 高危 / 1 中危，见[验收报告](design/2026-09-16-ssh-u2-acceptance-report.md)）⇒ **待重启复验**；**U2.2 SFTP 已于 2026-09-26 实施**（zcode 降级链 + 8 个 REST 端点 + 文件抽屉 + ssh config 导入，单测 225 例、`verify-all ssh` 26/26，实施记录见 [CHANGELOG](design/CHANGELOG.md)，真实主机读写往返待实机验收） |
+| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划（对应 U3）；**细化方案见 [Agent 化规划](design/2026-09-14-ssh-agent-driven-plan.md)（已定稿：D1 做「Agent 的 SSH 手」/ D2 总开关默认 `off` / D3 确认在对话页 / D4 允许 key·agent 主机隐式建连；A1–B 待做）**；`ssh_exec` 的通道地基（`lib/exec.js`：POSIX 包装 / close 收尾 + 排空 / banner 跳过）已于 2026-09-26 随 P0-3 落地 |
 
 ## M1 前置 SPIKE
 
@@ -176,18 +186,28 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 dsh-miasaki-ssh/
 ├── package.json            # @miasaki/dsh-ssh（dsh.client web 声明）
 ├── cordis.patch.yml        # 插件身份（id: ssh / 数据目录 / trustedHosts）
-├── index.js                # host 半：路由族 + REST API + WS 桥（帧上限 + viewer 路由）
+├── index.js                # host 半：路由族 + REST API + WS 桥（帧上限 + viewer 路由 + SFTP REST）
 ├── lib/
 │   ├── store.js            # 纯数据层：连接库 / known_hosts / 三道围栏（可单测）
-│   ├── runtime.js          # ssh2 运行时：TOFU / generation 绑定 / scrollback 环形缓冲 / WS 中继
-│   └── diagnose.js         # 连接诊断：DNS / TCP+banner / 认证方式（只发 none）/ 出口 IP / verdict
+│   ├── runtime.js          # ssh2 运行时：TOFU / generation 绑定 / scrollback 环形缓冲 / WS 中继 /
+│   │                       #   三层身份 + 票据 / keepalive / SFTP 会话缓存与 execOnly 记忆
+│   ├── diagnose.js         # 连接诊断：DNS / TCP+banner / 认证方式（只发 none）/ 出口 IP / verdict
+│   ├── exec.js             # exec 通道前置（P0-3）：POSIX 包装 / close 收尾 + 排空 / banner 跳过
+│   ├── paths.js            # 远程路径规范化（SFTP 与 A1 共用的安全口径一处）
+│   ├── sftp.js             # SFTP 传输层：列目录 / 流式上下行 / 变更 / SFTP→exec pipe 降级链 / 进度节流
+│   ├── limits.js           # 共享上限常量（512MiB / 票据 TTL / 节流 / 并发）
+│   └── sshConfig.js        # ~/.ssh/config 别名导入（ssh -G 优先 + 自研解析回退，只导直连）
 ├── client.js               # client 半：第一行入口按钮（actions 槽）+ conversation.view 注册 + iframe 视图
 ├── session.js              # 前端查看器实例：一个查看器独占 xterm + WS，整体可销毁（U0）+ 主题/字号/查找 API（U1）+ 只读缓冲区快照（A0）+ v2 票据附着/多 shell 绑定/写权/序列化快照（U2）
-├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑悬浮窗 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）
+├── sftp-ui.js              # 前端（iframe 内）：远程文件面板抽屉（U2.2）—— 面包屑/列表/上传队列/变更操作，自包含 IIFE（window.SshFiles）
+├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑悬浮窗 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）/ 文件面板入口与 ssh config 导入（U2.2/P1-1）
 ├── styles.css              # 工作区布局 + --ssh-* 语义令牌（原生明暗兜底，宿主桥接覆盖）
-├── test/                   # 单测 113 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑 ↔
-│                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照/未绑定不发帧/按 seq 匹配 ↔ app: 分组过滤/粘贴守卫/颜色合成/送对话格式/工作区快照 ↔
-│                           #   http: 路由与 attach 票据 ↔ client: 工厂契约 + 主题桥接快照）
+├── test/                   # 单测 225 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑/keepalive 与错误词汇 ↔
+│                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照/未绑定不发帧/按 seq 匹配 ↔
+│                           #   exec: POSIX 包装/exit 早于 data/排空窗口/超时/协议行扫描 ↔ paths: 词法归一/NUL/控制字符/~ 展开 ↔
+│                           #   sftp: 状态词汇/进度节流/列目录映射/上传降级链(sftp→exec pipe)/下载计数 ↔ http-sftp: 真实 HTTP 端到端（票据/fence/409/413/降级路径）↔
+│                           #   sftp-ui: vm 加载/纯函数/接线契约 ↔ sshConfig: 解析器/ssh -G 合并/缓存/回退通道 ↔
+│                           #   app: 分组过滤/粘贴守卫/颜色合成/送对话格式/工作区快照 ↔ http: 路由与 attach 票据 ↔ client: 工厂契约 + 主题桥接快照）
 ├── design/
 │   ├── 2026-09-09-ssh-design.md
 │   ├── 2026-09-12-ssh-workspace-plan.md        # 工作区优化规划设计（U0/U1 已实施；U2 细化方案见下）
@@ -216,6 +236,7 @@ dsh-miasaki-ssh/
 | [工作区优化规划](design/2026-09-12-ssh-workspace-plan.md) | **规划与实施记录**：现状诊断、信息架构、三主题桥接、连接生命周期契约、分期 U0–U3、验收矩阵。**U0（可靠性闭环）+ U1（统一工作区）已实施（2026-09-12），U2/U3 未动** |
 | [工作区概念稿](design/preview/2026-09-12-ssh-workspace-concept.html) | 可交互概念稿：三主题 + 原生暗色、四档宽度、八种连接状态；仅本地演示 |
 | [**Agent 化规划**](design/2026-09-14-ssh-agent-driven-plan.md) | **能力分层与实施规划（2026-09-14，已定稿）**：平台事实核查（`ctx.tools` / `ctx.approval` / `ctx.userQuestions` / `ctx.terminals` / host-preset 平面判据）、五条核心设计判断、四层能力（上下文桥 / 工具面 / 治理面 / 协作面）、工具清单、授权与命令分级、**SPIKE S1–S3 实测记录（§16）**、**A0 实施记录（§17）**、决策记录（D1–D4）与验收矩阵 |
+| [**zcode 对标调研与方案**](design/2026-09-26-ssh-zcode-benchmark-plan.md) | **对标智谱 zai-org/ZCode v3.14.3 的 SSH 子系统（2026-09-26，待用户拍板 D1–D5）**：zcode 架构解剖（连接认证 / exec / SFTP 降级链 / host key 缺席 / ssh config 别名 / 连接向导 / 连接注册表 / 验证基建）、17 维逐项对照总表、**P0×3（keepalive 等健壮性三件套 / SFTP 注入 exec pipe 降级 / exec 前置工作）/ P1×4 / P2×4 共 11 项候选**、风险表、「明确不做」清单、参考索引 |
 | [**独立模块化规划**](design/2026-09-14-ssh-global-panel-plan.md) | **从「会话视图」升级为「全局面板」（2026-09-14，待评审，未实施）**：诉求拆解（R1 独立 / R2 不消失 / R3 模块化）、作用域错配诊断、会话布参照物解剖、**0.1.5 全局面板通道逐行取证（`main` root keyed slot + `sidebar.panellist` + `ctx.layout.selectPanel`）**、**官方硬约束 F4（点会话条目强制回对话）**、A/B/C 方案对比、G0–G4 分期与 SPIKE 清单、待决策四项 |
 | [**全屏浮层规划（已定向）**](design/2026-09-14-ssh-fullscreen-overlay-plan.md) | **路线丁：照会话布同构（2026-09-14/15，用户拍板「全屏／走丁方案」，**D0 五项（§12）+ D1 四门槛（§13）+ D1.1 launcher（§14）+ D2 顶栏六项（§15/§16）+ D3 清理回归十一项（§17/§18）+ D4 尾项清理三项（§19）实测全过**，浮层改造收官）**：决策记录、三路对比（甲/乙/丁）、分层结构、**与 canvas 的同构对照表**、五个关键技术问题（**§5.1 隐藏态误 fit 会写坏远端 PTY——必须偏离 canvas 的 `display:none`**、窗控 reserve、双浮层互斥、响应式重校准、焦点）、逐文件改动清单、D0–D4 分期、验收矩阵与风险表 |
 | [**工作区 U2 规划**](design/2026-09-15-ssh-u2-plan.md) | **效率补齐（2026-09-15，**v1.0 已定稿**：7 项决策全部拍板；尚未开工）**：现状取证（**profile/runtime 共用 `connId`**、单 shell、连接级回放环与尺寸、WS 四帧、ssh2 SFTP 能力面、addon 版本实测）、**三层身份（connId → runtimeId → shellId）+ 短期附着票据**（规划 §8 硬要求）、四项分项设计（**同主机多 shell** / **SFTP**（REST 流式 + host 端零本机 IO）/ **工作区记忆**（偏好 `localStorage` + 快照 `sessionStorage` 双据）/ **精确恢复**（价值被 D0–D4 收窄，可降级为已知边界））、逐文件改动清单、U2.0–U2.4 分期与门槛、验收矩阵、风险表、SPIKE S-U2-1…4、**决策记录 7 项（全部已定）**；**§12 U2.0 SPIKE 验收：批内判据强度不通过（验的是自己构造的对象）→ 补做探针 A/B/C（真 Client×4 channel / 官方 addon / 真 GUI）全过后四项命门全部回答，两条独立路径同指 Go** |
