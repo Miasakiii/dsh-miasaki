@@ -204,6 +204,7 @@ window.__ModuleLoader__.load({
         }
         for (const [id, unsubscribe] of liveUnsubscribers) if (!snapshot.ids.includes(id)) { unsubscribe(); liveUnsubscribers.delete(id) }
       }
+      let syncFailureLogged = false
       const syncSessions = () => {
         if (syncQueued) return
         syncQueued = true
@@ -213,7 +214,17 @@ window.__ModuleLoader__.load({
           const sessionIds = new Set(sessions.map(session => session.id))
           const removedSessionIds = [...knownSessionIds].filter(id => !sessionIds.has(id))
           knownSessionIds = sessionIds
-          void fetch('/canvas/api/sessions/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessions, removedSessionIds }) }).catch(() => {})
+          // 失败必须留痕：2026-09-26 之前这里是个空 catch，把「每次同步都 400」
+          // 吞得一干二净 —— 画布里的 DSH 会话节点长期不更新，却没有任何信号。
+          // 只记一次（同步每次会话变化都跑），避免刷屏淹没真问题。
+          const report = detail => {
+            if (syncFailureLogged) return
+            syncFailureLogged = true
+            console.warn('dsh-canvas: 会话列表同步失败（画布节点可能滞后）— ' + detail)
+          }
+          void fetch('/canvas/api/sessions/sync', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessions, removedSessionIds }) })
+            .then(response => { if (!response.ok) report('HTTP ' + response.status) })
+            .catch(error => report(error instanceof Error ? error.message : String(error)))
         })
       }
       const syncTheme = () => {

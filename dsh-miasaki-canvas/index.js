@@ -6,6 +6,12 @@ export const name = 'canvas'
 export const inject = ['webServer', 'sessions']
 
 const MAX_BODY_BYTES = 32 * 1024
+// 2026-09-26：`/canvas/api/sessions/sync` 是**全量快照**语义 —— 客户端每次 POST 整个
+// 会话列表，体积随会话总数线性增长。本机 239 个会话 ≈ 40KB，早已越 32KiB 上限，
+// 于是每次同步都 400（画布里的 DSH 会话节点长期不更新，而前端 `.catch(() => {})`
+// 把失败静默吞掉，所以谁也没看见）。该路由单独给 2 MiB 预算（≈ 1 万个会话），
+// 其余 CRUD 路由仍守 32 KiB —— 上限是防御性的，不为一处全量接口抬高全部面。
+const MAX_SYNC_BODY_BYTES = 2 * 1024 * 1024
 const MAX_TITLE_LENGTH = 120
 const MAX_NOTE_LENGTH = 4_000
 // Projected message text cap: longer replies truncate with a marker pointing
@@ -15,6 +21,17 @@ const MAX_PROJECTION_LENGTH = 8_000
 // detail on purpose — that is the form's trade (cheaper context, lossy).
 const PROJECTION_SUMMARY_LENGTH = 1_200
 const PROJECTION_TRUNCATED_SUFFIX = '\n——…（详情查看全文）'
+// 2026-09-26 存储治理（84MB store 的根因）：工具调用的 arguments / result 曾是投影里
+// **唯一没有上限**的两个字段 —— 实测占整个 store 的 72%（result 43.7MB + arguments
+// 14.4MB，而**全部**消息正文合计才 15.5MB；骨架仅 0.08MB）。两者在前端都只作纯文本
+// `<pre>` 渲染（app.js `processRecords`），因此与消息正文同策：头部保留 + 截断标记。
+// 注意 null 必须保持 null（前端据此显示「等待结果」，不能变成字符串）。
+const MAX_PROCESS_PAYLOAD_LENGTH = 2_000
+const PROCESS_TRUNCATED_SUFFIX = '\n——…（已截断，全文见 DSH 会话）'
+// 每个线程只保留**最近** N 条消息：画布节点是「会话预览」，不是会话全文的副本
+// （全文在 DSH 自己的会话存储里）。实测 203 个线程的消息数中位数只有 34 条 —— N=50 时
+// 一半以上线程完全不被裁剪；配合上面的载荷上限，84MB → ≈19MB（-77%）。
+const MAX_THREAD_MESSAGES = 50
 const TOPIC_COLORS = ['#0f766e', '#2563eb', '#be123c', '#7c3aed', '#b45309']
 const LOCK_STALE_MS = 60_000
 // Deferred (event-projection) writes coalesce into one save per window, so a
@@ -222,7 +239,7 @@ export class WorkspaceStore {
       if (sessionId === '') throw new InputError('dshSessionId 必须提供')
       const clash = workspace.threads.find(item => item.dshSessionId === sessionId && item.id !== thread.id)
       if (clash !== undefined) {
-        thread.messages.push(...clash.messages)
+        this.retainThreadMessages(thread, clash.messages)
         thread.sourceSeedLength ??= clash.sourceSeedLength
         thread.parentId ??= clash.parentId
         workspace.threads = workspace.threads.filter(item => item.id !== clash.id)
@@ -279,7 +296,7 @@ export class WorkspaceStore {
       const { workspace, thread } = this.locateThread(threadId)
       const at = new Date().toISOString()
       const message = { id: randomUUID(), text: requiredText(text, MAX_NOTE_LENGTH, 'text'), kind: 'user', at }
-      thread.messages.push(message)
+      this.retainThreadMessages(thread, [message])
       thread.updatedAt = at
       workspace.updatedAt = at
       return structuredClone(thread)
@@ -558,6 +575,8 @@ export class WorkspaceStore {
       updatedAt: now,
       messages: [],
       pendingProcess: [],
+      // 裁剪水位（2026-09-26）：本线程已丢弃消息的最高 seq；replay 时据此拒绝复活旧卡片。
+      trimmedBeforeSeq: -1,
       mergeFrom: null,
       mergeState: null,
       absorbedBy: [],
@@ -586,7 +605,11 @@ export class WorkspaceStore {
       return
     }
     const projection = projectableEvent(event)
-    if (projection === null || thread.messages.some(message => message.sourceSeq === event.seq)) return
+    if (projection === null) return
+    // 裁剪水位（2026-09-26）：保留窗口之外的消息已被丢弃、其 sourceSeq 一并消失，
+    // 因此 replay 必须由水位兜底 —— 否则从更早的 seq 重放会把已丢弃的卡片贴回来。
+    if (typeof event.seq === 'number' && event.seq <= (thread.trimmedBeforeSeq ?? -1)) return
+    if (thread.messages.some(message => message.sourceSeq === event.seq)) return
     const at = new Date(event.time).toISOString()
     const message = {
       id: randomUUID(),
@@ -599,7 +622,7 @@ export class WorkspaceStore {
         : {}),
     }
     this.attachPendingProcess(thread, message)
-    thread.messages.push(message)
+    this.retainThreadMessages(thread, [message])
     thread.updatedAt = at
     workspace.updatedAt = at
     if (thread.dshSessionTitle === null && projection.kind === 'user') {
@@ -626,22 +649,34 @@ export class WorkspaceStore {
     const entry = process.find(item => item.callId === callId)
     if (event.type === 'tool/call') {
       if (entry === undefined) {
-        process.push({ callId, turn: data.turn, step: data.step, name: data.name, arguments: data.arguments, result: null, error: null })
+        process.push({ callId, turn: data.turn, step: data.step, name: data.name, arguments: capProcessPayload(data.arguments), result: null, error: null })
       } else {
         entry.name = data.name
-        entry.arguments = data.arguments
+        entry.arguments = capProcessPayload(data.arguments)
       }
     } else {
       const outcome = contentText(data.message?.content)
       const error = errorText(data.error)
       if (entry === undefined) {
-        process.push({ callId, turn: data.turn, step: data.step, name: '工具调用', arguments: null, result: outcome, error })
+        process.push({ callId, turn: data.turn, step: data.step, name: '工具调用', arguments: null, result: capProcessPayload(outcome), error: capProcessPayload(error) })
       } else {
-        entry.result = outcome
-        entry.error = error
+        entry.result = capProcessPayload(outcome)
+        entry.error = capProcessPayload(error)
       }
     }
     thread.updatedAt = at
+  }
+
+  /**
+   * 把消息并入线程并重新施加保留窗口（2026-09-26 存储治理）。
+   * 所有会增长 `messages` 的路径都必须走这里 —— 事件投影、手动添加、合并吸收三处，
+   * 否则保留窗口只会在其中一条路径上生效。
+   */
+  retainThreadMessages(thread, incoming) {
+    thread.messages.push(...incoming)
+    const trimmed = trimThreadMessages(thread, thread.messages)
+    thread.messages = trimmed.messages
+    thread.trimmedBeforeSeq = trimmed.trimmedBeforeSeq
   }
 
   attachPendingProcess(thread, message) {
@@ -665,6 +700,8 @@ export class WorkspaceStore {
       updatedAt: now,
       messages: [],
       pendingProcess: [],
+      // 裁剪水位（2026-09-26）：本线程已丢弃消息的最高 seq；replay 时据此拒绝复活旧卡片。
+      trimmedBeforeSeq: -1,
       mergeFrom: null,
       mergeState: null,
       absorbedBy: [],
@@ -766,6 +803,26 @@ function normalizeState(value) {
     if (state.version < 4 && foldLegacyToolCards(state.workspaces)) migrated = true
     state.version = 5
     migrated = true
+  }
+  // 2026-09-26 存储治理迁移（对所有版本路径统一生效：v5 直接载入 / v1 老文件重建）：
+  // ① 工具载荷按当前上限截断；② 每个线程只留最近 MAX_THREAD_MESSAGES 条消息并记录
+  // 裁剪水位。老 store 因此在**载入时**自动瘦身（`migrated` 置位 → 立即落盘一次）。
+  for (const workspace of state.workspaces) {
+    for (const thread of workspace.threads) {
+      if (Array.isArray(thread.messages)) {
+        const capped = thread.messages.map(capStoredMessagePayloads)
+        // 只有**内容真的被改写**才置 migrated：`trimmedBeforeSeq` 是纯内存归一化补全，
+        // 若让它也触发写盘，就破坏了「已是最新的文件载入不重写」这条既有契约
+        // （test/workspace-store.test.js 的 does-not-rewrite 闸门正是钉它）。
+        if (capped.some((message, index) => message !== thread.messages[index])) migrated = true
+        const trimmed = trimThreadMessages(thread, capped)
+        if (trimmed.messages.length !== capped.length) migrated = true
+        thread.messages = trimmed.messages
+        thread.trimmedBeforeSeq = trimmed.trimmedBeforeSeq
+      } else if (typeof thread.trimmedBeforeSeq !== 'number') {
+        thread.trimmedBeforeSeq = -1
+      }
+    }
   }
   // Recompute draft staleness on load: a source may have disappeared while the
   // host was down (or in an older build that never tracked this), and the flag
@@ -886,6 +943,59 @@ function truncateProjection(text) {
   const normalized = text.trim()
   if (normalized.length <= MAX_PROJECTION_LENGTH) return normalized
   return `${normalized.slice(0, MAX_PROJECTION_LENGTH)}${PROJECTION_TRUNCATED_SUFFIX}`
+}
+
+/** JSON.stringify that never throws (cyclic / exotic tool arguments must not break a write). */
+function safeJson(value) {
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+/**
+ * Cap one tool payload (`arguments` / `result` / `error`) at the process limit.
+ * `null` / `undefined` stay `null` — the card renders that as「等待结果」and a
+ * string would silently turn a pending call into a finished-looking one.
+ * Storage is the only thing capped: the full text remains in the DSH session.
+ */
+function capProcessPayload(value, limit = MAX_PROCESS_PAYLOAD_LENGTH) {
+  if (value === null || value === undefined) return null
+  const text = typeof value === 'string' ? value : safeJson(value)
+  if (text.length <= limit) return text
+  return `${text.slice(0, limit)}${PROCESS_TRUNCATED_SUFFIX}`
+}
+
+/**
+ * Apply the per-thread retention window and report the dropped-sequence watermark.
+ * The watermark exists because trimming removes the `sourceSeq` markers the
+ * projection dedup relies on: without it a replay from an older seq would
+ * resurrect cards that were deliberately dropped.
+ */
+function trimThreadMessages(thread, messages) {
+  const previous = typeof thread?.trimmedBeforeSeq === 'number' ? thread.trimmedBeforeSeq : -1
+  if (messages.length <= MAX_THREAD_MESSAGES) return { messages, trimmedBeforeSeq: previous }
+  const dropped = messages.slice(0, messages.length - MAX_THREAD_MESSAGES)
+  const watermark = dropped.reduce((max, item) => Math.max(max, item?.sourceSeq ?? -1), previous)
+  return { messages: messages.slice(-MAX_THREAD_MESSAGES), trimmedBeforeSeq: watermark }
+}
+
+/** Rewrite one stored message's tool payloads through the current caps (idempotent). */
+function capStoredMessagePayloads(message) {
+  if (!Array.isArray(message?.process) || message.process.length === 0) return message
+  let changed = false
+  const process = message.process.map(entry => {
+    const next = {
+      ...entry,
+      arguments: capProcessPayload(entry?.arguments ?? null),
+      result: capProcessPayload(entry?.result ?? null),
+      error: capProcessPayload(entry?.error ?? null),
+    }
+    if (next.arguments !== (entry?.arguments ?? null) || next.result !== (entry?.result ?? null) || next.error !== (entry?.error ?? null)) changed = true
+    return next
+  })
+  return changed ? { ...message, process } : message
 }
 
 /** Summary-form quote: a deliberately lossy head-only excerpt. */
@@ -1027,12 +1137,14 @@ function workspaceTitle(cwd, fallbackTitle) {
   return segment && segment.trim() !== '' ? segment : fallbackTitle
 }
 
-async function readJson(req) {
+async function readJson(req, limit = MAX_BODY_BYTES) {
   const chunks = []
   let length = 0
   for await (const chunk of req) {
     length += chunk.length
-    if (length > MAX_BODY_BYTES) throw new InputError('请求内容过大')
+    // 报错带实际大小与上限：2026-09-26 排查时只有一句「请求内容过大」，分不清是
+    // 请求畸形还是预算太小 —— 两个数一起回给客户端与日志，下次一眼可辨。
+    if (length > limit) throw new InputError(`请求内容过大（${length} > ${limit} 字节）`)
     chunks.push(chunk)
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new InputError('请求不是有效 JSON') }
@@ -1155,7 +1267,8 @@ export function apply(ctx, config) {
       if (mergePrepare !== null && req.method === 'POST') return sendJson(res, 200, await store.prepareMergeMessage(mergePrepare[1]))
       const mergeCommit = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/merge\/commit$/i.exec(path)
       if (mergeCommit !== null && req.method === 'POST') return sendJson(res, 200, { thread: await store.commitMerge(mergeCommit[1], await readJson(req)) })
-      if (path === '/canvas/api/sessions/sync' && req.method === 'POST') { const body = await readJson(req); const workspaces = await store.syncSessions(body.sessions, body.removedSessionIds); if (autoProjection) backfillFromSync(); return sendJson(res, 200, { workspaces }) }
+      // 全量会话列表：单独的体量预算（见 MAX_SYNC_BODY_BYTES）。
+      if (path === '/canvas/api/sessions/sync' && req.method === 'POST') { const body = await readJson(req, MAX_SYNC_BODY_BYTES); const workspaces = await store.syncSessions(body.sessions, body.removedSessionIds); if (autoProjection) backfillFromSync(); return sendJson(res, 200, { workspaces }) }
       const messages = /^\/canvas\/api\/threads\/([0-9a-f-]+)\/messages$/i.exec(path)
       if (messages !== null && req.method === 'POST') return sendJson(res, 201, { thread: await store.addMessage(messages[1], (await readJson(req)).text) })
       const thread = /^\/canvas\/api\/threads\/([0-9a-f-]+)$/i.exec(path)

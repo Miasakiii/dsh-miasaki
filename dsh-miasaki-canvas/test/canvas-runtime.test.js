@@ -330,3 +330,25 @@ test('prunes persisted collapsed state when a conversation is archived', async (
   assert.match(archive, /key\.startsWith\(`\$\{id\}:`\)/)
   assert.match(archive, /persistCollapsedCards\(\)/)
 })
+
+test('gives the full session-list sync its own body budget', async () => {
+  const source = await readFile(new URL('../index.js', import.meta.url), 'utf8')
+
+  // 2026-09-26：会话数越过 ~190 后，全量列表快照 > 32KiB ⇒ 每次同步都 400
+  // （本机 239 个会话 ≈ 40KB），画布里的 DSH 节点长期不更新却毫无信号。
+  assert.match(source, /const MAX_SYNC_BODY_BYTES = 2 \* 1024 \* 1024/)
+  assert.match(source, /async function readJson\(req, limit = MAX_BODY_BYTES\)/)
+  assert.match(source, /await readJson\(req, MAX_SYNC_BODY_BYTES\)/)
+  // 报错要能自证体量：只有一句「请求内容过大」时无从诊断（本次排查的实际教训）。
+  assert.match(source, /请求内容过大（\$\{length\} > \$\{limit\} 字节）/)
+})
+
+test('surfaces a failing session sync once instead of swallowing it', async () => {
+  const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  const sync = source.slice(source.indexOf('const syncSessions = () =>'), source.indexOf('const syncTheme = () =>'))
+
+  assert.match(sync, /dsh-canvas: 会话列表同步失败/)
+  assert.match(sync, /if \(!response\.ok\) report\('HTTP ' \+ response\.status\)/)
+  // 两条失败路径都要留痕：HTTP 非 2xx 与网络层抛错（旧实现是空 catch）。
+  assert.match(sync, /\.catch\(error => report\(error instanceof Error \? error\.message : String\(error\)\)\)/)
+})

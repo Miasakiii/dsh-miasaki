@@ -33,12 +33,12 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 # 安装到本机 DSH web profile（link 模式，改代码后重启 dsh web + 刷新页面）
 dsh plugin --profile web add link:C:\Users\Asakii\Desktop\dsh-miasaki\dsh-miasaki-canvas
 
-# 语法校验 + 全量测试（89 个用例）
+# 语法校验 + 全量测试（9 个测试文件共 98 项）
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
 corepack pnpm test
 
-# 或走仓库级统一回归入口（三入口语法 + 8 个测试文件共 89 项）
+# 或走仓库级统一回归入口（三入口语法 + 9 个测试文件共 98 项）
 node ..\scripts\verify-all.mjs canvas
 ```
 
@@ -54,7 +54,7 @@ dsh-miasaki-canvas/
 ├── app.js                      # 画布前端（iframe 内）
 ├── styles.css / deepseek-mark.svg
 ├── cordis.patch.yml            # web profile 注入行（数据目录 miasaki-canvas/）
-├── test/                       # 上游测试套件（node --test）
+├── test/                       # 本线回归套件（含 fork 后新增/改写的契约锚点，9 文件 98 例）
 ├── docs/                       # 上游用户手册（zh-CN / en，内容基于上游原文）
 ├── design/                     # 本线设计文档与变更记录
 │   ├── 2026-09-05-canvas-merge-design.md
@@ -83,3 +83,5 @@ dsh-miasaki-canvas/
 - **红线**：不改系统提示/模型请求/工具 schema；插件不直接调模型；DSH 是唯一事实来源。
 - **数据隔离**：画布元数据存 `$DSH_HOME/miasaki-canvas/`，不与上游 dsh-synapse 的 `$DSH_HOME/synapse/` 共用。
 - **外部视图槽（2026-09-10）**：别的插件可以把入口长在画布页面自己的「对话 / 会话布」旁边，而本线**不认识任何具体视图** —— 通用通道是页面级注册表 `window.__DSH_CANVAS_VIEW_ITEMS__`（`{ id, label }`）+ `dsh-canvas:view-items` 事件；client 半在 iframe `load` / 浮层打开 / 注册表变化时下发 `canvas:views`，画布页面渲染按钮并在点击时广播 `canvas:view`，由**注册方自己**监听去切视图。首个使用者是 SSH 线。契约与红线见 [`test/external-views.test.js`](test/external-views.test.js)。
+- **存储治理（2026-09-26）**：画布节点是会话**预览**，不是全文副本 —— 单条工具载荷（`arguments` / `result` / `error`）按 `MAX_PROCESS_PAYLOAD_LENGTH`（2000）截断并带可见标记（`null` 必须保持 `null`：前端据此显示「等待结果」），每个线程只保留最近 `MAX_THREAD_MESSAGES`（50）条消息；裁剪时记录 `trimmedBeforeSeq` 水位，避免 replay 从更早 seq 重放把已丢弃的卡片贴回来。老 store 在**载入时**自动迁移瘦身（实测 84.2MB → 20.0MB，-76.3%，迁移幂等）。契约见 [`test/store-retention.test.js`](test/store-retention.test.js)。
+- **同步体量预算（2026-09-26）**：`POST /canvas/api/sessions/sync` 是**全量快照**语义（客户端每次发整个会话列表，体积随会话总数线性增长），因此独占 `MAX_SYNC_BODY_BYTES`（2 MiB ≈ 1 万个会话），其余 CRUD 路由仍守 `MAX_BODY_BYTES`（32 KiB）——上限是防御性的，不为一处全量接口抬高全部面。超限报错带**实际字节数与上限**（旧文案只有一句「请求内容过大」，排查时分不清是请求畸形还是预算太小）；client 侧 HTTP 非 2xx 与网络异常**限频留痕一次**（旧实现是空 catch：本机 239 个会话越 32KiB 后每次同步都 400，画布节点长期不更新却毫无信号）。契约见 [`test/canvas-runtime.test.js`](test/canvas-runtime.test.js)。

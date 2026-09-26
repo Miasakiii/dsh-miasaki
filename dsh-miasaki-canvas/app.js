@@ -191,17 +191,9 @@ function settleRpc(requestId, value, error) {
 
 function setError(error = '') { state.error = error instanceof Error ? error.message : error; render() }
 
-function messagesFromEvents(events) {
-  if (!Array.isArray(events)) return []
-  return events.flatMap(event => {
-    const content = event?.data?.message?.content ?? event?.data?.content
-    const text = Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text).filter(Boolean).join('\n') : ''
-    if (event?.type === 'user/message' && text && !isInternalTurnText(text)) return [{ kind: 'user', text, at: event.time, sourceSeq: event.seq }]
-    if (event?.type === 'assistant/message' && text) return [{ kind: 'assistant', text, at: event.time, sourceSeq: event.seq }]
-    return []
-  })
-}
-
+// 前端投影已由 host 侧 index.js 的 projectableEvent 单一口径承担（2026-09-26 清理：
+// 原 messagesFromEvents 是 fork 前的第二份实现，仅被测试的源码切片引用）。
+// 本函数保留：详情视图渲染前仍要过滤 runtime context 与 system-reminder。
 function isInternalTurnText(text) {
   if (typeof text !== 'string') return false
   const normalized = text.trimStart()
@@ -734,16 +726,6 @@ function connectorPath(fromPosition, toPosition) {
   const fromY = fromPosition.y + CARD_HEIGHT / 2
   const toX = toPosition.x
   const toY = toPosition.y + CARD_HEIGHT / 2
-  const bend = Math.min(110, Math.max(36, Math.abs(toX - fromX) * .2))
-  return `M ${fromX} ${fromY} C ${fromX + bend} ${fromY}, ${toX - bend} ${toY}, ${toX} ${toY}`
-}
-
-function connectorPathFromElements(fromCard, toCard) {
-  const fromX = Number.parseFloat(fromCard.style.left) + CARD_WIDTH
-  const fromY = Number.parseFloat(fromCard.style.top) + CARD_HEIGHT / 2
-  const toX = Number.parseFloat(toCard.style.left)
-  const toY = Number.parseFloat(toCard.style.top) + CARD_HEIGHT / 2
-  if (![fromX, fromY, toX, toY].every(Number.isFinite)) return null
   const bend = Math.min(110, Math.max(36, Math.abs(toX - fromX) * .2))
   return `M ${fromX} ${fromY} C ${fromX + bend} ${fromY}, ${toX - bend} ${toY}, ${toX} ${toY}`
 }
@@ -1584,7 +1566,7 @@ function render() {
   const externalViewButtons = () => state.externalViews
     .map(item => `<button type="button" data-action="external-view" data-view-id="${escapeHtml(item.id)}" title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</button>`)
     .join('')
-  app.innerHTML = `<main class="canvas-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="Canvas"><svg class="brand-mark" aria-hidden="true" viewBox="0 0 32 32" fill="none"><path d="M9 10.5 16 7l7 3.5M9 10.5v8L16 22m0-15v15m7-11.5v8L16 22"/><circle cx="9" cy="10" r="2.5"/><circle cx="23" cy="10" r="2.5"/><circle cx="16" cy="23" r="2.5"/></svg><strong>Canvas</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threadTreeHtml(threads)}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话布</button>${externalViewButtons()}</div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}${mergePanelCard()}</section></main>`
+  app.innerHTML = `<main class="canvas-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="Canvas"><strong>Canvas</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threadTreeHtml(threads)}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话布</button>${externalViewButtons()}</div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}${mergePanelCard()}</section></main>`
   installDragging()
   cacheCardConnectors()
   // The initial camera from renderCanvas is inset (viewport not laid out yet);
@@ -2104,7 +2086,6 @@ app.addEventListener('click', async event => {
     if (button.dataset.action === 'close-card-inspector') { closeCardInspector(); return }
     if (button.dataset.action === 'toggle-sidebar') { state.sidebarCollapsed = !state.sidebarCollapsed; render() }
     if (button.dataset.action === 'create-session') openNewSession()
-    if (button.dataset.action === 'open-current' && state.currentDsh !== null) post('canvas:open-session', { sessionId: state.currentDsh.id })
     if (button.dataset.action === 'select-thread' && thread !== undefined) {
       state.mapCardSessionSwitches.clear()
       state.activeId = thread.id

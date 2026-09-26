@@ -2,6 +2,115 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-26（深夜）· 死代码清理（零行为变更）
+
+仓库级死代码审计后的第一批清理，五项均为「生产路径零引用」。验证：`node scripts/verify-all.mjs canvas`
+**12/12 PASS**（9 个测试文件 98 例全过）。
+
+| 项 | 位置 | 判定证据 |
+|---|---|---|
+| 前端投影第二份实现 `messagesFromEvents()` | `app.js:194-203` | 生产零调用；唯一引用是测试的源码切片（**测试遮蔽型死代码**）。该语义由 host 侧 `index.js` 的 `projectableEvent` 单一口径承担，覆盖见 `workspace-store.test.js`「does not persist the DSH runtime context as a user conversation turn」 |
+| DOM 读数版连线 `connectorPathFromElements()` | `app.js:741-749` | 全仓 1 命中＝定义本身；活体是同文件 `connectorPath(fromPosition, toPosition)`（由 `canvasConnectors` / `refreshCardConnectors` 调用）。LOD/虚拟化改造后端点一律走数据对象（`refreshCardConnectors` 注释：「counterpart card may be unmounted… its position is still authoritative」），DOM 读数版与现行架构相反 |
+| 永不触发的 `open-current` 分支 | `app.js:2107` | 该值不在 42 个 `data-action` 标记值中 ⇒ 无 UI 能产生；对照 `open-dsh` 在 footer 与检查器中均有标记 |
+| 死标记 `brand-mark` | `app.js` 模板 + `styles.css:38` | 规则为 `display:none` 且无任何媒体查询/主题分支改回可见；品牌区现状是 `deepseek-mark.svg`（`.brand::before`）+ 文字（`.brand strong`）+ 徽标（`.brand::after`）三件套。**`deepseek-mark.svg` 与其路由保留**（被 CSS `url()` 引用，删了品牌标记变空白） |
+| 退役「对比页」样式族与孤儿类 | `styles.css` 共 22 处 | `.compare-*` / `.top-actions` / `.detail-actions` 在 `app.js`、`client.js`、`index.js` 全为零命中；`.detail-actions` 已被 `.detail-head-actions`（`app.js:1522`）取代；这批规则仍写死旧视觉（7px 圆角、15px 字阶）与本线 16px `--node-radius` 令牌体系冲突 |
+
+`test/message-projection.test.js` 同步改写：切片锚点从被删的 `messagesFromEvents` 移到**仍被生产路径调用**的
+`isInternalTurnText`（`app.js:616` 详情视图渲染前过滤运行期上下文），用例由 1 例扩为 4 条断言
+（runtime context / `<system-reminder>` / 普通提问 / 非字符串输入）。测试文件数与用例总数不变（9 文件 98 例）。
+
+**复核中推翻的两条审计结论**（记录以儆效尤）：
+- `mergePanelCard()` 曾被判「被 `.merge-panel` 取代的旧实现」——实测它正是由 `render()` 模板的
+  `${mergePanelCard()}` 调用、渲染合并面板对话框（配套 `submitMergePanel`），**保留**；
+- `LEGACY_CARD_POSITIONS_KEY` / `dsh-canvas:card-positions:v2` 的 `removeItem` 是**迁移代码**而非死代码，
+  **保留**。
+
+**未做（留待决议）**：`loadThreadHistory()` 是空实现（`async function loadThreadHistory() {}`）却仍被 9 处
+`void` / `await Promise.all` 调用；删除需改 9 个调用点、触及渲染路径，收益低，本次不动。
+
+## 2026-09-26（晚）· 全量 `sessions/sync` 恒 400：32 KiB 全局请求体上限撞上 239 个会话
+
+**症状（怎么发现的）**：桌面端启动排查的无头实载里，页面每次加载都带 **9 次** 400 —— 去重后
+全部指向同一个 URL：`POST /canvas/api/sessions/sync`。
+
+**根因（两个数一乘）**：该接口是**全量快照**语义（`client.js` 每次把整个会话列表
+`{ id, title, cwd, parentId, blank }` 发上去），体积随会话总数线性增长；而 `readJson` 对所有
+POST 路由用同一个 `MAX_BODY_BYTES = 32 * 1024`。本机 `$DSH_HOME/sessions` 已有 **239 个会话**
+（≈40 KB），约 **190 个会话**就越界 ⇒ 每次同步都抛 `InputError('请求内容过大')` → 400。
+
+**为什么藏了这么久**：client 侧 `fetch(...).catch(() => {})` 把失败**吞得干干净净** ——
+画布里的 DSH 会话节点长期不更新，界面上没有任何信号，日志里也没有。
+
+**修复（三条，各修一层）**：
+1. `index.js`：新增 `MAX_SYNC_BODY_BYTES = 2 MiB`（≈1 万个会话），`readJson(req, limit)` 接受
+   按路由预算；只有全量 sync 路由用大预算，其余 CRUD 仍守 32 KiB（上限是防御性的，
+   不为一处全量接口抬高全部面）；
+2. `index.js`：超限报错带**实际字节数与上限**（`请求内容过大（64129 > 32768 字节）`）——
+   旧文案只有一句「请求内容过大」，排查时分不清是请求畸形还是预算太小；
+3. `client.js`：HTTP 非 2xx 与网络层异常两条路径都**限频留痕一次**（`console.warn`），
+   失败不再无声。
+
+**验证（本机实测）**：
+- 直接 POST 一个 **64,129 字节**的 body（`sessions` 全为无 id 条目 ⇒ 逐条跳过、零写入）
+  → 旧版 400，新版 **HTTP 200**；小 body 对照同样 200；
+- 无头 Edge 实载 ⇒ `HTTP >= 400` **归零**，启动屏正常、会话列表 / 插件入口 / SSH 胶囊全在；
+- `test/canvas-runtime.test.js` 增 2 条断言（预算分层 + 失败留痕），canvas 用例 **96 → 98**，
+  `node ../scripts/verify-all.mjs canvas` **12/12 PASS**。
+
+## 2026-09-26 · 存储治理：84MB `workspaces.json` 的根因与修复
+
+**背景（症状）**：桌面端「一直在刷新」排查中发现 `$DSH_HOME/miasaki-canvas/workspaces.json` 已涨到
+**84,209,057 字节**，且任何会话事件都会触发一次**整体重写** —— 诊断期间采样显示它每 3 秒仍在写盘。
+
+**体积构成（实测：8 工作区 / 203 线程 / 14843 条消息 / 17629 个 process 条目）**：
+
+| 字段 | 体积 | 占比 |
+|---|---|---|
+| `process.result`（工具结果全文） | 43.73 MB | 54% |
+| `messages.text`（消息正文，已有 8000 上限） | 15.48 MB | 19% |
+| `process.arguments`（工具参数） | 14.35 MB | 18% |
+| `process.error` + 骨架 + 其它 | ≈ 0.1 MB | <1% |
+
+**根因**：`foldToolProcess` 写入的 `arguments` / `result` / `error` 是投影里**唯一没有上限**的三个字段
+（消息正文有 `MAX_PROJECTION_LENGTH = 8000`，标题/笔记也各有上限），单条实测最大 59.0KB
+（`job_output` 结果）/ 76.8KB（`write` 参数）；消息条数同样从未设限（单线程最大 619 条）。二者相乘即 84MB。
+
+**修复（全部在 `index.js`）**：
+
+- **载荷上限**：新增 `MAX_PROCESS_PAYLOAD_LENGTH = 2000` + `PROCESS_TRUNCATED_SUFFIX`，
+  `capProcessPayload()` 在 `foldToolProcess` 的三个写点统一应用 —— 与消息正文同策（保头 + 可见标记）。
+  **`null` 必须保持 `null`**（前端据此渲染「等待结果」，变成字符串会让等待中的调用伪装成「已完成」）；
+  非字符串载荷走 `safeJson()`（循环引用不炸写入）。
+- **线程保留窗口**：新增 `MAX_THREAD_MESSAGES = 50` + `retainThreadMessages()` —— **所有**会增长
+  `messages` 的路径（事件投影 / 手动 `addMessage` / 合并吸收 `commitMerge`）收敛到这一个方法，
+  避免窗口只在其中一条路径生效。
+- **裁剪水位**：新增 `thread.trimmedBeforeSeq`。裁剪会连带丢弃 `sourceSeq` 去重标记，因此 replay 必须
+  靠水位兜底 —— `projectEventInto` 对 `seq <= trimmedBeforeSeq` 直接拒绝，否则从更早 seq 重放会把已
+  丢弃的卡片贴回来（[`test/store-retention.test.js`](../test/store-retention.test.js) 的 ★ 用例钉死）。
+- **载入即迁移**：`normalizeState` 末尾对所有版本路径统一跑「载荷截断 + 窗口裁剪」，老文件载入时自动
+  瘦身并落盘（`migrated` 置位）。**迁移只对真的被改写的数据置位** —— `trimmedBeforeSeq` 这类纯内存
+  字段补全不触发写盘，否则会打破 `workspace-store.test.js` 的
+  `does not rewrite an up-to-date v5 file on load` 契约（该闸门在实施中确实拦下了第一版）。
+
+**参数怎么定的**（不是拍脑袋）：一次性模拟脚本对全部 203 线程跑了 N × L 矩阵 —— 消息数**中位数只有
+34 条**，N=50 时一半以上线程完全不受影响；N=50 / L=2000 的理论体积 18.98MB，与实际剪裁结果
+19.99MB 吻合。
+
+**效果**：`84,209,057 → 19,992,624 字节`（**-76.3%**，省 61.2MB）；203 线程 / 8 工作区不变，
+消息 14843 → 5648（= 模拟值），`maxMsgsPerThread = 50`，84 个线程带水位，超限载荷 0；
+迁移**幂等**（再载入不重写）。剪裁由**产品代码自己**执行（`_refs/canvas-trim.mjs` 调 `WorkspaceStore.load`
+的迁移路径），避免规则漂移；剪裁前原件备份在 `_refs/canvas-backup/`，同目录另归档了 9/16 的孤儿
+原子写残留 `workspaces.json.42204.tmp`（8.9MB）。
+
+**测试**：新增 `test/store-retention.test.js` 7 例（载荷截断保头+标记 / `result` 保持 `null` /
+等待中调用不被伪装 / 窗口只留最新 N 条 / ★ 水位防 replay 复活 / 老 store 载入即迁移并落盘 /
+已合规文件不重写）；canvas 线 **96 项全绿**，`node ..\scripts\verify-all.mjs` 全绿
+（canvas 12/12，七线合计 107 项）。
+
+**未做（有意）**：不自动删除用户的历史会话节点（203 个 thread 是用户数据）；不把 messages 拆到独立
+文件（窗口 + 载荷上限已把稳态压到 ~20MB 量级，拆分收益抵不过 schema 变更风险）。稳态体积随**会话节点数**
+线性增长（每节点约 100KB 上限）——若将来节点数继续膨胀，下一步该做的是节点归档，而不是继续压窗口。
+
 ## 2026-09-22 · 文档整理（删除冗余上游产物）
 
 - **删除**：`docs/images/`（两张全仓零引用孤儿图 `native-webui.jpg` / `synapse-map.jpg`，运行时与构建链均无引用）；`docs/development.md`（上游 `dsh-synapse` 的发布指南，描述本仓不存在的三套 GitHub workflow 与 npm 发布流程，对本 fork 零适用性）。
