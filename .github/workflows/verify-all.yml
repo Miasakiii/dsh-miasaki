@@ -1,18 +1,20 @@
 # dsh-miasaki 统一回归 CI
 #
 # 落地评审报告 P0-1（无 CI）+ A2（把 desktop 的 cargo test 环境假阴性变成真信号）。
-# 在 windows-latest 上跑 `node scripts/verify-all.mjs`（七线 L0 静态检查 + L1 单线单测）。
+# 在 windows-latest 上跑 `node scripts/verify-all.mjs`（八线 L0 静态检查 + L1 单线单测）。
 #
 # ── 与 2026-09-13 草稿的差异（2026-09-14 审查修正，均已实测验证）────────────────
 #
-# 草稿的核心判断「七线中唯 ssh 有运行时依赖，其余六线零依赖」是错的，据此只装了
+# 草稿的核心判断「七线中唯 ssh 有运行时依赖，其余六线零依赖」是错的（那是当时的线数，
+# 现已为八线），据此只装了
 # ssh 依赖，会导致 CI 首次运行即有两条线必然失败。实际的依赖分布（读各线
 # package.json 核实）：
 #
 #   sidebar   4 个：@xterm/addon-fit @xterm/xterm node-pty ws        ← 草稿漏装
 #   ssh       4 个：@xterm/addon-fit @xterm/xterm ssh2 ws            ← 草稿装了
 #   desktop   3 个：sharp ws（+ devDep @tauri-apps/cli）             ← 草稿漏装
-#   canvas / fleet / dual-model / appearance：确认零依赖，无需安装
+#   canvas / fleet / dual-model / appearance / usage：确认零依赖，无需安装
+#     （usage 为纯官方契约插件，package.json 只有 peerDependencies；三项检查都不解析模块）
 #
 # 漏装的后果已用「干净副本（git ls-files 全量复制、无 node_modules/target）」
 # 复现：
@@ -32,7 +34,8 @@
 #   2. windows-latest 自带 MSVC（VS 2022 Build Tools），因此 desktop 的 `cargo test`
 #      不会遇到本地 Git Bash 里 GNU /usr/bin/link.exe 遮蔽 MSVC 链接器的假阴性
 #      （见 AGENTS.md「工作区卫生」与 README §统一回归 的 link.exe 注记）。
-#      → CI 中 desktop 应稳定为 8/8，而非本地常见的 7/8※。
+#      → CI 中 desktop 的 cargo test 项应稳定 PASS，而非本地 Git Bash 常见的链接失败※
+#        （项数随线内闸门增长，故此处不再写死分子/分母，避免注释比代码先过期）。
 #
 # ── 版本取舍 ────────────────────────────────────────────────────────────────
 #   · Node 22.19.0：各线 package.json 的 engines 下限即 ">=22.19.0"，CI 跑下限
@@ -72,7 +75,7 @@ permissions:
 
 jobs:
   verify-all:
-    name: 七线统一回归 (windows-latest)
+    name: 八线统一回归 (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -132,8 +135,8 @@ jobs:
         working-directory: dsh-miasaki-desktop
         run: npm ci --omit=dev
 
-      # 唯一质量闸门：七线统一回归。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
-      - name: 运行 verify-all（七线 L0 + L1）
+      # 唯一质量闸门：八线统一回归。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
+      - name: 运行 verify-all（八线 L0 + L1）
         run: node scripts/verify-all.mjs
 
       # 说明：以下实机项不在本 CI 内（需运行中的 DSH host 或桌面壳），

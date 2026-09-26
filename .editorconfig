@@ -1,0 +1,54 @@
+# 仓库级编辑器约定（2026-09-26 落地；治理层三件套之一：.editorconfig / 格式检查 / CI 注释）
+#
+# 目的：把「无 BOM / LF / 末行换行 / 缩进宽度」这些每次都要人工判断的细节变成默认值，
+# 让八条线在同一个约定下长，而不是各线各自漂。
+#
+# 范围与边界：**只**声明编辑器能稳定生效的规则。本仓八线零耦合、无根 workspace、
+# 无依赖注入，因此**不**引入 lint/format 工具链、不挂 pre-commit 钩子 —— 那是独立决议
+# （见评审报告 §五.P1.7）。本文件的作用是「不改代码也能约束新代码」。
+#
+# 落地时的存量实测（438 个被 git 追踪的文本文件，2026-09-26）：
+#   · 行尾：LF-only 421 / CRLF 17
+#   · 编码：UTF-8 BOM 10（全部是 fleet 的外部产物，见文末例外段）
+#   · 17 处 CRLF 分布在 canvas 文档（4）/ ssh README 与设计稿（2）/ desktop 的 dot.rs（1）/
+#     fleet 外部产物（10）。属历史存量，**本批不批量转换**：零语义的整文件 diff 会淹没
+#     真实改动。编辑到哪个文件，哪个文件自然归一到 LF 即可。
+#   · 复核命令：
+#       git ls-files '*.js' '*.mjs' '*.md' | % { if ((Get-Content -Raw $_).Contains("`r`n")) { $_ } }
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Markdown 行尾两个空格是硬换行，裁掉会改变渲染结果。
+[*.md]
+trim_trailing_whitespace = false
+
+# Rust 与 PowerShell 的社区惯例都是 4 空格（本仓现存 .ps1 已是 LF，故不另设行尾）。
+[*.rs]
+indent_size = 4
+
+[*.ps1]
+indent_size = 4
+
+[*.{yml,yaml}]
+indent_size = 2
+
+# ── 例外：外部工具写出的运行时产物 ──────────────────────────────────────────
+# fleet 的 agent 工具以「UTF-8 with BOM + CRLF」写这些文件（PowerShell 默认行为）。
+# 若在此声明 utf-8/lf，任何一次编辑器保存都会整文件改编码，而下次工具运行又把 BOM 写回，
+# 形成来回抖动的 diff。故**如实声明其现状**，把「是否转码」留作独立决议。
+# 判据：这 10 个文件同时也是全仓仅有的 BOM 文件（2026-09-26 实测）。
+[dsh-miasaki-fleet/agents/*/manifest.json]
+charset = utf-8-bom
+end_of_line = crlf
+
+[dsh-miasaki-fleet/agents/registry.json]
+charset = utf-8-bom
+end_of_line = crlf

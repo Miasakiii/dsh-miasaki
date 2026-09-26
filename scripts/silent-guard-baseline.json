@@ -1,0 +1,528 @@
+{
+  "note": "「守卫必须显式失败」闸门的存量冻结台账。**这是债，不是背书**：条目只表示「尚未核销」，每一条都应在后续触碰该文件时补 reason 并就地改写（throw / process.exit / guard-ok 注释）。新增条目会让闸门失败，故本文件只应由 `node scripts/check-silent-guards.mjs --update` 变更，且必须人工复核 diff。",
+  "generatedBy": "scripts/check-silent-guards.mjs --update",
+  "entries": [
+    {
+      "key": "dsh-miasaki-appearance/index.js|R1|if (!existsSync(full)) return null",
+      "rule": "R1",
+      "file": "dsh-miasaki-appearance/index.js",
+      "line": 184,
+      "snippet": "if (!existsSync(full)) return null",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-desktop/patches/dsh-client-ui-chat/rebuild-baseline.mjs|R2|} catch { /* 继续向上找 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/patches/dsh-client-ui-chat/rebuild-baseline.mjs",
+      "line": 54,
+      "snippet": "} catch { /* 继续向上找 */ }",
+      "count": 1,
+      "reason": "继续向上找"
+    },
+    {
+      "key": "dsh-miasaki-desktop/patches/dsh-client-ui-conversation/rebuild-baseline.mjs|R2|} catch { /* 继续向上找 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/patches/dsh-client-ui-conversation/rebuild-baseline.mjs",
+      "line": 53,
+      "snippet": "} catch { /* 继续向上找 */ }",
+      "count": 1,
+      "reason": "继续向上找"
+    },
+    {
+      "key": "dsh-miasaki-desktop/patches/dsh-client-ui-settings-models/rebuild-baseline.mjs|R2|} catch { /* 继续向上找 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/patches/dsh-client-ui-settings-models/rebuild-baseline.mjs",
+      "line": 51,
+      "snippet": "} catch { /* 继续向上找 */ }",
+      "count": 1,
+      "reason": "继续向上找"
+    },
+    {
+      "key": "dsh-miasaki-desktop/patches/dsh-client-ui-trajectory/rebuild-baseline.mjs|R2|} catch { /* 继续向上找 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/patches/dsh-client-ui-trajectory/rebuild-baseline.mjs",
+      "line": 54,
+      "snippet": "} catch { /* 继续向上找 */ }",
+      "count": 1,
+      "reason": "继续向上找"
+    },
+    {
+      "key": "dsh-miasaki-desktop/patches/dsh-cordis-host-runner/rebuild-baseline.mjs|R2|} catch { /* 继续向上找 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/patches/dsh-cordis-host-runner/rebuild-baseline.mjs",
+      "line": 54,
+      "snippet": "} catch { /* 继续向上找 */ }",
+      "count": 1,
+      "reason": "继续向上找"
+    },
+    {
+      "key": "dsh-miasaki-desktop/plugins/dsh-free-model-pool/lib/index.js|R1|if (!existsSync(p)) continue;",
+      "rule": "R1",
+      "file": "dsh-miasaki-desktop/plugins/dsh-free-model-pool/lib/index.js",
+      "line": 350,
+      "snippet": "if (!existsSync(p)) continue;",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-desktop/preset-sources/verify-presets.cjs|R2|try { return require(candidate) } catch { /* try next */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/preset-sources/verify-presets.cjs",
+      "line": 21,
+      "snippet": "try { return require(candidate) } catch { /* try next */ }",
+      "count": 1,
+      "reason": "try next"
+    },
+    {
+      "key": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs|R1|if (!existsSync(dir)) continue",
+      "rule": "R1",
+      "file": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs",
+      "line": 101,
+      "snippet": "if (!existsSync(dir)) continue",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs|R1|if (!existsSync(abs)) continue",
+      "rule": "R1",
+      "file": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs",
+      "line": 151,
+      "snippet": "if (!existsSync(abs)) continue",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|} catch {}",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
+      "line": 61,
+      "snippet": "} catch {}",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|}).catch(function () {})",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
+      "line": 138,
+      "snippet": "}).catch(function () {})",
+      "count": 2,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|} catch (e) {}",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
+      "line": 139,
+      "snippet": "} catch (e) {}",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|try { ws && ws.close() } catch {}",
+      "rule": "R2",
+      "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
+      "line": 292,
+      "snippet": "try { ws && ws.close() } catch {}",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R2|} catch { /* ignore */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 96,
+      "snippet": "} catch { /* ignore */ }",
+      "count": 1,
+      "reason": "ignore"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|const allTasks = safeReadJSONL(path.join(STATE_DIR, 'tasks.jsonl'));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 99,
+      "snippet": "const allTasks = safeReadJSONL(path.join(STATE_DIR, 'tasks.jsonl'));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|const manifest = safeReadJSON(path.join(agentDir, 'manifest.json'));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 122,
+      "snippet": "const manifest = safeReadJSON(path.join(agentDir, 'manifest.json'));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|const control = safeReadJSON(path.join(agentDir, 'control.json'));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 126,
+      "snippet": "const control = safeReadJSON(path.join(agentDir, 'control.json'));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|const status = safeReadJSON(path.join(agentDir, 'status.json'));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 130,
+      "snippet": "const status = safeReadJSON(path.join(agentDir, 'status.json'));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|const usageLines = safeReadJSONL(path.join(agentDir, 'usage.jsonl'));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 133,
+      "snippet": "const usageLines = safeReadJSONL(path.join(agentDir, 'usage.jsonl'));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|const manifest = safeReadJSON(path.join(AGENTS_DIR, id, 'manifest.json'));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 256,
+      "snippet": "const manifest = safeReadJSON(path.join(AGENTS_DIR, id, 'manifest.json'));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|const usageLines = safeReadJSONL(path.join(AGENTS_DIR, id, 'usage.jsonl'));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 259,
+      "snippet": "const usageLines = safeReadJSONL(path.join(AGENTS_DIR, id, 'usage.jsonl'));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|let control = safeReadJSON(controlPath) || {};",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 416,
+      "snippet": "let control = safeReadJSON(controlPath) || {};",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/fleet-monitor/server.js|R3|return sendJSON(res, safeReadJSONL(usagePath));",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/fleet-monitor/server.js",
+      "line": 436,
+      "snippet": "return sendJSON(res, safeReadJSONL(usagePath));",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/bus/bus-apply.mjs|R3|const raw = core.readJsonOrNull(abs)",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/bus/bus-apply.mjs",
+      "line": 118,
+      "snippet": "const raw = core.readJsonOrNull(abs)",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs|R3|const manifest = core.readJsonOrNull(path.join(dir, 'manifest.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs",
+      "line": 61,
+      "snippet": "const manifest = core.readJsonOrNull(path.join(dir, 'manifest.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs|R3|const control = core.readJsonOrNull(path.join(dir, 'control.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs",
+      "line": 63,
+      "snippet": "const control = core.readJsonOrNull(path.join(dir, 'control.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs|R3|const status = core.readJsonOrNull(path.join(dir, 'status.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs",
+      "line": 64,
+      "snippet": "const status = core.readJsonOrNull(path.join(dir, 'status.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs|R3|const v = core.readJsonOrNull(p)",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/agent-pick.mjs",
+      "line": 108,
+      "snippet": "const v = core.readJsonOrNull(p)",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/task-ready.mjs|R1|if (!fs.existsSync(dir)) return states",
+      "rule": "R1",
+      "file": "dsh-miasaki-fleet/workers/graph/task-ready.mjs",
+      "line": 73,
+      "snippet": "if (!fs.existsSync(dir)) return states",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/task-ready.mjs|R3|const manifest = core.readJsonOrNull(path.join(agentDir, 'manifest.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/task-ready.mjs",
+      "line": 82,
+      "snippet": "const manifest = core.readJsonOrNull(path.join(agentDir, 'manifest.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/task-ready.mjs|R3|const control = core.readJsonOrNull(path.join(agentDir, 'control.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/task-ready.mjs",
+      "line": 84,
+      "snippet": "const control = core.readJsonOrNull(path.join(agentDir, 'control.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/task-ready.mjs|R3|const status = core.readJsonOrNull(path.join(agentDir, 'status.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/task-ready.mjs",
+      "line": 85,
+      "snippet": "const status = core.readJsonOrNull(path.join(agentDir, 'status.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R1|if (!fs.existsSync(dir)) return",
+      "rule": "R1",
+      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
+      "line": 45,
+      "snippet": "if (!fs.existsSync(dir)) return",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const manifest = core.readJsonOrNull(path.join(agentDir, 'manifest.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
+      "line": 50,
+      "snippet": "const manifest = core.readJsonOrNull(path.join(agentDir, 'manifest.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const control = core.readJsonOrNull(path.join(agentDir, 'control.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
+      "line": 52,
+      "snippet": "const control = core.readJsonOrNull(path.join(agentDir, 'control.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const status = core.readJsonOrNull(path.join(agentDir, 'status.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
+      "line": 53,
+      "snippet": "const status = core.readJsonOrNull(path.join(agentDir, 'status.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const v = core.readJsonOrNull(path.join(ROOT, 'shared', 'agent-vendors.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
+      "line": 73,
+      "snippet": "const v = core.readJsonOrNull(path.join(ROOT, 'shared', 'agent-vendors.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R1|if (!fs.existsSync(tasksDir)) return out",
+      "rule": "R1",
+      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
+      "line": 81,
+      "snippet": "if (!fs.existsSync(tasksDir)) return out",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const v = core.readJsonOrNull(path.join(tasksDir, id, 'verdict.json'))",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
+      "line": 84,
+      "snippet": "const v = core.readJsonOrNull(path.join(tasksDir, id, 'verdict.json'))",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs|R1|if (!fs.existsSync(p)) return []",
+      "rule": "R1",
+      "file": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs",
+      "line": 48,
+      "snippet": "if (!fs.existsSync(p)) return []",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs|R2|try { out.push(JSON.parse(ln)) } catch { /* 坏行由巡检报错，这里跳过 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs",
+      "line": 53,
+      "snippet": "try { out.push(JSON.parse(ln)) } catch { /* 坏行由巡检报错，这里跳过 */ }",
+      "count": 1,
+      "reason": "坏行由巡检报错，这里跳过"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs|R2|try { fs.unlinkSync(from) } catch { /* 清理失败不掩盖原错误 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs",
+      "line": 81,
+      "snippet": "try { fs.unlinkSync(from) } catch { /* 清理失败不掩盖原错误 */ }",
+      "count": 1,
+      "reason": "清理失败不掩盖原错误"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs|R3|const existing = readJsonOrNull(targetAbs)",
+      "rule": "R3",
+      "file": "dsh-miasaki-fleet/workers/lib/bus-apply-core.cjs",
+      "line": 177,
+      "snippet": "const existing = readJsonOrNull(targetAbs)",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/pulse/publish-pulse.mjs|R2|} catch { /* ignore */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-fleet/workers/pulse/publish-pulse.mjs",
+      "line": 51,
+      "snippet": "} catch { /* ignore */ }",
+      "count": 1,
+      "reason": "ignore"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/validate-bus.mjs|R1|if (!existsSync(rp)) continue // 未交付的任务没有 result.json 是正常的",
+      "rule": "R1",
+      "file": "dsh-miasaki-fleet/workers/validate-bus.mjs",
+      "line": 231,
+      "snippet": "if (!existsSync(rp)) continue // 未交付的任务没有 result.json 是正常的",
+      "count": 1,
+      "reason": "未交付的任务没有 result.json 是正常的"
+    },
+    {
+      "key": "dsh-miasaki-fleet/workers/validate-bus.mjs|R1|if (!existsSync(vp)) continue // 未挂验证器的任务没有 verdict.json 是正常的",
+      "rule": "R1",
+      "file": "dsh-miasaki-fleet/workers/validate-bus.mjs",
+      "line": 248,
+      "snippet": "if (!existsSync(vp)) continue // 未挂验证器的任务没有 verdict.json 是正常的",
+      "count": 1,
+      "reason": "未挂验证器的任务没有 verdict.json 是正常的"
+    },
+    {
+      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R2|const clientPatched = await readFile(join(BASELINE, 'client.patched.js'), 'utf8').catch(() => null)",
+      "rule": "R2",
+      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "line": 697,
+      "snippet": "const clientPatched = await readFile(join(BASELINE, 'client.patched.js'), 'utf8').catch(() => null)",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R2|const hostPatched = await readFile(join(BASELINE, 'index.patched.js'), 'utf8').catch(() => null)",
+      "rule": "R2",
+      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "line": 698,
+      "snippet": "const hostPatched = await readFile(join(BASELINE, 'index.patched.js'), 'utf8').catch(() => null)",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R1|if (!existsSync(target)) { console.log(`[${half.key}] 目标不存在: ${target}`); continue }",
+      "rule": "R1",
+      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "line": 735,
+      "snippet": "if (!existsSync(target)) { console.log(`[${half.key}] 目标不存在: ${target}`); continue }",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R1|if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }",
+      "rule": "R1",
+      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "line": 757,
+      "snippet": "if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }",
+      "count": 2,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-usage/lib/index.js|R1|if (!fs.existsSync(legacyLedger)) return;",
+      "rule": "R1",
+      "file": "dsh-miasaki-usage/lib/index.js",
+      "line": 1009,
+      "snippet": "if (!fs.existsSync(legacyLedger)) return;",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "dsh-miasaki-usage/scripts/dedupe-usage-ledger.mjs|R2|try { j = JSON.parse(line); } catch (e) { /* 坏行原样保留 */ }",
+      "rule": "R2",
+      "file": "dsh-miasaki-usage/scripts/dedupe-usage-ledger.mjs",
+      "line": 44,
+      "snippet": "try { j = JSON.parse(line); } catch (e) { /* 坏行原样保留 */ }",
+      "count": 1,
+      "reason": "坏行原样保留"
+    },
+    {
+      "key": "scripts/patch-live-audit.mjs|R2|} catch { /* profiles 目录不存在：只保留上面的候选 */ }",
+      "rule": "R2",
+      "file": "scripts/patch-live-audit.mjs",
+      "line": 75,
+      "snippet": "} catch { /* profiles 目录不存在：只保留上面的候选 */ }",
+      "count": 1,
+      "reason": "profiles 目录不存在：只保留上面的候选"
+    },
+    {
+      "key": "scripts/patch-live-audit.mjs|R1|if (!existsSync(pkg)) continue",
+      "rule": "R1",
+      "file": "scripts/patch-live-audit.mjs",
+      "line": 83,
+      "snippet": "if (!existsSync(pkg)) continue",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "scripts/patch-live-audit.mjs|R2|} catch { /* 换个候选 */ }",
+      "rule": "R2",
+      "file": "scripts/patch-live-audit.mjs",
+      "line": 87,
+      "snippet": "} catch { /* 换个候选 */ }",
+      "count": 1,
+      "reason": "换个候选"
+    },
+    {
+      "key": "scripts/patch-live-audit.mjs|R1|if (!existsSync(root.dir)) continue",
+      "rule": "R1",
+      "file": "scripts/patch-live-audit.mjs",
+      "line": 110,
+      "snippet": "if (!existsSync(root.dir)) continue",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    },
+    {
+      "key": "scripts/verify-all.mjs|R1|if (!existsSync(testDir)) return []",
+      "rule": "R1",
+      "file": "scripts/verify-all.mjs",
+      "line": 42,
+      "snippet": "if (!existsSync(testDir)) return []",
+      "count": 1,
+      "reason": "（待补：触碰该文件时补理由）"
+    }
+  ]
+}

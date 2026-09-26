@@ -1,15 +1,17 @@
 #!/usr/bin/env node
-// 八线统一静态回归入口（L0 静态检查 + L1 单线单测）。
+// 八线 + 仓库级统一静态回归入口（L0 静态检查 + L1 单线单测）。
 //
 // 只跑「无外部依赖、可在任意机器复现」的检查：语法、单测、总线校验、令牌漂移、
 // 运行时补丁离线自证。需要运行中的 DSH host 或桌面壳的实机项（L2 插件加载 /
 // L3 冒烟 / L4 跨线联动）不在此脚本内——它们的清单在
 // dsh-miasaki-shared-docs/cross/smoke-test-matrix.md。
 //
+// `repo` 是**仓库级治理闸门**（跨八线生效，不属于任何单线）：见 planRepo()。
+//
 // 用法：
-//   node scripts/verify-all.mjs                      # 全部八线
+//   node scripts/verify-all.mjs                      # 全部八线 + 仓库级
 //   node scripts/verify-all.mjs dual-model           # 只跑指定线
-//                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage）
+//                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / repo）
 //
 // 实现注记：子进程一律 stdio: 'inherit'，不做管道捕获——受限沙箱下捕获另一个
 // 程序的 stdio 会以 EPERM 失败，而 inherit 不会。因此本脚本以退出码判定成败，
@@ -22,7 +24,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance', 'usage']
+const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance', 'usage', 'repo']
 
 /** Run one command, inheriting stdio; resolves to the exit code. */
 function run(cmd, args, cwd) {
@@ -118,6 +120,11 @@ function planFleet() {
   checks.push({ line: 'fleet', name: 'test verifier (G4 异构验证)', cmd: process.execPath, args: [join(dir, 'tests/verifier.test.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'verifier-pick --check (G4 契约)', cmd: process.execPath, args: [join(dir, 'workers/graph/verifier-pick.mjs'), '--check'], cwd: dir })
   checks.push({ line: 'fleet', name: 'syntax fleet-monitor/server.js', cmd: process.execPath, args: ['--check', join(dir, 'fleet-monitor/server.js')], cwd: dir })
+  // 2026-09-26 审计 P1.5 的收口：fleet-monitor 原是全仓唯一「写接口零鉴权 + CORS 通配」
+  // 的组合（POST /api/toggle 直接落盘 control.json）。围栏是纯函数 + 假 req/res 驱动真实
+  // handler，不起监听、不碰网络，故受限沙箱同样可跑；判据三条见测试文件头。
+  checks.push({ line: 'fleet', name: 'syntax fleet-monitor/fence.cjs', cmd: process.execPath, args: ['--check', join(dir, 'fleet-monitor/fence.cjs')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'test fleet-monitor (信任围栏)', cmd: process.execPath, args: [join(dir, 'tests/fleet-monitor.test.mjs')], cwd: dir })
   // Bus validation is the fleet line's regression suite (F1 contract + G0 graph/event/result).
   checks.push({ line: 'fleet', name: 'validate-bus', cmd: process.execPath, args: [join(dir, 'workers/validate-bus.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'publish-pulse', cmd: process.execPath, args: [join(dir, 'workers/pulse/publish-pulse.mjs')], cwd: dir })
@@ -390,7 +397,7 @@ async function planSsh() {
   // 单测不碰真实 SSH 连接（store 围栏/归一化、runtime 的 TOFU 与错误分类、
   // http 路由、client 工厂返回契约），因此可在无 sshd 的机器上复现；
   // 真实连接验收仍是实机项，见 smoke-test-matrix.md。
-  for (const entry of ['index.js', 'client.js', 'app.js', 'session.js', 'lib/store.js', 'lib/runtime.js']) {
+  for (const entry of ['index.js', 'client.js', 'app.js', 'session.js', 'lib/store.js', 'lib/runtime.js', 'lib/diagnose.js']) {
     checks.push({ line: 'ssh', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
   for (const file of await testFiles(dir)) {
@@ -446,6 +453,34 @@ function planUsage() {
   checks.push({ line: 'usage', name: 'verify-client-bundle (client 半装载契约)', cmd: process.execPath, args: [join(dir, 'scripts/verify-client-bundle.mjs'), join(dir, 'lib/client.js')], cwd: dir })
 }
 
+/**
+ * 仓库级治理闸门（跨八线生效，不属于任何单线）。
+ *
+ * 这两项补的是「逐例修不解决问题」的那类漏洞 —— 同类 bug 反复出现时，缺的不再是修法，
+ * 而是让第 N 例无法悄悄进来的闸门（评审报告 §五.P2.10）：
+ *   · silent-guards：守卫必须显式失败。四类形态（静默跳过 / 静默吞错 / 静默回退读取 /
+ *     声明清单缺口），存量冻结在 scripts/silent-guard-baseline.json，**新增即失败**；
+ *   · doc-versions：根 README 的版本台账必须与八线 package.json 逐字一致，
+ *     治「文档说一个版本、代码是另一个版本」这类当前态失真。
+ * 两项都零依赖、纯离线，受限沙箱与 CI 同样可跑。
+ */
+function planRepo() {
+  checks.push({
+    line: 'repo',
+    name: 'silent-guards (守卫必须显式失败)',
+    cmd: process.execPath,
+    args: [join(ROOT, 'scripts', 'check-silent-guards.mjs')],
+    cwd: ROOT,
+  })
+  checks.push({
+    line: 'repo',
+    name: 'doc-versions (版本台账 vs package.json)',
+    cmd: process.execPath,
+    args: [join(ROOT, 'scripts', 'check-doc-versions.mjs')],
+    cwd: ROOT,
+  })
+}
+
 /** 定位 cargo：优先 CARGO_HOME，其次 rustup 默认安装位置（PATH 里常没有）。 */function cargoBin() {
   const exe = process.platform === 'win32' ? 'cargo.exe' : 'cargo'
   const home = process.env.CARGO_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.cargo')
@@ -470,6 +505,7 @@ if (selected.includes('ssh')) await planSsh()
 if (selected.includes('dual-model')) await planDualModel()
 if (selected.includes('appearance')) await planAppearance()
 if (selected.includes('usage')) planUsage()
+if (selected.includes('repo')) planRepo()
 
 console.log(`[verify-all] ${selected.join(' / ')} — ${checks.length} 项检查\n`)
 
