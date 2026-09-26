@@ -10,10 +10,13 @@ window.__ModuleLoader__.load({
 		 *
 		 * 把「Session 日志」下载入口从主界面会话头部搬到轨迹页工具栏搜索栏左侧：
 		 *
-		 * 1. 隐藏主界面官方按钮：向 conversation.session.header.utilities 注册
-		 *    id: session-log-download 的同 id 条目 —— 平台 slot 语义 “reusing
-		 *    a shipped id puts you in THAT cell and replaces it”，官方「Session
-		 *    日志」胶囊被替换为同一渲染 null；插件卸载后官方按钮自动恢复（可逆）。
+		 * 1. 隐藏主界面官方按钮：DOM 层 display:none（[class*="sessionLogButton"]，
+		 *    子串锚点对 CSS hash 漂移稳健）。原设计的「向
+		 *    conversation.session.header.utilities 注册 id: session-log-download
+		 *    的同 id 条目做替换」自 DSH 0.1.5-rc.1 起已被官方自带的
+		 *    `@deepseek-ai/dsh-session-log-export` 占位堵死（同 id 注册必然冲突），
+		 *    2026-09-26 删除该死路——详见 apply 内注释；卸载时 disposer 还原
+		 *    display，官方按钮复现（可逆）。
 		 * 2. 轨迹页注入：[role=toolbar] 内 input[type="search"] 的容器左侧插入
 		 *    「Session 日志」下载按钮。轨迹页 toolbar 没有官方 slot，只能 DOM
 		 *    注入：MutationObserver 观察 body + 500ms 重试兜底（约 30s 窗口），
@@ -24,14 +27,14 @@ window.__ModuleLoader__.load({
 		 *    （浏览器 GET 流式下载，不经 fetch，无网络层依赖）。
 		 * 4. 反馈：按钮内联文案（准备中 / 已开始下载 / 下载失败，重试）随后复位。
 		 *
-		 * 生命周期：所有副作用（slot 替换、observer、按钮 DOM、retry/reset timer）
-		 * 挂 ctx.effect 的 disposer；stop / update / undefine 即完全复原。
+		 * 生命周期：所有副作用（observer、按钮 DOM、retry/reset timer、被隐藏按钮的
+		 * display 还原）挂 ctx.effect 的 disposer；stop / update / undefine 即完全复原。
 		 *
 		 * @package dsh-session-log-move
 		 */
 
-		/** Required services：slots（slot 注册）、timer（超时）、sessions（当前会话）。 */
-		const inject = ["slots", "timer", "sessions"];
+		/** Required services：timer（超时）、sessions（当前会话）。 */
+		const inject = ["timer", "sessions"];
 
 		const LABEL_READY = "Session 日志";
 		const LABEL_BUSY = "准备中…";
@@ -85,47 +88,20 @@ window.__ModuleLoader__.load({
 		}
 
 		function apply(ctx) {
-			// ---- 1. 隐藏主界面官方按钮：四保险 ----
-			// a) apply 体同步 register（slot 已声明时直接成功）；
-			// b) slots.inject watcher（slot 未来声明时回调）；
-			// c) 重试循环每 500ms 再试；
-			// d) DOM 层隐藏兜底：直接 display:none 官方按钮（与轨迹页注入同款手段，
-			//    不依赖 slot 语义；[class*="sessionLogButton"] 子串锚点对 CSS hash 漂移稳健）。
+			// ---- 1. 隐藏主界面官方按钮：只走 DOM ----
+			// 历史：本插件原设计是向 conversation.session.header.utilities 注册
+			// id: session-log-download 的**同 id 替换**条目（平台 slot 语义「复用已发布的
+			// id 即接管该 cell」）。但 DSH 0.1.5-rc.1 起官方自带
+			// `@deepseek-ai/dsh-session-log-export`，该 id 由官方包先行注册 ⇒ 替换从此
+			// 永远冲突（`already has an entry with id … registered by …`），重试也不可能成功。
 			//
-			// 2026-09-22 修复错误刷屏：DSH 0.1.5-rc.1 起官方自带
-			// `@deepseek-ai/dsh-session-log-export`，conversation.session.header.utilities
-			// 里的 `session-log-download` 条目由官方包注册——本插件的「同 id 替换」从此
-			// 永远冲突（already has an entry … registered by Z8）。旧代码把每次失败都
-			// console.error，叠加 60 次重试，页面加载后 30s 内持续刷屏、淹没真正的问题。
-			// 现在：重复 id 判定为**永久失败**（不再重试、不再刷屏），slot 未声明的短暂
-			// 窗口仍可重试，但失败日志整个 fiber 只记一次。
-			let headerRegistered = false;
-			let headerPermanentlyBlocked = false;
-			let headerErrorLogged = false;
-			const tryHideHeader = () => {
-				if (headerRegistered || headerPermanentlyBlocked) return;
-				try {
-					ctx.slots.register(
-						{ name: "conversation.session.header.utilities", id: "session-log-download" },
-						() => null,
-					);
-					headerRegistered = true;
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					// 官方包已占同一 id：slot 语义下无法替换，重试也不会成功 —— 永久放弃。
-					if (/already has an entry with id/.test(message)) {
-						headerPermanentlyBlocked = true;
-					}
-					if (!headerErrorLogged) {
-						headerErrorLogged = true;
-						console.error("dsh-session-log-move: header register failed - " + message);
-					}
-				}
-			};
-			tryHideHeader();
-			ctx.slots.inject("conversation.session.header.utilities", tryHideHeader);
-
-			// 保险 d：DOM 隐藏官方「Session 日志」胶囊（幂等；React 重建后由 observer/重试重新隐藏）。
+			// 2026-09-26 清理：删掉这条**注定失败**的 slot 路线（连同 0.1.7 下必然抢跑的
+			// 同步 register —— 槽声明是多级异步链，本插件 apply 时该槽尚未声明，于是每次
+			// 页面加载都留一条 `slot … is not declared` 的 error 噪声；而即便等到声明，
+			// 也只会换成同 id 冲突，永远走不到成功）。主界面按钮改由 DOM 隐藏**唯一**负责：
+			// 不依赖 slot 语义，[class*="sessionLogButton"] 子串锚点对 CSS hash 漂移稳健，
+			// 卸载时由 disposer 还原 display（见本节末尾）。
+			// 若将来官方让出该 id，slot 替换路线可从 git 历史（≤0.1.1）恢复。
 			const hideOfficialButton = () => {
 				const nodes = document.querySelectorAll('button[class*="sessionLogButton"]');
 				for (const node of nodes) {
@@ -229,13 +205,12 @@ window.__ModuleLoader__.load({
 				retryTimer = ctx.timeout(() => {
 					retryTimer = null;
 					attempts += 1;
-					tryHideHeader(); // 保险 c：header 替换也进重试循环，slot 何时声明都能命中
-					hideOfficialButton(); // 保险 d：DOM 隐藏兜底
+					hideOfficialButton(); // 官方按钮被 React 重建后补一次隐藏
 					if (!button || !button.isConnected) {
 						attachIfMissing();
 					}
-					// 两项目标都已达成则停止重试，避免空转。
-					if (headerRegistered && button && button.isConnected) {
+					// 自有按钮挂上即收手；若用户始终没走到轨迹页，窗口最多空转 30s。
+					if (button && button.isConnected) {
 						retryTimer = null;
 						return;
 					}

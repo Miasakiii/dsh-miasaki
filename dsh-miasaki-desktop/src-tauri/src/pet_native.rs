@@ -100,10 +100,19 @@ impl NativePet {
         }
     }
 
+    /// 2026-09-26 值去重（「一直在刷新」修复 P1）：与 `set_theme` / `set_activity` 同构 ——
+    /// 同值不再写日志、不再赋值。
+    ///
+    /// 背景：hash 通道里的 `petts`（pet-panel 心跳时间戳）每 1.5s 必变，而其余字段往往
+    /// 原封不动；壳按「fragment 变化」派发，于是每轮都对**同一个** mode 重设一次。
+    /// 旧实现无条件写日志，实测让 `pet.log` 以 1.32 行/秒持续 5 小时
+    /// （156945 行 / 4.7MB），用户侧观感就是「一直在刷新，停不下来」。
     pub fn set_mode(&self, mode: &str) {
-        window::pet_log_line(&format!("[native-pet] set_mode {mode}\n"));
         if let Ok(mut s) = self.shared.lock() {
-            s.mode = mode.to_string();
+            if s.mode != mode {
+                window::pet_log_line(&format!("[native-pet] set_mode {mode}\n"));
+                s.mode = mode.to_string();
+            }
         }
     }
 
@@ -123,10 +132,13 @@ impl NativePet {
         }
     }
 
+    /// 2026-09-26 值去重（「一直在刷新」修复 P1）：同 `set_mode` —— 同值不再写日志、不再赋值。
     pub fn set_intensity(&self, int: &str) {
-        window::pet_log_line(&format!("[native-pet] set_intensity {int}\n"));
         if let Ok(mut s) = self.shared.lock() {
-            s.intensity = int.to_string();
+            if s.intensity != int {
+                window::pet_log_line(&format!("[native-pet] set_intensity {int}\n"));
+                s.intensity = int.to_string();
+            }
         }
     }
 

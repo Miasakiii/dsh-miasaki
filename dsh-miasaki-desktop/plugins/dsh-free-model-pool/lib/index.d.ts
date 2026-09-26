@@ -80,5 +80,4 @@ export const inject = ['settings', 'webServer'] as const satisfies Injectable[];
 
 export function apply(ctx: { settings: Settings; webServer: WebServer }): void;
 
-declare const __devOnly: unique symbol;
 export type { Settings, WebServer };

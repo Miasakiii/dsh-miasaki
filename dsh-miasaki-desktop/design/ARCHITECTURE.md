@@ -8,12 +8,12 @@
 Miasaki.exe (Tauri 2, 单进程)
 ├─ 主窗口 "main"(WebView2, 无边框)
 │   ├─ loading.html(本地唤醒页)+ initialization_script 注入 theme-init.js
-│   └─ 导航 http://127.0.0.1:3080/(DSH web,由启动器拉起)
+│   └─ 导航 http://127.0.0.1:3080/(DSH web app,由启动器以 `dsh --profile miasaki` 拉起)
 ├─ 桌宠线程(原生 Win32 分层窗口,UpdateLayeredWindow 逐像素 alpha)
 │   ├─ set_mode / set_intensity(共享 Arc<Mutex<PetShared>>)
 │   └─ 33ms SetTimer → compose(帧更新 + 惰性 present)
 ├─ hash watchdog(tokio,33ms):URL fragment → 主题/强度/拖窗/命令
-├─ 后端存活看门狗(tokio,2s):后端死亡 → 自动重拉 dsh web(退避 2s→30s)+ 错误页重导航(2026-09-23)
+├─ 后端存活看门狗(tokio,2s):后端死亡 → 自动重拉 dsh 后端(退避 2s→30s)+ 错误页重导航(2026-09-23)
 ├─ fleet 脉冲看门狗(tokio,2s,可选):MIASAKI_FLEET_PULSE 文件 → 桌宠 fleet 指示
 ├─ 素材服务(127.0.0.1:39800,exe 旁 ui/pets|icons,CORS)
 └─ 托盘(tray-icon):显示/隐藏主窗口、退出
@@ -26,6 +26,7 @@ Miasaki.exe (Tauri 2, 单进程)
 
 | 决策 | 原因 |
 |---|---|
+| 自制插件只装专属 profile `miasaki`；官方 `desktop`/`web` 不碰 | 官方桌面端(Electron)独占 `desktop` 且 CLI 拒管该 profile；混装会污染官方 dsh。启动口径唯一来源 = `recovery::backend_profile_name()`（2026-09-26） |
 | WebView2 只做主窗,桌宠用原生 Win32 分层窗 | WebView2 透明/置顶/工具窗全部不可用(黑化/空白/绿幕),三角色/待机行为已验证 |
 | 初始化注入 = initialization_script + on_page_load eval | 只在文档创建时可靠;导航后 eval 不可靠 |
 | 主题 = 令牌层覆盖 `--dsw-static-*` + `--dsw-alias-bg-*` | 不动 DSH 本体,升级无冲突;rc.8 令牌面 73 个 static 与 token-surface.txt 一致 |
@@ -81,12 +82,16 @@ tb-drag pointerdown → 记录起点;pointermove → move=累计物理增量(×d
     → dsh-pet-panel 按 key 匹配 → 官方 PendingApproval.answer('allowed-once'|'rejected')
     → (失败) 3s 内审批仍在 → 桌宠改显「需要你的批准」提示去 DSH 界面处理
     │ 每 1.5s 心跳写 window.__miasakiPetPanel = { ts, state, tool }
+    ├──桌面端(P7,2026-09-26 下午):plugin:event|emit 'miasaki-pet-heartbeat'
+    │    → main.rs app.listen → set_official_state(ts,pet,pettool,petkey)
+    │    (URL 不动;浏览器/预览无 IPC → 回落写 hash,与历史一致)
     ▼
-注入运行时 02-core.js syncHash(hash 单写者):心跳 5s 内 → 追加 pet=<态>&pettool=<工具名>&petts=<ms>
-  官方通道静默 → 不带 pet 字段;05-sensors.js 同步关闭 act/wait DOM 扫描(不是双源并存)
+注入运行时 02-core.js syncHash(hash 单写者):**只有实质状态变化才写 URL** —— `petts` 的值
+  在判重里被归一化(P7),心跳不再驱动 URL 变更;官方通道静默 → 不带 pet 字段,
+  05-sensors.js 同步关闭 act/wait DOM 扫描(不是双源并存)
 兜底信号 —— DOM 扫描(通道死亡时,themes/src/05-sensors.js):
   scanActivity()("停止生成"按钮→busy) / scanApproval()(dialog 内允许+拒绝成对→wait=1)
-main.rs parse_fragment(结构体) + start_hash_watchdog
+main.rs parse_fragment(结构体) + start_hash_watchdog（兼容期保留:老注入产物 / 浏览器路径仍走 hash）
   ▼  pet.set_official_state(ts, state, tool) / set_activity / set_waiting_approval
 compose 六态合成(pet_native.rs PetState):
   官方(5s 心跳内,白名单归一化) > DOM 兜底(waiting/busy) > fleet 叠加(告警;Waiting>FleetBlocked)

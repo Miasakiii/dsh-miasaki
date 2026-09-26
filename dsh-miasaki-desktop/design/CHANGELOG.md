@@ -2,6 +2,622 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-26（深夜·续）· 死代码与孤儿素材清理（零行为变更）
+
+仓库级死代码审计（覆盖 `src-tauri/` `themes/` `ui/` `scripts/` `preset-sources/` `plugins/` `patches/` `design/`）
+后的清理。验证：`node scripts/verify-all.mjs desktop` **33/33 PASS**（含 `cargo test` 与 6 个补丁离线自证）。
+
+| 项 | 位置 | 判定证据 |
+|---|---|---|
+| 桌宠孤儿派生帧 `whale/states/idle.png`（859,782 B） | `ui/pets/whale/states/` | `frames.json:5-12` 的 whale `states.idle` 是六帧数组（`idle-00…05.png`），全文不含 `states/idle.png`；盘上 9 个 PNG 只被引用 8 个（kurumi 57/57、inverse 3/3 零孤儿，同法核出唯一孤儿）。**注意 `frames.json:100` 的 `"states/idle.png"` 属于 `inverse` 宠物**（其 `states/` 目录下同名文件仍在位），审计初判时极易看串行。删除后 `scripts/check-pet-assets.mjs` 的孤儿 WARN 归零、闸门 PASS |
+| 零引用类型声明文件 `lib/types/detect.d.ts`（42 行） | `plugins/dsh-free-model-pool/lib/types/` | 全仓唯一命中在历史 CHANGELOG；其 `FreeModelEntry/Summary/Profile` 与 `lib/index.d.ts` 逐字重复；`package.json` 的三处 `types` 只指向 `lib/index.d.ts` 与 `lib/types/client/index.d.ts`，该文件不在 exports 映射面 |
+| `SettingsSectionPanelProps` 接口 | `.../lib/types/client/index.d.ts:3-5` | 全仓 1 命中＝定义本身（client.js 是手写 `__ModuleLoader__` bundle，无 import 该类型） |
+| `declare const __devOnly: unique symbol;` ×2 | `lib/index.d.ts:83`、`lib/types/client/index.d.ts:15` | 两处逐字相同、均无 export、全仓零引用（同一次模板复制的残留） |
+| hash 命令 `"hide"` / `"show"` 两个 match 臂 | `src-tauri/src/main.rs:2148-2154` | `cmd=hide` / `cmd=show` 全仓零写者：`petHashCmd()` 的实参穷举为 `want-max/min/max/close/shutdown`（themes 侧 4 处 + runtime.js 5 处），pet-panel 走的是**另一对** `cmd=pet-show` / `cmd=pet-hide`（`main.rs:2169/2173` 有专属臂，未动）。主窗口显隐由托盘 `toggle` 直接完成 ⇒ 无功能丢失 |
+| Tauri 命令 `pet_log` + 其 `generate_handler!` 注册项 | `src-tauri/src/main.rs` | `invoke('pet_log'` 全仓零命中；13 个 `#[tauri::command]` 中 11 个有调用点。易混淆项：`pet_native/window.rs` 的 `pet_log_line()` 是 Rust 内部写 pet.log 的函数（20+ 处调用），与命令无关，未动。页面侧写壳日志的能力已由 `diag_console` 覆盖 |
+
+**刻意保留（防误删，均已核实）**：`ui/pets/inverse/raw/*.png`（12 MB，`inverse-states.mjs` 的唯一输入 +
+`check-pet-assets.mjs` 登记的再生源）、两张 `spritesheet.webp`（`build-init.mjs` 的 webp→png 转换**带
+`existsSync` 守卫**，源缺失会静默跳过 —— 正是 2026-09-10 的断链教训）、`whale/idle.gif`（`cut-frames.mjs`
+生成六帧的唯一源）、`themes/test/package.json` 与 `ui/test/package.json`（ESM 类型标记，删了这两目录的
+测试会以 CJS 解析失败）、`patches/*/baseline/*`（8 份，补丁自证闸门的唯一输入）。
+
+**留待决议**：`ui/icons/app.png`（43 KB）零消费者（启动页徽记是 `loading.html` 的内联 SVG，标题栏取
+`theme-*.png`），但删除须同批改 `build.rs:21` 的内嵌清单与 `make-icons.mjs:136-145` 的生成点，涉及构建链三处，
+按「删素材前必查脚本输入」纪律不在本次动；`themes/runtime.js`（1130 行 legacy 回退源）唯一引用是不可达的回退
+分支且仍带已移除的 `set_pet_mode` invoke，属需产品决策的删除面。
+
+## 2026-09-26（深夜）· P10：401 无限刷新 + 404 首屏 —— 鉴权改走官方 token，就绪判据改看应用层
+
+**这一轮的起点是两张开机截图**：① `找不到此 127.0.0.1 页 / HTTP ERROR 404`；
+② 用户复述「还是重复刷新」。**P9 本身是成功的** —— `pet.log` 里明确有
+`spawn-dsh: node 直启后端（绕开 cmd.exe）pid 40440`（740 已绕过），问题出在**后面两步**。
+
+### 一、404 首屏：壳在「webserver 已监听、路由还没注册」的窗口里导航
+
+`pet.log` 实测时序：`spawn-dsh`（1790397567）→ `page-load #1`（1790397570）——**相隔 3 秒**，
+而 DSH 冷启动要 3–6s。DSH 的 webserver **激活即监听**，路由晚注册，此间的请求**一律 404**
+（`dsh-host-webserver` 注释原文：*the fallback handler answers anything not yet claimed during
+startup with 404 until its owner registers*）⇒ WebView2 直接显示那个 404 页。
+更糟的是 `on_page_load` 命中 3080 就把 `PAGE_UP` 置真 —— **404 文档也被当成"加载成功"**，
+于是运行期看门狗的「文档从未就绪 → 重新导航」兜底**永远不会触发**，页面永久停住。
+
+### 二、无限刷新：401 → `location.reload()` 环（决定性实测）
+
+| 实测 | 结果 |
+|---|---|
+| `GET http://127.0.0.1:3080/`（不带 cookie） | **401** `text/plain`：`dsh web authentication required; reopen the URL printed by dsh web.` |
+| 该正文与 `themes/src/00-boot.js::is401()` 的检测串 | **逐字吻合** ⇒ 401 兜底链每轮 `location.reload()` |
+| `~/.dsh/.credentials.yaml`（1141B，09-25 21:23） | **没有** `client-connection/browser-session` 段（只有 `version`/`refs`/`records`）⇒ `auth_secret()` 返回 `None` |
+| 于是 loading 页… | 回落到**硬编码兜底 secret**（`00-boot.js` 的 `SECRET_B64`）签 cookie ⇒ **后端不认** ⇒ 恒 401 |
+| `GET /?token=<后端打印的 token>` | **303** + `Set-Cookie: dsh-auth-…=v1.…; HttpOnly; SameSite=Strict; Max-Age=2592000` |
+
+**结论**：壳的「预置 cookie」路线（`design/auth-cookie-prepinject.md`）**依赖 credentials 里一个
+本机并不存在的段**；而官方桌面端 / CLI 走的是**另一条**：打开 `/?token=…` → 后端签发 cookie。
+前者坏掉时，后者一直可用 —— 这也解释了为什么官方桌面端（desktop profile）始终正常。
+
+### 三、处置（P10）
+
+- **鉴权改走官方 token**（`main.rs`）：新增 `latest_web_token()` / `parse_web_token_line()`
+  —— 从壳自己重定向的 `%LOCALAPPDATA%\miasaki\server.log` 里取**最新**的
+  `dsh web: http://127.0.0.1:3080/?token=…`（只认本端口：该文件是 append，历史行来自别的实例），
+  `navigate_main()` 现在带 token 导航（`/?token=…` → 303 → 持久 cookie 落地），
+  取不到才回落裸 URL（最坏不劣化）。⭐ 这条**不依赖 `credentials.yaml`**。
+- **就绪判据从 TCP 升到应用层**：新增 `backend_http_status()` / `backend_http_ready()`
+  （零 crate 的极简 HTTP GET，判据 = **状态码不是 404**；401 也算就绪，因为那说明路由已接管），
+  `start_launch_sequence` 用它替代 `port_ready()`。
+- **404 兜底重导航**：新增 `schedule_renavigate_when_ready()` —— `on_page_load` 命中 3080 时调用，
+  若此刻 `GET /` 仍是 404，就等（最多 60s、全程只允许一个任务、关闭时退出），一旦路由就绪
+  **重新导航一次**。补上「`PAGE_UP` 被 404 页置真 ⇒ watchdog 不再兜底」这个缺口。
+- **P7 判据去污染（P9.1）**：`doc-boot` 打点新增 `top` 字段，壳侧**只对顶层 frame**计
+  `doc-boot`；子 frame（画布 / SSH 预览等 iframe 的 `about:blank`）另计 `frame-boot`（前 3 次 + 每 100 次）。
+  起因：`initialization_script` 注入**每个 frame**，实测 6 秒冒出 15 次 `doc-boot #N about:blank`，
+  把「文档级重载」判据整个污染 —— **上一轮 P7 留下的判据缺陷，本轮修正**。
+
+### 四、验证与产物
+
+- `cargo test --bin miasaki` **85 passed / 0 failed**（新增 `web_token_line_parses_only_this_port`：
+  本端口识别、`\r` 与尾随参数截断、别的端口拒绝、畸形行不 panic）；release 构建**零 warning**
+  （上一轮曾因「函数写了没接线」留 5 条 dead_code —— 本轮把 `backend_http_ready` 与
+  `schedule_renavigate_when_ready` 真正接进调用链后清零）。
+- 部署 `C:\ProgramData\MiasakiApp\Miasaki.exe` = **2026-09-26 12:47:17 / SHA256 `5DDD2E41F1212FA2`**，
+  binary 内自证含 P7/P9/P10 三批特征串。
+
+### 五、用户下一步
+
+重开 `miasaki.exe`。判据（全在 `%LOCALAPPDATA%\miasaki\pet.log`）：
+① `spawn-dsh: node 直启后端（绕开 cmd.exe）pid …`（P9）；
+② `navigate: 带官方 token 进入（len …）`（P10 —— **不再出现 401 兜底链**）；
+③ `doc-boot #N` 停在个位数、**没有** `about:blank` 的顶层 doc-boot；
+④ 页面不再 404、也不再自己刷新。
+
+**边界**：`latest_web_token()` 依赖后端把 `dsh web: …?token=…` 打到 stdout（壳已重定向到
+`server.log`），若将来该输出格式变化，会自动回落裸 URL —— 那时 `00-boot.js` 的 401 兜底链
+仍会生效（含熔断），但会退回「要点一次刷新」的老体验。这条已写进 `docs/` 之外的代码注释。
+
+## 2026-09-26（晚）· P9：壳不再依赖 `cmd.exe` —— 「一打开找不到页面」的真因是 os error 740
+
+**现象**（用户截图 + `pet.log`，两者逐字一致）：
+
+```
+未检测到 dsh，请安装 DeepSeek Harness …    未找到 dsh（不在 PATH）(dsh --version 执行失败)
+—— 环境自证 ——
+cmd.exe：无法启动（请求的操作需要提升。(os error 740)；os error Some(740)）
+PATH 含 C:\Users\Asakii\AppData\Roaming\npm：是
+C:\Users\Asakii\AppData\Roaming\npm\dsh.cmd：存在
+当前目录：C:\ProgramData\MiasakiApp
+```
+
+`pet.log` 同步落两行：`spawn-dsh: 拉起后端失败：启动 dsh 失败: 请求的操作需要提升。 (os error 740)`。
+
+**它不是「dsh 没装」**（`dsh.cmd` 在、PATH 也在）—— **是壳连 `cmd.exe` 都起不来**，于是
+`where dsh`（探测）、`echo ok`（自证）、`cmd /C dsh …`（拉起后端）**三条路同时断**，
+用户侧就是「一打开就是找不到页面 / 停在启动页」。2026-09-25 埋的四项环境自证在此**正是**
+把「以为没装」与「命令解释器起不来」当场分开的那一步 —— 这次是它救了排查。
+
+**排查（四步，全部本机实测）**：
+
+| 检查 | 结果 |
+|---|---|
+| 本会话（Medium 完整性）跑 `cmd /c echo ok` | **成功** ⇒ 不是系统级封禁 |
+| `C:\ProgramData\MiasakiApp` 内容 / `where cmd` / cmd.exe 签名 | 目录只有 exe + ui；`cmd` 解析到 System32；cmd.exe **微软签名有效** |
+| `HKCU\…\AppCompatFlags\Layers` | **`c:\windows\system32\cmd.exe = RUNASADMIN`**（即"cmd 以管理员身份运行"；该键 09-21 写入，同键另两条是下载的安装包与腾讯应用宝）。**但它不解释本次复发**：11:29 那次 `spawn_dsh` 是**成功**的（pet.log 有 pid 23176），同一标记当时已在 |
+| Rust 复现壳的调用（`_refs` 一次性探针，已删） | `Command::new("cmd")` / `+CREATE_NO_WINDOW` / `cmd.exe` / 绝对路径 / `COMSPEC` —— **五种全部成功** |
+
+**顺带发现**：PATH 的 `%APPDATA%\npm` 下存在**名为 `cmd` 的 npm 包装**
+（`command-code@1.47.0` 注册的 `bin.cmd` → `cmd` / `cmd.cmd` / `cmd.ps1`）。壳此前用**裸名**
+`cmd`，等于把「跑的是哪个 cmd」交给 CreateProcess 去搜（应用目录 → 当前目录 → System32 →
+PATH）—— 事故现场因此不可判读。**无论根因是否在此，壳都不该让系统去猜。**
+
+**处置（P9，三处）**：
+
+1. **绝对路径**（`main.rs::cmd_exe()`）：`%SystemRoot%\System32\cmd.exe` → 回落 `%COMSPEC%`
+   → 最后才回落裸名；四处调用（`cmd_capture` / 环境自证 / `spawn_dsh` 回落 / `open_terminal`）
+   全部改用它。
+2. **node 直启（主路径，绕开 cmd.exe）**：`spawn_dsh` 优先执行
+   `node "%APPDATA%\npm\node_modules\@deepseek-ai\dsh\lib\bin.js" --profile <名> --no-open`
+   —— node 与入口脚本都是**普通文件**，不经过命令解释器。新增两个探测纯函数
+   `node_exe()`（按 PATH 找 `node.exe`）与 `dsh_entry_js()`（npm 全局安装位置）；任一缺失或
+   spawn 失败 → 回落 `cmd /C dsh …`，且错误信息带上直启失败原因（最坏不劣化）。
+3. **探活与自证不再误报**：`dsh_available()` 先看 `dsh_entry_js()` 在不在（与 PATH、与
+   cmd.exe **都无关**）；失败页自证新增两行 —— **cmd.exe 绝对路径**与**node 直启可用性**。
+
+**验证**：`cargo test --bin miasaki` **84 passed / 0 failed**（新增
+`cmd_exe_is_absolute_and_exists` 钉死「不得再用裸名」、
+`direct_launch_probes_only_return_existing_files` 钉死探测只返回真实存在的文件）；
+release 构建零 warning。
+
+**用户下一步**：重开 `miasaki.exe`。判据：① 启动页不再出现「未检测到 dsh」；
+② `pet.log` 出现 `spawn-dsh: node 直启后端（绕开 cmd.exe）pid …`；
+③ 进去后 `page-load` / `doc-boot` 都停在个位数（P7 的判据）。
+
+**边界（诚实标注）**：第四条实验说明「740 只在壳进程里发生」**尚未收敛到机制**（同机同用户的
+复现全部成功），本轮是**绕过它**而不是解释它。若 node 直启同样失败，说明限制比 cmd 更宽
+（子进程创建被整体约束），届时应转向「外部启动后端 + 壳采用」的形态。另外那条
+`cmd.exe = RUNASADMIN` 是**用户的异常配置**（cmd 不需要管理员），清不清除由用户决定 ——
+不在本轮改动范围内。
+
+## 2026-09-26（下午·续）· P7：心跳不再驱动 URL —— 「进去后一直刷新」修掉（一打开找不到页面那条未修，现场备查）
+
+**现象**（用户原话）：「miasaki 一打开就是找不到页面，刷新后进去就开始无限刷新了」。
+**两条独立成因**，本次只落地第二条：
+
+| 症状 | 现场证据（全部本机实测量） | 结论 |
+|---|---|---|
+| 一打开找不到页面 | `%LOCALAPPDATA%\miasaki\server.log` 有 `failed to parse overlay …\profiles\miasaki\cordis.patch.yml: YAMLException (626:1)`（中午那次 PS here-string 事故的崩溃现场）；`~/.dsh/logs/startup-…11-24-03….log`：`webserver` 因 `EADDRINUSE 127.0.0.1:3099` **启动失败**（3099 是中午验证用的临时后端）；pet.log 11:29:42 启动 → 11:30:25 用户关闭，**42 秒零 `page-load`**（后端始终没就绪） | 后端没起来；而壳的「就绪」判据只有 `TCP connect 3080`，分不清「健康 / 僵死 / 别人的实例」。**本次未修**，写入待办 |
+| 刷新后一直刷新 | WebView2 History 库 `urls` **79250** / `visits` **88629** / 文件 **87MB**；11:10–11:32 与前一晚 23:53 全程 **1.2–1.5s 一轮 URL 变更**；`RELOAD` 仅 102 条（99.6% 是同文档 hash 抖动） | **P7 修掉** |
+
+**根因（P3 的判据本身没写错，是它漏了心跳这一路）**：
+
+1. `05-sensors.petEvalIntensity` 每 **1500ms** 调一次 `syncHash`，而目标 hash 里的 `petts` 是
+   pet-panel 每 1500ms 推进一次的心跳 ⇒ **P3 的顺序无关字段集合判重对心跳永远不成立**
+   ⇒ 每 1.5s 一次 `replaceState` ⇒ WebView2 每次都留一条记录。用户看到的就是「一直在刷新」。
+2. `on_page_load` 里那句无条件的 `eval(INIT_SCRIPT)`（**120KB**）：`page-load` 对**同文档
+   导航同样触发** ⇒ 上一条的每一次 URL 变更都换来一次整脚本重解析（渲染主线程白烧）。
+   **P6 留下的判据——「文档级重载会让 `page-load` 快速增长，同文档导航不会」——由此被实测
+   证伪**：11:32 那次 `page-load` 11 秒涨到 #20，而 History 里并无对应的文档级加载。
+
+**落地（P7，三处，判据与注释都留在代码里）**：
+
+- **注入层**（`themes/src/02-core.js`，`@slice:hash-sync` 段内）：新增
+  `withoutHeartbeatValues` / `sameFragmentExceptHeartbeat` / `emitToShell` / `pushPetHeartbeat`。
+  三态契约：① 除心跳外一切相同 → **URL 一个字节都不动**，心跳改经事件通道；
+  ② 实质状态变化 → 照旧写 URL（新心跳随这次写入一起带上）；③ 交不出事件（无 IPC / emit 被拒）
+  → **回落写 URL**，行为与历史一致（浏览器/预览走的就是这条，功能不降级）。
+- **页面 → 壳事件通道**（`themes/src/08-ready.js` 打点 + `src-tauri/src/main.rs` 的
+  `app.listen`）：`miasaki-pet-heartbeat`（六态心跳，替代 `petts` 走 URL）与 `miasaki-boot`
+  （**每次文档 boot 打一次点**）。权限来自既有 `capabilities/remote-dsh.json` 的
+  `core:default`（其 `core:event:default` 已含 `allow-emit`），与标题栏 `start_dragging`
+  同一条链路 —— **capability 文件一个字节未改**。`set_official_state` 仍是唯一入口
+  （白名单归一 + 截断不在这里复制一份规则）。
+- **壳侧注入收敛**（`main.rs`）：新增纯函数 `should_inject_init(url)` —— 只在**文档级导航**
+  （URL 不带 fragment）补注入主题脚本；F5 刷新虽保留 fragment，但新文档本就执行过
+  `initialization_script`，跳过无损失。hash 抖动不再是「每 1.5s 重解析 120KB」。
+
+**取证判据升级（README 同步）**：`page-load #N` 只说明「导航事件有多少次」（同文档导航也
+触发），**`doc-boot #N`（本次新增）才是「文档级重载」的判据** —— 它涨 = 页面真被重载；
+它不涨而 `page-load` 在涨 = 只是 URL 在变。这正是上一轮缺的那块拼图。
+
+**验证**：
+
+- `themes/test/*.test.js` 九个文件全绿，**85 例**（`hash-sync` 14 例：P7 新增 4 条 ——
+  桌面端心跳不写 URL 且 emit 载荷逐字段核对 / emit 被拒回落写 URL / 实质变化照写 /
+  无 IPC 环境行为不劣化；原「心跳推进必须照写」按新契约改写）；
+- `cargo test --bin miasaki` **82 passed / 0 failed**（新增
+  `init_injection_only_on_document_navigation`：裸文档 URL 才注入，带 fragment 一律跳过）；
+- `npm run gen-init` 重建注入产物（13 片、令牌完备性 + 自校验通过）。
+
+**用户下一步**：重开 `miasaki.exe`。判据：① 稳定态下 hash 不再自己变化（History 库不再长）；
+② `pet.log` 里 `doc-boot #N` 与 `page-load #N` 都停在个位数；③ 桌宠六态照常（心跳走事件
+通道，`set_official_state` 仍被驱动）。
+
+**仍未做（留给下一条）**：壳的「后端就绪」判据（TCP 通 ≠ 健康且是本 profile 的实例）、
+上次未退出后端的启动期清理、启动页显示后端失败的具体原因 —— 对应上表「一打开找不到页面」。
+
+## 2026-09-26（中午·续）· 会话记录按 profile 隔离 —— miasaki 壳与官方桌面端各记各的会话
+
+**诉求**（用户原话）：「如果不能实现之前的会话分类，至少现在开始 miasaki 和 dsh 的会话得隔离开吧」。
+
+**为什么「分类」做不到**（实测量）：会话文件 `session.v4.jsonl.zstd` 的 header 只有
+`type/version/id/createdAt/cwd/isSeeded/delegationDepth/agentPreset` —— **没有任何「哪个 profile 跑的」标记**。
+`~/.dsh/sessions/` 下 231 个会话（`--C-Users-Asakii-Desktop-dsh-miasaki--` 占 216 个）物理上无从判别来源，
+把历史分回各自 profile 没有可实现的路径；能做的只有**从现在开始隔离**。
+
+**隔离点**：官方 `dsh-base/cordis.patch.yml` 写着 `root: !!js dshHomePath('sessions')` ——
+一个**与 profile 无关的全局目录**，这就是三个 profile 会话混在一处的物理原因。`root` 是**单值**
+（`Config` 只有 `root` + 可选 `compression`），会话列表直接枚举该 root ⇒「换 root」即「换可见集合」，且天然双向。
+
+**落地**（只改一处，官方侧零改动）：
+
+- `~/.dsh/profiles/miasaki/cordis.patch.yml` 追加（profile 层优先级高于 bundle 层）：
+  `- id: session-persistence-jsonl` / `config.root: !!js dshHomePath('profiles', 'miasaki', 'sessions')`。
+  **表达式刻意不依赖任何服务**（不用 `ctx.get('profileContext')`）——上午那次 `sessionController`
+  不可用的根因正是无可选链的服务访问在重载求值时抛 `TypeError`；写死 profile 名把这条风险降为零；
+- **官方 `desktop` profile 一个字节未动**（前后哈希一致：`cordis.patch.yml` `8948F53D…` /
+  `package.json` `963CB662…`）——不在用户正在使用的 profile 上做结构性改动，是上午那次事故的直接教训；
+- **历史整体复制一份**进 `profiles/miasaki/sessions`（8 个项目目录 / 231 个会话 / 约 220 MB）：
+  本壳列表与 canvas 里引用过的历史会话照常可用，官方侧那份原样保留；
+- 备份 `cordis.patch.yml.bak-20260926-112206-before-sessionsplit`（回滚 = 覆盖回去 + 重启 host）。
+
+**验证（实机，两条独立证据链）**：
+
+| 侧 | 判据 | 实测 |
+|---|---|---|
+| 读取 | 无头 Edge 实载 `dsh --profile miasaki --no-open --port 31877`，捕获全部会话载荷 | 180 个会话 id 中 **179 个落在新 root**；唯一「只存在于全局 root」的 `session-1ccce120…` 经上下文核对出自 **canvas 工作区数据**（`sessionIds` + `pinnedSessionIds`），不是会话列表 |
+| 写入 | 后端运行期间新建的会话落在哪个 root | 11:27:16 新建 `session-0cfe7de0…` **落在新 root**；同一时段全局 root **零新增**（最新会话仍停在 11:17:28） |
+| 启动 | 插件树 | 无 `did not activate` / `pending`，无启动屏报错，控制台零错误 |
+| 边界 | 官方侧 | 两处配置哈希与改动前**逐字节一致** |
+
+**本次踩到的坑（写进纪律）**：第一次追加用了 PowerShell **双引号 here-string**，而反引号在 PS 里是转义符 ——
+注释里的 `` `root: `` 被解释成 `` `r ``（回车）+ `oot:`，`root:` 被劈成两行、YAML 解析失败
+（`failed to parse overlay … (626:1)`）。**离线 YAML 校验没抓住它**（CR 之后仍落在同一注释行内，标准解析器视为合法注释），
+是 `dsh --profile miasaki --dump-config`（DSH 自己的解析器）报出来的。⇒ 纪律三条：
+① **不要用 PowerShell here-string 拼含反引号的 YAML**（改用文件写入工具，或 `@'…'@` 单引号 here-string）；
+② 补丁层改动的验收必须走 `--dump-config`，它是语法权威闸门；
+③ **`--dump-config` 会重写 profile 的 `cordis.yml`（`prepareProfile` 里有 `writeFileSync`），不是只读操作** —— 沙箱下需要写权限。
+
+**用户下一步**：重启 `miasaki.exe`（会话 root 在后端启动时读取，不重启不生效）。官方桌面端无需任何操作。
+
+**遗留（本次未做）**：官方侧仍能看到 miasaki 跑过的**历史**会话（无来源标记，物理上消不掉）；
+`profiles/desktop/node_modules` 里 10 个自制包的孤儿目录同样仍在（对加载无影响）。
+
+## 2026-09-26（下午）· `dsh-session-log-move`：删掉注定失败的 slot 死路（并查明 0.1.7 已无头部胶囊可隐藏）
+
+**症状**：桌面端每次页面加载，console 都有一条
+`dsh-session-log-move: header register failed - slot "conversation.session.header.utilities" is not declared`
+（非阻断，但属于"看得见的错误"——2026-09-26 与 canvas 的 400 一并处理）。
+
+**查证（三层，逐层排除）**：
+1. **不是"忘了声明 inject"**：给 `package.json` 的 `dsh.client` 补上
+   `inject: ["@deepseek-ai/dsh-client-ui-conversation"]` 后，抓页面 `window.__DSH_BOOT__` 确认
+   该声明**已被 boot graph 接受**（该行 inject 逐字在场），但警告**照旧** ⇒ `dsh.client.inject`
+   只保证**模块加载顺序**（`dsh-client-modules` 的 `arriveGraphRow` 先到依赖），而槽的*声明*
+   是**多级异步链**：`conversation` 自己那个
+   `register({ name: "conversation.session.header", children: { … } })` 也在等父槽（layout 等）
+   声明 —— 插件 `apply` 时的同步 register **必然抢跑**；
+2. **就算等到也不算赢**：该 cell 的 `id: "session-log-download"` 自 DSH 0.1.5-rc.1 起由官方
+   `@deepseek-ai/dsh-session-log-export` 先行注册，同 id 注册**永远冲突**
+   （`already has an entry with id …`）——"同 id 替换"两头都是死；
+3. **对象本身已消失**：0.1.7-rc.2 里官方把入口改成会话头「**更多操作 ⋯**」菜单
+   （`SessionLogDownloadHeaderAction` 渲染 `Menu` + `aria-label="更多操作"`，菜单内
+   「下载 Session 日志」/「反馈」）⇒ 头部**不再有**「Session 日志」胶囊，插件用来隐藏它的
+   `[class*="sessionLogButton"]` 锚点在 0.1.7 安装目录**零命中**（全库 grep 无此标识）。
+
+**处置（v0.1.2）**：删掉整条注定失败的路线 —— `tryHideHeader` / `headerRegistered` /
+`headerPermanentlyBlocked` / `headerErrorLogged` 与 `ctx.slots.inject(...)` 全部移除，
+`inject` 由 `["slots","timer","sessions"]` 收为 `["timer","sessions"]`，`dsh.client.inject`
+回退（不再注册槽就不该声明跨 entry 依赖）；DOM 隐藏成为**唯一**且无害的兜底（旧版 DSH 仍有
+对象），重试窗口的收手条件从「替换成功」改为「自有按钮已挂」（旧条件恒 false ⇒ 每次都把 30s
+窗口跑满）。新增 `test/contract.test.js`（4 例：不再依赖槽声明 / DOM 路径完整 / 下载链路优先
+官方服务并降级端点 / 清单不含多余 inject），并入 `verify-all` → desktop **30 → 33 项**
+（两入口语法 + 该测试）。
+
+**验证**：契约测试 4/4、两入口 `node --check` 通过、`verify-all desktop` **33/33**（含
+`cargo test` 81 例）；临时后端 + 无头 Edge ⇒ **console 错误 0、4xx 0**、启动屏正常。
+三个文件（`package.json` / `lib/client.js` / `cordis.patch.yml`）已同步到 `miasaki` 与 `web`
+两个 profile 的 `file:` 安装副本并逐一核对哈希（`file:` 是快照复制，不跟源码走）。
+
+**遗留（待用户决策）**：插件「把入口搬到轨迹页」的目标里，"搬走"这一半已被官方演进自然满足
+（入口不再占头部、进了 ⋯ 菜单）；剩下"轨迹页搜索栏左侧按钮"**未做端到端确认**——无头探针靠
+文本猜 DOM 不稳（两次运行结果不一致），未采信。要收口就在真机上打开任一会话 →「轨迹」tab
+目检一次；若确认不再需要，可从 `miasaki` / `web` 两个 profile 卸载本插件。
+
+## 2026-09-26（中午）· 桌面端停在启动屏：`dsh-browser-playwright` 补丁在 `miasaki` profile 被重装冲掉
+
+**现象**：`miasaki.exe` 一打开就停在启动屏，文案与 2026-09-23 那次 0.1.7 升级事故**逐字相同**：
+
+```
+HARNESS
+Failed to load plugins
+web boot: 1 entry did not activate
+@yeesy369/dsh-browser-playwright: pending (waiting for service: settingsScope)
+```
+
+**根因（同症状、不同成因）**：壳拉起的后端是 `dsh --profile miasaki`（`backend_profile_name`），
+而 `@yeesy369/dsh-browser-playwright@0.8.1` 的双半兼容补丁在 **2026-09-26 10:43 该 profile
+重装依赖时被覆盖**（`lib/*.js` 是安装产物，pnpm 硬链把原版重新落位）。两半哈希回到 baseline 原版
+—— `client.js 0DA733A8…` / `index.js 3FDFD5BB…` ⇒ client 半 `inject` 里的 `settingsScope` 在
+0.1.7 早已移除，cordis 纤维永远 pending，而 web 前端 boot loader 对任何非 active 的 client 条目
+**直接抛错**停启动屏（host 侧同款审计只 warning）。`web` profile 的补丁仍在场
+（`AC63F3AD…` / `B859A6C3…`）—— 这解释了「官方桌面端与浏览器 GUI 都正常、只有 miasaki 桌面端打不开」。
+
+**结构性原因**：该补丁工具 `patch.mjs` 的自动探测**只认 `web` 一个 profile**，
+所以 `miasaki` 掉队后既没人打、也没人发现（live 审计会报，但那是单独一条命令）。
+
+**处置**：
+1. 给 `miasaki` profile 重打两半补丁
+   （`dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/` 的 `patch.mjs apply`）；
+2. **工具加固**：`patch.mjs` 改为遍历 `~/.dsh/profiles/*` 中**所有装了本插件**的 profile，
+   `status` / `apply` / `revert` / `rebuild-baseline` 全覆盖，`--target-dir` 退化为单目标覆盖；
+3. 文档：补丁 README 增「多 profile 语义」与二次复发记录；
+   `dsh-miasaki-shared-docs/cross/smoke-test-matrix.md` 补本行。
+
+**验证（本机实测）**：`patch.mjs verify` **VERIFY PASS（27 项）**；`status` 两 profile 双半
+**PATCHED**；`apply --yes` 幂等（两 profile 全跳过）；`scripts/patch-live-audit.mjs` →
+**9 个目标 / 8 件补丁全 patched**；另起临时后端 `dsh --profile miasaki --no-open --port 3099`
++ 无头 Edge 实载 ⇒ 启动屏消失，会话列表 / 插件入口 / SSH 胶囊 / 模型选择正常渲染
+（证据 `_refs/scripts-archive/bootcheck-miasaki-20260926/boot.png`）。
+
+**用户下一步**：重开 `miasaki.exe`（插件文件是后端启动时读入的，必须重启后端才生效）。
+**纪律**：任一次 profile 依赖重装之后，必须重跑 `node patch.mjs apply --yes` 与
+`node scripts/patch-live-audit.mjs`——前者补，后者验。
+
+## 2026-09-26（上午）· 复查：「刷新后又开始无限刷新」—— 命令通道被状态通道踩掉 + 无上限重试
+
+**现象**：用户在 Miasaki 里按 F5（或右键重载）之后，界面内容「反复闪动、停不下来」，
+10:34:33 被壳以 `quit repeated (frontend unresponsive?) → force exit, backend kept` 强制退出。
+**与凌晨那次（P1–P3）不是同一条链** —— 本次实测日志里 `set_mode`/`set_intensity` 只被调用
+3 次 / 2 次（凌晨那次的洪流是 1.32 行/秒），说明 P1 去重是有效的。
+
+**现场证据**（全部为本机实测量，非推测）：
+
+| 事实 | 数据 |
+|---|---|
+| WebView2 History 库 | `urls` **79170** 条 / `visits` **88520** 条 / 文件 **87,359,488 字节**（10:34:33 仍在写） |
+| F5 之后（10:34:13–10:34:33） | 每约 **1.19s** 一轮，每轮 **3 条 URL 变更**：基础 hash → `cmd=want-max&seq=<ms>` → 基础 hash（相隔 26ms / 1ms） |
+| 整个 10:29–10:34 窗口 | transition 里只有 **1 条 RELOAD**（就是用户那次 F5），其余全是同文档导航 |
+| 壳侧 pet.log | 该会话全程 32 行，**从头到尾没有一条 `hash-cmd want-max`** |
+| exe 版本 | `C:\ProgramData\MiasakiApp\Miasaki.exe` = 09:41:57 那份；**二进制内逐一自证**含 P1/P2/P3（P3 判重、`_lastMaxReqAt` 10s 节流、401 熔断键均在） |
+
+**根因（三处叠加，缺一不成立）**：
+
+1. **命令通道被状态通道踩掉**（`themes/src/02-core.js`）：`syncHash` 从零构造 target，
+   而 `05-sensors.petHashCmd` 刚写入的 `cmd/seq` 不在其中 ⇒ 每次状态同步都会把命令**原样抹掉**。
+   实测：命令写入后约 **1ms** 就出现一次「基础 hash」写回 —— 存活窗口远短于壳侧 33ms 轮询周期
+   ⇒ **命令几乎必然丢失**（与 pet.log 里从来没有命令记录完全吻合）；
+2. **命令被心跳清洗**（`src-tauri/src/main.rs`）：`heartbeat_only`（仅 `petts` 变化）分支把
+   `cmd` 与 theme/int/act/wait/bg 一起清掉。命令是**事件**（靠 `seq` 去重，重复处理无害），
+   心跳是**状态**（同值无意义）—— 两者语义不同，不能共用一条清洗规则；
+3. **重试没有上限**（`themes/src/06-titlebar.js`）：`want-max` 只有 10s 节流、没有次数上限，
+   且 `MAX_STATE` / `_lastMaxReqAt` 只活在**单份脚本实例**里（不跨实例共享）⇒ 只要推送没到，
+   就会永远重问 —— 用户侧看到的就是「停不下来」。
+
+**落地（P4–P6 + 一条诊断）**：
+
+- **P4**（`themes/src/02-core.js`）：`syncHash` **保留一切非自己管辖的字段**（`cmd`/`seq` 及未来
+  新增字段），只在自己管辖的 10 个键上取权威；判等改为**顺序无关**的字段集合比较
+  （pet-panel 经 `URLSearchParams` 重写会改变字段顺序，逐字节判等会退化成「每轮都写」）；
+- **P5**（`src-tauri/src/main.rs`）：心跳清洗抽成纯函数 `clear_redraw_fields`，
+  **`cmd` 与 `seq` 永不清除**（新增单测钉死这一条）；
+- **P6**（main.rs + 06-titlebar.js）：`on_page_load` 之后 **600ms / 2.5s / 6s 三次**重推 max 状态
+  （DSH 是重前端，页面 `wireMaxState()` 注册可能晚于原来那一次 600ms 推送）；
+  `MAX_STATE` 与自动请求计数改挂 `window`（**跨实例共享**）并加**双熔断**：
+  10 秒窗口内 ≤3 次、总量 ≤8 次；
+- **诊断**（main.rs）：新增 `page-load #N (+gapms) <url>` 日志（前 5 次全记 / 每 20 次一条 /
+  间隔 > 2s 必记）。这是上一轮唯一无法从静态代码判定的空白：**文档级重载会让它快速增长，
+  同文档导航不会** —— 下次复现时它能直接指出「是不是真的有东西在重载页面」。
+
+**验证**：
+
+- `themes` 单测 **82 passed / 0 failed**（`hash-sync.test.js` 新增 4 例：命令保真 ×2 /
+  判等顺序无关 / 未知字段一并保真）；
+- `cargo test --bin miasaki` **81 passed / 0 failed**（新增
+  `heartbeat_only_clears_state_but_never_commands`：命令与官方四通道必须保留、重绘类状态必须清空）；
+- `node scripts/build-init.mjs` 重建注入产物（13 片、令牌完备性与自校验通过）。
+
+**待用户实机验收（判据明确）**：
+
+1. 按 F5 后应「最多几次 `want-max` 就收敛」，**不再出现每秒数次的 URL 变更**；
+2. pet.log 里应出现 `hash-cmd want-max` 记录（证明命令通道恢复），且**只出现有限次**；
+3. 若界面仍闪，看 pet.log 里 `page-load #N` 的增长速率 —— 若它快速增长，说明确有东西在
+   重载页面，该日志的间隔会直接指出节奏（这是本次留下的取证入口）。
+
+## 2026-09-26 · 用量统计迁出本线 → 独立第八线 `dsh-miasaki-usage`（隔离的唯一例外项）
+
+**依据**（用户原话，两条，第二条是主线）：
+
+1. 「关于 miasaki 的用量统计可以干净的移植到官方 dsh 这来」；
+2. 澄清：「**干净接入是指统计要干净，官方桌面端统计只记载官方消耗**」。
+
+上一条隔离把官方桌面端 profile 清成 4 个官方 bundle。本批插件里 `dsh-token-monitor` 是唯一
+**零 miasaki 耦合**的一个（host 半只用官方 `webServer` / `llm/stream` / `tools/result` /
+`sessionProjections` / `tokenMeter` / `sessionQuery`，client 半只用官方三个槽位），所以它能作为
+唯一例外挂回隔离后的官方桌面端。但**接入干净 ≠ 统计干净**：账本原先落在全局单文件
+`~/.dsh/plugins-data/dsh-token-monitor/usage-log.jsonl`，desktop / miasaki / web 三个 profile
+混写同一本账 —— 官方侧「今日用量 / 热力图 / 趋势 / 模型占比」里一直掺着自制环境的消耗。
+**本次把账本一并改成按 profile 分区**，官方桌面端从此只记载官方消耗（细节与验证见该线
+`design/CHANGELOG.md`）。
+
+**落地**：
+
+- `git mv dsh-miasaki-desktop/plugins/dsh-token-monitor/ → dsh-miasaki-usage/`（独立第八线，线根即包根，
+  9 个文件全部识别为 R 重命名；本线插件数 5 → 4）；
+- 设计文档 `design/usage-stats-redesign.md` 随迁，**本线原路径留转发页**（该文档在本 CHANGELOG
+  历史条目里的既有引用仍可解析，历史条目按当时状态保留、不改写）；
+- **账本按 profile 分区**（该线 v0.5.2 → v0.6.0）：落 `<dataDir>/<profile>/`，profile 名取宿主
+  `profileContext.name`（回落 `DSH_PROFILE`，再回落 `default`）；分区前的混合账**一次性归位**到
+  `miasaki/`，官方桌面端从零累计 —— 「只记官方消耗」物理上没有别的实现方式；
+- **包名保持 `dsh-token-monitor` 不改**：该字符串同时是插件 id / client bundle entry id / HTTP 路由
+  前缀 / 数据目录名 ——改名等于历史账本搬家；
+- **profile 装法 `file:` → `link:`**（官方 `desktop` / `web` / `miasaki` 三处同改）：本次实测安装副本的
+  `client.js` 已落后源码 262 字节（file: 拷贝 + `pnpm install` no-op 的必然结果）；`link:` 后源码即真源；
+- `scripts/verify-client-bundle.mjs` 的 `--sync` 由「拷贝到 web profile 副本」改为**逐个 profile 核对安装点**；
+- 官方 `desktop` profile 加回**仅此一条**（`dependencies` + `dsh.profile.bundles`），其余插件维持隔离；
+- 统一回归 `scripts/verify-all.mjs` 接入第八线 `usage`（语法 + client bundle 自检）。
+
+**为什么它可以例外**：接入侧它不碰主题、不碰本线 `patches/`、不 import 任何 miasaki 包，用的全是官方
+契约与官方 `--dsw-alias-*` 令牌；统计侧分区后官方与自制各记各的账，官方口径不再被污染。
+细节见该线 `README.md` 与 [`../dsh-miasaki-usage/design/CHANGELOG.md`](../dsh-miasaki-usage/design/CHANGELOG.md)。
+
+## 2026-09-26 · 隔离：自制壳改用专属 profile `miasaki`，官方 dsh 恢复纯净
+
+**诉求**（用户原话）：「我想把自己做的 dsh 桌面端和我安装的官方 dsh 区分开，我做的插件不用装到
+官方 dsh 上，官方的 dsh 我要纯净的官方版」。
+
+**查明的事实**（实测量，非推测）：
+
+| 项 | 位置 | 隔离前状态 |
+|---|---|---|
+| 官方桌面端（Electron，`DeepSeek Harness.exe`） | `%USERPROFILE%\.dsh\profiles\desktop` | **被 10 个自制插件占用** |
+| 该 profile 的管理权 | `dsh --profile desktop` 直接报错 | `profile "desktop" is managed exclusively by the Electron application` —— 官方 CLI 不许碰 |
+| 自制壳 | `main.rs` 拉起 `dsh web --no-open` → `profiles\web` | 自制插件在此，**用户拍板继续保留** |
+| 自制桌面端的 6 个本体补丁 | `%APPDATA%\npm\node_modules\@deepseek-ai\dsh\node_modules\...` | 只影响官方 CLI；官方桌面端用自带 asar 副本，**不受影响** |
+
+**落地**：
+
+- **新增专属 profile `miasaki`**（`%USERPROFILE%\.dsh\profiles\miasaki`）：从 `web` 复制
+  `cordis.patch.yml` / `cordis.yml` / `pnpm-workspace.yaml` / `pnpm-lock.yaml` 与 `package.json`
+  （`name` 改为 `dsh-profile-miasaki`），经 `dsh plugin --profile miasaki install` 装齐 14 个包
+  （676ms，全部命中本地 store）；
+- **`recovery.rs`**：新增 `DEFAULT_PROFILE = "miasaki"` 与 `backend_profile_name()`
+  （`MIASAKI_PROFILE` 覆盖，非法名忽略）——**启动口径的唯一来源**，`spawn_dsh` 与 `profile_dir()`
+  必须同源，否则会出现「后端跑 A、恢复功能改 B」的分裂；`PROFILE_CANDIDATES` 改为
+  `["miasaki","web","desktop","tui","headless"]`；`profile_dir()` 改为启动口径优先，
+  `DSH_PROFILE` 降为次选（壳若从外部 dsh 会话继承了它，那个值并不代表本壳启动的 profile）；
+- **`main.rs`**：`spawn_dsh` 由 `cmd /C dsh web --no-open` 改为
+  `cmd /C dsh --profile <名> --no-open`；「打开终端」提示同步；看门狗日志文案
+  「自动重拉 dsh web」→「自动重拉 dsh 后端」；
+- **清理官方 `desktop` profile**：备份为 `package.json.bak-20260926-isolation` 后，
+  `dependencies` 清空、`bundles` 只留 4 项官方包（`dsh-base` / `dsh-web-app` /
+  `dsh-experimental-agent-team-profile` / `dsh-experimental-auto-review`）。
+
+**验证**（离线可复现，探针用后即删）：
+
+- 探针 profile `deskcheck`（复制 desktop 的清单 + junction 复用其 `node_modules`）跑
+  `dsh deskcheck --dump-config`：**1287 行输出里 `@miasaki` / pet-panel / token-monitor /
+  model-probe / free-model-pool / session-log-move / yeesy369 / openviking 计数全为 0**
+  —— 坐实「bundles 不含即不加载」，`node_modules` 里的历史残留不构成加载风险；
+- `miasaki` 端到端：`dsh --profile miasaki --no-open` 冷启动 **3080 端口 1s 内就绪**；
+  `--dump-config` 1941 行含全部 12 个插件（5×`@miasaki/*` + 5×`dsh-*` + 2×第三方）；
+- `cargo check --bin miasaki --tests`：**Finished**（10.51s，无错误）。
+
+**未做（用户明确保留）**：`profiles\web\package.json` 原样不动（「web 端可以保留我的插件」）；
+`desktop\node_modules` 里 10 个自制包孤儿目录未删（对加载无影响，删/留等价）。
+
+## 2026-09-26（凌晨）· 排查：桌面端「一直在刷新，停不下来」—— 1.5s 心跳环被「同值重设」放大
+
+**现象**：用户在 Miasaki 里点了一下刷新之后，界面「一直刷新、停不下来」，最终 **01:44:05**
+被壳自身以 `quit repeated (frontend unresponsive?) → force exit, backend kept` 强制退出。
+
+**现场证据**（均为实测量，非推测）：
+
+| 事实 | 数据 |
+|---|---|
+| `%LOCALAPPDATA%\miasaki\pet.log` 规模 | **156945 行 / 4.7MB**，最后写入 01:44:05 |
+| 桌宠状态重设速率 | 5070 行 / 3839 秒 = **1.32 行/秒**，与 1500ms 心跳周期严丝合缝 |
+| 壳轮询主线程阻塞 | `[00:36:41] hash poll slow 492ms → backoff 3000ms`（慢判定阈值 250ms） |
+| 注入层 hash 写入 | `syncHash` 由 `setInterval(petEvalIntensity, 1500)` 驱动且**无条件** `replaceState` |
+
+**根因链（三处叠加，缺一不成环）**：
+
+1. `plugins/dsh-pet-panel/lib/client.js`（`PET_HB_MS = 1500`）每轮把 `petPanel.ts = Date.now()`
+   写进 `window.__miasakiPetPanel` —— **时间戳每轮必变**；
+2. `themes/src/02-core.js` 的 `syncHash` 把它并入 URL hash（`&petts=`）⇒ **hash 每轮必变**；
+3. `src-tauri/src/main.rs` 的 hash watchdog 见 fragment 变化就对**同值**重设 `pet.set_mode()` +
+   `pet.set_intensity()` —— 这两个恰是全文件仅有的两个**没有内部去重**的 setter
+   （`set_theme` / `set_activity` / `set_waiting_approval` / `set_official_state` / `set_fleet`
+   都已有去重）。
+
+于是每 1.5s：桌宠被重设并重绘一次、写 2 行日志。**点「刷新」刷不掉它** —— 刷新只会把注入层与
+pet-panel 心跳一起重启，环立刻重建；这正是「停不下来」的直接解释。
+
+**落地**（三处，各带行为闸门）：
+
+- **P1 壳侧值去重**（`src-tauri/src/pet_native.rs`）：`set_mode` / `set_intensity` 改为与
+  `set_theme` / `set_activity` 同构 —— 同值不写日志、不赋值。**断环的关键一处**；
+- **P2 壳侧区分「整份状态变了」与「只有心跳变了」**（`src-tauri/src/main.rs` 新增
+  `fragment_signature`）：仅 `petts` 变化时清掉重绘类字段（theme / int / act / wait / cmd /
+  bg / move），**但官方六态心跳照常推进**。此处刻意**不**写成「签名相同就 `continue`」——
+  那会让 `set_official_state` 不再被调用、`official_at` 不刷新，5s 后通道判静默、桌宠整体
+  回落 DOM 兜底，那是**功能回归而不是优化**（设计时自查拦下，已写进代码注释与闸门）；
+- **P3 注入层写入判重**（`themes/src/02-core.js`，新增 `@slice:hash-sync` 切片标记）：目标 hash
+  与当前**逐字节一致**时不发 `replaceState`；任何字段真的变了（含心跳推进）仍照写。
+
+**验证**：
+
+- `themes` 单测 **78 passed / 0 failed**（新增 `themes/test/hash-sync.test.js` 7 例，钉住判重
+  **两侧**：逐字节一致 → 一次都不写 / 任何真字段变化 → 必须写，另含心跳同值重发不写入）；
+- `cargo test --bin miasaki` **79 passed / 0 failed**（新增
+  `fragment_signature_ignores_heartbeat_only_change`：8 类真变化不得被吞 + petts 首/中/尾剔除
+  + 不误伤 `pettool` / `petkey`）；
+- `node ../scripts/verify-all.mjs`（MSVC 环境 + cargo 入 PATH）**全绿**：desktop **30/30**、
+  七线合计 106 项；该闸门清单已登记新增的 `test hash-sync (syncHash 写入判重)`；
+- `node scripts/build-init.mjs` 重建 `src-tauri/injected/theme-init.js`（13 片、令牌完备性校验通过）。
+- `npm run verify`（headless Edge 视觉闸门）本次**未跑**：需创建命名管道 / GUI 子进程，在
+  `workspace-write` 沙箱下必然失败（脚本自身已在报错文案里注明），属环境边界而非代码问题。
+
+**旁支发现（本次未处理，另行立项）**：
+
+- `~/.dsh/miasaki-canvas/workspaces.json` 已膨胀到 **84,193,161 字节**（内容含历史会话消息
+  全文），且策略是「任一会话事件即整体重写」—— 采样时每 3 秒仍在写；`server.log` 另有
+  `canvas: workspaces.json 已被另一个 dsh web 实例修改` 的实例争抢警告；
+- `server.log` 记录到后端曾因第三方插件 `@yeesy369/dsh-web-permission` 导入
+  `@deepseek-ai/dsh-settings` 中不存在的 `settingsNamespace` **启动即崩**，被 backend-watchdog
+  反复重拉（日志里 63 行带不同 token 的启动记录）。该插件目录现已不存在，属历史故障，但同类
+  不兼容插件仍可能再次触发同一形态的「重拉—再崩」循环。
+
+**结案（2026-09-26 09:52 实测）**：用户复现仍为「闪」—— 排查发现**部署的 exe 仍是 9/25 22:58 的旧版**
+（`C:\ProgramData\MiasakiApp\Miasaki.exe` 与 `dist\Miasaki.exe` 时间戳一致，都早于本次源码改动），
+即上列三处修复**从未被编译进去**。重新 `npm run build`（exe 环节成功并自动签名；MSI 环节
+`light.exe` 失败 —— 按 README「exe 与 MSI 环节分离」该失败不影响入口）→ 覆盖 `dist\Miasaki.exe`
+→ `npm run deploy`（8 项校验全 PASS、哈希一致）后实测对照：
+
+| 指标 | 旧 exe | 新 exe（启动后 75 秒） |
+|---|---|---|
+| `set_mode` 写入 | 随每次 hash 变化，持续 **1.33 行/秒**（5 小时 156945 行） | **0 次** |
+| `set_intensity` 写入 | 与 `set_mode` 成对 | **1 次**（启动初值） |
+| `pet.log` 增量 | 约 80 行/分钟 | 75 秒 **15 行** |
+
+用户确认「界面持续闪烁、反复重绘」已消失，新版本（哈希 `C91494F30AC0A69D`）连续 75 秒无一次
+同值重设。
+
+**教训（本次真正踩到的坑）**：修复只落到**源码**不算完成 —— `themes/src/*.js` 的注入产物与 Rust 侧
+**都编译进 exe**，只重开应用会继续跑旧行为，且界面表现与修复前**逐帧一致**，极易误判为「修了没用」。
+自查判据：`Get-Item C:\ProgramData\MiasakiApp\Miasaki.exe | Select LastWriteTime` 必须**晚于**
+最后一次源码改动时间（本次即 09:41:57 > 01:51:30）；改完先构建再让人验证。
+
+## 2026-09-25（深夜）· 排查：失败页误报「未检测到 dsh」＋ 失败现场自证落地
+
+**现象**：从桌面快捷方式（`C:\ProgramData\MiasakiApp\Miasaki.exe`，Medium IL —— WebView2 正常、
+`pet.log` 有 `mica backdrop applied`）启动，主界面停在唤醒页提示「未检测到 dsh，请安装 DeepSeek
+Harness」，点「检查 dsh」返回 `未找到 dsh（不在 PATH）` + `（dsh --version 执行失败）`。
+而**实测 dsh 装得好好的**：`C:\Users\Asakii\AppData\Roaming\npm\dsh.cmd` 存在、
+`dsh --version` = `0.1.7-rc.2`、`where dsh` 在正常会话里能找到 —— 失败页把用户引向了
+「去重装 DSH」这个**错误方向**。
+
+**已定位的失败路径**（两条硬证据）：① `pet.log` 本次启动**没有** `shutting down dsh backend pid …`
+⇒ `DSH_PID` 从未写入 ⇒ `spawn_dsh()` 返回 Err；② `server.log` 自 22:33 之后**一行未增**
+⇒ `cmd.exe` 从未真正执行到 `dsh web`。界面那句文案只可能出自 `start_launch_sequence` 的
+`Err(e)` + `!dsh_ok` 分支，与两条证据互相印证。
+
+**为什么事后回溯不出根因**（三处吞错，本次一并修掉）：
+
+1. `cmd_capture` 用 `.ok()?` 把「cmd 根本起不来」与「cmd 跑了但找不到 dsh」压成同一个 `None`；
+2. `spawn_dsh` 失败只 `set_status`，**不落日志、不生成诊断报告**；
+3. `bootstrap.json` 的 `detail` 先被 waiting 心跳（`update_bootstrap_attempt("waiting", None, None)`）
+   覆盖，再被下次启动的 `bootstrap` 重置 —— 唤醒页那条「上次启动未正常完成：<detail>」因此**永远读不到**。
+
+**落地**（`src-tauri/src/main.rs`，纯增强，不改动拉起/探测行为）：
+
+- 新增 `dsh_env_facts()`：失败页「检查 dsh」现在附带四项环境事实 —— ① `cmd.exe` 能否执行
+  （**带 os error 码**：267 = 当前目录无效、5 = 拒绝访问）；② PATH 里有没有 npm 全局目录
+  （explorer 环境陈旧时的典型缺失）；③ `dsh.cmd` 在不在（在即证明「装好了」，与 PATH 无关）；
+  ④ 当前工作目录是否有效（子进程默认继承它）；
+- `spawn_dsh` 失败时落 `pet.log`（含错误原文），不再只留在状态栏；
+- 新增 `heartbeat_bootstrap()`：心跳只推进 `at`，**保留** phase/detail/dshAvailable；
+  `update_bootstrap_attempt` 在 phase=`bootstrap` 时保留上一轮 detail ⇒ 失败原因能活到下一次启动的唤醒页上。
+
+**验证**：`cargo check --bin miasaki` 通过（10.14s，无错误无警告）；`cargo test` **78 passed / 0 failed**；
+`scripts/`、`ui/test/` 中无 `dsh_check` / `bootstrap_state` 引用 ⇒ 未触及闸门语义。
+
+**结案（2026-09-26 00:23 抓到现场）**：同一个 exe（部署目录 mtime 仍是 22:58:20）在 **23:50:19** 再次启动
+即**完全正常** —— 台后监控抓到完整序列：`bootstrap`(23:50:19.532) → `waiting` + **`dshAvailable: true`**
+(23:50:20.043) → `waiting`(23:50:23.005) → **`up`**(23:50:23.474)，3080 与 39800 均在监听。
+`dshAvailable: true` 直接证明那一刻 `cmd /C where dsh` **成功执行**（且 PATH 里能找到 dsh）
+⇒ **23:26 是瞬时报障，不是稳定的环境缺陷**（同一 exe、同一机器、同一启动入口）。
+最符合的解释：22:58 刚构建 + `npm run deploy` 的 exe 在 **23:26 是首次运行**，安全软件对
+「新程序首次创建子进程」的实时拦截与三个观测点（cmd 起不来 / 探测失败 / 日志一行未增）全部吻合；
+21:40、22:33 两次成功跑的都是更早的构建，不构成反例。判据：若「重新构建 + 部署后的首次启动」
+再次复发即坐实该路径 —— 届时自证版本会直接给出 os error 码。
+
+**随之排除的候选**：explorer 环境的 PATH 陈旧（`dshAvailable: true` 证明该环境下 `where dsh` 可用；
+本机 `HKCU\Environment` 最后写入 2026-09-23 23:03:51 亦无冲突）、以及父进程工作目录失效
+（快捷方式 `WorkingDirectory` = `C:\ProgramData\MiasakiApp`，有效）。旁证一条：本机存在 `ASAKII\CodexSandboxUsers` 组
+（注释 `Codex sandbox internal group (managed)`，成员 `CodexSandboxOffline` / `CodexSandboxOnline`），
+`%LOCALAPPDATA%\miasaki\*` 已被打上该组 `ReadAndExecute` 的 ACL ⇒ 本机确有沙箱机制在介入进程/权限；
+但**尚无证据**表明它拦截了 Miasaki 的 `cmd.exe`（`server.log` 里那条
+`/usr/bin/bash: … /c/Windows/system32/cmd: Permission denied` 出自另一个 bash 工具上下文）。
+
 ## 2026-09-25（晚）· 排查：MSI 打包失败（结论＝会话环境限制，非项目配置）
 
 **现象**：`npm run build` 的 exe 环节成功、MSI 环节失败，而 tauri 只给出一句

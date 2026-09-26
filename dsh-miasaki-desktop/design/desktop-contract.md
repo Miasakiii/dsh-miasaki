@@ -130,5 +130,6 @@ if (d && d.has('theme.set')) d.theme.set('kurkuriel')
 
 | 日期 | 变更 |
 |---|---|
+| 2026-09-26 | **P7：页面 → 壳的事件通道**（`miasaki-pet-heartbeat` / `miasaki-boot`，经 `plugin:event\|emit`；权限来自既有 `core:default` 的 `core:event:default`）。**暴露面不变**：`window.miasakiDesktop` 的能力表、`protocolVersion`（仍为 1）与写者数量（仍为 2）全都没动 —— 变的是**六态心跳的送达通道**：`petts` 不再写 `location.hash`（那正是「URL 每 1.5s 变一次、History 库涨到 87MB」的驱动源），改由事件直达 `main.rs` 的 `app.listen`。§3 纪律②「契约自己不碰 `location.hash`」因此更强：**心跳也不再碰**。详见 [CHANGELOG.md](CHANGELOG.md) 2026-09-26（下午·续）。 |
 | 2026-09-25 | **v1.1**：新增受控写能力 `theme.set` 与 `window.controls`（minimize / maximize / close）。实现走**内部事件**（`miasaki-theme-set` / `miasaki-window-command`），执行落在寄生分片 `02-core.js` / `06-titlebar.js` —— 契约自己不碰 `location.hash`，**写者数量不变**（仍为 2）。闸门 11 → **15 例**（新增：派发与白名单拒绝、只暴露人话名不透内部协议名 `min`/`max`、寄生侧监听的静态断言）。同批修正 §4 的版本语义：`protocolVersion` **只在破坏性变更时提升**，增量能力靠 `has()` 探测。 |
 | 2026-09-25 | v1 落地（W1/T1.2–T1.4）：`10-contract.js` + 11 例闸门 + 本文档；同批记录 T1.1 spike 结论（`__DSH_BOOT_READY__` 闸门不可用，正确通道为 `index-inject`） |

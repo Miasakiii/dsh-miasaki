@@ -14,8 +14,45 @@
   // 最大化状态：true=最大化 false=还原 null=未知。远程页无 IPC 权限（capability 只授
   // start-dragging），改由 Rust 侧 eval 派发 CustomEvent `miasaki-max-state`（与桌宠状态
   // 推送同构）；null 时经 hash cmd=want-max 请求 Rust 重推，非 Tauri 环境点击本地翻转兜底。
+  //
+  // 2026-09-26「无限刷新」修复 P4（跨实例共享 + 自动请求双熔断）：
+  // 状态与请求计数原本只活在**这份脚本实例**的作用域里。只要页面上存在多份实例，或实例被
+  // 反复重建，每个实例就各自重试一次，合起来表现为「一秒多轮、停不下来」——实测 WebView2
+  // History 库在 20 秒里留下 20+ 条重复 URL 访问、且 pet.log 里**从未**出现 `hash-cmd want-max`
+  // （说明请求都在被抹掉前就没到达壳侧）。现在两样状态都挂到 `window`：
+  //   · 任一份实例收到 Rust 推送 → 全体实例立刻收敛，不再各自重问；
+  //   · 自动请求加「窗口内次数 + 总量」双熔断 —— 即使推送永远到不了，也只请求有限次。
+  // 用户主动点最大化按钮不走本路径（页面已有状态可翻转，见 buildTitlebar 的点击分支）。
+  var MAX_REQ_WINDOW_MS = 10000
+  var MAX_REQ_PER_WINDOW = 3
+  var MAX_REQ_TOTAL = 8
+
+  function sharedMaxReq() {
+    try {
+      if (!window.__msMaxReq || typeof window.__msMaxReq !== 'object') {
+        window.__msMaxReq = { at: 0, times: [], total: 0, tripped: false }
+      }
+      return window.__msMaxReq
+    } catch (e) {
+      return { at: 0, times: [], total: 0, tripped: false }
+    }
+  }
+
   var MAX_STATE = null
-  var _lastMaxReqAt = 0
+  try { if (typeof window.__msMaxState === 'boolean') MAX_STATE = window.__msMaxState } catch (e) { /* ignore */ }
+
+  /** 读当前最大化状态：**window 级共享值优先**（其它实例已收到推送时本实例立刻跟随）。 */
+  function currentMaxState() {
+    try {
+      if (typeof window.__msMaxState === 'boolean') MAX_STATE = window.__msMaxState
+    } catch (e) { /* ignore */ }
+    return MAX_STATE
+  }
+
+  function setMaxState(v) {
+    MAX_STATE = v
+    try { window.__msMaxState = v } catch (e) { /* ignore */ }
+  }
 
   function syncMaxBtn() {
     var bar = document.getElementById('miasaki-titlebar')
@@ -35,7 +72,7 @@
       window.addEventListener('miasaki-max-state', function (e) {
         try {
           var d = e && e.detail
-          MAX_STATE = !!(d && d.max)
+          setMaxState(!!(d && d.max))
           syncMaxBtn()
         } catch (e2) { /* ignore */ }
       })
@@ -44,8 +81,18 @@
 
   function requestMaxState() {
     var now = Date.now()
-    if (now - _lastMaxReqAt < 10000) return
-    _lastMaxReqAt = now
+    var s = sharedMaxReq()
+    if (now - s.at < 10000) return
+    // 已有共享答案（别的实例收到过推送）→ 不再问
+    if (currentMaxState() !== null) return
+    s.times = s.times.filter(function (t) { return now - t < MAX_REQ_WINDOW_MS })
+    if (s.tripped || s.total >= MAX_REQ_TOTAL || s.times.length >= MAX_REQ_PER_WINDOW) {
+      s.tripped = true
+      return
+    }
+    s.at = now
+    s.total++
+    s.times.push(now)
     try { petHashCmd('want-max') } catch (e) { /* ignore */ }
   }
 
@@ -133,14 +180,15 @@
       else if (act === 'max') {
         petHashCmd('max')
         // 非 Tauri 环境(普通浏览器预览)兜底：从未收到 Rust 推送时本地翻转图标
-        if (MAX_STATE === null) { MAX_STATE = true; syncMaxBtn() }
-        else if (IS_LOCAL) { MAX_STATE = !MAX_STATE; syncMaxBtn() }
+        if (currentMaxState() === null) setMaxState(true)
+        else if (IS_LOCAL) setMaxState(!MAX_STATE)
+        syncMaxBtn()
       }
       else if (act === 'close') petHashCmd('close')
     })
     updateTitlebar()
     syncMaxBtn()
-    if (MAX_STATE === null) requestMaxState()
+    if (currentMaxState() === null) requestMaxState()
   }
 
   function updateTitlebar() {

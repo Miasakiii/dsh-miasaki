@@ -2,7 +2,20 @@
 
 > Miasaki 专属 DSH 桌面端 — Tauri 2 薄壳 + 三主题（原版简约纯净 / 刻刻帝 / 狂狂帝）
 
-双击 EXE → 自动拉起 `dsh web`（如未运行）→ 打开 DSH Web GUI，并注入三套原创主题皮肤与悬浮切换条。**不修改 DSH 本体**：主题以令牌层覆盖（`--dsw-static-*` 色阶）实现，DSH 升级不受影响。
+双击 EXE → 自动拉起 `dsh --profile miasaki --no-open`（如未运行）→ 打开 DSH Web GUI，并注入三套原创主题皮肤与悬浮切换条。**不修改 DSH 本体**：主题以令牌层覆盖（`--dsw-static-*` 色阶）实现，DSH 升级不受影响。
+
+> **与官方 dsh 的边界（2026-09-26 起）**：自制壳固定跑**专属 profile `miasaki`**
+> （`%USERPROFILE%\.dsh\profiles\miasaki`），自制插件只装在这里。官方桌面端（Electron）独占的
+> `desktop` profile 里的自制插件已全部清空，官方 dsh 回到纯净状态；`web` profile 按用户要求
+> 保留自制插件（浏览器端调试用）。profile 名可用环境变量 `MIASAKI_PROFILE` 覆盖
+> （自定义 profile / 多 profile 实验）。背景与验证见 `design/CHANGELOG.md` 2026-09-26 条。
+>
+> **会话记录同样按 profile 隔离（2026-09-26 中午起）**：官方 `dsh-base` 的默认会话 root 是
+> `!!js dshHomePath('sessions')` —— 一个**与 profile 无关的全局目录**，三个 profile 的会话因此混在
+> 一处。`miasaki` profile 现覆写为 `profiles/miasaki/sessions`：本壳新会话写这里，官方桌面端
+> **看不到**，官方新会话本壳同样看不到（双向隔离；官方 `desktop` profile 配置**一个字节未动**）。
+> 历史会话已整体复制一份进专属目录，本壳列表与 canvas 引用照常可用。会话 header
+> 只有 `cwd`/`createdAt`/`agentPreset`、**没有来源标记**，历史无法事后分类，故只做「从现在开始隔离」。
 
 ## 快速开始
 
@@ -22,7 +35,7 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 
 ```bash
-node ../scripts/verify-all.mjs desktop   # 22 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链行为闸门 + 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×6 / 插件单测 / cargo test（35 例）
+node ../scripts/verify-all.mjs desktop   # 30 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×6 / 插件单测 / cargo test（81 例）
 ```
 
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
@@ -129,10 +142,51 @@ npm run deploy                                                                  
 powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -FixShortcuts   # 顺带修正桌面旧快捷方式
 ```
 
+> **改完源码必须重新构建（2026-09-26 实测教训）**：`themes/src/*.js` 的注入产物与 Rust 侧
+> **都编译进 exe** —— 只重开应用会继续跑旧行为，界面表现与修复前**逐帧一致**，极易误判成
+> 「改了没用」。部署后先自查时间戳再让人验证：
+>
+> ```powershell
+> Get-Item C:\ProgramData\MiasakiApp\Miasaki.exe | Select-Object LastWriteTime
+> # 必须晚于最后一次源码改动时间；否则跑的还是上一版
+> ```
+
 再用桌面「Miasaki 桌面端」快捷方式验证。失败弹窗自本次起按启动位置**分流**：exe 在
 `%USERPROFILE%` 之下时直接点名「改用 `C:\ProgramData\MiasakiApp\Miasaki.exe`」，不再给
 「加安全软件白名单」这类无效建议；同时打印**启动位置**，并说明低权进程连 `pet.log` 都写不进去
 （21:22 那场复发的日志一行未增，正是判据而非异常）。
+
+## 另一类失败：唤醒页停在「未检测到 dsh」（2026-09-25 深夜排查）
+
+**现象**：主界面正常出现（WebView2 无问题、`pet.log` 有 `mica backdrop applied`），但唤醒页提示
+「未检测到 dsh，请安装 DeepSeek Harness」，点「检查 dsh」得到 `未找到 dsh（不在 PATH）`。
+
+**先别照字面重装 DSH** —— 这条提示说明的是**「拉起 dsh 后端这一步失败了」**，
+而失败页当时把两类完全不同的原因（① `cmd.exe` 根本起不来；② cmd 正常但 PATH 里找不到 dsh）
+压成了同一句话，把人引向错误方向。
+
+**2026-09-25 起「检查 dsh」附带四项环境自证**：`cmd.exe` 能否执行（**带 os error 码**）、
+PATH 里有没有 `%APPDATA%\npm`、`dsh.cmd` 在不在（在即「装好了」，与 PATH 无关）、
+当前工作目录是否有效；`spawn_dsh` 失败也会落一行到 `pet.log`（含错误原文），
+且失败原因**不再被心跳覆盖**，会保留到下一次启动的唤醒页上。
+
+| 自证结果 | 含义 | 处置 |
+|---|---|---|
+| `cmd.exe：可执行`、`dsh.cmd：存在`、`PATH 含 …\npm：否` | explorer 环境的 PATH 陈旧（npm 目录没进去） | 重启 explorer 或注销重登；可临时用绝对路径验证 |
+| `cmd.exe：无法启动（… os error 5）` | 子进程创建被拦（安全软件 / 沙箱策略） | 给 `Miasaki.exe` 加白名单，并确认作用域内没有沙箱工具 |
+| `cmd.exe：无法启动（… os error 267）` | 当前工作目录失效（目录被删 / 网络盘卸载） | 从 `C:\ProgramData\MiasakiApp` 起步的快捷方式启动 |
+| `cmd.exe：无法启动（… os error 740）` | 系统拒绝创建命令解释器（`ERROR_ELEVATION_REQUIRED`）。**2026-09-26（晚）起壳已不再依赖 cmd.exe**：拉起后端走 node 直启（见下），探测也不再只看 PATH | 看 `pet.log` 是否出现 `spawn-dsh: node 直启后端（绕开 cmd.exe）pid …`；失败页自证新增的「node 直启：可用（node → dsh 入口）」一行会直接给出可用性。仍不行就手工在终端跑 `dsh --profile miasaki --no-open`，再回壳点「重试」（壳会采用外部后端、退出时不杀它） |
+| `dsh.cmd：不存在` | 确实没装 | 这时才需要装 DeepSeek Harness |
+
+**又一类「进不去」：首屏 404 / 进去后一直刷新（2026-09-26 深夜，P10）**
+
+| 现象 | 成因与判据 |
+|---|---|
+| WebView2 显示 `找不到此 127.0.0.1 页 / HTTP ERROR 404` | 壳在「webserver 已监听、**路由还没注册**」的窗口里导航了 —— DSH 的 fallback 在此期间对**任何**请求返回 404。现就绪判据已从「TCP 可连」升为**应用层**（`GET /` 状态码 ≠ 404），撞上也还有一次**自动重导航**（`schedule_renavigate_when_ready`，等路由就绪后重导） |
+| 页面反复刷新、停不下来 | `GET /` 返回 **401**（正文 `dsh web authentication required; reopen the URL printed by dsh web.`）⇒ 注入层的 401 兜底链每轮 `location.reload()`。根因：壳「预置 cookie」路线要用 `~/.dsh/.credentials.yaml` 的 `client-connection/browser-session.secret` 自己签名，**本机该段不存在**（只有 `version`/`refs`/`records`）⇒ 回落硬编码兜底 secret ⇒ 后端不认。现改为**官方 token 通道**：`GET /?token=…` → `303` + `Set-Cookie`（HttpOnly / SameSite=Strict / 30 天）。判据：`pet.log` 出现 `navigate: 带官方 token 进入（len …）`；若出现 `未取到 token` 则说明后端没把 `dsh web: …?token=…` 打进 `server.log`，此时会退回裸 URL（最坏是「要点一次刷新」的老体验） |
+
+> 诊断口径：`doc-boot #N` 只统计**顶层** frame（`top:true`），是「页面是否被重载」的判据；
+> 子 frame 的 `about:blank` 重建另计 `frame-boot #M`（画布/SSH 预览 iframe 的正常/异常活动）。
 
 ## 打包（MSI）失败排查
 
@@ -175,7 +229,7 @@ light 的完整命令行与 stderr。
 > 前五个作用于浏览器 bundle，改完**刷新页面**即生效；第六个作用于 **host 侧 Node 包**
 > （`lib/index.js`），改完必须**重启 DSH host 进程**才生效（Node 已加载的模块不会热更新）。
 > 另有一件作用于 host 侧的图片准入补丁属 dual-model 线（`../dsh-miasaki-dual-model/patches/`），
-> 同样需重启 `dsh web` 才生效。
+> 同样需重启 dsh 后端才生效。
 
 ```powershell
 cd patches/<补丁目录>
@@ -197,7 +251,7 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 > 见 `../dsh-miasaki-dual-model/patches/`）。
 > **两个计时补丁要一起重打**才完整（同一个 `firstTokenTime` 的两处显示）。
 > cordis-host-runner 是本目录里**唯一作用于 host 侧 Node 包**的补丁（其余都是浏览器 bundle）
-> ——host 侧两个补丁（它 + 图片准入）**需重启 `dsh web` 生效**，client 侧刷页面即生效。
+> ——host 侧两个补丁（它 + 图片准入）**需重启 dsh 后端生效**，client 侧刷页面即生效。
 >
 > **升级重打的实际流程（与下方历史记录里的表述不同，已按实测修正）**：
 > ① `status` 报 `unknown`（新版覆盖）→ ② 把安装目录的新版原版复制为 `baseline/*.original.js`
@@ -307,8 +361,30 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
   随态带出工具名 + `sessionId` + 原因（截断 160 字符）+ **官方 `key`**（经 hash `petkey=` 上报，
   用于内联审批的幂等身份），并落地**身份门禁**：拿不到稳定身份的审批一律不显示，
   宁可不报也不挂一个永远等不到 resolved 的常驻态），
-  1.5s 心跳写 `window.__miasakiPetPanel`，由注入运行时 `syncHash`
-  合并进 URL hash `pet=/pettool=/petts=`（单写者定律不变）。Rust `compose` 合成六态并按
+  1.5s 心跳写 `window.__miasakiPetPanel`。**心跳通道（P7，2026-09-26 下午）**：桌面端改经
+  Tauri 事件 `miasaki-pet-heartbeat`（`plugin:event|emit`，权限来自 `core:default` 里的
+  `core:event:default`，与标题栏 `start_dragging` 同一条链路）直达壳，**不再进 URL hash**
+  —— 旧路径让 `petts` 每 1.5s 写一次 hash，而注入层判重对心跳永远不成立，于是 URL 每秒变
+  1–2 次、WebView2 History 库涨到 **87MB / 88629 条 visits**、壳侧每 1.5s 重复注入 120KB
+  脚本，用户观感就是「一直在刷新、停不下来」。浏览器/预览（无 IPC）或 emit 被拒时
+  **回落写 hash**，行为与历史一致。**心跳去重（2026-09-26）**：
+  `petts` 每 1.5s 必变，故壳侧按「剔除 `petts` 后的签名」区分「整份状态变了」与「只有心跳
+  变了」—— 后者只刷新官方通道、跳过全部重绘类 setter（`set_mode`/`set_intensity` 自身也做
+  值去重）；注入层判重同样把 `petts` 的值归一化，**只有实质状态变化才写 URL**。旧实现的
+  无条件同值重设曾让 `pet.log` 涨到 **1.32 行/秒**（5 小时 156945 行），详见
+  [design/CHANGELOG.md](design/CHANGELOG.md) 2026-09-26 条。**命令通道保真（同日复查 P4–P6）**：
+  上一条的「心跳签名」曾把页面下发的 `cmd` 一并清掉，而 `syncHash` 从零构造 hash 也会把
+  `petHashCmd` 刚写的 `cmd/seq` 在约 1ms 后抹掉 —— 命令存活窗口短于壳侧 33ms 轮询周期，
+  于是「最大化状态永远未知 ⇒ 无限重问」（实测 WebView2 History 库 79170 条 URL / 87MB、
+  每 1.19s 一轮三条 URL 变更，而 pet.log 里从未出现 `hash-cmd want-max`）。现在：
+  `syncHash` **保真一切非自己管辖的字段**且判等顺序无关、心跳清洗**永不动 `cmd`/`seq`**、
+  `want-max` 走 **window 级共享状态 + 双熔断**（10s ≤3 次 / 总量 ≤8 次），
+  `on_page_load` 后 600ms/2.5s/6s 三次重推 max 状态。**复现时的取证入口是两条日志**：
+  `page-load #N` 说明「导航事件有多少次」（**同文档导航也触发**，P7 实测证伪了旧的
+  「只它增长 = 文档级重载」判据），`doc-boot #N` 才是「文档级重载」的判据 —— 由注入层
+  `08-ready.js` 在每次文档 boot 时经事件通道打点、壳侧计数落盘，两者一起看即可区分
+  「页面真被重载」与「只是 URL 在变」。此外 `on_page_load` 只在**文档级导航**（URL 不带
+  fragment）时才补注入主题脚本，不再每次 hash 变化都重解析一遍 120KB。Rust `compose` 合成六态并按
   **Waiting(审批) > FleetBlocked(告警) > Error > Done > Thinking(静默守候) > Idle** 优先级
   映射立绘/气泡（`pick_state_row` 单测钉死）：waiting 强制 kurumi `wait` 行 /
   whale·inverse `work` 立绘 + **常驻"等待审批"气泡**；done 播 review 庆祝一次（气泡 10s）；
@@ -422,12 +498,11 @@ desktop/
 ├─ themes/                   # 主题源（原创设计）
 │  ├─ pure.css / zafkiel.css / kurkuriel.css
 │  ├─ src/                   # 注入运行时分片（9 片，按 MANIFEST.json 拼接；改这里）
-│  │                         #   （00-boot.js 含 DSH 鉴权 cookie 注入：dsh web 重启后
+│  │                         #   （00-boot.js 含 DSH 鉴权 cookie 注入：dsh 后端重启后
 │  │                         #    旧 cookie 失效黑屏时自动重签并重载，见 CHANGELOG 2026-09-05）
 │  └─ runtime.js             # legacy 回退源（build-init 缺 src/ 时使用）
 ├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
-├─ plugins/dsh-token-monitor/    # DSH web profile bundle：用量监控（会话「用量」Tab 纯会话视角 + 侧栏脚部「用量统计」入口 → 全局浮窗：总览六卡/年热力图/趋势/模型用量 + 会话活跃分布（标题折叠自会话日志／近 30 日逐日分布条／排序·搜索·条数控件）/今日限额，v0.5.0）
 ├─ plugins/dsh-session-log-move/ # DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧，见下）
 ├─ plugins/dsh-model-probe/      # DSH web profile bundle：模型连通性真实探测（host only，设置页「测试连通性」的 B 档能力，见下）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
@@ -437,12 +512,20 @@ desktop/
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
-   ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh web/导航 + 后端存活看门狗 + fleet 脉冲看门狗
+   ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh 后端（专属 profile miasaki）/导航 + 后端存活看门狗 + fleet 脉冲看门狗
    ├─ src/launcher_icon.rs   # 软件头像 → 窗口/托盘图标（读 appearance 线配置，1.5s 巡检跟随）
    ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
    ├─ injected/theme-init.js # 构建产物（include_str! 注入，勿手改）
    └─ capabilities/          # 最小权限（core:default）
 ```
+
+> **用量统计已迁出本线（2026-09-26）**：`dsh-token-monitor`（会话「用量」Tab + 侧栏脚部
+> 「用量统计」→ 全局浮窗）原为本线内置插件，现独立成第八线
+> [`../dsh-miasaki-usage/`](../dsh-miasaki-usage/)。它是**纯官方契约、零 miasaki 耦合**的
+> 插件（host 半只用官方 `webServer` / `llm/stream` / `tools/result` / `sessionProjections` /
+> `tokenMeter` / `sessionQuery`，client 半只用官方三个槽位），因此能单独装进隔离后的官方
+> 桌面端 profile —— 官方桌面端现在只挂这一条，即可获得完整用量统计。搬迁理由、装法
+> （`link:`）与验证见该线 `README.md` 与 `design/CHANGELOG.md`。
 
 ## DSH 插件：免费模型池（`plugins/dsh-free-model-pool/`）
 
@@ -511,11 +594,17 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 
 把「Session 日志」下载按钮从**主界面会话头部**迁移到**轨迹页工具栏搜索栏左侧**：
 
-- **主界面隐藏**：`conversation.session.header.utilities` 同 id（`session-log-download`）
-  替换为空条目（平台 slot 语义：同 id 复用即替换该 cell），官方「Session 日志」胶囊不渲染。
-  **2026-09-22 起为降级行为**：DSH 0.1.5-rc.1 官方自带
-  `@deepseek-ai/dsh-session-log-export` 已自行注册同一 id，本插件的替换**永远冲突**——
-  此时判定永久失败（不再重试、错误日志只记一次），官方按钮保留（v0.1.1）；
+- **主界面隐藏**：DOM 层 `display:none`（`[class*="sessionLogButton"]` 子串锚点，卸载时
+  还原 display）。**2026-09-26 起 slot 路线已删**：向
+  `conversation.session.header.utilities` 注册同 id（`session-log-download`）做替换，
+  自 DSH 0.1.5-rc.1 起**永远冲突**（官方 `@deepseek-ai/dsh-session-log-export` 已自行注册
+  该 id），且 0.1.7 的槽声明是**多级异步链**（`conversation` 自己也在等父槽），插件 apply
+  时的同步 register 必然抢跑 —— 两者叠加只会留下 `slot … is not declared` 的启动噪声
+  （v0.1.2 删掉该死路；含 `dsh.client.inject` 的弯路一并回退）。
+  **另注（0.1.7-rc.2 实测）**：官方已把该入口收进会话头「**更多操作 ⋯**」菜单
+  （`aria-label="更多操作"` 的 Menu 锚点，菜单内「下载 Session 日志」），头部不再有胶囊
+  —— `[class*="sessionLogButton"]` 在 0.1.7 全库零命中。故 DOM 隐藏保留为**无害兜底**
+  （旧版 DSH 仍有对象），本插件当前的有效职责是**轨迹页注入**；
 - **轨迹页注入**：`[role=toolbar]` 内搜索框容器左侧插入同功能按钮（toolbar 无官方 slot，
   DOM 注入 + MutationObserver + 500ms 重试兜底约 30s，重渲染冲掉自动补挂）；
 - **下载链路**：复用官方 `sessionLogDownload` 服务（缺失降级 `<a download>` 触发
@@ -525,6 +614,11 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 
 先行动态插件验证（2026-09-07）通过后按此形态固化；设计见
 `design/session-log-download-relocate.md`，安装同 token-monitor profile bundle。
+**注意（2026-09-26 教训）**：本插件在 profile 里是 `file:` 依赖（快照复制，**不会自动跟随
+源码**）——改完源码必须同步 `~/.dsh/profiles/<名>/node_modules/dsh-session-log-move/` 下的
+副本（本次 0.1.2 的 `package.json` / `lib/client.js` / `cordis.patch.yml` 三个文件已手工同步到
+`miasaki` 与 `web` 两个 profile 并逐一核对哈希），重启 host 后生效。回归：`verify-all desktop`
+新增 3 项（两入口语法 + `test/contract.test.js` 4 例，钉住「不再依赖槽声明 + DOM 路径完整」）。
 
 ## DSH 插件：模型连通性探测（`plugins/dsh-model-probe/`）
 
@@ -589,7 +683,7 @@ probeModel 存储档案解析接线 2），已并入 `node scripts/verify-all.mj
   重复触发关闭请求仅重新显示确认弹窗；仅 Alt+F4 连击（前端无响应）时兜底强制退出、后端保持运行。
 - **后端断连自愈（2026-09-23）**：页面就绪后常驻「后端存活看门狗」（2s 探测：自拉后端进程
   存活 + 3080 端口监听）。后端意外死亡（被外部杀掉 / 撞上正在退出的旧服务 / 采用的外部后端
-  退出）时自动重拉 `dsh web`，失败按 2s→30s 退避重试；文档从未加载成功过（错误页）时重拉后
+  退出）时自动重拉 dsh 后端，失败按 2s→30s 退避重试；文档从未加载成功过（错误页）时重拉后
   补一次重新导航，活页面则由 DSH 前端自带重连静默恢复（鉴权 cookie 持久有效，无需刷新）。
   关闭前的保险：若 3080 上仍有**本应用进程树之外的客户端**（浏览器等）连接着后端，
   关闭应用时**保留后端不杀**（探测失败按旧语义照停，最坏不劣化）——共享后端不应被
@@ -606,7 +700,7 @@ probeModel 存储档案解析接线 2），已并入 `node scripts/verify-all.mj
 启动失败（dsh 未安装 / 端口被占用 / DSH 拉起异常）时，加载页会显示恢复动作组：
 
 - **检查 dsh** — `where dsh` + `dsh --version` 探测结果；
-- **打开终端** — 独立 cmd 窗口（可手动运行 `dsh web --no-open` / `netstat` 排查）；
+- **打开终端** — 独立 cmd 窗口（可手动运行 `dsh --profile miasaki --no-open` / `netstat` 排查）；
 - **打开日志目录** — `%LOCALAPPDATA%\miasaki\`（server.log / pet.log / bootstrap.json）；
 - **导出诊断** — 聚合日志尾部与状态文件到 `%APPDATA%\com.miasaki.desktop\diagnostics-<ts>.txt`。
 
@@ -657,7 +751,7 @@ deepseek-harness-desktop 启动恢复 + 健康标记 + 可靠性矩阵思路）�
 
 **症状**：「启动后总出错，点一下刷新才能正常」——错误页是 401 纯文本页（`dsh web
 authentication required; reopen the URL printed by dsh web.`）在深色窗口里的裸露渲染。
-dsh web 每次重启都有新签名 cookie，首次 `GET /` 必然 401；9-05 的「进 401 页后自动 reload」
+dsh 后端每次重启都有新签名 cookie，首次 `GET /` 必然 401；9-05 的「进 401 页后自动 reload」
 恢复链对 `text/plain` 文档的文本检测无保证，漏检即停住。
 
 **修法（已落地）**：cookie 签名与写入**提前到 navigate 之前**（loading 页 Web Crypto 签名 →

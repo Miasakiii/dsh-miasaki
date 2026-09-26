@@ -42,6 +42,22 @@
   ③ release（`panic="abort"`）下 panic hook 是否真落盘。三项清单见
   [`smoke-test-matrix.md`](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.1。
   **`Cargo.toml` 是 `panic = "abort"`**：诊断落盘挂在 `std::panic::set_hook`（已落地）。
+- [ ] **「一打开找不到页面」：后端就绪判据 + 残留清理（2026-09-26 下午 / 晚两轮定位）**
+  — 实测（证据见 CHANGELOG 同日两条）：壳的 `port_ready()` 只做 `TCP connect 3080`，
+  **分不清**「健康且是本 profile 的实例 / 僵死残留 / 别人的实例」。两条已确诊的成因里，
+  **晚间的 `os error 740`（壳连 cmd.exe 都起不来）已在 P9 处置**（node 直启 + 绝对路径 cmd +
+  自证增强）；剩下这一半是**启动期与残留**：
+  ① 就绪判据补**身份 + 健康**校验（不只 TCP 通）；
+  ② 上次未退出的后端 PID 落盘并在启动期清理（现实现遇到 `Access denied` 只「放弃」并指望
+  Job 兜底，而实测会残留 —— `server.log` 里 canvas 的「已被另一个 dsh web 实例修改」即其证据）；
+  ③ 启动页显示后端失败的**具体原因**（`server.log` 尾 / startup 日志路径）——
+  P9 已把「cmd.exe / node 直启」两项摆上自证页，`server.log` 尾仍待接。
+- [ ] **`os error 740` 的机制收敛（已知现象，未解）** — P9 的四步排查证明：同机、同用户、
+  同 PATH 下用 Rust 复现壳的 `Command::new("cmd")`（含裸名 + `CREATE_NO_WINDOW`）**五种全部成功**，
+  而在壳进程里三处调用**同时** `ERROR_ELEVATION_REQUIRED`；`HKCU\…\AppCompatFlags\Layers` 里那条
+  `c:\windows\system32\cmd.exe = RUNASADMIN`（09-21 起）**不是充分解释**（11:29 那次 spawn 成功）。
+  本轮是**绕过**而非解释。若 node 直启同样失败 ⇒ 限制比 cmd 更宽（子进程创建被整体约束），
+  届时应转为「外部启动后端 + 壳采用」形态。
 - [ ] **长时间稳定性观察** — 用户连续运行 ≥1h 无崩溃(第六轮修复验证)
 - [x] **GDI 异常兜底** — ULW 连续失败计数（首失败+每 300 次日志，10 连败销毁表面）
   + 表面无效每 ~30 compose 重试重建（2026-09-04，`pet_native/window.rs`；

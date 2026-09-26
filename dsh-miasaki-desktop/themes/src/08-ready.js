@@ -36,6 +36,14 @@
     // W4.3：首帧也报一次窗口底色（此前 apply() 未跑过时 CUR_BG 为空）
     CUR_BG = resolveNativeBg()
     syncHash(true) // 启动首帧强制重算 diag（后续按 DIAG_MIN_INTERVAL_MS 节流）
+    // P7 取证（2026-09-26 下午）：每次**文档级** boot 打一次点，由壳侧计数落盘。
+    // 壳的 `on_page_load` 对同文档导航（hash 变化）同样触发，分不清「页面真被重载」与
+    // 「只是 URL 变了一下」；本函数只在文档创建后跑一次，它的计数就是「文档级重载」的
+    // 唯一直接判据（非桌面端无 IPC → emitToShell 返回 false，静默跳过）。
+    // **必须带 `top`**（2026-09-26 深夜补）：`initialization_script` 注入**每个 frame**，
+    // 子 frame（画布/SSH 预览等 iframe）也会跑本函数 —— 实测它们的 `about:blank` 打点
+    // 把「文档级重载」判据整个污染（6 秒 15 次，全是 iframe 重建）。壳侧只对顶层计数。
+    try { emitToShell('miasaki-boot', { href: location.href, at: Date.now(), top: IS_TOP }) } catch (e) { /* ignore */ }
     // 自愈：切换条/标题栏/主题属性/样式层被页面重渲染清掉时自动重建（1s 巡检，切换后无空窗）
     setInterval(function () {
       try { /* 巡检单次失败不影响下一轮 */
@@ -53,8 +61,11 @@
         styleEl.textContent = styleFor(current)
       }
       syncDark()
-      // 最大化状态未知（推送丢失/标题栏重建）→ 10s 间隔经 hash 请求 Rust 重推（本地页同通道）
-      if (MAX_STATE === null && document.getElementById('miasaki-titlebar')) requestMaxState()
+      // 最大化状态未知（推送丢失/标题栏重建）→ 经 hash 请求 Rust 重推（本地页同通道）。
+      // 2026-09-26「无限刷新」修复 P4：改用**跨实例共享**的判定与**有界**请求
+      // （详见 06-titlebar.js 的 currentMaxState / requestMaxState）—— 旧实现只按实例内
+      // 的 MAX_STATE 判空重试，多实例或实例重建时会退化成「一秒多轮」的无限重试。
+      if (currentMaxState() === null && document.getElementById('miasaki-titlebar')) requestMaxState()
       } catch (e) { /* keep */ }
     }, 1000)
   }

@@ -217,8 +217,14 @@ pub fn show_confirm(_title: &str, _text: &str) -> bool {
 pub const BASELINE_BUNDLES: [&str; 2] = ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"];
 /// profile 的补丁层文件名（备份对象）。
 pub const PATCH_FILE: &str = "cordis.patch.yml";
-/// background profile 解析顺序：环境变量优先，再按 dsh 的 profile 约定回落。
-pub const PROFILE_CANDIDATES: [&str; 4] = ["web", "desktop", "tui", "headless"];
+/// 自制壳专属 profile 名。
+///
+/// **隔离契约（2026-09-26）**：官方 dsh-desk（Electron）独占 `desktop` profile，
+/// 官方 CLI 的各模式分别用 `web` / `tui` / `headless`。自制壳与它的全部自制插件
+/// 只允许落在本 profile，于是「官方 dsh 保持纯净」是结构决定的，不靠使用者自律。
+pub const DEFAULT_PROFILE: &str = "miasaki";
+/// background profile 解析顺序：专属名优先，再按 dsh 的 profile 约定回落。
+pub const PROFILE_CANDIDATES: [&str; 5] = ["miasaki", "web", "desktop", "tui", "headless"];
 
 /// 解析 dshHome，口径与 `@deepseek-ai/dsh-home-paths` 及 `launcher_icon::dsh_home` 一致：
 /// 非空白 `$DSH_HOME` 优先，否则 `~/.dsh`。
@@ -256,10 +262,10 @@ pub fn is_valid_profile_name(name: &str) -> bool {
 
 /// 解析当前 profile 目录（纯函数，喂 dshHome 与候选名，单测覆盖）。
 ///
-/// 实测依据：壳拉起的是 `dsh web`，而 `dsh <name>` 即 `dsh --profile <name>`，
-/// 所以本机后端跑的是 `web` profile（已核对 `~/.dsh/profiles/web/package.json`
-/// 的 `dsh.profile.bundles` 含全部七线插件）。`MIASAKI_PROFILE` / `DSH_PROFILE`
-/// 用于覆盖（自定义 profile、多 profile 实验）；其余候选按顺序回落。
+/// 契约依据：`dsh <name>` 即 `dsh --profile <name>`，而壳现在拉起的是
+/// `dsh --profile miasaki`（见 [`backend_profile_name`]），故本机后端跑 `miasaki` profile
+/// —— 官方 dsh-desk 独占的 `desktop`、官方 CLI 的 `web` 都不再承载自制插件。
+/// `MIASAKI_PROFILE` 可覆盖（自定义 profile、多 profile 实验）；其余候选按顺序回落。
 /// **不猜**：目录里既没有 `package.json` 也没有 `cordis.patch.yml` 就跳过。
 pub fn resolve_profile_dir(dsh_home: &Path, candidates: &[String]) -> Option<PathBuf> {
     for name in candidates {
@@ -274,16 +280,31 @@ pub fn resolve_profile_dir(dsh_home: &Path, candidates: &[String]) -> Option<Pat
     None
 }
 
-/// 运行时解析：环境变量 → `web` → `desktop` → 其余候选。
+/// 后端要启动的 profile 名：`MIASAKI_PROFILE` 覆盖，否则 [`DEFAULT_PROFILE`]。
+///
+/// **启动口径的唯一来源** —— `spawn_dsh` 与 [`profile_dir`] 必须同源，否则会出现
+/// 「后端跑 A、恢复功能改 B」的分裂。非法名一律忽略（名字会拼进命令行与文件路径）。
+pub fn backend_profile_name() -> String {
+    if let Ok(v) = std::env::var("MIASAKI_PROFILE") {
+        let v = v.trim().to_string();
+        if is_valid_profile_name(&v) {
+            return v;
+        }
+    }
+    DEFAULT_PROFILE.to_string()
+}
+
+/// 运行时解析：启动口径（[`backend_profile_name`]）→ `DSH_PROFILE` → 其余候选。
+///
+/// `DSH_PROFILE` 只作次选：壳自己拉起的后端由 dsh 设置该变量（值即启动口径），
+/// 而壳进程若从外部 dsh 会话继承了它，那个值并不代表本壳实际启动的 profile。
 pub fn profile_dir() -> Option<PathBuf> {
     let home = dsh_home()?;
-    let mut candidates: Vec<String> = Vec::new();
-    for key in ["MIASAKI_PROFILE", "DSH_PROFILE"] {
-        if let Ok(v) = std::env::var(key) {
-            let v = v.trim().to_string();
-            if !v.is_empty() {
-                candidates.push(v);
-            }
+    let mut candidates: Vec<String> = vec![backend_profile_name()];
+    if let Ok(v) = std::env::var("DSH_PROFILE") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            candidates.push(v);
         }
     }
     candidates.extend(PROFILE_CANDIDATES.iter().map(|s| s.to_string()));
@@ -522,6 +543,18 @@ mod tests {
     }
 
     /* ---- profile 解析 ---- */
+
+    /// 隔离契约（2026-09-26）：候选表首位必须等于专属 profile —— `spawn_dsh` 的启动口径
+    /// 与恢复功能靠它同源，错位就会出现「后端跑 A、恢复功能改 B」的分裂。
+    /// 纯静态断言，不读环境变量（避免测试受 `MIASAKI_PROFILE` 影响）。
+    #[test]
+    fn profile_candidates_lead_with_default_profile() {
+        assert_eq!(DEFAULT_PROFILE, "miasaki");
+        assert_eq!(PROFILE_CANDIDATES[0], DEFAULT_PROFILE);
+        assert!(is_valid_profile_name(DEFAULT_PROFILE));
+        // 官方 Electron 独占的 `desktop` 仍留在候选表：显式指定时仍可定位（不主动选它）。
+        assert!(PROFILE_CANDIDATES.contains(&"desktop"));
+    }
 
     #[test]
     fn profile_name_rejects_path_traversal() {

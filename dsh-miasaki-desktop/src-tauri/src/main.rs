@@ -15,7 +15,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const REMOTE_URL: &str = "http://127.0.0.1:3080/";
 const ASSET_PORT: u16 = 39800;
@@ -26,7 +26,7 @@ const BOOTSTRAP_WAITING_INTERVAL: Duration = Duration::from_secs(3);
 static LAUNCHING: AtomicBool = AtomicBool::new(false);
 /// 启动序列代际：retry 时 +1，旧序列检测到代际变化自行退出（避免双序列并存）。
 static BOOTSTRAP_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-/// 桌面端拉起的 dsh web 进程 PID；None = 后端非本应用启动（用户手动/已在运行），关闭应用时不杀。
+/// 桌面端拉起的 dsh 后端进程 PID；None = 后端非本应用启动（用户手动/已在运行），关闭应用时不杀。
 /// 注意（2026-09-23）：关闭前还会探测 3080 上是否有本应用进程树之外的客户端（浏览器等）
 /// 仍连着——有则保留后端不杀，杜绝「关桌面端 → 拖走共享后端 → 浏览器断连」。
 static DSH_PID: std::sync::Mutex<Option<u32>> = std::sync::Mutex::new(None);
@@ -44,6 +44,43 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// 据此区分「活 SPA」（DSH 前端自带指数退避重连，静候即可，无需 reload）与「从未加载
 /// 成功的错误页」（WebView2 错误页不会自行重试，必须重新导航）。
 static PAGE_UP: AtomicBool = AtomicBool::new(false);
+/// 页面加载计数（`on_page_load` 每次触发 +1）与上一次触发时刻。
+///
+/// **为什么要有它**：2026-09-26「刷新后无限刷新」复查时，唯一无法从静态代码判定的事实是
+/// 「页面到底有没有在反复重载/重建」。WebView2 的 History 库只能说明 URL 变了多少次，
+/// 区分不了「同文档导航」与「文档级重载」。这两个计数器把答案直接写进 pet.log：
+/// 文档级重载会让它快速增长（配合 `record_bootstrap_up` 写 bootstrap.json），
+/// 而同文档导航不会。为防刷屏，日志按「前 5 次全记 + 每 20 次一条 + 间隔 > 2s 必记」抽稀。
+///
+/// **2026-09-26（下午）更正**：上面「同文档导航不会让它增长」这条假设**已被实测证伪**——
+/// URL 每 1.5s 变一次时 `page-load` 同样每 1.5s 长一次（见 P7）。所以它现在只说明
+/// 「导航事件有多少次」，不再是「文档级重载」的判据；那个判据见 `BOOT_MARKS`。
+static PAGE_LOADS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_PAGE_LOAD_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// 文档级 boot 打点计数与上一次时刻（P7，2026-09-26 下午）。
+///
+/// 打点来自页面自己：`08-ready.js` 在 `onReady()` 里 emit `miasaki-boot`，而 `onReady()`
+/// 每个**文档**只跑一次（同文档导航不会重跑）⇒ **它涨 = 页面真的在被重载；它不涨而
+/// `page-load` 在涨 = 只是 URL 在变**。这正是 P7 落地后要盯的判据。
+/// 抽稀口径与 `page-load` 一致：前 5 次全记 / 每 20 次一条 / 间隔 > 2s 必记。
+static BOOT_MARKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_BOOT_MARK_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+/// 子 frame（iframe）boot 计数（2026-09-26 深夜补）。与 `BOOT_MARKS` **必须分开**：
+/// `initialization_script` 注入每个 frame，而画布 / SSH 预览等 iframe 的 `about:blank`
+/// 重建**不是**「页面被重载」—— 混在一起时实测 6 秒 15 次，判据直接失真。
+/// 本计数只回答「页面上有没有东西在反复重建 iframe」，抽稀更狠（前 3 次 + 每 100 次）。
+static FRAME_BOOTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `on_page_load` 是否要**补注入**主题脚本：只有文档级导航（URL 不带 fragment）才需要。
+///
+/// 注入脚本本已由 `initialization_script` 在每个新文档的 document_start 自动执行，这里的
+/// `eval` 只是补保险。而 `on_page_load` 对同文档导航（hash 变化）**同样触发** ⇒ 原来的
+/// 无条件 eval 等于**每 1.5s 解析一遍 120KB 脚本**（P7 实测的 URL 变更节奏），白白烧渲染
+/// 主线程。判据取「URL 带不带 `#`」：带 fragment 的一定是同文档导航；F5 刷新虽保留
+/// fragment，但那时新文档本就执行过初始化脚本，跳过这次补注入不损失任何东西。
+fn should_inject_init(url: &str) -> bool {
+    !url.contains('#')
+}
 /// W4.3（2026-09-25）：DWM Mica 是否**真的生效**（由 `apply_mica` 写入）。
 /// 渲染层回传的窗口底色只在未生效时才应用——生效时窗口底必须保持透明（否则盖掉系统材质）。
 static MICA_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -268,10 +305,27 @@ fn write_bootstrap_state(s: &BootstrapState) {
 
 fn update_bootstrap_attempt(phase: &str, detail: Option<&str>, dsh_available: Option<bool>) {
     let mut s = read_bootstrap_state().unwrap_or_else(BootstrapState::default_state);
+    // 诊断纪律（2026-09-25）：进入新一轮启动（phase="bootstrap"）时**保留**上一轮的
+    // detail / dshAvailable —— 启动页正是靠它回答「上次为什么没起来」
+    // （loading.html 的 bootstrap_state 分支）。旧实现每次启动都无条件重置 lastAttempt，
+    // 让失败现场在下次启动的第一时间就被抹掉，事后无从回溯。
+    let keep_prev = phase == "bootstrap" && detail.is_none();
+    let prev_detail = s.last_attempt.detail.clone();
+    let prev_avail = s.last_attempt.dsh_available;
     let mut attempt = BootstrapAttempt::new(phase);
-    attempt.detail = detail.map(str::to_string);
-    attempt.dsh_available = dsh_available;
+    attempt.detail = detail.map(str::to_string).or(if keep_prev { prev_detail } else { None });
+    attempt.dsh_available = dsh_available.or(if keep_prev { prev_avail } else { None });
     s.last_attempt = attempt;
+    write_bootstrap_state(&s);
+}
+
+/// 低频心跳：只推进 `at`，**保留** phase / detail / dshAvailable。
+/// 旧实现用 `update_bootstrap_attempt("waiting", None, None)` 打心跳，会把几百毫秒前
+/// 刚写下的失败详情（phase="spawn" 的 detail）瞬间覆盖成一条无信息的 waiting ——
+/// 「后端为何没起来」这个最关键的事实因此永远读不到。
+fn heartbeat_bootstrap() {
+    let mut s = read_bootstrap_state().unwrap_or_else(BootstrapState::default_state);
+    s.last_attempt.at = chrono_now();
     write_bootstrap_state(&s);
 }
 
@@ -283,9 +337,57 @@ fn record_bootstrap_up() {
     write_bootstrap_state(&s);
 }
 
+/// Windows 命令解释器的**绝对路径**。
+///
+/// **为什么不用裸名 `cmd`**（2026-09-26 晚，os error 740 事故）：壳内三处
+/// `Command::new("cmd")`（探测 `where dsh` / 环境自证 `echo ok` / 拉起后端）在同一时刻
+/// **全部** `ERROR_ELEVATION_REQUIRED`，而**同一台机器、同一用户、同一 PATH** 下用 Rust 复现
+/// 同一调用（含裸名 + `CREATE_NO_WINDOW`）全部成功 —— 差异只可能在壳进程自身。
+/// 裸名要交给 CreateProcess 去搜（应用目录 → 当前目录 → System32 → PATH），而 PATH 的
+/// `%APPDATA%\npm` 下恰好存在**名为 `cmd` 的 npm 包装**（`command-code` 包注册的命令）。
+/// 无论根因是否在此，壳都不该让系统去猜跑哪个 `cmd`：直接给绝对路径。
+fn cmd_exe() -> PathBuf {
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let p = PathBuf::from(root).join("System32").join("cmd.exe");
+        if p.is_file() {
+            return p;
+        }
+    }
+    if let Some(spec) = std::env::var_os("COMSPEC") {
+        let p = PathBuf::from(spec);
+        if p.is_file() {
+            return p;
+        }
+    }
+    PathBuf::from("cmd.exe")
+}
+
+/// `node.exe` 的绝对路径：按 PATH 目录顺序取第一个存在的（**不走命令解释器**）。
+/// 用途见 [`spawn_dsh`] 的 node 直启分支 —— 它让「拉起后端」不再依赖 cmd.exe。
+fn node_exe() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("node.exe"))
+        .find(|p| p.is_file())
+}
+
+/// npm 全局安装的 `dsh` 入口脚本（`dsh.cmd` 里 node 执行的就是它；同源写法见
+/// `%APPDATA%\npm\dsh.cmd` 的 `"%dp0%\node_modules\@deepseek-ai\dsh\lib\bin.js"`）。
+fn dsh_entry_js() -> Option<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    let p = PathBuf::from(appdata)
+        .join("npm")
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("lib")
+        .join("bin.js");
+    p.is_file().then_some(p)
+}
+
 /// cmd 输出捕获（用户机运行时使用；用于 where dsh / dsh --version 探测）。
 fn cmd_capture(args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("cmd").args(args).output().ok()?;
+    let out = std::process::Command::new(cmd_exe()).args(args).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -300,12 +402,95 @@ fn cmd_capture(args: &[&str]) -> Option<String> {
 fn dsh_available() -> bool {
     #[cfg(target_os = "windows")]
     {
+        // P9：**入口文件在 = 一定可用**（与 PATH、与 cmd.exe 都无关 —— node 直启直接用它）。
+        // 旧实现在这里只跑 `where dsh`，于是「cmd.exe 起不来」被误报成「未安装 DSH」。
+        if dsh_entry_js().is_some() {
+            return true;
+        }
         cmd_capture(&["/C", "where", "dsh"]).is_some()
     }
     #[cfg(not(target_os = "windows"))]
     {
         false
     }
+}
+
+/// 失败现场自证（2026-09-25）：把「cmd.exe 能不能执行」「PATH 里有没有 npm 全局目录」
+/// 「dsh.cmd 在不在」「当前工作目录是否有效」四项事实一次性摆到失败页上。
+///
+/// 为什么需要：旧 `dsh_check` 只输出 `where dsh` + `dsh --version` 两条，而
+/// `cmd_capture` 用 `.ok()?` 把「cmd 根本起不来」与「cmd 跑了但找不到 dsh」
+/// 压成同一个 None —— 失败页于是统一显示「未找到 dsh（不在 PATH）」，把排查方向
+/// 指向「去重装 DSH」，而实测 dsh 装得好好的（正常会话里 `where dsh` 能找到、
+/// `dsh --version` 正常）。这四项事实能把这两类原因当场分开。
+#[cfg(target_os = "windows")]
+fn dsh_env_facts() -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // ① cmd.exe 本身能否执行（os error 267 = 当前目录无效，5 = 拒绝访问，740 = 需要提升）
+    //    P9 起用**绝对路径**：裸名曾把「跑的是哪个 cmd」交给系统搜索，事故中无从判断。
+    let cmd_path = cmd_exe();
+    match std::process::Command::new(&cmd_path).args(["/C", "echo ok"]).output() {
+        Ok(o) if o.status.success() => {
+            lines.push(format!("cmd.exe：可执行（{}）", cmd_path.display()))
+        }
+        Ok(o) => lines.push(format!(
+            "cmd.exe：退出码 {:?}（{}）",
+            o.status.code(),
+            cmd_path.display()
+        )),
+        Err(e) => lines.push(format!(
+            "cmd.exe：无法启动（{e}；os error {:?}）（{}）",
+            e.raw_os_error(),
+            cmd_path.display()
+        )),
+    }
+    // ①b P9：node 直启路径是否可用（**这一项与 cmd.exe 无关** —— 它就是为 cmd 不可用准备的）
+    match (node_exe(), dsh_entry_js()) {
+        (Some(n), Some(e)) => lines.push(format!(
+            "node 直启：可用（{} → {}）",
+            n.display(),
+            e.display()
+        )),
+        (n, e) => lines.push(format!(
+            "node 直启：不可用（node={}；dsh 入口={}）",
+            n.map(|p| p.display().to_string())
+                .unwrap_or_else(|| "未找到".into()),
+            e.map(|p| p.display().to_string())
+                .unwrap_or_else(|| "未找到".into())
+        )),
+    }
+    // ② PATH 里有没有 npm 全局目录（explorer 环境陈旧时最常见的缺失项）
+    let path = std::env::var("PATH").unwrap_or_default();
+    let npm_dir = std::env::var("APPDATA").ok().map(|a| format!("{a}\\npm"));
+    match &npm_dir {
+        Some(d) => {
+            let hit = path
+                .split(';')
+                .any(|p| p.trim_end_matches('\\').eq_ignore_ascii_case(d.trim_end_matches('\\')));
+            lines.push(format!("PATH 含 {}：{}", d, if hit { "是" } else { "否" }));
+        }
+        None => lines.push("PATH：读不到 APPDATA".to_string()),
+    }
+    // ③ npm 目录里的 dsh.cmd 是否存在（存在即「装好了」，与 PATH 无关）
+    if let Some(d) = &npm_dir {
+        let f = std::path::Path::new(d).join("dsh.cmd");
+        lines.push(format!(
+            "{}：{}",
+            f.display(),
+            if f.exists() { "存在" } else { "不存在" }
+        ));
+    }
+    // ④ 当前工作目录（子进程默认继承它；失效时 CreateProcess 会直接失败）
+    match std::env::current_dir() {
+        Ok(d) => lines.push(format!("当前目录：{}", d.display())),
+        Err(e) => lines.push(format!("当前目录：无效（{e}）")),
+    }
+    lines.join("\n")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn dsh_env_facts() -> String {
+    "当前平台不支持".to_string()
 }
 
 /* ---------------- 主题偏好持久化（prefs.json v1） ---------------- */
@@ -363,7 +548,7 @@ fn save_prefs_theme(theme: &str) {
 
 /* ---------------- 关闭流程（确认弹窗 + 分级停止 DSH 后端 + 恢复对话框） ---------------- */
 
-/// 停止由桌面端拉起的 dsh web。判据**原样保留 2026-09-23 的修复**：
+/// 停止由桌面端拉起的 dsh 后端。判据**原样保留 2026-09-23 的修复**：
 /// 关闭前探测 3080 上是否仍有本应用进程树之外的客户端（浏览器等）连接着——
 /// 后端是共享服务，「关桌面端」不应把别人正在用的连接拖走（12:14 断连事故根因：
 /// 桌面端两次关闭分别杀掉了浏览器正连着的后端）。
@@ -758,7 +943,7 @@ fn confirm_background_close() -> bool {
 
 /* ---------------- DSH 启动器 ---------------- */
 
-/// dsh web 鉴权 secret：读 `~/.dsh/.credentials.yaml` 的
+/// DSH web 应用鉴权 secret：读 `~/.dsh/.credentials.yaml` 的
 /// `client-connection/browser-session.secret`（2026-09-22 预置注入配套的「secret 动态化」）。
 /// 手写行解析，零 crate 依赖：定位段 → 段内缩进行找 `secret:`；值须为 b64url 字符集。
 /// 任何失败返回 None —— 调用方（loading 页）回落硬编码常量，行为与历史版本一致。
@@ -795,7 +980,7 @@ fn auth_secret() -> Option<String> {
     None
 }
 
-/// 预置 dsh web 鉴权 cookie：由 loading 页 Web Crypto 签名后经 IPC 送入，在 **navigate 之前**
+/// 预置 DSH web 应用鉴权 cookie：由 loading 页 Web Crypto 签名后经 IPC 送入，在 **navigate 之前**
 /// 写入 WebView2 的 cookie jar，使首次 `GET /` 即带有效 cookie —— 401 不发生
 /// （2026-09-22「启动后总出错要点刷新」修复的主修；设计见 design/auth-cookie-prepinject.md）。
 /// async 命令：Webview2 的 cookie API 在同步命令里死锁（wry#583）。
@@ -851,6 +1036,81 @@ fn port_ready() -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
+/// 后端**应用层**是否就绪：不只是 TCP 通，而是 `GET /` 已被真正的路由接管。
+///
+/// **为什么必须有它**（2026-09-26 深夜，404 事故）：DSH 的 webserver **激活即监听**，而在
+/// web-app 注册路由之前，**任何请求都由 fallback 返回 404** —— `dsh-host-webserver` 的注释
+/// 原文：*the fallback handler answers anything not yet claimed during startup with 404
+/// until its owner registers*。壳此前只看 `TCP connect` ⇒ 后端 spawn 后 **3 秒**就导航
+/// （pet.log 实测 `spawn-dsh` → `page-load #1` 相隔 3s），而 DSH 冷启动要 3–6s ⇒ 撞进这段
+/// 窗口 ⇒ WebView2 直接显示「找不到此 127.0.0.1 页 / HTTP ERROR 404」（用户实测截图）。
+///
+/// 判据取「状态码**不是 404**」：路由注册后 `GET /` 要么 200（已带 cookie），要么 401
+/// （需鉴权，见 `themes/src/00-boot.js` 的 401 兜底链）—— 两者都说明**应用已经在应答**；
+/// 只有 404 才意味着「还在 fallback 阶段」。
+fn backend_http_ready() -> bool {
+    backend_http_status().is_some_and(|code| code != 404)
+}
+
+/// 极简 HTTP/1.1 GET，只取状态码（零 crate、300ms 连接 + 700ms 读超时）。任何失败 → None。
+fn backend_http_status() -> Option<u16> {
+    let addr = format!("127.0.0.1:{BACKEND_PORT}").parse().ok()?;
+    let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(300)).ok()?;
+    s.set_read_timeout(Some(Duration::from_millis(700))).ok()?;
+    s.set_write_timeout(Some(Duration::from_millis(300))).ok()?;
+    let req = format!(
+        "GET / HTTP/1.1\r\nHost: 127.0.0.1:{BACKEND_PORT}\r\nUser-Agent: miasaki-shell\r\nConnection: close\r\n\r\n"
+    );
+    s.write_all(req.as_bytes()).ok()?;
+    let mut buf = [0u8; 64];
+    let n = s.read(&mut buf).ok()?;
+    parse_http_status(&String::from_utf8_lossy(&buf[..n]))
+}
+
+/// 从响应首行解析状态码（纯函数，单测覆盖）：`HTTP/1.1 404 Not Found` → `404`。
+fn parse_http_status(head: &str) -> Option<u16> {
+    let mut parts = head.lines().next()?.split_whitespace();
+    if !parts.next()?.starts_with("HTTP/") {
+        return None;
+    }
+    parts.next()?.parse::<u16>().ok()
+}
+
+/// 「首屏撞进 404 窗口」的兜底重导航：只允许一个在飞。
+static RENAVIGATE_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// 若当前文档是在 fallback 阶段加载的 404 页，则**等后端真正就绪后重新导航一次**。
+///
+/// 为什么需要（即便导航前已用 `backend_http_ready()` 把门）：后端可能在**导航之后**才开始
+/// 注册路由（冷启动抖动、或上一次残留实例刚退出），此时文档已停在 404 —— 而 `on_page_load`
+/// 命中 3080 就把 `PAGE_UP` 置真，运行期看门狗的「文档从未就绪 → 重新导航」兜底因此**不会**
+/// 再触发（404 页也算"加载成功"）。本函数补上这条：只要 `GET /` 还在 404，就等；一旦不再是
+/// 404，立刻重新导航。最多等 60s，且全程只允许一个任务（`RENAVIGATE_PENDING`）。
+fn schedule_renavigate_when_ready(app: &AppHandle) {
+    if backend_http_ready() || RENAVIGATE_PENDING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(60) {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if SHUTTING_DOWN.load(Ordering::SeqCst) {
+                break;
+            }
+            if backend_http_ready() {
+                app_log_line(&format!(
+                    "[{}] http-ready: 后端路由已注册 → 重新导航（首屏曾撞 404）\n",
+                    chrono_now()
+                ));
+                let _ = navigate_main(&app);
+                break;
+            }
+        }
+        RENAVIGATE_PENDING.store(false, Ordering::SeqCst);
+    });
+}
+
 fn spawn_dsh() -> Result<PathBuf, String> {
     let log_path = log_dir().join("server.log");
     let log = OpenOptions::new()
@@ -862,14 +1122,70 @@ fn spawn_dsh() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let mut cmd = std::process::Command::new("cmd");
-        // --no-open：rc.8 起 `dsh web` 会自动打开默认浏览器，与 WebView2 导航重复 → 双窗口
-        cmd.args(["/C", "dsh", "web", "--no-open"])
+        // profile 用自制壳专属名（recovery::DEFAULT_PROFILE）：官方 dsh-desk 独占的 desktop、
+        // 官方 CLI 的 web 都不再承载自制插件 —— 「官方 dsh 纯净」由结构保证。
+        // --no-open：rc.8 起 web app 会自动打开默认浏览器，与 WebView2 导航重复 → 双窗口
+        let profile = recovery::backend_profile_name();
+
+        // —— P9（2026-09-26 晚）：**优先 node 直启，绕开 cmd.exe** ——
+        // 事故：壳内 CreateProcess("cmd.exe") 被系统拒绝（os error 740 =
+        // ERROR_ELEVATION_REQUIRED），而 `dsh` 只是 npm 的 .cmd 包装脚本 —— 整条
+        // 「拉起后端」的路当场堵死，用户侧就是「一打开就是找不到页面」。
+        // node 与 dsh 入口都是普通文件、不经过命令解释器，所以这条路不依赖 cmd.exe；
+        // 直启失败才回落 `cmd /C dsh …`（最坏与旧实现等价）。
+        let direct_err: String = match (node_exe(), dsh_entry_js()) {
+            (Some(node), Some(entry)) => {
+                let mut direct = std::process::Command::new(&node);
+                direct
+                    .arg(&entry)
+                    .args(["--profile", profile.as_str(), "--no-open"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::from(
+                        log.try_clone().map_err(|e| e.to_string())?,
+                    ))
+                    .stderr(std::process::Stdio::from(
+                        log.try_clone().map_err(|e| e.to_string())?,
+                    ))
+                    .creation_flags(0x0800_0000);
+                match direct.spawn() {
+                    Ok(child) => {
+                        assign_to_backend_job(&child);
+                        *DSH_PID.lock().unwrap() = Some(child.id());
+                        app_log_line(&format!(
+                            "[{}] spawn-dsh: node 直启后端（绕开 cmd.exe）pid {}\n",
+                            chrono_now(),
+                            child.id()
+                        ));
+                        return Ok(log_path);
+                    }
+                    Err(e) => {
+                        app_log_line(&format!(
+                            "[{}] spawn-dsh: node 直启失败（{e}）→ 回落 cmd 路径\n",
+                            chrono_now()
+                        ));
+                        format!("node 直启失败: {e}")
+                    }
+                }
+            }
+            (n, e) => format!(
+                "node 直启不可用（node={}；dsh 入口={}）",
+                n.map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "未找到".into()),
+                e.map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "未找到".into())
+            ),
+        };
+
+        // —— 回落：`cmd /C dsh …`（绝对路径 cmd.exe，不用裸名） ——
+        let mut cmd = std::process::Command::new(cmd_exe());
+        cmd.args(["/C", "dsh", "--profile", profile.as_str(), "--no-open"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
             .stderr(std::process::Stdio::from(log))
             .creation_flags(0x0800_0000);
-        let child = cmd.spawn().map_err(|e| format!("启动 dsh 失败: {e}"))?;
+        let child = cmd
+            .spawn()
+            .map_err(|e| format!("启动 dsh 失败: {e}（{direct_err}）"))?;
         // 纳入 Job（KILL_ON_JOB_CLOSE）：壳异常消亡时由 OS 回收整棵进程树，
         // 不再依赖「关闭流程跑到了」这个前提（见 BACKEND_JOB 的注释）。
         assign_to_backend_job(&child);
@@ -895,14 +1211,73 @@ fn set_status(app: &AppHandle, text: &str) {
     eval_status(app, &format!("window.__setStatus && window.__setStatus({escaped})"));
 }
 
+/// 从后端输出（壳自己重定向的 `%LOCALAPPDATA%\miasaki\server.log`）里取**最新**的
+/// `dsh web: http://127.0.0.1:3080/?token=…`。
+///
+/// **为什么必须走这条**（2026-09-26 深夜，401 无限刷新事故）：
+/// DSH 的鉴权有两个入口 ——
+/// ① **官方 token URL**：`GET /?token=<token>` → `303` + `Set-Cookie: dsh-auth-…`
+///    （`HttpOnly; SameSite=Strict; Max-Age=2592000`，本机实测）；官方桌面端与 CLI 走的就是它；
+/// ② 壳的「预置 cookie」路线：读 `~/.dsh/.credentials.yaml` 的
+///    `client-connection/browser-session.secret` 自己签一份（`main.rs::auth_secret`）。
+/// **本机实测 ② 的前提不存在**：该文件（1141B，2026-09-25 21:23）里**没有那个段**
+/// （只有 `version` / `refs` / `records`）⇒ `auth_secret()` 返回 `None` ⇒ loading 页回落到
+/// **硬编码兜底 secret** ⇒ 签出来的 cookie 后端不认 ⇒ `GET /` 恒 401
+/// （`dsh web authentication required; reopen the URL printed by dsh web.`，实测原文）⇒
+/// `themes/src/00-boot.js` 的 401 兜底链每轮 `location.reload()` ⇒ 用户看到「一直在刷新」。
+///
+/// 因此**优先用官方 token URL 导航**：后端随即 `Set-Cookie`（30 天持久），之后所有导航
+/// （含 F5、hash 变化）都带这个 cookie。取不到 token 时回落到裸 URL —— 最坏不劣化。
+fn latest_web_token() -> Option<String> {
+    let text = std::fs::read_to_string(log_dir().join("server.log")).ok()?;
+    text.lines().rev().find_map(parse_web_token_line)
+}
+
+/// 从一行后端输出里解析 token（纯函数，单测覆盖）。
+/// 只认**本端口**的行：`server.log` 是 append 的，历史行来自别的实例/别的端口。
+fn parse_web_token_line(line: &str) -> Option<String> {
+    const MARK: &str = "dsh web: http://127.0.0.1:";
+    let rest = &line[line.find(MARK)? + MARK.len()..];
+    let (port, tail) = rest.split_once("/?token=")?;
+    if port != BACKEND_PORT.to_string() {
+        return None;
+    }
+    let token: String = tail
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    (!token.is_empty() && token.len() <= 128).then_some(token)
+}
+
 /// 把主窗口导航到 DSH 后端地址。
 ///
 /// 刻意不用 `expect`：`remote_url()` 可被环境变量 `MIASAKI_REMOTE` 覆盖（见其定义），
 /// 非法值会让 `Url::parse` 失败，而 release 构建是 `panic = "abort"`（Cargo.toml）
 /// ——一处配置写错就终结整个桌面端进程。这里与 backend-watchdog 的 `if let Ok(url)`
 /// 保持同一容错口径，失败信息交给调用方做用户可见反馈。
+///
+/// P10（2026-09-26 深夜）：目标优先带**官方 token**（见 `latest_web_token` 的注释）——
+/// 那是唯一不依赖 `credentials.yaml` 里某个可选段就能拿到有效鉴权的路。
 fn navigate_main(app: &AppHandle) -> Result<(), String> {
-    let target = remote_url();
+    let base = remote_url();
+    let target = match latest_web_token() {
+        Some(t) => {
+            app_log_line(&format!(
+                "[{}] navigate: 带官方 token 进入（len {}）\n",
+                chrono_now(),
+                t.len()
+            ));
+            let sep = if base.ends_with('/') { "?" } else { "/?" };
+            format!("{base}{sep}token={t}")
+        }
+        None => {
+            app_log_line(&format!(
+                "[{}] navigate: 未取到 token → 回落裸 URL（可能撞 401 兜底链）\n",
+                chrono_now()
+            ));
+            base
+        }
+    };
     let url = tauri::Url::parse(&target).map_err(|e| format!("远端地址无效（{target}）：{e}"))?;
     let wv = app
         .get_webview_window("main")
@@ -928,7 +1303,11 @@ fn start_launch_sequence(app: &AppHandle) {
             if BOOTSTRAP_GEN.load(Ordering::SeqCst) != gen {
                 return;
             }
-            if port_ready() {
+            // P10（2026-09-26 深夜，404 事故）：就绪判据必须是**应用层**（`GET /` 已不是
+            // 404 = 路由已注册），而不是仅「TCP 可连」—— DSH 的 webserver **激活即监听**、
+            // 路由晚注册，只看 TCP 会在 spawn 后 3 秒就导航、撞进 fallback 的 404 窗口
+            // （实测：WebView2 直接显示「找不到此 127.0.0.1 页 / HTTP ERROR 404」）。
+            if backend_http_ready() {
                 // 鉴权 cookie 预置等待：loading 页签好后经 set_auth_cookie 置位；
                 // 3s 超时放行（fail-open），401 兜底链见 themes/00-boot.js。
                 // 效果：首次 GET / 即带有效 cookie，不再出现「启动后要点刷新」。
@@ -970,6 +1349,10 @@ fn start_launch_sequence(app: &AppHandle) {
                         );
                     }
                     Err(e) => {
+                        // 失败自证（2026-09-25）：拉起失败必须落盘。旧实现只写状态栏文案，
+                        // 界面一关什么都不剩 —— 本次「未检测到 dsh」报障即如此：
+                        // pet.log 里没有一行相关记录，只能靠推理反推失败原因。
+                        app_log_line(&format!("[{}] spawn-dsh: 拉起后端失败：{e}\n", chrono_now()));
                         update_bootstrap_attempt("spawn", Some(&e), Some(dsh_ok));
                         let msg = if !dsh_ok {
                             "未检测到 dsh，请安装 DeepSeek Harness（详见 README），或点击「检查 dsh」".to_string()
@@ -997,10 +1380,10 @@ fn start_launch_sequence(app: &AppHandle) {
                 );
                 eval_status(&app, "window.__setRetry && window.__setRetry(true)");
             }
-            // 低频落盘 waiting 心跳（避免每 400ms 写盘）
+            // 低频落盘 waiting 心跳（避免每 400ms 写盘）；只推进 at，不覆盖失败详情
             if last_wait_log.elapsed() > BOOTSTRAP_WAITING_INTERVAL {
                 last_wait_log = Instant::now();
-                update_bootstrap_attempt("waiting", None, None);
+                heartbeat_bootstrap();
             }
             tokio::time::sleep(Duration::from_millis(400)).await;
         }
@@ -1011,7 +1394,7 @@ fn start_launch_sequence(app: &AppHandle) {
 
 /// 常态探测周期。启动序列把页面导航到 3080 之后才启动本看门狗（与 hash/pulse 看门狗同批）。
 const BACKEND_POLL_MS: u64 = 2000;
-/// 重拉后等待端口就绪的上限：dsh web 冷启动约 3~6s，90s 与 BOOTSTRAP_TIMEOUT 同口径。
+/// 重拉后等待端口就绪的上限：dsh 后端冷启动约 3~6s，90s 与 BOOTSTRAP_TIMEOUT 同口径。
 const BACKEND_RESPAWN_TIMEOUT: Duration = Duration::from_secs(90);
 /// `GetExitCodeProcess` 对仍活着的进程返回的退出码（Win32 STILL_ACTIVE）。
 #[cfg(target_os = "windows")]
@@ -1204,10 +1587,10 @@ fn start_backend_watchdog(app: &AppHandle) {
                 respawn_reason = Some("采用的外部后端已退出，3080 无监听".to_string());
             }
             let Some(reason) = respawn_reason else { continue };
-            // —— 恢复：重拉 dsh web 并等端口就绪 ——
+            // —— 恢复：重拉 dsh 后端并等端口就绪 ——
             fail_streak += 1;
             app_log_line(&format!(
-                "[{}] backend-watchdog: {reason} → 自动重拉 dsh web（连续第 {fail_streak} 次，间隔 {interval}ms）\n",
+                "[{}] backend-watchdog: {reason} → 自动重拉 dsh 后端（连续第 {fail_streak} 次，间隔 {interval}ms）\n",
                 chrono_now()
             ));
             match spawn_dsh() {
@@ -1258,7 +1641,7 @@ fn start_backend_watchdog(app: &AppHandle) {
                     // T2.1：后端拉不起来是 host 侧故障，留现场（含 server.log 尾）
                     let _ = diag::report(
                         diag::Source::Host,
-                        "自动重拉 dsh web 失败",
+                        "自动重拉 dsh 后端失败",
                         &format!("respawn failed: {e}\nreason: {reason}\n"),
                     );
                 }
@@ -1387,6 +1770,40 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         }
     }
     p
+}
+
+/// 2026-09-26（「一直在刷新」修复 P2）：剔除**只随心跳变化**的字段后的 fragment 签名。
+///
+/// 只剔除 `petts`：它是 pet-panel 的心跳时间戳（每 1.5s 一个新值），除它之外的字段才是
+/// 「页面状态真的变了」的信号。签名相同 → 整段解析与桌宠重设全部跳过（源头收敛）。
+/// `diag::note_hash_fragment`（挂起现场诊断）仍记**原始** fragment，不受本函数影响。
+fn fragment_signature(fragment: &str) -> String {
+    if !fragment.contains("petts=") {
+        return fragment.to_string();
+    }
+    fragment
+        .split('&')
+        .filter(|seg| !seg.starts_with("petts="))
+        .collect::<Vec<&str>>()
+        .join("&")
+}
+
+/// 仅心跳变化（剔除 `petts` 后签名相同）时丢弃**重绘类状态字段**。
+///
+/// 语义边界（2026-09-26「刷新后无限刷新」修复 P5）：**命令不是状态，永不清除**。
+/// `cmd`/`seq` 由页面在点击/请求时一次性写入，壳侧靠 `seq` 单调递增去重，重复处理无害；
+/// 而把它与 theme/int/act/wait/bg 一起清掉，会让「命令行」与紧随其后的「心跳行」互相覆盖
+/// —— 页面写完命令后 ≤1.5s 必有一次心跳推进，命令随即从处理队列里消失。
+/// 实测佐证：pet.log 里从头到尾没有一条 `hash-cmd want-max`，而页面侧每轮都在写它。
+/// 官方通道四字段（pet/pettool/petkey/petts）同样保留：它们正是本轮心跳的意义所在。
+fn clear_redraw_fields(p: &mut FragmentParts) {
+    p.theme = None;
+    p.int = None;
+    p.act = None;
+    p.wait = None;
+    p.bg = None;
+    p.move_reset = false;
+    p.move_xy = None;
 }
 
 fn pet_mode_for(theme: &str) -> &'static str {
@@ -1567,6 +1984,8 @@ fn start_hash_watchdog(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut last_fragment = String::new();
+        // 剔除 petts（心跳时间戳）后的签名：用于区分「整份状态变了」与「只有心跳变了」。
+        let mut last_signature = String::new();
         let mut last_seq: i64 = -1;
         let mut last_diag = String::new();
         // 拖窗：累计增量差值应用(JS 发相对按下起点的累计值;Rust 应用与上次的差,不丢帧不重复)
@@ -1637,9 +2056,25 @@ fn start_hash_watchdog(app: &AppHandle) {
                 continue;
             }
             last_fragment = fragment.to_string();
+            // 2026-09-26「一直在刷新」修复 P2：区分「整份状态变了」与「只有心跳变了」。
+            // `petts`（pet-panel 心跳时间戳）每 1.5s 必变，而主题/强度/活动/审批/底色
+            // 往往原封不动 —— 旧实现对**同值**也照走全部 setter，实测让 pet.log 以
+            // 1.32 行/秒持续 5 小时（156945 行 / 4.7MB）并持续驱动桌宠重绘。
+            // 判据 = 剔除 petts 后的签名：仅心跳变化时只保留官方六态通道（见下方清空段）。
+            // 心跳**必须照常推进** —— 否则 official_at 不刷新，5s 后通道判静默，桌宠整体
+            // 回落 DOM 兜底，那是功能回归而不是优化。
+            let signature = fragment_signature(fragment);
+            let heartbeat_only = signature == last_signature;
+            last_signature = signature;
             // 挂起现场要用「最后一次 hash fragment」，在同一个观察点上顺手记下（零拷贝路径）
             diag::note_hash_fragment(fragment);
-            let parts = parse_fragment(fragment);
+            let mut parts = parse_fragment(fragment);
+            if heartbeat_only {
+                // 仅心跳变化：丢弃重绘类**状态**字段，保留官方四通道与**命令**。
+                // 语义边界与实测依据见 `clear_redraw_fields` 的文档注释（P5 修复）——
+                // 旧实现在这里连 `cmd` 一起清掉，等于让心跳把页面刚下发的命令吃掉。
+                clear_redraw_fields(&mut parts);
+            }
             // 诊断位落盘：hash diag（含侧栏宽/收起判定）变化时写一行日志，
             // 导出诊断可见 → 标题栏/侧栏问题可远程定位（1.5s 同步一次，变化才写，不刷屏）
             if let Some(p) = fragment.split("&diag=").nth(1) {
@@ -1710,13 +2145,6 @@ fn start_hash_watchdog(app: &AppHandle) {
                     last_seq = parts.seq;
                     app_log_line(&format!("[{}] hash-cmd {c}\n", chrono_now()));
                     match c.as_str() {
-                        "hide" => {
-                            let _ = wv.hide();
-                        }
-                        "show" => {
-                            let _ = wv.show();
-                            let _ = wv.set_focus();
-                        }
                         "min" => {
                             let _ = wv.minimize();
                         }
@@ -1767,11 +2195,6 @@ fn retry_start(app: AppHandle) {
     start_launch_sequence(&app);
 }
 
-#[tauri::command]
-fn pet_log(msg: String) {
-    app_log_line(&format!("[{}] {msg}\n", chrono_now()));
-}
-
 /// 本地唤醒页确认「关闭应用」的直接入口（远程页经 hash cmd=shutdown 到达 shutdown_app）。
 #[tauri::command]
 fn shutdown(app: AppHandle) {
@@ -1793,16 +2216,19 @@ fn bootstrap_state() -> serde_json::Value {
     }
 }
 
-/// dsh 安装探测：where dsh + dsh --version（失败则仅返回 where 结果）。
+/// dsh 安装探测：where dsh + dsh --version + 环境自证（失败时也能一眼分清是哪一类问题）。
 #[tauri::command]
 fn dsh_check() -> String {
     #[cfg(target_os = "windows")]
     {
         let where_result = cmd_capture(&["/C", "where", "dsh"]).unwrap_or_else(|| "未找到 dsh（不在 PATH）".into());
-        match cmd_capture(&["/C", "dsh", "--version"]) {
-            Some(v) => format!("{where_result}\n版本：{v}"),
-            None => format!("{where_result}\n（dsh --version 执行失败）"),
-        }
+        let version = match cmd_capture(&["/C", "dsh", "--version"]) {
+            Some(v) => format!("版本：{v}"),
+            None => "（dsh --version 执行失败）".to_string(),
+        };
+        // 失败自证（2026-09-25）：把环境四项事实附在后面 —— 见 dsh_env_facts 的注释。
+        // 旧输出只有 where/--version 两行，「cmd 起不来」与「dsh 不在 PATH」无从区分。
+        format!("{where_result}\n{version}\n\n— 环境自证 —\n{}", dsh_env_facts())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1810,13 +2236,17 @@ fn dsh_check() -> String {
     }
 }
 
-/// 打开独立 cmd 窗口（用户手动执行 dsh web / netstat 排查）。
+/// 打开独立 cmd 窗口（用户手动执行 `dsh --profile <名>` / netstat 排查）。
 #[tauri::command]
 fn open_terminal() {
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "cmd", "/K", "title Miasaki 诊断终端 && echo 可手动运行: dsh web --no-open"])
+        let hint = format!(
+            "title Miasaki 诊断终端 && echo 可手动运行: dsh --profile {} --no-open",
+            recovery::backend_profile_name()
+        );
+        let _ = std::process::Command::new(cmd_exe())
+            .args(["/C", "start", "cmd", "/K", hint.as_str()])
             .spawn();
     }
 }
@@ -2322,7 +2752,6 @@ fn main() {
         }))
         .invoke_handler(tauri::generate_handler![
             retry_start,
-            pet_log,
             shutdown,
             bootstrap_state,
             dsh_check,
@@ -2432,15 +2861,44 @@ fn main() {
                     if url.starts_with("http://127.0.0.1:3080") {
                         PAGE_UP.store(true, Ordering::SeqCst);
                         record_bootstrap_up();
-                        let _ = webview.eval(INIT_SCRIPT);
-                        // 延迟推一次最大化状态与**原生材质实际值**：eval INIT_SCRIPT 后页面监听
-                        // 已就绪（重启后恢复上次窗口尺寸时的初始图标同样正确）
+                        // P10：若这个文档是在 fallback 阶段加载的 404 页，等后端真正就绪后
+                        // **重新导航一次**（`PAGE_UP` 已置真 ⇒ 运行期看门狗的「文档从未就绪 →
+                        // 重新导航」兜底不会再触发，404 页会被当成"加载成功"永久停住）。
+                        schedule_renavigate_when_ready(webview.app_handle());
+                        // 页面加载计数：抽稀落盘（前 5 次 / 每 20 次 / 间隔 > 2s）。
+                        // 用途见 PAGE_LOADS 的注释 —— 它是「文档级重载 vs 同文档导航」的唯一判据。
+                        let n = PAGE_LOADS.fetch_add(1, Ordering::Relaxed) + 1;
+                        let now_ms = chrono_now_ms();
+                        let prev_ms = LAST_PAGE_LOAD_MS.swap(now_ms, Ordering::Relaxed);
+                        let gap = if prev_ms == 0 { -1 } else { now_ms - prev_ms };
+                        if n <= 5 || n % 20 == 0 || gap < 0 || gap > 2000 {
+                            app_log_line(&format!(
+                                "[{}] page-load #{n} (+{gap}ms) {url}\n",
+                                chrono_now()
+                            ));
+                        }
+                        // P7：只在**文档级导航**补注入（判据与反例见 should_inject_init 注释）。
+                        if should_inject_init(&url) {
+                            let _ = webview.eval(INIT_SCRIPT);
+                        }
+                        // 延迟推最大化状态与**原生材质实际值**：eval INIT_SCRIPT 后页面监听
+                        // 已就绪（重启后恢复上次窗口尺寸时的初始图标同样正确）。
+                        //
+                        // 2026-09-26「刷新后无限刷新」修复 P6：**max 状态改为多次重推**。
+                        // 页面侧的 `wireMaxState()` 在 DOMContentLoaded 才注册，而 DSH 是重前端：
+                        // 后端冷启动 / 大工作区加载时，600ms 这一次推送可能早于监听器注册而被丢弃，
+                        // 页面于是长期处于「最大化状态未知」并反复经 hash 请求（见 06-titlebar.js
+                        // 的有界重试）。推送是幂等的（只是派发一次 CustomEvent），补两次成本极低。
                         let app2 = webview.app_handle().clone();
                         tauri::async_runtime::spawn(async move {
                             tokio::time::sleep(Duration::from_millis(600)).await;
                             push_max_state(&app2);
                             // W4.2：用 DWM 的**实际**结果修正 init 里的预判值
                             push_native_material(&app2);
+                            for delay in [2_500u64, 6_000u64] {
+                                tokio::time::sleep(Duration::from_millis(delay - 600)).await;
+                                push_max_state(&app2);
+                            }
                         });
                     }
                 })
@@ -2687,6 +3145,66 @@ fn main() {
             // 原生分层窗口桌宠（与主窗同进程，零 IPC 同步）
             app.manage(pet_native::NativePet::spawn(app.handle().clone()));
 
+            // P7（2026-09-26 下午）：页面 → 壳的**事件通道**。远程页的 IPC 权限来自
+            // capabilities/remote-dsh.json 的 `core:default`（其 `core:event:default` 已含
+            // `allow-emit`），与标题栏既有的 `plugin:window|start_dragging` 同一条链路。
+            //
+            // 用途一 · 六态心跳：`petts` 不再经 URL 送达 —— 那正是「URL 每 1.5s 变一次、
+            //   History 库涨到 87MB、页面一直在闪」的驱动源（见 themes/src/02-core.js 的
+            //   P7 注释）。页面侧在 emit 失败时会回落写 URL，所以这里只负责收。
+            // 用途二 · 文档级 boot 打点：把「页面到底有没有被重载」变成可计量的事实，
+            //   补上 PAGE_LOADS 判据被证伪后的空白（见 BOOT_MARKS 的注释）。
+            {
+                let handle = app.handle().clone();
+                app.listen("miasaki-pet-heartbeat", move |event| {
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+                        return;
+                    };
+                    let ts = v.get("petts").and_then(|x| x.as_i64()).unwrap_or(0);
+                    if ts <= 0 {
+                        return;
+                    }
+                    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+                    // 事件载荷与 hash 字段一样不可信：白名单归一与截断都只在
+                    // `set_official_state` 内部做一次（唯一入口，不在这里复制规则）。
+                    handle.state::<pet_native::NativePet>().set_official_state(
+                        ts,
+                        &field("pet"),
+                        &field("pettool"),
+                        &field("petkey"),
+                    );
+                });
+                app.listen("miasaki-boot", move |event| {
+                    let v: serde_json::Value =
+                        serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null);
+                    let is_top = v.get("top").and_then(|x| x.as_bool()).unwrap_or(true);
+                    let href = v
+                        .get("href")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    // **只有顶层 frame 才算「文档级重载」**：`initialization_script` 注入每个
+                    // frame，子 frame（画布/SSH 预览等 iframe）同样跑 08-ready —— 实测它们的
+                    // `about:blank` 打点把判据整个污染（6 秒 15 次，全是 iframe 重建）。
+                    // 子 frame 单独计数、更狠地抽稀：它回答的是另一个问题（有没有东西在反复
+                    // 重建 iframe），不该混进「页面是否被重载」。
+                    if !is_top {
+                        let m = FRAME_BOOTS.fetch_add(1, Ordering::Relaxed) + 1;
+                        if m <= 3 || m % 100 == 0 {
+                            app_log_line(&format!("[{}] frame-boot #{m} {href}\n", chrono_now()));
+                        }
+                        return;
+                    }
+                    let n = BOOT_MARKS.fetch_add(1, Ordering::Relaxed) + 1;
+                    let now_ms = chrono_now_ms();
+                    let prev_ms = LAST_BOOT_MARK_MS.swap(now_ms, Ordering::Relaxed);
+                    let gap = if prev_ms == 0 { -1 } else { now_ms - prev_ms };
+                    if n <= 5 || n % 20 == 0 || gap < 0 || gap > 2000 {
+                        app_log_line(&format!("[{}] doc-boot #{n} (+{gap}ms) {href}\n", chrono_now()));
+                    }
+                });
+            }
+
             let app = app.handle().clone();
             start_launch_sequence(&app);
             let _ = webview;
@@ -2699,6 +3217,71 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// P9（2026-09-26 晚，os error 740 事故）：壳只允许用**绝对路径**调命令解释器。
+    /// 裸名会让 CreateProcess 去搜（应用目录 → 当前目录 → System32 → PATH），而本机
+    /// `%APPDATA%\npm\cmd`（`command-code` 包注册的命令）恰好存在 —— 事故中
+    /// 「到底跑的是哪个 cmd」无从判断，这一条把它钉死。
+    #[test]
+    fn cmd_exe_is_absolute_and_exists() {
+        let c = cmd_exe();
+        assert!(c.is_absolute(), "cmd.exe 必须是绝对路径：{}", c.display());
+        assert!(c.is_file(), "cmd.exe 必须存在：{}", c.display());
+    }
+
+    /// node 直启的两个探测点：只返回**真实存在**的文件（找不到就是 None，不猜路径）。
+    #[test]
+    fn direct_launch_probes_only_return_existing_files() {
+        if let Some(n) = node_exe() {
+            assert!(n.is_file(), "node_exe() 必须返回存在的文件：{}", n.display());
+        }
+        if let Some(e) = dsh_entry_js() {
+            assert!(e.is_file(), "dsh_entry_js() 必须返回存在的文件：{}", e.display());
+        }
+    }
+
+    /// P10（2026-09-26 深夜，401 无限刷新事故）：官方 token URL 的行解析。
+    /// 只认**本端口**的行 —— `server.log` 是 append 的，历史行来自别的实例/别的端口。
+    #[test]
+    fn web_token_line_parses_only_this_port() {
+        assert_eq!(
+            parse_web_token_line("dsh web: http://127.0.0.1:3080/?token=abc-DEF_123"),
+            Some("abc-DEF_123".to_string())
+        );
+        // 尾随内容（\r、其它查询参数）必须被截断，不能把垃圾带进 URL
+        assert_eq!(
+            parse_web_token_line("dsh web: http://127.0.0.1:3080/?token=abc\r"),
+            Some("abc".to_string())
+        );
+        assert_eq!(
+            parse_web_token_line("dsh web: http://127.0.0.1:3080/?token=abc&x=1"),
+            Some("abc".to_string())
+        );
+        // 别的端口不算（历史行 / 别的 profile / 别的实例）
+        assert_eq!(
+            parse_web_token_line("dsh web: http://127.0.0.1:3099/?token=abc"),
+            None
+        );
+        // 畸形行：不 panic、不返回空 token
+        assert_eq!(parse_web_token_line("dsh web: http://127.0.0.1:3080/"), None);
+        assert_eq!(
+            parse_web_token_line("dsh web: http://127.0.0.1:3080/?token="),
+            None
+        );
+        assert_eq!(parse_web_token_line("Node.js v24.15.0"), None);
+    }
+
+    /// P7（2026-09-26 下午）：补注入只在**文档级导航**发生。
+    /// 反例就是本次事故：URL 每 1.5s 变一次 ⇒ 原来的无条件 `eval(INIT_SCRIPT)` 等于每 1.5s
+    /// 解析一遍 120KB 脚本（渲染主线程白烧 + 页面持续重排，用户观感即「一直在刷新」）。
+    #[test]
+    fn init_injection_only_on_document_navigation() {
+        assert!(should_inject_init("http://127.0.0.1:3080/"));
+        assert!(should_inject_init("http://127.0.0.1:3080/index.html"));
+        assert!(should_inject_init("http://tauri.localhost/loading.html"));
+        assert!(!should_inject_init("http://127.0.0.1:3080/#miasaki-theme=pure&int=idle"));
+        assert!(!should_inject_init("http://127.0.0.1:3080/?x=1#cmd=want-max&seq=7"));
+    }
 
     /// 契约样例（ab-linkage-pulse-v2-2026-09-04.md）的时间戳基准。
     const TS: &str = "2026-09-04T07:40:08Z";
@@ -2944,6 +3527,84 @@ mod tests {
         assert_eq!(parse_fragment("bg=f7f4").bg, None, "长度不足必须忽略");
         assert_eq!(parse_fragment("bg=zzzzzz").bg, None, "非十六进制必须忽略");
         assert_eq!(parse_fragment("miasaki-theme=pure").bg, None, "缺省即 None");
+    }
+
+    /// 2026-09-26「一直在刷新」修复 P2：剔除 `petts`（心跳时间戳）后的签名。
+    /// 守两件事：① 仅心跳变化时签名必须不变（否则每 1.5s 走一遍全量重设）；
+    /// ② 其它任何字段变化都必须仍被感知（否则真状态更新被吞，桌宠不再跟随）。
+    #[test]
+    fn fragment_signature_ignores_heartbeat_only_change() {
+        let base = "miasaki-theme=zafkiel&int=high&act=idle&wait=0&pet=thinking&pettool=&petts=1790358020&petkey=&diag=1.2.3";
+        let next_beat = "miasaki-theme=zafkiel&int=high&act=idle&wait=0&pet=thinking&pettool=&petts=1790358021&petkey=&diag=1.2.3";
+        assert_eq!(
+            fragment_signature(base),
+            fragment_signature(next_beat),
+            "仅心跳推进不得算作变化"
+        );
+
+        // 真变化一律不得被吞：主题 / 强度 / 活动 / 审批 / 官方六态 / 工具名 / diag / 命令
+        for changed in [
+            "miasaki-theme=pure&int=high&act=idle&wait=0&pet=thinking&pettool=&petts=1790358020&petkey=&diag=1.2.3",
+            "miasaki-theme=zafkiel&int=low&act=idle&wait=0&pet=thinking&pettool=&petts=1790358020&petkey=&diag=1.2.3",
+            "miasaki-theme=zafkiel&int=high&act=busy&wait=0&pet=thinking&pettool=&petts=1790358020&petkey=&diag=1.2.3",
+            "miasaki-theme=zafkiel&int=high&act=idle&wait=1&pet=thinking&pettool=&petts=1790358020&petkey=&diag=1.2.3",
+            "miasaki-theme=zafkiel&int=high&act=idle&wait=0&pet=waiting&pettool=&petts=1790358020&petkey=&diag=1.2.3",
+            "miasaki-theme=zafkiel&int=high&act=idle&wait=0&pet=thinking&pettool=bash&petts=1790358020&petkey=&diag=1.2.3",
+            "miasaki-theme=zafkiel&int=high&act=idle&wait=0&pet=thinking&pettool=&petts=1790358020&petkey=&diag=1.2.4",
+            "miasaki-theme=zafkiel&int=high&act=idle&wait=0&pet=thinking&pettool=&petts=1790358020&petkey=&diag=1.2.3&cmd=min&seq=1",
+        ] {
+            assert_ne!(
+                fragment_signature(base),
+                fragment_signature(changed),
+                "真变化被吞：{changed}"
+            );
+        }
+
+        // 无 petts 的 fragment（老注入产物 / 本地页）原样返回，不引入任何改写
+        assert_eq!(
+            fragment_signature("miasaki-theme=pure&cmd=min&seq=1790358020"),
+            "miasaki-theme=pure&cmd=min&seq=1790358020"
+        );
+        // petts 在首 / 中 / 尾任意位置都要剔干净；且不得误伤相邻键（pettool/petkey 都是
+        // "pett"/"petk" 前缀，任何以 petts 开头的其它键也不能被当成心跳）
+        assert_eq!(fragment_signature("petts=1&a=1"), "a=1");
+        assert_eq!(fragment_signature("a=1&petts=1&b=2"), "a=1&b=2");
+        assert_eq!(fragment_signature("a=1&petts=1"), "a=1");
+        assert_eq!(fragment_signature("pettsx=1"), "pettsx=1");
+        assert_eq!(fragment_signature("pettool=bash&petkey=k"), "pettool=bash&petkey=k");
+    }
+
+    /// 2026-09-26「刷新后无限刷新」修复 P5 的行为闸门：**心跳不得吃掉命令**。
+    ///
+    /// 两侧都要钉住：
+    /// ① 重绘类状态必须被丢弃（否则每 1.5s 走一遍全量重设，正是 09-26 那条 1.32 行/秒洪流）；
+    /// ② `cmd`/`seq` 必须保留 —— 命令是**事件**，被心跳清掉就永久丢失；实测 pet.log 里
+    ///    从头到尾没有 `hash-cmd want-max`，而页面每轮都在写它，就是被这条规则吃掉的。
+    #[test]
+    fn heartbeat_only_clears_state_but_never_commands() {
+        let mut p = parse_fragment(
+            "miasaki-theme=zafkiel&int=high&act=busy&wait=1&pet=waiting&pettool=bash&\
+             petts=1790358021&petkey=abc&bg=0c0b11&diag=1.2.3&cmd=want-max&seq=1790358021",
+        );
+        clear_redraw_fields(&mut p);
+        // 命令与去重序号：一条都不能少
+        assert_eq!(p.cmd.as_deref(), Some("want-max"), "命令必须保留（P5）");
+        assert_eq!(p.seq, 1790358021, "seq 必须保留，否则壳侧去重口径失效");
+        // 官方四通道：心跳本身就是它们的载体，必须原样留下
+        assert_eq!(p.pet.as_deref(), Some("waiting"));
+        assert_eq!(p.pet_tool.as_deref(), Some("bash"));
+        assert_eq!(p.pet_key.as_deref(), Some("abc"));
+        assert_eq!(p.pet_ts, Some(1790358021));
+        // 重绘类状态：必须清掉
+        assert!(p.theme.is_none() && p.int.is_none() && p.act.is_none() && p.wait.is_none());
+        assert!(p.bg.is_none());
+        assert!(!p.move_reset && p.move_xy.is_none());
+
+        // 没有命令的心跳行照常只清状态，不得凭空造出命令
+        let mut q = parse_fragment("miasaki-theme=pure&petts=5&diag=1");
+        clear_redraw_fields(&mut q);
+        assert!(q.cmd.is_none());
+        assert_eq!(q.seq, -1, "无 seq 时保持 parse_fragment 的 -1 缺省");
     }
 
     #[cfg(target_os = "windows")]

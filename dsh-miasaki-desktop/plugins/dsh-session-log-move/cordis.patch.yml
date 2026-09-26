@@ -2,9 +2,12 @@
 #
 # DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧）。
 # - client half：
-#   · 隐藏主界面官方按钮 —— conversation.session.header.utilities 注册
-#     id: session-log-download 的空条目（官方支持同 id 替换该 cell），
-#     官方「Session 日志」胶囊按钮不再渲染；
+#   · 隐藏主界面官方按钮 —— DOM 层 display:none（[class*="sessionLogButton"]，
+#     子串锚点对 CSS hash 漂移稳健；卸载时还原）。原「向
+#     conversation.session.header.utilities 注册同 id 条目做替换」的路线，自
+#     DSH 0.1.5-rc.1 起被官方自带的 dsh-session-log-export 占位堵死（同 id 注册
+#     必然冲突），且 0.1.7 的槽声明是多级异步链、apply 时同步 register 只会留下
+#     `slot … is not declared` 噪声 —— 2026-09-26 已删除该死路（git 历史 ≤0.1.1）；
 #   · 轨迹页注入 —— 在 [role=toolbar] 内 input[type=search] 的容器左侧
 #     注入同功能「Session 日志」下载按钮（纯原生 DOM + MutationObserver +
 #     重试兜底），点击复用官方 sessionLogDownload service（缺失时降级为
