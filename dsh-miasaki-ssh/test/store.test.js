@@ -6,7 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  hostKeyOf, parseHostKey, fingerprintOf, normalizeConnection, sanitizeConnection,
+  hostKeyOf, fingerprintOf, normalizeConnection, sanitizeConnection,
   stripPort, fenceCheck, InputError, NotFoundError, SshStore,
 } from '../lib/store.js'
 

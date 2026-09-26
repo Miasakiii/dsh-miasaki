@@ -2,6 +2,94 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-26（深夜）· 死代码清理（零行为变更，10 项）
+
+仓库级死代码审计后的清理。本线无文件级垃圾（空目录 0 / 备份副本 0 / 误入库产物 0），全部删除面都是
+「生产路径零引用」的函数、字段与方法。**每一条都用全仓引用搜索逐个核过，且确认无一被测试的 `readFile`+正则
+契约断言钉住**。验证：`node scripts/verify-all.mjs ssh` **12/12 PASS**（126 例单测全过）。
+
+| 项 | 位置 | 判定证据 |
+|---|---|---|
+| `RuntimeManager.currentStatus()` | `lib/runtime.js:704-708` | 全仓 `.currentStatus` 零命中；index.js 全走 `listState()`（:130/:172/:187） |
+| `RuntimeConn` 的 `cols` / `rows` 字段 | `lib/runtime.js` 构造器 | `rc.cols` / `rc.rows` 零读取（尺寸已收敛到 `ShellChannel` 级）；模块级 `DEFAULT_COLS/ROWS` 常量仍被 openShell 使用，未动 |
+| `RuntimeConn` 的 `fpToken` / `fpHash` 字段 | 同上 | 两字段全仓仅构造器赋值处命中，零读取（指纹走 `rc.fp` 对象） |
+| `RuntimeConn` 的 `host` 字段 | 同上 | `this.host` / `rc.host` 零读取（`rc.label` 才是对外名） |
+| `RuntimeConn.get stream()` | `lib/runtime.js` | 注释自称「兼容旧测试」，但测试全用 `shell.stream` / `sh.stream`；`rc.stream` 零命中。**属未接线的兼容外壳** |
+| `ShellChannel.disposed` 字段 + `dispose()` | `lib/runtime.js` | `shell.dispose` 零调用；`.disposed` 的全部读点都是 `rc.disposed`（RuntimeConn 的同名成员是活的，未动） |
+| `parseHostKey()` | `lib/store.js:32-40` | 全仓 2 命中＝定义＋`test/store.test.js` 的 import（该测试全文无调用）；test 的 import 同批移除 |
+| `SshStore.exit()` | `lib/store.js` | 空实现（`{ /* nothing to clean */ }`）、零调用（`index.js:96` 只挂 `runtime.shutdown?.()`） |
+| 导出 `DEFAULT_COLS` / `DEFAULT_ROWS` | `lib/store.js:9-10` | 无任何 import 方；runtime.js 用的是自己的私有同名副本（:25-26） |
+| `ticketTimer` | `session.js:68`+`:372` | 全仓 2 命中＝声明＋destroy 清理，**零赋值**（票据改为每次重附着现取后的残留） |
+| `rememberLastTab()` | `app.js:86-101` | 全仓 1 命中＝定义本身；工作区快照 `saveWorkspace/readWorkspace` 已接管（`readLastTab` 仍被 mount 兼容分支使用，保留） |
+| `.fact-line` 规则 | `styles.css:274` | 该父容器在现有 app.js 中零产出 |
+
+**未做（留待决议，非误判）**：`GET /ssh/api/state`（`index.js:129-131`）线内零消费方，但 `_refs/scripts-archive/` 下
+9 处验收探针依赖它、README 要求复验时重跑 ⇒ 保留；`lib/runtime.js` 的序列化占位脚本分支（`index.js:108-111`）
+看似永不执行，但 CHANGELOG:114 实证发生过（宿主先启动、addon 后安装）⇒ 保留。
+
+## 2026-09-26（B4：让位测量的「时机」修复 —— 修「还是会有问题，点击页面后可能恢复正常」）
+
+- **用户第三次复报**：「还是会有问题，点击页面后可能恢复正常」＋两张桌面壳截图。图 1（异常）里 SSH 文字被官方两颗「▭」夹在中间、按钮盒交叠；图 2（正常）里 SSH 退到整排 chrome 左侧、留出大段空白。两张图**相位相同**（都是主页 hero），差别只在落点。
+- **方法（这次不再靠像素反推，直接逐帧量测 + 对照实验）**：用 Playwright 起无头 Chromium，`addInitScript` 在 document-start **复刻桌面壳标题栏**（`#miasaki-titlebar .tb-group` 5 颗 26px 键 + desktop 线 `03-switcher.js` 的两条让位 CSS + `:root{--ms-titlebar-reserve:156px}`），再逐帧（rAF）记录 `--dsh-ssh-launcher-right`、launcher 按钮盒、两个官方锚点的 rect 与**重叠量**。为绕开沙箱对命名管道的限制，浏览器用 `--remote-debugging-port` 单独起、Playwright 走 `connectOverCDP`；页面认证用另起一个 `dsh --profile web --port 3099` 实例拿带 `?token=` 的 URL（`launchToken` 是进程级随机值，外部读不到）。
+- **实测事实（两个洞，各自独立可复现）**：
+  - **洞 A —— 过渡期间只有一次测量**。右栏开合走官方 CSS transform 过渡（`.P3OORG_panel [data-dockkit-host=dock]{transition: transform var(--ds-transition-duration-slow)}`）。对照实验（探针 B 阶段，157 帧）：只在触发瞬间测一次的实现里，过渡期间 launcher 与刚移入视口的 strip **最大重叠 41px**，要等 `transitionend` 才在下一次纠正 —— 41px 正是用户图 1 那个 `{SSH[]` 叠压的量级。
+  - **洞 B —— CSS 变量让位线变化不带任何 DOM 变动（持久性叠压的根因）**。桌面壳侧栏线把安全线 `--ms-titlebar-reserve`（默认 128px → 注入终端键后 156px）写在 `document.documentElement.style` 上；这条线一变，官方整行 chrome 整体平移，而 **`MutationObserver` 的 childList 与右栏属性判据一个都收不到**。对照实验（探针 D 阶段，93 帧）：把安全线 156→220px 后，落点变量**一次都没有重测**（取值序列只有一个旧值），dockkit strip 从 `x[1028,1092]` 移到 `x[964,1028]` 后与 launcher **持续重叠 20px** —— 这正是用户说的「还是会有问题」；而「点击页面后可能恢复正常」是点击引发某处 React 重渲染、**顺带**补上一次测量（= 图 2）。
+  - **附带事实**：右栏收起时 `[data-dockkit-strip-chrome]` 被 `transform: translateX(var(--dsh-sidebar-width))` 推到视口右缘之外，实测 `left=1590 / 64×28`（视口 1248）—— 宽高都是真实值，B3 的 0×0 判据拦不住它。
+- **归因澄清（防回潮）**：屏外锚点**不是**叠压的根因 —— 让位量取 `Math.min`，屏外坐标（1590）比在场锚点（corner 1080）更大，min 根本选不中它。B4 把「视口外的锚点不参与」加进来，修的是**语义**（否则「量不到」与「量到一个无效值」混在一起、不可分辨），不是为了消除叠压。真正的因果链是「**零 DOM 变动的让位线变化** ⇒ 没有重测信号 ⇒ 落点停在旧值」。
+- **修（`client.js`）**：
+  - **视口过滤**：新增纯函数 `inViewportRow(rect, viewportWidth)`（有真实尺寸 + 左边界在视口右缘之内），主锚点与紧邻兄弟一律先过它；
+  - **过渡期跟随重测**：`startFollow()` / `followTick()` —— 触发后逐帧重测，跟到连续 `FOLLOW_SETTLE_FRAMES=4` 帧不再变化；**并设下限 `FOLLOW_MIN_FRAMES=30`**（≈500ms）：过渡前段 chrome 还在视口外时让位量恒取兜底值、可连着多帧「不变」，只看「稳定」就收手会漏掉它移进视口的那一刻 —— 实测这个早停正是残留 41px 叠压的原因；硬上限 `FOLLOW_MAX_FRAMES=90` 兜住抖动。无 rAF 的宿主（契约测试桩）直接不启动，避免同步递归；
+  - **根元素观察（洞 B 的解）**：`rootObserver` 观察 `document.documentElement` 的 `style`，且**同步调用 `syncNow()`、不走 rAF 节流** —— 安全线是 inline style 覆盖 `:root` 声明、同步生效，延后一帧就会露出「chrome 已平移、launcher 还没跟」的窗口（实测 20px）。回调是微任务、浏览器尚未绘制，强制布局读到的就是新位置。`documentElement.style` 的写入方不止本线（皮肤线 / 侧栏线 / 官方都在写），故先做一次**廉价的相关变量比对**（`WATCHED_ROOT_VARS = ['--ms-titlebar-reserve', '--dsh-ssh-chrome-reserve']`，读 inline style 不触发布局），只有真的变了才重测 —— 顺带断掉「写自己的 `--dsh-ssh-launcher-right` 触发自己」的自激环；
+  - **补充信号**：`transitionend`（捕获阶段，过渡收尾的权威信号）、`visibilitychange`（后台标签页不跑 rAF）、`document.fonts.ready`（字体落地会改变 chrome 实测宽度）；`resize` 与 body 子树/右栏属性观察照旧；
+  - **兄弟链基准修正**：断链判据改用**本锚点自己的** `nodeLeft`，而不是跨锚点累积的 `chromeLeft`（后者会被前一个锚点拉小、导致提前 `break`）；
+  - 工厂级 rAF 取用（`hasAnimationFrame` / `raf`）上提复用；fiber 卸载时断开两个 observer、移除三个监听并 `stopFollow()`。
+- **对照结果（同一探针，修复前语义 vs 修复后语义）**：
+
+  | 阶段 | 修复前 | 修复后 |
+  | --- | --- | --- |
+  | A 冷加载（右栏收起） | 179px，无叠压 | 179px，无叠压（不变） |
+  | B 右栏展开过渡（157 帧） | 过渡期**持续叠压 41px**，末帧才纠正 | 逐帧轨迹 `179→200→220→236→247→255→261→264`，**0 帧重叠** |
+  | D 安全线 156→220px（93 帧） | **落点一次都不重测**，持续叠压 20px | 同步重测到 328px，仅 **1 帧**（≈16ms）过渡态 |
+  | C 右栏收起（125 帧） | 跟随 | 0 帧重叠 |
+
+  余下 D 阶段的那 1 帧来自「CSS 变量同步生效」与「MutationObserver 微任务」之间的渲染管线时序；16ms 人眼不可见，且与修复前的**持续性**叠压有本质区别（进一步消除需把落点改成 `calc(var(--ms-titlebar-reserve) + chrome 宽 + gap)` 的纯 CSS 组合式，复杂度与边界风险不值得，此处留档说明）。
+- **测试**：`test/client.test.js` 33 → **38 例** ——
+  - `B4 视口判据`（纯函数直读：1590/1248 ⇒ 不参与、1028/1248 ⇒ 参与、0×0 ⇒ 不参与、左半截在视口内 ⇒ 参与）；
+  - `B4 视口判据进实测路径`（只在场一颗屏外锚点 ⇒ **不写变量**，旧实现会算出 0 后退回兜底；对照：同一锚点移进视口 ⇒ `228px`）；
+  - `B4 跟随重测`（受控 rAF 桩：过渡逐帧移入视口 ⇒ 落点跟着改；**下限帧数内即使值不变也继续跟**；下限之后值稳定 ⇒ 自行收手，不排空帧）；
+  - `B4 接线静态锁定`（视口过滤两处、局部兄弟基准、`FOLLOW_*` 三常量与终止条件、`startFollow` 的 rAF 守卫、`transitionend` 捕获、`visibilitychange`、`fonts.ready`、`stopFollow`、导出）；
+  - `B4 重测信号`（**行为**：渲染 launcher 后有 observer 盯着 `documentElement` 的 `style`；并断言 body 子树的 childList 观察没被取代）；
+  - 夹具（非产品）：`capture({ raf: true })` 提供**受控** rAF 队列 + `flushRaf(rounds)`、`capture({ effects: true })` 让 effect 立即执行并收集清理函数、MutationObserver 记录 `observe` 的 target/options —— 后者是「有没有重测信号」这条契约唯一可钉的方式（桩不会自己派发 mutation）。
+- **回归**：单测 **121 → 126 例**（app 16 / client 38 / http 7 / runtime 23 / session 34 / store 8）；`node --test test/*.test.js` 全绿。
+- **生效方式**：只改 `client.js`（client bundle，不经 `index.js` 的 `cachedAsset`）⇒ **刷新页面即可**（被缓存则硬刷新，或重启 `dsh web` / 桌面壳）。改后实测：探针页面**无需重启实例**即加载到新代码。
+- **实机复验待办（桌面壳）**：① 冷启动进主页，SSH **不再**压在任何官方键上，且**不需要**点一下页面；② 点开右栏的全过程里 SSH 平滑让位、无叠压帧；③ 侧栏线注入终端键（`--ms-titlebar-reserve` 128→156px）那一刻 SSH 同步让位；④ 窗口缩放 / 切回窗口（最小化恢复）后落点正确；⑤ 会话窗口（胶囊在场）仍不出现右上角那颗（B2 契约不变）。
+
+## 2026-09-26（B3：主页入口「同排官方 chrome 让位」—— 修「SSH 按钮还是有问题」的叠压）
+
+- **用户复报**：「SSH按钮还是有问题，修复一下」＋两张桌面壳截图（红框圈住右上角那一排）。批注框逐像素量测：图 1 红框 `x[2046,2329] y[16,95]`、图 2 红框 `x[1952,2327] y[14,82]`。
+- **先做的事实核验（避免又一次「推演根因」）**：
+  - **两张图是同一个页面相位**。用官方 hero 居中布局反推表头高度：图 1 `logo_top=582 / composer_bottom=991 (B=409)`、图 2 `467 / 1103 (B=636)` ⇒ 反推表头高 `H≈57` 与 `H≈56`（同一常量口径），**相差 ≤3px**。若图 2 是「已绑定会话的空白会话」（表头多出 `padding-top 10 + titleRow 30`，右栏折叠时再多 28px 的 ExpandButton），居中块会下移 14–20px —— 实测只差 1.5px ⇒ **两图同相位**，不存在「会话窗口又冒出入口」。
+  - **两颗 SSH 都是 launcher、不是胶囊**：沿文字中线扫像素，`x 2082/2085/2088` 全白 ⇒ 没有胶囊的 1px 边框（胶囊有 `border:1px solid --dsw-alias-border-l2` + 半透明底）。胶囊形态排除。
+  - **DPI 与窗控口径对齐**：`- □ ×` 三键中心间距 56 物理 px、图标 18px ⇒ 与桌面壳 `#miasaki-titlebar .tb-btn{26px}` + `gap:2px` 在 **200% 缩放**下逐项吻合；侧栏线注入到 tb-group 首位的终端键（`26px`，且把 `--ms-titlebar-reserve` 从 128px 抬到 **156px**）把窗控组左边界推到 `x≈2192` ⇒ `syncChrome` 量出的 reserve ≈158px ⇒ launcher 右缘落在 `x≈2148`。**实测值一致**，说明定位管线本身没错。
+- **可见缺陷（本次真正要修的）**：launcher 的按钮盒 `x[2081,2148]`，而官方那颗「▭」的按钮盒 `x[2120,2176]`（会话头 corner 里的「展开侧栏」= 折叠态；右栏展开时同一落点换成 dockkit strip 末端的「收起」键，两者都被壳的 reserve 顶到同一条让位线上）⇒ **按钮盒重叠 28 物理 px（14 CSS px）**，文字与图标净距只剩 **1.5 CSS px**，视觉上贴在一起；右栏展开时左邻又插进「全屏 / 收起」两颗键（`x[1996,2028]`、`x[2058,2090]`），launcher 被夹在中间、两侧各剩 3 物理 px。用户红线框住的正是这一排。
+- **根因**：launcher 的 `right` 只按**桌面壳窗控组**算（`--dsh-ssh-chrome-reserve + 16px`），而壳把窗控组之外的空间让给 DSH 官方控件（`--ms-titlebar-reserve`）⇒ 官方控件被顶到窗控组左侧的同一行里，正好压在 launcher 的落点上。**这不是「该不该显示」的问题**（B1/B2 已定：主页显示、胶囊在场时不显示），而是同一行里两块 chrome 抢位。
+- **修（`client.js`，沿用本仓既有的「实测让位」纪律）**：
+  - 新增纯函数 `launcherClearanceOffset({ viewportWidth, chromeLeft, gap })`（工厂级、`module.exports` 导出供测试直读，同 `readThemeSnapshot` 的做法）：返回 `viewportWidth − chromeLeft + gap`，量不到返回 `null`；
+  - 新增 `syncLauncherOffset()`：实测**官方在这一行的 chrome 最左边界** —— `[data-conversation-header-corner]`（会话头右端；canvas 线早已用同一属性做 `:has()` 锚点）与 `[data-dockkit-strip-chrome]`（右栏 dockkit strip 末端两键；desktop 线用它做让位），并**吸收间距 ≤48px 的紧邻兄弟按钮**（strip 末端左边可能还挨着「加标签 / 分栏」等禁用态键）；口径 = `max(壳窗控口径 reserve+16, 躲开官方 chrome 的偏移)`，结果写进 `--dsh-ssh-launcher-right`，量不到时移除变量；
+  - CSS 改为 `right:var(--dsh-ssh-launcher-right,calc(var(--dsh-ssh-chrome-reserve,0px) + 16px))` —— **hero 态（量不到）行为逐字不变**，`--dsh-ssh-chrome-reserve` 仍只服务壳窗控口径（iframe 顶栏的 `reserve` 语义不受影响）；
+  - 重测时机：`syncChrome()`（apply 期间 + iframe load）、launcher 可见时的 DOM 变动（rAF 节流）、`window resize`；MutationObserver 的观察项**补上 `data-sidebar-right-open` / `data-sidebar-right-panel`** —— 官方 panel 开合是**改属性 + 改 transform**（不卸载、不增删节点），只看 `childList` 会漏掉「dockkit chrome 进出这一行」；
+  - fiber 卸载清理新增 `--dsh-ssh-launcher-right`。
+- **一次被实机量测推翻的方案（留档，防回潮）**：B3 最初把「会话面板已绑定会话」（`[data-conversation-header-corner]` 存在）当成第三维来**隐藏** launcher。量测证明那会误杀主页入口 —— 空白会话 `hideChrome = blank` 不渲染 titleCluster（胶囊缺席），但官方 `ConversationMainPanel` 的 `hero = sessionId === void 0 || (blank && (open || summaryBlank))` 仍让它处于 hero 相位（输入框居中），**那正是用户口中的「主页」**；B1 的「只在主页显示」锚的也是会话面板这一维。⇒ 判据**维持两维**，该锚点只用于让位测量。回归用例 `D1.1g` 把这个反例钉死。
+- **测试**：`test/client.test.js` 29 → **33 例** ——
+  - 新增 `B3 让位：偏移 = …`（纯函数：实机口径 1248/1060 ⇒ 196px、chrome 更靠左 ⇒ 更大偏移、gap 可注入、三种量不到 ⇒ null、退化场景不为负）；
+  - 新增 `B3 让位：实测路径写落点变量（含紧邻兄弟按钮），量不到时不写`（桩里按实机坐标摆 DOM：corner 锚点 ⇒ `196px`；chrome + 紧邻兄弟 ⇒ `272px`，只量 chrome 会是 210px、仍会叠上；0×0 空容器 ⇒ 不写变量）；
+  - 新增 `B3 让位：接线静态锁定`（官方双锚点、`max` 口径、CSS 回落、resize 重测、卸载清理）；
+  - 改写 `D1.1g` 为「会话头在场不影响显隐」的反例锁定；`D1.1f` 判据断言回到两维；`D1.1d` 观察项断言补属性过滤；
+  - 夹具（非产品）：`document.documentElement.style` 记录 `setProperty/removeProperty`、节点支持 `setRect()` 与 `previousElementSibling`、`window.innerWidth` 可注入 —— 否则让位路径在桩里永远走 `catch` 分支（假绿）。
+- **回归**：单测 **117 → 121 例**（app 16 / client 33 / http 7 / runtime 23 / session 34 / store 8）；`node scripts/verify-all.mjs ssh` **12/12 PASS**。
+- **生效方式**：改的是 `client.js`（client bundle，不经 `index.js` 的 `cachedAsset`）⇒ **浏览器刷新即可**（被缓存则硬刷新，或重启 `dsh web`）。
+- **实机复验待办**：① 主页（hero / 空白会话）右上角那颗 SSH 与左邻的官方「▭」**不再贴在一起**（净距 ≥8px）；② 右栏展开时它退到 dockkit chrome 左侧、不再被夹在中间；③ 右栏收起 / 会话头卸载后落点**可逆地**回到窗控口径；④ 窗口缩放后落点跟随；⑤ 会话窗口（胶囊在场）仍**不出现**右上角那颗（B2 契约不变）。
+
 ## 2026-09-25（B2：launcher 与会话头胶囊结构性互斥 —— 修「会话窗口右上角多一颗 SSH」）
 
 - **用户报障**：「右上角 SSH 按钮优化一下」→ 随即澄清「**会话窗口右上角不应该有 SSH 按钮**」＋「**重复了，胶囊有 SSH 按钮入口**」，并附桌面壳窗口截图（红框标出右上角那颗）。

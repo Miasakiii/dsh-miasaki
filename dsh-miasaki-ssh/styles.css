@@ -271,7 +271,6 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
 .empty-space p { font-size: 12px; line-height: 1.9; color: var(--ssh-muted); max-width: 380px; margin: 0 0 18px; overflow-wrap: anywhere; }
 .empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .recent-line { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 14px; }
-.fact-line { font-size: 11px; margin: 16px 0 0; }
 
 .statusbar {
   flex: none; height: 29px; padding: 0 16px;

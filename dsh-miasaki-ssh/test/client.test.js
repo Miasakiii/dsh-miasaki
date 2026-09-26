@@ -31,13 +31,15 @@ function dispatchOverlayMessage(win, token, data, sourceWin) {
 function capture(options = {}) {
   let descriptor = null
   const styles = []
+  /** B4：`capture({ effects: true })` 时收集 effect 清理函数（测试可手动卸载）。 */
+  const effects = []
   const makeNode = tag => {
     const node = {
       tagName: String(tag ?? 'div').toUpperCase(),
       textContent: '', hidden: false, className: '', type: '', title: '', src: '',
       children: [], attributes: new Map(), handlers: new Map(), onceHandlers: new Map(),
       removed: false, appended: [],
-      style: { setProperty() {}, removeProperty() {}, display: '' },
+      style: { props: new Map(), setProperty(k, v) { this.props.set(k, String(v)) }, removeProperty(k) { this.props.delete(k) }, display: '' },
       get classList() {
         const self = node
         return {
@@ -59,7 +61,15 @@ function capture(options = {}) {
       appendChild(child) { return this.append(child) },
       remove() { node.removed = true; if (node.parent) node.parent.children = node.parent.children.filter(c => c !== node) },
       closest() { return null },
-      getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }),
+      // 让位测量要读前一个兄弟（dockkit strip 末端可能挨着「加标签 / 分栏」等键）。
+      get previousElementSibling() {
+        const siblings = node.parent?.children ?? []
+        const index = siblings.indexOf(node)
+        return index > 0 ? siblings[index - 1] : null
+      },
+      // 默认真实 DOM 的 0×0 矩形；测试可用 `node.setRect({...})` 摆位置（让位测量用）。
+      setRect(rect) { node.__rect = { right: 0, bottom: 0, ...rect } },
+      getBoundingClientRect: () => node.__rect ?? { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 },
       querySelector(sel) { return matchIn(node, sel) },
       querySelectorAll(sel) { const out = []; collect(node, sel, out); return out },
     }
@@ -110,11 +120,15 @@ function capture(options = {}) {
     const withoutAttr = lastSeg.replace(/\[[^\]]*\]/g, '')
     const cls = withoutAttr.match(/\.([\w-]+)/g)?.map(s => s.slice(1)) ?? []
     const id = withoutAttr.match(/#([\w-]+)/)?.[1] ?? null
-    const attr = lastSeg.match(/\[([\w-]+)="([^"]*)"\]/) // 支持 [attr="value"]
+    const attrValue = lastSeg.match(/\[([\w-]+)="([^"]*)"\]/) // [attr="value"]
+    const attrPresence = lastSeg.match(/\[([\w-]+)\]/) // [attr]（存在性）
     const tag = withoutAttr.replace(/[#.][\w-]+/g, '').trim().toLowerCase()
     if (tag !== '' && node.tagName !== tag.toUpperCase()) return false
     if (id !== null && node.id !== id) return false
-    if (attr !== null && node.attributes.get(attr[1]) !== attr[2]) return false
+    if (attrValue !== null && node.attributes.get(attrValue[1]) !== attrValue[2]) return false
+    // 2026-09-26 B3：launcher 判据读官方 `[data-conversation-header-corner]`（存在性锚点，
+    // 官方给的是空串值）⇒ 桩必须支持不带值的属性选择器，否则夹具假阴性。
+    if (attrValue === null && attrPresence !== null && !node.attributes.has(attrPresence[1])) return false
     for (const c of cls) if (!(node.className ?? '').includes(c)) return false
     return true
   }
@@ -157,6 +171,8 @@ function capture(options = {}) {
   document.head.append = node => { styles.push(node); rawHeadAppend(node) }
   const window = {
     __ModuleLoader__: { load(d) { descriptor = d } },
+    // 让位量以视口宽为基准；默认 0 表示「量不到」⇒ 落点变量不写（既有无窗控环境的等价行为）。
+    innerWidth: options.innerWidth ?? 0,
     sessionStorage: { store: new Map(), getItem(k) { return this.store.get(k) ?? null }, setItem(k, v) { this.store.set(k, String(v)) }, removeItem(k) { this.store.delete(k) } },
     getComputedStyle: () => ({ paddingLeft: '0px', getPropertyValue: () => '' }),
     // message 监听收集 + postMessage 记录：D2 顶栏消息协议的行为闭环测试用。
@@ -172,6 +188,9 @@ function capture(options = {}) {
     },
     setTimeout: () => 0,
   }
+  const rafQueue = []
+  /** B4：所有 MutationObserver 实例（含它们的 observe 目标与选项），供契约断言直读。 */
+  const mutationObservers = []
   const context = vm.createContext({
     window,
     document,
@@ -179,15 +198,59 @@ function capture(options = {}) {
     HTMLElement: class {},
     MessageEvent: class { constructor(type, init) { this.type = type; this.origin = init?.origin ?? ''; this.source = init?.source ?? null; this.data = init?.data ?? null } },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail } },
-    MutationObserver: class { observe() {} disconnect() {} },
+    // B4：观察记录被留档 —— 「安全线（documentElement 上的 CSS 变量）变化必须有重测信号」
+    // 这条契约只能靠「有没有 observer 盯着它」来钉（桩不会自己派发 mutation）。
+    MutationObserver: class {
+      constructor(cb) { this.cb = cb; this.observations = [] }
+      observe(target, options) { this.observations.push({ target, options }); mutationObservers.push(this) }
+      disconnect() {}
+    },
     ResizeObserver: class { observe() {} disconnect() {} },
+    // B4 跟随重测（`capture({ raf: true })`）：提供**受控** rAF —— 回调排队，由测试用
+    // `flushRaf()` 手动推进。默认**不提供**：client.js 的 rAF 回退是同步执行，给了队列会
+    // 让既有用例的语义漂移（它们断言的是 apply 当下的同步结果）。
+    ...(options.raf === true
+      ? {
+          requestAnimationFrame(fn) { rafQueue.push(fn); return rafQueue.length },
+          cancelAnimationFrame(id) { rafQueue[id - 1] = null },
+        }
+      : {}),
   })
   vm.runInContext(source, context, { filename: 'client.js' })
   assert.notEqual(descriptor, null, 'client.js must call window.__ModuleLoader__.load()')
+  /** 受控 rAF：推进 `rounds` 轮（每轮执行当前排队的回调，回调新排的进下一轮）。 */
+  const flushRaf = (rounds = 1) => {
+    let ran = 0
+    for (let i = 0; i < rounds; i++) {
+      const pending = rafQueue.splice(0, rafQueue.length)
+      if (pending.length === 0) break
+      for (const fn of pending) {
+        if (typeof fn === 'function') { fn(); ran += 1 }
+      }
+    }
+    return ran
+  }
   // registerIds: the overlay host built via innerHTML needs manual id-free query —
   // our stub builds real nodes for innerHTML through createElement? No: innerHTML
   // is not parsed. Provide direct references:
-  return { descriptor, window, styles, document }
+  // B4：`requireStub` 按 capture 定制 —— `capture({ effects: true })` 时 effect 回调会**立即
+  // 执行**（并把清理函数收集进 `effects`），从而让 launcher 的订阅路径（sync / 跟随重测）
+  // 可被行为测试触达；默认沿用模块级的惰性 react 桩（既有用例依赖「effect 不执行」）。
+  const reactStub = options.effects === true
+    ? {
+        createElement: (type, props, ...children) => ({ type, props, children }),
+        useState: initial => [typeof initial === 'function' ? initial() : initial, () => {}],
+        useRef: initial => ({ current: initial }),
+        useCallback: fn => fn,
+        useEffect: fn => { if (typeof fn === 'function') effects.push(fn()) },
+        useLayoutEffect: fn => { if (typeof fn === 'function') effects.push(fn()) },
+      }
+    : react
+  const localRequire = name => {
+    if (name === 'react') return reactStub
+    throw new Error(`unexpected require: ${name}`)
+  }
+  return { descriptor, window, styles, document, flushRaf, rafQueue, effects, requireStub: localRequire, observers: mutationObservers }
 }
 
 // React stub: createElement keeps children so a rendered element can be asserted;
@@ -528,10 +591,13 @@ test('D2 顶栏消息：ssh:view canvas → 关自己 + 委托点击 canvas 胶�
 
 // ---- D1.1 无会话头时的常驻入口（shell.overlay，方案 §14）-------------------
 // 判据是核心：会话头的胶囊入口注册在 `conversation.session.header.actions` 槽里，而官方在
-// **没有当前会话**（`sessionId === void 0`）时只渲染一个空的 titleRow 占位 ⇒ hero 态
-// （首屏）没有 SSH 入口，launcher 顶上。
-// **反向同样硬**：只要本线的胶囊在 DOM 里，launcher 就必须消失 —— 否则就是
-// 「同一个 SSH 两个入口」（2026-09-25 用户报「重复了，胶囊有 SSH 按钮入口」，见 B2 修复）。
+// **没有绑定会话**（`sessionId === void 0`，只渲染一个空的 titleRow 占位）时没有胶囊
+// ⇒ hero 态（首屏）由 launcher 顶上。
+// **反向同样硬**：只要本线的胶囊在 DOM 里、或会话面板已经绑定会话，launcher 就必须消失
+// —— 否则就是「同一个 SSH 两个入口」：
+//   · 2026-09-25 B2 修「胶囊在场」（用户报「重复了，胶囊有 SSH 按钮入口」）；
+//   · 2026-09-26 B3 修「空白会话」—— hideChrome = blank 时**没有胶囊但会话已绑定**，
+//     只判胶囊会漏（用户复报「SSH 按钮还是有问题」并附会话窗口截图）。
 test('D1.1 入口注册到 shell.overlay：自有 id、order 40、不替换既有条目', () => {
   const { descriptor } = capture()
   const ctx = fakeCtx()
@@ -594,7 +660,7 @@ test('D1.1f 判据只认 DOM 事实：不得退回「推演官方 blank 字段�
   assert.match(source, /const OWN_ENTRY_SELECTOR = '\.dsh-ssh-switch'/,
     '互斥判据必须锚定本线自己的入口选择器')
   assert.match(source, /onConversationHome\(\) && !ownEntryPresent\(\)/,
-    'launcher 判据 = 在主页 **且** 胶囊不在场')
+    'launcher 判据 = 在主页 **且** 胶囊不在场（B3 复核后维持两维）')
   assert.doesNotMatch(source, /useOnConversationHome|LauncherButton/,
     '旧 hook 与两层组件必须已删除（留着就可能被改回推演判据）')
   // 首帧防闪：会话头与 launcher 是两棵 fiber，首次 render 时判据必然先为 true ⇒
@@ -602,6 +668,292 @@ test('D1.1f 判据只认 DOM 事实：不得退回「推演官方 blank 字段�
   assert.match(source, /usePaintEffect\(\(\) => \{/, 'hook 必须用 usePaintEffect（paint 前）订阅')
   assert.match(source, /typeof react\.useLayoutEffect === 'function'[\s\S]{0,80}: react\.useEffect/,
     'usePaintEffect = useLayoutEffect 优先，桩环境退回 useEffect')
+})
+
+// 2026-09-26 B3（实机量测后定稿）：用户第二次复报「SSH 按钮还是有问题」，两张桌面壳截图
+// 里 launcher 与官方那颗「▭」**按钮盒重叠 14 CSS px**（文字与图标只差 1.5 CSS px），
+// 右栏展开时还被夹在右栏 chrome 与官方键之间。
+// 根因：launcher 的 right 只按桌面壳窗控组算，而壳把窗控之外的空间让给 DSH 官方控件
+// （--ms-titlebar-reserve）⇒ 官方控件正好压在 launcher 的落点上。
+// 修法：量出同排官方 chrome 的最左边界，让 launcher 退到其左侧留呼吸位。
+// 下面这条钉**纯函数**（无 DOM 依赖）；接线由下一条静态契约钉。
+test('B3 让位：偏移 = 视口宽 − 官方 chrome 左边界 + 呼吸位（量不到则 null）', () => {
+  const { descriptor } = capture()
+  const exports = descriptor.factory(requireStub)
+  const offset = exports.launcherClearanceOffset
+  assert.equal(typeof offset, 'function', '必须导出纯函数供契约测试直读')
+
+  // 实机量测复刻：1280px 视口、官方 chrome 左边界 1060 ⇒ 退到其左侧 8px
+  assert.equal(offset({ viewportWidth: 1248, chromeLeft: 1060 }), 196,
+    '1248 − 1060 + 8 = 196px（实测截图口径）')
+  assert.equal(offset({ viewportWidth: 1248, chromeLeft: 1010 }), 246,
+    '官方 chrome 更靠左（右栏展开两颗键）⇒ 偏移同步变大')
+  assert.equal(offset({ viewportWidth: 1248, chromeLeft: 1060, gap: 16 }), 204,
+    '呼吸位可注入（测试与将来调参用）')
+
+  // 量不到的两种情形一律 null ⇒ 调用方移除变量、CSS 回落壳窗控口径（hero 态行为不变）
+  assert.equal(offset({ viewportWidth: 1248, chromeLeft: Number.POSITIVE_INFINITY }), null,
+    '官方 chrome 不在场 ⇒ null')
+  assert.equal(offset({ viewportWidth: 0, chromeLeft: 100 }), null, '视口宽不可用 ⇒ null')
+  assert.equal(offset({ viewportWidth: Number.NaN, chromeLeft: 100 }), null, '视口宽 NaN ⇒ null')
+
+  // 退化：chrome 已越过视口右缘时不得给出负偏移
+  assert.equal(offset({ viewportWidth: 1248, chromeLeft: 1400 }), 0, '退化场景归零，不返回负数')
+})
+
+// 让位量的**实测路径**（apply 期间会量一次）：把官方 chrome 按实机坐标摆进桩里，
+// 断言写出的 CSS 落点变量；并证明「紧邻的官方兄弟按钮」也被吸收进让位量。
+test('B3 让位：实测路径写落点变量（含紧邻兄弟按钮），量不到时不写', () => {
+  const place = (rect) => {
+    const { descriptor, document } = capture({ innerWidth: 1248 })
+    return { descriptor, document, rect }
+  }
+
+  // ① 右栏折叠：会话头 corner（「展开」键）落在官方让位线上 ⇒ 退到它左侧 8px
+  {
+    const { descriptor, document } = place()
+    const corner = document.createElement('div')
+    corner.setAttribute('data-conversation-header-corner', '')
+    corner.setRect({ left: 1060, top: 24, width: 28, height: 28 })
+    document.body.append(corner)
+    descriptor.factory(requireStub).apply(fakeCtx())
+    assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), '196px',
+      '1248 − 1060 + 8 = 196px（实机截图口径：corner 锚点让位）')
+  }
+
+  // ② 右栏展开：dockkit strip chrome 在场，其左侧紧邻一颗（禁用态浅灰）按钮 ⇒ 一并吸收
+  {
+    const { descriptor, document } = place()
+    const sibling = document.createElement('div')
+    sibling.setRect({ left: 984, top: 24, width: 56, height: 28, right: 1040 })
+    const chrome = document.createElement('div')
+    chrome.setAttribute('data-dockkit-strip-chrome', '')
+    chrome.setRect({ left: 1046, top: 24, width: 130, height: 28 })
+    document.body.append(sibling)
+    document.body.append(chrome)
+    descriptor.factory(requireStub).apply(fakeCtx())
+    assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), '272px',
+      '吸收紧邻兄弟后按 984 让位：1248 − 984 + 8 = 272px（只量 chrome 会是 210px，仍会叠上）')
+  }
+
+  // ③ 空容器（官方 :empty 时 display:none，rect 为 0×0）⇒ 视为量不到，不写变量
+  {
+    const { descriptor, document } = place()
+    const corner = document.createElement('div')
+    corner.setAttribute('data-conversation-header-corner', '')
+    document.body.append(corner)
+    descriptor.factory(requireStub).apply(fakeCtx())
+    assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), undefined,
+      '0×0 的空容器必须跳过（hero 态回落壳窗控口径）')
+  }
+})
+
+// 让位量的接线契约：锚点必须是官方既有属性、方向必须是「退到 chrome 左侧」、
+// 与壳窗控口径取 max、随 DOM 变动与窗口尺寸变化重测、fiber 卸载时清变量。
+test('B3 让位：接线静态锁定（官方锚点 + 实测 + max 口径 + 重测与清理）', async () => {
+  assert.match(source, /const ROW_CHROME_SELECTORS = \['\[data-conversation-header-corner\]', '\[data-dockkit-strip-chrome\]'\]/,
+    '必须锚定官方两个既有属性：会话头 corner 与右栏 dockkit strip chrome')
+  assert.match(source, /const LAUNCHER_GAP_PX = 8/, '呼吸位 8px 常量必须显式声明')
+  assert.match(source, /viewportWidth, chromeLeft/, '实测处必须把视口宽与 chrome 左边界交给纯函数')
+  assert.match(source, /shellReserve = reserve/, '壳窗控口径必须留给落点取 max（不能被让位量顶到窗控上）')
+  assert.match(source, /Math\.max\(shellReserve \+ 16, clearance\)/,
+    '落点 = max(壳窗控口径, 躲开官方 chrome 的偏移)')
+  assert.match(source, /setProperty\('--dsh-ssh-launcher-right', offset \+ 'px'\)/,
+    '落点经 CSS 变量下发')
+  assert.match(source, /removeProperty\('--dsh-ssh-launcher-right'\)/,
+    '量不到时（以及 fiber 卸载时）必须清掉变量，落点可逆地回到壳窗控口径')
+  assert.match(source, /right:var\(--dsh-ssh-launcher-right,calc\(var\(--dsh-ssh-chrome-reserve,0px\) \+ 16px\)\)/,
+    'CSS 必须优先消费落点变量、回落壳窗控口径')
+  assert.match(source, /window\.addEventListener\('resize', onResize\)/,
+    '窗口尺寸变化会挪动官方 chrome 左边界 ⇒ 必须重测')
+  assert.match(source, /if \(next\) \{[\s\S]{0,240}?syncLauncherOffset\(\)/,
+    'DOM 变动后（仅在 launcher 可见时）重测落点')
+})
+
+// 2026-09-26 B4（用户第三次复报「还是会有问题，点击页面后可能恢复正常」）：
+// 用无头 Chromium + 复刻桌面壳标题栏（`#miasaki-titlebar .tb-group` + `--ms-titlebar-reserve`）
+// 逐帧量测，定位到 B3 之后仍存的两个洞 —— ①**视口外的锚点**污染让位量；②官方右栏的
+// **transform 过渡**期间与结束都没有重测信号。两者叠加的现场与用户两张截图逐像素吻合：
+// 让位量被归零 ⇒ 落点退回兜底 `reserve+16` ⇒ 压在刚移入视口的 dockkit 两颗键上（图一）；
+// 直到用户点一下页面（React 重渲染）才被顺带纠正（图二）。下面四条钉死这两点。
+test('B4 视口判据：被 transform 推出视口的锚点不参与（宽高非零，0×0 判据拦不住）', () => {
+  const { descriptor } = capture()
+  const inViewport = descriptor.factory(requireStub).inViewportRow
+  assert.equal(typeof inViewport, 'function', '必须导出纯函数供契约测试直读')
+  const rect = (left, width) => ({ left, right: left + width, width, height: 28 })
+
+  // 实机复刻：视口 1248 CSS px，右栏收起时 `[data-dockkit-strip-chrome]` 的 rect
+  assert.equal(inViewport(rect(1590, 64), 1248), false,
+    'left 1590 ≫ vw 1248：被 translateX 推出视口右缘 ⇒ 不参与（这是 B4 的根因）')
+  assert.equal(inViewport(rect(1028, 64), 1248), true,
+    '右栏展开后同一颗锚点移入视口 ⇒ 参与让位')
+  assert.equal(inViewport(rect(0, 0), 1248), false, '0×0 空容器仍不参与（B3 判据不回退）')
+  assert.equal(inViewport(rect(-40, 20), 1248), true, '左半截还在视口内就算在场')
+})
+
+test('B4 视口判据进实测路径：量不到就不写变量（旧实现会算出 0 并退回兜底）', () => {
+  // ① 只在场一颗**被推出视口**的 dockkit strip（右栏收起、会话头 corner 尚未渲染）
+  const { descriptor, document } = capture({ innerWidth: 1248 })
+  const out = document.createElement('div')
+  out.setAttribute('data-dockkit-strip-chrome', '')
+  out.setRect({ left: 1590, top: 24, width: 64, height: 28 })
+  document.body.append(out)
+  descriptor.factory(requireStub).apply(fakeCtx())
+  assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), undefined,
+    '视口外的锚点等于「量不到」⇒ 不写变量、CSS 回落壳窗控口径（旧实现：1590 使让位量归零后写成 16px）')
+
+  // ② 对照：同一颗锚点移进视口 ⇒ 正常让位（1248 − 1028 + 8 = 228）
+  const second = capture({ innerWidth: 1248 })
+  const inside = second.document.createElement('div')
+  inside.setAttribute('data-dockkit-strip-chrome', '')
+  inside.setRect({ left: 1028, top: 24, width: 64, height: 28 })
+  second.document.body.append(inside)
+  second.descriptor.factory(requireStub).apply(fakeCtx())
+  assert.equal(second.document.documentElement.style.props.get('--dsh-ssh-launcher-right'), '228px',
+    '1248 − 1028 + 8 = 228px（右栏展开后的实测口径）')
+})
+
+test('B4 跟随重测：过渡期逐帧跟到稳定，落点自己走到位（不再依赖用户点击页面）', () => {
+  const cap = capture({ innerWidth: 1248, raf: true, effects: true })
+  const { descriptor, document, flushRaf, requireStub: localRequire } = cap
+  const strip = document.createElement('div')
+  strip.setAttribute('data-dockkit-strip-chrome', '')
+  strip.setRect({ left: 1590, top: 24, width: 64, height: 28 }) // 收起：被推到视口外
+  document.body.append(strip)
+
+  const ctx = fakeCtx()
+  const factory = descriptor.factory(localRequire)
+  assert.equal(typeof factory.inViewportRow, 'function', '导出的判定函数也要能在该 require 下取得')
+  factory.apply(ctx)
+  assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), undefined,
+    '前置：apply 期间量一次 —— chrome 全在视口外 ⇒ 不写变量')
+
+  // 挂载 launcher：usePaintEffect 里的 sync() 测一次并启动跟随
+  const launcher = ctx.registered.find(row => row.name === 'shell.overlay').view
+  launcher({})
+  assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), undefined,
+    '过渡首帧仍量不到（chrome 还在视口右缘之外）')
+
+  // 过渡进行：官方 `transform: translateX(…)` → `none`，chrome 逐帧移入视口
+  strip.setRect({ left: 1300, top: 24, width: 64, height: 28 })
+  flushRaf()
+  strip.setRect({ left: 1180, top: 24, width: 64, height: 28 })
+  flushRaf()
+  assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), '76px',
+    '移入视口的当帧就跟着改：1248 − 1180 + 8 = 76px（旧实现：无任何重测信号，停在兜底）')
+
+  // 过渡结束（--ds-transition-duration-slow 量级）⇒ 值稳定后再跟几帧即收手
+  strip.setRect({ left: 1028, top: 24, width: 64, height: 28 })
+  flushRaf(8)
+  assert.equal(document.documentElement.style.props.get('--dsh-ssh-launcher-right'), '228px',
+    '过渡结束的落点 = 1248 − 1028 + 8 = 228px —— 用户图二那个位置，但不再需要点一下页面')
+  // 收手下限（FOLLOW_MIN_FRAMES）：过渡前段 chrome 还在视口外时让位量恒取兜底值、连续多帧
+  // 「不变」，据此收手就会漏掉它移进视口的那一刻（实测残留 41px 叠压）⇒ 下限内必须继续跟。
+  assert.ok(flushRaf(15) > 0, '下限帧数内即使值不变也必须继续跟')
+  assert.ok(flushRaf(40) > 0, '一路跟到下限')
+  assert.equal(flushRaf(5), 0, '下限之后值不再变 ⇒ 跟随自行收手（不留常驻 rAF）')
+})
+
+test('B4 接线静态锁定：视口过滤 + 局部兄弟基准 + 跟随重测 + 过渡/可见性信号', () => {
+  assert.match(source, /const inViewportRow = \(rect, viewportWidth\) =>/,
+    '视口过滤必须是显式纯函数（可单测、可读）')
+  assert.match(source, /if \(!inViewportRow\(rect, viewportWidth\)\) continue/,
+    '主锚点必须先过视口判据')
+  assert.match(source, /if \(!inViewportRow\(siblingRect, viewportWidth\)\) continue/,
+    '紧邻兄弟按钮同样要过视口判据')
+  assert.match(source, /let nodeLeft = rect\.left/,
+    '兄弟链基准必须是**本锚点自己的**左边界，不能是跨锚点累积的 chromeLeft')
+  assert.match(source, /if \(nodeLeft - siblingRect\.right > CHROME_ADJACENT_PX\) break/,
+    '断链判据必须用局部基准')
+  assert.match(source, /const FOLLOW_SETTLE_FRAMES = 4/, '跟随的稳定阈值必须显式声明')
+  assert.match(source, /const FOLLOW_MIN_FRAMES = 30/,
+    '跟随的下限帧数必须显式声明 —— 过渡前段「值不变」不等于过渡结束，早停会残留叠压')
+  assert.match(source, /const FOLLOW_MAX_FRAMES = 90/, '跟随的硬上限必须显式声明')
+  assert.match(source, /followStableFrames >= FOLLOW_SETTLE_FRAMES && followFrames >= FOLLOW_MIN_FRAMES/,
+    '跟随的终止条件 = 既到下限帧数、又连续若干帧不再变化')
+  assert.match(source, /const startFollow = \(\) => \{\s*\n\s*if \(!hasAnimationFrame\) return/,
+    '无 rAF 的宿主（契约测试桩）不得启动跟随 —— 回退实现是同步的，会变成同步递归')
+  assert.match(source, /document\.addEventListener\('transitionend', onTransitionEnd, true\)/,
+    '官方右栏的 CSS 过渡收尾不带 DOM 变动 ⇒ 必须由 transitionend 补测（捕获阶段）')
+  assert.match(source, /document\.addEventListener\('visibilitychange', onVisibilityChange\)/,
+    '后台标签页不跑 rAF ⇒ 切回窗口必须补测')
+  assert.match(source, /rootObserver\.observe\(document\.documentElement, \{ attributes: true, attributeFilter: \['style'\] \}\)/,
+    '安全线（documentElement 上的 CSS 变量）变化必须被观察 —— 这是持久性叠压的根因信号')
+  assert.match(source, /const rootObserver = new MutationObserver\(onRootStyleChange\)/,
+    '根元素 style 变化必须**同步**重测（安全线是 inline style、同步生效；延后一帧就露出 '
+    + '「chrome 已平移、launcher 还没跟」的叠压窗口 —— 实测 20px）')
+  assert.match(source, /const WATCHED_ROOT_VARS = \['--ms-titlebar-reserve', '--dsh-ssh-chrome-reserve'\]/,
+    'documentElement.style 的写入方不止本线 ⇒ 必须先做廉价的相关变量比对')
+  assert.match(source, /if \(key !== null && key === rootVarsLast\) return/,
+    '相关变量没变就不得强制布局重测；顺带断掉「写自己的变量触发自己」的自激环')
+  assert.match(source, /rootObserver\.disconnect\(\)/, '卸载时必须断开根元素观察者')
+  assert.match(source, /document\.fonts\?\.ready\?\.then\?\.\(\(\) => schedule\(\)\)/,
+    '字体落地会改变官方 chrome 实测宽度 ⇒ 必须补测')
+  assert.match(source, /stopFollow\(\)/, 'fiber 卸载必须停掉跟随（不留悬空 rAF）')
+  assert.match(source, /module\.exports\.inViewportRow = inViewportRow/, '纯函数必须导出供测试直读')
+})
+
+// 洞 B 的**行为**契约（2026-09-26 B4，持久性叠压的真正根因）：
+// 桌面壳侧栏线把安全线 `--ms-titlebar-reserve`（128 → 注入终端键后 156px）写在
+// `document.documentElement.style` 上。这条线一变，官方整行 chrome 整体平移 —— 而**全程
+// 零 DOM 变动**，childList 与右栏属性判据一个都收不到。对照实验（无头 Chromium）：把安全线
+// 156→220px 后，落点变量一次都没有重测，strip 从 x[1028,1092] 移到 x[964,1028] 后与
+// launcher **持续重叠 20px** —— 用户「还是会有问题」的持久形态；「点击页面后可能恢复正常」
+// 则是点击引发某处 React 重渲染、顺带补上的一次测量。
+// 桩不会自己派发 mutation，所以这条只能钉「有没有 observer 盯着 documentElement 的 style」。
+test('B4 重测信号：安全线变化必须在观察范围内（否则落点永不重测）', () => {
+  const cap = capture({ innerWidth: 1248, raf: true, effects: true })
+  const ctx = fakeCtx()
+  cap.descriptor.factory(cap.requireStub).apply(ctx)
+  // launcher 的订阅在 usePaintEffect 里建立 ⇒ 必须先渲染一次组件（effects: true 让桩执行）
+  const launcher = ctx.registered.find(row => row.name === 'shell.overlay').view
+  launcher({})
+
+  const watchesRootStyle = cap.observers.some(observer =>
+    observer.observations.some(v =>
+      v.target === cap.document.documentElement
+      && Array.isArray(v.options?.attributeFilter)
+      && v.options.attributeFilter.includes('style')))
+  assert.ok(watchesRootStyle,
+    '必须有一个 MutationObserver 盯着 documentElement 的 style ⇒ 安全线（--ms-titlebar-reserve）'
+    + '变化时才会重测；否则落点会停在按旧位置算的值上，与官方 chrome 持续叠压')
+
+  // 对照：body 子树的观察仍然在（B1/B2/B3 的显隐与右栏属性判据不能丢）
+  const watchesBody = cap.observers.some(observer =>
+    observer.observations.some(v => v.target === cap.document.body && v.options?.childList === true))
+  assert.ok(watchesBody, 'body 子树的 childList 观察不得被这次的根元素观察取代')
+})
+
+// 2026-09-26 B3 记录（**已被实机量测推翻的那一版判据，留作反例**）：
+// 当时推断「空白会话（hideChrome = blank ⇒ 无胶囊）也算会话窗口 ⇒ 应隐藏 launcher」。
+// 实机逐像素复核后撤回：空白会话的对话相位仍是 hero（官方
+// `ConversationMainPanel` 的 `hero = sessionId === void 0 || (blank && (open || summaryBlank))`，
+// 输入框居中），那正是用户口中的「主页」；B1 的「只在主页显示」锚的也是会话面板这一维。
+// 这条测试把「**不能**只因为会话头存在就隐藏」钉死 —— 否则主页入口会被误杀。
+test('D1.1g 会话头在场（corner 锚点）不影响显隐：判据仍只认「主页 + 胶囊不在场」', () => {
+  const { descriptor, document } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const launcher = ctx.registered.find(row => row.name === 'shell.overlay').view
+  const render = () => launcher({})
+
+  // 前置：hero（官方只渲染空 titleRow ⇒ 没有 corner 锚点）⇒ 入口在场
+  assert.notEqual(render(), null, '前置：hero 态必须渲染入口')
+
+  // 会话头渲染出 corner 锚点、但胶囊不在（空白会话）：入口**仍在场**（这就是主页）。
+  const corner = document.createElement('div')
+  corner.setAttribute('data-conversation-header-corner', '')
+  document.body.append(corner)
+  assert.equal(document.querySelector('.dsh-ssh-switch'), null, '前置：此状态下确实没有胶囊')
+  assert.notEqual(render(), null, '会话头在场不足以隐藏入口（corner 锚点只用于让位测量）')
+
+  // 胶囊一出现（会话真正开始）⇒ 立刻让位；胶囊退场 ⇒ 恢复。可逆。
+  const capsule = document.createElement('div')
+  capsule.className = 'dsh-ssh-switch'
+  document.body.append(capsule)
+  assert.equal(render(), null, '胶囊在场 ⇒ launcher 必须为 null（B2 的硬契约不变）')
+  capsule.remove()
+  assert.notEqual(render(), null, '胶囊退场 ⇒ 入口恢复（可逆）')
 })
 
 // 2026-09-25 修：用户报「右上角 SSH 按钮应该只在主页显示，而不是每个界面都有」。
@@ -631,8 +983,10 @@ test('D1.1d 面板锚点与官方隔离契约一致，且靠 MutationObserver �
     '必须锚定官方 [data-slot="main.conversation"]（其它主面板激活时它不存在）')
   assert.match(text, /const observer = new MutationObserver\(schedule\)/,
     '面板切换 / 会话头挂载没有官方读取接口，须由 MutationObserver 跟随')
-  assert.match(text, /document\.body, \{ childList: true, subtree: true \}/,
+  assert.match(text, /document\.body, \{[\s\S]{0,240}?childList: true,\s*subtree: true/,
     '观察 body 子树（面板与会话头都是官方 React 增删节点）')
+  assert.match(text, /attributeFilter: \['data-sidebar-right-open', 'data-sidebar-right-panel'\]/,
+    '右栏开合是**改属性**（panel 用 transform 移出屏幕、不卸载）⇒ 必须观察这两个属性')
 })
 
 test('D1.1 点击走与胶囊同一条路径：打开浮层 + 写记忆', () => {

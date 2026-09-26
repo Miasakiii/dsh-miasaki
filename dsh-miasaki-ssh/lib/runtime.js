@@ -700,12 +700,6 @@ export class SshRuntime {
     rc.answer(info.code, info.message)
     rc.dispose()
   }
-
-  currentStatus() {
-    const out = []
-    for (const rc of this.conns.values()) out.push({ id: rc.connId, state: rc.status })
-    return out
-  }
 }
 
 // U2.4 快照上限：单 shell 屏幕快照（serialize 串）的 host 侧内存封顶。
@@ -734,14 +728,10 @@ export class RuntimeConn {
     this.id = runtimeId       // runtimeId：内部实例标识（含 generation 语义）
     this.connId = connId      // profile id：对外名字（REST/路由不变）
     this.client = null
-    this.cols = DEFAULT_COLS
-    this.rows = DEFAULT_ROWS
     this.status = 'connecting'
     this.sockets = new Set()  // 附着到本 runtime 的全部 viewer（含未绑 shell 的状态观察者）
     this.disposed = false
     this.connKey = null
-    this.fpToken = null
-    this.fpHash = null
     this.lastErrorCode = null
     this.lastErrorMessage = null
 
@@ -749,7 +739,6 @@ export class RuntimeConn {
     this.shells = new Map()   // shellId -> ShellChannel
     this.shellSeq = 0
 
-    this.host = record.host
     this.label = record.label
   }
 
@@ -757,11 +746,6 @@ export class RuntimeConn {
   primaryShell() {
     for (const sh of this.shells.values()) if (!sh.ended) return sh
     return [...this.shells.values()].at(-1) ?? null
-  }
-
-  /** 兼容旧测试/旧调用面的最小外壳：默认 shell 的流。 */
-  get stream() {
-    return this.primaryShell()?.stream ?? null
   }
 
   broadcast(json) {
@@ -800,7 +784,6 @@ export class ShellChannel {
     this.sbChunks = []
     this.sbLen = 0
     this.snapshotData = null  // U2.4：最近一次屏幕快照（serialize 串，内存态）
-    this.disposed = false
   }
 
   broadcast(json) {
@@ -810,6 +793,4 @@ export class ShellChannel {
       try { ws.send(payload) } catch { this.viewers.delete(ws) }
     }
   }
-
-  dispose() { this.disposed = true }
 }

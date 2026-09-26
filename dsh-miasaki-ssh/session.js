@@ -65,7 +65,6 @@
     let disposed = false
     let socket = null
     let retryTimer = null
-    let ticketTimer = null
     let attempts = 0     // viewer-channel re-attach attempts since last server frame
     let sshEnded = false // the bound shell or host connection reported ended → never re-attach
     let fitQueued = false
@@ -369,7 +368,6 @@
       }
       disposed = true
       if (retryTimer !== null) { env.clearTimer(retryTimer); retryTimer = null }
-      if (ticketTimer !== null) { env.clearTimer(ticketTimer); ticketTimer = null }
       if (snapshotTimer !== null) { env.clearTimer(snapshotTimer); snapshotTimer = null }
       if (socket !== null) {
         const s = socket

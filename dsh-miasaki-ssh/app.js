@@ -83,23 +83,6 @@ function saveWorkspace() {
   return sessionStore.set(WORKSPACE_KEY, JSON.stringify(snap))
 }
 
-function rememberLastTab(connId) {
-  // 兼容旧调用面：语义 = 把激活标签指到该主机的（首个）标签；null 清空激活项。
-  if (connId === null) {
-    const ws = readWorkspace()
-    if (ws !== null) {
-      ws.activeTab = null
-      sessionStore.set(WORKSPACE_KEY, JSON.stringify(ws))
-    }
-    return
-  }
-  const idx = state.tabs.findIndex(tab => tab.connId === connId)
-  if (idx === -1) return
-  const ws = readWorkspace() ?? { version: WORKSPACE_VERSION, tabs: [], activeTab: null, drawerOpen: false }
-  ws.activeTab = idx
-  sessionStore.set(WORKSPACE_KEY, JSON.stringify(ws))
-}
-
 function readLastTab() {
   const ws = readWorkspace()
   if (ws === null) return null

@@ -6,8 +6,6 @@ import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promis
 import { dirname } from 'node:path'
 
 export const DEFAULT_PORT = 22
-export const DEFAULT_COLS = 120
-export const DEFAULT_ROWS = 32
 export const AUTH_METHODS = new Set(['password', 'key', 'agent'])
 
 export class InputError extends Error {}
@@ -26,17 +24,6 @@ export function hostKeyOf(hostname, port) {
   const h = String(hostname).trim()
   const p = Number(port) || DEFAULT_PORT
   return h.includes(':') ? `[${h}]:${p}` : `${h}:${p}`
-}
-
-/** Split a hostKey back into { host, port }. */
-export function parseHostKey(key) {
-  const bracket = /^\[(.+)\]:(\d+)$/.exec(String(key))
-  if (bracket !== null) return { host: bracket[1], port: Number(bracket[2]) }
-  const idx = String(key).lastIndexOf(':')
-  if (idx === -1) return { host: String(key), port: DEFAULT_PORT }
-  const host = String(key).slice(0, idx)
-  const port = Number(String(key).slice(idx + 1))
-  return { host, port: Number.isInteger(port) && port > 0 ? port : DEFAULT_PORT }
 }
 
 /** OpenSSH-style SHA256 fingerprint of a DER host key. */
@@ -284,5 +271,4 @@ export class SshStore {
       await this.hosts.save()
     }
   }
-  async exit() { /* nothing to clean for the store itself */ }
 }

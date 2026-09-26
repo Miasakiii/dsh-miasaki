@@ -3,8 +3,9 @@
 // 路线丁（全屏浮层，方案 2026-09-14-ssh-fullscreen-overlay-plan.md）：SSH 是**会话之外的
 // 全屏功能模块** —— body 级宿主 + 常驻 iframe + visibility 隐藏 + sessionStorage 开关记忆。
 // 入口有三处：① 会话头胶囊（conversation.session.header.actions，order 26，与 canvas
-// 胶囊合成一体）；② hero 态 launcher（shell.overlay，order 40，方案 §14）；③ 画布页
-// 外部视图槽按钮（canvas:view 广播）。
+// 胶囊合成一体）；② **hero 态**（首屏 / 会话头没有胶囊时）的 launcher（shell.overlay，
+// order 40，方案 §14；显隐两维判据 + 同排官方 chrome 实测让位，见下方 launcherShouldRender
+// 与 syncLauncherOffset，2026-09-26 B3/B4）；③ 画布页外部视图槽按钮（canvas:view 广播）。
 //
 // 2026-09-15 D3 清理：`conversation.view` 注册与官方 tab 委托三件套
 // （ownTab/hideOwnTab/restoreTabs/viewIsSsh/selectSsh）**整体删除** —— 浮层已成为唯一
@@ -37,6 +38,58 @@ window.__ModuleLoader__.load({
     const COMPACT_RELEASE_PX = 200
     const compactDecision = ({ leftGap, compact, enter = COMPACT_ENTER_PX, release = COMPACT_RELEASE_PX }) =>
       compact ? leftGap < release : leftGap < enter
+
+    // ---- launcher 的「躲开同一行官方 chrome」偏移（2026-09-26 B3）-------------
+    // 纯函数、无 DOM 依赖，供契约测试直读（同 `readThemeSnapshot` 的做法）。
+    // 输入视口宽（CSS px）与官方 chrome 的最左边界（CSS px），返回 launcher 的 CSS
+    // `right` 偏移（px）：**退到 chrome 左侧留 `gap` 呼吸位**。量不到（视口宽不可用 /
+    // chrome 缺席 ⇒ chromeLeft 为 Infinity）返回 null ⇒ 调用方移除变量、CSS 回落桌面壳
+    // 窗控口径。负数归零（chrome 已越过视口右缘的退化场景）。
+    const LAUNCHER_GAP_PX = 8
+    // 让位时**顺带吸收紧邻的官方兄弟按钮**：dockkit strip 末端除 chrome 容器外，左边
+    // 还可能挨着「加标签 / 分栏」等按钮（不可用时呈浅灰），只量容器会和它们叠上。
+    // 上限 48px：再远就是 tab 条 / 标题本身，不该算进让位量。
+    const CHROME_ADJACENT_PX = 48
+    const ROW_CHROME_SELECTORS = ['[data-conversation-header-corner]', '[data-dockkit-strip-chrome]']
+    const launcherClearanceOffset = ({ viewportWidth, chromeLeft, gap = LAUNCHER_GAP_PX }) => {
+      if (!Number.isFinite(viewportWidth) || viewportWidth <= 0) return null
+      if (!Number.isFinite(chromeLeft)) return null
+      return Math.max(0, Math.ceil(viewportWidth - chromeLeft + gap))
+    }
+    // ---- 锚点必须**落在视口内**才参与让位（2026-09-26 B4）---------------------
+    // 右栏收起时 `[data-dockkit-strip-chrome]` 被官方
+    // `transform: translateX(var(--dsh-sidebar-width))` 整体推到视口右缘之外 —— 实测
+    // `left=1590 / width=64 / height=28`（视口宽 1248）：宽高都是真实值，旧 0×0 判据
+    // （`width<=0||height<=0`）拦不住它。
+    // **归因澄清（B4 对照实验，避免把原因记错）**：它不是「持续叠压」的根因 —— 让位量取
+    // `Math.min`，屏外坐标（1590）比在场锚点（corner 1080）更大，min 根本不会选它。它的价值是
+    // **语义正确性**：视口外的锚点在几何上不可能与 launcher 叠压，把它计进来只会在「它是唯一
+    // 在场锚点」时凭空造出一个 `clearance = 0`（再被 max 兜回兜底值），让「量不到」与「量到
+    // 一个无效值」两件事混在一起、不可分辨。持久性根因是**零 DOM 变动的 CSS 变量让位线变化**
+    // —— 见 `useLauncherVisible` 里的 rootObserver。
+    const inViewportRow = (rect, viewportWidth) =>
+      rect.width > 0 && rect.height > 0 && rect.left < viewportWidth
+    // ---- 过渡期跟随重测（2026-09-26 B4）---------------------------------------
+    // 官方右栏开合 / 分栏切换是 **CSS transform 过渡**（`.P3OORG_panel [data-dockkit-host=dock]`
+    // 的 `transition: transform var(--ds-transition-duration-slow)`），chrome 的位置在几百毫秒
+    // 里连续变化。对照实验（无头 Chromium，属性触发官方过渡；实测数据见 CHANGELOG）：
+    // **只在触发瞬间测一次**的实现里，过渡期间 launcher 与刚移入视口的 strip **最大重叠 41px**，
+    // 要等 `transitionend` 才在下一次纠正 —— 那就是用户图一的那一帧。
+    // 跟随重测把这个窗口收掉：逐帧跟到连续 `FOLLOW_SETTLE_FRAMES` 帧不再变化；硬上限
+    // `FOLLOW_MAX_FRAMES` 兜住「值一直抖」的极端情况（约 1.5s）。
+    // **下限 `FOLLOW_MIN_FRAMES` 不可省**：过渡前段 chrome 还在视口外（被 `inViewportRow`
+    // 滤掉）时让位量会一直取兜底值、连续多帧「不变」，若据此收手，等 chrome 真正移进视口
+    // 就没人再测了 —— 实测正是这个早停让过渡期间残留 41px 叠压（收手下限补上后归零）。
+    const FOLLOW_SETTLE_FRAMES = 4
+    const FOLLOW_MIN_FRAMES = 30
+    const FOLLOW_MAX_FRAMES = 90
+
+    // rAF 取用（2026-09-26 B4）：浏览器恒有；契约测试的 VM 桩没有 ⇒ 退回原来的同步回退，
+    // 既有测试的确定性不受影响（跟随重测在无 rAF 宿主上直接不启动，见 startFollow）。
+    const hasAnimationFrame = typeof requestAnimationFrame === 'function'
+    const raf = hasAnimationFrame
+      ? requestAnimationFrame
+      : fn => (typeof setTimeout === 'function' ? setTimeout(fn, 16) : fn())
 
     /** 紧凑形态的终端图标（内联 SVG，跟随 currentColor 与主题令牌）。 */
     const terminalGlyph = () => react.createElement('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
@@ -104,7 +157,17 @@ window.__ModuleLoader__.load({
       // top/height 由 syncChrome 从窗控组**实测**（见下），不写死。
       // 首版是带底带框的 999px 胶囊 + 写死 top:14px —— 实测混在一排线性图标与圆形
       // 头像里太重、不协调，而且比窗控组（top:5px）低 9px，根本没对齐。
-      '.dsh-ssh-launcher button{position:absolute;top:var(--dsh-ssh-chrome-top,5px);right:calc(var(--dsh-ssh-chrome-reserve,0px) + 16px);pointer-events:auto;height:var(--dsh-ssh-chrome-height,28px);padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}' +
+      //
+      // right 的**两个口径**（2026-09-26 B3 修）：
+      // ① 兜底 = 壳窗控口径 `--dsh-ssh-chrome-reserve + 16px`（桌面壳量出的窗控组宽度）；
+      // ② 实际 = `--dsh-ssh-launcher-right`（`syncLauncherOffset()` 实测 DSH 自身在这
+      //    一行的 chrome 后取「两者更靠左」的那个）。为什么必须叠 ②：桌面壳把自家窗控
+      //    组之外的空间让给 DSH 官方控件（`--ms-titlebar-reserve`），于是会话头的
+      //    corner（右栏折叠时的「展开」键）与右栏 dockkit strip 的两颗 chrome 键正好
+      //    被顶到 launcher 的默认落点上 —— 实测 2496px 宽 / 200% 缩放的桌面壳窗口里，
+      //    launcher 文字与官方那颗「▭」只差 1.5 CSS px（按钮盒重叠 14px），用户
+      //    两次反馈「SSH 按钮还是有问题」的可见缺陷就是这个叠压。
+      '.dsh-ssh-launcher button{position:absolute;top:var(--dsh-ssh-chrome-top,5px);right:var(--dsh-ssh-launcher-right,calc(var(--dsh-ssh-chrome-reserve,0px) + 16px));pointer-events:auto;height:var(--dsh-ssh-chrome-height,28px);padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary,#6b7280);font:600 12px Inter,system-ui,sans-serif;cursor:pointer;white-space:nowrap}' +
       '.dsh-ssh-launcher button:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}' +
       '.dsh-ssh-launcher button:focus-visible{outline:2px solid var(--dsw-static-deepseek-450,#111827);outline-offset:2px}'
 
@@ -277,6 +340,7 @@ window.__ModuleLoader__.load({
         // 判据失败时保守显示（宁可多一颗按钮，也别让别人把入口判丢）。
         let canvasAvailable = true
         try { canvasAvailable = document.querySelector('.dsh-canvas-switch') !== null } catch { /* 查询失败：保守显示 */ }
+        shellReserve = reserve // launcher 落点取 max 用（见 syncLauncherOffset）
         try {
           const root = document.documentElement.style
           root.setProperty('--dsh-ssh-chrome-reserve', reserve + 'px')
@@ -284,6 +348,9 @@ window.__ModuleLoader__.load({
           root.setProperty('--dsh-ssh-chrome-height', chromeHeight + 'px')
         } catch { /* 只读环境 */ }
         try { frame.contentWindow?.postMessage({ source: 'dsh-ssh', type: 'chrome', version: 1, reserve, canvasAvailable, overlayToken: overlayMsgToken }, location.origin) } catch { /* iframe 刚卸载 */ }
+        // launcher 自己的落点：壳窗控口径 + 同排官方 chrome 让位（见 syncLauncherOffset）。
+        // 挂在 syncChrome 上，apply 期间与 iframe load 时都会各量一次。
+        syncLauncherOffset()
       }
 
       // ---- 主题桥（浮层与 view 两个 iframe 共用；快照去重逻辑同 U1）-------
@@ -456,7 +523,146 @@ window.__ModuleLoader__.load({
         }
       }
 
-      /** launcher 的唯一显隐判据：在主页 **且** 本线胶囊不在场。 */
+      // ---- 「同一行里的官方 chrome」让位（2026-09-26 B3 修，B4 补取数时机与视口判据）----
+      // 用户第二次复报「SSH 按钮还是有问题」并附两张桌面壳截图（红框圈住右上角那一排）。
+      // 逐像素量测（2496×1546 截图 = 1248×773 CSS × 200% 缩放）得到的**可见缺陷**：
+      //   · launcher 的按钮盒 ≈ x[2081,2148]，官方那颗「▭」的按钮盒 ≈ x[2120,2176]
+      //     —— **重叠 28 物理 px（14 CSS px）**，文字与图标只差 1.5 CSS px，视觉上贴在一起；
+      //   · 右栏展开时它俩之间又插进右栏 dockkit chrome 的两颗键（全屏 / 收起），
+      //     launcher 被夹在中间，两侧都只剩 3 物理 px。
+      // 根因：launcher 的 right 只按**桌面壳窗控组**算（`--dsh-ssh-chrome-reserve`），
+      // 而桌面壳把窗控组之外的空间让给 DSH 官方控件（`--ms-titlebar-reserve`，默认 128px、
+      // sidebar 线注入终端键后升到 156px）⇒ 官方控件被顶到窗控组左侧的同一行里，
+      // 正好压在 launcher 的落点上。这不是「该不该显示」的问题（B1/B2 已定：主页显示、
+      // 胶囊在场时不显示），而是**同一行里两块 chrome 抢位**。
+      // 修法沿用本仓既有的「实测让位」纪律（canvas 线 syncChrome / desktop 线
+      // `--ms-titlebar-reserve` 都是这个套路）：量出这一行里 DSH 官方 chrome 的**最左边界**，
+      // 把 launcher 退到它左侧留呼吸位。两个锚点都是官方既有属性：
+      //   · `[data-conversation-header-corner]` —— 会话头右端（右栏折叠时「展开」键在此；
+      //     canvas 线早已用它做 :has() 锚点）；
+      //   · `[data-dockkit-strip-chrome]` —— 右栏 dockkit strip 末端的「全屏 / 收起」两键
+      //     （desktop 线用它做让位，注释里写明它恒存、只在分栏最右格渲染）。
+      //
+      // 2026-09-26 B4（用户第三次复报「还是会有问题，点击页面后可能恢复正常」）：B3 只修了
+      // 「用哪个口径」，**取数时机**与**锚点在场判据**各留了一个洞，叠加出的缺陷与用户截图
+      // 逐像素吻合。用无头 Chromium + 复刻桌面壳标题栏（`#miasaki-titlebar .tb-group` +
+      // `--ms-titlebar-reserve`）逐帧量测 + **对照实验**（同一探针分别跑「修复前语义」与
+      // 「修复后语义」）拿到的现场，两个洞各自独立可复现：
+      //   · 洞 A —— **过渡期间只有一次测量**：右栏开合走 CSS transform 过渡
+      //     （`--ds-transition-duration-slow`）。对照实测：只在触发瞬间测一次的实现里，
+      //     过渡期间 launcher 与刚移入视口的 strip **最大重叠 41px**，随后靠 `transitionend`
+      //     才纠正 —— 41px 正是用户图一里 `{SSH[]` 那个叠压量级（瞬时，但每次开右栏都出现）；
+      //   · 洞 B（**持久性叠压的根因**）—— **CSS 变量让位线变化不带任何 DOM 变动**：桌面壳
+      //     侧栏线把 `--ms-titlebar-reserve`（128 → 156px）写在 documentElement 上，这条线一变
+      //     官方整行 chrome 就整体平移。对照实测：把安全线 156→220px 后，落点变量
+      //     **一次都没有重测**（取值序列只有一个旧值），strip 从 x[1028,1092] 移到 x[964,1028]
+      //     后与 launcher **持续重叠 20px** —— 这就是用户「还是会有问题」的持久形态；
+      //     「点击页面后可能恢复正常」＝ 点击引发某处 React 重渲染，才顺带补上一次测量
+      //     （= 用户图二，SSH 退到 x≈950）；
+      //   · 附带修正 —— 视口外的锚点不参与（`inViewportRow`）：右栏收起时 dockkit strip 被
+      //     `transform: translateX(var(--dsh-sidebar-width))` 推到视口右缘之外，实测
+      //     `left=1590 / 64×28`（视口 1248），宽高非零 ⇒ 旧 0×0 判据拦不住。它**不是**叠压的
+      //     根因（让位量取 min，屏外坐标更大、选不中），修的是「量不到」与「量到无效值」
+      //     混在一起的语义问题（详见 `inViewportRow` 上方注释）。
+      // B4 的修法：① 过渡期逐帧跟随到值稳定（`startFollow`）；② 观察 **documentElement 的
+      // style**，让安全线变化有重测信号（`rootObserver`）；③ 补 `transitionend` /
+      // `visibilitychange` / `fonts.ready` 三个补充信号；④ 视口外的锚点一律不参与。
+      /** 壳窗控口径量出的 reserve；供 launcher 落点取 max（见 syncLauncherOffset）。 */
+      let shellReserve = 0
+      let launcherOffsetLast = null
+
+      /**
+       * 量出同排官方 chrome 的最左边界，写进 `--dsh-ssh-launcher-right`。
+       * 口径 = max(壳窗控口径 reserve+16, 躲开官方 chrome 的偏移)：前者与 iframe 顶栏
+       * 共用同一个 reserve 变量（这里不动它），后者由 `launcherClearanceOffset()` 纯函数算；
+       * 两者取更靠左的那个，保证既不被窗控压住、也不压在官方控件上。
+       * 量不到（视口宽不可用 / 在场 chrome 全在视口外）⇒ 移除变量，CSS 回落壳窗控口径。
+       * @returns 本次测得的偏移（px），量不到时为 null（跟随重测用返回值判断是否仍在变）。
+       */
+      const syncLauncherOffset = () => {
+        let offset = null
+        try {
+          const viewportWidth = Number.isFinite(window.innerWidth) ? window.innerWidth : 0
+          let chromeLeft = Number.POSITIVE_INFINITY
+          for (const selector of ROW_CHROME_SELECTORS) {
+            for (const node of document.querySelectorAll(selector)) {
+              const rect = node.getBoundingClientRect()
+              // 视口外的锚点不参与：右栏收起时 dockkit strip 被 transform 推到视口右缘之外，
+              // 宽高却仍是真实值（0×0 判据拦不住），会把让位量污染成 0。见 inViewportRow。
+              if (!inViewportRow(rect, viewportWidth)) continue
+              // 每个锚点**独立**累积：兄弟链的断链判据必须以本锚点自己的左边界为基准，
+              // 否则前一个锚点把 chromeLeft 拉小之后，这里会在错误的距离上提前 break。
+              let nodeLeft = rect.left
+              // 吸收紧邻（间距 ≤ 48px）的官方兄弟按钮：dockkit strip 末端除 chrome 容器
+              // 外，左边可能还挨着「加标签 / 分栏」等键，只量容器会和它们叠上。
+              for (let sibling = node.previousElementSibling; sibling !== null; sibling = sibling.previousElementSibling) {
+                const siblingRect = sibling.getBoundingClientRect()
+                if (!inViewportRow(siblingRect, viewportWidth)) continue
+                if (nodeLeft - siblingRect.right > CHROME_ADJACENT_PX) break // 再往左就不是紧邻了
+                nodeLeft = Math.min(nodeLeft, siblingRect.left)
+              }
+              chromeLeft = Math.min(chromeLeft, nodeLeft)
+            }
+          }
+          const clearance = launcherClearanceOffset({ viewportWidth, chromeLeft })
+          if (clearance !== null) offset = Math.max(shellReserve + 16, clearance)
+        } catch { /* 无父文档 / 只读环境：保持壳窗控口径 */ }
+        if (offset === null) {
+          // 量不到（hero 态 / 无窗控环境）：清变量 ⇒ CSS 回落壳窗控口径。
+          // removeProperty 幂等，未写过时调用也无副作用。
+          launcherOffsetLast = null
+          try { document.documentElement.style.removeProperty('--dsh-ssh-launcher-right') } catch { /* 只读环境 */ }
+          return null
+        }
+        if (offset === launcherOffsetLast) return offset // 去重：同一偏移不重复写样式
+        launcherOffsetLast = offset
+        try { document.documentElement.style.setProperty('--dsh-ssh-launcher-right', offset + 'px') } catch { /* 只读环境 */ }
+        return offset
+      }
+
+      /**
+       * 过渡期跟随重测（2026-09-26 B4，常量与理由见文件头 `FOLLOW_*`）。
+       *
+       * 只在**有 rAF** 的宿主启动：契约测试的 VM 桩没有 rAF，而回退实现是同步执行
+       * ⇒ 逐帧递归会变成同一个 tick 里的同步递归。桩环境不需要跟随（它的 DOM 不会自己动）。
+       */
+      let followRaf = null
+      let followStableFrames = 0
+      let followFrames = 0
+      const followTick = () => {
+        followRaf = null
+        const before = launcherOffsetLast
+        syncLauncherOffset()
+        followFrames += 1
+        // 值还在变 ⇒ 说明过渡 / 布局还没停，继续跟。但**「值不变」不等于过渡结束**：
+        // 过渡前段 chrome 还在视口外时让位量恒取兜底值、可以连着多帧不变，据此收手就会
+        // 漏掉它移进视口的那一刻（实测残留 41px 叠压）。故下限 FOLLOW_MIN_FRAMES 内无条件跟。
+        followStableFrames = launcherOffsetLast === before ? followStableFrames + 1 : 0
+        const settled = followStableFrames >= FOLLOW_SETTLE_FRAMES && followFrames >= FOLLOW_MIN_FRAMES
+        if (!settled && followFrames < FOLLOW_MAX_FRAMES) followRaf = raf(followTick)
+      }
+      const startFollow = () => {
+        if (!hasAnimationFrame) return
+        followStableFrames = 0
+        followFrames = 0
+        if (followRaf === null) followRaf = raf(followTick)
+      }
+      const stopFollow = () => {
+        if (followRaf === null) return
+        try { if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(followRaf) } catch { /* 无 cancelAnimationFrame 的宿主 */ }
+        followRaf = null
+      }
+
+      /**
+       * launcher 的唯一显隐判据：在主页 **且** 本线胶囊不在场。
+       *
+       * 2026-09-26 B3 记录：曾把「会话面板已绑定会话」（`[data-conversation-header-corner]`
+       * 存在）也当成一维来隐藏 launcher，实机量测后**撤回** —— 空白会话里官方
+       * `hideChrome = blank` 不渲染 titleCluster（胶囊缺席）但对话相位仍是 hero
+       * （`ConversationMainPanel` 的 `hero = sessionId === void 0 || (blank && (open || summaryBlank))`，
+       * 输入框仍居中），那正是用户口中的「主页」⇒ 入口该在；B1 的「只在主页显示」指的
+       * 也是这一维（`[data-slot="main.conversation"]`）。该锚点现在只用于**让位测量**（见上）。
+       */
       const launcherShouldRender = () => onConversationHome() && !ownEntryPresent()
 
       /**
@@ -464,29 +670,94 @@ window.__ModuleLoader__.load({
        * 没有可读信号，因此用 MutationObserver 观察；rAF 节流合并流式输出期间的高频 DOM 变动
        * （只在布尔值真正翻转时才 setState，避免无谓重渲染）。
        *
-       * 订阅用 `usePaintEffect`（= useLayoutEffect，见文件头）：首次 `sync()` 必须跑在
+       * 订阅用 `usePaintEffect`（= useLayoutEffect，见文件头）：首次 `syncNow()` 必须跑在
        * paint 之前，否则刷新时会先闪一帧多余的 SSH。
        */
       function useLauncherVisible() {
         const [visible, setVisible] = react.useState(launcherShouldRender)
         usePaintEffect(() => {
           let scheduled = false
-          const sync = () => {
+          /** 立即测一次（判据 + 落点 + 跟随）。 */
+          const syncNow = () => {
             const next = launcherShouldRender()
             setVisible(prev => (prev === next ? prev : next))
+            // 同排官方 chrome 会随「右栏开合 / 会话头挂载」出入 ⇒ 每次变动重测一次落点。
+            // 只在可见时测：隐藏时测了也没人看，还能避免流式输出期间白白读布局。
+            if (next) {
+              syncLauncherOffset()
+              // 官方 chrome 此刻可能正在 transform 过渡里（右栏开合 / 分栏切换）⇒ 跟到稳定为止，
+              // 否则落点会钉在过渡中间值上（见文件头 FOLLOW_* 的实测记录）。
+              startFollow()
+            }
           }
-          const raf = typeof requestAnimationFrame === 'function'
-            ? requestAnimationFrame
-            : fn => (typeof setTimeout === 'function' ? setTimeout(fn, 16) : fn())
           const schedule = () => {
             if (scheduled) return
             scheduled = true
-            raf(() => { scheduled = false; sync() })
+            raf(() => { scheduled = false; syncNow() })
           }
-          sync()
+          syncNow()
           const observer = new MutationObserver(schedule)
-          observer.observe(document.body, { childList: true, subtree: true })
-          return () => observer.disconnect()
+          // 观察项除子树增删外**必须包含右栏那两个属性**：官方 panel 开合是改属性 +
+          // 改 transform（不卸载、不增删节点），只看 childList 会漏掉「dockkit chrome
+          // 进出这一行」⇒ launcher 落点停在旧值上。两个属性都是低频变更（用户开合面板
+          // / 切全屏），rAF 节流后开销可忽略。
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['data-sidebar-right-open', 'data-sidebar-right-panel'],
+          })
+          // 根元素 style（2026-09-26 B4 补，**持久性叠压的根因信号**）：桌面壳侧栏线把
+          // 安全线 `--ms-titlebar-reserve`（默认 128px → 注入终端键后 156px）写在
+          // `document.documentElement.style` 上；这条安全线一变，官方整行 chrome 整体平移
+          // —— 而**全程零 DOM 变动**，childList 与右栏属性判据一个都收不到。
+          // 无头 Chromium 实测（探针 D 阶段）：把安全线 156→220px 后，落点变量**一次都没有
+          // 重测**（取值序列只有一个旧值），dockkit strip 从 x[1028,1092] 移到 x[964,1028]
+          // 后与 launcher **持续重叠 20px** —— 这正是用户「还是会有问题」的持久形态，而
+          // 「点击页面后可能恢复正常」是因为点击引发了某处 React 重渲染，才顺带补上一次测量。
+          // **必须同步测、不走 schedule 的 rAF 节流**：安全线是 inline style 覆盖 `:root`
+          // 声明、**同步生效**（没有过渡），延后一帧就会露出「chrome 已平移、launcher 还没跟」
+          // 的叠压窗口（实测正是 20px）。MutationObserver 回调是微任务、浏览器尚未绘制，
+          // 这里 `getBoundingClientRect()` 强制布局读到的就是新位置 ⇒ 同一帧内改完。
+          // 但 `documentElement.style` 的写入方不止我们（皮肤线 / 侧栏线 / 官方都在写），
+          // 逐次强制布局太贵 ⇒ 先做一次**廉价**的相关变量比对，只有真的变了才重测。
+          // 顺带断掉自触发：我们写的是 `--dsh-ssh-launcher-right`，不在关心列表里。
+          const WATCHED_ROOT_VARS = ['--ms-titlebar-reserve', '--dsh-ssh-chrome-reserve']
+          let rootVarsLast = null
+          const onRootStyleChange = () => {
+            let key
+            try {
+              const inline = document.documentElement.style
+              key = WATCHED_ROOT_VARS.map(name => inline.getPropertyValue(name)).join('|')
+            } catch { key = null } // 读不到 inline style（只读宿主）⇒ 退化成每次都测
+            if (key !== null && key === rootVarsLast) return
+            rootVarsLast = key
+            syncNow()
+          }
+          const rootObserver = new MutationObserver(onRootStyleChange)
+          rootObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+          // 窗口尺寸变化同样会挪动官方 chrome 的左边界（右栏是推挤式布局）。
+          const onResize = () => schedule()
+          window.addEventListener('resize', onResize)
+          // 过渡收尾的「最后一帧」保证（2026-09-26 B4）：跟随机制通常已经覆盖，但系统级
+          // 「减少动效」、掉帧、后台标签页都可能让 rAF 提前收手；过渡结束事件是权威信号。
+          // 捕获阶段监听 document：官方的过渡元素在 React 树深处，不冒泡到 window 也能收到。
+          const onTransitionEnd = () => schedule()
+          document.addEventListener('transitionend', onTransitionEnd, true)
+          // 后台标签页不跑 rAF：切回窗口时补测一次，避免跟随在不可见期间空转后留下旧落点。
+          const onVisibilityChange = () => schedule()
+          document.addEventListener('visibilitychange', onVisibilityChange)
+          // 字体落地会改变官方 chrome 的实测宽度（Inter/Montserrat 与回退字体不等宽）
+          // ⇒ 补测一次。`document.fonts` 在极老宿主上可能缺席。
+          try { document.fonts?.ready?.then?.(() => schedule()) } catch { /* 无字体接口：跳过 */ }
+          return () => {
+            observer.disconnect()
+            rootObserver.disconnect()
+            window.removeEventListener('resize', onResize)
+            document.removeEventListener('transitionend', onTransitionEnd, true)
+            document.removeEventListener('visibilitychange', onVisibilityChange)
+            stopFollow()
+          }
         }, [])
         return visible
       }
@@ -499,11 +770,15 @@ window.__ModuleLoader__.load({
        * （`sessionId === void 0 ? <div className={titleRow}/> :
        * renderSlot('conversation.session.header', …)`）⇒ hero 态（首屏）没有胶囊，这里顶上。
        *
-       * **判据（2026-09-25 B2 重写）**：`在主页` **且** `本线胶囊不在场`
-       * （见上方 `launcherShouldRender()`）。旧判据靠推演官方 `useSessions` 的 blank 字段，
-       * 它与「会话头会不会渲染」**不等价** ⇒ 会话窗口里 launcher 与胶囊同时在场
-       * （用户报「重复了，胶囊有 SSH 按钮入口」）。
-       * 现在只认 DOM 事实，**结构性杜绝双入口**（验收用
+       * **判据（2026-09-25 B2 定，2026-09-26 B3 复核后维持两维）**：`在主页` **且**
+       * `本线胶囊不在场`（见上方 `launcherShouldRender()`）——
+       * ① 2026-09-25 B1 补「在不在主页」（`shell.overlay` 是 root 级浮层，每一屏都渲染；
+       *    判据是官方 `[data-slot="main.conversation"]` 隔离锚点）；
+       * ② 2026-09-25 B2 补「本线胶囊不在场」（旧判据推演官方 `useSessions` 的 `blank` 字段，
+       *    与「会话头会不会渲染」**不等价** ⇒ 会话窗口里 launcher 与胶囊同时在场）。
+       * B3 一度想再补「会话未绑定」一维，实机量测后撤回（理由见 `launcherShouldRender()`）；
+       * 那次的真正缺陷是**同一行里的叠压**，修在 `syncLauncherOffset()`。
+       * 两维都只认 DOM 事实，**结构性杜绝双入口**（验收用
        * `document.querySelectorAll('.dsh-ssh-launcher').length === 0` 锁死）。
        *
        * 不再消费任何官方 prop ⇒ **不必再拆两层**判「有没有 useSessions」（React 规则里
@@ -561,12 +836,13 @@ window.__ModuleLoader__.load({
         const index = canvasViewItems.indexOf(VIEW_ITEM)
         if (index >= 0) canvasViewItems.splice(index, 1)
         window.dispatchEvent(new CustomEvent('dsh-canvas:view-items', { detail: { items: canvasViewItems.slice() } }))
-        // launcher 的 reserve 变量归本 fiber（§14.4）：不清掉会在 documentElement 上留痕。
+        // launcher 的 reserve / 落点变量归本 fiber（§14.4）：不清掉会在 documentElement 上留痕。
         try {
           const root = document.documentElement.style
           root.removeProperty('--dsh-ssh-chrome-reserve')
           root.removeProperty('--dsh-ssh-chrome-top')
           root.removeProperty('--dsh-ssh-chrome-height')
+          root.removeProperty('--dsh-ssh-launcher-right')
         } catch { /* 只读环境 */ }
         // 浮层宿主整树回收（含 iframe / 加载态 / 监听）；开关记忆不清除 ——
         // 它是用户意图而非插件生命周期状态（§5.9）。插件重装后记忆态若为真，
@@ -582,6 +858,10 @@ window.__ModuleLoader__.load({
 
     // 供契约测试（test/client.test.js）直读主题快照的取数逻辑。
     module.exports.readThemeSnapshot = readThemeSnapshot
+    // 同上：launcher 让位量的纯函数（无 DOM 依赖，可直接单测）。
+    module.exports.launcherClearanceOffset = launcherClearanceOffset
+    // 同上：让位测量的视口过滤纯函数（B4，无 DOM 依赖）。
+    module.exports.inViewportRow = inViewportRow
 
     return module.exports
   },
