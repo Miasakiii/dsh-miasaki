@@ -37,6 +37,10 @@ window.miasakiDesktop = {
       close() -> boolean       // 关闭 = 隐藏到托盘（W3.1 语义）
     }
   },
+  chrome: {                    // v1.2：壳 chrome 几何（只读 + 订阅，避让量由插件自己算）
+    bounds() -> { left, top, right, bottom, width, height } | null,  // 视口坐标；量不到为 null
+    onChange(cb) -> unsubscribe                                      // cb(bounds | null)
+  },
   assets: { baseUrl: 'http://127.0.0.1:39800/' }
 }
 ```
@@ -51,6 +55,26 @@ window.miasakiDesktop = {
 | `window.maxState.subscribe` | 订阅最大化状态（Rust `eval` 派发 `miasaki-max-state`） | `06-titlebar.js` / `main.rs::push_max_state` |
 | `window.controls` | 窗控（**v1.1**）：派发 `miasaki-window-command`，由 `06-titlebar.js` 映射为 `petHashCmd('min'\|'max'\|'close')` | 同上（复用唯一 hash 写者） |
 | `assets.baseUrl` | 素材服务基址（省得插件各抄一遍端口） | `main.rs`（39800 素材服务） |
+| `chrome.bounds` | **v1.2**：壳窗控按钮组在视口坐标下的矩形（量不到返回 `null`） | `06-titlebar.js` 建的 `#miasaki-titlebar .tb-group` |
+| `chrome.onChange` | **v1.2**：订阅该组尺寸/位置变化（`ResizeObserver`）——sidebar 往组里插按钮这类事会触发 | 同上 |
+
+> **v1.2 的边界（改之前先读）**：① 只给**矩形**，不给「你该让多少」——各插件呼吸位不同
+> （canvas 6px、ssh 6+8px），壳无权替它们决策；② **不提供官方 DSH chrome 的位置**（那是官方资产，
+> ssh 自己的口径②继续自量）；③ 子 frame 仍只给空壳（纪律③）——canvas / ssh 都是
+> **主帧量、iframe 消费**（`canvas:chrome` / `--ssh-chrome-reserve` 下发），无需开口子。
+>
+> 配套：`06-titlebar.js` 用 `ResizeObserver` 观测 `.tb-group` 实宽，
+> **壳成为 `--ms-titlebar-reserve` 的唯一写者**（公式 = 组宽 + right 8 + 呼吸 12；
+> 108→128、136→156）。静态兜底 `03-switcher.js:89` 取**注入形态上界** `156px`
+> （2026-09-27 实机重叠事件后由 128 改：兜底是「无人写」时的最后防线，按「无终端键」取值会在
+> sidebar 插键后少让一格 ⇒ 官方 ExpandButton 压住终端键）。
+>
+> **注入方契约**（跨线，判据用契约能力而不是版本号）：
+> `chrome.bounds` 能力在位 ⇒ 壳自己观测实宽，**注入方一律不写**该变量；
+> 能力缺席（旧壳 / 浏览器直开）⇒ 注入方按**同源公式**（组实宽 + 8 + 12）补位 ——
+> 当下唯一实现是 sidebar 线的 `titlebarButton.writeReserve`，闸门在
+> `dsh-miasaki-sidebar/test/titlebar-button.test.js`。两条线各自只守一半：壳守"我在位时我算"，
+> 注入方守"壳不在位时我算"。
 
 ## 3. 三条设计纪律（改契约前必读）
 
@@ -130,6 +154,7 @@ if (d && d.has('theme.set')) d.theme.set('kurkuriel')
 
 | 日期 | 变更 |
 |---|---|
+| 2026-09-27 | **v1.2：壳 chrome 几何**（`chrome.bounds()` / `chrome.onChange()`）。由来：[全线审查](../../dsh-miasaki-shared-docs/repo-review-2026-09-27.md) §4-① 发现右上角一带有**三方争用**——sidebar 往 `.tb-group` 插终端键并硬编码写 `--ms-titlebar-reserve:156px`、canvas 与 ssh 各自量宽避让、壳自己消费该变量给官方控件让位；同一事实三种取数，且 canvas 还写死了「宽度固定，无需监听」这个已被 sidebar 注入打破的前提。本能力把它收敛成一个**只读**接口（「壳说事实、插件选分支」，与 `12-material` 的 `data-mia-native-mica` 同一分工）。**`protocolVersion` 仍为 1** —— 按 §4 语义，增量能力只追加 `capabilities` 条目。同批：`06-titlebar.js` 用 `ResizeObserver` 观测实宽自动写 `--ms-titlebar-reserve`（**壳成为唯一写者**，sidebar 的两处写入删除）；`06-titlebar.js` 头部纪律同步 v1.1/v1.2（此前仍写「只读 + 不提供写通道」，与同文件 v1.1 实现自相矛盾）；`contract.test.js` 的能力表核验补上**未知命名空间即失败**的守卫（原先对未知 ns 静默跳过）。闸门 **15 → 19 例**。 |
 | 2026-09-26 | **P7：页面 → 壳的事件通道**（`miasaki-pet-heartbeat` / `miasaki-boot`，经 `plugin:event\|emit`；权限来自既有 `core:default` 的 `core:event:default`）。**暴露面不变**：`window.miasakiDesktop` 的能力表、`protocolVersion`（仍为 1）与写者数量（仍为 2）全都没动 —— 变的是**六态心跳的送达通道**：`petts` 不再写 `location.hash`（那正是「URL 每 1.5s 变一次、History 库涨到 87MB」的驱动源），改由事件直达 `main.rs` 的 `app.listen`。§3 纪律②「契约自己不碰 `location.hash`」因此更强：**心跳也不再碰**。详见 [CHANGELOG.md](CHANGELOG.md) 2026-09-26（下午·续）。 |
 | 2026-09-25 | **v1.1**：新增受控写能力 `theme.set` 与 `window.controls`（minimize / maximize / close）。实现走**内部事件**（`miasaki-theme-set` / `miasaki-window-command`），执行落在寄生分片 `02-core.js` / `06-titlebar.js` —— 契约自己不碰 `location.hash`，**写者数量不变**（仍为 2）。闸门 11 → **15 例**（新增：派发与白名单拒绝、只暴露人话名不透内部协议名 `min`/`max`、寄生侧监听的静态断言）。同批修正 §4 的版本语义：`protocolVersion` **只在破坏性变更时提升**，增量能力靠 `has()` 探测。 |
 | 2026-09-25 | v1 落地（W1/T1.2–T1.4）：`10-contract.js` + 11 例闸门 + 本文档；同批记录 T1.1 spike 结论（`__DSH_BOOT_READY__` 闸门不可用，正确通道为 `index-inject`） |

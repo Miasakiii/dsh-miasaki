@@ -27,6 +27,14 @@ window.__ModuleLoader__.load({
       ]
     }
 
+    // ---- 桌面壳契约对象（2026-09-27）-----------------------------------------
+    // `window.miasakiDesktop` 是桌面壳注入层（desktop 线 `themes/src/10-contract.js`）
+    // 暴露的能力面：有版本号、可探测（`has(name)`）、缺失即降级。**只在模块初始化时取一次
+    // 并保存**：契约对象是壳在文档早期写入的稳定单例，每次取数重取只会让「契约在不在」
+    // 的判断散落到多个调用点，且同一拍里前后判定可能不一致。浏览器直开时为 `undefined`，
+    // 所有消费点都必须按「能力缺失 → 走既有的 DOM 兜底」处理。
+    var d = typeof window !== 'undefined' ? window.miasakiDesktop : undefined
+
     // ---- 会话头部窄宽度自适应（2026-09-10）----------------------------------
     // 官方会话头把一行分成 titleCluster（flex:1 + min-width:0，可被压到 0）与
     // headerUtilities / headerCorner（都是 flex:none，不收缩）；而 titleCluster 内部
@@ -52,13 +60,32 @@ window.__ModuleLoader__.load({
       react.createElement('circle', { cx: 12, cy: 6, r: 1.7, fill: 'currentColor' }),
       react.createElement('circle', { cx: 7, cy: 12, r: 1.7, fill: 'currentColor' }))
 
-    module.exports.inject = ['sessions', 'workspaces', 'slots']
+    // DSH 0.1.7 起会话导航从 ctx.sessions.open 移到 ctx.uiWorkspace.openSession
+    // （ISessions 契约删除了 open），要调用它必须显式注入 uiWorkspace。
+    module.exports.inject = ['sessions', 'workspaces', 'uiWorkspace', 'slots']
     module.exports.apply = ctx => {
       // 幂等守卫：DSH HMR/页面重挂可能重复 apply，旧实例的 DOM/监听还没被回收
       // 时会叠加出两个「对话/会话布」按钮——同一页面只允许一份画布桥。
       if (window.__DSH_CANVAS_BOOTED__) return
       window.__DSH_CANVAS_BOOTED__ = true
+      // 失败必须留痕：2026-09-27 之前 canvas:open-session / canvas:activate-session
+      // 两处是空 catch，把 TypeError（ctx.sessions.open 在 0.1.7 已删除）一律显示成
+      // 「关联的 DSH 会话已不可用」——会话其实活着，真实原因被吞。与 syncSessions
+      // 的 report 同一纪律：日志带真实原因，toast 文案只做用户侧摘要。
+      const reasonOf = error => error instanceof Error ? error.message : String(error)
+      const reportBridgeFailure = (action, error) => {
+        console.warn(`dsh-canvas: ${action} 失败（关联的 DSH 会话可能已删除或未加载）— ${reasonOf(error)}`)
+      }
       const prompt = async (sessionId, text) => {
+        // 先打开再借 scope：0.1.7 的 ctx.sessions.scope() 只对已 retain 的世代有效
+        // （uiWorkspace.openSession 同步 materializeScope），未在前台打开过的会话直接
+        // 取 scope 恒为 undefined，发消息必失败。openSession 自身的失败原因必须带走。
+        try {
+          ctx.uiWorkspace.openSession(sessionId)
+        } catch (error) {
+          reportBridgeFailure('canvas:send-message', error)
+          throw new Error(`关联的 DSH 会话已不可用（${reasonOf(error)}）`)
+        }
         const scope = ctx.sessions.scope(sessionId)
         const session = scope === undefined ? undefined : ctx.sessions.sessionOf(scope)
         if (session === undefined) throw new Error('关联的 DSH 会话已不可用')
@@ -246,19 +273,46 @@ window.__ModuleLoader__.load({
       // 桌面端无边框窗口的窗控按钮组（V4 #miasaki-titlebar .tb-group，V3 兜底 .tb-capsule，
       // fixed top:5px right:8px）零占位浮在页面右上角，画布工具条同为 fixed 右上会叠压。
       // 量出按钮组左缘到视口右缘的距离 + 余量下发，iframe 用它做 --canvas-chrome-reserve；
-      // 普通浏览器无窗控组传 0。按钮组宽度与 right 偏移固定，不随窗口尺寸变化，故无需监听 resize。
+      // 普通浏览器无窗控组传 0。
+      //
+      // 取数口径（2026-09-27）：**契约优先，DOM 兜底**。
+      //   ① 契约在位（`d.has('chrome.bounds')`）→ 用 `d.chrome.bounds()` 量得的**壳窗控按钮组**
+      //      （`#miasaki-titlebar .tb-group`）视口矩形取数；量不到（返回 null / 非桌面壳 / 按钮未挂载）
+      //      一律 0 —— 契约量的是壳的资产，**不是**官方 DSH chrome 的位置，两者不可互推。
+      //   ② 契约缺失（浏览器直开 / 旧壳）→ 退化为下面这段一次性 DOM 探针，行为与契约出现之前
+      //      逐字等价（.tb-group 优先 + .tb-capsule 兜底）。
+      //
+      // 为什么必须订阅而不是「量一次就够」：窗口尺寸**确实**不影响按钮组的 right 偏移，但
+      // **同排其他插件会往按钮组里插按钮** —— sidebar 线的终端键插在 `.tb-group` 首位
+      // （dsh-miasaki-sidebar/client.js 的 titlebarButton.ensure，宽度 108px → 136px）。
+      // 画布只在 open() / onFrameLoad() / showMapOverlay() 三条路径各量一次，注入若发生在
+      // 首次取数之后，就会**一直少让 28px** 且不会自愈。故契约在位时必须订阅 chrome.onChange
+      // （注册在下方，退订挂在 apply 的清理效果里）；契约缺失时没有变更源，只能一次性探针。
       const syncChrome = () => {
         let reserve = 0
         try {
-          const capsule = document.querySelector('#miasaki-titlebar .tb-group') ??
-            document.querySelector('#miasaki-titlebar .tb-capsule')
-          if (capsule instanceof HTMLElement) {
-            const rect = capsule.getBoundingClientRect()
-            if (rect.width > 0) reserve = Math.ceil(window.innerWidth - rect.left + 6)
+          // 「契约可用」= 对象在、且能力表里登记了 chrome.bounds（契约文档的推荐写法
+          // `d && d.has && d.has(...)`）。子 frame 只拿到没有 has 的空壳对象，这里按
+          // 「契约不可用」处理 → 走下面的 DOM 兜底，与浏览器直开同一条路径。
+          if (d !== undefined && typeof d.has === 'function' && d.has('chrome.bounds')) {
+            const box = d.chrome?.bounds?.() ?? null
+            if (box !== null && box.width > 0) reserve = Math.ceil(window.innerWidth - box.left + 6)
+          } else {
+            const capsule = document.querySelector('#miasaki-titlebar .tb-group') ??
+              document.querySelector('#miasaki-titlebar .tb-capsule')
+            if (capsule instanceof HTMLElement) {
+              const rect = capsule.getBoundingClientRect()
+              if (rect.width > 0) reserve = Math.ceil(window.innerWidth - rect.left + 6)
+            }
           }
-        } catch { /* 无父文档场景兜底 0 */ }
+        } catch { /* 无父文档 / 契约或探针异常：reserve 兜底 0 */ }
         send('canvas:chrome', { reserve })
       }
+      // 订阅按钮组的尺寸 / 位置变化（壳窗控组被插入新按钮、被重排、或 DPI / 窗口变化）。
+      // 契约缺失时无订阅源，`unsubscribeChrome` 为 null —— 由上面的 DOM 探针承担。
+      const unsubscribeChrome = d !== undefined && typeof d.has === 'function' && d.has('chrome.onChange')
+        ? d.chrome.onChange(syncChrome)
+        : null
       const syncCurrentSession = () => {
         syncSessions()
         syncLiveSessions()
@@ -307,7 +361,9 @@ window.__ModuleLoader__.load({
           return send('canvas:current-session', { session: currentSession(ctx) })
         }
         if (event.data.type === 'canvas:open-session') {
-          try { ctx.sessions.open(event.data.sessionId); close() } catch { send('canvas:bridge-error', { message: '关联的 DSH 会话已不可用' }) }
+          // DSH 0.1.7：导航 API 是 ctx.uiWorkspace.openSession（ctx.sessions.open
+          // 已从 ISessions 删除，旧调用每次都是 TypeError）。失败带走真实原因。
+          try { ctx.uiWorkspace.openSession(event.data.sessionId); close() } catch (error) { reportBridgeFailure('canvas:open-session', error); send('canvas:bridge-error', { message: `关联的 DSH 会话已不可用（${reasonOf(error)}）` }) }
           // Best-effort anchor to the requested turn: chat nodes expose their
           // source event seq (anchorSeq) and render with data-chat-anchor-key,
           // so resolve seq -> node key -> scroll once the view materializes.
@@ -338,7 +394,8 @@ window.__ModuleLoader__.load({
           // Bidirectional current-session sync: switch DSH's current session
           // without closing the map; the sessions-list subscription re-sends
           // canvas:current-session so the map follows the new highlight.
-          try { ctx.sessions.open(event.data.sessionId) } catch { send('canvas:bridge-error', { message: '关联的 DSH 会话已不可用' }) }
+          // 同 canvas:open-session：0.1.7 起走 ctx.uiWorkspace.openSession。
+          try { ctx.uiWorkspace.openSession(event.data.sessionId) } catch (error) { reportBridgeFailure('canvas:activate-session', error); send('canvas:bridge-error', { message: `关联的 DSH 会话已不可用（${reasonOf(error)}）` }) }
           return
         }
         if (event.data.type === 'canvas:fork-session') {
@@ -397,6 +454,9 @@ window.__ModuleLoader__.load({
         window.removeEventListener('keydown', onKeyDown)
         window.removeEventListener('dsh-canvas:view-items', publishExternalViews)
         themeObserver?.disconnect()
+        // 契约订阅同批退订（与主题观察者同居清理路径）：漏掉会让壳在插件卸载后继续
+        // 回调已销毁的闭包 —— HMR/重挂后叠加出多份发送者。
+        if (typeof unsubscribeChrome === 'function') unsubscribeChrome()
         unsubscribeSessions()
         unsubscribeWorkspaces()
         for (const unsubscribe of liveUnsubscribers.values()) unsubscribe()

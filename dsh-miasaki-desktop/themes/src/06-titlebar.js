@@ -172,6 +172,8 @@
     var brand = bar.querySelector('.tb-brand')
     if (brand) brand.onerror = function () { window.__msGlyphFallback && window.__msGlyphFallback(this, current) }
     document.body.appendChild(bar)
+    // 让位量自动化（2026-09-27）：壳成为 `--ms-titlebar-reserve` 的唯一写者，见 watchTitlebarReserve
+    watchTitlebarReserve(bar)
     bar.addEventListener('click', function (ev) {
       var b = ev.target && ev.target.closest ? ev.target.closest('.tb-btn') : null
       if (!b) return
@@ -206,4 +208,50 @@
       // 悬浮提示当前主题（顶部无文字，悬停徽章可知主题）
       brand.title = META[current].name + ' · ' + META[current].sub
     }
+  }
+
+  /* ---------- 让位量自动化：壳是 `--ms-titlebar-reserve` 的唯一写者（2026-09-27） ---------- */
+
+  // 为什么搬进壳：窗控组是**零占位浮层**（03-switcher.js:51 height:0），官方 DSH 控件靠
+  // `--ms-titlebar-reserve` 让开它（`:90` 会话头 padding-right、`:110` dockkit strip margin-right）。
+  // 此前这个变量由 **sidebar 线硬编码写 156px**（它往组里插了一个终端键）——
+  // 于是「组实宽」这一事实被抄成了常量，而注释里早写明「其他注入方都往 brand 紧前插」：
+  // 每多一个注入方，那个常量就失真一次（它已经改过一次：118 → 156）。
+  // 现在壳观测**实宽**自行计算，任何注入方插/删按钮都会自动跟随：
+  //     组宽 108 → 128 = 108 + right(8) + 呼吸(12)   ← 无注入键形态
+  //     组宽 136 → 156 = 136 + 8 + 12               ← sidebar 插终端键后的形态，亦为静态兜底值
+  // 兜底：量不到 / ResizeObserver 不可用 ⇒ 本函数不动，
+  // `03-switcher.js:89` 的 `:root{--ms-titlebar-reserve:156px}` 仍在（inline 才覆盖它）。
+  // 该兜底 2026-09-27 由 128 改为 156：兜底是「无人写」时的最后防线，须按**注入形态上界**
+  // 取值——否则「sidebar 删写入（当天生效）+ 壳自动计算未重编（旧 exe）」的空档期里，
+  // 变量无人写、回落到 128，官方 ExpandButton 会压住终端键（实机事件见 03-switcher.js 同处注释）。
+  var TB_RESERVE_RIGHT = 8
+  var TB_RESERVE_GAP = 12
+
+  function syncTitlebarReserve() {
+    try {
+      var group = document.querySelector('#miasaki-titlebar .tb-group')
+      if (!group || typeof group.getBoundingClientRect !== 'function') return
+      var width = group.getBoundingClientRect().width
+      if (!(width > 0)) return
+      document.documentElement.style.setProperty(
+        '--ms-titlebar-reserve', Math.round(width + TB_RESERVE_RIGHT + TB_RESERVE_GAP) + 'px')
+    } catch (e) { /* 极端环境（无 documentElement）静默：CSS 层已有静态兜底 */ }
+  }
+
+  /** 观测窗控组实宽；组内插/删按钮（sidebar 的终端键等）会触发重算。同一元素只挂一个观测者。 */
+  function watchTitlebarReserve(bar) {
+    var group = bar && bar.querySelector ? bar.querySelector('.tb-group') : null
+    if (!group) return
+    syncTitlebarReserve()
+    try {
+      if (typeof ResizeObserver !== 'function') return
+      var prev = window.__msTbReserveRO
+      if (prev && prev.__msTarget === group) return
+      if (prev) { try { prev.disconnect() } catch (e) { /* ignore */ } }
+      var ro = new ResizeObserver(function () { syncTitlebarReserve() })
+      ro.__msTarget = group
+      ro.observe(group)
+      window.__msTbReserveRO = ro
+    } catch (e) { /* 观测不可用 ⇒ 静态兜底仍生效 */ }
   }

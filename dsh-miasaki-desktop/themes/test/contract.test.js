@@ -21,15 +21,21 @@ const manifestPath = join(desktop, 'themes', 'src', 'MANIFEST.json')
 const bundlePath = join(desktop, 'src-tauri', 'injected', 'theme-init.js')
 const source = readFileSync(slicePath, 'utf8')
 
-/** 造一个最小页面：可控 frame 身份 / origin / 主题属性，收集 observer 与事件监听。 */
-function harness({ isTop = true, protocol = 'http:', hostname = '127.0.0.1', theme = 'zafkiel' } = {}) {
+/** 造一个最小页面：可控 frame 身份 / origin / 主题属性 / 壳窗控组矩形，收集 observer 与事件监听。 */
+function harness({
+  isTop = true, protocol = 'http:', hostname = '127.0.0.1', theme = 'zafkiel',
+  chromeBox = null, withResizeObserver = true
+} = {}) {
   const observers = []
+  const resizeObservers = []
   const listeners = {}
   const attrs = {}
   const dispatched = []
   if (theme !== null) attrs['data-miasaki-theme'] = theme
 
   const documentElement = { getAttribute: (n) => (n in attrs ? attrs[n] : null) }
+  // v1.2：壳窗控组（`.tb-group`）。chromeBox === null ⇒ 页面里没有按钮组（本地页 / 已卸载）
+  const chromeEl = chromeBox === null ? null : { getBoundingClientRect: () => chromeBox }
   const win = {
     addEventListener: (n, fn) => { (listeners[n] = listeners[n] || []).push(fn) },
     removeEventListener: (n, fn) => { listeners[n] = (listeners[n] || []).filter((f) => f !== fn) },
@@ -40,7 +46,10 @@ function harness({ isTop = true, protocol = 'http:', hostname = '127.0.0.1', the
 
   const sandbox = {
     window: win,
-    document: { documentElement },
+    document: {
+      documentElement,
+      querySelector: (sel) => (sel === '#miasaki-titlebar .tb-group' ? chromeEl : null)
+    },
     location: { protocol, hostname },
     // VM 新 realm 没有 CustomEvent，注入一个最小实现
     CustomEvent: class {
@@ -55,8 +64,15 @@ function harness({ isTop = true, protocol = 'http:', hostname = '127.0.0.1', the
       disconnect() { this.disconnected = true }
     }
   }
+  if (withResizeObserver) {
+    sandbox.ResizeObserver = class {
+      constructor(cb) { this.cb = cb; this.disconnected = false; resizeObservers.push(this) }
+      observe(target) { this.observed = target }
+      disconnect() { this.disconnected = true }
+    }
+  }
   vm.runInNewContext(source, sandbox)
-  return { api: win.miasakiDesktop, observers, listeners, attrs, documentElement, dispatched }
+  return { api: win.miasakiDesktop, observers, resizeObservers, listeners, attrs, documentElement, dispatched, chromeEl }
 }
 
 test('分片已登记进 MANIFEST.order 且生成产物含它', () => {
@@ -83,7 +99,8 @@ test('主帧：完整能力对象（版本号 + 能力表 + has 探测）', () =
   // 注意：api 来自 vm 新 realm，其数组与本 realm 的 Array 原型不同 ⇒ 用 join 比较
   assert.equal(
     api.capabilities.join('|'),
-    'theme.current|theme.onChange|theme.set|window.maxState.subscribe|window.controls|assets.baseUrl'
+    'theme.current|theme.onChange|theme.set|window.maxState.subscribe|window.controls' +
+      '|chrome.bounds|chrome.onChange|assets.baseUrl'
   )
   assert.equal(api.has('theme.current'), true)
   assert.equal(api.has('nope.at.all'), false)
@@ -91,12 +108,13 @@ test('主帧：完整能力对象（版本号 + 能力表 + has 探测）', () =
 })
 
 test('★ 子 frame：只给空壳（不得暴露能力对象）', () => {
-  const { api } = harness({ isTop: false })
+  const { api } = harness({ isTop: false, chromeBox: { left: 0, top: 0, right: 108, bottom: 26, width: 108, height: 26 } })
   assert.equal(api.protocolVersion, 1)
   assert.equal(api.isDesktop, true)
   assert.equal(api.capabilities, undefined, '子 frame 拿到了能力表')
   assert.equal(api.theme, undefined, '子 frame 拿到了 theme 命名空间')
   assert.equal(api.window, undefined, '子 frame 拿到了 window 命名空间')
+  assert.equal(api.chrome, undefined, '子 frame 拿到了 chrome 命名空间（v1.2 也必须按纪律③降级）')
   assert.equal(api.has, undefined)
 })
 
@@ -158,9 +176,13 @@ test('★ 只读纪律：契约内不得出现任何 hash 写通道', () => {
 })
 
 test('★ 能力表与暴露面一致（能力表即事实，不留"将来会有"的占位）', () => {
-  const { api } = harness()
+  const { api } = harness({ chromeBox: { left: 1172, top: 11, right: 1280, bottom: 37, width: 108, height: 26 } })
+  // 已核验的命名空间白名单：新增命名空间必须在本测试里补断言 —— 早先的写法对未知 ns **静默跳过**，
+  // 等于「能力表即事实」这条纪律没有闸门（v1.2 加 chrome 时发现并补上）。
+  const KNOWN = ['theme', 'window', 'chrome', 'assets']
   for (const name of api.capabilities) {
     const [ns, member] = name.split('.')
+    assert.ok(KNOWN.includes(ns), `能力表出现未核验的命名空间「${ns}」——请在本测试里补断言，不得静默跳过`)
     if (ns === 'theme') assert.equal(typeof api.theme[member], 'function', `${name} 声称支持但未实现`)
     if (ns === 'window') {
       if (member === 'controls') {
@@ -172,6 +194,7 @@ test('★ 能力表与暴露面一致（能力表即事实，不留"将来会有
         assert.equal(typeof api.window.onMaxStateChange, 'function', `${name} 声称支持但未实现`)
       }
     }
+    if (ns === 'chrome') assert.equal(typeof api.chrome[member], 'function', `${name} 声称支持但未实现`)
     if (ns === 'assets') assert.equal(typeof api.assets.baseUrl, 'string', `${name} 声称支持但未实现`)
   }
 })
@@ -224,4 +247,59 @@ test('★ v1.1：寄生侧必须真的监听（静态断言，防"派发了没�
   assert.match(core, /ORDER\.indexOf\(t\) >= 0/, '执行侧必须再校验一次白名单（双向校验）')
   assert.match(titlebar, /addEventListener\('miasaki-window-command'/, '06-titlebar 必须监听窗控事件')
   assert.match(titlebar, /petHashCmd\('min'\)/, '窗控必须复用既有 hash 写者（不新增写者）')
+})
+
+/* ---------------- v1.2 壳 chrome 几何（2026-09-27） ---------------- */
+
+test('★ v1.2 chrome.bounds()：量到壳窗控组矩形；量不到返回 null（降级）', () => {
+  const box = { left: 1144, top: 11, right: 1272, bottom: 37, width: 136, height: 26 }
+  const b = harness({ chromeBox: box }).api.chrome.bounds()
+  assert.equal(b.left, 1144)
+  assert.equal(b.top, 11)
+  assert.equal(b.right, 1272)
+  assert.equal(b.bottom, 37)
+  assert.equal(b.width, 136, 'sidebar 插键后的实宽 136 必须原样透出（避让量由插件自己算，壳不替它决策）')
+  assert.equal(b.height, 26)
+  assert.equal(harness().api.chrome.bounds(), null, '没有按钮组时返回 null，不得抛错')
+  assert.equal(
+    harness({ chromeBox: { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 } }).api.chrome.bounds(),
+    null,
+    '宽 0（未布局 / 已卸载）按量不到处理'
+  )
+})
+
+test('★ v1.2 chrome.onChange()：ResizeObserver 驱动、回调给最新矩形、退订即断开', () => {
+  const h = harness({ chromeBox: { left: 1144, top: 11, right: 1272, bottom: 37, width: 136, height: 26 } })
+  const seen = []
+  const off = h.api.chrome.onChange((b) => seen.push(b))
+  assert.equal(h.resizeObservers.length, 1, '未注册 ResizeObserver')
+  assert.equal(h.resizeObservers[0].observed, h.chromeEl, '未观测壳窗控按钮组')
+  h.resizeObservers[0].cb()
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].width, 136)
+  // 这条回调正是「sidebar 往组里插终端键」的重测信号（审查 §4-① 的根因）
+  h.resizeObservers[0].cb()
+  assert.equal(seen.length, 2, '每次尺寸变化都应回调')
+  off()
+  assert.equal(h.resizeObservers[0].disconnected, true, '退订未 disconnect')
+})
+
+test('★ v1.2 降级：非函数入参 / 无按钮组 / 无 ResizeObserver 一律安全返回空退订', () => {
+  assert.equal(typeof harness().api.chrome.onChange(null), 'function')
+  assert.equal(harness().resizeObservers.length, 0, '无按钮组时不应注册观察者')
+  const legacy = harness({
+    chromeBox: { left: 0, top: 0, right: 108, bottom: 26, width: 108, height: 26 },
+    withResizeObserver: false
+  })
+  assert.equal(typeof legacy.api.chrome.onChange(() => {}), 'function', '无 ResizeObserver 必须回落到空退订')
+  assert.equal(legacy.resizeObservers.length, 0)
+  assert.equal(legacy.api.chrome.bounds().width, 108, '订阅不可用不影响只读读取')
+})
+
+test('★ v1.2：让位量由壳自动计算（06-titlebar 观测实宽；契约自己不得写该变量）', () => {
+  const titlebar = readFileSync(join(desktop, 'themes', 'src', '06-titlebar.js'), 'utf8')
+  assert.match(titlebar, /new ResizeObserver\(/, '06-titlebar 必须观测窗控组实宽')
+  assert.match(titlebar, /--ms-titlebar-reserve/, '06-titlebar 必须写让位量变量')
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  assert.doesNotMatch(code, /--ms-titlebar-reserve/, '契约不得自己写让位量（那是 06-titlebar 的职责）')
 })

@@ -27,6 +27,61 @@ window.__ModuleLoader__.load({
       ? react.useLayoutEffect
       : react.useEffect
 
+    // ---- 口径①「壳窗控口径」消费桌面契约（2026-09-27 T4）----------------------
+    // 口径①今天量的是壳自己的资产 `#miasaki-titlebar .tb-group`，却靠**猜类名**：
+    // 壳改一次选择器（v3 的 `.tb-capsule` 就是这么变成兜底的）、或侧栏线往组里注入
+    // 一颗终端键（组宽 108 → 136），插件都得跟着改一遍。契约 v1.2 增补
+    // `chrome.bounds()`（**壳窗控按钮组**在视口坐标下的矩形，量不到返回 `null`）把这件事
+    // 变成有版本号、可探测的读取面；`chrome.onChange(cb)` 是驱动它的 ResizeObserver
+    // 信号（组尺寸 / 位置变化，含「侧栏线后来插了一颗键」）。
+    //
+    // **契约对象只在模块初始化时取一次**（契约 `10-contract.js` 由 initialization_script
+    // 注入、早于插件 client 装载 ⇒ 这里读得到就是**整个页面生命期**都在；页面里换壳只能靠
+    // 重载，模块单例届时一并重建）。**矩形不缓存、每次重测重取**：窗口尺寸变化会直接挪动
+    // 组的位置（右侧按钮组），缓存成快照就会把落点钉死 —— 读取本身是纯几何、无副作用。
+    //
+    // **降级方向**：量不到（浏览器 / 旧壳 / 子 frame 只拿到空壳）时一律回落到原来的
+    // DOM 探针（含 `.tb-capsule` 双类名兜底）—— 这条兜底路径**不删**。
+    const desktopContract = typeof window !== 'undefined' ? window.miasakiDesktop ?? null : null
+
+    /**
+     * 能力探测。**两条独立判据**：① 有 `has` 就走 `has(name)`（契约的正式读法，
+     * 与 `desktop-contract.md` 给的消费方式逐字一致 —— 用法按规范，不按实现）；
+     * ② 没有 `has` 但能力表是数组就查表 —— 只探测**同一个已捕获对象自己声明的**能力，
+     * 不额外放宽准入（`has` 返回非 `true` 一律当没有，缺 `has` 的**空壳**对象仍被排除）。
+     */
+    const hasContractCapability = name => {
+      if (desktopContract === null) return false
+      let reported = false
+      try { reported = typeof desktopContract.has === 'function' && desktopContract.has(name) === true } catch { reported = false }
+      if (reported) return true
+      try { return Array.isArray(desktopContract.capabilities) && desktopContract.capabilities.indexOf(name) >= 0 } catch { return false }
+    }
+
+    /**
+     * 读一次契约的窗控组矩形（视口坐标），归一到与 DOM 探针**同一形状**（补 `left` / `top`）
+     * ⇒ 其上的 reserve 算式与垂直对齐判据**一处实现、两条数据源**，不会算出两套口径。
+     * 契约缺席 / 能力未提供 / 抛异常 / 量不到（`null`）都返回 `null` ⇒ 调用方回落 DOM 探针。
+     * 契约只承诺返回 `{ left, top, right, bottom, width, height }`，但**缺项按「量不到」处理**
+     * （`applyRect` 的 `Number.isFinite` 判据会退回默认值）—— 不在这里替壳编一个默认 top/height。
+     */
+    const contractChromeRect = () => {
+      // 先验 `chrome` 本身：探针读的是**能力表**，而能力表与暴露面理论上可能漂移
+      // （壳侧登记了 `chrome.bounds` 却没挂 `chrome`）—— 别让这种漂移变成 TypeError。
+      if (desktopContract === null || desktopContract.chrome === null || typeof desktopContract.chrome !== 'object') return null
+      if (!hasContractCapability('chrome.bounds')) return null
+      let rect = null
+      try { rect = desktopContract.chrome.bounds() } catch { return null } // 契约定时器 / 壳侧异常不得拖垮顶栏重测
+      if (rect === null || rect === undefined || typeof rect !== 'object') return null
+      if (typeof rect.left !== 'number' || typeof rect.width !== 'number') return null
+      return {
+        left: rect.left,
+        width: rect.width,
+        height: typeof rect.height === 'number' ? rect.height : null,
+        top: typeof rect.top === 'number' ? rect.top : null,
+      }
+    }
+
     // ---- 会话头部窄宽度自适应（2026-09-10）----------------------------------
     // 与 canvas 线同款判据（阈值、滞回、观察对象都一致），但**各自实现、不共享代码**
     // —— 六线零耦合。官方会话头里 titleCluster 可被压到 0，而 headerActions 是
@@ -308,29 +363,45 @@ window.__ModuleLoader__.load({
       }
       const overlayIsOpen = () => !overlay.classList.contains('is-closed')
 
-      // ---- 桌面壳窗控 reserve（照抄 canvas syncChrome 量法，D0 ③ 已实测）--
+      // ---- 桌面壳窗控 reserve（口径①：契约优先 + DOM 兜底）------------------
       // 两个消费者：① 浮层内 iframe 走 postMessage（iframe 侧的 `--ssh-chrome-reserve`）；
       // ② 宿主里的 launcher 走宿主 CSS 变量 —— 它不在 iframe 内，收不到 postMessage。
-      // 按钮组宽度与 right 偏移固定、不随窗口尺寸变化（canvas 同款判据），故量一次即可；
-      // 但**必须在 apply 期间主动调一次**：下面的 load 监听只在 iframe 加载时才跑，
-      // 而 iframe 是懒加载的（用户没开过浮层就永远不加载），靠它设变量会漏。
+      // 2026-09-27 T4：量取改**契约优先**（`chrome.bounds()`，见文件头），量不到才回落原来的
+      // DOM 探针。两条路径产出**同一个 `rect` 形状** ⇒ 下面的 reserve 算式与垂直对齐判据共用
+      // 一份实现，不存在两套口径。**必须在 apply 期间主动调一次**：下面的 load 监听只在
+      // iframe 加载时才跑，而 iframe 是懒加载的（用户没开过浮层就永远不加载），靠它设变量会漏。
       const syncChrome = () => {
         let reserve = 0
         let chromeTop = 5
         let chromeHeight = 28
+        const applyRect = rect => {
+          if (rect === null || !(rect.width > 0)) return
+          reserve = Math.ceil(window.innerWidth - rect.left + 6)
+          // launcher 的**垂直对齐**：与窗控组同顶同高。量不到就退回默认 5 / 28
+          // （普通浏览器没有窗控，这两个值不影响任何人）。限界防呆：窗控量出的
+          // 高度不该超出 20–44，超了说明量错了，宁可退回默认也不跟着摆歪。
+          if (Number.isFinite(rect.top) && rect.top >= 0 && rect.top <= 40) chromeTop = Math.round(rect.top)
+          if (Number.isFinite(rect.height) && rect.height >= 20 && rect.height <= 44) chromeHeight = Math.round(rect.height)
+        }
         try {
-          const capsule = document.querySelector('#miasaki-titlebar .tb-group') ??
-            document.querySelector('#miasaki-titlebar .tb-capsule')
-          if (capsule instanceof HTMLElement) {
-            const rect = capsule.getBoundingClientRect()
-            if (rect.width > 0) {
-              reserve = Math.ceil(window.innerWidth - rect.left + 6)
-              // launcher 的**垂直对齐**：与窗控组同顶同高。量不到就退回默认 5 / 28
-              // （普通浏览器没有窗控，这两个值不影响任何人）。限界防呆：窗控量出的
-              // 高度不该超出 20–44，超了说明量错了，宁可退回默认也不跟着摆歪。
-              const top = Number.parseFloat(window.getComputedStyle(capsule).top)
-              if (Number.isFinite(top) && top >= 0 && top <= 40) chromeTop = Math.round(top)
-              if (rect.height >= 20 && rect.height <= 44) chromeHeight = Math.round(rect.height)
+          // 口径①-a：契约（量的是**壳的**按钮组，壳有权代理）。
+          const contracted = contractChromeRect()
+          if (contracted !== null) applyRect(contracted)
+          else {
+            // 口径①-b：DOM 探针兜底（浏览器 / 旧壳 / 子 frame 空壳）。双类名兜底必须保留：
+            // `.tb-group` 是现行，`.tb-capsule` 是 v3 旧类名（老壳仍可能是它）。
+            const capsule = document.querySelector('#miasaki-titlebar .tb-group') ??
+              document.querySelector('#miasaki-titlebar .tb-capsule')
+            if (capsule instanceof HTMLElement) {
+              const rect = capsule.getBoundingClientRect()
+              if (rect.width > 0) {
+                // 垂直对齐（DOM 兜底路径的既有读法）：读 computed `top`，**此行行为不改**。
+                // 与契约路径的 `bounds().top`（几何）在窗口无缩放时同值（`tb-group` 实为
+                // `position:fixed; top:11px; right:8px`，见 `03-switcher.js:60`），归一到同一个
+                // `rect.top` 字段后由 `applyRect` 统一处理。
+                const top = Number.parseFloat(window.getComputedStyle(capsule).top)
+                applyRect({ left: rect.left, width: rect.width, height: rect.height, top })
+              }
             }
           }
         } catch { /* 无父文档场景兑底 0 */ }
@@ -409,6 +480,36 @@ window.__ModuleLoader__.load({
       }
       window.addEventListener('message', onCanvasView)
       publishCanvasViews()
+
+      // ---- 口径①的额外重测信号：契约 `chrome.onChange`（2026-09-27 T4）----------
+      // 契约背后是壳侧对按钮组的 ResizeObserver ⇒ 「侧栏线后来往组里注入了一颗终端键」
+      // （组宽 108 → 136，让位量少 28px）这类变化有了**直接信号**，不必等窗口 resize 或
+      // 某次 DOM 变动顺带补测。**与 `rootObserver` 不互斥、不是替代关系**（见 useLauncherVisible）：
+      //   · 本信号管**壳的**按钮组（口径①的数据源变了 ⇒ 重测顶栏 reserve 与落点）；
+      //   · `rootObserver` 管**官方**那一侧（`--ms-titlebar-reserve` 变化 ⇒ 官方 chrome 平移，
+      //     全程零 DOM 变动）—— 那是 B4 的成果，契约化口径①之后它照旧盯着官方。
+      // 退订挂在既有 fiber 清理路径（ctx.effect 的 teardown）上：订阅归本 fiber，重挂不留悬空订阅。
+      let unsubscribeChromeContract = null
+      const subscribeChromeContract = () => {
+        if (unsubscribeChromeContract !== null) return // 幂等：重复 apply / HMR 不得叠订阅
+        if (desktopContract === null || desktopContract.chrome === null || typeof desktopContract.chrome !== 'object') return
+        if (!hasContractCapability('chrome.onChange')) return
+        let off = null
+        try { off = desktopContract.chrome.onChange(remeasureChromeContract) } catch { off = null }
+        unsubscribeChromeContract = typeof off === 'function' ? off : () => {}
+      }
+      const disposeChromeContractSubscription = () => {
+        const off = unsubscribeChromeContract
+        unsubscribeChromeContract = null
+        if (off === null) return
+        try { off() } catch { /* 壳侧退订抛异常不得阻断 fiber 清理 */ }
+      }
+      /** 壳窗控组尺寸 / 位置变化 ⇒ 立刻重测（同步：契约的 observer 回调在 paint 前，此刻量得到新值）。 */
+      const remeasureChromeContract = () => {
+        syncChrome()
+        // 落点还跟着官方那一侧（口径②），壳组变化会移动 launcher 的起点 ⇒ 一并校正一次。
+        syncLauncherOffset()
+      }
 
       /** 第一行入口：与「对话 / 会话布」并排的「SSH」胶囊按钮。 */
       function SshSwitch() {
@@ -825,6 +926,10 @@ window.__ModuleLoader__.load({
       // reserve 量一次并写进宿主 CSS 变量（launcher 的定位消费它）。**必须在 apply 期间调**：
       // iframe 是懒加载的，只挂在它的 load 监听上会漏（详见 syncChrome 上方注释）。
       syncChrome()
+      // 口径①的额外重测信号：契约可用即在 apply 期间挂上（幂等，退订在下面的 teardown）。
+      // 挂在这里而不是放进 launcher 的订阅 effect：顶栏 reserve 与 launcher 的可见性无关
+      // （浮层内 iframe 也消费同一个 reserve），hero 态也要跟。
+      subscribeChromeContract()
 
       // Reset the idempotence guard and every page-level side effect when the fiber
       // is torn down (HMR full recycle / plugin reinstall), so the next apply can
@@ -833,6 +938,8 @@ window.__ModuleLoader__.load({
         window.__DSH_SSH_BOOTED__ = false
         window.removeEventListener('message', onCanvasView)
         window.removeEventListener('message', onOverlayMessage)
+        // 契约订阅归本 fiber：不退还的话，HMR / 重装后壳侧回调会打到已拆除的闭包上。
+        disposeChromeContractSubscription()
         const index = canvasViewItems.indexOf(VIEW_ITEM)
         if (index >= 0) canvasViewItems.splice(index, 1)
         window.dispatchEvent(new CustomEvent('dsh-canvas:view-items', { detail: { items: canvasViewItems.slice() } }))
@@ -862,6 +969,9 @@ window.__ModuleLoader__.load({
     module.exports.launcherClearanceOffset = launcherClearanceOffset
     // 同上：让位测量的视口过滤纯函数（B4，无 DOM 依赖）。
     module.exports.inViewportRow = inViewportRow
+    // 2026-09-27 T4：口径①的契约读法（能力探测 + 矩形归一），供契约测试直读。
+    module.exports.hasContractCapability = hasContractCapability
+    module.exports.contractChromeRect = contractChromeRect
 
     return module.exports
   },

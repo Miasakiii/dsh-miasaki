@@ -2,6 +2,104 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-27 · 让位量改为「能力门控兜底」——实机重叠事件订正上一条
+
+**事件**：用户报「右侧边栏按钮和终端按钮重叠」，附桌面壳截图。上一条（同日早先）把让位量
+100% 让给壳、并判断「壳侧未跟进时静态兜底 `128px` 只是**轻微叠压**，属配对问题，不是本线回写变量的
+理由」——**实机证明这个判断不成立**：不是轻微，是两个图标**相切叠压**（官方「打开右侧边栏」
+ExpandButton 的面板图标里套着终端键的 `>`）。
+
+**取证（零误差自证）**：截图 2296×1416 @2× DPI ⇒ CSS 视口 1148×708；
+壳窗控三键中心间距实测 56 物理 px = 28 CSS = `.tb-btn` 26 + gap 2 ⇒ **2× 换算成立**。据此把右上角
+换算成距窗口右缘：
+
+| 元素 | 实测（CSS px，距右缘） | 理论值 |
+|---|---|---|
+| 壳 `.tb-group` | 左缘 144、右缘 8 | 8 + 组宽 136 ✓ |
+| 终端键图标（`>` + ▾） | 125.5 – 136.5 | 组首位按钮盒中央 131 ✓ |
+| 官方 ExpandButton 图标 | **134.5 – 149.5** | `128` 兜底 ⇒ 图标 134.5 – 149.5 ✓ **逐字吻合** |
+
+⇒ 运行期 `--ms-titlebar-reserve` **就是 128px**（不是壳源码算出的 156px）。
+
+**根因：两个写者同时撤出，外壳没接上。** 上一条的迁移只完成了一半，而两半的生效速度差一个构建周期：
+
+- 本线删写入 —— `exports["./client"]` **直指源码**（`link:` 安装），改完**刷新即生效**；
+- 壳接写入 —— `theme-init.js` 经 `include_str!` **编译期内嵌 exe**，运行中的壳是 **9-26 12:47**
+  构建的（`themes/src/06-titlebar.js` 的 `watchTitlebarReserve` 是 9-27 才加的）⇒ **未生效**。
+
+于是变量在运行期**无人写**，回落到 `03-switcher.js:89` 的静态兜底 `128px` —— 而那个值是照
+「**无终端键**」的组宽 108 算的（108+8+12），本线插入的一格（26 + gap 2 = 28px）让它**整整少让一格**。
+「配对窗口」在实机里不是瞬时状态，而是**从改 sidebar 到用户下次重编壳为止**的整段时间（本次 ≥ 数小时）。
+
+**改法（能力门控，不是回退到硬编码）**：`titlebarButton` 新增 `writeReserve` / `watchReserve` /
+`stopReserveWatch`，用桌面壳契约能力表做判据（`themes/src/10-contract.js` v1.2 的 `chrome.bounds`）：
+
+- **能力在位（新壳）** ⇒ 本线**不写**，壳的 `watchTitlebarReserve` 是唯一写者（上一条的架构决定保留）；
+- **能力缺席（旧壳 / 浏览器直开）** ⇒ 本线按**同源公式**（`.tb-group` 实宽 + `TB_RESERVE_RIGHT`(8)
+  + `TB_RESERVE_GAP`(12)）补位 —— 常量与壳侧 `06-titlebar.js` 逐字同源，`156px` 是算出来的，不是抄来的。
+
+判据取**能力**而不是版本号：能力在不在，页面自己知道；版本号要靠猜。这与 canvas 线
+`d.has('chrome.bounds')` 的分支写法同款（「壳说事实、插件选分支」）。
+
+**停止路径**：`dispose()` → `stop()` 里只在本线**确实写过**（`wroteReserve` 标志）时才 `removeProperty`
+—— 新壳在位时那个 inline 值是壳写的，无条件删会让官方控件在卸载瞬间回压窗控组。
+
+**为什么这不算推翻上一条**：上一条要防的是「本线把组实宽抄成常量、把结果钉死」。本次写入的是
+**实宽的函数**（ResizeObserver 回调里量、只在宽度真变时落笔），且被能力门控严格限制在**没有壳算的环境**。
+权限没有重叠：能力在位就只有壳写。
+
+- **触摸点**：`client.js`（`titlebarButton.ensure` 调用 `watchReserve`；新增 `writeReserve` /
+  `watchReserve` / `stopReserveWatch` 与 `reserveRO` / `wroteReserve` 两个字段；`stop()` 补清理）、
+  `test/titlebar-button.test.js`（2 → **4 项**）、`README.md`、本文件。
+- **测试口径改写**：原「`client.js` 不得出现 `--ms-titlebar-reserve`」改为三条更精确的断言 ——
+  ① 写入必须过 `has('chrome.bounds')` 门控；② 公式必须 `getBoundingClientRect().width` 实算、
+  不得出现 `156` 之类字面量；③ `removeProperty` 必须被 `wroteReserve` 门控。另留对照项锁注入功能。
+- **验证**：`node scripts/verify-all.mjs` 全量 **140 项 PASS**（sidebar 11/11）。本沙箱内 headless Edge
+  被拦（`mojo ... 拒绝访问 0x5`），**实机项待验**：在壳里刷新一次页面，`--ms-titlebar-reserve` 应为
+  `156px`、官方 ExpandButton 与终端键不再相交（判据即 `npm run verify` 的
+  「折叠态：窗控组与「打开右侧边栏」不叠压」，或 DevTools 里跑 `verify-themes.mjs` 的 `GEOM` 表达式）。
+
+## 2026-09-27 · 停止写桌面壳的内部变量（让位量归壳自动计算）
+
+**改了什么**：`client.js` 的 `titlebarButton` 删掉两处对桌面壳内部 CSS 变量 `--ms-titlebar-reserve`
+的写入 —— 首次注入时的 `setProperty(…, '156px')`（原 `:1299`）与 `dispose()` 里的 `removeProperty(…)`
+（原 `:1378`），以及随之失去唯一用途的 `freshlyCreated` 标志。**按钮本身一字未动**：仍插
+`#miasaki-titlebar .tb-group` 首位、仍由 `MutationObserver` 维持首位、「终端 + ▾」双热点与菜单照旧。
+
+**为什么删**：桌面壳同批改为**自己**观测 `.tb-group` 实宽算这个变量
+（`dsh-miasaki-desktop/themes/src/06-titlebar.js:213-254` 的 `watchTitlebarReserve` / `syncTitlebarReserve`，
+公式 = 组宽 + `TB_RESERVE_RIGHT`(8) + `TB_RESERVE_GAP`(12)：**108 → 128、136 → 156**）。数值与本线原先
+手写的 `156px` **逐字相同，故外观零变化**；但语义已经分叉 —— 壳算的是「组实宽的函数」，本线写的是
+「一个常量」：以后任何注入方增删按钮，壳会自动跟随，而本线的硬编码会把结果**钉死**（两方写同一个
+inline 变量，谁最后落笔不确定）。
+
+**为何现在才删（三方争用）**：本轮全线审查点名这个变量有**三个互不知情的参与方**，同一个事实三种取数：
+① **sidebar 写**（本线，2026-09-12 起，为给自己新插的终端键腾位，把「组实宽」抄成常量 `156px`；
+   该常量此前已随按钮增减改过一次：`118px` → `156px`，见 `06-titlebar.js:217-219` 的壳侧注释）；
+② **壳读**（`dsh-miasaki-desktop/themes/src/03-switcher.js:89` 静态兜底 `128px`，`:90` 会话头
+   `padding-right`、`:110` dockkit strip `margin-right` 消费它）；
+③ **canvas · ssh 各自量**（两条线各自按窗口控件胶囊量测避让，与本线无通信；canvas 甚至写死了
+   「宽度固定，无需监听」这个**已被本线注入打破**的前提）。
+变量只有一个而写者有三个潜在来源 ⇒ 让位量取决于最后写入者，而本线是唯一写死常量的那个。壳这次把
+「量 + 算 + 写」收归一处（`06-titlebar.js` 成为唯一写者），并给 canvas / ssh 开了**只读**几何接口
+（`10-contract.js:103-146` 的 `chromeBounds` / `onChromeChange`，只给矩形、避让量各插件自算），
+本线相应退回**只插按钮**的单一职责。
+
+**边界（重要）**：本线仍**依赖**壳给出足够右侧留边（终端键在组最左，留边不足会压住右端官方控件），
+但**不再负责它的值**——量测责任 100% 在壳。这是跨线**版本配对**关系：壳侧未跟进时静态兜底是
+`128px`（组宽 136 时轻微叠压），属配对问题，**不是本线回写变量的理由**（回写会让两方权限再次重叠）。
+
+- **触摸点**：`client.js`（`titlebarButton.ensure` / `dispose`）、`test/titlebar-button.test.js`（新，2 项）、
+  `README.md`（时间线一处矛盾订正 + 「历史存档」例外两处 + 测试清单与计数 62 → 64）、本文件。
+- **新增测试**：`test/titlebar-button.test.js` 2 项**源码静态断言**——① `client.js` 里**不得再出现**
+  `--ms-titlebar-reserve`（防回潮：写入与清理两处都必须带这个名字，字面量命中即失败）；
+  ② 对照断言注入逻辑仍在（锚点 / 首位插入 / observer / 菜单），防「连功能一起删」式的过度订正。
+- **验证**：`node scripts/verify-all.mjs sidebar` **11/11 PASS**（新增 1 个测试文件 = 检查项 10 → 11）。
+- **待实机（需重启 `dsh web` + 桌面壳）**：① 标题栏终端按钮仍在 `.tb-group` 首位；
+  ② 官方控件右端留边 = 壳算出的 `156px`（组宽 136 = 窗控 108 + 终端键 28，加 8 + 12），
+  与删除前**同值** ⇒ 外观应无任何变化，这正是本次最省事的验收判据；③ 拖窗改宽 / 折叠展开右栏时留边跟随
+  （壳侧 `ResizeObserver` 生效）。
+
 ## 2026-09-26（深夜）· 壳时代残留清理 + README 两处自相矛盾订正
 
 仓库级死代码审计后的清理。本线入库文件仅 26 个、壳退役两阶段清理本来做得较彻底，本次只剩三处壳时代/未实施

@@ -33,46 +33,68 @@ function capture(options = {}) {
   const styles = []
   /** B4：`capture({ effects: true })` 时收集 effect 清理函数（测试可手动卸载）。 */
   const effects = []
-  const makeNode = tag => {
-    const node = {
-      tagName: String(tag ?? 'div').toUpperCase(),
-      textContent: '', hidden: false, className: '', type: '', title: '', src: '',
-      children: [], attributes: new Map(), handlers: new Map(), onceHandlers: new Map(),
-      removed: false, appended: [],
-      style: { props: new Map(), setProperty(k, v) { this.props.set(k, String(v)) }, removeProperty(k) { this.props.delete(k) }, display: '' },
-      get classList() {
-        const self = node
-        return {
-          add: c => { if (!self.className.includes(c)) self.className += ` ${c}` },
-          remove: c => { self.className = self.className.replace(c, '').trim() },
-          toggle: (c, force) => {
-            const has = self.className.includes(c)
-            if (force === undefined ? !has : force) { if (!has) self.className += ` ${c}` } else self.className = self.className.replace(c, '').trim()
-          },
-          contains: c => self.className.includes(c),
-        }
-      },
-      setAttribute(k, v) { this.attributes.set(k, String(v)) },
-      getAttribute(k) { return this.attributes.get(k) ?? null },
-      addEventListener(type, fn) { const l = this.handlers.get(type) ?? []; l.push(fn); this.handlers.set(type, l) },
-      removeEventListener(type, fn) { this.handlers.set(type, (this.handlers.get(type) ?? []).filter(f => f !== fn)) },
-      click() { for (const fn of [...(this.handlers.get('click') ?? [])]) fn({ currentTarget: this }) },
-      append(child) { if (child) { this.children.push(child); child.parent = node } },
-      appendChild(child) { return this.append(child) },
-      remove() { node.removed = true; if (node.parent) node.parent.children = node.parent.children.filter(c => c !== node) },
-      closest() { return null },
-      // 让位测量要读前一个兄弟（dockkit strip 末端可能挨着「加标签 / 分栏」等键）。
-      get previousElementSibling() {
-        const siblings = node.parent?.children ?? []
-        const index = siblings.indexOf(node)
-        return index > 0 ? siblings[index - 1] : null
-      },
-      // 默认真实 DOM 的 0×0 矩形；测试可用 `node.setRect({...})` 摆位置（让位测量用）。
-      setRect(rect) { node.__rect = { right: 0, bottom: 0, ...rect } },
-      getBoundingClientRect: () => node.__rect ?? { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 },
-      querySelector(sel) { return matchIn(node, sel) },
-      querySelectorAll(sel) { const out = []; collect(node, sel, out); return out },
+  // 2026-09-27 T4：桩节点以前是**纯对象**，而 client.js 的 DOM 兜底探针有一道
+  // `capsule instanceof HTMLElement` 守卫（真实 DOM 里 `querySelector` 的结果必然通过）
+  // ⇒ 「契约缺席走 DOM 探针」这条路径在桩里从来没被真正执行过（旧用例都落在
+  // `rect.width > 0` 的假环境里）。这里把节点改成**真正的 `HTMLElement` 实例**
+  // （`class NodeHTMLElement {}` + 同一个类交给 VM 上下文），兜底路径才能在桩里跑起来。
+  class NodeHTMLElement {
+    constructor(tag) {
+      this.tagName = String(tag ?? 'div').toUpperCase()
+      this.textContent = ''
+      this.hidden = false
+      this.className = ''
+      this.type = ''
+      this.title = ''
+      this.src = ''
+      this.children = []
+      this.attributes = new Map()
+      this.handlers = new Map()
+      this.onceHandlers = new Map()
+      this.removed = false
+      this.appended = []
+      this.style = {
+        props: new Map(),
+        setProperty(k, v) { this.props.set(k, String(v)) },
+        removeProperty(k) { this.props.delete(k) },
+        display: '',
+      }
     }
+    get classList() {
+      const self = this
+      return {
+        add: c => { if (!self.className.includes(c)) self.className += ` ${c}` },
+        remove: c => { self.className = self.className.replace(c, '').trim() },
+        toggle: (c, force) => {
+          const has = self.className.includes(c)
+          if (force === undefined ? !has : force) { if (!has) self.className += ` ${c}` } else self.className = self.className.replace(c, '').trim()
+        },
+        contains: c => self.className.includes(c),
+      }
+    }
+    setAttribute(k, v) { this.attributes.set(k, String(v)) }
+    getAttribute(k) { return this.attributes.get(k) ?? null }
+    addEventListener(type, fn) { const l = this.handlers.get(type) ?? []; l.push(fn); this.handlers.set(type, l) }
+    removeEventListener(type, fn) { this.handlers.set(type, (this.handlers.get(type) ?? []).filter(f => f !== fn)) }
+    click() { for (const fn of [...(this.handlers.get('click') ?? [])]) fn({ currentTarget: this }) }
+    append(child) { if (child) { this.children.push(child); child.parent = this } }
+    appendChild(child) { return this.append(child) }
+    remove() { this.removed = true; if (this.parent) this.parent.children = this.parent.children.filter(c => c !== this) }
+    closest() { return null }
+    // 让位测量要读前一个兄弟（dockkit strip 末端可能挨着「加标签 / 分栏」等键）。
+    get previousElementSibling() {
+      const siblings = this.parent?.children ?? []
+      const index = siblings.indexOf(this)
+      return index > 0 ? siblings[index - 1] : null
+    }
+    // 默认真实 DOM 的 0×0 矩形；测试可用 `node.setRect({...})` 摆位置（让位测量用）。
+    setRect(rect) { this.__rect = { right: 0, bottom: 0, ...rect } }
+    getBoundingClientRect() { return this.__rect ?? { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 } }
+    querySelector(sel) { return matchIn(this, sel) }
+    querySelectorAll(sel) { const out = []; collect(this, sel, out); return out }
+  }
+  const makeNode = tag => {
+    const node = new NodeHTMLElement(tag)
     // client.js 用 host.innerHTML 建浮层结构（section > bar + loading + iframe）。
     // 桩不解析 HTML，但对这个已知字面量按结构生成可查询子树。
     Object.defineProperty(node, 'innerHTML', {
@@ -173,8 +195,19 @@ function capture(options = {}) {
     __ModuleLoader__: { load(d) { descriptor = d } },
     // 让位量以视口宽为基准；默认 0 表示「量不到」⇒ 落点变量不写（既有无窗控环境的等价行为）。
     innerWidth: options.innerWidth ?? 0,
+    // 2026-09-27 T4：桌面壳契约（`window.miasakiDesktop`）的 fake。**必须在
+    // `vm.runInContext` 之前挂上** —— client.js 在**模块初始化**时取一次契约对象
+    // （所以下面用 `capture({ desktop })` 注入；`capture()` 之后再赋值已经晚了）。
+    ...(options.desktop === undefined ? {} : { miasakiDesktop: options.desktop }),
     sessionStorage: { store: new Map(), getItem(k) { return this.store.get(k) ?? null }, setItem(k, v) { this.store.set(k, String(v)) }, removeItem(k) { this.store.delete(k) } },
-    getComputedStyle: () => ({ paddingLeft: '0px', getPropertyValue: () => '' }),
+    // T4：DOM 兜底路径的垂直对齐读 `getComputedStyle(窗控组).top`。桩以前恒返回 `''`
+    // （⇒ parseFloat 得 NaN ⇒ 退回默认 5），于是「DOM 口径的 top 也量得到」无从断言；
+    // 这里改成把节点自己摆的 `top` 报出来（与真实 DOM 的 computed top 语义一致）。
+    getComputedStyle: node => ({
+      paddingLeft: '0px',
+      getPropertyValue: () => '',
+      get top() { const rect = node?.__rect; return rect === undefined ? '' : String(rect.top) + 'px' },
+    }),
     // message 监听收集 + postMessage 记录：D2 顶栏消息协议的行为闭环测试用。
     __msgListeners: [],
     __lastChromeToken: null,
@@ -195,7 +228,7 @@ function capture(options = {}) {
     window,
     document,
     location: { origin: 'http://dsh.local' },
-    HTMLElement: class {},
+    HTMLElement: NodeHTMLElement,
     MessageEvent: class { constructor(type, init) { this.type = type; this.origin = init?.origin ?? ''; this.source = init?.source ?? null; this.data = init?.data ?? null } },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail } },
     // B4：观察记录被留档 —— 「安全线（documentElement 上的 CSS 变量）变化必须有重测信号」
@@ -279,6 +312,37 @@ function fakeCtx() {
     },
     effect(callback, label) { effects.push({ label, dispose: callback() }) },
   }
+}
+
+// ---- 2026-09-27 T4：桌面壳契约 fake ----------------------------------------
+// 形状与 `dsh-miasaki-desktop/themes/src/10-contract.js` 的暴露面一致（只实现本线消费的
+// `has` / `chrome.bounds` / `chrome.onChange`）。`bounds` 取**函数**是为了让测试能在同一个
+// capture 里改「这一刻量到什么」（契约矩形是实时几何，缓存的快照过不了窗口 resize 那一关）。
+function fakeDesktop({ bounds, onChange } = {}) {
+  const listeners = []
+  const caps = [...(bounds === undefined ? [] : ['chrome.bounds']), ...(onChange === undefined ? [] : ['chrome.onChange'])]
+  return {
+    protocolVersion: 1,
+    isDesktop: true,
+    capabilities: caps,
+    has: name => caps.includes(name),
+    chrome: {
+      ...(bounds === undefined ? {} : { bounds }),
+      ...(onChange === undefined ? {} : { onChange: cb => { listeners.push(cb); return () => { const i = listeners.indexOf(cb); if (i >= 0) listeners.splice(i, 1) } } }),
+    },
+    /** 测试侧：模拟壳侧 ResizeObserver 触发（组尺寸 / 位置变化）。 */
+    emitChange: () => { for (const cb of listeners.slice()) cb() },
+    get changeListeners() { return listeners },
+  }
+}
+
+/** 把复刻桌面壳的按钮组摆进桩 DOM（B4 那套无头夹具的等价物）。*/
+function placeTitlebarGroup(document, rect) {
+  const group = document.createElement('div')
+  group.className = 'tb-group'
+  group.setRect(rect)
+  document.body.append(group)
+  return group
 }
 
 test('client half registers under the package id', () => {
@@ -411,6 +475,140 @@ test('桌面壳窗控 reserve：canvas 同款量法 + postMessage 下发', () =>
   assert.match(source, /#miasaki-titlebar \.tb-capsule/)
   assert.match(source, /Math\.ceil\(window\.innerWidth - rect\.left \+ 6\)/, '量法与 canvas syncChrome 逐字一致')
   assert.match(source, /type: 'chrome', version: 1, reserve/, 'chrome 消息带 reserve 字段')
+})
+
+// 2026-09-27 T4（防回潮）：口径① 必须有**契约消费点**，否则「契约优先」会悄悄退回纯 DOM 探针
+// —— 而单测喂了 fake 契约也照样绿（fake 没人调），这层伪装单看行为断言抓不住。
+test('T4 口径①契约消费点：源码里必须真的读 chrome.bounds()（防回潮）', () => {
+  assert.match(source, /desktopContract\.chrome\.bounds\(\)/, '必须存在 chrome.bounds 消费点')
+  assert.match(source, /hasContractCapability\('chrome\.bounds'\)/,
+    '读契约前必须走能力探测（缺能力的旧壳 / 浏览器不得被硬调）')
+  assert.match(source, /typeof window !== 'undefined' \? window\.miasakiDesktop \?\? null : null/,
+    '契约对象必须在模块初始化时取一次并保存（不是每次重测现取）')
+  assert.match(source, /hasContractCapability\('chrome\.onChange'\)/,
+    'chrome.onChange 必须经能力探测后再订阅')
+  assert.match(source, /desktopContract\.chrome\.onChange\(remeasureChromeContract\)/,
+    '契约的尺寸变化信号必须接到重测上')
+  assert.match(source, /disposeChromeContractSubscription\(\)/, '退订必须挂在既有 fiber 清理路径上（ctx.effect teardown）')
+})
+
+// T4 行为①：契约可用（fake 里 has('chrome.bounds') 为 true）⇒ reserve 与垂直对齐都取 bounds()，
+// 同一份 DOM 里的复刻 `.tb-group`（另一组坐标）不得再参与 —— 若悄悄回落 DOM，reserve 会量成 354。
+test('T4 契约优先：reserve 取 chrome.bounds() 而非 DOM 探针（同场复刻壳按钮组作对照）', () => {
+  const desktop = fakeDesktop({ bounds: () => ({ left: 1120, top: 6, right: 1256, bottom: 34, width: 136, height: 28 }) })
+  const { descriptor, window, document } = capture({ innerWidth: 1248, desktop })
+  // 复刻桌面壳：按钮组 DOM 在场，但坐标与契约**刻意不同**（DOM 口径会算出 354），
+  // 用来证明「契约在位时不读 DOM」。getBoundingClientRect 的调用次数同时钉死这一点。
+  const group = placeTitlebarGroup(document, { left: 900, top: 20, width: 136, height: 28 })
+  let domReads = 0
+  const rawRect = group.getBoundingClientRect
+  group.getBoundingClientRect = () => { domReads += 1; return rawRect() }
+
+  descriptor.factory(requireStub).apply(fakeCtx())
+
+  const props = document.documentElement.style.props
+  assert.equal(props.get('--dsh-ssh-chrome-reserve'), '134px',
+    '1248 − 1120 + 6 = 134px：必须取契约 bounds()（DOM 探针会给 1248 − 900 + 6 = 354px）')
+  assert.equal(props.get('--dsh-ssh-chrome-top'), '6px', '垂直对齐也走契约（buttons 组与 launcher 同顶）')
+  assert.equal(props.get('--dsh-ssh-chrome-height'), '28px')
+  assert.equal(domReads, 0, '契约在位时不得再量 DOM 按钮组（否则等于两套口径并存）')
+  assert.equal(window.__chromeMessages.at(-1).reserve, 134, 'chrome 消息里的 reserve 同源')
+})
+
+// T4 行为②：契约缺席（浏览器 / 旧壳）⇒ 必须原路回落 DOM 探针，**双类名兜底一个字不删**。
+test('T4 兜底不变：无契约（或契约未提供该能力）时仍走 DOM 双类名探针', () => {
+  // ① 完全没有 `window.miasakiDesktop`（普通浏览器）
+  const plain = capture({ innerWidth: 1248 })
+  assert.equal(plain.window.miasakiDesktop, undefined, '前置：桩里本来就没有契约对象')
+  placeTitlebarGroup(plain.document, { left: 1104, top: 8, width: 136, height: 28 })
+  plain.descriptor.factory(requireStub).apply(fakeCtx())
+  assert.equal(plain.document.documentElement.style.props.get('--dsh-ssh-chrome-reserve'), '150px',
+    '1248 − 1104 + 6 = 150px（DOM 口径原样保留）')
+  assert.equal(plain.document.documentElement.style.props.get('--dsh-ssh-chrome-top'), '8px',
+    '垂直对齐仍读 computed top（DOM 兜底路径的原口径；fixed 定位下与契约几何 top 同值）')
+
+  // ② 契约在、但**没登记** chrome.bounds（旧壳 v1.1）⇒ 同样回落 DOM，且不得去调不存在的 bounds
+  let called = 0
+  const legacy = capture({
+    innerWidth: 1248,
+    desktop: { protocolVersion: 1, isDesktop: true, capabilities: [], has: () => false, chrome: { bounds: () => { called += 1; return { left: 1, width: 2, height: 3, top: 4 } } } },
+  })
+  placeTitlebarGroup(legacy.document, { left: 1104, top: 8, width: 136, height: 28 })
+  legacy.descriptor.factory(requireStub).apply(fakeCtx())
+  assert.equal(legacy.document.documentElement.style.props.get('--dsh-ssh-chrome-reserve'), '150px',
+    '能力表里没有 chrome.bounds ⇒ 回落 DOM 探针')
+  assert.equal(called, 0, '能力探测未通过时不得调用 bounds()')
+
+  // ③ v3 旧壳的 `.tb-capsule` 兜底类名同样必须仍然量得到（契约路径下不再需要，兜底分支里要留）
+  const oldShell = capture({ innerWidth: 1248 })
+  const capsule = oldShell.document.createElement('div')
+  capsule.className = 'tb-capsule'
+  capsule.setRect({ left: 1152, top: 4, width: 88, height: 26 })
+  oldShell.document.body.append(capsule)
+  oldShell.descriptor.factory(requireStub).apply(fakeCtx())
+  assert.equal(oldShell.document.documentElement.style.props.get('--dsh-ssh-chrome-reserve'), '102px',
+    '1248 − 1152 + 6 = 102px（.tb-capsule 兜底必须保留）')
+})
+
+// T4 行为③：契约提供 chrome.onChange ⇒ 组尺寸 / 位置变化（比如侧栏线后来注入一颗终端键）
+// 直接触发重测，不必等窗口 resize 或某次 DOM 变动顺带补测；退订挂在 fiber 清理路径上。
+test('T4 chrome.onChange：注册为口径①的额外重测信号，退订随 fiber 拆除', () => {
+  const current = { left: 1140 }
+  const desktop = fakeDesktop({
+    bounds: () => ({ left: current.left, top: 5, width: 108, height: 28 }),
+    onChange: () => {},
+  })
+  const { descriptor, document } = capture({ innerWidth: 1248, desktop, effects: true })
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+
+  assert.equal(desktop.changeListeners.length, 1, 'apply 期间必须挂上契约的尺寸变化订阅')
+  assert.equal(document.documentElement.style.props.get('--dsh-ssh-chrome-reserve'), '114px',
+    '前置：1248 − 1140 + 6 = 114px')
+
+  // 壳侧按钮组变宽（侧栏线注入终端键：左边界左移 28px）⇒ 契约回调 ⇒ 立刻重测
+  current.left = 1112
+  desktop.emitChange()
+  assert.equal(document.documentElement.style.props.get('--dsh-ssh-chrome-reserve'), '142px',
+    '1248 − 1112 + 6 = 142px：契约回调必须触发重测（旧实现只靠窗口 resize / DOM 变动，会少让 28px）')
+
+  // fiber 拆除 ⇒ 退订（不退还的话壳侧回调会打到已拆除的闭包上）
+  ctx.effects[0].dispose()
+  assert.equal(desktop.changeListeners.length, 0, '卸载必须退订契约订阅')
+
+  // 幂等：重复 apply 不得叠第二个订阅。这里有**两道**守卫，本用例钉的是外层那道：
+  //   · 外层 boot 守卫（`client.js:276` 的 `window.__DSH_SSH_BOOTED__`）⇒ 第二次 apply 整体 return；
+  //   · 内层订阅守卫（`client.js:493`）只在**同一次 apply 内**重复调用时有效
+  //     （`unsubscribeChromeContract` 是 apply 的局部变量，跨 apply 不复用）。
+  // 2026-09-27 审查指出：原写法没说明这一点，读起来像在测内层守卫。
+  const second = fakeDesktop({ bounds: () => ({ left: 1140, top: 5, width: 108, height: 28 }), onChange: () => {} })
+  const cap2 = capture({ innerWidth: 1248, desktop: second })
+  const factory2 = cap2.descriptor.factory(cap2.requireStub)
+  const ctx2 = fakeCtx()
+  factory2.apply(ctx2)
+  factory2.apply(ctx2)
+  assert.equal(second.changeListeners.length, 1, '重复 apply 只留一个订阅')
+  // ★ 反证（防「恒真断言」）：清掉 boot 守卫后再 apply 会**真的**再订阅一次 —— 证明上面那条
+  //   断言不是"因为第二次 apply 根本没执行"而恒真，而是守卫确实在挡；内层守卫不跨 apply，
+  //   故此处预期 +1。真实路径（HMR 重挂）走的是 teardown（退订 + 清守卫）后的全新 apply，不叠。
+  cap2.window.__DSH_SSH_BOOTED__ = false
+  factory2.apply(ctx2)
+  assert.equal(second.changeListeners.length, 2,
+    '（反证）boot 守卫被清后跨 apply 会再订阅一次 ⇒ 上一条断言由守卫支撑，非恒真')
+})
+
+// T4 静态契约：口径②与 rootObserver 不因口径①契约化而改动（B4 的成果不可回退）。
+test('T4 保留不变：口径②的官方 DOM 探针与 rootObserver 都在（契约只管壳自己的资产）', () => {
+  assert.match(source, /const ROW_CHROME_SELECTORS = \['\[data-conversation-header-corner\]', '\[data-dockkit-strip-chrome\]'\]/,
+    '口径② 量的是官方 DSH 的 DOM，壳无权代理 ⇒ 选择器不变')
+  assert.match(source, /document\.querySelectorAll\(selector\)/, '口径② 仍自己量官方锚点')
+  assert.match(source, /const rootObserver = new MutationObserver\(onRootStyleChange\)/,
+    'rootObserver 必须保留（它盯的是官方 chrome 随 --ms-titlebar-reserve 平移，B4 的根因信号）')
+  assert.match(source, /rootObserver\.observe\(document\.documentElement, \{ attributes: true, attributeFilter: \['style'\] \}\)/,
+    'rootObserver 的观察项不变')
+  assert.match(source, /const WATCHED_ROOT_VARS = \['--ms-titlebar-reserve', '--dsh-ssh-chrome-reserve'\]/,
+    'WATCHED_ROOT_VARS 不变')
+  assert.match(source, /rootObserver\.disconnect\(\)/, 'rootObserver 的退订不变')
 })
 
 test('主题桥：浮层 iframe load 时补发快照，快照去重（U1 契约保持）', () => {

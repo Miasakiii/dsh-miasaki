@@ -2,7 +2,84 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
-## 2026-09-26（深夜·续）· 死代码与孤儿素材清理（零行为变更）
+## 2026-09-27（续）· 让位量兜底改按「注入形态上界」——实机重叠事件订正 T1
+
+**事件**：用户报「右侧边栏按钮和终端按钮重叠」，附壳截图。**根因不是公式错，而是变量在运行期无人写**：
+T1 的迁移只完成了一半，两半的生效速度差**一个构建周期** ——
+
+- sidebar 删写入（`link:` 安装 + `exports["./client"]` 直指源码）⇒ **刷新即生效**；
+- 壳接写入（`06-titlebar.js` 的 `watchTitlebarReserve`）经 `include_str!` **编译期内嵌 exe**
+  ⇒ 运行中的壳是 **9-26 12:47** 构建的，**未生效**。
+
+⇒ 变量回落到 `03-switcher.js:89` 的静态兜底 `128px`，而那是照「**无终端键**」的组宽 108 算的
+（108+8+12），sidebar 的终端键（26 + gap 2）让组宽变 136 ⇒ **安全线整整少让一格**。
+换算取证（截图 2296×1416 @2× ⇒ CSS 1148×708；窗控三键中心距 56 物理 = 28 CSS = 26+2 ⇒ 2× 成立）：
+官方 ExpandButton 图标距右缘实测 **134.5–149.5**，正是 `128` 兜底下的理论值（逐字吻合）；
+终端键图标 125.5–136.5 ⇒ 两者相切叠压。
+
+| 项 | 内容 |
+|---|---|
+| 改法 | `03-switcher.js:89` 静态兜底 `128px` → **`156px`**（覆盖「终端键已插」的形态）；公式与 `watchTitlebarReserve` 一字不动 —— 兜底是「无人写」时的最后防线，须按**注入形态上界**取值：多让 28px 只是官方控件更靠左（无功能损失），少让则必然叠压 |
+| 跨线契约（写进注释） | ① 壳在位且含 `watchTitlebarReserve` ⇒ 壳观测实宽自动写，**注入方一律不写**（判据用契约能力 `chrome.bounds`）；② 旧壳无该能力 ⇒ 注入方按**同源公式**（组实宽 + 8 + 12）补位 |
+| 同批跨线 | sidebar 线把「删写入」改为**能力门控兜底**（`titlebarButton.writeReserve` / `watchReserve`，闸门 `test/titlebar-button.test.js` 2 → 4 项），使空档期内也有正确让位量 |
+| 产物 | `node scripts/build-init.mjs` 重建 `src-tauri/injected/theme-init.js`（13 片，令牌校验 + 自校验通过） |
+| 验收 | `node scripts/verify-all.mjs` 全量 **140 项 PASS**（desktop 33/33、sidebar 11/11、repo 2/2）；**实机项待验**：需重编 exe（`npm run build`）后重启壳，`npm run verify` 的「折叠态：窗控组与「打开右侧边栏」不叠压」应转绿 |
+
+**教训（可复用）**：跨线迁移里「**谁写、谁不写**」的交接，必须按**生效延迟最慢的一方**排期 ——
+插件是源码直发（秒级），壳是编译期内嵌（构建周期级）。交接窗口内两边都不写的空档，只能靠
+**兜底值取上界**顶住，不能靠"配对关系"的乐观假设。
+
+## 2026-09-27 · 桌面端适配整改 A 批 + B 批 T7：契约 v1.2（chrome 几何）· 让位量归壳 · fleet 配置回退
+
+上游：[全线审查报告](../../dsh-miasaki-shared-docs/repo-review-2026-09-27.md) 与
+[整改方案](../../dsh-miasaki-shared-docs/cross/desktop-adaptation-plan-2026-09-27.md)。
+审查的核心判断：**壳与插件的契约面已从 1 项长到 12 项，只有 1 项被文档化，而恰恰是那一项零消费**；
+真正在用的 8 项（`data-miasaki-theme`、`--ms-titlebar-reserve`、`.tb-group` …）全是隐式契约，
+且「窗控组实宽」这**一个事实有三方各自取数**（sidebar 写死常量 / canvas 量 DOM / ssh 实测）。
+
+### T1 · 壳成为 `--ms-titlebar-reserve` 的唯一写者
+
+| 项 | 内容 |
+|---|---|
+| 问题 | 该变量此前由 **sidebar 线硬编码写 156px**（它往 `.tb-group` 插了一个终端键）。`03-switcher.js` 的注释早已写明「其他注入方都往 brand 紧前插」⇒ 每多一个注入方，那个常量就失真一次（它已经改过一次：118 → 156） |
+| 做法 | `06-titlebar.js` 的 `buildTitlebar()` 末尾挂 `ResizeObserver` 观测 `.tb-group` 实宽，回调写 `--ms-titlebar-reserve = 组宽 + right(8) + 呼吸(12)`；`syncTitlebarReserve()` / `watchTitlebarReserve()` 新增于分片尾部（**寄生分片内，不新增分片**） |
+| 为什么公式可信 | 双向反推：组宽 108 → 128（与 `03-switcher.js` 的静态兜底逐字一致）、组宽 136 → 156（与 sidebar 插键后的历史值逐字吻合） |
+| 兜底 | 量不到 / `ResizeObserver` 不可用 ⇒ 本函数不动，`:root{--ms-titlebar-reserve:156px}` 仍在（inline 才覆盖它）。**该值于同日续条由 128 改为 156**（兜底须覆盖注入形态，见上） |
+| 验收 | `verify-themes` 新增 2 项：注入一格 `.tb-btn` ⇒ reserve 自动跟随到「新组宽 + 20」；移除后回落 |
+
+### T2 · 契约 v1.2：壳 chrome 几何（只读 + 订阅）
+
+`10-contract.js` 新增 `chrome.bounds()` → `{left,top,right,bottom,width,height} | null`（视口坐标，量 `.tb-group`）
+与 `chrome.onChange(cb)`（`ResizeObserver` 驱动）；能力表 +2 条。**`protocolVersion` 仍为 1** ——
+按 `desktop-contract.md` §4，增量能力只追加 `capabilities`，不提升版本。
+
+- **边界**：只给矩形、不给「你该让多少」（各插件呼吸位不同：canvas 6px、ssh 6+8px）；
+  **不代理官方 DSH chrome 的位置**（那是官方资产，ssh 自己量）；子 frame 仍只给空壳（纪律③），
+  因为 canvas / ssh 都是**主帧量、iframe 消费**。
+- **已知限制**（如实记录）：订阅那一刻 `.tb-group` 必须已存在 —— **不能改观察 `#miasaki-titlebar`**，
+  它 `height:0` 且全宽，尺寸不随按钮增减变化（`ResizeObserver` 只报观察元素自身的盒子）。
+  实机路径成立：壳的 `buildTitlebar()` 在 `onReady()`（DOMContentLoaded）跑，插件 client 装载更晚；
+  且消费侧两侧都有重量兜底（canvas 在 `open` / `onFrameLoad` / `showMapOverlay` 重量，ssh 另有 `rootObserver`）。
+- **顺带修**：`10-contract.js` 头部纪律同步 v1.1/v1.2 —— 此前仍写「只读 + 不提供写通道」，
+  与同文件 v1.1 的 `theme.set` / `window.controls` 自相矛盾（审查 §4-⑦）。
+- **闸门**：`contract.test.js` **15 → 19 例**；其中「能力表与暴露面一致」补上
+  **未知命名空间即失败**的守卫（原先对未知 ns **静默跳过**，等于该纪律一直没有闸门）。
+
+### T7 · `MIASAKI_FLEET_PULSE` 三级回退（B 批）
+
+| 项 | 内容 |
+|---|---|
+| 问题 | 桌宠 fleet 指示器只认环境变量，而**全仓没有任何脚本/安装步骤设置过它**；2026-09-27 实测用户级/机器级/进程级全为空 ⇒ `fleet-pulse.json` 每分钟都在更新，桌宠从来不读，联动等于不存在（本文件早有「从未启动」记录） |
+| 做法 | `pulse_path()` 三级：环境变量（非空）→ `%LOCALAPPDATA%\miasaki\config.json` 的 `fleetPulsePath` → `None`（静默关闭）。拆出纯函数 `resolve_pulse_path()` 以便单测，BOM 容错 |
+| 为什么不放 `~/.dsh/` | 壳自己的 marker 已在 `%LOCALAPPDATA%\miasaki\`（W3 的 `background-close-confirmed`），配置与它同目录；且不建目录（该函数在 2s 轮询路径上被调用） |
+| 文档 | `README.md` 的 Fleet 指示器段补两种开启方式，并**订正写反的优先级**：原写「fleet 告警 > DSH 等待审批」，与 `pet_native/window.rs:157` 的 `st != Waiting` 守卫相反，实为**等待审批优先** |
+| 验收 | `cargo test` 新增 `pulse_path_falls_back_to_shell_config`（环境变量优先 / 空串回落 / 配置读取 / 六种坏输入安全 None / BOM） |
+
+**同批跨线改动**（各线自查并已各自回写）：canvas `client.js` 让位取数契约化 + 退订
+（`verify-all canvas` 13/13、单测 100 → 105 例）；sidebar 让位量改**能力门控兜底**
+（`verify-all sidebar` 11/11、单测 62 → **66** 例；当日续条订正，见上）；ssh 口径①契约化（口径② 与 `rootObserver` 不动）。
+
+
 
 仓库级死代码审计（覆盖 `src-tauri/` `themes/` `ui/` `scripts/` `preset-sources/` `plugins/` `patches/` `design/`）
 后的清理。验证：`node scripts/verify-all.mjs desktop` **33/33 PASS**（含 `cargo test` 与 6 个补丁离线自证）。
@@ -827,7 +904,8 @@ parentNode 判空重建）不变。
   窗口内 errCount 恒 0；同一份日志里探针注入真实异常的两次运行精确落盘 errCount=1。
 - **复跑**：首次验证在 11 片产物（`EDD01B15…`）上完成；部署**含并行新增 `11-console.js`
   的 12 片产物**（`AF14DA12…`）后同样 **11/11 PASS**。
-- 截图证据（`_refs/`，已 gitignore）：`shot-A-ro-loop-filtered.png`（产物期无红条）、
+- 截图证据（`_refs/scripts-archive/redbar-probe-20260925/`，已 gitignore；2026-09-27 归档时与本批探针同目录）：
+  `shot-A-ro-loop-filtered.png`（产物期无红条）、
   `shot-B-real-exception.png`（真实异常红条）、`shot-C-real-dsh-page.png` 与
   `shot-D-final-normal-mode.png`（真实 DSH 页面无红条）。
 - 遗留：验证在 3080 后端留下 2 个探针会话（"数到 60"、"雨夜的图书馆"短文），可在侧栏删除。

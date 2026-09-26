@@ -2,6 +2,52 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-27 · T4：口径①「壳窗控口径」契约化（口径②与 rootObserver 不变）
+
+**背景**：桌面壳契约 v1.2 增补 `chrome.bounds()` / `chrome.onChange()`（见
+[desktop-adaptation-plan-2026-09-27.md](../../dsh-miasaki-shared-docs/cross/desktop-adaptation-plan-2026-09-27.md) §2.5）。
+本线此前量壳自己的资产 `#miasaki-titlebar .tb-group` 是靠**猜类名**：壳换一次选择器（v3 的 `.tb-capsule`
+就是这么沦为兜底的）、或侧栏线往按钮组里插一颗键（组宽 108 → 136，让位量少 28px），本线都得跟着改一次。
+
+### 改了什么
+
+- **口径①（壳窗控）改为契约优先 + DOM 兜底**：`syncChrome()` 先读 `chrome.bounds()`（视口坐标矩形），
+  量不到（`null` / 旧壳没登记该能力 / 浏览器 / 子 frame 只拿到空壳）才回落原来的 DOM 探针 ——
+  **`.tb-group` 与 `.tb-capsule` 双类名兜底一字未删**。两条数据源归一到**同一个 `rect` 形状**
+  （`left` / `width` / `height` / `top`），其上的 reserve 算式 `Math.ceil(innerWidth − left + 6)`
+  与垂直对齐判据（20–44px 限界防呆）**只有一份实现**，不会算出两套口径。
+- **契约对象在模块初始化时取一次并保存**（`desktopContract`），**矩形不缓存、每次重测重取**
+  —— 窗口尺寸变化会直接挪动右侧按钮组，缓存快照会把落点钉死。
+- **`chrome.onChange` 注册为口径①的额外重测信号**（apply 期间挂、幂等、退订挂在既有
+  `ctx.effect` 清理路径上）：侧栏线「后来」注入终端键这一刻有了直接信号，不必再等窗口 resize
+  或某次 DOM 变动顺带补测。
+- **口径②（同排官方 chrome 让位）与 `rootObserver` 都不动**：口径② 量的是官方 DSH 的 DOM
+  （`[data-conversation-header-corner]` / `[data-dockkit-strip-chrome]`），**不是壳的资产，壳无权代理**；
+  `rootObserver` 盯的是「官方 chrome 随 `--ms-titlebar-reserve` 平移」（**全程零 DOM 变动**，B4 的
+  持久性叠压根因信号）—— 契约化口径①之后它仍要盯官方那一侧，两者**不是替代关系**。逐帧跟随
+  （`FOLLOW_*`）、视口判据（`inViewportRow`）、过渡 / 可见性 / 字体三信号一并保持原样。
+- 新增导出 `hasContractCapability` / `contractChromeRect`（纯函数，供契约测试直读）。
+  `computeChromeClearance` / `computeFabSafeRight`（app.js）**零改动**。
+
+### 测试（client 43 例，全线 299 例；`verify-all ssh` **31/31 PASS**）
+
+- **夹具**：`capture({ desktop })` 喂 fake `window.miasakiDesktop`（**必须在 `vm.runInContext` 之前**，
+  因为契约在模块初始化时取一次）；`fakeDesktop()` 提供 `has` / `chrome.bounds` / `chrome.onChange`
+  与 `emitChange()`（模拟壳侧 ResizeObserver）。
+- **顺带修掉的夹具假阴性**：桩节点原是**纯对象**，而 DOM 兜底探针有 `capsule instanceof HTMLElement`
+  守卫 ⇒ 兜底路径在桩里**从来没被真正执行过**（旧用例都落回 reserve 0 的假环境）。现改为
+  `class NodeHTMLElement` + 同一个类作为 `HTMLElement` 交给 VM；`getComputedStyle(node)` 也改为
+  如实报出节点自己摆的 `top`（原为恒 `''`）。
+- **新增 5 例**：①契约消费点静态断言（防回潮）；②契约优先（同场摆一份坐标不同的复刻 `.tb-group`，
+  断言 reserve 取 `bounds()`、且 `getBoundingClientRect` **零调用**）；③兜底不变（无契约 / 旧壳能力表
+  为空 / `.tb-capsule` 旧类名三条）；④`chrome.onChange` 触发重测 + fiber 拆除退订 + 重复 apply 幂等；
+  ⑤口径②与 `rootObserver` 的保留断言。
+
+### 待实机验收
+
+先开 SSH、再让 sidebar 注入终端键：launcher 与浮层顶栏 reserve 应自动 +28px（`chrome.onChange` 生效）；
+官方 `--ms-titlebar-reserve` 再变时（B4 场景）落点仍随 `rootObserver` 纠正。
+
 ## 2026-09-26 · A1 实机验收：真协议 sshd 上的工具面闭环（逮到 6 处真缺陷并修复）
 
 **背景**：用户「SSH线A1 实测」。P2-2 落地后一直挂着「`agentTools: true` 的工具注册与审批落点待实机验收」——

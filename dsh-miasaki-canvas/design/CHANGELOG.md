@@ -2,6 +2,77 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-27 · 让位取数契约化：消费 `miasakiDesktop.chrome.bounds/onChange`，修掉「无需监听」的错误前提
+
+**症状（缺陷）**：画布工具条（`.canvas-controls`）与错误条（`.status-message`）用 `--canvas-chrome-reserve`
+给桌面壳窗控按钮组让位。sidebar 线的终端键插进按钮组**首位**（`dsh-miasaki-sidebar/client.js` 的
+`titlebarButton.ensure`：`group.insertBefore(btn, first)`）后按钮组从 **108px 变 136px**，左缘左移 28px；
+而画布只在 `open()` / `onFrameLoad()` / `showMapOverlay()` 三条路径与两个列表订阅（`client.js:442-443`）
+各量一次（`syncCurrentSession()`），
+**注入晚于首次取数时就一直少让 28px**，没有任何自愈路径 —— 工具条被窗控组压住一角。
+
+**根因（错误前提写进了注释）**：`client.js:268` 断言「按钮组宽度与 right 偏移固定，不随窗口尺寸变化，
+故无需监听 resize」。后半句（窗口尺寸不影响）成立，**前半句（宽度固定）是错的** —— 按钮组是**共享容器**，
+同排每个插件都会往里面插自己的按钮，宽度是别人的函数，不是常量。
+
+**修复（`client.js`，消费桌面壳契约 v1.2 的 `chrome.bounds` / `chrome.onChange`）**：
+1. **契约优先**：`has('chrome.bounds')` 在位时 `reserve = ceil(innerWidth - d.chrome.bounds().left + 6)`；
+   量不到（返回 `null` / `width <= 0`）一律 0。契约量的是**壳窗控按钮组**（`#miasaki-titlebar .tb-group`）
+   的视口矩形，**不是**官方 DSH chrome 的位置，两者不可互推。
+2. **DOM 兜底一字未改**：契约缺失（浏览器直开 / 旧壳）时仍走原探针（`.tb-group` 优先、v3 `.tb-capsule` 兜底），
+   行为与契约出现之前等价；`try/catch` 保留（无父文档 / 探针异常 ⇒ reserve=0）。
+3. **订阅变更**：初始化时 `has('chrome.onChange')` ⇒ `d.chrome.onChange(syncChrome)`，退订函数与
+   `themeObserver?.disconnect()` **同居 apply 的清理效果**（漏退订会让壳在插件卸载后回调已销毁闭包）。
+4. **契约对象模块初始化只取一次**（`var d = typeof window !== 'undefined' ? window.miasakiDesktop : undefined`），
+   `syncChrome` 内不再重取 —— 同一拍里「契约在不在」的判定不会前后不一致。
+5. 删掉 `:268` 那句错误注释，替换为准确描述：窗口尺寸确实不影响，但**同排其他插件会插按钮**，
+   故契约在位必须订阅；契约缺失才退化为一次性 DOM 探针。
+
+**验证**：新增 `test/chrome-reserve.test.js`（5 例，零依赖：按源码锚点切出「契约取名 + `syncChrome` + 订阅」
+三段真实代码用 `new Function` 求值，`window`/`document`/`HTMLElement`/`send` 全以参数注入，
+不引入 jsdom）—— 契约在位 reserve=166（1280-1120+6）、`onChange` 触发重发且补上 28px（122 → 150）、
+契约缺失回落双类名探针、契约在但不是能力面（空壳无 `has`）同样回落、量不到一律 0、取值点纪律。
+**反向验证**：四组突变（忽略契约 / 不订阅 / 用 `right` 取数 / 删掉订正后的说明）逐条被测试打红，
+非「永远绿」。`node scripts/verify-all.mjs canvas` ⇒ **13/13 PASS**（10 个测试文件 105 例全过）。
+
+**待实机**：桌面壳（需含 `chrome.bounds` 的新版壳）里先开画布、再触发 sidebar 注入终端键，
+画布工具条不应再被窗控组压住；DevTools 里 `window.miasakiDesktop.has('chrome.bounds')` 为 `true`。
+
+## 2026-09-27 · DSH 0.1.7 适配：`ctx.sessions.open` 删除导致「关联的 DSH 会话已不可用」恒报
+
+**症状**：会话布里点任意卡片（或卡片上的跳回按钮）恒弹红条「**关联的 DSH 会话已不可用**」，
+但左侧会话列表里三个会话都活着、地图渲染完全正常。
+
+**根因**：文案唯一来源是 `client.js` 两处 `try { ctx.sessions.open(...) } catch { ... }`。
+DSH 0.1.6 的 `ISessions` 契约有 `open(id)`（职责"Select a session as current"）；**0.1.7 起该方法
+被删除**，会话导航收敛到 `ctx.uiWorkspace.openSession(target)`（ui-workspace 服务，`replaceMain`
+同步替换 mainView reference）。当前运行时（`dsh` CLI 0.1.7-rc.2、`@deepseek-ai/dsh-api-session-controller`
+0.1.7-rc.2）里 `ClientSessions` 没有 `open` ⇒ `ctx.sessions.open` 是 `undefined` ⇒ 调用即
+`TypeError: ctx.sessions.open is not a function` ⇒ 被**空 catch** 吞掉 ⇒ 恒显示固定文案。
+即：数据面（`ctx.sessions.list` / `ctx.workspaces.list`）没受影响，坏的只有「选中并跳回 DSH 会话」。
+连带「从画布发消息」：0.1.7 的 `ctx.sessions.scope()` 只对已 retain 的世代有效，跳转链路坏掉后
+目标会话可能从未 retain，取 scope 恒 `undefined`，同一句文案改以 RPC 错误形式返回。
+
+**修复（`client.js`，v0.5.0-miasaki.7）**：
+1. `inject` 增加 `'uiWorkspace'`（显式注入才能调用）；
+2. 三处导航全部改走 `ctx.uiWorkspace.openSession`：`canvas:open-session`（跳回 DSH）、
+   `canvas:activate-session`（卡片选中联动，keep map open）、`prompt()`（画布发消息）；
+3. `prompt()` 先 `openSession` 再借 scope——`materializeScope` 是同步的
+   （`ClientSessions.retainScope` 同步建 ScopeRecord 并 `scopes.set`），打开后立即可取；
+   0.1.7 未知会话 id 时 `openSession` 抛 `sessions.retain: unknown session <id>`，
+   这才是「会话真的没了」的唯一合法出口；
+4. 两处空 `catch` 与 `prompt()` 的打开失败全部改为 `console.warn` 留痕
+   （`reportBridgeFailure(action, error)`）+ toast 文案带真实原因，不再吞错误。
+
+**验证**：`test/canvas-runtime.test.js` 由 30 例扩为 32 例（新增「跳回 DSH 走 uiWorkspace」
+「发消息先打开再借 scope」两条契约锚点，原 `ctx.sessions.open` 断言改写为新 API 并加
+`doesNotMatch(ctx.sessions.open(` 全局否定）；9 文件 **100 例全过**；三入口 `node --check` 通过。
+**待实机**：`dsh web`（或桌面壳）重启后点卡片/跳回/画布发消息三个动作验收，console 确认无
+`dsh-canvas: * 失败` 告警。
+
+**给 ssh 线的提醒**：`dsh-miasaki-ssh/design/2026-09-14-ssh-global-panel-plan.md:204` 计划写的
+`this.sessions.open(sessionId)` 同款已删除 API，实装时按 `ctx.uiWorkspace.openSession` 写。
+
 ## 2026-09-26（深夜）· 死代码清理（零行为变更）
 
 仓库级死代码审计后的第一批清理，五项均为「生产路径零引用」。验证：`node scripts/verify-all.mjs canvas`
@@ -98,9 +169,9 @@ POST 路由用同一个 `MAX_BODY_BYTES = 32 * 1024`。本机 `$DSH_HOME/session
 
 **效果**：`84,209,057 → 19,992,624 字节`（**-76.3%**，省 61.2MB）；203 线程 / 8 工作区不变，
 消息 14843 → 5648（= 模拟值），`maxMsgsPerThread = 50`，84 个线程带水位，超限载荷 0；
-迁移**幂等**（再载入不重写）。剪裁由**产品代码自己**执行（`_refs/canvas-trim.mjs` 调 `WorkspaceStore.load`
-的迁移路径），避免规则漂移；剪裁前原件备份在 `_refs/canvas-backup/`，同目录另归档了 9/16 的孤儿
-原子写残留 `workspaces.json.42204.tmp`（8.9MB）。
+迁移**幂等**（再载入不重写）。剪裁由**产品代码自己**执行（脚本 `_refs/scripts-archive/canvas-trim.mjs`
+调 `WorkspaceStore.load` 的迁移路径），避免规则漂移；剪裁前原件备份 `_refs/canvas-backup/` 与同目录
+9/16 的孤儿原子写残留 `workspaces.json.42204.tmp`（8.9MB）**已于 2026-09-26 清仓回收**（脚本保留在归档区）。
 
 **测试**：新增 `test/store-retention.test.js` 7 例（载荷截断保头+标记 / `result` 保持 `null` /
 等待中调用不被伪装 / 窗口只留最新 N 条 / ★ 水位防 replay 复活 / 老 store 载入即迁移并落盘 /

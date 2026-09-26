@@ -1256,8 +1256,18 @@ window.__ModuleLoader__.load({
     }
 
     // --- 标题栏终端按钮（桌面壳：#miasaki-titlebar 由 themes 注入）---------
+    // 让位量公式与 desktop 壳 `themes/src/06-titlebar.js` 的
+    // `TB_RESERVE_RIGHT` / `TB_RESERVE_GAP` **同源**：组实宽 + right(8) + 呼吸(12)。
+    // 两处必须同值 —— 同一个变量出现两个公式，就是「同值却语义分叉」的起点。
+    const TB_RESERVE_RIGHT = 8
+    const TB_RESERVE_GAP = 12
+
     const titlebarButton = {
       observer: null,
+      /** 让位量观测者（只用于**旧壳**；新壳自带 watchTitlebarReserve，见 writeReserve 的能力门控）。 */
+      reserveRO: null,
+      /** 本线是否写过让位量：只有写过才在 stop() 时清理，避免删掉新壳写进去的值。 */
+      wroteReserve: false,
       /**
        * 注入 / 维持标题栏终端按钮。拍板顺序（2026-09-12 第二次交换要求）：
        * [终端][其他注入按钮…][brand][窗控]——终端按钮置于 tb-group **最前**。
@@ -1270,7 +1280,6 @@ window.__ModuleLoader__.load({
         const group = document.querySelector('#miasaki-titlebar .tb-group')
         if (group === null) return false
         let btn = document.getElementById('miasaki-tb-terminal')
-        let freshlyCreated = false
         if (btn === null) {
           btn = document.createElement('div')
           btn.id = 'miasaki-tb-terminal'
@@ -1288,19 +1297,69 @@ window.__ModuleLoader__.load({
           })
           btn.append(caret)
           btn.addEventListener('click', () => bottomPanel.toggle())
-          freshlyCreated = true
         }
         const first = group.firstElementChild
         if (btn !== first) {
           if (first === null) group.append(btn)
           else group.insertBefore(btn, first)
         }
-        // 多占一格按钮位：让位量同步放宽（03-switcher 的变量兜底 128 → +28）。
-        if (freshlyCreated) document.documentElement.style.setProperty('--ms-titlebar-reserve', '156px')
+        // 让位量（标题栏右侧预留边距）：**新壳**自 2026-09-27 起按 `.tb-group` 实宽用
+        // ResizeObserver 自动计算，壳是唯一写者，本线不写（见 writeReserve 的能力门控）。
+        // **旧壳**没有那套自动计算；壳侧静态兜底当时是 `128px`，照「**无终端键**」的组宽
+        // 108 定的 —— 本线插进的那一格（26 + gap 2 = 28px）会让安全线少让整整 28px，
+        // 官方「打开右侧边栏」ExpandButton 于是压到终端键上。2026-09-27 实机截图取证：
+        // 官方 icon 距右缘 134.5–149.5px、终端键 icon 125.5–136.5px —— 两者相切叠压，
+        // 正是用户的「右侧边栏按钮和终端按钮重叠」。
+        // 壳侧兜底已同批改为覆盖当前形态的 156px；本线的实宽补位仍保留，因为兜底是**上界
+        // 约定**，而注入方每多插一格（宽 28px）它就再次不够 —— 观察实宽才能精确跟随。
+        titlebarButton.watchReserve(group)
         return true
+      },
+      /**
+       * 让位量兜底：**旧壳**（无 `chrome.bounds` 能力）在位时按 `.tb-group` **实宽**补写；
+       * 新壳在位直接返回并把本线的观测者摘掉。
+       *
+       * 判据用桌面壳契约能力表（`themes/src/10-contract.js` v1.2 的 `chrome.bounds`），
+       * 不猜版本号：能力在位 ⇒ 壳的 `watchTitlebarReserve` 会自己观测实宽并写这个变量，
+       * 本线再写就是第二个写者（2026-09-27 审查点名的三方争用）。
+       */
+      writeReserve(group) {
+        const d = typeof window !== 'undefined' ? window.miasakiDesktop : undefined
+        if (d !== undefined && typeof d.has === 'function' && d.has('chrome.bounds')) {
+          titlebarButton.stopReserveWatch()
+          return
+        }
+        // 在 ResizeObserver 回调里量：不额外触发布局，且只在尺寸真变时被调用。
+        const width = group.getBoundingClientRect().width
+        if (!(width > 0)) return
+        const px = Math.round(width + TB_RESERVE_RIGHT + TB_RESERVE_GAP) + 'px'
+        if (document.documentElement.style.getPropertyValue('--ms-titlebar-reserve') === px) return
+        document.documentElement.style.setProperty('--ms-titlebar-reserve', px)
+        titlebarButton.wroteReserve = true
+      },
+      /** 观察按钮组实宽（幂等；ResizeObserver 不可用时静默 —— 旧壳的静态兜底仍在）。 */
+      watchReserve(group) {
+        if (titlebarButton.reserveRO !== null) return
+        if (typeof ResizeObserver !== 'function') return
+        const ro = new ResizeObserver(() => { titlebarButton.writeReserve(group) })
+        ro.observe(group)
+        titlebarButton.reserveRO = ro
+        titlebarButton.writeReserve(group)
+      },
+      stopReserveWatch() {
+        if (titlebarButton.reserveRO === null) return
+        titlebarButton.reserveRO.disconnect()
+        titlebarButton.reserveRO = null
       },
       stop() {
         if (titlebarButton.observer !== null) { titlebarButton.observer.disconnect(); titlebarButton.observer = null }
+        titlebarButton.stopReserveWatch()
+        // 只清理**本线写过**的值：新壳在位时那个 inline 值是壳写的，removeProperty 会把壳的
+        // 让位量一并删掉（卸载瞬间官方控件回压窗控组）。
+        if (titlebarButton.wroteReserve) {
+          document.documentElement.style.removeProperty('--ms-titlebar-reserve')
+          titlebarButton.wroteReserve = false
+        }
       },
       watch() {
         titlebarButton.ensure()
@@ -1375,7 +1434,6 @@ window.__ModuleLoader__.load({
         titlebarButton.stop()
         document.getElementById('miasaki-tb-terminal')?.remove()
         document.getElementById('miasaki-tb-term-menu')?.remove()
-        document.documentElement.style.removeProperty('--ms-titlebar-reserve')
       },
     }
 

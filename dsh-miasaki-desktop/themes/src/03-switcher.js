@@ -86,7 +86,24 @@
     // 一格)渲染,故分栏左格天然不受影响。两条让位线都落在 --ms-titlebar-reserve 上,
     // 与官方控件保持 12px 呼吸位。选择器一律带 #root 提权,压过官方 CSS Module(注入
     // 时机晚于我们,同特异性会反超)。
-    ':root{--ms-titlebar-reserve:128px;}' +
+    //
+    // ⚠ 兜底取值口径（2026-09-27 实机事件后改，勿再按「无注入键」定值）：
+    // 下面这个常量是**无人写 inline 时**的最后防线，必须按「**任何可能的注入形态**」取
+    // 上界，而不是按当前观测到的那一种。128px 是照**无终端键**的组宽 108 算的
+    // （108+8+12）；sidebar 线的终端键插进组首位后组宽变 136 ⇒ 安全线需 156
+    // （136+8+12）。2026-09-27 用户报「右侧边栏按钮和终端按钮重叠」，实机测量：官方
+    // ExpandButton 图标距右缘 134.5–149.5px、终端键图标 125.5–136.5px，两者相切 ——
+    // 成因正是**两个写者同时撤出**（sidebar 删掉硬编码写入**当天立即生效**，壳的自动
+    // 计算要重编 exe 才生效）⇒ 变量无人写 ⇒ 回落到 128 ⇒ 少让整整一格 28px。
+    // 故兜底改 156：多让 28px 只是官方控件更靠左（无功能损失），少让则必然叠压。
+    //
+    // 注入方契约（跨线，两条线各守一半）：
+    //   ① 壳在位且版本含 06-titlebar.js 的 `watchTitlebarReserve` ⇒ 壳观测 `.tb-group`
+    //      实宽自动写，**注入方一律不写**（判据用契约能力 `chrome.bounds`，不猜版本号）；
+    //   ② 旧壳（无该能力）⇒ 注入方按**同源公式**（组实宽 + 8 + 12）自行补位 ——
+    //      sidebar 线的 `titlebarButton.writeReserve` 是唯一实现，闸门在
+    //      `dsh-miasaki-sidebar/test/titlebar-button.test.js`。
+    ':root{--ms-titlebar-reserve:156px;}' +
     '#root header:has([data-conversation-header-corner]){padding-right:var(--ms-titlebar-reserve);}' +
     // 展开(推挤)时**主动撤回**让位:收起态中栏延伸到窗口右缘,窗控会压住会话头右端的
     // 展开按钮;而推挤展开时(`data-sidebar-right-panel="push"` + 官方 panel 上的

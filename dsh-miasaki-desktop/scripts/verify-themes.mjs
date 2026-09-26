@@ -5,6 +5,7 @@
 //      右上角安全区（窗控按钮组 × 官方右栏两处控件不叠压）
 import { spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
@@ -15,6 +16,12 @@ const PORT = 9333
 const TARGET = process.env.MIASAKI_VERIFY_URL || 'http://127.0.0.1:3080/'
 const INIT = readFileSync(join(root, 'src-tauri', 'injected', 'theme-init.js'), 'utf8')
 
+// 无头 profile 放**系统临时目录**（2026-09-27 改）：此前放工作区 `dsh-miasaki-desktop/.edge-test-profile/`，
+// 跑一次就是 747 个文件 / 34MB / 63 个 `.js`。虽然 `.gitignore` 挡得住 git，但仓库级
+// `scripts/check-silent-guards.mjs` 是**按目录遍历**的（不读 .gitignore）⇒ 全量回归凭空多出
+// 「190 处新增静默降级」的假阳性。2026-09-26 清仓时删过一次该目录，说明它会反复长出来 —— 现在换落点根治。
+const PROFILE = join(tmpdir(), 'miasaki-verify-themes-profile')
+
 const edge = spawn(EDGE, [
   '--headless=new',
   `--remote-debugging-port=${PORT}`,
@@ -22,7 +29,7 @@ const edge = spawn(EDGE, [
   '--no-first-run',
   '--disable-gpu',
   '--window-size=1280,860',
-  `--user-data-dir=${join(root, '.edge-test-profile')}`,
+  `--user-data-dir=${PROFILE}`,
   'about:blank'
 ], { stdio: 'ignore' })
 
@@ -195,8 +202,15 @@ try {
   check('kurkuriel: 破裂表盘水印已挂载', state.watermark === true)
 
   // ---------- 4. 持久化 ----------
-  const persisted = await evaluate(`localStorage.getItem('miasaki.theme')`)
-  check('主题持久化到 localStorage', persisted === 'kurkuriel', String(persisted))
+  // 容错（2026-09-27）：无鉴权页面（headless Edge 裸开 3080 ⇒ P10 之后的 401 文档带 sandbox）
+  // 会**拒绝 localStorage 访问**并抛 SecurityError，旧写法直接崩掉整个脚本、后面所有段落
+  // （含与页面内容无关的让位量断言）一条都跑不到。本步按「环境不可用」skip，其余照常执行。
+  try {
+    const persisted = await evaluate(`localStorage.getItem('miasaki.theme')`)
+    check('主题持久化到 localStorage', persisted === 'kurkuriel', String(persisted))
+  } catch (e) {
+    skip('主题持久化到 localStorage', `本页不可访问 localStorage（未鉴权 / sandbox 文档）：${String(e.message).slice(0, 80)}`)
+  }
 
   // ---------- 4.5 M2 S6 让位协议往返（模拟 appearance 线的 <html> 门控属性） ----------
   // 前 22 项已证「appearance 未安装时 desktop 行为逐字节不变」；这里手动写门控属性验证协议：
@@ -283,6 +297,39 @@ try {
     check('窗控组与官方控件同一条水平线（中心差 ≤ 2px）',
       g.verticalDelta !== null && g.verticalDelta <= 2,
       `Δ=${g.verticalDelta}px`)
+  }
+
+  // ---------- 6.5 T1 让位量自动化：壳观测窗控组实宽（2026-09-27 审查 §4-①） ----------
+  // 背景：`--ms-titlebar-reserve` 此前由 **sidebar 线硬编码写 156px**（它往组里插了一个终端键），
+  // 「组实宽」这一事实被抄成了常量。现在壳用 ResizeObserver 观测 `.tb-group` 自行计算，
+  // 任何注入方插/删按钮都应自动跟随。判据：插一个同规格 `.tb-btn`（26 + gap 2）
+  // ⇒ reserve 变成「新组宽 + 20」，移除后回落。20 = right(8) + 呼吸(12)，与 03-switcher 静态兜底同源。
+  const reserveBefore = JSON.parse(await evaluate(GEOM))
+  const probeInjected = await evaluate(`(function(){
+    var group = document.querySelector('#miasaki-titlebar .tb-group');
+    if (!group) return false;
+    var b = document.createElement('div');
+    b.className = 'tb-btn'; b.id = 'mia-reserve-probe'; b.textContent = 'x';
+    group.insertBefore(b, group.firstElementChild);
+    return true;
+  })()`)
+  await sleep(700)
+  const reserveAfterInject = JSON.parse(await evaluate(GEOM))
+  await evaluate(`(function(){var b=document.getElementById('mia-reserve-probe');if(b)b.remove();return true})()`)
+  await sleep(700)
+  const reserveAfterRemove = JSON.parse(await evaluate(GEOM))
+
+  if (!probeInjected || !reserveBefore.group) {
+    skip('让位量随窗控组实宽自动跟随', '未找到 #miasaki-titlebar .tb-group')
+  } else {
+    const grow = reserveAfterInject.group.w - reserveBefore.group.w
+    check('让位量随窗控组实宽自动跟随（注入一格按钮 ⇒ 自动放宽）',
+      grow >= 20 &&
+        Math.abs((parseFloat(reserveAfterInject.reserve) || 0) - (reserveAfterInject.group.w + 20)) <= 1,
+      `组宽 ${reserveBefore.group.w} → ${reserveAfterInject.group.w}（+${Math.round(grow)}），reserve=${reserveAfterInject.reserve}`)
+    check('移除按钮后让位量回落（ResizeObserver 双向跟随）',
+      Math.abs((parseFloat(reserveAfterRemove.reserve) || 0) - (reserveAfterRemove.group.w + 20)) <= 1,
+      `组宽 ${reserveAfterRemove.group.w}，reserve=${reserveAfterRemove.reserve}`)
   }
 
   const failed = results.filter((r) => !r.ok).length

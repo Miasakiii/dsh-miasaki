@@ -57,8 +57,35 @@ test('activating a session from the map syncs DSH without closing the map', asyn
   const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
   const activate = source.slice(source.indexOf("'canvas:activate-session'"), source.indexOf("'canvas:fork-session'"))
 
-  assert.match(activate, /ctx\.sessions\.open\(event\.data\.sessionId\)/)
+  // DSH 0.1.7：ctx.sessions.open 已从 ISessions 契约删除，导航必须走
+  // ctx.uiWorkspace.openSession（旧调用每次抛 TypeError，曾被空 catch 一律
+  // 显示成「关联的 DSH 会话已不可用」——会话其实活着）。
+  assert.match(activate, /ctx\.uiWorkspace\.openSession\(event\.data\.sessionId\)/)
   assert.doesNotMatch(activate, /close\(\)/)
+  assert.match(source, /module\.exports\.inject = \['sessions', 'workspaces', 'uiWorkspace', 'slots'\]/)
+  assert.doesNotMatch(source, /ctx\.sessions\.open\(/)
+})
+
+test('jumping back to DSH from a card closes the map through uiWorkspace navigation', async () => {
+  const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  const openSession = source.slice(source.indexOf("'canvas:open-session'"), source.indexOf("if (event.data.type === 'canvas:activate-session')"))
+
+  assert.match(openSession, /ctx\.uiWorkspace\.openSession\(event\.data\.sessionId\); close\(\)/)
+})
+
+test('sending a message from the canvas opens the target session before borrowing its scope', async () => {
+  const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
+  const prompt = source.slice(source.indexOf('const prompt = async'), source.indexOf('const style = document.createElement'))
+
+  // 0.1.7 的 scope() 只对已 retain 的世代有效：先 openSession 再取 scope；
+  // openSession 失败必须经 reportBridgeFailure 留痕并带走真实原因。
+  // ⚠ 先断言调用**存在**：只写下面那条顺序断言的话，一旦 openSession 被删，
+  //   `indexOf` 返回 -1，而 -1 < 112 仍为 true ⇒ 断言恒真、抓不到它自称守的回归
+  //   （2026-09-27 审查实测：删掉调用后本测试仍绿）。存在性断言是该顺序断言的前提。
+  assert.ok(prompt.includes('ctx.uiWorkspace.openSession(sessionId)'),
+    '发消息路径必须真的调用 ctx.uiWorkspace.openSession（0.1.7 删除 ctx.sessions.open 后的唯一入口）')
+  assert.ok(prompt.indexOf('ctx.uiWorkspace.openSession(sessionId)') < prompt.indexOf('ctx.sessions.scope(sessionId)'))
+  assert.match(prompt, /reportBridgeFailure\('canvas:send-message', error\)/)
 })
 
 test('selecting a session in the sidebar syncs the DSH current session', async () => {

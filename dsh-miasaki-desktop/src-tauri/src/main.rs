@@ -1849,9 +1849,46 @@ fn chrono_now_ms() -> i64 {
 }
 
 /// X2:fleet 脉冲文件路径（A×B 路径 B：Rust 直读聚合文件）。
-/// 由环境变量 MIASAKI_FLEET_PULSE 指定，未设 → 联动关闭（两线零耦合，可选接入）。
+///
+/// **三级回退**（2026-09-27 补 ②，见审查 §4-④）：
+///   ① 环境变量 `MIASAKI_FLEET_PULSE`（显式指定，最高优先；空串视为未设）
+///   ② `%LOCALAPPDATA%\miasaki\config.json` 的 `fleetPulsePath`（持久化，**从开始菜单/资源管理器启动也生效**）
+///   ③ 都没有 → 联动关闭（两线零耦合，可选接入）
+///
+/// 为什么补 ②：此前只认环境变量，而**全仓没有任何脚本或安装步骤设置过它** ——
+/// 2026-09-27 实机实测：用户级 / 机器级 / 进程级全为空 ⇒ 脉冲文件每分钟都在更新，
+/// 桌宠却从来不读，「联动」等于不存在（`design/CHANGELOG.md` 早有「从未启动」的记录）。
 fn pulse_path() -> Option<PathBuf> {
-    std::env::var_os("MIASAKI_FLEET_PULSE").map(PathBuf::from)
+    let env = std::env::var_os("MIASAKI_FLEET_PULSE");
+    let cfg = std::fs::read_to_string(shell_config_path()).ok();
+    resolve_pulse_path(env.as_deref(), cfg.as_deref())
+}
+
+/// 壳自己的配置文件：与 W3 的关闭确认 marker 同目录（`%LOCALAPPDATA%\miasaki`）。
+/// 只读拼接，**不建目录**（本函数在 2s 轮询路径上被调用）。
+fn shell_config_path() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("miasaki")
+        .join("config.json")
+}
+
+/// 纯函数：环境变量值 + 配置文本 → pulse 路径（不碰进程环境，可单测）。
+/// 容错：BOM（记事本写回）/ 坏 JSON / 缺键 / 非字符串 / 空白 ⇒ `None`，绝不 panic。
+fn resolve_pulse_path(env: Option<&std::ffi::OsStr>, config_txt: Option<&str>) -> Option<PathBuf> {
+    if let Some(v) = env {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    let txt = config_txt?;
+    let v: serde_json::Value = serde_json::from_str(txt.trim_start_matches('\u{feff}')).ok()?;
+    let p = v.get("fleetPulsePath")?.as_str()?.trim();
+    if p.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(p))
 }
 
 /// pulse 时效上限：超过此龄期的 pulse 视为 stale（发布器已死），不再当作实时状态。
@@ -3281,6 +3318,41 @@ mod tests {
         assert!(should_inject_init("http://tauri.localhost/loading.html"));
         assert!(!should_inject_init("http://127.0.0.1:3080/#miasaki-theme=pure&int=idle"));
         assert!(!should_inject_init("http://127.0.0.1:3080/?x=1#cmd=want-max&seq=7"));
+    }
+
+    /// T7（2026-09-27）：pulse 路径三级回退 —— 环境变量优先、空串回落配置文件、坏配置安全返回 None。
+    /// 由来：此前只认环境变量，而全仓无任何设置点 ⇒ 这条联动从未真正生效（审查 §4-④）。
+    #[test]
+    fn pulse_path_falls_back_to_shell_config() {
+        use std::ffi::OsStr;
+        const CFG: &str = r#"{"fleetPulsePath":"C:\\from-config\\pulse.json"}"#;
+        // ① 环境变量优先（配置文件里有值也不看）
+        assert_eq!(
+            resolve_pulse_path(Some(OsStr::new("D:\\from-env\\pulse.json")), Some(CFG)),
+            Some(PathBuf::from("D:\\from-env\\pulse.json"))
+        );
+        // ② 环境变量为空串 ⇒ 视为未设，回落配置文件
+        assert_eq!(
+            resolve_pulse_path(Some(OsStr::new("")), Some(CFG)),
+            Some(PathBuf::from("C:\\from-config\\pulse.json"))
+        );
+        // ③ 无环境变量 ⇒ 用配置文件
+        assert_eq!(
+            resolve_pulse_path(None, Some(CFG)),
+            Some(PathBuf::from("C:\\from-config\\pulse.json"))
+        );
+        // ④ 都没有 / 坏 JSON / 缺键 / 非字符串 / 空白 ⇒ None（联动静默关闭，不得 panic）
+        assert_eq!(resolve_pulse_path(None, None), None);
+        assert_eq!(resolve_pulse_path(None, Some("not json")), None);
+        assert_eq!(resolve_pulse_path(None, Some("{}")), None);
+        assert_eq!(resolve_pulse_path(None, Some(r#"{"fleetPulsePath":""}"#)), None);
+        assert_eq!(resolve_pulse_path(None, Some(r#"{"fleetPulsePath":"   "}"#)), None);
+        assert_eq!(resolve_pulse_path(None, Some(r#"{"fleetPulsePath":123}"#)), None);
+        // ⑤ BOM 容错（Windows 记事本写回会带 BOM）
+        assert_eq!(
+            resolve_pulse_path(None, Some("\u{feff}{\"fleetPulsePath\":\"C:\\\\p.json\"}")),
+            Some(PathBuf::from("C:\\p.json"))
+        );
     }
 
     /// 契约样例（ab-linkage-pulse-v2-2026-09-04.md）的时间戳基准。

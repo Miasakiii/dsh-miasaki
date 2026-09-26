@@ -82,6 +82,12 @@ const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'target', 'vendor', '_refs', 'baseline', 'test', 'tests',
   'design', 'docs', 'themes', 'agents', 'tasks', 'logs', 'coverage', 'src-tauri', '.vs',
   '.pnpm-store', 'cordis', 'injected', 'frames', 'states', 'sprites', 'assets',
+  // 无头 Edge 的临时 profile。2026-09-27：它此前落在 `dsh-miasaki-desktop/.edge-test-profile/`，
+  // 跑一次 `verify-themes.mjs` 就是 747 个文件 / 34MB / 63 个 `.js` —— 本脚本按目录遍历、
+  // **不读 `.gitignore`**，于是全量回归凭空多出「190 处新增静默降级」的**假阳性**。
+  // 假红比不红更糟：它会训练人忽略这个闸门。根因已在 `verify-themes.mjs` 修掉（profile 改到
+  // 系统临时目录），这里再兜一道，防历史目录残留。
+  '.edge-test-profile',
 ])
 
 /** 闸门自身不参与扫描（否则它的正则字面量会自我命中）。 */
