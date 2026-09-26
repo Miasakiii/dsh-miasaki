@@ -744,6 +744,62 @@ function openEditor(conn = null) {
     aliasSelect.value = ''
   })
 
+  // U3/P2-1：跳板引用（D4=② —— 跳板必须是一条已受信任的主机记录：凭据与 TOFU
+  // 全走既有机制；password 跳板未连过时由 host 半明确报 JUMP_UNAVAILABLE）。
+  const jumpSelect = el('select')
+  jumpSelect.id = 'edit-jump'
+  const jumpOptions = [{ value: '', label: '直连（不经跳板）' }]
+  for (const item of state.connections) {
+    if (editing && item.id === conn.id) continue // 不能把自己当跳板
+    jumpOptions.push({ value: item.id, label: `${item.label}（${item.username}@${item.host}:${item.port}）` })
+  }
+  for (const option of jumpOptions) {
+    const opt = el('option', '', option.label)
+    opt.value = option.value
+    jumpSelect.append(opt)
+  }
+  jumpSelect.value = conn?.jumpHostId ?? ''
+
+  // A1 工具面：Agent 访问档位（Agent 化规划 §7.1）。默认 none = 模型看不见这台主机。
+  const agentSelect = el('select')
+  agentSelect.id = 'edit-agent-access'
+  for (const [value, label] of [['none', '不允许（默认）'], ['readonly', '只读'], ['full', '完整']]) {
+    const opt = el('option', '', label)
+    opt.value = value
+    agentSelect.append(opt)
+  }
+  agentSelect.value = ['none', 'readonly', 'full'].includes(conn?.agentAccess) ? conn.agentAccess : 'none'
+
+  // U3/P2-1：本地转发规则（本机 127.0.0.1:localPort → 经此连接 → 远端 remoteHost:remotePort）
+  const forwardRows = []
+  const forwardList = el('div', 'forward-rows')
+  forwardList.id = 'edit-forwards'
+  const addForwardRow = (item = {}) => {
+    const row = el('div', 'forward-row')
+    const local = inputNode('', item.localPort ?? '', { type: 'number', placeholder: '本地端口' })
+    local.min = '1'; local.max = '65535'
+    const remoteHost = inputNode('', item.remoteHost ?? '', { placeholder: '远端主机（如 127.0.0.1）' })
+    const remotePort = inputNode('', item.remotePort ?? '', { type: 'number', placeholder: '远端端口' })
+    remotePort.min = '1'; remotePort.max = '65535'
+    const remove = el('button', 'text-btn danger', '删除')
+    remove.type = 'button'
+    const entry = { local, remoteHost, remotePort }
+    remove.onclick = () => {
+      const index = forwardRows.indexOf(entry)
+      if (index >= 0) forwardRows.splice(index, 1)
+      row.remove()
+    }
+    row.append(local, remoteHost, remotePort, remove)
+    forwardList.append(row)
+    forwardRows.push(entry)
+  }
+  for (const spec of conn?.forwards ?? []) addForwardRow(spec)
+  const addForwardBtn = el('button', 'text-btn', '添加转发')
+  addForwardBtn.type = 'button'
+  addForwardBtn.onclick = () => addForwardRow()
+  forwardList.append(addForwardBtn)
+  const forwardNote = el('p', 'notice', '转发在本机 127.0.0.1 上监听；连接建立后自动生效，断开自动撤下。修改只影响下一次连接。')
+
   const error = el('p', 'form-error', '')
   error.hidden = true
   const form = el('form')
@@ -756,6 +812,10 @@ function openEditor(conn = null) {
   form.append(
     fieldNode('名称', name), fieldNode('SSH 配置导入', aliasSelect), grid, fieldNode('用户名', username),
     fieldNode('认证方式', method), keyField, fieldNode('分组', group),
+    fieldNode('Agent 访问', agentSelect),
+    fieldNode('经由跳板', jumpSelect),
+    fieldNode('本地端口转发', forwardList),
+    forwardNote,
     notice, error,
   )
   // 「保存并连接」的意图必须走**闭包变量**：早期版本把标记挂在按钮 run 的那个 `event`
@@ -776,6 +836,17 @@ function openEditor(conn = null) {
       group: group.value.trim() || '未分组',
       favorite: conn?.favorite === true,
       auth: { method: method.value },
+      // A1：Agent 访问档位（none/readonly/full；store 归一化把关）
+      agentAccess: agentSelect.value,
+      // U3/P2-1：空串 = 直连；转发规则按行收集（空行忽略，store 归一化把关）
+      jumpHostId: jumpSelect.value,
+      forwards: forwardRows
+        .map(entry => ({
+          localPort: Number(entry.local.value),
+          remoteHost: entry.remoteHost.value.trim(),
+          remotePort: Number(entry.remotePort.value),
+        }))
+        .filter(item => item.localPort > 0 && item.remoteHost.length > 0 && item.remotePort > 0),
     }
     if (body.auth.method === 'key') body.auth.keyPath = keyPath.value.trim()
     const run = async () => {
@@ -922,6 +993,33 @@ function trustListSheet() {
     nodes.push(row)
   }
   openSheet('信任记录', nodes, [{ label: '关闭', run: () => closeSheet() }])
+}
+
+// ------------------------------------------------------------------ A1 执行台账（只读）
+// 官方 approval/asked|decided 审计对当前不可用（SPIKE S3 实测）⇒ SSH 侧自记内存环，
+// 这里只渲染。秘密从不进台账（命令本身不是秘密）。
+async function agentAuditSheet(conn) {
+  const nodes = [el('p', '', `Agent（模型）在这台主机上的执行记录。当前访问档位：${{ none: '不允许', readonly: '只读', full: '完整' }[conn.agentAccess] ?? '不允许'}。`)]
+  let entries = []
+  try {
+    const body = await api(`/ssh/api/agent-audit?hostId=${encodeURIComponent(conn.id)}&limit=100`)
+    entries = body.entries ?? []
+  } catch (err) {
+    nodes.push(el('p', 'notice warning', `读取失败：${err.message}`))
+  }
+  if (entries.length === 0) {
+    nodes.push(el('p', 'notice', '暂无记录。Agent 还没有（或被允许）在这台主机上执行过命令。'))
+  }
+  for (const entry of entries) {
+    const row = el('div', 'trust-row')
+    const info = el('div', 'trust-info')
+    const head = el('div', 'trust-key', `${entry.at ?? ''} · ${entry.riskLevel ?? '—'} · ${entry.decision ?? '—'}`)
+    info.append(head)
+    if (entry.command) info.append(el('div', 'trust-fp', String(entry.command).slice(0, 300)))
+    row.append(info)
+    nodes.push(row)
+  }
+  openSheet('Agent 执行记录', nodes, [{ label: '关闭', run: () => closeSheet() }])
 }
 
 // ------------------------------------------------------------------ 连接生命周期
@@ -1079,6 +1177,12 @@ function handleSessionFrame(conn, msg) {
     if (state.session !== null && state.session.isReadOnly() === true) {
       setStatusNote('写入权已空出，可从只读条点「接管写入」。')
     }
+  } else if (msg.type === 'forward') {
+    // U3/P2-1：本地转发事件。listening / channel-open 是常态不进状态栏；
+    // 失败（端口被占 EADDRINUSE / 服务端拒绝转发）必须让人看见。
+    if (msg.event === 'listen-error' || msg.event === 'channel-error') {
+      setStatusNote(`本地转发 ${msg.localPort} 异常：${msg.message ?? '未知原因'}`)
+    }
   }
   renderBanner()
   renderRail()
@@ -1235,9 +1339,18 @@ function renderIdentity() {
   $('#identity-name').textContent = conn?.label ?? 'SSH 工作区'
   $('#identity-env').textContent = conn?.group ?? ''
   $('#identity-env').hidden = conn === null || !conn.group || conn.group === '未分组'
+  // U3/P2-1：跳板与转发是连接的静态构成 —— 身份行如实标注（运行态由 forward 帧驱动）
+  const extras = []
+  if (conn !== null && typeof conn.jumpHostId === 'string' && conn.jumpHostId.length > 0) {
+    const jump = state.connections.find(item => item.id === conn.jumpHostId)
+    extras.push(`经 ${jump?.label ?? '跳板'}`)
+  }
+  if (conn !== null && Array.isArray(conn.forwards) && conn.forwards.length > 0) {
+    extras.push(`转发 ${conn.forwards.length} 条`)
+  }
   $('#identity-sub').textContent = conn === null
     ? '选择主机，开始连接'
-    : `${conn.username}@${conn.host}:${conn.port} · ${{ password: '密码认证', key: '私钥认证', agent: 'SSH agent' }[conn.auth?.method] ?? conn.auth?.method}`
+    : [`${conn.username}@${conn.host}:${conn.port}`, { password: '密码认证', key: '私钥认证', agent: 'SSH agent' }[conn.auth?.method] ?? conn.auth?.method, ...extras].join(' · ')
   const live = conn !== null && isLive(liveOf(conn.id))
   $('#btn-search').disabled = !live
   $('#btn-files').disabled = !live
@@ -1615,6 +1728,8 @@ function hostMenuItems(conn) {
     try { await navigator.clipboard.writeText(address); setStatusNote('已复制连接地址。') } catch { window.prompt('连接地址：', address) }
   } })
   items.push({ icon: 'shield', label: '查看信任记录', run: () => trustListSheet() })
+  // A1：Agent 执行台账（只读；官方 approval 审计对当前不可用，SSH 侧自记）
+  items.push({ icon: 'info', label: 'Agent 执行记录', run: () => void agentAuditSheet(conn) })
   // 字号行（plan §6 首版必需）：菜单内联 −/值/+
   items.push({
     custom: (() => {

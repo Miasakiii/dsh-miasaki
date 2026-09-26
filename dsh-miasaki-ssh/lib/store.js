@@ -7,6 +7,10 @@ import { dirname } from 'node:path'
 
 export const DEFAULT_PORT = 22
 export const AUTH_METHODS = new Set(['password', 'key', 'agent'])
+/** Agent 访问档位（A1 工具面，Agent 化规划 §7.1）：默认 none = 模型看不见这台主机。 */
+export const AGENT_ACCESS_LEVELS = new Set(['none', 'readonly', 'full'])
+/** 每条连接的本地转发规则上限（每条 = 一个本机监听端口，hold 不住太多）。 */
+export const MAX_FORWARDS_PER_CONNECTION = 8
 
 export class InputError extends Error {}
 export class NotFoundError extends Error {}
@@ -75,6 +79,56 @@ function requirePort(port) {
 }
 
 /**
+ * 校验并归一化转发规则（U3/P2-1：本地端口转发）。
+ * 每条规则 = 本机 127.0.0.1:localPort → 经 SSH → 远端 remoteHost:remotePort。
+ * 规则只有一处（与 splitHostPort 同源的纪律）：REST 写入与连接时建立都过它。
+ * remoteHost 是**远端视角**的地址（常见 `127.0.0.1`/`localhost`——服务就在 SSH
+ * 服务器本机上），因此不做 DNS 语法强校验，只拒空白与反斜杠。
+ */
+export function normalizeForwards(input) {
+  if (input === undefined || input === null) return []
+  if (!Array.isArray(input)) throw new InputError('转发规则必须是数组')
+  if (input.length > MAX_FORWARDS_PER_CONNECTION) {
+    throw new InputError(`每条连接最多 ${MAX_FORWARDS_PER_CONNECTION} 条转发规则`)
+  }
+  const seenPorts = new Set()
+  const out = []
+  for (const raw of input) {
+    if (raw === null || typeof raw !== 'object') throw new InputError('转发规则格式不正确')
+    const localPort = Number(raw.localPort)
+    if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) throw new InputError('本地端口必须是 1–65535 的整数')
+    if (seenPorts.has(localPort)) throw new InputError(`本地端口 ${localPort} 重复`)
+    seenPorts.add(localPort)
+    const remoteHost = String(raw.remoteHost ?? '').trim()
+    if (remoteHost.length === 0) throw new InputError('远端主机不能为空')
+    if (remoteHost.length > 255 || /[\s\\]/.test(remoteHost)) throw new InputError('远端主机不合法')
+    const remotePort = Number(raw.remotePort)
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) throw new InputError('远端端口必须是 1–65535 的整数')
+    out.push({
+      localPort,
+      remoteHost,
+      remotePort,
+      label: String(raw.label ?? '').trim().slice(0, 40),
+    })
+  }
+  return out
+}
+
+/**
+ * 连接 id 的合法形状 —— **一处口径**，store / REST 路由 / WS 票据三处共用。
+ *
+ * 2026-09-26 A1 实测逮到两次「同一份数据，Agent 用得了、人点不动」：REST 路由目录段与
+ * `/ssh/api/attach`、`/ssh/api/sftp/ticket` 都各自写着 `[0-9a-f-]+`（UUID 形状），而 store
+ * 对 id 只要求「非空字符串」⇒ 任何非 UUID 的 id 都会在页面侧被判非法。
+ * id 是内部标识（页面从不自己造），所以判据只需挡住路径分隔符、空白与控制字符。
+ */
+export function isConnectionId(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) return false
+  if (value !== value.trim()) return false // 首尾空白会造成「看着一样、查不到」
+  return !/[\s/\\]/.test(value) && !/[\u0000-\u001f\u007f]/.test(value)
+}
+
+/**
  * Validate and normalize a raw connection input into a stored record shape.
  * auth.keyPath must be an absolute path when method is 'key'; passwords are
  * never accepted into the store (they live in the runtime only).
@@ -87,7 +141,7 @@ export function normalizeConnection(input = {}) {
   // failed DNS (getaddrinfo ENOTFOUND, 实机反馈 2026-09-26).
   const typedHost = splitHostPort(input.host)
   const record = {
-    id: typeof input.id === 'string' && input.id.length > 0 ? input.id : randomUUID(),
+    id: isConnectionId(input.id) ? input.id : randomUUID(),
     label: normalizeLabel(input.label, 80),
     host: requireHost(typedHost.host),
     port: requirePort(typedHost.port ?? input.port),
@@ -98,6 +152,14 @@ export function normalizeConnection(input = {}) {
     createdAt: input.createdAt ?? new Date().toISOString(),
     updatedAt: input.updatedAt ?? new Date().toISOString(),
     lastConnectedAt: input.lastConnectedAt ?? null,
+    // U3（P2-1）：本地端口转发规则 + 跳板引用（另一条连接记录的 id）。
+    // 跳板必须是一条**已受信任的主机记录**（D4=②）：凭据与 TOFU 全部复用既有机制。
+    forwards: normalizeForwards(input.forwards),
+    ...(typeof input.jumpHostId === 'string' && input.jumpHostId.trim().length > 0
+      ? { jumpHostId: input.jumpHostId.trim() }
+      : {}),
+    // A1 工具面（Agent 化规划 §7.1）：Agent 访问档位。默认 none（模型看不见这台主机）。
+    agentAccess: AGENT_ACCESS_LEVELS.has(input.agentAccess) ? input.agentAccess : 'none',
   }
   if (authMethod === 'key') {
     const keyPath = String(input.auth?.keyPath ?? '').trim()
@@ -122,6 +184,9 @@ export function sanitizeConnection(record) {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     lastConnectedAt: record.lastConnectedAt,
+    forwards: Array.isArray(record.forwards) ? record.forwards.map(item => ({ ...item })) : [],
+    agentAccess: AGENT_ACCESS_LEVELS.has(record.agentAccess) ? record.agentAccess : 'none',
+    ...(typeof record.jumpHostId === 'string' && record.jumpHostId.length > 0 ? { jumpHostId: record.jumpHostId } : {}),
   }
 }
 

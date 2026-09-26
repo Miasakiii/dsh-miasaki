@@ -17,6 +17,7 @@ import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { hostKeyOf, fingerprintOf, splitHostPort } from './store.js'
 import { openSftpSession, resolveRemoteHome } from './sftp.js'
+import { createLocalForward, forwardSummaries } from './forward.js'
 import { SFTP_TICKET_TTL_MS } from './limits.js'
 
 // One time budget shared by the ssh2 handshake (readyTimeout) and the
@@ -298,9 +299,110 @@ export class SshRuntime {
     rc.execOnlyUpload = true
   }
 
+  // ------------------------------------------------------------------ 跳板（U3/P2-1，D4=②）
+  /**
+   * 确保跳板 runtime 已连接并返回它的 ssh2 Client。跳板必须是一条**已受信任的主机记录**：
+   * 凭据与 TOFU 全走既有机制 —— key/agent 认证可隐式建连（无秘密传递），
+   * password 认证在无人连过时以 CREDENTIAL_MISSING 失败 ⇒ 映射为 JUMP_UNAVAILABLE，
+   * 由人在页面上先连接跳板（「不把发起认证暴露成隐式能力」与 A1 同一条纪律）。
+   * 跳板**从未连过**（无指纹记录）时同样拒绝：它的 TOFU 确认窗口没有 UI 附着点
+   * （没人 attach 跳板 rc），让用户先单独连一次是唯一诚实的路径。
+   */
+  async ensureJumpRuntime(connId) {
+    const existing = this.runtimeOf(connId)
+    if (existing !== null && existing.status === 'connected' && existing.client !== null) {
+      return { client: existing.client }
+    }
+    if (existing !== null && (existing.status === 'waiting-fingerprint' || existing.status === 'connecting')) {
+      return this.awaitJump(existing)
+    }
+    const jumpRecord = await this.store.getConnection(connId)
+    if (jumpRecord === null) {
+      return { error: { code: 'JUMP_UNAVAILABLE', message: '跳板主机不存在：请检查「经由跳板」配置' } }
+    }
+    const known = await this.store.getFingerprint(hostKeyOf(jumpRecord.host, jumpRecord.port))
+    if (known === null) {
+      return { error: { code: 'JUMP_UNAVAILABLE', message: '跳板机是首次连接（需要确认指纹）：请先单独连接该主机完成信任，再经它连目标' } }
+    }
+    const result = await this.connect(connId, { openShell: false })
+    if (result?.error !== undefined) {
+      return { error: { code: 'JUMP_UNAVAILABLE', message: `跳板机未连接（${result.error}）：请先连接该主机` } }
+    }
+    const rc = this.runtimeOf(connId)
+    if (rc === null) {
+      return { error: { code: 'JUMP_UNAVAILABLE', message: '跳板机连接不可用，请重试' } }
+    }
+    return this.awaitJump(rc)
+  }
+
+  /** 等一条跳板 rc 真正就绪（readyPromise）；等待期出现指纹确认 / 失败 ⇒ 结构化错误。 */
+  async awaitJump(rc) {
+    if (rc.status === 'waiting-fingerprint') {
+      return { error: { code: 'JUMP_UNAVAILABLE', message: '跳板机正在等待指纹确认：请先单独连接该主机完成信任' } }
+    }
+    try {
+      await rc.readyPromise
+    } catch (error) {
+      return { error: { code: 'JUMP_UNAVAILABLE', message: `跳板机连接失败：${error?.message ?? error}` } }
+    }
+    if (rc.status !== 'connected' || rc.client === null) {
+      return { error: { code: 'JUMP_UNAVAILABLE', message: '跳板机未就绪，请重试' } }
+    }
+    return { client: rc.client }
+  }
+
+  /** 经跳板 client 开一条到目标 host:port 的 direct-tcpip 通道（作为新连接的 sock）。 */
+  openJumpChannel(client, record, { timeoutMs = HANDSHAKE_BUDGET_MS } = {}) {
+    return new Promise(resolve => {
+      let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        resolve(null)
+      }, timeoutMs)
+      try {
+        client.forwardOut('127.0.0.1', 0, record.host, record.port, (err, channel) => {
+          if (settled) { try { channel?.close?.() } catch { /* gone */ }; return }
+          settled = true
+          clearTimeout(timer)
+          resolve(err ? null : channel)
+        })
+      } catch {
+        settled = true
+        clearTimeout(timer)
+        resolve(null)
+      }
+    })
+  }
+
+  // ------------------------------------------------------------------ 本地转发（U3/P2-1）
+  /** 连接就绪后按记录里的规则建立本地监听；重复调用幂等（按 localPort 去重）。 */
+  setupForwards(rc) {
+    if (rc.disposed || rc.client === null) return
+    const specs = Array.isArray(rc.record?.forwards) ? rc.record.forwards : []
+    for (const spec of specs) {
+      if (rc.forwarders.has(spec.localPort)) continue
+      const fwd = createLocalForward({
+        client: rc.client,
+        spec,
+        onEvent: event => {
+          // 监听/通道事件广播给 viewer（页面只渲染）。EADDRINUSE / 服务端拒绝转发
+          // 是**转发层**故障：绝不能把连接状态翻成 error（answer() 会）——终端照常可用。
+          rc.broadcast({ type: 'forward', event: event.type, localPort: event.localPort, message: event.message ?? null })
+        },
+      })
+      rc.forwarders.set(spec.localPort, fwd)
+    }
+  }
+
+  /** 关闭一个连接的全部本地转发（teardown / 手动断开共用）。 */
+  closeForwards(rc) {
+    for (const fwd of rc.forwarders.values()) void fwd.close()
+    rc.forwarders.clear()
+  }
+
   // ------------------------------------------------------------------ state
-  listState() {
-    const out = []
+  listState() {    const out = []
     for (const rc of this.conns.values()) {
       out.push({
         id: rc.connId,           // profile id：REST 对外名字不变
@@ -308,6 +410,9 @@ export class SshRuntime {
         state: rc.status,
         label: rc.label,
         shells: shellSummaries(rc),
+        // U3/P2-1：本地转发运行态 + 跳板来源（页面渲染用；无则为空）
+        forwards: forwardSummaries(rc.forwarders),
+        via: typeof rc.record?.jumpHostId === 'string' && rc.record.jumpHostId.length > 0 ? rc.record.jumpHostId : null,
       })
     }
     return out
@@ -316,6 +421,29 @@ export class SshRuntime {
   isConnected(id) {
     const runtimeId = this.byProfile.get(id)
     return runtimeId !== undefined && this.conns.get(runtimeId)?.status === 'connected'
+  }
+
+  /**
+   * A1 `ssh_session_read` 的 host 侧读数口：读指定连接的当前 shell 回放环尾部。
+   * 只读内存态 ring，不碰远端、不开 channel。截断在调用方（工具输出预算）。
+   */
+  readShellText(connId, { lines = 200 } = {}) {
+    const rc = this.runtimeOf(connId)
+    if (rc === null) return null
+    const shell = rc.primaryShell()
+    if (shell === null) return null
+    const text = Buffer.concat(shell.sbChunks).toString('utf8')
+    const all = text.split('\n')
+    const kept = all.slice(-Math.max(1, Math.min(Number(lines) || 200, 2000)))
+    return {
+      text: kept.join('\n'),
+      truncated: kept.length < all.length,
+      cols: shell.cols,
+      rows: shell.rows,
+      title: shell.title,
+      live: shell.ended !== true,
+      runtimeId: rc.id,
+    }
   }
 
   // ------------------------------------------------------------------ connect
@@ -342,6 +470,7 @@ export class SshRuntime {
     }
 
     const rc = new RuntimeConn(this, id, record)
+    rc.openShell = options.openShell !== false // 跳板等辅助连接不开 shell
     this.conns.set(rc.id, rc)
     this.byProfile.set(id, rc.id)
 
@@ -369,6 +498,27 @@ export class SshRuntime {
     }
     const cfg = built.cfg
     const keyboardPassword = built.keyboardPassword
+
+    // U3/P2-1 跳板（D4=②）：目标连接走跳板 runtime 的 direct-tcpip 通道作为 sock。
+    // 跳板必须先连上（key/agent 可隐式建连；password 必须人先连 —— 见 ensureJumpRuntime）。
+    // 跳板通道挂在 rc 上，teardown 时随连接一起关闭。
+    if (typeof record.jumpHostId === 'string' && record.jumpHostId.length > 0) {
+      const jump = await this.ensureJumpRuntime(record.jumpHostId)
+      if (jump.error !== undefined) {
+        this.bail(rc, jump.error)
+        return { id, error: jump.error.code }
+      }
+      const channel = await this.openJumpChannel(jump.client, record)
+      if (channel === null) {
+        this.bail(rc, { code: 'JUMP_CHANNEL_FAILED', message: '无法经跳板机建立到目标的通道：请检查跳板机是否允许转发、目标地址端口是否正确' })
+        return { id, error: 'JUMP_CHANNEL_FAILED' }
+      }
+      rc.jumpChannel = channel
+      cfg.sock = channel
+      // sock 是 duplex stream：ssh2 不再自建 TCP，host/port 仅供信息展示
+      cfg.host = record.host
+      cfg.port = record.port
+    }
 
     rc.connKey = hostKeyOf(record.host, record.port)
 
@@ -399,6 +549,10 @@ export class SshRuntime {
       // reached when session ends or connection drops
       this.expirePendingFor(rc)
       for (const sh of rc.shells.values()) sh.stream = null
+      // SSH 断了 ⇒ 本地转发失去通道：撤监听（僵尸端口比没有端口更糟）
+      this.closeForwards(rc)
+      // ready 之前就 close ⇒ 就绪门必须 reject（跳板 awaitJump 不能挂死）
+      if (rc.status !== 'connected') rc.settleReady(new Error('连接已断开'))
       if (rc.disposed) return
       if (rc.status === 'connected' || rc.status === 'connecting' || rc.status === 'waiting-fingerprint') {
         rc.status = 'closed'
@@ -432,8 +586,8 @@ export class SshRuntime {
           if (this.pending.get(token) !== item) return
           this.expirePendingFor(rc)
           if (this.conns.get(rc.id) === rc && rc.status === 'waiting-fingerprint') {
-            rc.status = 'error'
-            rc.broadcast({ type: 'status', state: 'error', code: 'FINGERPRINT_TIMEOUT', message: '指纹确认超时，已断开' })
+            // 走 answer：同一帧形状 + 就绪门 reject（跳板 awaitJump 不能挂死）
+            rc.answer('FINGERPRINT_TIMEOUT', '指纹确认超时，已断开')
           }
         }, HANDSHAKE_BUDGET_MS),
       }
@@ -497,7 +651,11 @@ export class SshRuntime {
   onReady(rc) {
     if (rc.disposed) return
     rc.status = 'connected'
+    rc.settleReady() // 跳板 awaitJump 等的就是这一刻
     void this.store.touchConnected(rc.connId).catch(() => {})
+    // U3/P2-1：本地转发随连接就绪建立（幂等；无规则时零动作）
+    this.setupForwards(rc)
+    if (rc.openShell === false) return // 跳板等辅助连接：只做通道，不开 shell
     // 连接就绪即开第一个 shell（默认 shell），其余由 viewer 显式 shell.open（方案 §4.1.3）
     this.openShell(rc, { cols: DEFAULT_COLS, rows: DEFAULT_ROWS }, (err, shell) => {
       if (rc.disposed) return
@@ -861,12 +1019,15 @@ export class SshRuntime {
     this.expirePendingFor(rc) // a discarded connection cannot keep a confirm window open
     this.expireTicketsFor(rc.connId)
     this.expireSftpTicketsFor(rc.connId)
+    this.closeForwards(rc) // 本地监听先撤（否则跳板通道关了它还占着端口）
+    try { rc.jumpChannel?.close?.() } catch { /* gone */ }
     try { rc.sftp?.end?.() } catch { /* ignore */ }
     try { rc.client && rc.client.end() } catch { /* ignore */ }
     for (const sh of rc.shells.values()) {
       try { sh.stream && sh.stream.end() } catch { /* ignore */ }
     }
     rc.status = 'closed'
+    rc.settleReady(new Error('连接已放弃'))
     rc.broadcast({ type: 'status', state: 'closed', code: 'DISCARDED' })
     rc.dispose()
     if (this.byProfile.get(rc.connId) === rc.id) this.byProfile.delete(rc.connId)
@@ -874,6 +1035,9 @@ export class SshRuntime {
 
   async shutdown() {
     for (const rc of [...this.conns.values()]) {
+      this.closeForwards(rc)
+      rc.settleReady(new Error('runtime 已关闭'))
+      try { rc.jumpChannel?.close?.() } catch { /* ignore */ }
       try { rc.sftp?.end?.() } catch { /* ignore */ }
       try { rc.client && rc.client.end() } catch { /* ignore */ }
       rc.sockets.clear()
@@ -946,7 +1110,34 @@ export class RuntimeConn {
     this.homeDir = null
     this.execOnlyUpload = false
 
+    // U3/P2-1：跳板通道 + 本地转发（连接级，teardown 一并关闭）
+    this.jumpChannel = null
+    this.forwarders = new Map() // localPort -> forwarder
+    this.openShell = true
+
+    // 连接记录（转发规则与跳板引用的来源；listState 不直接外发它）
+    this.record = record ?? null
+
+    // 就绪门（U3/P2-1 跳板需要）：ready 时 resolve(rc)，终态（error/close/bail）时
+    // reject(Error)。waiting-fingerprint 是中间态，不结算（确认窗口继续走）。
+    this.readySettled = false
+    this.readyPromise = new Promise((resolve, reject) => {
+      this._resolveReady = resolve
+      this._rejectReady = reject
+    })
+    // 常态下没人读就绪门（只有 awaitJump 显式等）—— 不挂 no-op catch 的话，
+    // teardown/bail 的 reject 会以 unhandledRejection 炸出来。
+    this.readyPromise.catch(() => { /* 见 awaitJump */ })
+
     this.label = record.label
+  }
+
+  /** readyPromise 的单次结算点（幂等）。 */
+  settleReady(error = null) {
+    if (this.readySettled) return
+    this.readySettled = true
+    if (error !== null && error !== undefined) this._rejectReady(error)
+    else this._resolveReady(this)
   }
 
   /** 第一个未结束的 shell；全部结束则回最后一个（供回放）。 */
@@ -967,6 +1158,7 @@ export class RuntimeConn {
     this.status = 'error'
     this.lastErrorCode = code
     this.lastErrorMessage = message
+    this.settleReady(new Error(message))
     this.broadcast({ type: 'status', state: 'error', code, message })
   }
 

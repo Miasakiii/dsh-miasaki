@@ -184,6 +184,30 @@ test('REST: 历史记录在 connect 时就地拆分并回写，响应回报 repa
   }, { seed: { version: 1, connections: [legacy] } })
 })
 
+// 2026-09-26 A1 实测逮到：REST 路由正则只认 UUID 形状（`[0-9a-f-]+`），而 store 接受任意
+// 非空 id ⇒ 非 UUID id 的记录「列表里看得见、点一下就 404 接口不存在」。两处口径必须一致。
+// （同一条记录 Agent 走 store 直查一直能用 —— 所以缺陷只在人的页面上显形。）
+test('REST: 非 UUID 形状的连接 id 也能操作（详情/连接不落 404 兜底）', async () => {
+  const human = {
+    id: 'a1-live-local', label: 'a1-local-sshd', host: '127.0.0.1', port: 22,
+    username: 'u', auth: { method: 'password' }, group: '未分组', favorite: false,
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', lastConnectedAt: null,
+  }
+  await withServer(async ({ port }) => {
+    const list = await rawRequest(port, '/ssh/api/connections')
+    assert.equal(JSON.parse(list.text).connections.length, 1, '列表里本来就看得见')
+
+    const one = await rawRequest(port, `/ssh/api/connections/${human.id}`)
+    assert.equal(one.status, 200, '详情不能 404')
+    assert.equal(JSON.parse(one.text).connection.id, human.id)
+
+    // password 且未给口令 ⇒ 业务层的 400（CREDENTIAL_MISSING），但绝不能是路由 404
+    const connect = await rawRequest(port, `/ssh/api/connections/${human.id}/connect`, { method: 'POST', body: '{}' })
+    assert.equal(connect.status, 400, `连接接口应命中业务分支，实际 ${connect.status}：${connect.text}`)
+    assert.notEqual(JSON.parse(connect.text).error, '接口不存在')
+  }, { seed: { version: 1, connections: [human] } })
+})
+
 test('WS upgrade: fence blocks foreign host, then ok client can talk', async () => {  await withServer(async ({ port }) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ssh/ws`, [], { headers: HOST_HEADER })
     // no connection has been created, so the host replies with an error frame
@@ -206,8 +230,14 @@ test('U2.1: POST /ssh/api/attach 对未知连接 404 / 非法 connId 400', async
   await withServer(async ({ port }) => {
     const res = await rawRequest(port, '/ssh/api/attach', { method: 'POST', body: JSON.stringify({ connId: '11111111-1111-1111-1111-111111111111' }) })
     assert.equal(res.status, 404)
-    const bad = await rawRequest(port, '/ssh/api/attach', { method: 'POST', body: JSON.stringify({ connId: 'not-a-uuid!' }) })
+    // 形状非法的判据是「空白 / 路径分隔符 / 控制字符」（口径一处：store.isConnectionId），
+    // **不是** UUID 形状 —— 后者曾让非 UUID id 的终端永远附着不上（2026-09-26 实机）。
+    const bad = await rawRequest(port, '/ssh/api/attach', { method: 'POST', body: JSON.stringify({ connId: 'bad id' }) })
     assert.equal(bad.status, 400)
+
+    const human = await rawRequest(port, '/ssh/api/attach', { method: 'POST', body: JSON.stringify({ connId: 'a1-live-local' }) })
+    assert.equal(human.status, 404, '非 UUID 但形状合法 ⇒ 只该报连接不存在')
+    assert.equal(JSON.parse(human.text).error, '连接不存在或未在运行')
   })
 })
 

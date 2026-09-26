@@ -29,7 +29,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **终端功能**：多主机标签（同主机只 attach；关闭查看 ≠ 断开，断开需确认）、Ctrl+Shift+C/V 复制粘贴、缓冲区原生查找（**零新依赖**——addon-search 对 xterm 6 只有 beta 版，未核验不引入）、字号 12–20px、本地清屏、专注模式、多行 / 含控制字符粘贴先预览确认；
 - **响应式**：容器查询断点 960 / 720 / 480（依据 SSH 容器宽度而非窗口宽度），窄屏导航改模态抽屉（焦点陷阱 + Esc 归还焦点）。
 
-**待实机验证**（U0+U1+A0+D2–D4+U2 合并验收，见 [回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)）：**重启 `dsh web`**（`index.js` 的 `cachedAsset` 对静态资源做进程内一次性缓存，浏览器强刷不够）后按清单逐项过。**U2 已于 2026-09-16 跑过一轮完整实机验收并修复 4 处回归（见下文「U2 实机验收」段），实机复验同样待重启后进行**。U2.2（SFTP）留待真实主机补验后开工、U3（跳板 / 转发）未动；A1（工具面）待 SPIKE S4 实测。
+**待实机验证**（U0+U1+A0+D2–D4+U2 合并验收，见 [回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)）：**重启 `dsh web`**（`index.js` 的 `cachedAsset` 对静态资源做进程内一次性缓存，浏览器强刷不够）后按清单逐项过。**U2 已于 2026-09-16 跑过一轮完整实机验收并修复 4 处回归（见下文「U2 实机验收」段），实机复验同样待重启后进行**。U2.2（SFTP）留待真实主机补验后开工；**A1（工具面）已于 2026-09-26 在本机真协议 sshd（真 `ssh2.Server`）上完成实机验收**——「三工具进模型工具面 / L0 免审批直通 / L1 审批双向（允许则执行、拒绝则远端零记录）」三条判据均有双侧证据，过程中逮到并修复 **6 处真缺陷**（`output` 缺失导致注册被官方全部拒收、`ssh_hosts` 不带 `id`、审批入参形状不符契约、隐式建连不等就绪、注册时点早于服务就绪、审计不落盘），见 [CHANGELOG](design/CHANGELOG.md) 顶部「A1 实机验收」节；U3（跳板 / 转发）已实施、实机待验。
 
 **2026-09-14 A0 上下文桥已实施**（[Agent 化规划](design/2026-09-14-ssh-agent-driven-plan.md) §8.2/§17，用户拍板四项决策后的首个交付）：
 
@@ -118,6 +118,15 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 
 **2026-09-26 对标 zcode 调研完成**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户定向「参考 zcode 官方仓库做」）：对象为智谱 [zai-org/ZCode](https://github.com/zai-org/ZCode)（v3.14.3，agent harness，其 SSH 子系统用于「把 agent runtime 部署到远程」，参考克隆 `_refs/zcode/`）。**双方独立踩中同一批 ssh2 坑**（tryKeyboard 不开则新装 Ubuntu/Debian 密码必失败——本线 2026-09-26 已修；短命令 exit 早于 stdout data；readyTimeout 20s 太短；client 无常驻 error 监听会炸 host）⇒ 互相印证。**我们更强项**：TOFU + known_hosts（zcode 产品代码零 host key 校验，保持不动）。**识别的差距与候选**：keepalive 15s×3、**SFTP→exec pipe 降级链**（网关/跳板把 exec 与 sftp 落到不同文件系统视图）、`~/.ssh/config` 别名导入（`ssh -G` 优先 + 自研解析回退）、连接向导「实时阶段日志 + 收起≠关闭」、远端能力 preflight、docker sshd + `ssh -L` 真隧道验证基建；跳板/端口转发（U3）zcode 无参考、需自研。产出 **P0×3 / P1×4 / P2×4 共 11 项候选 + 5 项待用户拍板决策（D1–D5）**，另有「明确不做」清单（agent-over-ssh 部署链、WSL/Docker backend 等，各附理由）。
 
+**2026-09-26 P2 落地：U3 跳板/本地转发 + A1 `ssh_exec` 工具面**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户「p2开工」，实施记录见 [CHANGELOG](design/CHANGELOG.md)）：
+
+- **U3 本地端口转发**：`lib/forward.js` 在 127.0.0.1 起真监听，每入连接经 `forwardOut`（direct-tcpip）送达远端视角地址；编辑器配置（上限 8 条）、连上即建、断开即撤、端口关闭即释放；EADDRINUSE/服务端拒绝逐连接上报不撤监听；
+- **U3 跳板（D4=②）**：目标连接经跳板 runtime 的 forwardOut 通道作 `sock` 注入——凭据/TOFU/票据全复用；跳板从未连过或缺指纹 ⇒ `JUMP_UNAVAILABLE` 前置拒绝（TOFU 确认窗口无 UI 附着点）；password 跳板不隐式建连；
+- **A1 工具面（D2 默认 off）**：`ssh_hosts` / `ssh_exec` / `ssh_session_read` 三工具；命令服务端分级 L0/L1/L2（命令头判 `rm -rf`、`docker rm -f` 不误伤；未识别保守 L1）；readonly 主机 L1/L2 连审批机会都不给；full 的 L1/L2 走 `userQuestions` 审批四态（unavailable 失败关闭）；key/agent 隐式建连、password 不；`exec.signal` 取消、双预算截断、cwd POSIX 引用前置；审计台账（内存环 200 条 + **追加落盘 `dataDir/exec-audit.jsonl`**，重启可查）+「Agent 执行记录」浮层；
+- **P2-3 双栈边界**：exec 假定 `/bin/sh`（远端 Windows 给可照做提示）；SFTP 路径按 POSIX 归一；
+- **P2-4 真协议探针**（归档 `_refs/scripts-archive/ssh-p2-probes/`）**8/8 PASS**：真 direct-tcpip 字节往返 + **经跳板 sock 注入完成真协议握手** + 真 exec（motd 跳过）；
+- 单测 **225 → 276 例**、`verify-all ssh` **20/20 → 31/31**；**A1 工具面已于 2026-09-26 单独完成实机验收**（本机真协议 sshd，工具面可见 / L0 直通 / L1 审批双向，见 [CHANGELOG](design/CHANGELOG.md) 顶部；基座 `_refs/scripts-archive/ssh-a1-live/`）；真跳板建连与本地转发实机仍待验。
+
 **2026-09-26 对标方案落地：P0 三件套 + U2.2 SFTP + P1-1 ssh config 导入**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户拍板「按建议开工」D1②/D5②/D2①，实施记录见 [CHANGELOG](design/CHANGELOG.md)）：
 
 - **P0-1 连接健壮性**：keepalive 15s×3（NAT/防火墙静默断开不再挂死，真协议探针 6/6 PASS 归档 `_refs/scripts-archive/ssh-keepalive-probe/`：60043ms 报 `Keepalive timeout` 归 `TIMEOUT`）；连接配置提取为纯函数 `buildConnectConfig()`；`classifyError()` 新增 ssh2 `level` 分级与私钥口令两码（`KEY_PASSPHRASE_MISSING/INVALID`）；
@@ -166,7 +175,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 | **U0+U1**（工作区规划） | U0 可靠性闭环（二进制输出 / 查看器实例 / 恢复 attach / 指纹闭环 / 输入归属）+ U1 统一工作区（主机导航 / 多标签 / 编辑抽屉 / 三主题桥接 / 复制粘贴 / 查找 / 字号 / 响应式） | **已实施，待实机验收** |
 | **A0**（Agent 化规划 §8.2/§17） | 上下文桥：送往对话（选区 / 最近 40 行 / 错误追问）+ 来源主机标记 + 剪贴板通道 | **已实施（2026-09-14），待实机验收**（单测 63 例、`verify-all ssh` 12/12） |
 | M2 | SFTP、系统终端打开、空白会话备用入口（多标签 / 断线重连 / 主题跟随 / 分组收藏已随 U1 交付） | **U2 主体已实施（2026-09-16）：[U2 规划](design/2026-09-15-ssh-u2-plan.md) §6 的 U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复已落地并过 **113 例单测** + 端到端探针（见[实施验收包](design/2026-09-16-ssh-u2-implementation-report.md)）；同轮实机验收发现并修复 4 处回归（2 阻断 / 1 高危 / 1 中危，见[验收报告](design/2026-09-16-ssh-u2-acceptance-report.md)）⇒ **待重启复验**；**U2.2 SFTP 已于 2026-09-26 实施**（zcode 降级链 + 8 个 REST 端点 + 文件抽屉 + ssh config 导入，单测 225 例、`verify-all ssh` 26/26，实施记录见 [CHANGELOG](design/CHANGELOG.md)，真实主机读写往返待实机验收） |
-| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | 规划（对应 U3）；**细化方案见 [Agent 化规划](design/2026-09-14-ssh-agent-driven-plan.md)（已定稿：D1 做「Agent 的 SSH 手」/ D2 总开关默认 `off` / D3 确认在对话页 / D4 允许 key·agent 主机隐式建连；A1–B 待做）**；`ssh_exec` 的通道地基（`lib/exec.js`：POSIX 包装 / close 收尾 + 排空 / banner 跳过）已于 2026-09-26 随 P0-3 落地 |
+| M3 | 与 DSH 联动：选中文本送进对话、`ssh_exec` 工具（带审批门）、命令片段、跳板机 / 端口转发、云厂商实例导入 | **A1 工具面 + U3 跳板/本地转发已于 2026-09-26 实施**：`ssh_hosts` / `ssh_exec` / `ssh_session_read` 三工具（D2 总开关默认 `off`，patch `agentTools` 开启）；服务端分级 L0–L2（`classifyCommand`）；readonly 硬闸 + full 走 `userQuestions` 审批四态（unavailable 失败关闭）；key/agent 隐式建连、password 不；`exec.signal` 取消 + 双预算截断；审计台账（内存环 + 落盘 `exec-audit.jsonl`）+「Agent 执行记录」浮层。跳板 D4=②：目标连接经跳板 runtime 的 forwardOut 通道作 `sock` 注入（凭据/TOFU/票据全复用）；本地转发 direct-tcpip 真监听。真协议探针 8/8 归档 `_refs/scripts-archive/ssh-p2-probes/`，实施记录见 [CHANGELOG](design/CHANGELOG.md)。**A1 工具面已于 2026-09-26 实机验收**（真协议 sshd：工具面可见 + L0 直通 + L1 审批双向 + 拒绝零外发；基座 `_refs/scripts-archive/ssh-a1-live/`）；**真跳板建连 / 本地转发实机仍待验**；云厂商实例导入未动 |
 
 ## M1 前置 SPIKE
 
@@ -190,23 +199,30 @@ dsh-miasaki-ssh/
 ├── lib/
 │   ├── store.js            # 纯数据层：连接库 / known_hosts / 三道围栏（可单测）
 │   ├── runtime.js          # ssh2 运行时：TOFU / generation 绑定 / scrollback 环形缓冲 / WS 中继 /
-│   │                       #   三层身份 + 票据 / keepalive / SFTP 会话缓存与 execOnly 记忆
+│   │                       #   三层身份 + 票据 / keepalive / SFTP 会话缓存与 execOnly 记忆 /
+│   │                       #   跳板（就绪门 + sock 注入）/ 本地转发 / readShellText
 │   ├── diagnose.js         # 连接诊断：DNS / TCP+banner / 认证方式（只发 none）/ 出口 IP / verdict
-│   ├── exec.js             # exec 通道前置（P0-3）：POSIX 包装 / close 收尾 + 排空 / banner 跳过
+│   ├── exec.js             # exec 通道前置（P0-3）：POSIX 包装 / close 收尾 + 排空 / banner 跳过 / signal 取消
 │   ├── paths.js            # 远程路径规范化（SFTP 与 A1 共用的安全口径一处）
 │   ├── sftp.js             # SFTP 传输层：列目录 / 流式上下行 / 变更 / SFTP→exec pipe 降级链 / 进度节流
 │   ├── limits.js           # 共享上限常量（512MiB / 票据 TTL / 节流 / 并发）
-│   └── sshConfig.js        # ~/.ssh/config 别名导入（ssh -G 优先 + 自研解析回退，只导直连）
+│   ├── sshConfig.js        # ~/.ssh/config 别名导入（ssh -G 优先 + 自研解析回退，只导直连）
+│   ├── forward.js          # 本地端口转发（net 监听 + forwardOut，U3/P2-1）
+│   ├── policy.js           # A1 策略：命令分级 L0/L1/L2 + 访问判定（纯函数）
+│   ├── tools.js            # A1 工具面：ssh_hosts / ssh_exec / ssh_session_read（定义与执行体）
+│   └── audit.js            # A1 执行台账：内存环 + 追加落盘 exec-audit.jsonl（不记输出内容与秘密）
 ├── client.js               # client 半：第一行入口按钮（actions 槽）+ conversation.view 注册 + iframe 视图
 ├── session.js              # 前端查看器实例：一个查看器独占 xterm + WS，整体可销毁（U0）+ 主题/字号/查找 API（U1）+ 只读缓冲区快照（A0）+ v2 票据附着/多 shell 绑定/写权/序列化快照（U2）
 ├── sftp-ui.js              # 前端（iframe 内）：远程文件面板抽屉（U2.2）—— 面包屑/列表/上传队列/变更操作，自包含 IIFE（window.SshFiles）
 ├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑悬浮窗 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）/ 文件面板入口与 ssh config 导入（U2.2/P1-1）
 ├── styles.css              # 工作区布局 + --ssh-* 语义令牌（原生明暗兜底，宿主桥接覆盖）
-├── test/                   # 单测 225 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑/keepalive 与错误词汇 ↔
+├── test/                   # 单测 276 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑/keepalive 与错误词汇 ↔
 │                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照/未绑定不发帧/按 seq 匹配 ↔
-│                           #   exec: POSIX 包装/exit 早于 data/排空窗口/超时/协议行扫描 ↔ paths: 词法归一/NUL/控制字符/~ 展开 ↔
-│                           #   sftp: 状态词汇/进度节流/列目录映射/上传降级链(sftp→exec pipe)/下载计数 ↔ http-sftp: 真实 HTTP 端到端（票据/fence/409/413/降级路径）↔
+│                           #   exec: POSIX 包装/exit 早于 data/排空窗口/超时/协议行扫描/signal 取消 ↔ paths: 词法归一/NUL/控制字符/~ 展开 ↔
+│                           #   sftp: 状态词汇/进度节流/列目录映射/上传降级链(sftp→exec pipe)/下载计数 ↔ http-sftp: 真实 HTTP 端到端（票据/fence/409/413/降级）↔
 │                           #   sftp-ui: vm 加载/纯函数/接线契约 ↔ sshConfig: 解析器/ssh -G 合并/缓存/回退通道 ↔
+│                           #   forward: 真 TCP 往返/EADDRINUSE/close 释放/store 归一化/编辑器契约 ↔ forward-runtime: 跳板选取/就绪门/转发生命周期 ↔
+│                           #   policy: L0/L1/L2 分级表/readonly 硬闸 ↔ audit: 环语义 ↔ tools: 三工具执行体/审批四态/取消/超时/隐式建连 ↔
 │                           #   app: 分组过滤/粘贴守卫/颜色合成/送对话格式/工作区快照 ↔ http: 路由与 attach 票据 ↔ client: 工厂契约 + 主题桥接快照）
 ├── design/
 │   ├── 2026-09-09-ssh-design.md

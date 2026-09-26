@@ -1,6 +1,12 @@
 # SSH 线对标 zcode（zai-org/ZCode）调研与后续方案设计
 
-> **状态**：~~**v1.0 调研完成，待用户拍板（决策项见 §8）**~~ **v1.1：D1–D5 已拍板（2026-09-26 用户「按建议开工」），P0×3 与 P1-1 已实施完毕**（P0-1 keepalive/错误词汇、P0-3 `lib/exec.js`、U2.2 SFTP 含降级链、P1-1 ssh config 导入；单测 153 → 225 例、`verify-all ssh` 14/14 → 26/26，keepalive 真协议探针 6/6 归档 `_refs/scripts-archive/ssh-keepalive-probe/`）。实施记录见 [CHANGELOG](CHANGELOG.md) 同名条目。**P2 四项（U3 跳板转发 / A1 `ssh_exec` / 双栈细节 / 验证基建）未动**；实机验收待重启 `dsh web`。
+> **状态**：**v1.2：P0×3 + P1-1 + P2×4 全部实施完毕**（用户两次拍板「按建议开工」「p2开工」）。
+> P0-1 keepalive/错误词汇、P0-3 `lib/exec.js`、U2.2 SFTP 含降级链、P1-1 ssh config 导入、
+> P2-1 U3 跳板（D4=② sock 注入）+ 本地转发、P2-2 A1 三工具（D2 默认 off）、
+> P2-3 双栈边界、P2-4 真协议探针 8/8（归档 `_refs/scripts-archive/ssh-p2-probes/`）。
+> 单测 153 → **276 例**、`verify-all ssh` 14/14 → **31/31**，实施记录见 [CHANGELOG](CHANGELOG.md)。
+> **全部待重启 `dsh web` 后实机验收**（SFTP 往返 / 降级实机路径 / ssh config 导入 / 真跳板建连 /
+> 本地转发实机 / `agentTools: true` 的工具注册与审批落点）。
 >
 > **参考克隆**：`_refs/zcode/`（zai-org/ZCode `main` @ `2026-09-24`，README 自称 v3.14.3；
 > 6.8k stars，TypeScript pnpm monorepo）。`_refs/` 为归档区、不入库；文中所有 zcode 路径均相对该克隆。

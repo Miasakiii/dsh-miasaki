@@ -206,8 +206,13 @@ test('SFTP 票据：未运行连接 404，非法 connId 400', async () => {
   await withServer(async ({ port }) => {
     const missing = await postJson(port, '/ssh/api/sftp/ticket', { connId: '11111111-1111-1111-1111-111111111111' })
     assert.equal(missing.status, 404)
-    const bad = await postJson(port, '/ssh/api/sftp/ticket', { connId: 'not-a-uuid!' })
+    // 形状非法的判据是空白 / 路径分隔符 / 控制字符（store.isConnectionId 一处口径），
+    // 不是 UUID 形状 —— 非 UUID id 必须能走到「连接不存在」而不是被判非法（2026-09-26 实机）。
+    const bad = await postJson(port, '/ssh/api/sftp/ticket', { connId: 'bad id' })
     assert.equal(bad.status, 400)
+    const human = await postJson(port, '/ssh/api/sftp/ticket', { connId: 'a1-live-local' })
+    assert.equal(human.status, 404)
+    assert.equal(JSON.parse(human.body).error, '连接不存在或未在运行')
   })
 })
 

@@ -90,7 +90,7 @@ test('SshStore persists connections and fingerprints, then reloads', async () =>
     // list is sanitized (no secrets leak; there are none) and includes state
     const list = await store.listConnections()
     assert.equal(list.length, 1)
-    assert.deepEqual(Object.keys(list[0]).sort(), ['auth', 'createdAt', 'favorite', 'group', 'host', 'id', 'label', 'lastConnectedAt', 'port', 'updatedAt', 'username'].sort())
+    assert.deepEqual(Object.keys(list[0]).sort(), ['agentAccess', 'auth', 'createdAt', 'favorite', 'forwards', 'group', 'host', 'id', 'label', 'lastConnectedAt', 'port', 'updatedAt', 'username'].sort())
 
     // update
     await store.updateConnection(created.id, { host: '10.0.0.2' })
@@ -149,4 +149,21 @@ test('normalizeConnection：主机栏里带端口时拆分，且它优先于端�
 
   // 内嵌端口同样过端口校验：不合法就报错，不静默连错地方
   assert.throws(() => normalizeConnection({ label: 'x', host: '10.0.0.1:99999', username: 'u' }), /端口必须是/)
+})
+
+test('isConnectionId：口径一处（无空白/路径分隔符/控制字符），UUID 不是唯一合法形状', async () => {
+  const { isConnectionId } = await import('../lib/store.js')
+  // 2026-09-26 实机：REST 路由与 attach 票据曾各自要求 UUID 形状，非 UUID id 的记录
+  // 「Agent 用得了、人点不动」。判据现在只有这一处。
+  assert.equal(isConnectionId('a1-live-local'), true, '人类可读 id 与 UUID 同级合法')
+  assert.equal(isConnectionId('11111111-1111-1111-1111-111111111111'), true)
+  assert.equal(isConnectionId('a.b_c-d:e'), true)
+  for (const bad of ['', ' x', 'x ', 'a b', 'a/b', 'a\\b', 'a\nb', '\u0000', 'x'.repeat(129), 42, null, undefined, {}]) {
+    assert.equal(isConnectionId(bad), false, `应拒绝 ${JSON.stringify(bad) ?? String(bad)}`)
+  }
+  // normalizeConnection 与它同源：非法输入 id ⇒ 回落到新 UUID（不静默接受畸形 id）
+  const record = normalizeConnection({ id: 'bad id', label: 'x', host: '10.0.0.1', username: 'u' })
+  assert.match(record.id, /^[0-9a-f-]{36}$/i)
+  const kept = normalizeConnection({ id: 'a1-live-local', label: 'x', host: '10.0.0.1', username: 'u' })
+  assert.equal(kept.id, 'a1-live-local')
 })

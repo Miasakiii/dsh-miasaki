@@ -24,7 +24,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node --check index.js && node --check client.js && node --check session.js && node --check app.js && node --check sftp-ui.js && node --check lib/store.js && node --check lib/runtime.js && node --check lib/diagnose.js && node --check lib/exec.js && node --check lib/paths.js && node --check lib/sftp.js && node --check lib/limits.js && node --check lib/sshConfig.js",
+    "build": "node --check index.js && node --check client.js && node --check session.js && node --check app.js && node --check sftp-ui.js && node --check lib/store.js && node --check lib/runtime.js && node --check lib/diagnose.js && node --check lib/exec.js && node --check lib/paths.js && node --check lib/sftp.js && node --check lib/limits.js && node --check lib/sshConfig.js && node --check lib/forward.js && node --check lib/tools.js && node --check lib/policy.js && node --check lib/audit.js",
     "prepare": "pnpm run build",
     "test": "node --test test/*.test.js"
   },

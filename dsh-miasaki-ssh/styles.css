@@ -433,6 +433,12 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
 
 .diag-note { margin: 16px 0 0; font-size: 11px; line-height: 1.8; color: var(--ssh-faint); }
 
+/* ---------------------------------------------------------------- U3/P2-1 本地转发编辑行 */
+.forward-rows { display: flex; flex-direction: column; gap: 6px; }
+.forward-row { display: grid; grid-template-columns: 5.5em 1fr 5.5em auto; gap: 6px; align-items: center; }
+.forward-row input { width: 100%; min-width: 0; }
+.forward-row .text-btn { padding: 4px 8px; min-height: 30px; font-size: 11px; white-space: nowrap; }
+
 /* ---------------------------------------------------------------- U2.2 文件面板（右抽屉）
  * 挂在 .workbench（position:relative）内的绝对定位抽屉：宽屏 400px 侧栏，
  * 窄屏（≤720，与主机导航抽屉同一断点口径）整幅覆盖。z-index 低于 sheet 浮层，

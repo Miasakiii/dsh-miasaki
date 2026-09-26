@@ -12,3 +12,7 @@
         trustedHosts: []
         # Connection/auth limits.
         scrollbackBytes: 262144
+        # A1 工具面总开关（D2：默认 off —— 不注册即不进 schema、不占 token，
+        # 模型完全不知道 SSH 存在；「关掉即原生」与 appearance 线同一条纪律）。
+        # 开启后注册 ssh_hosts / ssh_exec / ssh_session_read 三个工具。
+        agentTools: false

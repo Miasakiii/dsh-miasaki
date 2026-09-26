@@ -20,11 +20,14 @@
 //     WS attach 帧必须携带 POST /ssh/api/attach 签发的一次性短期票据；
 //     无 v:2 的旧帧直接拒绝并提示刷新（方案 §3.3 不做双栈）
 import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
-import { SshStore, InputError, NotFoundError, fenceCheck, sanitizeConnection } from './lib/store.js'
+import { SshStore, InputError, NotFoundError, fenceCheck, sanitizeConnection, isConnectionId } from './lib/store.js'
 import { SshRuntime } from './lib/runtime.js'
 import { diagnose } from './lib/diagnose.js'
+import { createSshTools } from './lib/tools.js'
+import { createAuditRing } from './lib/audit.js'
 import {
   listDirectory,
   statRemote,
@@ -116,6 +119,63 @@ function cachedAsset(url, contentType) {
   }
 }
 
+/**
+ * `userQuestions` 的活引用：该服务与 `tools` 是同一时点才可能就绪的，apply 时同步取会拿到
+ * undefined（那会让每一次审批都失败关闭）。这里每次调用现取；服务缺席即抛错 ⇒ 工具层收敛成
+ * APPROVAL_UNAVAILABLE（失败关闭方向不变，但失败原因可查）。
+ */
+function liveUserQuestions(ctx) {
+  return {
+    ask(request) {
+      const service = typeof ctx.get === 'function' ? ctx.get('userQuestions') : undefined
+      if (service === undefined || service === null || typeof service.ask !== 'function') {
+        throw Object.assign(new Error('本进程没有 userQuestions 服务（确认通道不可用）'), { code: 'NO_SERVICE' })
+      }
+      return service.ask(request)
+    },
+  }
+}
+
+/**
+ * A1 工具注册（导出以便单测跑**行为**，而不是对着源码跑正则 —— 旧的正则断言正是让
+ * 「apply 时 tools 服务还没就绪」这个真机缺陷溜过去的原因）。
+ *
+ * @returns {{ enabled: boolean, toolsService: boolean, registered: string[],
+ *   failed: { name: string, message: string }[], at: string|null }} 同步快照（注册在依赖就绪后才发生）
+ */
+export function registerAgentTools({ config, ctx, sshTools, onReport }) {
+  const report = { enabled: config?.agentTools === true, toolsService: false, registered: [], failed: [], at: null }
+  if (report.enabled !== true) return report
+  if (typeof ctx?.inject !== 'function') {
+    report.failed.push({ name: '*', message: 'ctx.inject 不可用：无法等 tools 服务就绪' })
+    return report
+  }
+  const fiber = ctx.inject(['tools'], injected => {
+    const scope = injected ?? ctx
+    const service = typeof scope.get === 'function' ? scope.get('tools') : undefined
+    report.at = new Date().toISOString()
+    if (service === undefined || service === null || typeof service.register !== 'function') {
+      ctx.logger?.warn?.('ssh: agentTools 已开启，但本进程没有 tools 服务 —— 不注册（模型不可见）')
+    } else {
+      report.toolsService = true
+      for (const tool of sshTools.tools) {
+        try {
+          service.register(tool)
+          report.registered.push(tool.name)
+        } catch (error) {
+          report.failed.push({ name: tool.name, message: String(error?.message ?? error) })
+          ctx.logger?.error?.(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+    }
+    onReport?.(report)
+  })
+  if (typeof fiber?.catch === 'function') {
+    fiber.catch(error => ctx.logger?.warn?.(`ssh: A1 工具注册等待依赖时出错：${error?.message ?? error}`))
+  }
+  return report
+}
+
 export function apply(ctx, config) {
   const dataDir = config?.dataDir
   const scrollbackBytes = Number.isSafeInteger(config?.scrollbackBytes) && config.scrollbackBytes > 0 ? config.scrollbackBytes : 256 * 1024
@@ -126,8 +186,40 @@ export function apply(ctx, config) {
   // 端到端测试用故障注入的「已连接 rc + 假 sftp client」驱动真实路由，不起真 sshd。
   // 产品路径（cordis patch 配置）不可能带上它 ⇒ 不存在被配置面利用的面。
   const runtime = config?.runtime instanceof SshRuntime ? config.runtime : new SshRuntime(store, { scrollbackBytes })
+  // A1 执行台账（§7.5）：内存环 + 追加落盘 `dataDir/exec-audit.jsonl`（重启后可查过往），
+  // REST 只读，不记输出内容、不记秘密。2026-09-26 实机实测：只留内存环时重启即失忆。
+  const audit = createAuditRing({
+    file: typeof dataDir === 'string' && dataDir.length > 0 ? join(dataDir, 'exec-audit.jsonl') : null,
+  })
 
   ctx.effect(() => () => void runtime.shutdown?.(), 'ssh: runtime shutdown')
+
+  // ------------------------------------------------------------- A1 工具面（D2：默认 off）
+  // **2026-09-26 实机逮到（P2-2 的首次真实 profile 复验）**：profile bundle 行的 apply 时点
+  // 早于 `tools` 服务就绪 —— 旧写法在这里同步 `ctx.get('tools')` 取到 undefined，于是三个
+  // 工具**一个都没注册**，会话工具面里根本没有 `ssh_*`（看起来像「D2 关着」，其实是没注册）。
+  // 现在改走 cordis 的依赖注入 `ctx.inject(['tools'], …)`：服务就绪即注册；服务始终缺席时
+  // 回调不执行、插件本体照常加载 —— 仍是可选依赖，**不**进插件的 inject 声明。
+  if (config?.agentTools === true) {
+    const sshTools = createSshTools({
+      runtime,
+      store,
+      audit,
+      // userQuestions 与 tools 同一时点才可能就绪 ⇒ 传活引用（服务缺席时抛错 ⇒ 工具层失败关闭）
+      userQuestions: liveUserQuestions(ctx),
+      logger: ctx.logger,
+    })
+    registerAgentTools({
+      config,
+      ctx,
+      sshTools,
+      onReport: report => {
+        // 注册自证（只写 dataDir，失败不影响插件）：实测时「到底注没注册」一眼可查，
+        // 不必再靠日志或猜。文件与 connections.json 同目录族。
+        try { writeFileSync(join(dataDir, 'agent-tools.json'), `${JSON.stringify(report, null, 2)}\n`) } catch { /* 诊断不破坏启动 */ }
+      },
+    })
+  }
 
   // ------------------------------------------------------------- assets
   const appAsset = cachedAsset('./app.js')
@@ -190,7 +282,7 @@ export function apply(ctx, config) {
       if (path === '/ssh/api/attach' && req.method === 'POST') {
         const body = await readJson(req)
         const connId = String(body?.connId ?? '')
-        if (!/^[0-9a-f-]+$/i.test(connId)) return sendJson(res, 400, { error: 'connId 不合法' })
+        if (!isConnectionId(connId)) return sendJson(res, 400, { error: 'connId 不合法' })
         const runtimeId = runtime.byProfile.get(connId)
         if (runtimeId === undefined || runtime.conns.get(runtimeId) === undefined) {
           return sendJson(res, 404, { error: '连接不存在或未在运行' })
@@ -232,7 +324,7 @@ export function apply(ctx, config) {
       if (path === '/ssh/api/sftp/ticket' && req.method === 'POST') {
         const body = await readJson(req)
         const connId = String(body?.connId ?? '')
-        if (!/^[0-9a-f-]+$/i.test(connId)) return sendJson(res, 400, { error: 'connId 不合法' })
+        if (!isConnectionId(connId)) return sendJson(res, 400, { error: 'connId 不合法' })
         const rc = runtime.runtimeOf(connId)
         if (rc === null || rc.status !== 'connected') return sendJson(res, 404, { error: '连接不存在或未在运行' })
         const { ticket, expiresAt } = runtime.issueSftpTicket(connId, { ttlMs: SFTP_TICKET_TTL_MS })
@@ -374,6 +466,13 @@ export function apply(ctx, config) {
         return sendJson(res, 200, { aliases, from })
       }
 
+      // A1 执行台账（只读；官方 approval 审计对当前不可用，SPIKE S3）
+      if (path === '/ssh/api/agent-audit' && req.method === 'GET') {
+        const query = new URL(req.url ?? '/', 'http://dsh.local').searchParams
+        const entries = audit.list({ hostId: query.get('hostId') ?? undefined, limit: Number(query.get('limit')) || 100 })
+        return sendJson(res, 200, { entries })
+      }
+
       if (path === '/ssh/api/fingerprint' && req.method === 'POST') {
         const body = await readJson(req)
         const result = await runtime.confirmFingerprint(String(body?.token ?? ''), body?.accept === true)
@@ -400,9 +499,12 @@ export function apply(ctx, config) {
           return sendJson(res, 201, { connection: record })
         }
       }
-      const one = /^\/ssh\/api\/connections\/([0-9a-f-]+)$/i.exec(path)
+      // 连接 id 的形状由 store 决定（`normalizeConnection`：任意非空字符串）—— 路由正则必须与它
+      // **同口径**。旧写法只认 `[0-9a-f-]+`（UUID 形状），于是任何非 UUID id 的记录都会
+      // 「在列表里看得见、点一下就 404 接口不存在」；2026-09-26 A1 实测用人类可读 id 时逮到。
+      const one = /^\/ssh\/api\/connections\/([^/]+)$/i.exec(path)
       if (one !== null) {
-        const id = one[1]
+        const id = decodeURIComponent(one[1])
         if (req.method === 'GET') {
           const record = await store.getConnection(id)
           if (record === null) return sendJson(res, 404, { error: '连接不存在' })
@@ -423,9 +525,9 @@ export function apply(ctx, config) {
           }
         }
       }
-      const op = /^\/ssh\/api\/connections\/([0-9a-f-]+)\/(connect|disconnect)$/i.exec(path)
+      const op = /^\/ssh\/api\/connections\/([^/]+)\/(connect|disconnect)$/i.exec(path)
       if (op !== null && req.method === 'POST') {
-        const id = op[1]
+        const id = decodeURIComponent(op[1])
         if (op[2] === 'disconnect') return sendJson(res, 200, await runtime.disconnect(id))
         const body = await readJson(req).catch(() => ({}))
         const result = await runtime.connect(id, {

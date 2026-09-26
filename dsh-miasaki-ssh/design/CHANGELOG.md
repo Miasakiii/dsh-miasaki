@@ -2,6 +2,128 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-26 · A1 实机验收：真协议 sshd 上的工具面闭环（逮到 6 处真缺陷并修复）
+
+**背景**：用户「SSH线A1 实测」。P2-2 落地后一直挂着「`agentTools: true` 的工具注册与审批落点待实机验收」——
+本轮把这句话兑现，并**逮到六个只靠单测看不见的缺陷**（前四个属于「一上机必失败」级别）。
+
+### 实测基座（归档 `_refs/scripts-archive/ssh-a1-live/`，不入库）
+
+- `sshd.mjs`：**真 ssh2.Server**（真握手 / 公钥认证 / exec / shell channel），命令表应答，含
+  `a1-race`（exit 早于 data）、`a1-fail`（非零退出 + stderr）、`a1-sleep`（超时）三个时序陷阱；
+- `prepare.mjs`：一次性 ed25519 主机/客户端密钥 + **隔离 dataDir**（预置 `connections.json` 与
+  `known_hosts.json` 的 TOFU 指纹），测试主机不进用户真实连接库；
+- 实例：`dsh --profile web --patch a1-live.patch.yml --no-open --port 3099`（`agentTools: true` +
+  隔离 dataDir）——**不改仓库默认、不动用户 profile 文件**；
+- 探针：`selftest.mjs`（exec 通道 7/7）、`runtime-e2e.mjs`（host 半端到端 9/9）、
+  `official-ask-check.mjs`（官方 cordis + `dsh-user-questions` 真服务 6/6）、
+  `official-tools-check.mjs`（官方 `dsh-tools` 注册表 3/3）。
+
+### 实机结论（三条证据链，缺一不算过）
+
+| 判据 | 证据 |
+|---|---|
+| 三工具真进模型工具面 | 会话 `request/header` 的 54 个工具里含 `ssh_exec` / `ssh_hosts` / `ssh_session_read` |
+| L0 免审批直通 | `uname -a` 台账 `exit:0`（62ms），假 sshd 侧同一时刻收到该命令 |
+| L1 审批**双向** | 允许：卡上停顿 10.0s → `allowed-once` → `exit:0`，远端有记录；拒绝：停顿 6.6s → `APPROVAL_REJECTED` → **远端 sshd 零新增记录**（命令根本没连出去） |
+
+**修复后复验（同日第二、三轮，均为新会话）**：
+
+- **第二轮（缺陷 2/6 的复验）**：`ssh_hosts` 返回行首即 `a1-live-local`，模型**一次就用对 `hostId`**
+  （`exit:0` / 61ms，远端 sshd 同一时刻收到 `uname -a`），`dataDir/exec-audit.jsonl` 同步落盘（seq 1）。
+- **第三轮（缺陷 8/9 的复验 + `ssh_session_read` 实机）**：人在页面连上 `a1-local-sshd`（终端出现
+  `Welcome to Ubuntu …` 与提示符，敲了一行 `ls`），Agent 侧 `ssh_session_read` **读回该终端原文**
+  （含 `file-a / file-b / dir-c`），紧接着 `ssh_exec uname -a` 拿到 `exit:0` / 56ms。远端日志给出
+  通道分离的直接证据：`shell: opened`（15:45:50，人的 PTY）→ `exec: "uname -a"`（15:46:42，Agent 的
+  exec channel）**同一条连接、互不干扰** —— J2「人的 PTY ≠ Agent 的 exec」与 SPIKE S4（同一 Client
+  上 shell 与 exec 并存）双双落地；落盘台账同步记下 `(session_read)` / `decision:"read"`。
+
+### 逮到并修复的缺陷
+
+1. **`output` 缺失 ⇒ 三个工具被官方注册表全部拒收**（最严重）：`ctx.tools.register()` 要求
+   `ToolDefinition.output = { schema, render }`，旧定义没有 ⇒ 抛
+   `tool "<name>" must declare output { … }`，而这条错误被 `catch { logger.error }` 静默吞掉 ——
+   页面上看起来像「D2 关着」，实际是**一个工具都没注册**。修：三工具补齐 `output`（schema +
+   render 文本卡片），并补注册表级探针与形状回归单测。
+2. **`ssh_hosts` 渲染不带 `id` ⇒ 工具面实机不可用**：模型只看得见 `output.render` 的文本
+   （看不到 value 的 JSON），旧渲染只有 `label · address · …` ⇒ 模型拿 label 当 `hostId`，
+   连吃 `NOT_FOUND`。修：`id` 提到行首 + 描述明确「hostId 用返回里的 id」+ 回归断言。
+3. **审批入参形状不符官方契约**：旧实现传 `{ title, reason, detail:{…}, options:[…] }`，官方是
+   `{ questions:[…], agent?, signal? }` ⇒ 真机上必然 `TypeError` 被兜成 `APPROVAL_UNAVAILABLE`
+   （**所有 L1/L2 审批必然失败关闭**）。修：按契约重写（`questions[]` / `detail` 为 string /
+   `agent`+`signal` 透传 / `ASK_ABORTED ⇒ cancelled` / 自由文本**拒绝优先**）。
+4. **隐式建连不等就绪 ⇒ 首次 `ssh_exec` 必 `NOT_CONNECTED`**：`runtime.connect()` 是异步的，
+   返回时 `status` 还停在 `connecting`（单测 stub 直接给 `connected`，把这一层时序掩盖了）。
+   修：`awaitReady()` 轮询真就绪；指纹等待立刻给 `FINGERPRINT_REQUIRED`；已有在飞连接不重复
+   `connect`（重复会 retire 掉前一条 runtime）。
+5. **注册时点早于服务就绪**：profile bundle 行的 apply 早于 `tools` / `userQuestions` 就绪，
+   同步 `ctx.get()` 取到 undefined。修：改走 cordis 依赖注入 `ctx.inject(['tools'], …)` +
+   `userQuestions` 活引用 + **注册自证** `dataDir/agent-tools.json`（把「注没注册」变成可查事实）。
+6. **审计只留内存 ⇒ 重启失忆**（规划 §7.5 本就要求落盘）：`lib/audit.js` 增 `file` 参数，追加写
+   `dataDir/exec-audit.jsonl`，懒加载回填 + 超长压回尾部 + 坏行跳过；`clear()` 只清内存不删历史。
+7. **拒绝卡看不到被拒的命令**：错误分支 render 现在带 `host · command · riskLevel`，工具返回值
+   也补 `host`（对话流回看才知道被拒的是哪台机器的哪条命令）。
+8. **REST 路由的连接 id 口径与 store 不一致 ⇒ 非 UUID id 的记录「看得见、点不动」**（人工复验
+   时逮到）：`store.normalizeConnection` 接受任意非空 id，而路由正则只认 `[0-9a-f-]+`（UUID 形状）
+   ⇒ 详情/连接/断开全落 `404 接口不存在`（页面只显示「连接失败：接口不存在」，假 sshd 侧连一次
+   TCP 都没收到）。**同一条记录 Agent 走 store 直查一直好用** —— 所以缺陷只在人这一侧显形，
+   前几轮的 Agent 实测（`ssh_exec` 全绿）根本照不到它。修：两处正则改 `([^/]+)` + `decodeURIComponent`，
+   补 REST 回归（非 UUID id 的详情 200 / 连接走业务分支）。**服务端自证**：`GET …/a1-live-local`
+   → 200、`POST …/connect` → `{"ok":true,"state":"connecting"}` 且假 sshd 侧记录 `shell: opened`。
+
+9. **`connId` 形状校验在 WS/SFTP 侧另有一套 ⇒ 终端永远附着不上**（同一次人工复验的第二处）：
+   `/ssh/api/attach` 与 `/ssh/api/sftp/ticket` 各自写着 `^[0-9a-f-]+$`（UUID 形状）⇒ 非 UUID id 的
+   连接**连得上、却看不到终端**：页面显示「浏览器与本地服务暂时失联，正在自动重新附着（4/4）」→
+   最终「connId 不合法」。修：把判据收敛成 `store.isConnectionId()` **一处口径**（非空、无空白 /
+   路径分隔符 / 控制字符；UUID 不是唯一合法形状），路由目录段、attach、sftp ticket 三处共用，
+   `normalizeConnection` 与它同源（畸形输入 id 回落新 UUID）。**服务端自证**：
+   `POST /ssh/api/attach {connId:"a1-live-local"}` → 200 + 票据 + `shells:[{shellId:"sh-1",state:"live"}]`；
+   `POST /ssh/api/sftp/ticket` → 200 + 票据（两者修复前都是 400）。
+
+### 测试与闸门
+
+- 单测 **276 → 294 例**（tools +6 / audit +5 / http +2 / store +1，含上述缺陷的回归断言）；
+  `verify-all ssh` **31/31**。
+- **仍未实测**：B 阶段的对话流 SSH 工具卡；官方 `approval/asked|decided` 审计对仍不可用（§7.3
+  方案 A 的已知代价，现由落盘台账承担）。**`ssh_session_read` 已随第三轮验完**（见上）。
+
+## 2026-09-26 · P2 落地：U3 跳板/本地转发 + A1 ssh_exec 工具面 + 双栈边界 + 真协议探针
+
+**背景**：用户「p2开工」——对标方案 §5 的 P2 四项全部实施（D4=② 跳板走 runtime 复用路线）。
+
+### P2-1 U3：跳板 + 本地端口转发（`lib/forward.js` + `lib/runtime.js` + `store.js` + 编辑器）
+
+- **本地转发**：`createLocalForward()` 在 127.0.0.1 起真 TCP 监听，每入连接经 ssh2 `forwardOut`（direct-tcpip）送远端视角的 `remoteHost:remotePort`；fast-client 首字节不丢（data 监听先于通道回调挂 + pending 补发）；失败即停两端；`close()` 兜底 500ms 不挂 teardown；端口关闭即可再绑（无僵尸占用）；EADDRINUSE / 服务端拒绝逐连接上报且**不撤监听**（改配置后新连接立即可用）。
+- **跳板（D4=②）**：目标连接的 cfg.sock = 跳板 runtime 的 forwardOut 通道 ⇒ 凭据 / TOFU / 票据全复用既有机制，不另起一套。两个诚实边界：① 跳板**从未连过**（无指纹记录）⇒ 前置拒绝 `JUMP_UNAVAILABLE`（它的 TOFU 确认窗口没有 UI 附着点，让用户先单独连一次）；② password 跳板未连过 ⇒ 不隐式建连（「不把发起认证暴露成隐式能力」与 A1 同一条纪律）。
+- **就绪门**：RuntimeConn 新增 `readyPromise`（ready resolve / 终态 reject / 创建即挂 no-op catch 防未处理拒绝）；`awaitJump` 等真就绪——修掉「跳板未就绪就 forwardOut」的真 bug。
+- **生命周期**：转发随连接就绪自动建立（幂等按 localPort 去重）、随断开/teardown/shutdown 全撤；SSH 意外断开也撤（僵尸端口比没端口更糟）。
+- **数据与 UI**：连接记录新增 `forwards`（上限 8、端口/主机校验、本地端口去重）与 `jumpHostId`（引用另一条已受信任连接）；编辑器加「Agent 访问 / 经由跳板 / 本地端口转发」三组字段；身份行标注「经 X / 转发 N 条」；转发错误经 `forward` 帧进状态栏。
+
+### P2-2 A1 `ssh_exec` 工具面（`lib/tools.js` / `lib/policy.js` / `lib/audit.js` + `index.js`）
+
+- **三工具**（规划 §6.1，少而正交）：`ssh_hosts`（只读免审批，杜绝主机幻觉）/ `ssh_exec`（核心）/ `ssh_session_read`（读人正在用的终端回放，只读免审批）。**D2：总开关默认 `off`**（cordis patch `agentTools: false`；开启且 ctx.get('tools') 在场才注册——不进 inject 声明，缺失不拖垮插件）。
+- **服务端分级**：`classifyCommand()` 纯函数——L2 危险模式（命令头判 rm -rf，`docker rm -f` 不误伤；sudo/env 前缀剥离）、L0 只读白名单（`sed -i`/`find -delete` 等写 flag 落 L1）、未识别一律保守 L1；`decideRisk()` 硬闸：readonly 主机 L1/L2 **连审批机会都不给**。
+- **审批四态**（规划 §7.3 方案 A）：`userQuestions.ask()` 宽容解析返回值；`rejected`/`cancelled`/`unavailable` 全返回结构化结果、**不抛异常不中止轮次**；unavailable 给可行动失败信息（官方 approval seam SPIKE S3 实测不可用 ⇒ 失败关闭是正确方向）。
+- **连接纪律**：key/agent 主机可隐式建连（无秘密传递，不开 shell）；password 主机 `NOT_CONNECTED`；`exec.signal` 取消透传到 channel；超时结束 channel 不挂死工具；输出 32KB/8KB 双预算截断；cwd 经 POSIX 引用前置。
+- **审计**：`createAuditRing()` 内存环 200 条（seq/时间/主机/命令/分级/决策），`GET /ssh/api/agent-audit` 只读 + 主机菜单「Agent 执行记录」浮层。秘密从不进台账。
+- **偏离登记**：`userQuestions.ask()` 的确切参数形状无实测记录（SPIKE 只确认服务可达）⇒ 调用按通用约定 + 返回值宽容解析 + 不可用失败关闭；待一次真实会话实测后收紧。
+
+### P2-3 双栈边界
+
+- 既有就位项核对：Windows agent pipe / ssh.exe 四级发现 / 反斜杠字面保留 / `C:\` keyPath 判定。
+- **exec 的 `/bin/sh` 边界**：远端是 Windows（OpenSSH for Windows）时无 /bin/sh ⇒ `EXEC_FAILED` 消息带可照做提示（不静默失败）。SFTP 路径按 POSIX 归一（远端 Windows 的盘符路径不支持）——记入已知边界。
+
+### P2-4 真协议探针（归档 `_refs/scripts-archive/ssh-p2-probes/run-forward-probe.mjs`）
+
+**8/8 ALL PASS**：A 组本地转发经真 ssh2 服务器 direct-tcpip 字节往返 / 计数 / 端口释放（含 ssh2 `tcpip` 事件挂连接实例的坑）；B 组**经跳板 forwardOut 通道 sock 注入完成真协议握手**（D4=② 的可行性证明）；C 组真 exec 退出码 + motd 行进 stdout + `scanJsonLine` 跳过 + POSIX 包装形状。
+
+### 测试与闸门
+
+- 单测 **225 → 276 例**（forward +8 / forward-runtime +6 / policy +12 / audit +4 / tools +21）；
+- `verify-all ssh` **20/20 → 31/31**；全量 verify-all 九类全 PASS；`npm run build` 全文件通过；
+- 期间逮到并修复的真 bug：跳板未就绪即 forwardOut（缺就绪门）、readyPromise 未处理拒绝、转发首字节丢失（fast client）、两处 app.js 语法笔误（粘行/多层花括号，均被 vm 加载的单测逮住）。
+- **重启 `dsh web` 后待实机验收**：真实跳板机建连、本地转发实机使用、`agentTools: true` 后三工具在真实会话的注册与审批落点。
+
 ## 2026-09-26 · zcode 对标方案落地：P0 三件套 + U2.2 SFTP + P1-1 ssh config 导入
 
 **背景**：用户对[对标调研与方案](2026-09-26-ssh-zcode-benchmark-plan.md)拍板「按建议开工」——

@@ -38,13 +38,15 @@ export function buildPosixShellExecCommand(command) {
  *
  * @param {{ exec: Function }} client ssh2 Client（或测试替身）
  * @param {string} command 原始命令（内部自动 POSIX 包装）
+ * @param {{ signal?: AbortSignal }} [options] A1 的 exec.signal：协作方撤回即结束 channel
  * @returns {Promise<{code: number|null, signal: string|null, stdout: string,
- *   stderr: string, timedOut?: boolean, error?: string}>}
+ *   stderr: string, timedOut?: boolean, canceled?: boolean, error?: string}>}
  */
 export function execCommand(client, command, {
   timeoutMs = DEFAULT_EXEC_TIMEOUT_MS,
   maxOutputBytes = DEFAULT_EXEC_MAX_OUTPUT_BYTES,
   drainWindowMs = EXEC_DRAIN_WINDOW_MS,
+  signal,
 } = {}) {
   return new Promise(resolve => {
     const wrapped = buildPosixShellExecCommand(command)
@@ -65,9 +67,18 @@ export function execCommand(client, command, {
       settled = true
       if (drainTimer !== null) { clearTimeout(drainTimer); drainTimer = null }
       if (timeoutTimer !== null) { clearTimeout(timeoutTimer); timeoutTimer = null }
+      signal?.removeEventListener('abort', onAbort)
       try { channel?.end?.() } catch { /* already gone */ }
       resolve({ code: exitCode, signal: exitSignal, stdout, stderr, ...patch })
     }
+
+    // A1 exec.signal 取消约定：协作方（工具框架）撤回 ⇒ 结束 channel 并结算取消态
+    const onAbort = () => {
+      try { channel?.end?.() } catch { /* gone */ }
+      finish({ canceled: true })
+    }
+    if (signal?.aborted === true) { finish({ canceled: true }); return }
+    signal?.addEventListener('abort', onAbort, { once: true })
 
     // 排空：close 之后若还有迟到数据，每次数据把窗口顺延一次；窗口静默才收尾。
     const armDrain = () => {
