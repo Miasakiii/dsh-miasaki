@@ -7,7 +7,7 @@
     "validate": "node workers/validate-bus.mjs",
     "validate:strict": "node workers/validate-bus.mjs --strict",
     "pulse": "node workers/pulse/publish-pulse.mjs",
-    "test": "node tests/liveness.test.mjs && node tests/bus-contract.test.mjs && node tests/bus-apply.test.mjs && node tests/bus-integration.test.mjs && node tests/task-graph.test.mjs && node tests/capability-graph.test.mjs && node tests/verifier.test.mjs",
+    "test": "node tests/liveness.test.mjs && node tests/bus-contract.test.mjs && node tests/bus-apply.test.mjs && node tests/bus-integration.test.mjs && node tests/task-graph.test.mjs && node tests/capability-graph.test.mjs && node tests/verifier.test.mjs && node tests/fleet-monitor.test.mjs",
     "apply": "node workers/bus/bus-apply.mjs",
     "bus:version": "node workers/bus/bus-apply.mjs --current-version",
     "graph:ready": "node workers/graph/task-ready.mjs",

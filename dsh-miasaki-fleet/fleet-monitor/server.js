@@ -9,6 +9,11 @@
  *   GET  /api/usage/:agentId  → 单 agent 的 usage.jsonl 原始数据
  *   GET  /api/report?days=N   → 历史成本报表（按天/按 agent 聚合）
  *
+ * 安全：**所有**路由（含静态面板）都先过 fence.cjs 的三道信任围栏
+ *   （Host / sec-fetch-site / Origin），未过者一律 403 且不带 CORS 头。
+ *   本服务含写接口（POST /api/toggle/:agentId 落盘 control.json），
+ *   只绑 127.0.0.1 挡不住浏览器代发的跨站请求 —— 见 fence.cjs 头部说明。
+ *
  * 启动：node server.js [workspace-root] [port]
  * 默认 workspace = 项目根目录（server.js 所在目录的上级）
  * 默认 port = 39801
@@ -21,6 +26,9 @@ const fs = require('fs');
 const path = require('path');
 // F3 判活：与 publish-pulse 共用同一口径（实现在 workers/lib/liveness.cjs）。
 const { evaluateLiveness } = require('../workers/lib/liveness.cjs');
+// 2026-09-26 审计 P1.5：本服务原为「CORS 通配 + 写接口零鉴权」。补三道信任围栏，
+// 与 appearance / ssh / sidebar 三条线同构（同判据、同 reason 词表，各自独立实现）。
+const { fenceCheck, buildTrustedHosts, corsHeadersFor } = require('./fence.cjs');
 
 /* ---------- 配置 ---------- */
 const WORKSPACE = process.argv[2] || path.resolve(__dirname, '..');
@@ -28,6 +36,9 @@ const PORT = parseInt(process.argv[3] || '39801', 10);
 const AGENTS_DIR = path.join(WORKSPACE, 'agents');
 const STATE_DIR = path.join(WORKSPACE, 'state');
 const PANEL_HTML = path.join(__dirname, 'panel.html');
+// 逃生门：确需从其它主机名访问时用 `FLEET_MONITOR_TRUSTED_HOSTS=a.example,b.example`
+// 显式声明；默认只认本机（localhost / 127.0.0.1 恒在放行集内）。
+const TRUSTED_HOSTS = buildTrustedHosts((process.env.FLEET_MONITOR_TRUSTED_HOSTS || '').split(','));
 
 /* ---------- 缓存 ---------- */
 let fleetCache = null;
@@ -321,14 +332,13 @@ function aggregateReport(days) {
 
 /* ---------- HTTP 服务 ---------- */
 
-function setCors(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+/** 入口统一调用：只有**已过围栏**的请求才会走到这里。 */
+function setCors(res, headers) {
+  for (const [key, value] of Object.entries(corsHeadersFor(headers))) res.setHeader(key, value);
 }
 
 function sendJSON(res, data, status = 200) {
-  setCors(res);
+  // 不在此设 CORS 头：由 handleRequest 入口统一设置，被围栏拒绝的响应必须一个都不带。
   const body = JSON.stringify(data, null, 2);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(body);
@@ -353,13 +363,25 @@ function readBody(req) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const pathname = url.pathname;
 
-  // CORS preflight
+  // ── 信任围栏（三道：Host / sec-fetch-site / Origin）──────────────────────
+  // 必须排在**所有**路由之前。理由：本服务带写接口（POST /api/toggle/:agentId
+  // 直接落盘 control.json）。只绑 127.0.0.1 限制的是「谁能连」，而浏览器可以把
+  // 任意网页发起的请求送到 127.0.0.1 —— 挡跨站要靠这三道判定，不是靠绑定地址。
+  // 被拒响应不发任何 CORS 头，页面侧连字段都读不到。
+  const verdict = fenceCheck(req.headers, TRUSTED_HOSTS);
+  if (!verdict.ok) {
+    res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ error: 'forbidden', reason: verdict.reason }, null, 2));
+    return;
+  }
+  setCors(res, req.headers);
+
+  // CORS preflight（只有已过围栏的请求能到达这里）
   if (req.method === 'OPTIONS') {
-    setCors(res);
     res.writeHead(204);
     res.end();
     return;
@@ -417,10 +439,18 @@ const server = http.createServer(async (req, res) => {
   // 404
   res.writeHead(404, { 'Content-Type': 'text/plain' });
   res.end('Not Found');
-});
+}
 
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[Fleet Monitor] listening on http://127.0.0.1:${PORT}`);
-  console.log(`[Fleet Monitor] workspace: ${WORKSPACE}`);
-  console.log(`[Fleet Monitor] agents dir: ${AGENTS_DIR}`);
-});
+const server = http.createServer(handleRequest);
+
+// 只在被直接运行时监听：require 本模块做单测不应占端口、不应产生副作用。
+if (require.main === module) {
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log(`[Fleet Monitor] listening on http://127.0.0.1:${PORT}`);
+    console.log(`[Fleet Monitor] workspace: ${WORKSPACE}`);
+    console.log(`[Fleet Monitor] agents dir: ${AGENTS_DIR}`);
+    console.log(`[Fleet Monitor] trusted hosts: ${[...TRUSTED_HOSTS].join(', ')}`);
+  });
+}
+
+module.exports = { handleRequest, server, TRUSTED_HOSTS };

@@ -13,7 +13,7 @@
 | `state/` | 任务台账 / 成本账本 / 事件流 / `fleet-pulse.json`（运行时产物） |
 | `tasks/` | 任务书 brief 与交付物 |
 | `workers/` | 扫描器（discovery）、派单器（dispatch）、总线校验（validate-bus.mjs）、脉冲发布（pulse/publish-pulse.mjs） |
-| `fleet-monitor/` | 监控面板（panel.html + server.js，本地 HTTP） |
+| `fleet-monitor/` | 监控面板（panel.html + server.js + **fence.cjs 三道信任围栏**，本地 HTTP；2026-09-26 起所有路由先过围栏，跨站请求 403 且不带 CORS 头） |
 | `schemas/` | 文件总线 JSON Schema（F1 契约） |
 | `docs/` | 设计文档与调研/校准报告 |
 | `tests/` | 回归冒烟与样本 |
