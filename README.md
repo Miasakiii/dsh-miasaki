@@ -10,9 +10,9 @@
 | Fleet | [`dsh-miasaki-fleet/`](dsh-miasaki-fleet/) | 多 Agent CLI 编排（`package.json` 0.20.0）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）/ G0–G4 图工程判定层（契约、图与就绪度、能力图、异构验证者选取）。 |
 | Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.6，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
 | Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.10.0-miasaki.0）：**接入官方右侧 Sidebar**，只注册「审查」一个 tab 类型（辅助对话归 M2）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除）；**2026-09-25 右栏终端退役**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），沿用官方策略不再自建，内嵌终端收敛为**底部面板单形态**（Ctrl+` / 标题栏按钮唤起，多标签多会话、node-pty 路线 B、一次性 token 闸门、回放环 + 背压淘汰，host 半与容器无关零改动）。单测 57 通过 / 5 环境跳过、静态回归 10/10。 |
-| SSH | [`dsh-miasaki-ssh/`](dsh-miasaki-ssh/) | DSH web SSH 插件 `@miasaki/dsh-ssh`（全新自研，2026-09-09 立项）：**会话头第一行**「SSH」段（与「对话 / 会话布」同一个胶囊，三段一体）+ **画布页面内部**那组按钮旁的「SSH」（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器。**M1 代码完成，已 link 安装**；U0 可靠性闭环 + U1 统一工作区（2026-09-12）、A0 上下文桥（2026-09-14）、D1–D4 全屏浮层改造与**四轮真机验收**（2026-09-15）、**U2 主体落地**（2026-09-16：U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复）、**主页入口判据与落点收敛**（2026-09-25 B1/B2：只在主页 + 与会话头胶囊结构性互斥；2026-09-26 B3/B4：同排官方 chrome 实测让位 + 让位量的取数时机（过渡期逐帧跟随、安全线变化的同步重测），修与官方「▭」的按钮盒叠压）均已实施，单测 **126 例**、静态回归 12/12；U2.2 SFTP 与 U3（跳板 / 转发）未动，实机项待验收。 |
+| SSH | [`dsh-miasaki-ssh/`](dsh-miasaki-ssh/) | DSH web SSH 插件 `@miasaki/dsh-ssh`（全新自研，2026-09-09 立项）：**会话头第一行**「SSH」段（与「对话 / 会话布」同一个胶囊，三段一体）+ **画布页面内部**那组按钮旁的「SSH」（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器。**M1 代码完成，已 link 安装**；U0 可靠性闭环 + U1 统一工作区（2026-09-12）、A0 上下文桥（2026-09-14）、D1–D4 全屏浮层改造与**四轮真机验收**（2026-09-15）、**U2 主体落地**（2026-09-16：U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复）、**主页入口判据与落点收敛**（2026-09-25 B1/B2：只在主页 + 与会话头胶囊结构性互斥；2026-09-26 B3/B4：同排官方 chrome 实测让位 + 让位量的取数时机（过渡期逐帧跟随、安全线变化的同步重测），修与官方「▭」的按钮盒叠压）均已实施。**2026-09-26 对标 zcode（zai-org/ZCode）方案落地**（[对标调研与方案](dsh-miasaki-ssh/design/2026-09-26-ssh-zcode-benchmark-plan.md)）：P0 三件套（keepalive 15s×3 + `buildConnectConfig()` 纯函数 + ssh2 `level` 错误词汇与私钥口令两码；`lib/exec.js` exec 前置；U2.2 SFTP 注入 zcode 降级链——sftp 视图无目录或会话打不开 ⇒ 零字节消耗直降 `mkdir -p && cat >`，mid-stream 失败记 `execOnlyUpload` 下次直走命令通道）+ P1-1 `~/.ssh/config` 别名导入（`ssh -G` 优先 + 自研解析回退，只导直连 alias）。单测 **225 例**、静态回归 **26/26**；U3（跳板 / 转发）未动，实机项待验收（真实主机 SFTP 往返 / 降级实机路径 / 导入回填 / keepalive 长连接）。 |
 | 双模型 | [`dsh-miasaki-dual-model/`](dsh-miasaki-dual-model/) | DSH web 双模型插件 `@miasaki/dsh-dual-model`（2026-09-10 立项）：会话级「主模型 + 辅助模型」，只要其一支持图片即可上传图片，输入框右下角（`conversation.input.right`）快速配置。**M1 实现完成，待实机验证**——M0 六项技术假设实测全部成立；准入走一行本体补丁（可选服务探测，未装插件零退化，规则 + 双基线入库并可离线自证）；单测 33 例、`verify-all dual-model` 12/12。设计文档与变更记录见其 `design/`。 |
-| 外观 | [`dsh-miasaki-appearance/`](dsh-miasaki-appearance/) | DSH web 外观插件 `@miasaki/dsh-appearance`（2026-09-11 立项）：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果。**M2 已收官（2026-09-12）**——M1 底座（设置栏 + 首帧注入 + 契约自检）实机六项全过后，S1–S6 依次落地 **皮肤层**（`derive-skins.mjs` 编译 105 token 表 + 首帧防闪色 boot style）、**壁纸与玻璃档位**（配置 v2、内置程序化渐变 + 本地图源、`color-mix` 表面透明度自动跟皮肤跟明暗）、**桌面壳让位协议**（`data-miasaki-theme-yield` 免刷新翻转、冲突自检）。走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject`，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约。单测 98 例、静态回归 16/16；M3–M4 接动效与会话效果。**2026-09-22 Boot Splash 首帧启动画设计定稿**（跨线新增项）：3080 首帧全屏启动画（三主题纹章动效 + 退场双信号 + 2.5s 超时兜底不挡错误页），与 desktop「Loading 2.0」契约见 `cross/boot-loading-2026-09-22.md`。 |
+| 外观 | [`dsh-miasaki-appearance/`](dsh-miasaki-appearance/) | DSH web 外观插件 `@miasaki/dsh-appearance`（2026-09-11 立项）：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果。**M2 已收官（2026-09-12）**——M1 底座（设置栏 + 首帧注入 + 契约自检）实机六项全过后，S1–S6 依次落地 **皮肤层**（`derive-skins.mjs` 编译 105 token 表 + 首帧防闪色 boot style）、**壁纸与玻璃档位**（配置 v2、内置程序化渐变 + 本地图源、`color-mix` 表面透明度自动跟皮肤跟明暗）、**桌面壳让位协议**（`data-miasaki-theme-yield` 免刷新翻转、冲突自检）。走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject`，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约。**2026-09-26 与官方「通用」设置页对照去重**：明暗偏好与正文字号是通用页 `AppearanceRow` / `FontSizeRow` 自己的行，外观页**不再做第二入口**，「主题」组只留官方没有的「皮肤」；`config.theme` 的 scheme / accent / fontSize 三个镜像字段同批删除（配置 v4），并立下「上新设项先过通用页对照」纪律（去重决策与 M3 → Boot Splash → M4 推进路线见该线 `design/2026-09-26-appearance-page-dedup-and-roadmap.md`）；同日 **V1 视觉统一**——单选控件全线换成官方「选择丸 + 下拉菜单」（`LanguageRow` 规格 + 官方 `Menu`），九宫格/表面旋钮/占位卡/运行信息同步对齐官方卡片与空态语言（见该线 `design/2026-09-26-appearance-visual-unification-and-roadmap.md`）。单测 101 例、静态回归 16/16；M3–M4 接动效与会话效果。**2026-09-22 Boot Splash 首帧启动画设计定稿**（跨线新增项）：3080 首帧全屏启动画（三主题纹章动效 + 退场双信号 + 2.5s 超时兜底不挡错误页），与 desktop「Loading 2.0」契约见 `cross/boot-loading-2026-09-22.md`。 |
 | 用量统计 | [`dsh-miasaki-usage/`](dsh-miasaki-usage/) | DSH web 插件 `dsh-token-monitor`（v0.6.0，**2026-09-26 由桌面端线迁出、独立成第八线**）：会话「用量」Tab（纯当前会话视角 —— 上下文剩余 / 官方聚合 / 按会话过滤的实时明细 / 活跃时长）+ 侧栏脚部「用量统计」入口 → 全局浮窗（总览六卡 / 年热力图 / 使用趋势 / 模型用量 + 会话活跃分布 / 今日与限额）。**两条「干净」**：**① 接入干净** —— 本仓唯一「纯官方契约、零 miasaki 耦合」的插件（host 半只用官方 `webServer` / `llm/stream` / `tools/result` / `sessionProjections` / `tokenMeter` / `sessionQuery`，client 半只用官方三个槽位 `conversation.view` / `sidebar.footer.action` / `shell.overlay`），不碰主题、不碰补丁、不依赖其它 miasaki 包，因此可单独装进任意官方 DSH profile；**② 统计干净** —— **账本按 profile 分区**（`~/.dsh/plugins-data/dsh-token-monitor/<profile>/`），官方桌面端只记载官方自己这个实例的消耗，不再与自制壳（`miasaki`）/ 浏览器 GUI（`web`）混账；分区前的混合账一次性归位到 `miasaki/`，官方侧从零累计。2026-09-26 官方桌面端 profile 隔离为纯净官方版后**只挂回这一条**；装法由 `file:` 改 `link:`（消除副本漂移）。 |
 | 共享参考 | [`dsh-miasaki-shared-docs/`](dsh-miasaki-shared-docs/) | `cross/` 跨线设计契约（如 A×B 桌宠↔fleet 联动、sidebar 路线讨论）、`dsh-platform/` DSH 平台调研与升级回归记录。 |
 
@@ -137,6 +137,52 @@ pid/时间戳（防多实例互踩半截 JSON）；新增 EEXIST 故障注入回
   存量 17 处 CRLF 不批量转换以免零语义 diff 淹没真实改动）。
 - **仍缺**：`lint` / `format` 工具链（当前只有编辑器约定，没有 CI 级强制）；
   30+ 处文档「当前态失真」的逐条订正（版本台账闸门只覆盖版本号这一类）。
+
+**2026-09-26 深夜·续三（外观线与官方「通用」设置页对照去重）** `[实测]`：用户「通用设置里有的，
+外观设置就不需要有了」。逐行取证官方「通用」页（`settings.general.item` 槽 6 行：语言 /
+外观(浅·深·跟随系统) / 字号 / 会话视图 / 回车行为 / 权限预设）后，外观页**移除明暗偏好与
+正文字号两行**（M1 起的「同一 `ctx.theme` 偏好第二入口」，不做只读回显），「主题」组只留
+官方三立方没有的「皮肤」；连带删除 `config.theme` 的 scheme / accent / fontSize 三个
+镜像死字段（`accent` 从未接 UI）与无消费者的 `data-mia-scheme` 属性，配置 **v3 → v4**
+（删字段无需搬运，sanitize 直接丢弃）。新增「与通用页不重复」回归闸门 1 例
+（面板不渲染两行文本、无 `.mia-cube` 节点、无 `px` 单位节点），单测 **98 → 100 例**、
+`appearance` 仍 **16/16**、`repo` **2/2**。去重决策（D1–D5）与持续推进路线
+（M3 动效 → Boot Splash 实施 → M4 会话效果，及「上新设项先过通用页对照」纪律）见
+[`dsh-miasaki-appearance/design/2026-09-26-appearance-page-dedup-and-roadmap.md`](dsh-miasaki-appearance/design/2026-09-26-appearance-page-dedup-and-roadmap.md)；
+回归矩阵 §3.5 判据改写 + §3.0 台账外观 6 → 7 项（新增 D7 去重复核）。**实机待用户重启
+`dsh web` 后验收**。
+
+**2026-09-26 深夜·续四（外观页 V1 视觉统一已实施）** `[实测]`：用户「不够美观、和 dsh 设置页
+设计语言不够统一、功能也不完善」→ 拍板「只做 V1」。根因是**控件形态选错**：官方设置行的单选
+标准控件是**选择丸 + 下拉菜单**（`LanguageRow`/`PermissionRow` 规格 + 官方 `Menu`），本线却用了
+一排 Pill。四处单选（皮肤 / 壁纸图源 / 玻璃档位 / 我的上传）全换**官方选择丸 + Menu**；
+九宫格换官方卡片语言（r16 + border-l4）；表面四旋钮换官方双列字段网格；M3/M4 占位换官方
+dashed 卡；运行信息收敛为面板底部一行；Pill 整类退场。行为逻辑与配置**零改动**，单测
+**100 → 101 例**（新增「选择丸 + Menu」控件闸门）、`appearance` 仍 **16/16**。功能路线
+P1 M3 动效 → P2 Boot Splash 实施 → P3 M4 会话效果 → P4 恢复默认 → P5 导入导出 →
+P6 壁纸双图/URL 源，见
+[`dsh-miasaki-appearance/design/2026-09-26-appearance-visual-unification-and-roadmap.md`](dsh-miasaki-appearance/design/2026-09-26-appearance-visual-unification-and-roadmap.md)。
+**实机待用户重启 `dsh web` 后验收**（四个选择丸开合 / 菜单键盘 / dashed 占位 / 三主题）。
+
+**2026-09-26 深夜·续五（ssh 对标 zcode 方案落地 + 静态闸门补强）** `[实测]`：用户对 ssh 线
+[对标调研与方案](dsh-miasaki-ssh/design/2026-09-26-ssh-zcode-benchmark-plan.md)（智谱
+zai-org/ZCode v3.14.3）拍板「按建议开工」（D1② P0 三件套全做 / D5② 降级链并进 U2.2 /
+D2① ssh config 只导直连 alias）。落地：① **P0-1 连接健壮性**——keepalive 15s×3（真协议
+探针 6/6 PASS：吞掉服务端外发字节模拟静默断开，60043ms 收到 `Keepalive timeout` 归
+`TIMEOUT`，对照组零错误）；`buildConnectConfig()` 纯函数化（握手预算/keepalive/agent
+三条口径可单测）；`classifyError()` 新增 ssh2 `level` 分级与私钥口令两码。② **P0-3 exec
+前置**（`lib/exec.js`）：POSIX `/bin/sh -c` 包装、close 收尾 + exit 码优先 + 50ms 排空、
+banner/motd 跳过。③ **U2.2 SFTP**（`lib/paths.js` / `lib/sftp.js` / `lib/limits.js` +
+8 个 REST 端点 + `sftp-ui.js` 右抽屉）：zcode 降级链（目录在 sftp 视图不存在 / 会话打不开
+⇒ 零字节消耗直降 `mkdir -p && cat >`）；**偏离登记**：单次 HTTP 源流不可回放 ⇒ mid-stream
+失败不就地降级，记 `execOnlyUpload` 下次直走命令通道。④ **P1-1 ssh config 导入**
+（`lib/sshConfig.js`）：`ssh -G` 优先 + 自研解析回退，只导直连 alias（含 ProxyJump 的禁选
+不静默丢）。单测 **153 → 225 例**。**闸门补强（本轮整理发现的口子）**：CHANGELOG 原写
+「新模块进静态闸门」，但 `planSsh` 的语法检查清单**没有**这 6 个新模块（14→20 全靠新测试
+文件）⇒ 补进 `verify-all.mjs`，`verify-all ssh` **14/14 → 26/26**；回归矩阵 §1/L1/§3.0/
+§3.6 与根 README SSH 行同批订正（原「126 例 / 12/12 / U2.2 未动」为失真现状），§3.0 实机
+台账 **39 → 43 项**（新增 A12–A15：SFTP 往返 / 降级实机 / 导入回填 / keepalive 长连接）。
+**实机待用户重启 `dsh web` 后验收**。
 
 > ※ **【2026-09-19 已修】** sidebar 的 `terminal-hub.test.js` 曾在受限沙箱下整片失败（2026-09-12 归因）：
 > `resolvePtyBin` 用 `where.exe` 解析 shell 绝对路径并**捕获其输出**，而受限沙箱禁止管道捕获

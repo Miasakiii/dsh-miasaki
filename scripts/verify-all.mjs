@@ -397,7 +397,14 @@ async function planSsh() {
   // 单测不碰真实 SSH 连接（store 围栏/归一化、runtime 的 TOFU 与错误分类、
   // http 路由、client 工厂返回契约），因此可在无 sshd 的机器上复现；
   // 真实连接验收仍是实机项，见 smoke-test-matrix.md。
-  for (const entry of ['index.js', 'client.js', 'app.js', 'session.js', 'lib/store.js', 'lib/runtime.js', 'lib/diagnose.js']) {
+  // 2026-09-26 U2.2/P0-3/P1-1 新模块同批进静态闸门（此前只有 7 个入口，SFTP/exec/sshConfig
+  // 等新文件只靠 package.json 的 build 脚本检查，回归里看不见——「闸门报了 PASS」与
+  // 「新文件确实被检查」是两件事，缺的口子就在这里补上）。
+  for (const entry of [
+    'index.js', 'client.js', 'app.js', 'session.js', 'sftp-ui.js',
+    'lib/store.js', 'lib/runtime.js', 'lib/diagnose.js',
+    'lib/exec.js', 'lib/paths.js', 'lib/sftp.js', 'lib/limits.js', 'lib/sshConfig.js',
+  ]) {
     checks.push({ line: 'ssh', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
   for (const file of await testFiles(dir)) {
