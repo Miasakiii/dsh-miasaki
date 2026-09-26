@@ -2,6 +2,30 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-26（深夜）· 修：配置写盘失败被吞掉却回报 200 成功（用户改动静默回滚）
+
+**缺陷**（2026-09-14 评审点名、本次修复）：`POST /appearance/api/config` 的写盘链是
+`writeChain.then(save).catch(logger.error)`，紧接着**无条件** `200 + changed: true`。而 `store.save` 抛错时
+`current` / `revision`（赋值在 `await` 之后）保持旧值 ⇒ 响应体里的 `config` 是**旧配置**却自称 `changed: true`。
+客户端（`client.js` 的 save 流程）据此 `setState` 旧值、按旧值重写门控属性、`setError(null)` ——
+**用户改设置静默回滚，界面上没有任何提示**。
+
+- **触发边界**：`dataDir` 缺失时不触发（`lib/store.js` 直接返回，不落盘）；需 `dataDir` 在位而
+  `mkdir` / `writeFile` / `rename` 失败（权限、磁盘满、路径被同名文件占据）。
+- **修法（host 半）**：把成败显式带回 —— 写盘失败一律 **`500 + error:'persist-failed' + changed:false`**
+  + 当前（未生效的旧）配置 + 人类可读 `message`（`配置写入失败：<OS 原因>`）。`writeChain` 仍保持 resolved
+  （一次失败不得让后续写入永久卡死）。
+- **修法（client 半）**：`requestJson` 的文案优先级改为 **`message` > `error` 枚举 > `HTTP <status>`**，
+  面板因此直接显示 OS 原因而不是 `persist-failed` 这种机器枚举。
+- **加固（`lib/store.js`）**：原子写的临时名由固定 `${file}.tmp` 改为 `${file}.<pid>-<ts>.tmp` ——
+  桌面壳 / 浏览器 GUI / 官方桌面端可能同时挂本插件各写一份配置，固定名会让两个进程互相截断半截 JSON。
+- **回归闸门**（`test/host.test.js` 新增 1 例，该文件 16/16）：把 `dataDir` 指向一个**普通文件**造出可复现的
+  EEXIST，钉死三件事 —— ①失败必须 500 且 `changed:false`；②内存配置与修订号**不得**变动（失败写入不生效）；
+  ③失败后链路仍可继续（第二次仍如实失败，而不是卡死或转成假成功）。
+  注：`apply` 的异步 `store.load()` 完成时也会把 `revision +1`（那是「加载」不是「写入」），
+  用例因此先等加载落定再取基准，否则比较会假失败。
+- 验证：`node scripts/verify-all.mjs appearance` **16/16 PASS**（95 例单测 + 皮肤表复算闸门）。
+
 ## 2026-09-25 · 玻璃 `mica` 档与原生材质分层（消除双层模糊，规划 W4.2）
 
 - **问题**：`mica` 档的产品语义是「**用系统云母**」，但实现是页面侧 `backdrop-filter: blur(40px) saturate(1.6)`。Win11 上壳的原生 Mica（`DWMWA_SYSTEMBACKDROP_TYPE`）同时生效 ⇒ 两层模糊叠在一起：更糊、更耗电，且与档位语义自相矛盾（M2 设计文档里那句"web 近似、非 Win11 真 Mica"正是这个矛盾的注脚）。此前 `data-mia-glass` 与壳的 `MIASAKI_NO_MICA` **互不知情**。

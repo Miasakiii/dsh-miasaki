@@ -360,3 +360,42 @@ test('预设路由：无 dataDir 时清单为空但请求不失败（面板给�
   assert.equal(res.body.persistent, false)
   assert.deepEqual(res.body.presets, [], '落不了盘就不谎报可用')
 })
+
+// 2026-09-26 回归闸门：写盘失败曾被吞掉却回报 200 + changed:true（用户改动静默回滚、无提示）。
+// 这两条钉死修复契约：①失败必须 500 + changed:false + 内存配置/修订号不动；②失败后 writeChain
+// 不得变成永久 rejected（否则后续任何写入都卡死 —— 表现为请求永不返回）。
+test('POST /config：落盘失败必须如实失败（500 + changed:false，内存配置与修订号不动）', async () => {
+  const { mkdtempSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'mia-config-blocked-'))
+  // dataDir 指向一个**普通文件**：store.save 的 mkdir(<该文件>) 以 EEXIST 失败，
+  // 这正是「dataDir 在位但写不进去」（权限 / 磁盘 / 路径被占）的最小复现。
+  const blocker = join(dir, 'blocked')
+  writeFileSync(blocker, 'not-a-directory')
+
+  const ctx = fakeCtx()
+  host.apply(ctx, { dataDir: blocker })
+
+  // apply 内的 store.load() 是异步的，且完成时也会把 revision +1（那是「加载」不是「写入」）。
+  // 先等它落定，否则 before 取到的修订号还停在加载前的值，比较会假失败。
+  await new Promise(resolve => setTimeout(resolve, 25))
+
+  const before = await callApi(ctx, '/appearance/api/state')
+  assert.equal(before.status, 200)
+  assert.equal(before.body.persistent, true, 'dataDir 非空 ⇒ store 自认可落盘')
+
+  const failed = await writeConfig(ctx, { patch: { enabled: true } })
+  assert.equal(failed.status, 500, '写盘失败必须 500，不得谎报成功')
+  assert.equal(failed.body.error, 'persist-failed')
+  assert.equal(failed.body.changed, false, '不得回报 changed:true')
+  assert.match(failed.body.message, /^配置写入失败：/, '必须带回人类可读原因供面板显示')
+
+  const after = await callApi(ctx, '/appearance/api/state')
+  assert.deepEqual(after.body.config, before.body.config, '失败的写入不得改动内存配置')
+  assert.equal(after.body.revision, before.body.revision, '失败的写入不得推进修订号')
+
+  // 链必须保持可继续：第二次仍然如实失败（而不是永不 resolve / 或转成 200 假成功）。
+  const again = await writeConfig(ctx, { patch: { theme: { skin: 'zafkiel' } } })
+  assert.equal(again.status, 500, '一次失败不得让后续写入卡死或假成功')
+  assert.equal(again.body.changed, false)
+})

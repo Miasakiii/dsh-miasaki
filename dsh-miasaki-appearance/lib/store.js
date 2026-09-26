@@ -47,7 +47,9 @@ export class AppearanceStore {
     const next = sanitizeConfig(value)
     if (!this.persistent) return next
     await mkdir(dirname(this.file), { recursive: true })
-    const temp = `${this.file}.tmp`
+    // 临时名带 pid 与时间戳：桌面壳 / 浏览器 GUI / 官方桌面端可能同时挂着本插件并各写一份
+    // 配置，固定 `.tmp` 名会让两个进程互相截断对方的半截 JSON（2026-09-26 加固）。
+    const temp = `${this.file}.${process.pid}-${Date.now().toString(36)}.tmp`
     await writeFile(temp, `${JSON.stringify(next, null, 2)}\n`, 'utf8')
     await rename(temp, this.file)
     return next

@@ -82,7 +82,7 @@ dsh-miasaki-appearance/
 │   ├── icon-presets.js    # 应用图标预设：手写 PNG 编码 + SDF 绘制 + 预设表（程序化生成）
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 95 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
+├── test/                  # 98 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
 ├── design/                # 规划设计 + M1/M2/M2.5/M2.6/M2.7 实施 + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
@@ -173,7 +173,7 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test --test-isolation=none "test/*.test.js"     # 95 例（8 个测试文件）
+node --test --test-isolation=none "test/*.test.js"     # 98 例（8 个测试文件）
 node ../scripts/verify-all.mjs appearance              # 统一回归入口（16 项）
 ```
 

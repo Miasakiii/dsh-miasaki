@@ -364,13 +364,35 @@ export function apply(ctx, config) {
         // 无实质变化：不写盘、不递增修订，但仍回答最新状态（面板的重复提交是常态）。
         return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: false })
       }
+      // 写盘失败必须**如实失败**（2026-09-26 修：此前 `.catch` 只记日志，随后仍无条件返回
+      // 200 + `changed: true`，而 `current` / `revision` 停在旧值 ⇒ 客户端据此 setState 旧配置、
+      // 清空错误提示，用户改动静默回滚且无任何提示）。现在把成败显式带回：失败一律
+      // 500 + `changed: false` + 当前（未生效的旧）配置，客户端不再有「假成功」可依据。
+      let saveError = null
       writeChain = writeChain.then(async () => {
-        current = await store.save(next)
-        revision += 1
+        try {
+          current = await store.save(next)
+          revision += 1
+        } catch (error) {
+          saveError = error
+          throw error
+        }
       }).catch(error => {
+        // 链本身必须保持 resolved（否则一次失败会永久拒绝后续写入）；错误已由 saveError 承载并上报。
         ctx.logger?.error?.(error instanceof Error ? error : new Error(String(error)))
       })
       await writeChain
+      if (saveError !== null) {
+        return sendJson(res, 500, {
+          error: 'persist-failed',
+          // 人类可读原因（面板直接显示）；`error` 保留机器枚举供上层判定。
+          message: `配置写入失败：${saveError instanceof Error ? saveError.message : String(saveError)}`,
+          config: current,
+          revision,
+          persistent: store.persistent,
+          changed: false,
+        })
+      }
       return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: true })
     }
 

@@ -61,7 +61,11 @@ window.__ModuleLoader__.load({
         payload = null
       }
       if (!response.ok) {
-        const error = new Error(payload && typeof payload.error === 'string' ? payload.error : `HTTP ${response.status}`)
+        // 文案优先级：人类可读的 message（如「配置写入失败：EEXIST…」）> 机器枚举 error > HTTP 状态码。
+        const detail = payload !== null && typeof payload === 'object'
+          ? (typeof payload.message === 'string' ? payload.message : payload.error)
+          : null
+        const error = new Error(typeof detail === 'string' ? detail : `HTTP ${response.status}`)
         error.status = response.status
         error.payload = payload
         throw error
