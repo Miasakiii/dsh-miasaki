@@ -16,6 +16,27 @@
 > **看不到**，官方新会话本壳同样看不到（双向隔离；官方 `desktop` profile 配置**一个字节未动**）。
 > 历史会话已整体复制一份进专属目录，本壳列表与 canvas 引用照常可用。会话 header
 > 只有 `cwd`/`createdAt`/`agentPreset`、**没有来源标记**，历史无法事后分类，故只做「从现在开始隔离」。
+>
+> **⚠ 隔离的可见性边界（2026-09-27 实机排查后补）**：`web` profile 与本壳 profile 装的插件
+> **完全相同**、界面几乎无法区分，但两者**各有一份会话库** ⇒ 在浏览器 GUI（`dsh web`，默认
+> `127.0.0.1:19387`）里聊的会话，**在壳（`127.0.0.1:3080`）里看不到**，反之亦然。这正是用户
+> 报「每次启动壳，会话记录都丢失」的物理原因（实机核对：壳库最近一条 09-26 23:49「报错什么原因」，
+> 而同一时刻用户正在浏览器 GUI 里聊的「侧边栏按钮重叠和会话记录丢失」落在**全局库**）。
+> **30 秒分辨当前窗口用的是哪份库**：
+> - 看右上角有没有壳窗控三键（`－ □ ×`，其左是主题徽章）= **miasaki 壳** → 壳库；
+>   没有 = 浏览器 GUI → 全局库。
+> - 或跑一次两库对照（标题取自投影缓存，`<slug>` 即 `--C-Users-Asakii-Desktop-dsh-miasaki--`）：
+>   ```powershell
+>   foreach ($r in 'sessions', 'profiles\miasaki\sessions') {
+>     "=== $r ==="
+>     Get-ChildItem "$env:USERPROFILE\.dsh\$r\<slug>" -Directory |
+>       Sort-Object LastWriteTime -Descending | Select-Object -First 5 |
+>       ForEach-Object { "{0:MM-dd HH:mm}  {1}" -f $_.LastWriteTime, $_.Name }
+>   }
+>   ```
+> **要「两处都能看到」只有一条路：取消隔离**（删掉 `profiles/miasaki/cordis.patch.yml` 里
+> `session-persistence-jsonl` 的 `root` 覆写，回到共用一份；`root` 是单值，**没有"双 root"可配**）。
+> 复制/镜像会造出同一 `sessionId` 的两份分叉记录，**不建议**。
 
 ## 快速开始
 
@@ -392,13 +413,19 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
   官方通道 5s 无心跳（非桌面端 / 插件缺失 / 崩溃）才启用 `act=/wait=` 扫描（选择器
   `themes/src/05-sensors.js` 顶部常量区，校准 `__miasakiProbe()`）。agent 员工状态
   后续归 `dsh-miasaki-fleet/fleet-monitor/` 工作面板，不进桌宠。
-- **Fleet 指示器（v2026-09-04，可选联动）**：设环境变量 `MIASAKI_FLEET_PULSE`
-  指向 `dsh-miasaki-fleet/state/fleet-pulse.json`（由 fleet 侧
+- **Fleet 指示器（v2026-09-04，可选联动；2026-09-27 补配置回退）**：两种开启方式 ——
+  ① 环境变量 `MIASAKI_FLEET_PULSE`；② `%LOCALAPPDATA%\miasaki\config.json` 里写
+  `{"fleetPulsePath":"<绝对路径>"}`（**从开始菜单 / 资源管理器启动也生效**）。
+  此前只有 ①，而它从未被任何脚本或安装步骤设置过 ⇒ 脉冲文件每分钟都在更新、桌宠却从来不读，
+  这条联动等于不存在（2026-09-27 实测：用户级 / 机器级 / 进程级环境变量全为空）。两者都指向
+  `dsh-miasaki-fleet/state/fleet-pulse.json`（由 fleet 侧
   `node workers/pulse/publish-pulse.mjs` 发布，契约见
   `dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`），桌面端
   脉冲看门狗 2s 轮询，桌宠按 **fleet 告警(blocked/error，failed 行 + 常驻
   “需要你的批准”气泡）> DSH 等待审批 > fleet 运行中（work 立绘 + 常驻“忙碌中…”）
-  > busy > intensity** 映射；未设变量时联动静默关闭。
+  > busy > intensity** 映射（**2026-09-27 订正**：本行原写「fleet 告警 > DSH 等待审批」，
+  与 `pet_native/window.rs:157` 的 `st != Waiting` 守卫相反 —— 实为**等待审批优先**）；
+  两处都未配置时联动静默关闭。
 - 位置与角色持久化到 `%APPDATA%\com.miasaki.desktop\pet.json`（**v2，2026-09-16**：
   「**角色可见区域**中心」相对所在显示器工作区的比例 `rx/ry` + 工作区几何（作为屏幕身份）
   + 绝对坐标兜底 + 隐藏状态，原子写；**v1 文件自动读取并在下次保存时升级**）。
@@ -450,9 +477,13 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
   无底色/无边框/无毛玻璃/padding，观感接近标准无边框应用；主题徽章 16px 保留在按钮组
   左侧，为启动页唯一主题标识——用户拍板 2026-09-06），hover 底色只落在单按钮上
   （Win11 原生同款，关闭键 hover 红底）。**唯一页面级调整 = 右上角安全区让位**（2026-09-10
-  晚重写）：裸键组实测宽 108px，加 `right:8px` 后恒占距窗口右缘 `[8,116]px`，故声明
-  `--ms-titlebar-reserve:128px`（含 12px 呼吸位），再按**恒存锚点**让位 DSH 0.1.5 官方右栏的
-  两处控件——折叠态的「打开右侧边栏」（`[data-conversation-header-corner]`，其官方
+  晚重写；**2026-09-27 实机重叠事件后订正取值口径**）：裸键组实测宽 108px，加 `right:8px` 后恒占
+  距窗口右缘 `[8,116]px`；sidebar 线的终端键插进组首位后组宽 136px ⇒ 占 `[8,144]px`。
+  让位量 `--ms-titlebar-reserve` 自 2026-09-27 起由壳的 `ResizeObserver` 观测 `.tb-group` 实宽
+  **自动计算**（组宽 + 8 + 12），静态兜底取**注入形态上界** `156px` —— 兜底是「无人写」时的最后
+  防线，**宁多勿少**：按「无终端键」取 128px 时，sidebar 插键后安全线整整少让一格（28px），官方
+  「打开右侧边栏」ExpandButton 会压住终端键（2026-09-27 用户报障的实机现象）。让位按**恒存锚点**：
+  折叠态的「打开右侧边栏」（`[data-conversation-header-corner]`，其官方
   `margin-right:-16px` 需归零）与展开态的面板 chrome 全屏/收起两键
   （`[data-dockkit-strip-chrome]`，只在分栏最右一格渲染）；裸键组 `top:11px` 使其中心与官方
   控件同落在 24px 水平线上。旧规则 `header:has([role="tablist"]){padding-right:118px}` 已废

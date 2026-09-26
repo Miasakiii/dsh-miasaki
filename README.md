@@ -8,7 +8,7 @@
 |---|---|---|
 | 桌面端 | [`dsh-miasaki-desktop/`](dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH web 插件：免费模型池、桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）——**用量监控已于 2026-09-26 迁出本线，见第八线**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的六个运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。 |
 | Fleet | [`dsh-miasaki-fleet/`](dsh-miasaki-fleet/) | 多 Agent CLI 编排（`package.json` 0.20.0）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）/ G0–G4 图工程判定层（契约、图与就绪度、能力图、异构验证者选取）。 |
-| Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.6，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
+| Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.7，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
 | Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.10.0-miasaki.0）：**接入官方右侧 Sidebar**，只注册「审查」一个 tab 类型（辅助对话归 M2）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除）；**2026-09-25 右栏终端退役**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），沿用官方策略不再自建，内嵌终端收敛为**底部面板单形态**（Ctrl+` / 标题栏按钮唤起，多标签多会话、node-pty 路线 B、一次性 token 闸门、回放环 + 背压淘汰，host 半与容器无关零改动）。单测 57 通过 / 5 环境跳过、静态回归 10/10。 |
 | SSH | [`dsh-miasaki-ssh/`](dsh-miasaki-ssh/) | DSH web SSH 插件 `@miasaki/dsh-ssh`（全新自研，2026-09-09 立项）：**会话头第一行**「SSH」段（与「对话 / 会话布」同一个胶囊，三段一体）+ **画布页面内部**那组按钮旁的「SSH」（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器。**M1 代码完成，已 link 安装**；U0 可靠性闭环 + U1 统一工作区（2026-09-12）、A0 上下文桥（2026-09-14）、D1–D4 全屏浮层改造与**四轮真机验收**（2026-09-15）、**U2 主体落地**（2026-09-16：U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复）、**主页入口判据与落点收敛**（2026-09-25 B1/B2：只在主页 + 与会话头胶囊结构性互斥；2026-09-26 B3/B4：同排官方 chrome 实测让位 + 让位量的取数时机（过渡期逐帧跟随、安全线变化的同步重测），修与官方「▭」的按钮盒叠压）均已实施。**2026-09-26 对标 zcode（zai-org/ZCode）方案落地**（[对标调研与方案](dsh-miasaki-ssh/design/2026-09-26-ssh-zcode-benchmark-plan.md)）：P0 三件套（keepalive 15s×3 + `buildConnectConfig()` 纯函数 + ssh2 `level` 错误词汇与私钥口令两码；`lib/exec.js` exec 前置；U2.2 SFTP 注入 zcode 降级链——sftp 视图无目录或会话打不开 ⇒ 零字节消耗直降 `mkdir -p && cat >`，mid-stream 失败记 `execOnlyUpload` 下次直走命令通道）+ P1-1 `~/.ssh/config` 别名导入（`ssh -G` 优先 + 自研解析回退，只导直连 alias）。单测 **225 例**、静态回归 **26/26**；U3（跳板 / 转发）未动，实机项待验收（真实主机 SFTP 往返 / 降级实机路径 / 导入回填 / keepalive 长连接）。 |
 | 双模型 | [`dsh-miasaki-dual-model/`](dsh-miasaki-dual-model/) | DSH web 双模型插件 `@miasaki/dsh-dual-model`（2026-09-10 立项）：会话级「主模型 + 辅助模型」，只要其一支持图片即可上传图片，输入框右下角（`conversation.input.right`）快速配置。**M1 实现完成，待实机验证**——M0 六项技术假设实测全部成立；准入走一行本体补丁（可选服务探测，未装插件零退化，规则 + 双基线入库并可离线自证）；单测 33 例、`verify-all dual-model` 12/12。设计文档与变更记录见其 `design/`。 |
@@ -25,7 +25,7 @@
 |---|---|---|
 | 桌面端 | `dsh-miasaki-desktop/` | 0.1.0 |
 | Fleet | `dsh-miasaki-fleet/` | 0.20.0 |
-| Canvas | `dsh-miasaki-canvas/` | 0.5.0-miasaki.6 |
+| Canvas | `dsh-miasaki-canvas/` | 0.5.0-miasaki.7 |
 | Sidebar | `dsh-miasaki-sidebar/` | 0.10.0-miasaki.0 |
 | SSH | `dsh-miasaki-ssh/` | 0.1.0-miasaki.0 |
 | 双模型 | `dsh-miasaki-dual-model/` | 0.1.3-miasaki.0 |
@@ -207,6 +207,47 @@ banner/motd 跳过。③ **U2.2 SFTP**（`lib/paths.js` / `lib/sftp.js` / `lib/l
 > **现状**：受限沙箱下直接 `node dsh-miasaki-sidebar/test/terminal-hub.test.js` → **15/15 全绿**，
 > 无须再切普通终端。归因过程与判据见
 > [回归矩阵 §1 的 ※※ 注记](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
+
+**2026-09-27（桌面端适配整改 A 批 + B 批 T7：契约 v1.2 与让位量归壳）** `[实测]`：上游是同日的
+[全线审查](dsh-miasaki-shared-docs/repo-review-2026-09-27.md)（八线对桌面端的适配现状）与
+[整改方案](dsh-miasaki-shared-docs/cross/desktop-adaptation-plan-2026-09-27.md)。
+审查的核心判断：**壳与插件的契约面已从 1 项长到 12 项，只有 1 项被文档化，而恰恰是那一项零消费**；
+真正在用的 8 项（`data-miasaki-theme`、`--ms-titlebar-reserve`、`.tb-group` …）全是隐式契约，
+且「窗控组实宽」这**一个事实有三方各自取数**（sidebar 写死常量 / canvas 量 DOM / ssh 实测）。
+
+- **T1 让位量归壳**（`themes/src/06-titlebar.js`）：`ResizeObserver` 观测 `.tb-group` 实宽，自动写
+  `--ms-titlebar-reserve = 组宽 + 8 + 12`（108→128、136→156）⇒ **壳成为该变量唯一写者**，sidebar 两处硬编码写入删除。
+  **同日续修（实机重叠事件）**：迁移的两半生效速度不同 —— 插件删写入**刷新即生效**，壳接写入要**重编 exe**
+  （`include_str!` 内嵌），空档期变量无人写 ⇒ 回落到照「无终端键」定的静态兜底 `128px`、整整少让一格 28px，
+  官方 ExpandButton 压住 sidebar 终端键（用户报障）。两处订正：兜底改按**注入形态上界**取 `156px`（`03-switcher.js`）；
+  sidebar 改**能力门控兜底**（`chrome.bounds` 在位不写 / 缺席按 `.tb-group` 实宽补位）。**根因与换算取证见
+  [desktop/design/CHANGELOG.md 当日续条](dsh-miasaki-desktop/design/CHANGELOG.md)** 与
+  [sidebar/design/CHANGELOG.md 同日条](dsh-miasaki-sidebar/design/CHANGELOG.md)。
+  `verify-themes` 新增 2 项端到端断言（注入一格按钮 ⇒ 自动 +28、移除 ⇒ 回落），**本轮实跑 23/23 PASS** —
+  顺带解开该脚本在 P10（改走官方 token）之后的一个死结：未鉴权页面的 `localStorage` 访问被拒会**崩掉整个脚本**，
+  改为该项 skip、其余照跑（此前它一项都验不到）。
+- **T2 契约 v1.2**（`themes/src/10-contract.js`）：新增**只读** `chrome.bounds()` / `chrome.onChange()`
+  （壳窗控组视口矩形 + 变更订阅）。**`protocolVersion` 仍为 1** —— 按契约 §4，增量能力只追加 `capabilities`；
+  子 frame 仍只给空壳（canvas / ssh 都是主帧量、iframe 消费，无需开口子）。闸门 **15 → 19 例**，
+  并补上「**未知命名空间即失败**」的守卫（原先对未知 ns 静默跳过，等于该纪律一直没有闸门）。
+- **消费侧三处**：canvas 让位取数契约化 + 订阅（`verify-all canvas` **13/13**、单测 100 → 105）；
+  ssh 口径①契约化、**口径② 与 `rootObserver` 不动**（`verify-all ssh` **31/31**、`client.test.js` 38 → 43 例，
+  顺带修掉测试夹具一个**假阴性**：桩节点是纯对象、`instanceof HTMLElement` 恒 false ⇒ DOM 兜底路径从未真被执行过）；
+  sidebar 让位量改**能力门控兜底**（见上 T1 续修；`verify-all sidebar` **11/11**、单测 62 → **66**）。
+- **T7 fleet 联动**（`src-tauri/src/main.rs`）：`MIASAKI_FLEET_PULSE` 补**三级回退**（环境变量 →
+  `%LOCALAPPDATA%\miasaki\config.json` 的 `fleetPulsePath` → 关闭）。此前只认环境变量，而全仓
+  **没有任何脚本或安装步骤设置过它**（2026-09-27 实测：用户级/机器级/进程级全空）⇒ 脉冲文件每分钟都在更新、
+  桌宠从来不读，这条联动等于不存在。同批订正 README 里**写反的优先级**（实为「等待审批 > fleet 告警」）。
+  `cargo test` **86 例**。
+- **同批落地**：`themes/src/10-contract.js` 头部纪律同步 v1.1/v1.2（此前仍写「只读 + 不提供写通道」，
+  与同文件实现自相矛盾）；`design/desktop-contract.md` 补 v1.2 契约面与三条边界；回归矩阵 §3.1 新增
+  「契约 v1.2 + 让位量归壳」判据行 + 台账 **E9**（台账总数 45 → 47 项，分母口径已在文件里写明）。
+- **顺带修掉一处闸门假阳性**：`verify-themes.mjs` 的无头 Edge profile 原落在工作区
+  `dsh-miasaki-desktop/.edge-test-profile/`（跑一次 747 文件 / 34MB），而 `check-silent-guards.mjs`
+  按目录遍历、**不读 `.gitignore`** ⇒ 全量回归凭空报「190 处新增静默降级」。已把 profile 改到系统
+  临时目录，并在 `SKIP_DIRS` 兜一道防历史残留（该目录 2026-09-26 清仓时删过一次，会反复长出来）。
+- **仍待办**：① **T6 跨线契约闸门**（`check-pulse-contract`，B 批）未做 —— 本批只落了 T7；
+  ② 实机项 E9 等（一次桌面壳重启 + 一次 `dsh web` 重启即可同批验 §3.0 的 D1+D2 共 25 项）。
 
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）

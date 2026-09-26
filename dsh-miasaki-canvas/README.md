@@ -18,7 +18,10 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 
 **2026-09-10 补：插槽解决了「被重渲染挤掉」，但不解决「宽度不够」。** 官方会话头里 `headerActions` / `headerUtilities` / `headerCorner` 都是 `flex:none`，标题簇是 `flex:1; min-width:0` —— 中栏被右侧边栏推窄到固定项放不下时，actions 会**溢出并压叠**在 utilities 上（标题同时被裁没）。切换器为此加了**运行时自适应**：`ResizeObserver` 观察会话头，留给标题的余量不足时收成图标形态（≈116px → ≈64px，带滞回避免抖动）；平台层另有一个本体补丁把溢出从「压叠」改为「可横向滚动」兜底。归因与宽度预算见 [设计](design/2026-09-10-conversation-header-crowding-fix.md)，补丁见 [desktop/patches/dsh-client-ui-conversation](../dsh-miasaki-desktop/patches/dsh-client-ui-conversation/README.md)。
 
-**桌面端（无边框窗口）适配**（2026-09-06，v0.5.0-miasaki.2；2026-09-07 跟进桌面端标题栏 v4 改名）：桥接层 `client.js` 把两类父文档状态同步进画布 iframe——①桌面窗控按钮组（V4 `#miasaki-titlebar .tb-group`，V3 兜底 `.tb-capsule`）的右上占位宽度（`canvas:chrome` → `--canvas-chrome-reserve`，画布工具条与错误条整体左移让位，普通浏览器为 0 不受影响）；②主题品牌色（`canvas:theme` 除明暗外带 `--dsw-static-deepseek-450` → `--canvas-accent`，画布内所有强调色/激活胶囊/小地图/主按钮由它 color-mix 派生，三主题随动）。画布全部滚动容器统一 6px 主题化胶囊滚动条，默认隐藏、容器 hover/聚焦时显现（Firefox 走 `scrollbar-width/color` 常显兜底）；暗色下画布遮罩层同步深色，消除亮色壳暗色画布的亮边。
+**桌面端（无边框窗口）适配**（2026-09-06，v0.5.0-miasaki.2；2026-09-07 跟进桌面端标题栏 v4 改名；**2026-09-27 取数契约化**）：桥接层 `client.js` 把两类父文档状态同步进画布 iframe——①桌面窗控按钮组（V4 `#miasaki-titlebar .tb-group`，V3 兜底 `.tb-capsule`）的右上占位宽度（`canvas:chrome` → `--canvas-chrome-reserve`，画布工具条与错误条整体左移让位，普通浏览器为 0 不受影响）；②主题品牌色（`canvas:theme` 除明暗外带 `--dsw-static-deepseek-450` → `--canvas-accent`，画布内所有强调色/激活胶囊/小地图/主按钮由它 color-mix 派生，三主题随动）。画布全部滚动容器统一 6px 主题化胶囊滚动条，默认隐藏、容器 hover/聚焦时显现（Firefox 走 `scrollbar-width/color` 常显兜底）；暗色下画布遮罩层同步深色，消除亮色壳暗色画布的亮边。
+**2026-09-27 补（全线审查 §4-①）**：占位宽度的取数**契约优先** —— 壳提供只读的 `window.miasakiDesktop.chrome.bounds()` / `chrome.onChange()`（契约 v1.2），画布据此算让位量并订阅变化；契约不在时（浏览器 / 旧壳）逐字回落到原有的双类名 DOM 探针。**修掉了一处错误前提**：旧注释写「按钮组宽度固定，不随窗口尺寸变化，故无需监听 resize」——窗口尺寸确实不影响，但**同排其他插件会往组里插按钮**（sidebar 的终端键就是），少让 28px 并持续陈旧正是旧行为的缺陷。
+
+**DSH 0.1.7 API 适配**（2026-09-27，v0.5.0-miasaki.7）：DSH 0.1.7 起 `ISessions` 契约删除 `open(id)`，会话导航统一收敛到 `ctx.uiWorkspace.openSession(target)`——桥接层 `client.js` 原来调用的 `ctx.sessions.open` 每次都是 `TypeError`，却被空 `catch` 一律显示成误导性的「关联的 DSH 会话已不可用」（会话其实活着，只是点卡片/跳回 DSH 必报错）。本次：① `inject` 增加 `uiWorkspace`，三处导航（卡片选中联动 / 跳回 DSH / 画布发消息）全部改走 `ctx.uiWorkspace.openSession`；② 发消息路径先 `openSession` 再借 `ctx.sessions.scope()`——0.1.7 的 scope 只对已 retain 的世代有效（`openSession` 同步 materializeScope），未在前台打开过的会话直接取 scope 恒为 `undefined`；③ 两处空 `catch` 改为 `console.warn` 留痕 + toast 带真实原因。契约见 [`test/canvas-runtime.test.js`](test/canvas-runtime.test.js)。
 
 ## 合并怎么用
 
@@ -33,12 +36,12 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 # 安装到本机 DSH web profile（link 模式，改代码后重启 dsh web + 刷新页面）
 dsh plugin --profile web add link:C:\Users\Asakii\Desktop\dsh-miasaki\dsh-miasaki-canvas
 
-# 语法校验 + 全量测试（9 个测试文件共 98 项）
+# 语法校验 + 全量测试（10 个测试文件共 105 例）
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
 corepack pnpm test
 
-# 或走仓库级统一回归入口（三入口语法 + 9 个测试文件共 98 项）
+# 或走仓库级统一回归入口（三入口语法 + 10 个测试文件共 105 例）
 node ..\scripts\verify-all.mjs canvas
 ```
 
@@ -54,7 +57,7 @@ dsh-miasaki-canvas/
 ├── app.js                      # 画布前端（iframe 内）
 ├── styles.css / deepseek-mark.svg
 ├── cordis.patch.yml            # web profile 注入行（数据目录 miasaki-canvas/）
-├── test/                       # 本线回归套件（含 fork 后新增/改写的契约锚点，9 文件 98 例）
+├── test/                       # 本线回归套件（含 fork 后新增/改写的契约锚点，10 文件 105 例）
 ├── docs/                       # 上游用户手册（zh-CN / en，内容基于上游原文）
 ├── design/                     # 本线设计文档与变更记录
 │   ├── 2026-09-05-canvas-merge-design.md

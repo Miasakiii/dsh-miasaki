@@ -33,7 +33,10 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 
 - **2026-09-10 迁移**：DSH `0.1.5-rc.1` 内置官方右侧 Sidebar（分栏 / 全屏 / 浮窗 / 文件树 / 文档预览 / 模型交付文件），
   用户拍板「官方做了侧边栏就用官方的」。壳层（推挤 / `shell.overlay` 挂载 / 自研 tab 栏 / 空态选择页 /
-  抽屉手势与遮罩 / 桌面壳标题栏注入 / 两处自研开关 / 按会话持久化）全部停用。
+  抽屉手势与遮罩 / 两处自研开关 / 按会话持久化）全部停用。同批停用的还有**壳的侧栏入口按钮**
+  （`syncTitlebarButton` / `.tb-sidebar`，注入对象恰好也在 `#miasaki-titlebar`）——**注意标题栏这个落点
+  2026-09-12 已随内嵌终端重建**：今天仍是活代码的「标题栏终端按钮」就插在 `.tb-group` 首位
+  （`client.js` 的 `titlebarButton`，见 [design/CHANGELOG.md](design/CHANGELOG.md) 2026-09-12 条）。
   设计见 [design/2026-09-10-migrate-to-official-rightbar.md](design/2026-09-10-migrate-to-official-rightbar.md)。
 - **2026-09-10 实机修复**：首次打开官方右栏是**一片空白**，引导页没有任何入口胶囊。根因不是注册失败
   （两个 `sidebar.right.pane.tab` 正文都在册），而是 `sidebarRightTabs.register` 的 `guide` 条目把
@@ -64,9 +67,17 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
   列表行采用官方行范式（32px + 8px 圆角 + `6px 8px` 内边距），语义色与滚动条走令牌，
   面板边框改官方详情列同款 `.5px + border-l3`。详见 [CHANGELOG](design/CHANGELOG.md)。
 
-> 原壳层能力（推挤锚点 / 抽屉右滑关闭 / 桌面壳让位 / 持久化 v2→v3）的完整设计记录保留在
-> [CHANGELOG](design/CHANGELOG.md) 与 `design/2026-09-06-sidebar-roadmap-design.md` 中，**均已被官方右栏取代**，
+> 原壳层能力（推挤锚点 / 抽屉右滑关闭 / 持久化 v2→v3）的完整设计记录保留在
+> [CHANGELOG](design/CHANGELOG.md) 与 `design/2026-09-06-sidebar-roadmap-design.md` 中，**已被官方右栏取代**，
 > 仅作历史存档，不再描述当前行为。
+>
+> **例外（2026-09-27 订正，「桌面壳让位」不是历史）**：**标题栏终端按钮仍在**——桌面壳里它会被插进
+> `#miasaki-titlebar .tb-group` 首位，是活代码（`client.js` 的 `titlebarButton`）；**让位量由桌面壳自动
+> 计算**（壳用 `ResizeObserver` 观测 `.tb-group` 实宽写壳内变量），**本线不写**。
+> **同日订正（实机重叠事件）**：迁移的两半生效速度不同——本线删写入**刷新即生效**，壳接写入要**重编
+> exe**（`include_str!` 内嵌），空档期里变量无人写、回落到照「无终端键」定的静态兜底 `128px`，官方
+> 「打开右侧边栏」ExpandButton 因此压住终端键（用户报障）。现改为**能力门控兜底**：`chrome.bounds`
+> 能力在位（新壳）本线不写；缺席（旧壳 / 浏览器直开）才按**同源公式**（组实宽 + 8 + 12）补位。
 
 ## 组件蓝图（M1–M3）
 
@@ -78,7 +89,7 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 | 内嵌终端多标签（多会话） | **标签栏多开**：会话集合（上限 8）+ 活动标签记忆 + 最小尺寸仲裁 + 帧协议 v2；`＋`/`×`/中键/双击重命名/右键菜单/`▾` 溢出 + `Ctrl+Shift+`` / `Ctrl+PageUp·Down` / `Alt+1..8`；标签栏最右 `×` = 收起底部面板；**终端是一整块**（标签栏 + xterm，无下半部分），状态条只在报错/退出/工作区变更时出现；`＋` 右键选 shell / 开系统终端 | M3.1 / v0.9.0 | **已实施，待实机验证**（2026-09-19；见[补充设计](design/2026-09-19-terminal-multi-tab-plan.md)与[可视原型](design/2026-09-19-terminal-tabs-mockup.html)——两文中「右栏 tab 容器」的表述以 2026-09-25 退役为准；单测 57 通过 / 5 环境跳过，前端 DOM 桩冒烟 52 断言全过） |
 | 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成（待实现后再注册官方 tab 类型） |
 | 标题栏启动器组 | ~~底部内嵌终端面板（xterm + node-pty + WS 回放）~~ → **已按 2026-09-12 拍板落地为「内嵌终端底部面板」**（见上；2026-09-25 起为唯一形态）；外部程序跳转按钮（explorer / VS Code 菜单）仍为未实现残留 | M3（已部分落地） | 终端部分 = **v0.8.0 已实现**；外部跳转按钮未实现（前提已随壳退役重建，待另立项） |
-| ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉 / 桌面壳让位~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线） |
+| ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线）。~~桌面壳让位~~ **不在退役列**：标题栏终端按钮仍在（壳内插 `.tb-group` 首位），让位量由桌面壳用 `ResizeObserver` 自动计算；本线仅在**旧壳**（无 `chrome.bounds` 能力）时按同源公式补位（2026-09-27 实机重叠事件后订正） |
 
 ## 目录结构
 
@@ -100,6 +111,7 @@ dsh-miasaki-sidebar/
 │   ├── review-grouping.test.js  # 审查列表目录分组与组内统计求和（源码抽取，3 项）
 │   ├── review-view-store.test.js # 审查视图持久化：默认值 / 非法回退 / 订阅通知 / 私有模式降级（源码抽取，6 项）
 │   ├── rightbar-guide.test.js   # 官方右栏 guide 条目契约：title / description 必须是函数（源码抽取，4 项）
+│   ├── titlebar-button.test.js  # 标题栏终端按钮写域边界：让位量须过 chrome.bounds 能力门控、按 .tb-group 实宽算、清理受 wroteReserve 门控，且注入逻辑仍在（源码静态断言，4 项）
 │   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
 │   ├── terminal-hub.test.js     # 内嵌终端 host 半：PTY 枚举纪律 / 回放环 / 一次性 token / 围栏 / 多会话隔离与回收（fake pty 注入，15 项）
 │   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单 / diff 新契约（12 项）
@@ -169,13 +181,14 @@ socket `bufferedAmount` 超 8MB 丢帧（终端输出有损可接受），不无
 ## 验证
 
 ```powershell
-# 本线单测（62 项：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
-#            右栏 guide 契约 4 + 终端 launcher 7 + 内嵌终端 hub 15 + 路由 12）
+# 本线单测（66 项：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
+#            右栏 guide 契约 4 + 标题栏按钮写域 4 + 终端 launcher 7 + 内嵌终端 hub 15 + 路由 12）
 node test/review-data.test.js
 node test/review-view.test.js        # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过）
 node test/review-grouping.test.js    # 审查列表目录分组与组内统计求和（从 client.js 抽取纯函数求值）
 node test/review-view-store.test.js  # 审查视图持久化（抽取 client.js 的 reviewView，注入 mock localStorage）
 node test/rightbar-guide.test.js     # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
+node test/titlebar-button.test.js    # 标题栏终端按钮写域边界：让位量写入必须过 chrome.bounds 能力门控、公式按 .tb-group 实宽算、清理受 wroteReserve 门控（4 项静态断言）
 node test/terminal-launcher.test.js
 node test/terminal-hub.test.js       # 内嵌终端 host 半（fake pty + fake resolveBin 双注入，不需要真实 shell）：多会话隔离 / 定向广播 / 未知 id 静默丢弃 / 上限 8 / 关闭回收 / 最小尺寸仲裁 / dispose 全杀
 node test/api-routing.test.js        # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、浏览器信任三道、视图白名单与 /review/diff 新契约

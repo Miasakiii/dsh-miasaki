@@ -127,6 +127,13 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **P2-4 真协议探针**（归档 `_refs/scripts-archive/ssh-p2-probes/`）**8/8 PASS**：真 direct-tcpip 字节往返 + **经跳板 sock 注入完成真协议握手** + 真 exec（motd 跳过）；
 - 单测 **225 → 276 例**、`verify-all ssh` **20/20 → 31/31**；**A1 工具面已于 2026-09-26 单独完成实机验收**（本机真协议 sshd，工具面可见 / L0 直通 / L1 审批双向，见 [CHANGELOG](design/CHANGELOG.md) 顶部；基座 `_refs/scripts-archive/ssh-a1-live/`）；真跳板建连与本地转发实机仍待验。
 
+**2026-09-27 T4 让位口径契约化**（[桌面端适配整改 A 批](../dsh-miasaki-shared-docs/cross/desktop-adaptation-plan-2026-09-27.md) 五件之一，与 desktop 契约 v1.2 / canvas / sidebar 同批落地）：
+
+- **取数契约优先**：桌面壳 `window.miasakiDesktop.chrome.bounds()` 在位时按其矩形算 launcher 的让位（原「壳口径①」），契约缺失（浏览器 / 旧壳）**逐字回落**到原 DOM 探针（`.tb-group` 优先、`.tb-capsule` 兜底）—— 两条路径的 reserve 算式统一收进 `applyRect`，限界与向上取整不变；
+- **订阅**：`chrome.onChange` 驱动重测，退订挂 fiber teardown（漏退订会让壳在插件卸载后回调已销毁闭包）；**口径②（量官方 DSH chrome 与紧邻兄弟按钮、退到其左 8px）与 `rootObserver` 一字未动**；
+- **同批修测试夹具一处假阴性**：桩节点原是纯对象 ⇒ `instanceof HTMLElement` 恒 false，**DOM 兜底路径从未真被执行过**（改真类 `NodeHTMLElement` 并交给 VM）；
+- 单测 **276 → 299 例**（client 38 → 43）、`verify-all ssh` **31/31**（18 个测试文件 299 例全过）。
+
 **2026-09-26 对标方案落地：P0 三件套 + U2.2 SFTP + P1-1 ssh config 导入**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户拍板「按建议开工」D1②/D5②/D2①，实施记录见 [CHANGELOG](design/CHANGELOG.md)）：
 
 - **P0-1 连接健壮性**：keepalive 15s×3（NAT/防火墙静默断开不再挂死，真协议探针 6/6 PASS 归档 `_refs/scripts-archive/ssh-keepalive-probe/`：60043ms 报 `Keepalive timeout` 归 `TIMEOUT`）；连接配置提取为纯函数 `buildConnectConfig()`；`classifyError()` 新增 ssh2 `level` 分级与私钥口令两码（`KEY_PASSPHRASE_MISSING/INVALID`）；
@@ -216,7 +223,7 @@ dsh-miasaki-ssh/
 ├── sftp-ui.js              # 前端（iframe 内）：远程文件面板抽屉（U2.2）—— 面包屑/列表/上传队列/变更操作，自包含 IIFE（window.SshFiles）
 ├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑悬浮窗 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）/ 文件面板入口与 ssh config 导入（U2.2/P1-1）
 ├── styles.css              # 工作区布局 + --ssh-* 语义令牌（原生明暗兜底，宿主桥接覆盖）
-├── test/                   # 单测 276 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑/keepalive 与错误词汇 ↔
+├── test/                   # 单测 299 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑/keepalive 与错误词汇 ↔
 │                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照/未绑定不发帧/按 seq 匹配 ↔
 │                           #   exec: POSIX 包装/exit 早于 data/排空窗口/超时/协议行扫描/signal 取消 ↔ paths: 词法归一/NUL/控制字符/~ 展开 ↔
 │                           #   sftp: 状态词汇/进度节流/列目录映射/上传降级链(sftp→exec pipe)/下载计数 ↔ http-sftp: 真实 HTTP 端到端（票据/fence/409/413/降级）↔
