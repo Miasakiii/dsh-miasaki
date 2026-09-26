@@ -23,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node --check index.js && node --check client.js && node --check session.js && node --check app.js && node --check lib/store.js && node --check lib/runtime.js",
+    "build": "node --check index.js && node --check client.js && node --check session.js && node --check app.js && node --check lib/store.js && node --check lib/runtime.js && node --check lib/diagnose.js",
     "prepare": "pnpm run build",
     "test": "node --test test/*.test.js"
   },

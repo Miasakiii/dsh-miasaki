@@ -24,7 +24,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 
 - **双栏工作区**：可收起主机导航（232px，208–288 语义随容器收窄）+ 多主机终端标签 + 单条状态栏；未选主机有空态（最近连接 / 新建主机），未连接主机有摘要页（连接 / 编辑入口）；
 - **主机导航**：名称 / `username@host:port` 联合搜索、分组归档、收藏（星标 + 组内置顶）、存活状态点；**右键与工具区「更多」菜单同源**（打开终端 / 编辑 / 收藏 / 复制地址 / 信任记录 / 断开 / 删除）；
-- **编辑器抽屉**：右侧 412px sheet，字段校验（用户名必填、**不再默认 root**）、认证方式渐进显示私钥路径、活跃主机编辑提示「仅影响下一次连接」、服务端错误内联展示，[取消 / 保存 / 保存并连接]；
+- **编辑器悬浮窗**：560px 居中卡片（2026-09-26 由右侧 412px 抽屉改造，见下文「实机反馈修复」），字段校验（用户名必填、**不再默认 root**）、认证方式渐进显示私钥路径、活跃主机编辑提示「仅影响下一次连接」、服务端错误内联展示，[取消 / 保存 / 保存并连接]；
 - **三主题桥接**：client.js 读取宿主**最终计算样式**（body 优先，白名单令牌）→ 同源 postMessage + 页面级注册表 `__DSH_SSH_THEME__`（iframe 首帧直读，不闪兜底色）→ `--ssh-*` 语义变量 + xterm 主题（背景 / 前景 / 光标 / 选区 / ANSI 16 色）；半透明宿主色合成到实体底再进终端；原生明暗兜底；主题切换不重建 SSH；
 - **终端功能**：多主机标签（同主机只 attach；关闭查看 ≠ 断开，断开需确认）、Ctrl+Shift+C/V 复制粘贴、缓冲区原生查找（**零新依赖**——addon-search 对 xterm 6 只有 beta 版，未核验不引入）、字号 12–20px、本地清屏、专注模式、多行 / 含控制字符粘贴先预览确认；
 - **响应式**：容器查询断点 960 / 720 / 480（依据 SSH 容器宽度而非窗口宽度），窄屏导航改模态抽屉（焦点陷阱 + Esc 归还焦点）。
@@ -74,6 +74,47 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **兜底**：量不到窗控组但宿主下发了 `reserve` 时，退回水平让位（`--ssh-chrome-avoid-right` → `.sheet-head` 的 `padding-right`）；浏览器里两者皆为 0，抽屉照旧顶格满高。
 - **验证**：单测 82 → **85 例**（新增让位量纯函数 / 量测与兜底分支 / 样式契约三例）；另有一次性探针（headless Chrome × 桌面壳几何复刻）出前后对照图 —— 修复前两个 ✕ 叠在一起，修复后抽屉下移 45px、× 与窗控完全分离（探针用完即删）。
 - **重启生效**：改的是 `app.js` 与 `styles.css` ⇒ 需重启 `dsh web`（`index.js` 的 `cachedAsset` 是进程内缓存，浏览器强刷不够）。
+- **形态变更（2026-09-26）**：贴边抽屉形态已整体退役，改为居中悬浮窗；本条的顶部让位量 `--ssh-chrome-clearance` 保留、消费点改为遮罩层的内边距，水平兜底 `--ssh-chrome-avoid-right` 退役（见下条）。
+
+**2026-09-26 实机反馈修复：弹层从右侧抽屉改为居中悬浮窗（右下角主题球遮挡确认键）**（用户截图报告）：
+
+- **现象与取证**：桌面壳右下角的主题球（`#miasaki-switcher .ms-btn`，fixed `right/bottom 16px` 的 46px 圆 + 6px ping 光晕，z-index 99990，压在 `/ssh/` iframe 之上）盖住贴边抽屉右下角的确认键 —— 截图里「连接密码 · NO.1」弹窗的确认键正好在球底下，点不到。
+- **修法（形态改造，不是再让位）**：`.sheet` 从「右缘滑出的全高抽屉」改为**居中悬浮窗**：遮罩口径照官方设置面板（`rgba(0,0,0,.24)` + `blur(2px)`，深色主题 `rgba(0,0,0,.5)`）、卡片 `min(560px, 100% − 2×边距)`、24px 圆角、发丝描边 + 两层淡投影、`max-height: calc(100% − 64px)`，结构为标题栏 + 可滚动内容 + 底部右侧按钮区。**所有弹层场景**（新建/编辑主机、连接密码、私钥口令、指纹确认 TOFU、信任记录、断开确认、粘贴确认）一并换形态，不留两套。
+- **两条让位口径（父视口实测写入，量不到归零）**：① 顶部 `--ssh-chrome-clearance` 改挂在遮罩层的 `padding-top`，卡片（含右上角 ×）整体落到壳窗控带之下；② 新增 `--ssh-shell-fab-safe-right` = 主题球左缘距本 iframe 右缘 + 6px 光晕 + 8px 呼吸，卡片宽度取 `min(560px, 100% − 2 × max(32px, 安全线))` —— 宽窗口零影响，窄窗口自动缩窄以避开球。同时退役 `--ssh-chrome-avoid-right`（贴边形态的水平兜底）与 `openSheet` 的死参数 `wide`。
+- **实测（真产物 × headless Edge，探针归档 `_refs/scripts-archive/ssh-modal-verify/`）**：宿主页加载**真实壳注入产物** `dsh-miasaki-desktop/src-tauri/injected/theme-init.js` 自建窗控组与主题球（结果里 `shell=real`），iframe 直供**真实** `app.js` / `styles.css`。五场景全过：1540×1042 新建主机、640×820 窄窗、**480×640 极窄**（卡片与球的垂直投影相交 34px、水平 0 —— 安全线正是为此）、1540×1042「连接密码」、无壳 chrome 的浏览器形态（`fabSafeRight=0px` / `clearance=0px`，边距退回 32px 基数）。「保存并连接」「确认」与球的**重叠面积全为 0**。
+- **测试**：app 例数 16 → **17**（新增 `computeFabSafeRight` 纯函数例；`syncChromeClearance` 与样式契约两例改写为新口径），全线 **127 例**、`verify-all ssh` **12/12 PASS**。
+- **重启生效**：改的是 `app.js` 与 `styles.css` ⇒ 需重启 `dsh web`（`index.js` 的 `cachedAsset` 是进程内缓存，浏览器强刷不够）。
+
+**2026-09-26 实机反馈修复：主机栏里连端口一起填 ⇒ `getaddrinfo ENOTFOUND`**（用户截图报告「报错了」）：
+
+- **现象**：连接失败，横幅 `getaddrinfo ENOTFOUND 8.138.243.30:25112`。取证在截图里：标题行地址是 `wwq7tmzr@8.138.243.30:25112:22`（页面格式是 `${username}@${host}:${port}`）⇒ **host 字段本身就是 `8.138.243.30:25112`**、端口栏还是默认 22。
+- **根因**：主机栏粘贴了 `host:port` 写法，`requireHost()` 只拒空白/斜杠、放行 ⇒ ssh2 把整串当主机名交给 DNS。
+- **修法（三层，规则只有一处）**：
+  1. **`splitHostPort()`**（`lib/store.js`）：拆 `example.com:2222` / `[::1]:2222`；**裸 IPv6 不拆**（多个冒号是地址语法）；端口照样过 1–65535 校验（`10.0.0.1:99999` 报错而不是静默连错）。
+  2. **写入即拆分**：`normalizeConnection()` 用它，且**内嵌端口优先于端口栏**（粘贴进来的地址比默认 22 更具体）⇒ 以后直接粘贴 `8.138.243.30:25112` 就能存对。
+  3. **历史记录在连接时修正**：`runtime.connect()` 发现 host 带端口就拆分、回写磁盘、并把改动如实回报（`repaired`）→ `index.js` 透传 → 前端 `setStatusNote` 说明「主机地址里带着端口 25112 —— 已移到「端口」栏」，同时刷新列表让标题栏地址跟着更新。**不静默改数据**。
+  4. 报错文案：`classifyError` 的 `HOST_NOT_FOUND` 前面补一句能照做的指引（原始消息原样保留，排障要看它）。
+- **立即解法（不用等重启）**：打开该主机的「编辑主机」，把主机改成 `8.138.243.30`、端口改成 `25112`，保存即可连；重启后即使不改，点「重新连接」也会自动修正。
+- **测试**：store +2（`splitHostPort` 各形态、`normalizeConnection` 优先级与非法端口）、runtime +3（ENOTFOUND 文案、历史记录连接时修正并回写、干净记录不多写盘）、http +2（**真实 `index.js` 端到端**：POST 写入即拆分；种子历史记录 connect 响应带 `repaired` 且磁盘已修正）、app +1（页面必须提示并刷新列表）⇒ 全线 **135 例**、`verify-all ssh` **12/12 PASS**。
+- **同一轮实机反馈的第二跳（地址修对后报 `Connection lost before handshake`）**：这不是本线缺陷 —— 链路探测（`_refs/scripts-archive/ssh-conn-probe/`，真实 `ssh2` 握手）显示 **TCP 38ms 建连成功、服务器 8 秒零字节、69ms 内 RST**：该端口上不是（或不对外提供）SSH 服务。`classifyError()` 为此新增 `HANDSHAKE_LOST` 码，把原句配上排查方向（「先确认这个端口是不是 SSH：云安全组放行、端口映射指向 sshd」），`ECONNRESET` 另立 `CONNECTION_RESET` 码；两者都保留原始消息。例数 135 → **136**。
+- **第三跳（端口换 2005 后报 `connect ETIMEDOUT`）**：多端口 TCP 探测给出画像 —— **22 / 2005 / 8080 全部被丢包**（3.5s 无响应），**443 / 25112 可达**（TCP 通但沉默；25112 上一轮实测 69ms RST，不是 sshd）。即这台机器按**端口白名单**放行，sshd 实际端口不在放行集合里。`classifyError()` 的 `TIMEOUT` 分支同样补上排查方向（云安全组 / 防火墙是否放行该端口、服务是否在监听），原句保留。例数 136 → **137**。
+- **第四跳（放行 22 后报 `All configured authentication methods failed`）—— 补上真实能力缺口**：新装 Ubuntu / Debian 与部分云镜像的 sshd 默认 `PasswordAuthentication no` + `KbdInteractiveAuthentication yes`，密码入口在 **keyboard-interactive**；而 ssh2 **只在 `tryKeyboard === true` 时才尝试该方法**（`ssh2/lib/client.js:843`）⇒ 本线此前对这类服务器「密码再对也认证失败」。现在 password 分支开 `tryKeyboard` 并用同一密码回填 prompt（密码仍只在内存、不落盘；服务端若用它做二次验证则自然不通过，不猜不绕过）。**真协议测试**：`ssh2.Server` 起只开 keyboard-interactive 的假 sshd（现场生成 RSA host key + 真实 session/pty/shell），走完 TOFU → 认证 → 开 shell → connected；**反向验证**：临时置 false 该用例立挂 ⇒ 测试确实锁得住。例数 137 → **138**。
+
+**2026-09-26 新功能：连接诊断（档 B）** —— 把「连不上时该看什么」做进产品，不再靠命令行挖：
+
+- **两个入口**：主机菜单（工具区 `⋯` 与终端右键同源）里的 **「连接诊断」**；编辑主机悬浮窗里的 **「测试连接」**（草稿也能测，不必先保存）。
+- **三层事实 + 一句结论**：DNS（IP 字面量会明确标注「无需解析」）→ TCP + SSH banner 一次连接同时取 →（可选）服务端允许的认证方式。**结论由 host 半 `buildVerdict()` 给**（单一出处、可单测），页面只渲染与复制：`REACHABLE` / `NOT_SSH` / `TCP_TIMEOUT` / `TCP_REFUSED` / `TCP_RESET` / `TCP_UNREACHABLE` / `DNS_FAILED` / `PASSWORD_DISABLED`，每条带可照做的提示。
+- **两条默认值（2026-09-26 那次封 IP 的直接教训）**：① **公网出口 IP 默认不查**，点「查询公网出口 IP」才外呼第三方（ipinfo.io → ipify → ifconfig.me 逐个尝试），界面写明数据去向；② **认证方式默认不探测**，点了也只发协议自带的 **`none`** —— 不发送任何密码或密钥，也**不会被服务器记成一次失败登录**（fail2ban 的 sshd 过滤器不匹配 `none`）。
+- **本机信息**（放行时要用）：出口 IP + 网卡地址 + 诊断环境（平台 / Node 版本）；**报告一键复制**（纯文本，可直接贴给同事或云厂商工单）。
+- **实测**（真产物 × headless Edge，归档 `_refs/scripts-archive/ssh-modal-verify/`）：探针的 `/ssh/api/diagnose` 桩路由**直接调真实 `lib/diagnose.js`**，8 个场景全过 —— 其中诊断两景为「TCP 通但零字节 ⇒ NOT_SSH」与「真 ssh2 假 sshd + 认证方式探测 ⇒ REACHABLE + publickey/password」。
+- **测试**：`test/diagnose.test.js` **11 例**（banner 解析 / socket 错误词汇 / DNS 字面量短路 / **真 socket** 三种形态 / **真 `ssh2.Server`** 验「只发 `none`、服务端看不到密码」/ 出口 IP 逐个回退 / verdict 全分支 / 端到端组装）+ http 路由端到端 **1 例** + 前端契约 **2 例** ⇒ 全线 **138 → 152 例**、`verify-all ssh` **12 → 14/14**。
+
+**2026-09-26 修复：「只读：另一个窗口正在此终端输入」在未连接时常驻**（用户截图报告「一直都有」）：
+
+- **根因两处**：① `renderWriteBar()` 写的是 `bar.hidden = isWriteOwner()` —— **没有会话时它也等于 false**，于是启动 / 断开 / 关标签后横幅都会被翻开；② `session.js` 的写权初始值就是 `'read'`，连接还没开 shell（写权未决）就被 UI 当成只读，而文案「另一个窗口正在此终端输入」当时并不成立。
+- **修法：写权补成三态** `pending`（未决）/ `read`（明确只读）/ `write`（持有写权）—— `session.js` 初始 `pending` 并新增 `isReadOnly()`；`app.js` 只在「会话活着 + `isReadOnly() === true`」时显示只读条；`write.open`（写权空出）的提示同样收敛为「明确只读」，未决态不再误报「可以接管」。
+- **连带（刻意）**：`ready` 帧带 `mode:'read'` 现在会触发一次 `onModeChange`（pending → read 是真实变化），旧实现被 `setMode` 去抖吃掉 —— 对应断言已按新语义改写。
+- **测试 + 实测**：session 2 例改写 + app 契约 1 例 ⇒ 全线 **153 例**、`verify-all ssh` **14/14**；探针新增 `H-idle-write-bar-hidden`（未连接态量到 `hidden:true / display:none`），8 景全过。
 
 **2026-09-16 U2 主体落地：多 shell / 工作区记忆 / 精确恢复**（[U2 规划](design/2026-09-15-ssh-u2-plan.md) §6 顺序 U2.1 → U2.3 → U2.4；交接文档 [实施验收包](design/2026-09-16-ssh-u2-implementation-report.md)）：
 
@@ -138,10 +179,11 @@ dsh-miasaki-ssh/
 ├── index.js                # host 半：路由族 + REST API + WS 桥（帧上限 + viewer 路由）
 ├── lib/
 │   ├── store.js            # 纯数据层：连接库 / known_hosts / 三道围栏（可单测）
-│   └── runtime.js          # ssh2 运行时：TOFU / generation 绑定 / scrollback 环形缓冲 / WS 中继
+│   ├── runtime.js          # ssh2 运行时：TOFU / generation 绑定 / scrollback 环形缓冲 / WS 中继
+│   └── diagnose.js         # 连接诊断：DNS / TCP+banner / 认证方式（只发 none）/ 出口 IP / verdict
 ├── client.js               # client 半：第一行入口按钮（actions 槽）+ conversation.view 注册 + iframe 视图
 ├── session.js              # 前端查看器实例：一个查看器独占 xterm + WS，整体可销毁（U0）+ 主题/字号/查找 API（U1）+ 只读缓冲区快照（A0）+ v2 票据附着/多 shell 绑定/写权/序列化快照（U2）
-├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑抽屉 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）
+├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑悬浮窗 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）
 ├── styles.css              # 工作区布局 + --ssh-* 语义令牌（原生明暗兜底，宿主桥接覆盖）
 ├── test/                   # 单测 113 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑 ↔
 │                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照/未绑定不发帧/按 seq 匹配 ↔ app: 分组过滤/粘贴守卫/颜色合成/送对话格式/工作区快照 ↔

@@ -399,10 +399,14 @@ test('保存并连接：意图标记不得挂在事件对象上（D-1 回归）'
   assert.match(source, /if \(alsoConnect === true\) void connectFlow\(connection\)/, '标记为真时必须真的发起连接')
 })
 
-// ---- 2026-09-15 实机反馈：SSH 抽屉标题栏的 × 与桌面壳窗控组叠在同一块像素上 ---------
-// 桌面壳窗控组是 fixed 右上角的零占位浮层，压在页面之上；抽屉标题栏的 × 只比它低 9px、
-// 靠左 14px ⇒ 被窗控压住点不到。修法是抽屉整体下移到窗控下沿之下，让位量由窗控组与
-// iframe 的**父视口**矩形实测得到（两种挂载形态共用一套算法）。
+// ---- 桌面壳 chrome 让位（两次实机反馈的回归护栏）-----------------------------------
+// ① 2026-09-15：抽屉标题栏的 × 被壳窗控组（fixed 右上角）压住点不到 → 顶部让位
+//    （computeChromeClearance），抽屉整体下移到窗控下沿之下。
+// ② 2026-09-26：贴边抽屉右下角的确认键被壳主题球（fixed right/bottom 16px 的 46px 圆）
+//    压住点不到 → 形态改为**居中悬浮窗**（贴边形态从根上不再适用），并给卡片留出右缘
+//    安全线（computeFabSafeRight）；窄窗口下卡片宽度/最大高据此缩，球够不着卡片。
+// 两条让位量都取**父视口**坐标实测，浮层（iframe 顶格）与会话视图（iframe 在中栏）
+// 共用一套算法：chrome 不在 iframe 内时自然归零。
 test('computeChromeClearance：窗控下沿 → 让位量，iframe 在窗控下方时归零', () => {
   const capsule = { width: 100, height: 26, bottom: 37 }
   assert.equal(context.computeChromeClearance(capsule, { top: 0 }), 45, '37 + 8px 呼吸 = 45')
@@ -414,17 +418,41 @@ test('computeChromeClearance：窗控下沿 → 让位量，iframe 在窗控下�
   assert.equal(context.computeChromeClearance({ width: 10, height: 26, bottom: Number.NaN }, { top: 0 }), null)
 })
 
+test('computeFabSafeRight：球左缘 → 卡片右缘安全线，球不在本 iframe 内时归零', () => {
+  // 浮层形态：iframe 顶格铺满父视口，球（46px 圆 + right/bottom 16px）落在 iframe 右下角
+  const frame = { top: 0, right: 1540, bottom: 1530 }
+  const ball = { left: 1478, top: 1468, bottom: 1514, width: 46, height: 46 }
+  assert.equal(context.computeFabSafeRight(ball, frame), 76, '球左缘距右缘 62 + 6px 光晕 + 8px 呼吸 = 76')
+
+  // 窄窗口里球已经压进 iframe 内：安全线随 iframe 右缘收窄
+  assert.equal(context.computeFabSafeRight(ball, { top: 0, right: 1500, bottom: 1530 }), 36)
+
+  // 球整个在本 iframe 右侧之外（会话视图：iframe 只占中栏）
+  assert.equal(context.computeFabSafeRight(ball, { top: 0, right: 800, bottom: 1530 }), 0)
+  // 垂直方向与 iframe 不相交（球在 iframe 下方）
+  assert.equal(context.computeFabSafeRight(ball, { top: 0, right: 1540, bottom: 1200 }), 0)
+
+  // 量不到 / 不可见：浏览器里没有球，球被 display:none 收起时矩形为零
+  assert.equal(context.computeFabSafeRight(null, frame), 0)
+  assert.equal(context.computeFabSafeRight({ left: 0, top: 0, bottom: 0, width: 0, height: 0 }, frame), 0)
+  // iframe 矩形不可用或缺字段：保守不让位，不凭空把卡片缩窄
+  assert.equal(context.computeFabSafeRight(ball, null), 0)
+  assert.equal(context.computeFabSafeRight(ball, { top: 0 }), 0)
+  assert.equal(context.computeFabSafeRight({ left: Number.NaN, top: 0, bottom: 10, width: 46, height: 46 }, frame), 0)
+})
+
 /** 造一个「SSH 页面跑在 iframe 里」的 vm 环境，用于测量 / 让位变量的行为闭环。 */
-function bootShell({ capsuleRect = null, frameRect = null, topLevel = false, throwOnQuery = false, reserve = 0 } = {}) {
+function bootShell({ capsuleRect = null, ballRect = null, frameRect = null, topLevel = false, throwOnQuery = false } = {}) {
   const style = new Map()
   const iframeDoc = {
     addEventListener() {},
     documentElement: { style: { setProperty: (key, value) => style.set(key, value) } },
   }
+  const element = rect => (rect === null ? null : { getBoundingClientRect: () => rect })
   const parentDoc = {
-    querySelector() {
+    querySelector(selector) {
       if (throwOnQuery) throw new Error('SecurityError: cross-origin frame')
-      return capsuleRect === null ? null : { getBoundingClientRect: () => capsuleRect }
+      return String(selector).includes('miasaki-switcher') ? element(ballRect) : element(capsuleRect)
     },
   }
   const win = { addEventListener() {} }
@@ -432,50 +460,101 @@ function bootShell({ capsuleRect = null, frameRect = null, topLevel = false, thr
   win.frameElement = frameRect === null ? null : { getBoundingClientRect: () => frameRect }
   const ctx = vm.createContext({ window: win, document: iframeDoc })
   vm.runInContext(source, ctx, { filename: 'app.js' })
-  if (reserve > 0) vm.runInContext(`overlayState.reserve = ${reserve}`, ctx)
   return { ctx, style }
 }
 
-test('syncChromeClearance：量到窗控走垂直让位，量不到才退回宿主 reserve 的水平让位', () => {
+test('syncChromeClearance：两条让位变量都由父视口实测写出，量不到归零', () => {
   const capsuleRect = { width: 100, height: 26, bottom: 37 }
+  const frameRect = { top: 0, right: 1540, bottom: 1530 }
+  const ballRect = { left: 1478, top: 1468, bottom: 1514, width: 46, height: 46 }
 
-  // ① 桌面壳 + iframe 顶格（浮层 / 覆盖式会话头）：抽屉下移 45px，水平让位归零
-  const shell = bootShell({ capsuleRect, frameRect: { top: 0, right: 800 }, reserve: 150 })
+  // ① 桌面壳浮层形态：卡片下移 45px（窗控下沿 + 8px 呼吸）、右缘留 76px（球安全线）
+  const shell = bootShell({ capsuleRect, ballRect, frameRect })
   assert.equal(vm.runInContext('measureChromeClearance()', shell.ctx), 45)
+  assert.equal(vm.runInContext('measureShellFab()', shell.ctx), 76)
   vm.runInContext('syncChromeClearance()', shell.ctx)
   assert.equal(shell.style.get('--ssh-chrome-clearance'), '45px')
-  assert.equal(shell.style.get('--ssh-chrome-avoid-right'), '0px', '垂直已让开时不得再左推 ×')
+  assert.equal(shell.style.get('--ssh-shell-fab-safe-right'), '76px')
 
-  // ② iframe 本就在窗控下方（会话视图）：不让位，也不左推
-  const lower = bootShell({ capsuleRect, frameRect: { top: 44, right: 800 }, reserve: 150 })
+  // ② 会话视图（iframe 在中栏，两块壳 chrome 都在 iframe 之外）：都归零，卡片按 32px 基数居中
+  const lower = bootShell({ capsuleRect, ballRect, frameRect: { top: 44, right: 800, bottom: 900 } })
   vm.runInContext('syncChromeClearance()', lower.ctx)
   assert.equal(lower.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(lower.style.get('--ssh-chrome-avoid-right'), '0px')
+  assert.equal(lower.style.get('--ssh-shell-fab-safe-right'), '0px')
 
-  // ③ 量不到窗控组（浏览器）但有宿主 reserve：退回水平让位
-  const blind = bootShell({ reserve: 150 })
-  assert.equal(vm.runInContext('measureChromeClearance()', blind.ctx), null)
-  vm.runInContext('syncChromeClearance()', blind.ctx)
-  assert.equal(blind.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(blind.style.get('--ssh-chrome-avoid-right'), '150px', '宿主实测的 reserve 是最后一道兜底')
+  // ③ 浏览器（没有壳 chrome）：归零，且不再写已退役的 --ssh-chrome-avoid-right
+  const plain = bootShell({})
+  assert.equal(vm.runInContext('measureChromeClearance()', plain.ctx), null)
+  assert.equal(vm.runInContext('measureShellFab()', plain.ctx), null)
+  vm.runInContext('syncChromeClearance()', plain.ctx)
+  assert.equal(plain.style.get('--ssh-chrome-clearance'), '0px')
+  assert.equal(plain.style.get('--ssh-shell-fab-safe-right'), '0px')
+  assert.equal(plain.style.has('--ssh-chrome-avoid-right'), false)
 
-  // ④ 顶层窗口（浏览器直接打开 /ssh/）：两个变量都归零，抽屉照旧顶格
-  const top = bootShell({ capsuleRect, frameRect: { top: 0, right: 800 } , topLevel: true })
+  // ④ 顶层窗口（浏览器直接打开 /ssh/）：归零
+  const top = bootShell({ capsuleRect, ballRect, frameRect, topLevel: true })
   vm.runInContext('syncChromeClearance()', top.ctx)
   assert.equal(top.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(top.style.get('--ssh-chrome-avoid-right'), '0px')
+  assert.equal(top.style.get('--ssh-shell-fab-safe-right'), '0px')
 
   // ⑤ 跨源读父文档抛错：静默降级为不让位，不冒泡
-  const crossOrigin = bootShell({ throwOnQuery: true, reserve: 150 })
+  const crossOrigin = bootShell({ throwOnQuery: true })
   vm.runInContext('syncChromeClearance()', crossOrigin.ctx)
   assert.equal(crossOrigin.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(crossOrigin.style.get('--ssh-chrome-avoid-right'), '150px')
+  assert.equal(crossOrigin.style.get('--ssh-shell-fab-safe-right'), '0px')
 })
 
-test('抽屉让位的样式契约：.sheet 消费 clearance，.sheet-head 消费 avoid-right', async () => {
+test('悬浮窗形态的样式契约：遮罩居中 + 顶部让位 + 卡片按球安全线留边', async () => {
   const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8')
-  assert.match(css, /\.sheet \{[^}]*height: calc\(100% - var\(--ssh-chrome-clearance, 0px\)\)/,
-    '抽屉高度必须减掉让位量，否则 margin-top 会把抽屉顶出视口')
-  assert.match(css, /\.sheet \{[^}]*margin-top: var\(--ssh-chrome-clearance, 0px\)/)
-  assert.match(css, /\.sheet-head \{[^}]*padding-right: calc\(20px \+ var\(--ssh-chrome-avoid-right, 0px\)\)/)
+  assert.match(css, /\.overlay \{[^}]*display: flex; align-items: center; justify-content: center;/,
+    '悬浮窗必须居中，不得退回贴右缘的抽屉')
+  assert.match(css, /\.overlay \{[^}]*padding: var\(--ssh-chrome-clearance, 0px\) 0 0;/,
+    '顶部让位要落在遮罩层的内边距上，卡片（含右上角 ×）才会整体落到壳窗控之下')
+  assert.match(css, /--ssh-modal-edge: max\(32px, var\(--ssh-shell-fab-safe-right, 0px\)\)/,
+    '卡片边距 = 32px 基数与球安全线取大值')
+  assert.match(css, /\.sheet \{[^}]*width: min\(var\(--ssh-modal-w\), calc\(100% - 2 \* var\(--ssh-modal-edge\)\)\)/)
+  assert.match(css, /\.sheet \{[^}]*max-height: calc\(100% - 64px\)/,
+    '高度只留固定呼吸位：球在右下角，与卡片上下边界无关')
+  assert.doesNotMatch(css, /--ssh-chrome-avoid-right/, '水平让位兜底随贴边抽屉形态一起退役')
+})
+
+// 实机反馈（2026-09-26）：主机栏里连端口一起填 ⇒ getaddrinfo ENOTFOUND。host 半在
+// connect 时就地拆分并回写（见 runtime.test.js / http.test.js），页面这半边必须把
+// 「改了什么」说出来 + 刷新列表，否则用户会以为端口凭空变了。
+test('连接回报 repaired 时必须提示用户并刷新连接列表', () => {
+  assert.match(source, /result\?\.repaired === 'object'/, '要判 repaired 存在')
+  assert.match(source, /setStatusNote\(`主机地址里带着端口/, '要如实说明端口被移到「端口」栏')
+  assert.match(source, /await refreshConnections\(\)/, '要刷新列表，标题栏地址随之更新')
+})
+
+// 连接诊断（档 B）：两个入口 + 两条默认值（出口 IP 与认证方式探测都默认关，点了才发）。
+test('连接诊断：两个入口、复制报告、两条「点了才发」的默认值', () => {
+  assert.match(source, /label: '连接诊断'/, '工具区「⋯」菜单要有入口')
+  assert.match(source, /label: '测试连接'/, '编辑主机弹窗要有测试连接（草稿也能测）')
+  assert.match(source, /body\.draft = draft/, '草稿走 draft 目标')
+  assert.match(source, /resolveEgress: options\.resolveEgress === true/, '出口 IP 逐次显式请求')
+  assert.match(source, /probeAuth: options\.probeAuth === true/, '认证方式探测逐次显式请求')
+  assert.match(source, /label: '查询公网出口 IP'/, '要有一个按钮，而不是自动跑')
+  assert.match(source, /label: '探测认证方式'/, '认证方式默认不探测')
+  assert.match(source, /label: '复制报告'/, '报告要能一键复制')
+  assert.match(source, /才会外呼第三方服务/, '界面要写明出口 IP 会外呼')
+})
+
+test('连接诊断面板的样式契约：结论条按 level 上色 + 事实格', async () => {
+  const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8')
+  assert.match(css, /\.diag-verdict\.ok \{ border-left-color: var\(--ssh-ok\)/)
+  assert.match(css, /\.diag-verdict\.warn \{[^}]*var\(--ssh-warn\)/)
+  assert.match(css, /\.diag-verdict\.error \{[^}]*var\(--ssh-err\)/)
+  assert.match(css, /\.diag-grid \{ display: grid;/)
+})
+
+// 实机反馈（2026-09-26）：「只读：另一个窗口正在此终端输入」在**未连接**时也常驻。
+// 根因是旧判据 `bar.hidden = isWriteOwner()` —— 没有会话时 isWriteOwner()=false 也会把
+// 横幅翻开。现在只在「会话活着 + 服务端明确说只读」时才显示。
+test('只读条判据：无会话 / 写权未决时必须收起', () => {
+  assert.match(source, /const live = session !== null && isLive\(liveOf\(session\.connId\)\)/)
+  assert.match(source, /const readOnly = live && session\.isReadOnly\(\) === true/)
+  assert.match(source, /bar\.hidden = !readOnly/)
+  assert.doesNotMatch(source, /bar\.hidden = writable/, '旧写法把「无会话」也算成只读 ⇒ 横幅常驻')
+  assert.match(source, /isReadOnly\(\) === true.*接管写入|写入权已空出.*isReadOnly/s, '写权空出提示也要用「明确只读」，未决态不提示')
 })

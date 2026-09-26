@@ -320,10 +320,10 @@ function setupThemeListener() {
 function applyChrome(data) {
   overlayState.token = typeof data.overlayToken === 'string' && data.overlayToken.length > 0 ? data.overlayToken : null
   const reserve = Number.isFinite(data.reserve) ? Math.max(0, Math.round(data.reserve)) : 0
-  overlayState.reserve = reserve
   try { document.documentElement.style.setProperty('--ssh-chrome-reserve', reserve + 'px') } catch { /* 只读环境 */ }
-  // 抽屉让位的兜底口径跟着宿主的实测值走（量不到窗控组时用水平让位顶上，见 syncChromeClearance）。
-  syncChromeClearance()
+  // 让位量（`--ssh-chrome-clearance` / `--ssh-shell-fab-safe-right`）不从这里写：它们按父
+  // 视口实测两块壳 chrome，与宿主下发的 reserve（窗控组宽度口径）无关，只在 mount 与
+  // resize 时重算（见 syncChromeClearance）。
   const available = data.canvasAvailable !== false
   if (available !== overlayState.canvasAvailable) {
     overlayState.canvasAvailable = available
@@ -333,23 +333,23 @@ function applyChrome(data) {
   }
 }
 
-const overlayState = { token: null, current: 'ssh', canvasAvailable: true, reserve: 0 }
+const overlayState = { token: null, current: 'ssh', canvasAvailable: true }
 
-// ---- 桌面壳窗控让位（实机反馈修复）------------------------------------------
-// 桌面壳的窗控组（`#miasaki-titlebar .tb-group`：主题徽记 + 最小化/最大化/关闭）是
-// **fixed 右上角的零占位浮层**，压在页面之上。SSH 页面在壳里跑在 iframe 内，右上角那
-// 片像素恰好是「新建主机」等抽屉标题栏的位置 ⇒ 抽屉的 × 关闭按钮与窗控组叠在同一块
-// 像素上（实机截图实测：两者中心只差 14×9px，× 被窗控压住、点不到）。
-//
-// 让位口径取**抽屉整体下移到窗控下沿之下**，而不是把 × 往左推：
-// ① 会话头第一行的入口胶囊（窄窗口下的紧凑态 `>_`）也在这一行，往左让位会撞上它；
-// ② 窄窗口里往左让位会把 × 推到抽屉中间，标题栏右侧空出一大片，读感更差；
-// ③ 浏览器里量不到窗控（clearance = 0），抽屉照旧顶格，零副作用。
-//
-// 坐标系：窗控组与 iframe 的矩形都取**父视口**坐标，两者相减即得「本 iframe 内需要让开
-// 的顶部高度」。iframe 本就在窗控下方时（会话视图里 iframe 从会话头下开始）差值为负，
-// 归零 —— 不需要为两种挂载形态写分支。
+// ---- 桌面壳 chrome 让位（实机反馈修复）------------------------------------------
+// 桌面壳有两块 chrome 是**零占位浮层**，压在 /ssh/ iframe 之上、页面 z-index 拦不住：
+//   ① 窗控组（`#miasaki-titlebar .tb-group`：主题徽记 + 最小化/最大化/关闭，fixed 右上角）；
+//   ② 主题球（`#miasaki-switcher .ms-btn`：fixed right/bottom 16px 的 46px 圆，z-index 99990）。
+// 两处都命中过可用性缺陷：抽屉标题栏的 × 被窗控压住点不到（2026-09-15）；贴边抽屉
+// 右下角的「连接」被主题球压住点不到（2026-09-26）。悬浮窗（居中卡片）形态从根上让开了
+// 这两角的大部分面积，剩下两条让位口径：
+//   ① 顶部 —— 卡片（含右上角 ×）整体落到窗控下沿之下：`--ssh-chrome-clearance`；
+//   ② 右缘 —— 窗口窄到卡片会与主题球相交时，卡片宽度按球的安全线留边：
+//      `--ssh-shell-fab-safe-right`。
+// 两条都取**父视口坐标**下的实测矩形相减：同一套算法覆盖浮层（iframe 顶格）与会话视图
+// （iframe 在中栏，两块 chrome 可能都在 iframe 之外 → 自然归零）两种挂载形态，无分支。
 const CHROME_GAP_PX = 8 // 窗控下沿再留一段呼吸，避免「贴着」的读感
+const FAB_GAP_PX = 8    // 球左缘再留一段呼吸
+const FAB_GLOW_PX = 6   // 球的 ping 光晕（`.ms-btn::after{inset:-6px}`）—— 它同样吃点击
 
 /** 纯函数：父视口坐标下的窗控组矩形 + iframe 矩形 → 本 iframe 顶部让位量（px）；量不到返回 null。 */
 function computeChromeClearance(capsuleRect, frameRect) {
@@ -361,8 +361,29 @@ function computeChromeClearance(capsuleRect, frameRect) {
     ? Number(frameRect.top)
     : 0
   const overlap = bottom - frameTop
-  if (overlap <= 0) return 0 // 窗控整条都在 iframe 之上：不挡任何东西，别凭空下移抽屉
+  if (overlap <= 0) return 0 // 窗控整条都在 iframe 之上：不挡任何东西，别凭空下移卡片
   return Math.ceil(overlap + CHROME_GAP_PX)
+}
+
+/**
+ * 纯函数：父视口坐标下的主题球矩形 + iframe 矩形 → 本 iframe 的右缘安全线（px）。
+ * 语义 =「距本 iframe 右缘这么多像素以内的区域归球」：卡片据此留边。球水平不落在
+ * 本 iframe 内（会话视图里 iframe 右缘在球左侧）或与 iframe 垂直不相交时返回 0。
+ */
+function computeFabSafeRight(fabRect, frameRect) {
+  if (fabRect === null || fabRect === undefined) return 0
+  if (!(fabRect.width > 0) || !(fabRect.height > 0)) return 0
+  const left = Number(fabRect.left)
+  const top = Number(fabRect.top)
+  const bottom = Number(fabRect.bottom)
+  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(bottom)) return 0
+  const right = Number(frameRect?.right)
+  const frameTop = Number(frameRect?.top)
+  const frameBottom = Number(frameRect?.bottom)
+  if (!Number.isFinite(right) || !Number.isFinite(frameTop) || !Number.isFinite(frameBottom)) return 0
+  if (bottom <= frameTop || top >= frameBottom) return 0 // 垂直方向与 iframe 不相交
+  const safe = right - left + FAB_GLOW_PX + FAB_GAP_PX
+  return safe > 0 ? Math.ceil(safe) : 0
 }
 
 /** 从父文档量窗控组（同源才可读）；顶层窗口 / 无窗控组 / 跨源一律 null。 */
@@ -374,27 +395,41 @@ function measureChromeClearance() {
     const capsule = doc?.querySelector?.('#miasaki-titlebar .tb-group') ??
       doc?.querySelector?.('#miasaki-titlebar .tb-capsule') ?? null
     if (capsule === null || typeof capsule.getBoundingClientRect !== 'function') return null
-    const frame = window.frameElement ?? null
-    const frameRect = frame !== null && typeof frame.getBoundingClientRect === 'function'
-      ? frame.getBoundingClientRect()
-      : null
-    return computeChromeClearance(capsule.getBoundingClientRect(), frameRect)
+    return computeChromeClearance(capsule.getBoundingClientRect(), frameRectInParent())
   } catch { return null } // 跨源 iframe / 宿主文档不可读
 }
 
+/** 从父文档量主题球（同源才可读）；顶层窗口 / 浏览器里没有球 / 跨源一律 null。 */
+function measureShellFab() {
+  try {
+    if (window.parent === window) return null
+    const doc = window.parent !== null && window.parent !== undefined ? window.parent.document : null
+    const ball = doc?.querySelector?.('#miasaki-switcher .ms-btn') ?? null
+    if (ball === null || typeof ball.getBoundingClientRect !== 'function') return null
+    return computeFabSafeRight(ball.getBoundingClientRect(), frameRectInParent())
+  } catch { return null }
+}
+
+/** 本 iframe 在父视口里的矩形；量不到返回 null（让位口径据此保守归零）。 */
+function frameRectInParent() {
+  const frame = window.frameElement ?? null
+  return frame !== null && typeof frame.getBoundingClientRect === 'function'
+    ? frame.getBoundingClientRect()
+    : null
+}
+
 /**
- * 写让位变量。量到窗控 → 抽屉顶部下移（`--ssh-chrome-clearance`）；量不到窗控组但宿主
- * 下发了 reserve（浮层模式下 client.js 从同一元素实测）→ 退回水平让位
- * （`--ssh-chrome-avoid-right`）。两条路都不会让 × 压在窗控上面。
+ * 写两条让位变量：顶部 `--ssh-chrome-clearance`（卡片下移到窗控之下）、右缘
+ * `--ssh-shell-fab-safe-right`（卡片留边避开主题球）。量不到一律归零 —— 浏览器里、
+ * 或两块 chrome 都不在 iframe 内时，卡片按 `--ssh-modal-edge` 的 32px 基数居中。
  */
 function syncChromeClearance() {
-  const measured = measureChromeClearance()
-  const clearance = measured ?? 0
-  const avoidRight = measured === null ? overlayState.reserve : 0
+  const clearance = measureChromeClearance() ?? 0
+  const fabSafe = measureShellFab() ?? 0
   try {
     const style = document.documentElement.style
     style.setProperty('--ssh-chrome-clearance', clearance + 'px')
-    style.setProperty('--ssh-chrome-avoid-right', avoidRight + 'px')
+    style.setProperty('--ssh-shell-fab-safe-right', fabSafe + 'px')
   } catch { /* 只读环境 */ }
 }
 
@@ -570,14 +605,15 @@ function savePrefs() {
   } catch { /* noop */ }
 }
 
-// ------------------------------------------------------------------ sheet（右侧抽屉）
+// ------------------------------------------------------------------ 悬浮窗（模态）
+// 形态 = 居中悬浮窗（遮罩 + 居中卡片），不是右侧抽屉：贴边抽屉右下角的确认键会被桌面壳
+// 主题球压住（2026-09-26 实机反馈）。样式在 styles.css 的「悬浮窗（模态）」段。
 let sheetReturnFocus = null
 
-function openSheet(title, bodyNodes, actions, { wide = false } = {}) {
+function openSheet(title, bodyNodes, actions) {
   closeMenu()
   sheetReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
   $('#sheet-title').textContent = title
-  $('#sheet').classList.toggle('wide', wide === true)
   const body = $('#sheet-body')
   body.replaceChildren(...bodyNodes)
   const foot = $('#sheet-actions')
@@ -708,6 +744,19 @@ function openEditor(conn = null) {
   form.addEventListener('submit', submit)
   const actions = [
     { label: '取消', run: () => closeSheet() },
+    // 草稿也能测：还没保存的连接直接用表单里的值探测（host/port 现取现用）
+    {
+      label: '测试连接',
+      run: () => {
+        const targetHost = host.value.trim()
+        const targetPort = Number(port.value) || 22
+        const targetLabel = name.value.trim() || targetHost
+        void openDiagnostics({
+          draft: { host: targetHost, port: targetPort, username: username.value.trim(), label: targetLabel },
+          label: targetLabel,
+        })
+      },
+    },
     { label: '保存并连接', primary: true, run: () => { saveAndConnect = true; form.dispatchEvent(new window.Event('submit', { cancelable: true })) } },
   ]
   openSheet(editing ? '编辑主机' : '新建主机', [form], actions)
@@ -835,13 +884,20 @@ async function connectFlow(conn) {
       if (passphrase.length > 0) secrets.passphrase = passphrase
     } catch { return }
   }
+  let result = null
   try {
-    await api(`/ssh/api/connections/${encodeURIComponent(conn.id)}/connect`, json(secrets))
+    result = await api(`/ssh/api/connections/${encodeURIComponent(conn.id)}/connect`, json(secrets))
   } catch (err) {
     state.selection = conn.id
     state.pendingError = { message: err.message }
     renderAll()
     return
+  }
+  // 主机栏里带着端口的历史记录：host 半在连接时就地拆开并回写，这里如实告诉用户改了什么
+  // （标题栏地址随之变成 `host:port`，否则用户会以为端口凭空变了）。
+  if (result !== null && typeof result?.repaired === 'object' && result.repaired !== null) {
+    await refreshConnections()
+    setStatusNote(`主机地址里带着端口 ${result.repaired.port} —— 已移到「端口」栏：现在连的是 ${result.repaired.host}:${result.repaired.port}。`)
   }
   openHost(conn.id)
 }
@@ -965,8 +1021,8 @@ function handleSessionFrame(conn, msg) {
     if (tab !== null) { tab.live = false; saveWorkspace() }
     state.frameState = { state: 'closed', message: '该 shell 已结束；其他标签不受影响，可新建 shell 或关闭标签。' }
   } else if (msg.type === 'write.open') {
-    // 写权空出：当前 viewer 若处于只读态，提示可接管（不自动接管）
-    if (state.session !== null && state.session.isWriteOwner() !== true) {
+    // 写权空出：当前 viewer 若**明确**处于只读态，提示可接管（不自动接管；未决态不提示）
+    if (state.session !== null && state.session.isReadOnly() === true) {
       setStatusNote('写入权已空出，可从只读条点「接管写入」。')
     }
   }
@@ -990,9 +1046,15 @@ function handleModeChange(mode) {
 function renderWriteBar() {
   const bar = $('#write-bar')
   if (bar === null) return
-  const writable = state.session !== null && state.session.isWriteOwner() === true
-  bar.hidden = writable
-  if (writable) return
+  // 只在「会话活着 + 服务端明确说本查看器只读」时显示。两个反例都是实机逮到的：
+  //   ① 没有会话（未连接 / 已断开）时旧写法 `hidden = isWriteOwner()` 会算出 writable=false
+  //      ⇒ 把横幅翻开 ⇒ 未连接时它常驻（用户报「一直都有」）；
+  //   ② 连接还没开 shell（写权未决）时不算只读 —— 此时并没有"另一个窗口在输入"。
+  const session = state.session
+  const live = session !== null && isLive(liveOf(session.connId))
+  const readOnly = live && session.isReadOnly() === true
+  bar.hidden = !readOnly
+  if (!readOnly) return
   const take = bar.querySelector('#write-take')
   if (take !== null) {
     take.onclick = () => {
@@ -1358,6 +1420,110 @@ async function disconnectHost(id) {
   renderAll()
 }
 
+// ------------------------------------------------------------------ 连接诊断（档 B）
+// 探测与结论都在 host 半（lib/diagnose.js）：DNS → TCP → SSH banner →（可选）认证方式，
+// 页面只负责渲染与复制。两条默认值写死在交互里（2026-09-26 那次封 IP 的教训）：
+//   ① 公网出口 IP 要点了按钮才外呼第三方 IP 服务（按钮旁写明数据去向）；
+//   ② 认证方式默认不探测：它会让服务器多一次认证交互 —— 本线只发协议自带的 `none`
+//      （不会被记成失败密码），但能不发就不发。
+const DIAG_TCP_TEXT = {
+  connected: '已连接', timeout: '无响应（丢包）', refused: '被拒绝（RST）',
+  reset: '被重置（RST）', unreachable: '网络不可达', error: '失败',
+}
+
+const tcpLine = tcp => (tcp === null || tcp === undefined)
+  ? '未探测'
+  : `${DIAG_TCP_TEXT[tcp.outcome] ?? tcp.outcome} · ${tcp.ms}ms${tcp.outcome === 'connected' ? '' : ` · ${tcp.detail ?? ''}`}`
+
+function diagRows(report) {
+  const rows = []
+  const push = (key, value, tone = '') => rows.push({ key, value, tone })
+  push('目标', `${report.target.host}:${report.target.port}`)
+  const lan = report.local.addresses.filter(item => item.internal !== true)
+  push('本机网卡', lan.length === 0 ? '未取到' : lan.map(item => `${item.address}（${item.name}）`).join('、'))
+  if (report.egress === null) push('公网出口 IP', '未查询 —— 点下方「查询公网出口 IP」才会外呼第三方服务', 'muted')
+  else if (report.egress.error !== undefined) push('公网出口 IP', `查询失败：${report.egress.error}`, 'warn')
+  else push('公网出口 IP', `${report.egress.ip}（${report.egress.source}）`, 'ok')
+  const dns = report.dns ?? {}
+  if (dns.error !== undefined) push('DNS', `解析失败：${dns.error}`, 'error')
+  else if (dns.literal === true) push('DNS', `${report.target.host} 是 IP 字面量，无需解析`, 'ok')
+  else push('DNS', `→ ${(dns.ips ?? []).join('、')}（${dns.ms}ms）`, 'ok')
+  push(`TCP ${report.target.port}`, tcpLine(report.tcp), report.tcp?.outcome === 'connected' ? 'ok' : 'error')
+  push('SSH banner', report.ssh?.banner ?? '—（未取到）', report.ssh?.isSsh === true ? 'ok' : 'error')
+  if (report.ssh?.isSsh === true) push('SSH 服务', report.ssh.software ?? '未知')
+  if (report.auth === null || report.auth === undefined) push('认证方式', '未探测（默认关；点了也只发协议自带的 `none`）', 'muted')
+  else if (Array.isArray(report.auth.methods)) push('认证方式', report.auth.methods.join(' / ') || '（空）', 'ok')
+  else push('认证方式', `探测失败：${report.auth.error ?? '未知'}`, 'warn')
+  push('诊断环境', `${report.local.platform} · Node ${report.local.node}`)
+  return rows
+}
+
+function diagReportNodes(report) {
+  const nodes = []
+  const box = el('div', `diag-verdict ${report.verdict.level}`)
+  box.append(el('strong', '', report.verdict.title))
+  if (report.verdict.hints.length > 0) {
+    const list = el('ul', 'diag-hints')
+    for (const hint of report.verdict.hints) list.appendChild(el('li', '', hint))
+    box.appendChild(list)
+  }
+  nodes.push(box)
+  const grid = el('dl', 'diag-grid')
+  for (const row of diagRows(report)) {
+    grid.append(el('dt', '', row.key), el('dd', row.tone === '' ? '' : `tone-${row.tone}`, row.value))
+  }
+  nodes.push(grid)
+  nodes.push(el('p', 'diag-note', '探测只做 DNS / TCP / SSH banner；认证方式默认不查，点了也只发协议自带的 `none` —— 不发送任何密码或密钥，也不会被服务器记成一次失败登录。查询公网出口 IP 会把请求发给第三方 IP 服务（ipinfo.io / ipify / ifconfig.me，逐个尝试）。'))
+  return nodes
+}
+
+function diagReportText(report) {
+  const lines = [`SSH 连接诊断${report.target.label === null ? '' : ` · ${report.target.label}`}`, `时间：${report.ranAt}`, '']
+  for (const row of diagRows(report)) lines.push(`${row.key}：${row.value}`)
+  lines.push('', `结论：${report.verdict.title}`)
+  for (const hint of report.verdict.hints) lines.push(`  · ${hint}`)
+  return lines.join('\n')
+}
+
+/**
+ * 打开诊断悬浮窗。`connectionId` 用已保存主机，`draft` 用编辑中的草稿（还没保存也能测）。
+ * 先跑基础探测（不发认证、不外呼），两个可选探测各自一个按钮，点了才发。
+ */
+async function openDiagnostics({ connectionId = null, draft = null, label = '' }) {
+  const title = `连接诊断${label === '' ? '' : ` · ${label}`}`
+  const run = async (options = {}) => {
+    openSheet(title, [el('p', '', '正在探测…（DNS → TCP → SSH banner）')], [{ label: '关闭', run: () => closeSheet() }])
+    let report = null
+    try {
+      const body = { probeAuth: options.probeAuth === true, resolveEgress: options.resolveEgress === true }
+      if (connectionId !== null) body.connectionId = connectionId
+      else body.draft = draft
+      report = (await api('/ssh/api/diagnose', json(body))).report
+    } catch (error) {
+      openSheet(title, [el('p', 'notice error', `诊断失败：${error.message}`)], [{ label: '关闭', run: () => closeSheet() }])
+      return
+    }
+    const actions = []
+    if (report.egress === null) {
+      actions.push({ label: '查询公网出口 IP', run: () => { void run({ ...options, resolveEgress: true }) } })
+    }
+    if (report.auth === null) {
+      actions.push({ label: '探测认证方式', run: () => { void run({ ...options, probeAuth: true }) } })
+    }
+    actions.push({
+      label: '复制报告',
+      run: async () => {
+        const text = diagReportText(report)
+        if (await copyText(text)) setStatusNote('诊断报告已复制到剪贴板。')
+        else window.prompt('诊断报告：', text)
+      },
+    })
+    actions.push({ label: '关闭', run: () => closeSheet() })
+    openSheet(title, diagReportNodes(report), actions)
+  }
+  await run({})
+}
+
 // ------------------------------------------------------------------ 主机菜单（工具区「更多」与右键同源）
 function hostMenuItems(conn) {
   const live = isLive(liveOf(conn.id))
@@ -1371,6 +1537,8 @@ function hostMenuItems(conn) {
     items.push({ icon: 'plus', label: '新建 shell 标签', run: () => openNewShellTab(conn.id) })
   }
   items.push({ icon: 'edit', label: '编辑主机', run: () => openEditor(conn) })
+  // 连接诊断：连不上时看这一条 —— DNS / TCP / banner / 认证方式 + 本机出口 IP（点了才查）
+  items.push({ icon: 'search', label: '连接诊断', run: () => { void openDiagnostics({ connectionId: conn.id, label: conn.label }) } })
   items.push({
     icon: 'star', label: conn.favorite === true ? '取消收藏' : '收藏主机',
     run: async () => {
@@ -1984,8 +2152,8 @@ async function mount() {
   applyThemeSnapshot(initialTheme())
   setupThemeListener()
   buildSkeleton(root)
-  // 桌面壳窗控让位：抽屉标题栏的 × 不能与窗控组叠在一起（见 syncChromeClearance 注释）。
-  // 先量一次（顶层窗口量不到就是 0），窗口尺寸变化时重测 —— 会话视图下 iframe 的右缘会动。
+  // 桌面壳 chrome 让位：悬浮窗卡片要避开壳窗控带（右上）与主题球（右下），见 syncChromeClearance。
+  // 先量一次（顶层窗口 / 浏览器里量不到就是 0），窗口尺寸变化时重测 —— 会话视图下 iframe 的右缘会动。
   syncChromeClearance()
   window.addEventListener('resize', scheduleChromeClearance)
   // 浮层模式（路线丁）专属：自绘顶栏（对话｜会话布｜SSH）。回退视图里不渲染 ——

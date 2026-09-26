@@ -27,6 +27,10 @@
   --ssh-term-bg: #ffffff;
   --ssh-term-fg: #2b3446;
   --ssh-cursor: var(--ssh-accent);
+  /* 悬浮窗（模态）几何：宽度取表单的自然尺度；最小边距含桌面壳右下角主题球的
+     安全线（`--ssh-shell-fab-safe-right` 由 app.js 实测写入，浏览器里为 0）。 */
+  --ssh-modal-w: 560px;
+  --ssh-modal-edge: max(32px, var(--ssh-shell-fab-safe-right, 0px));
   color-scheme: light;
 }
 :root[data-scheme="dark"] {
@@ -332,30 +336,45 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
   .state-banner .text-btn { margin-left: 24px; }
 }
 
-/* ---------------------------------------------------------------- sheet 浮层 */
+/* ---------------------------------------------------------------- 悬浮窗（模态） */
+/* 形态 = 官方设置面板那一类**居中悬浮窗**：全屏遮罩 + 居中卡片 + 大圆角 + 轻投影。
+ * 旧形态是从右缘贴边滑出的全高抽屉，右下角的「连接 / 保存」正好落在桌面壳主题球
+ * （`#miasaki-switcher`，fixed right/bottom 16px 的 46px 圆，z-index 99990 压在本
+ * iframe 之上）底下 ⇒ 确认键点不到（实机反馈）。居中形态从根上避开那一角，另有两
+ * 条让位约束：
+ *   ① 顶部避开桌面壳窗控带（fixed 右上角零占位浮层）：让位量由 app.js 实测窗控组与
+ *      iframe 的**父视口**矩形得到（浮层形态约 45px，浏览器里 0），写成
+ *      `--ssh-chrome-clearance` 作本层的顶部内边距 —— 卡片（含右上角 ×）整体落在窗控下沿之下。
+ *   ② 右下避开主题球：窗口够宽时卡片天然与球不相交，窄窗口（宽 < 卡片宽 + 2×安全线）
+ *      才会压住卡片右下角，故卡片宽度按 `--ssh-modal-edge` 留边（= max(32px, 球安全线)）；
+ *      高度只留固定 64px 呼吸位 —— 球在右下角，与卡片上下边界无关。 */
 .overlay {
   position: fixed; inset: 0; z-index: 50;
-  background: rgba(16, 23, 40, 0.21);
-  display: flex; justify-content: flex-end;
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--ssh-chrome-clearance, 0px) 0 0;
+  /* 遮罩口径与官方设置面板同一档（--dsw-alias-bg-mask-1 + --dsw-mask-blur）。 */
+  background: rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(2px);
 }
-/* 抽屉整体下移到桌面壳窗控带之下：窗控组（主题徽记 + 最小化/最大化/关闭）是 fixed
-   右上角的**零占位浮层**，压在页面之上；抽屉标题栏的 × 正好落在它上面（实机反馈：
-   两个 ✕ 中心只差 14×9px，抽屉那颗被压住点不到）。让位量由 app.js 用窗控组与 iframe
-   的父视口矩形实测下发；浏览器里、或 iframe 本就在窗控下方时该变量为 0，抽屉照旧顶格满高。 */
+:root[data-scheme="dark"] .overlay { background: rgba(0, 0, 0, 0.5); }
 .sheet {
-  width: min(412px, 100%); height: calc(100% - var(--ssh-chrome-clearance, 0px));
-  margin-top: var(--ssh-chrome-clearance, 0px);
-  background: var(--ssh-surface); color: var(--ssh-text); border-left: 1px solid var(--ssh-border);
-  display: flex; flex-direction: column; box-shadow: -8px 0 35px rgba(16, 23, 40, 0.05); min-height: 0;
+  width: min(var(--ssh-modal-w), calc(100% - 2 * var(--ssh-modal-edge)));
+  /* 垂直留白只取固定呼吸位（顶部窗控让位已由 .overlay 的内边距扣掉）：球在右下角，
+     与卡片的上下边界无关，不该把它那 80px 安全线也算成上下边距。 */
+  max-height: calc(100% - 64px);
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--ssh-surface); color: var(--ssh-text);
+  border: 1px solid var(--ssh-border); border-radius: 24px;
+  /* 官方 elevation-prominent 的观感：0.5px 发丝描边 + 两层极淡投影。 */
+  box-shadow: 0 0 0 0.5px var(--ssh-border), 0 3px 8px rgba(0, 0, 0, 0.05), 0 12px 40px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
 }
-/* 让位兜底：量不到窗控组、但宿主下发了 reserve 时改成水平让开（--ssh-chrome-avoid-right），
-   量到窗控时该变量为 0、这里就是原始的 20px。 */
 .sheet-head {
-  padding: 18px 20px 14px; padding-right: calc(20px + var(--ssh-chrome-avoid-right, 0px));
+  padding: 16px 14px 14px 20px;
   display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--ssh-border); flex: none;
 }
 .sheet-head h2 {
-  font-size: 16px; margin: 0; flex: 1; font-weight: 600;
+  font-size: 15px; margin: 0; flex: 1; font-weight: 600;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sheet-body { padding: 18px 20px; overflow-y: auto; flex: 1; min-height: 0; }
@@ -389,3 +408,27 @@ svg.icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-w
   padding: 14px 20px; border-top: 1px solid var(--ssh-border); background: var(--ssh-surface); flex: none;
 }
 .sheet-actions button { font-size: 12px; }
+
+/* ------------------------------------------------------------------ 连接诊断面板 */
+/* 结论条按 level 上色（ok/warn/error），下面是 key-value 事实格；两者都由 app.js 的
+   diagReportNodes() 产出，结论文案来自 host 半的 buildVerdict()（单一出处）。 */
+.diag-verdict {
+  border: 1px solid var(--ssh-border); border-left-width: 3px; border-radius: 8px;
+  background: var(--ssh-raised); padding: 11px 13px; margin: 0 0 16px; font-size: 12.5px; line-height: 1.7;
+}
+.diag-verdict strong { display: block; font-weight: 600; }
+.diag-verdict.ok { border-left-color: var(--ssh-ok); }
+.diag-verdict.warn { border-left-color: var(--ssh-warn); background: var(--ssh-warn-bg); color: var(--ssh-warn); }
+.diag-verdict.error { border-left-color: var(--ssh-err); background: var(--ssh-err-bg); color: var(--ssh-err); }
+.diag-hints { margin: 7px 0 0; padding-left: 17px; }
+.diag-hints li { margin: 3px 0; }
+
+.diag-grid { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px 12px; margin: 0; font-size: 12px; }
+.diag-grid dt { color: var(--ssh-muted); }
+.diag-grid dd { margin: 0; overflow-wrap: anywhere; }
+.diag-grid dd.tone-ok { color: var(--ssh-ok); }
+.diag-grid dd.tone-warn { color: var(--ssh-warn); }
+.diag-grid dd.tone-error { color: var(--ssh-err); }
+.diag-grid dd.tone-muted { color: var(--ssh-muted); }
+
+.diag-note { margin: 16px 0 0; font-size: 11px; line-height: 1.8; color: var(--ssh-faint); }

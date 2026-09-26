@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs'
 import { WebSocketServer } from 'ws'
 import { SshStore, InputError, NotFoundError, fenceCheck, sanitizeConnection } from './lib/store.js'
 import { SshRuntime } from './lib/runtime.js'
+import { diagnose } from './lib/diagnose.js'
 
 export const name = 'ssh'
 export const inject = ['webServer']
@@ -130,6 +131,26 @@ export function apply(ctx, config) {
         return sendJson(res, 200, { connections: runtime.listState() })
       }
 
+      // 连接诊断（DNS → TCP → SSH banner → 可选认证方法）。默认不发任何凭据：
+      // 诊断按钮要是每次都记一次失败登录，用户会被 fail2ban / 云主机安全封 IP。
+      // `resolveEgress` 是**逐次显式**的：只有用户点了「查询公网出口 IP」才会外呼第三方服务。
+      if (path === '/ssh/api/diagnose' && req.method === 'POST') {
+        const body = await readJson(req).catch(() => ({}))
+        const record = typeof body?.connectionId === 'string' ? await store.getConnection(body.connectionId) : null
+        const draft = body?.draft ?? null
+        const target = record ?? draft
+        if (target === null || typeof target !== 'object') return sendJson(res, 400, { error: '缺少诊断目标（connectionId 或 draft）' })
+        const report = await diagnose({
+          host: record !== null ? record.host : draft?.host,
+          port: record !== null ? record.port : Number(draft?.port),
+          username: record !== null ? record.username : draft?.username,
+          label: record !== null ? record.label : (typeof draft?.label === 'string' ? draft.label : null),
+          probeAuth: body?.probeAuth === true,
+          resolveEgress: body?.resolveEgress === true,
+        })
+        return sendJson(res, 200, { report })
+      }
+
       // U2.1 附着票据（方案 §3.2）：一次性 + TTL 30s；WS attach 帧消费之。
       if (path === '/ssh/api/attach' && req.method === 'POST') {
         const body = await readJson(req)
@@ -211,7 +232,9 @@ export function apply(ctx, config) {
           passphrase: typeof body?.passphrase === 'string' ? body.passphrase : undefined,
         })
         if (result?.error) return sendJson(res, 400, { error: result.error })
-        return sendJson(res, 200, { ok: true, state: result.state })
+        // `repaired`：主机栏里带端口的历史记录已在连接时就地修正（runtime.connect），
+        // 把「改了什么」如实回给页面，由页面提示用户（不静默改数据）。
+        return sendJson(res, 200, { ok: true, state: result.state, ...(result.repaired === undefined ? {} : { repaired: result.repaired }) })
       }
       return sendJson(res, 404, { error: '接口不存在' })
     } catch (error) {

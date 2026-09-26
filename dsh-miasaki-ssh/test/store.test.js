@@ -6,7 +6,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  hostKeyOf, fingerprintOf, normalizeConnection, sanitizeConnection,
+  hostKeyOf, fingerprintOf, normalizeConnection, sanitizeConnection, splitHostPort,
   stripPort, fenceCheck, InputError, NotFoundError, SshStore,
 } from '../lib/store.js'
 
@@ -119,4 +119,34 @@ test('SshStore persists connections and fingerprints, then reloads', async () =>
 
 test('SshStore rejects an empty dataDir', () => {
   assert.throws(() => new SshStore(''), /non-empty/)
+})
+
+// ---- 实机反馈（2026-09-26）：主机栏里连端口一起填（`8.138.243.30:25112` + 端口栏 22）
+// 会被 ssh2 当主机名去解析（getaddrinfo ENOTFOUND）。写入路径统一在 normalizeConnection
+// 里拆分，规则只有 splitHostPort 一处。
+test('splitHostPort 拆出粘贴地址里的端口，且不吃掉裸 IPv6 字面量', () => {
+  assert.deepEqual(splitHostPort('example.com:2222'), { host: 'example.com', port: 2222 })
+  assert.deepEqual(splitHostPort(' 8.138.243.30:25112 '), { host: '8.138.243.30', port: 25112 })
+  assert.deepEqual(splitHostPort('[::1]:2222'), { host: '::1', port: 2222 })
+  assert.deepEqual(splitHostPort('::1'), { host: '::1', port: null }, '裸 IPv6 的冒号是地址语法，不是端口')
+  assert.deepEqual(splitHostPort('2001:db8::1'), { host: '2001:db8::1', port: null })
+  assert.deepEqual(splitHostPort('example.com'), { host: 'example.com', port: null })
+  assert.deepEqual(splitHostPort(''), { host: '', port: null })
+})
+
+test('normalizeConnection：主机栏里带端口时拆分，且它优先于端口栏', () => {
+  const pasted = normalizeConnection({ label: 'NO.1', host: '8.138.243.30:25112', port: 22, username: 'u' })
+  assert.equal(pasted.host, '8.138.243.30')
+  assert.equal(pasted.port, 25112, '粘贴进来的是地址本体，端口栏的默认 22 不该盖掉它')
+
+  const plain = normalizeConnection({ label: 'x', host: '10.0.0.1', port: 2200, username: 'u' })
+  assert.equal(plain.host, '10.0.0.1')
+  assert.equal(plain.port, 2200)
+
+  const v6 = normalizeConnection({ label: 'x', host: '[::1]:2222', username: 'u' })
+  assert.equal(v6.host, '::1')
+  assert.equal(v6.port, 2222)
+
+  // 内嵌端口同样过端口校验：不合法就报错，不静默连错地方
+  assert.throws(() => normalizeConnection({ label: 'x', host: '10.0.0.1:99999', username: 'u' }), /端口必须是/)
 })

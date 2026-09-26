@@ -70,7 +70,10 @@
     let fitQueued = false
     let shellId = typeof options.shellId === 'string' && options.shellId.length > 0 ? options.shellId : null
     let shellSeq = Number.isInteger(options.shellSeq) ? options.shellSeq : null // 刷新恢复：workspace 快照里的 seq
-    let mode = 'read'
+    // 写权三态：'pending' 未决（还没收到任何权威信号）、'read' 明确只读（服务端/其它
+    // 查看器持有写权）、'write' 本查看器持有写权。初始不是 'read' —— 否则「连接还没
+    // 建立 / 还没开 shell」也会被 UI 当成只读，弹出「另一个窗口正在此终端输入」。
+    let mode = 'pending'
     let bufferLive = false   // this viewer already holds output (fresh load vs re-attach)
     let pendingSnapshot = null // snapshot frame arrived before binary replay (fresh load)
     let awaitingReplay = false // next binary on THIS socket is the attach replay (or a snapshot)
@@ -507,6 +510,8 @@
     }
 
     function isWriteOwner() { return mode === 'write' }
+    /** 明确只读（可显示「已被其他查看器接管 / 只读」类提示）；未决态返回 false。 */
+    function isReadOnly() { return mode === 'read' }
     function currentShellId() { return shellId }
 
     function size() {
@@ -518,7 +523,7 @@
     return {
       connId: conn.id, term, fit, dispose,
       applyTheme, setFontSize, fontSize, find, clearLocal, input, size, snapshot,
-      openShell, takeover, closeShell, isWriteOwner, currentShellId,
+      openShell, takeover, closeShell, isWriteOwner, isReadOnly, currentShellId,
     }
   }
 

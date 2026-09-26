@@ -26,6 +26,22 @@ export function hostKeyOf(hostname, port) {
   return h.includes(':') ? `[${h}]:${p}` : `${h}:${p}`
 }
 
+/**
+ * Split a `host:port` pair typed into the host field ('example.com:2222',
+ * '[::1]:2222') so a pasted address still connects. A bare IPv6 literal keeps
+ * its colons (address syntax, not a port) and reports `port: null`.
+ */
+export function splitHostPort(value) {
+  const text = String(value ?? '').trim()
+  const bracketed = /^\[([^\]]+)\]:(\d+)$/.exec(text)
+  if (bracketed !== null) return { host: bracketed[1], port: Number(bracketed[2]) }
+  // Exactly one colon plus a digits-only tail is 'host:port'; IPv6 literals have
+  // two or more colons and never match.
+  const plain = /^([^:]+):(\d+)$/.exec(text)
+  if (plain !== null) return { host: plain[1], port: Number(plain[2]) }
+  return { host: text, port: null }
+}
+
 /** OpenSSH-style SHA256 fingerprint of a DER host key. */
 export function fingerprintOf(keyBuffer) {
   const digest = createHash('sha256').update(keyBuffer).digest('base64')
@@ -66,11 +82,15 @@ function requirePort(port) {
 export function normalizeConnection(input = {}) {
   const authMethod = typeof input.auth?.method === 'string' ? input.auth.method : 'password'
   if (!AUTH_METHODS.has(authMethod)) throw new InputError('不支持的认证方式')
+  // A port pasted into the host field wins over the port column: `8.138.243.30:25112`
+  // beside the default 22 is exactly the shape that reached ssh2 as a hostname and
+  // failed DNS (getaddrinfo ENOTFOUND, 实机反馈 2026-09-26).
+  const typedHost = splitHostPort(input.host)
   const record = {
     id: typeof input.id === 'string' && input.id.length > 0 ? input.id : randomUUID(),
     label: normalizeLabel(input.label, 80),
-    host: requireHost(input.host),
-    port: requirePort(input.port),
+    host: requireHost(typedHost.host),
+    port: requirePort(typedHost.port ?? input.port),
     username: (String(input.username ?? '').trim().slice(0, 255)),
     auth: { method: authMethod },
     group: (String(input.group ?? '').trim().slice(0, 40) || '未分组'),

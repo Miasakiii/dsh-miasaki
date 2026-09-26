@@ -11,8 +11,15 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { generateKeyPairSync } from 'node:crypto'
+import ssh2 from 'ssh2'
 import { classifyError, SshRuntime, RuntimeConn, ShellChannel, MAX_SHELLS_PER_RUNTIME, MAX_SNAPSHOT_BYTES } from '../lib/runtime.js'
 import { SshStore, fingerprintOf } from '../lib/store.js'
+
+// ssh2 是 CommonJS 包：命名导入只对 lexer 认出的成员可用，Server 要走默认导入再解构。
+const { Server: SshServer } = ssh2
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 test('classifyError maps ssh2 client errors to stable codes', () => {
   assert.equal(classifyError(new Error('All configured authentication methods failed')).code, 'AUTH_FAILED')
@@ -20,6 +27,132 @@ test('classifyError maps ssh2 client errors to stable codes', () => {
   assert.equal(classifyError(new Error('getaddrinfo ENOTFOUND example.com')).code, 'HOST_NOT_FOUND')
   assert.equal(classifyError(new Error('handshake: ETIMEDOUT')).code, 'TIMEOUT')
   assert.equal(classifyError(new Error('Unknown something')).code, 'ERROR')
+})
+
+// 实机反馈（2026-09-26）：`getaddrinfo ENOTFOUND 8.138.243.30:25112` 是「主机栏里连端口
+// 一起填」的产物。原始消息必须原样保留（排障要看它），前面补一句能照着做的指引。
+test('classifyError: 解析失败带可照做的指引，且不吞掉原始消息', () => {
+  const info = classifyError(new Error('getaddrinfo ENOTFOUND 8.138.243.30:25112'))
+  assert.equal(info.code, 'HOST_NOT_FOUND')
+  assert.match(info.message, /端口填在「端口」栏/)
+  assert.match(info.message, /8\.138\.243\.30:25112/)
+})
+
+// 同一轮实机反馈的第二跳：地址修对后报 `Connection lost before handshake`（TCP 通了、
+// 对端零字节 RST）—— 多半是「这个端口不是 sshd」。同样是原句保留 + 可照做的指引。
+test('classifyError: 握手前断开给排查方向，ECONNRESET 单独成码', () => {
+  const lost = classifyError(new Error('Connection lost before handshake'))
+  assert.equal(lost.code, 'HANDSHAKE_LOST')
+  assert.match(lost.message, /Connection lost before handshake/)
+  assert.match(lost.message, /是不是 SSH 服务/)
+  assert.equal(classifyError(new Error('read ECONNRESET')).code, 'CONNECTION_RESET')
+})
+
+// 第三跳：端口换成 2005 后报 `connect ETIMEDOUT 8.138.243.30:2005`（包被丢）。同一套
+// 口径：原句保留 + 指向安全组/监听。
+test('classifyError: 超时指向安全组与监听，原句保留', () => {
+  const info = classifyError(new Error('connect ETIMEDOUT 8.138.243.30:2005'))
+  assert.equal(info.code, 'TIMEOUT')
+  assert.match(info.message, /connect ETIMEDOUT 8\.138\.243\.30:2005/)
+  assert.match(info.message, /安全组/)
+})
+
+// 历史记录里主机栏带端口时，连接是唯一出口：就地拆分、回写、如实回报（不静默改数据）。
+test('CONNECT: 主机栏带端口的历史记录在连接时拆分并回写，改动回报给页面', async () => {
+  const { runtime, store, cleanup } = await freshRuntime()
+  try {
+    // 刻意绕过 normalizeConnection 直写存储 —— 模拟线上那条历史记录（拆分是本次才加的）
+    store.connections.value.connections.push({
+      id: 'legacy-1', label: 'NO.1', host: '127.0.0.1:1', port: 22, username: 'u',
+      auth: { method: 'password' }, group: '未分组', favorite: false,
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', lastConnectedAt: null,
+    })
+    await store.connections.save()
+
+    const result = await runtime.connect('legacy-1', { password: 'x' })
+    assert.deepEqual(result.repaired, { from: '127.0.0.1:1', host: '127.0.0.1', port: 1 })
+    const stored = await store.getConnection('legacy-1')
+    assert.equal(stored.host, '127.0.0.1', '磁盘上的记录必须一起修正，不能只改内存')
+    assert.equal(stored.port, 1)
+    assert.equal(runtime.conns.get(runtime.byProfile.get('legacy-1')).connKey, '127.0.0.1:1', '指纹键用修正后的 host:port')
+    await runtime.disconnect('legacy-1')
+  } finally { await cleanup() }
+})
+
+test('CONNECT: 干净记录不产生 repaired，也不多写一次盘', async () => {
+  const { runtime, store, cleanup } = await freshRuntime()
+  try {
+    const created = await store.createConnection({ label: 'ok', host: '127.0.0.1', port: 1, username: 'u', auth: { method: 'password' } })
+    const before = (await store.getConnection(created.id)).updatedAt
+    const result = await runtime.connect(created.id, { password: 'x' })
+    assert.equal(result.repaired, undefined)
+    assert.equal((await store.getConnection(created.id)).updatedAt, before, '没改动就不该写盘')
+    await runtime.disconnect(created.id)
+  } finally { await cleanup() }
+})
+
+// ---- 真实 ssh2 服务端：只提供 keyboard-interactive 的机器 ---------------------------
+// 新装 Ubuntu/Debian 与部分云镜像的 sshd 是 `PasswordAuthentication no` +
+// `KbdInteractiveAuthentication yes`。ssh2 客户端**只在 tryKeyboard 为真时**才尝试该方法
+// （`ssh2/lib/client.js:843`），缺它就会出现「密码正确、却报 All configured authentication
+// methods failed」（实机反馈 2026-09-26）。这里用真协议端点把这条链路钉住：TOFU 指纹确认 →
+// keyboard-interactive 回填密码 → connected。
+test('AUTH: 服务端只开 keyboard-interactive 时，同一密码经该通道登录成功（真协议）', async () => {
+  const { runtime, store, cleanup } = await freshRuntime()
+  const hostKey = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+    publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  }).privateKey
+  const offered = []
+  const serverClients = new Set()
+  const server = new SshServer({ hostKeys: [hostKey] }, client => {
+    serverClients.add(client)
+    client.on('close', () => serverClients.delete(client))
+    client.on('authentication', ctx => {
+      offered.push(ctx.method)
+      if (ctx.method !== 'keyboard-interactive') return ctx.reject(['keyboard-interactive'])
+      ctx.prompt([{ prompt: 'Password: ', echo: false }], answers => {
+        if (answers[0] === 'secret') ctx.accept()
+        else ctx.reject()
+      })
+    })
+    // runtime 在 ready 之后会自动开首个 shell（onReady）——端点必须应答 pty/shell，
+    // 否则测到的是「认证过了但开不了 shell」，分不清两件事。
+    client.on('session', accept => {
+      const session = accept()
+      session.on('pty', acceptPty => acceptPty?.())
+      session.on('window-change', acceptChange => acceptChange?.())
+      session.on('shell', acceptShell => {
+        const stream = acceptShell()
+        stream.on('data', () => {})
+        stream.on('close', () => stream.end())
+      })
+    })
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
+  let connId = null
+  try {
+    const conn = await store.createConnection({ label: 'kbd', host: '127.0.0.1', port, username: 'u', auth: { method: 'password' } })
+    connId = conn.id
+    await runtime.connect(conn.id, { password: 'secret' })
+    const rc = runtime.conns.get(runtime.byProfile.get(conn.id))
+
+    for (let i = 0; i < 250 && rc.status !== 'waiting-fingerprint' && rc.status !== 'connected' && rc.status !== 'error'; i++) await sleep(20)
+    // 首见主机键：走真实 TOFU 确认（证明这条路径也在链路里，而不是被绕过）
+    if (rc.status === 'waiting-fingerprint') await runtime.confirmFingerprint(rc.fp.token, true)
+    for (let i = 0; i < 250 && rc.status !== 'connected' && rc.status !== 'error'; i++) await sleep(20)
+
+    assert.equal(rc.status, 'connected', `期望 connected，实际 ${rc.status}：${rc.lastErrorMessage ?? ''}`)
+    assert.ok(offered.includes('keyboard-interactive'), '服务端应收到 keyboard-interactive 认证请求')
+    assert.equal(offered.at(-1), 'keyboard-interactive', '服务端只给这一个方法 ⇒ 最终必须落到它上面（password 先试被拒是正常的）')
+  } finally {
+    if (connId !== null) await runtime.disconnect(connId).catch(() => {})
+    for (const client of serverClients) { try { client.end() } catch { /* already gone */ } }
+    server.close()
+    await cleanup()
+  }
 })
 
 function makeConn(connKey) {

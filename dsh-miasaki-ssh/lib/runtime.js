@@ -15,7 +15,7 @@
 import { Client } from 'ssh2'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { hostKeyOf, fingerprintOf } from './store.js'
+import { hostKeyOf, fingerprintOf, splitHostPort } from './store.js'
 
 // One time budget shared by the ssh2 handshake (readyTimeout) and the
 // fingerprint confirm window: while hostVerifier is pending the handshake
@@ -52,8 +52,24 @@ export function classifyError(error) {
   if (text.includes('no supported auth')) return { code: 'AUTH_UNSUPPORTED', message }
   if (text.includes('econnrefused')) return { code: 'CONNECTION_REFUSED', message }
   if (text.includes('ehostunreach')) return { code: 'HOST_UNREACHABLE', message }
-  if (text.includes('enotfound')) return { code: 'HOST_NOT_FOUND', message }
-  if (text.includes('etimedout') || text.includes('timed out')) return { code: 'TIMEOUT', message }
+  if (text.includes('enotfound')) {
+    // 实机反馈（2026-09-26）：`getaddrinfo ENOTFOUND 8.138.243.30:25112` 出现在主机栏里
+    // 连端口一起填、端口栏留默认 22 的时候。原始消息原样保留（排障要看它），前面补一句
+    // 能直接照做的指引；记录本身由 connect() 就地修正，这里只服务「解析真失败」的域名。
+    return { code: 'HOST_NOT_FOUND', message: `无法解析主机名（${message}）—— 请检查主机地址：只填域名或 IP，端口填在「端口」栏` }
+  }
+  if (text.includes('etimedout') || text.includes('timed out')) {
+    // 实机反馈（2026-09-26 续）：`connect ETIMEDOUT <ip>:<port>` 是「包被丢掉」——多数是
+    // 云安全组/防火墙没放行该端口，或那里根本没有服务在监听。原句保留 + 排查方向。
+    return { code: 'TIMEOUT', message: `${message} —— 对端没有应答：先确认云安全组 / 防火墙是否放行了这个端口（以及服务是否在监听），再考虑网络质量` }
+  }
+  // 实机反馈（2026-09-26 续）：TCP 通了、但对端在本端发出 SSH banner 之前就断开
+  // （实测 [host]:[port] 38ms 建连、69ms RST、零字节）。最常见的原因是「这个端口不是
+  // sshd」或「安全组/端口映射没指向 sshd」。原句看不懂，补一句可照做的排查方向。
+  if (text.includes('connection lost before handshake')) {
+    return { code: 'HANDSHAKE_LOST', message: `${message} —— 对端在 SSH 握手前就断开：先确认这个端口是不是 SSH 服务（云安全组是否对本机放行、端口映射是否指向 sshd），再考虑网络抖动` }
+  }
+  if (text.includes('econnreset')) return { code: 'CONNECTION_RESET', message }
   if (text.includes('host key')) return { code: 'HOST_KEY', message }
   return { code: 'ERROR', message }
 }
@@ -132,8 +148,18 @@ export class SshRuntime {
 
   // ------------------------------------------------------------------ connect
   async connect(id, options = {}) {
-    const record = await this.store.getConnection(id)
+    let record = await this.store.getConnection(id)
     if (record === null) return { error: 'NOT_FOUND' }
+
+    // 主机栏里连端口一起填了（`8.138.243.30:25112`）：ssh2 会把它当主机名去解析
+    // （getaddrinfo ENOTFOUND）。连接是这类历史记录唯一的出口，就地修正并回写一次，
+    // 让用户点「重新连接」即可连上 —— 判定与拆分复用 store 的同一个纯函数（规则一处）。
+    const typed = splitHostPort(record.host)
+    let repaired = null
+    if (typed.port !== null && typed.port !== record.port) {
+      repaired = { from: record.host, host: typed.host, port: typed.port }
+      record = await this.store.updateConnection(id, { host: typed.host, port: typed.port })
+    }
 
     const existingRuntimeId = this.byProfile.get(id)
     if (existingRuntimeId !== undefined) {
@@ -154,12 +180,22 @@ export class SshRuntime {
       username: record.username,
       readyTimeout: HANDSHAKE_BUDGET_MS,
     }
+    // 只开 keyboard-interactive 的服务器（新装 Ubuntu / Debian、部分云镜像的默认
+    // `PasswordAuthentication no` + `KbdInteractiveAuthentication yes`）需要客户端显式
+    // 打开 tryKeyboard：ssh2 仅在 `tryKeyboard === true` 时把该方法列入 authsAllowed
+    // （`ssh2/lib/client.js:843`）。不开的话，密码再对也只会收到
+    // `All configured authentication methods failed`（实机反馈 2026-09-26）。
+    // 回填的就是本次连接的密码（PAM 的单密码提示）；服务端若拿这个通道做二次验证，
+    // 回填密码自然不通过 —— 与不说谎的失败一致，不额外猜测。
+    let keyboardPassword = null
     if (record.auth.method === 'password') {
       if (typeof options.password !== 'string' || options.password.length === 0) {
         this.bail(rc, { code: 'CREDENTIAL_MISSING', message: '需要密码：尝试在新会话中为连接输入密码' })
         return { id, error: 'CREDENTIAL_MISSING' }
       }
       cfg.password = options.password
+      cfg.tryKeyboard = true
+      keyboardPassword = options.password
     } else if (record.auth.method === 'key') {
       try {
         cfg.privateKey = await readFile(record.auth.keyPath)
@@ -193,6 +229,12 @@ export class SshRuntime {
     const client = new Client()
     rc.client = client
     client.on('ready', () => this.onReady(rc))
+    if (keyboardPassword !== null) {
+      // 密码提示有几个就回填几个（PAM 通常是单提示）。
+      client.on('keyboard-interactive', (name, instructions, lang, prompts, finish) => {
+        finish(prompts.map(() => keyboardPassword))
+      })
+    }
     client.on('error', err => {
       if (rc.disposed) return
       this.expirePendingFor(rc) // a dead handshake must not keep a live confirm token
@@ -214,7 +256,7 @@ export class SshRuntime {
     } catch (error) {
       this.bail(rc, classifyError(error))
     }
-    return { id, state: rc.status }
+    return { id, state: rc.status, ...(repaired === null ? {} : { repaired }) }
   }
 
   async handleHostKey(rc, key, verify) {

@@ -383,26 +383,34 @@ test('ready 帧同时喂给 onFrame（状态模型），并落 shellId + 写权�
   const h = makeHarness()
   const { statuses, frames, modeChanges, session } = h.create()
   const ws = await h.openFirst()
+  // 未决态：还没收到任何写权信号，既不是 owner 也不是"只读"（UI 据此不显示只读条）
+  assert.equal(session.isWriteOwner(), false)
+  assert.equal(session.isReadOnly(), false, 'pending 不是只读：此时并没有"另一个窗口在输入"')
   ws.serverText({ type: 'ready', state: 'connected', shellId: 'sh-2', mode: 'read' })
   assert.equal(statuses.at(-1).kind, 'ok')
   assert.equal(frames.at(-1)?.type, 'status', 'ready 帧必须转发给 app.js 状态模型')
   assert.equal(frames.at(-1)?.state, 'connected')
-  // 初次即为 read：setMode 只在变化时通知（read→read 无第二次），这是刻意去抖
-  assert.deepEqual(modeChanges, [], 'unchanged mode does not fire onModeChange (de-dup)')
+  // pending → read 是真实变化：必须通知 UI（旧实现初始即 'read'，这条通知被去抖吃掉，
+  // 于是只读条在"连接中"就冒出来、又在真正只读时不更新）
+  assert.deepEqual(modeChanges, ['read'])
   assert.equal(session.isWriteOwner(), false, 'still read-only after ready')
+  assert.equal(session.isReadOnly(), true)
   ws.serverText({ type: 'write.granted', shellId: 'sh-2' })
-  assert.deepEqual(modeChanges, ['write'])
+  assert.deepEqual(modeChanges, ['read', 'write'])
   assert.equal(session.isWriteOwner(), true)
+  assert.equal(session.isReadOnly(), false)
 })
 
 test('write.revoked flips the viewer to read-only with a clear message', async () => {
   const h = makeHarness()
-  const { statuses, modeChanges } = h.create()
+  const { statuses, modeChanges, session } = h.create()
   const ws = await h.openFirst()
   ws.serverText({ type: 'ready', state: 'connected', shellId: 'sh-1', mode: 'write' })
+  assert.equal(session.isReadOnly(), false)
   ws.serverText({ type: 'write.revoked', shellId: 'sh-1' })
   assert.deepEqual(modeChanges, ['write', 'read'])
   assert.match(statuses.at(-1).text, /只读|接管/)
+  assert.equal(session.isReadOnly(), true, '被接管后才是只读 —— 这是只读条唯一该出现的理由')
 })
 
 test('shell.opened resets sshEnded, parses seq from the title and reports to app.js', async () => {
