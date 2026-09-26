@@ -11,6 +11,14 @@
 >
 > 根因是 0.1.7 重写设置机制，该插件两半各自踩雷（详见下文）。本补丁把两半都改成
 > **双轨**（0.1.7 新路 / ≤0.1.6 老路），npm 上作者尚未发兼容版（0.8.1 仍是 latest）。
+>
+> **2026-09-26 二次复发（同一症状，不同成因）**：`miasaki` profile（`miasaki.exe` 桌面端
+> 拉起的口径 `dsh --profile miasaki`）在重装依赖时冲掉了两半补丁，而 `patch.mjs` 当时
+> **只探 `web` 一个 profile** ⇒ 补丁静默缺席，桌面端一开就停在上面那张启动屏。
+> 处置：探测改为**遍历所有装了该插件的 profile**（`status`/`apply`/`revert`/
+> `rebuild-baseline` 全覆盖，`--target-dir` 退化为单目标），并把本机 `web` / `miasaki`
+> 两个 profile 都重打到位（无头 Edge 实载验证：启动屏消失，会话列表 / 插件入口 /
+> SSH 胶囊 / 模型选择正常渲染）。npm `latest` 至今仍是 0.8.1。
 
 ## 症状与两级破坏
 
@@ -86,11 +94,16 @@
 
 ```bash
 node patch.mjs verify            # 离线自检：两半重建 SHA 比对 + node --check + 双世界行为断言（27 项）
-node patch.mjs status            # 两半当前状态（ORIGINAL / PATCHED / UNKNOWN）
+node patch.mjs status            # 两半当前状态（ORIGINAL / PATCHED / UNKNOWN）——默认遍历全部 profile
 node patch.mjs apply --yes       # 备份 + 应用（幂等；已是当前版补丁则跳过；旧版补丁需 revert 或 --force）
 node patch.mjs revert            # 从 .dsh-bak 还原
 node patch.mjs rebuild-baseline  # 升级专用：以当前安装原版重建 baseline（先 revert）
 ```
+
+**多 profile 语义（2026-09-26 起）**：`status` / `apply` / `revert` / `rebuild-baseline` 默认
+遍历 `$DSH_HOME/profiles/*` 中**所有装了本插件**的 profile（本机：`miasaki` + `web`），逐个判态、
+逐个打补丁，输出带 `== profile: <名> ==` 标题；`--target-dir <lib 目录>` 退化为只打单个目标，
+`DSH_PROFILE_DIR` 在场时仍只认它（显式优先）。`verify` / `freeze` 是离线操作，与 profile 无关。
 
 `verify` 的双世界冒烟按**真实 cordis 语义**建模：父级访问未 inject 服务抛错、
 `ctx.inject` 仅在服务齐备时激活子 fiber、`whileServed` 的 serve/卸卡翻转、
@@ -111,7 +124,10 @@ node patch.mjs rebuild-baseline  # 升级专用：以当前安装原版重建 ba
   `apply` 用「临时文件 + rename」换目录项，**不能就地截断写**（会污染 store 的同一 inode）；
   store 侧原版已核实未动（`0DA733A8…` 仍在）。
 - 重装/升级该插件会冲掉补丁：先 `revert`（或删 `.dsh-bak` 后重打），再 `apply`；
-  插件发新版本后先 `rebuild-baseline` 核对锚点。
+  插件发新版本后先 `rebuild-baseline` 核对锚点。**任一个 profile 重装依赖后都要重跑一次
+  `node patch.mjs apply --yes`**（默认覆盖全部 profile、幂等，已是当前版会直接跳过）；
+  `node scripts/patch-live-audit.mjs` 逐半判 PATCHED / ORIGINAL，是这条纪律的兜底检查
+  ——2026-09-26 的复发正是「审计判据正确、但没人跑」+「apply 只打 web」两头叠加。
 - 只改这一个第三方包的安装产物，不动 DSH 本体、不动其他插件、不进 profile 配置。
 - 备份文件：应用后在插件 lib 目录留 `client.js.dsh-bak` / `index.js.dsh-bak`。
 

@@ -1,4 +1,4 @@
-# 七线统一回归矩阵（smoke-test-matrix）
+# 八线统一回归矩阵（smoke-test-matrix）
 
 > 建立于 2026-09-07。四条线代码零耦合，但共用一个 DSH host 与一个桌面壳，
 > 回归必须分层：能脚本化的进 `scripts/verify-all.mjs`，需要真机/真 host 的留在本文档手动执行。
@@ -8,7 +8,7 @@
 | 层 | 内容 | 载体 | 可自动化 |
 |---|---|---|---|
 | **L0** 静态检查 | 语法（`node --check`）、令牌完备性、令牌漂移 | `node scripts/verify-all.mjs` | 是 |
-| **L1** 单线单测 | Canvas 89 项、Sidebar 62 项、SSH 113 项、双模型 33 项、外观 95 项、Fleet 108 项、Desktop 120 例（含 2026-09-25 新增的 57 例：主题来源 8 / hash 字段级 8 / 契约 v1 11 / 窗口底色回传 10 / console 旁路 12 / 材质分层 8）+ `cargo test` **78 例** | `node scripts/verify-all.mjs` | 是 |
+| **L1** 单线单测 | Canvas 98 项、Sidebar 62 项、SSH 113 项、双模型 33 项、外观 95 项、Fleet 108 项、**用量统计 3 项**（第八线 `dsh-token-monitor`：host 半语法 + 数据修复工具语法 + client bundle 装载契约）、Desktop 127 例（含 2026-09-25 新增的 57 例：主题来源 8 / hash 字段级 8 / 契约 v1 11 / 窗口底色回传 10 / console 旁路 12 / 材质分层 8；2026-09-26 新增 hash 同步判重 7 例 + **`plugins/dsh-session-log-move` 契约 4 例**）+ `cargo test` **79 例**（2026-09-26 实测 **81 例**） | `node scripts/verify-all.mjs` | 是 |
 | **L2** 插件加载 | 装 profile → 重启 host → 页面刷新 → 插件生效/停用可恢复 | 本文档 §2 | 否（需重启 host） |
 | **L3** 实机冒烟 | 桌面壳启动、窗口、主题、桌宠、Canvas、Sidebar、SSH、双模型、外观 | 本文档 §3 | 否（需真机） |
 | **L4** 跨线联动 | Fleet pulse → 桌宠；主题 → Canvas/Sidebar；标题栏让位 | 本文档 §4 | 否 |
@@ -20,14 +20,14 @@ node scripts/verify-all.mjs            # 七线全量
 node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）
 ```
 
-**2026-09-25 实测基线**（七线全量重跑，共 **105 项检查**；DSH **0.1.7-rc.2** 已实装 / Node v24.15.0）：
+**2026-09-26（晚）实测基线**（**八线**全量重跑，共 **113 项检查**；DSH **0.1.7-rc.2** 已实装 / Node v24.15.0）：
 
 | 线 | 项数 | 内容 | 结果 |
 |---|---:|---|---|
 | sidebar | 10 | `index.js`/`client.js` 语法 + 8 个测试文件（review-data 5 / review-view 10 / review-grouping 3 / review-view-store 6 / rightbar-guide 4 / terminal-launcher 7 / api-routing 12 / terminal-hub 15，共 62 例） | PASS |
-| canvas | 11 | 三入口语法 + 8 个测试文件共 89 例（含 mergeStale 失效、external-views 外部视图槽、header-adaptive 会话头自适应） | PASS |
+| canvas | 12 | 三入口语法 + 9 个测试文件共 98 例（含 mergeStale 失效、external-views 外部视图槽、header-adaptive 会话头自适应、**store-retention 存储治理**：载荷截断保头+标记 / `result` 保持 `null` / 窗口只留最近 50 条 / ★ 裁剪水位防 replay 复活 / 老 store 载入即迁移并落盘 / 已合规文件不重写；**同步体量预算**（2026-09-26）：全量 `sessions/sync` 独占 2MiB 预算、超限报错带实际字节数、client 侧失败只留痕一次） | PASS |
 | fleet | 15 | 图与总线判定 10 项（liveness 7 例 / bus-contract 23 / bus-apply 15 / bus-integration 13 / task-graph 13 / capability-graph 17 / verifier 20，共 108 例，及 `task-ready` `agent-pick` `verifier-pick` 的 `--check`、**dispatch 能力闸门接线**）+ server.js 语法 + validate-bus + publish-pulse + validate-bus --strict | PASS |
-| desktop | 29 | gen-init（令牌校验 + **W0 三道产物自校验**：样式 JSON 可解析且键集一致 / 目录下 `.js` 必须全部登记进 `MANIFEST.order`（漏登记＝静默不打包）/ 写盘字节一致）+ tokens:diff（无漂移）+ **注入脚本语法闸门**（`syntax injected/theme-init.js`——`themes/src/*.js` 拼接产物，WebView2 每个文档都跑）+ **鉴权 cookie 兜底链行为闸门**（6 例：已有 cookie 只按原值续期 / 401 熔断上限与可见提示 / document_start 不误清计数）+ **启动页契约**（11 例：S4a 视觉层 10——动画只准 transform/opacity、扫描线 opacity ≤ .06、零新增色、reduced-motion 全静止、类名纪律、就绪回弹 VM 驱动幂等；S3 拖放安全网 1——只拦文件拖放、官方已消费与文本链接不碰）+ **桌宠资产链完整性闸门**（frames 引用齐全 / 再生源在位 / 无孤儿派生，故障注入四分支自证）+ **patch verify ×6**（模型设置 / 会话头溢出保护 / 轨迹计时恢复 / 消息气泡计时恢复 / cordis client 查询挂起修复 / **消息画廊多图 tile 宽高比**）＋ `plugins/dsh-model-probe` 语法 3 项 + 探测判定表 20 例 + settings 读取双轨 12 例 + `plugins/dsh-free-model-pool` 语法 2 项 + settings-read 10 例 + routes 5 例 + **主题来源优先级闸门**（8 例：`__MIA_THEME__` > URL > localStorage > pure，含"非壳环境不报错"与"localStorage 抛异常不崩"两条边界——W0-T0.1）+ **hash 字段级读写闸门**（8 例：精确增删不误伤并发字段 / 保真 `%20` 原始编码 / seq 覆盖保护——W0-T0.2）+ **桌面契约 v1 闸门**（15 例：子 frame 只给空壳 / 能力表与暴露面一致 / 只读纪律不得开 hash 写通道 / **v1.1 写能力**：theme.set 与 window.controls 只派发内部事件、白名单拒绝、人话名不透 `min`/`max`、寄生侧监听静态断言——W1）+ **窗口底色回传闸门**（10 例：半透明底合成到不透明 / 拿不到不透明底即如实放弃不猜色——W4.3）+ **渲染层 console 旁路闸门**（12 例：只旁路不改原生调用 / 只顶层 frame / 环形上限 50 条 / ResizeObserver 调度噪声与红条同判据过滤——W2 收尾）+ cargo test **73 例**（launcher 图标 6 + 桌宠状态机与持久化 16 + 启动链 pulse stale / backend backoff / netstat 解析 6 + 隐藏态主题头像悬浮球 `dot.rs` 7 + **W2 新增**：diag 诊断格式化与 10 份轮转 / 看门狗状态机 / panic hook 12 + recovery sanitizeProfile 备份与中止 / 分级停机状态机 11 + Job 参数与真机 `KILL_ON_JOB_CLOSE` / hex 解析 3） | PASS（MSVC 环境）※ |
+| desktop | 33 | gen-init（令牌校验 + **W0 三道产物自校验**：样式 JSON 可解析且键集一致 / 目录下 `.js` 必须全部登记进 `MANIFEST.order`（漏登记＝静默不打包）/ 写盘字节一致）+ tokens:diff（无漂移）+ **注入脚本语法闸门**（`syntax injected/theme-init.js`——`themes/src/*.js` 拼接产物，WebView2 每个文档都跑）+ **鉴权 cookie 兜底链行为闸门**（6 例：已有 cookie 只按原值续期 / 401 熔断上限与可见提示 / document_start 不误清计数）+ **启动页契约**（11 例：S4a 视觉层 10——动画只准 transform/opacity、扫描线 opacity ≤ .06、零新增色、reduced-motion 全静止、类名纪律、就绪回弹 VM 驱动幂等；S3 拖放安全网 1——只拦文件拖放、官方已消费与文本链接不碰）+ **桌宠资产链完整性闸门**（frames 引用齐全 / 再生源在位 / 无孤儿派生，故障注入四分支自证）+ **patch verify ×6**（模型设置 / 会话头溢出保护 / 轨迹计时恢复 / 消息气泡计时恢复 / cordis client 查询挂起修复 / **消息画廊多图 tile 宽高比**）＋ `plugins/dsh-model-probe` 语法 3 项 + 探测判定表 20 例 + settings 读取双轨 12 例 + `plugins/dsh-free-model-pool` 语法 2 项 + settings-read 10 例 + routes 5 例 + **`plugins/dsh-session-log-move` 语法 2 项 + 槽声明契约 4 例（2026-09-26 新增，合计 33 项）** + **主题来源优先级闸门**（8 例：`__MIA_THEME__` > URL > localStorage > pure，含"非壳环境不报错"与"localStorage 抛异常不崩"两条边界——W0-T0.1）+ **hash 字段级读写闸门**（8 例：精确增删不误伤并发字段 / 保真 `%20` 原始编码 / seq 覆盖保护——W0-T0.2）+ **桌面契约 v1 闸门**（15 例：子 frame 只给空壳 / 能力表与暴露面一致 / 只读纪律不得开 hash 写通道 / **v1.1 写能力**：theme.set 与 window.controls 只派发内部事件、白名单拒绝、人话名不透 `min`/`max`、寄生侧监听静态断言——W1）+ **窗口底色回传闸门**（10 例：半透明底合成到不透明 / 拿不到不透明底即如实放弃不猜色——W4.3）+ **渲染层 console 旁路闸门**（12 例：只旁路不改原生调用 / 只顶层 frame / 环形上限 50 条 / ResizeObserver 调度噪声与红条同判据过滤——W2 收尾）+ **hash 同步判重闸门**（7 例：目标 hash 与当前逐字节一致时一次 `replaceState` 都不发 / 任何真字段变化必须照写 / 心跳同值重发不写入 / `force` 重算 diag 落地 / 判重不得退化成「永不写」——2026-09-26「一直在刷新」修复 P3）+ cargo test **79 例**（launcher 图标 6 + 桌宠状态机与持久化 16 + 启动链 pulse stale / backend backoff / netstat 解析 6 + 隐藏态主题头像悬浮球 `dot.rs` 7 + **W2 新增**：diag 诊断格式化与 10 份轮转 / 看门狗状态机 / panic hook 12 + recovery sanitizeProfile 备份与中止 / 分级停机状态机 11 + Job 参数与真机 `KILL_ON_JOB_CLOSE` / hex 解析 3 ＋ **2026-09-26 新增**：帧签名剔除心跳（`fragment_signature` 对仅 `petts` 变化的判别，含 8 类真变化不得被吞与 `pettool`/`petkey` 不误伤）1） | PASS（MSVC 环境）※ |
 | ssh | 12 | 6 个入口语法（index / client / app / session / lib-store / lib-runtime）+ 6 个测试文件共 117 例（U0 故障注入：指纹保存失败 / 跨代确认隔离 / viewer 输入归属 / 尺寸限界 / 背压淘汰 / 重附着预算；U1：分组过滤 / 粘贴守卫 / 颜色合成 / 缓冲查找 / 主题下发 / 会话头列宽手柄隐藏；D2：顶栏消息闭环 / 浮层契约 / `ready`·`status` 帧必须喂状态模型（D-2 回归）/ `canvasAvailable` 段数双向变化（hero 两段）/ 「保存并连接」形态护栏（D-1 回归）；U2：v2 帧契约与 `VERSION_MISMATCH` / 一次性 attach 票据生命周期 / 多 shell 隔离与写权接管 / 关闭语义三分 / 工作区快照恢复与损坏降级 / 序列化快照三路恢复；**U2 实机验收回归：未绑定 shell 不发帧 / 就绪补绑 / 按 `shellSeq` 精确匹配**；**B1/B2 launcher 判据：只在主页（`[data-slot="main.conversation"]` 锚点）**且**本线胶囊不在场（`.dsh-ssh-switch`）时才渲染 —— 与会话头胶囊结构性互斥，旧「推演官方 `useSessions.blank`」判据已删**） | PASS |
 | dual-model | 12 | 6 个入口语法 + 5 个测试文件共 33 例（routing 10 / store 7 / content 7 / **invalidation 5**——0.1.7 双轨失效信号 / **client 4**——触发钮在 `/state` 失败态不得禁用）+ 图片准入补丁 `patch verify` | PASS |
 | appearance | 16 | 7 个入口语法（index / client / lib-config / lib-avatar / lib-icon-presets / lib-store / lib-fence）+ 8 个测试文件共 95 例（含 M2.6 风格契约、M2.7 预设渲染与落盘、primitives 引用闭环与渲染树签名）+ `derive-skins --check`（M2 皮肤表可复算） | PASS |
@@ -77,6 +77,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 计时面板可恢复 | 刷新页面 → 打开任一**已结束**步骤的轨迹计时面板 / 悬停消息耗时面板 | 首 token 延迟、生成、吞吐量三行与气泡「首 token 用时（TTFT）」均为数字（修复前为「首 token 时间不可用」） |
 | 外观线 host 半生效 | 重启 `dsh web` → `curl -s http://127.0.0.1:3080/appearance/api/state` | 返回 `{"config":{…},"revision":N,"persistent":true}`；`persistent:false` 表示 `cordis.patch.yml` 的 `dataDir` 没传进 config（改动只存在于内存） |
 | 模型探测插件 host 半生效（连通性 v2） | 重启 `dsh web` → `curl -s http://127.0.0.1:3080/model-probe-api/health` | 返回 `{"ok":true,"version":"0.1.0","protocols":[…],"timeoutMs":15000}`。**404 = 插件未被 host 加载**——此时设置页按钮会自动降级为目录探测并附提示（功能不缺失，但口径变旧） |
+| 用量统计 host 半生效（第八线） | 重启官方桌面端 → `curl -s http://127.0.0.1:3080/dsh-token-monitor/global` | 返回 JSON 且含 `"profile":"desktop"`；**404 = 该插件未被 host 加载**。账本按 profile 分区（`~/.dsh/plugins-data/dsh-token-monitor/<profile>/`）——官方桌面端只记载官方消耗，实机判据见 §3.8 |
 
 > **部署契约（易踩）**：sidebar/canvas 改代码后，只刷新页面无效、强刷也无效——
 > **必须重启 `dsh web`**。`/sidebar/api/health` 的 `version` 字段是判断 host 是否已加载新 bundle 的
@@ -108,6 +109,8 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | W4.2 材质分层（2026-09-25，跨 desktop × appearance） | ① **Win11**：外观线选 `mica` 档 → 侧栏 / 对话 / 右栏**只有一层模糊**（与 `frost` 档对比，不应更糊、更"奶"）；② `MIASAKI_NO_MICA=1` 启动 → `mica` 档回落到页面侧 `backdrop-filter`（此时它是唯一模糊来源，视觉应与改动前一致）；③ DevTools 执行 `document.documentElement.getAttribute('data-mia-native-mica')` —— 与是否设了 `MIASAKI_NO_MICA` 一致（未设且 Win11 ⇒ `"on"`）；④ 切 `light` / `frost` 两档不受影响（它们的 CSS 不含该条件）；⑤ 冷启动首帧不出现"先双层再单层"的可见跳变 |
 | W5 自更新降级方案（2026-09-25） | ① **未配置**时点托盘「检查更新」→ 提示配置文件路径（`%LOCALAPPDATA%\miasaki\update-source.json`），**不发网络请求**；② 配真实 `feed`（纯文本版本号 > 0.1.0）→ 弹「发现新版本」→ 选「是」应打开系统默认浏览器到 `page`；③ `feed` 内容写 `0.1.0` → 提示「已是最新版本」；④ 断网 / `feed` 不可达 → **可读的失败提示**（不得静默、不得假装已最新）；⑤ 全程**不出现**任何下载写盘或安装动作（本方案边界） |
 | 契约 v1.1 写能力（2026-09-25） | DevTools 里（DSH 页）执行 ① `window.miasakiDesktop.theme.set('kurkuriel')` → 应切主题（等价于点切换条）；② `window.miasakiDesktop.window.controls.minimize()` → 窗口最小化；③ `.maximize()` → 最大化/还原切换；④ `.close()` → **隐藏到托盘**（W3.1 语义，不是退出）；⑤ `theme.set('bogus')` → 返回 `false`、**无任何副作用**；⑥ `window.miasakiDesktop.window.controls.min` / `.max` 应为 `undefined`（内部协议名不外泄）；⑦ SSH / 画布 iframe 内该对象仍只有三字段（写能力不泄漏到子 frame） |
+| P7 心跳通道 / URL 不再抖动（2026-09-26 下午） | ① 打开任一会话静置 3 分钟后切走再回来：`%LOCALAPPDATA%\com.miasaki.desktop\EBWebView\Default\History` 的**文件大小与修改时间不再持续增长**（改动前实测 87MB、1.2–1.5s 一轮 URL 变更）；② `%LOCALAPPDATA%\miasaki\pet.log` 里 `doc-boot #N` 与 `page-load #N` **都停在个位数**（`doc-boot` 涨 = 页面真被重载；两者都不涨 = 修复生效）；③ 桌宠六态照常 —— 切会话/发问 → `thinking`/`done` 立绘与气泡正确，证明心跳经事件通道被 `set_official_state` 消费（DevTools 里 `window.__TAURI_INTERNALS__` 存在即可走该通道）；④ 断网/无 IPC 场景（浏览器直开 `http://127.0.0.1:3080`）行为与历史一致：心跳仍走 hash、页面上不报错；⑤ F5 刷新后桌宠状态在 1–2 秒内恢复（`on_page_load` 只在文档级导航补注入主题脚本，同文档导航不再重解析 120KB） |
+| P9 后端拉起不依赖 `cmd.exe`（2026-09-26 晚） | ① 冷启动 `miasaki.exe`：启动页**不再**出现「未检测到 dsh」，`pet.log` 出现 `spawn-dsh: node 直启后端（绕开 cmd.exe）pid …`；② 失败页点「检查 dsh」→ 自证里 `cmd.exe：可执行（C:\WINDOWS\System32\cmd.exe）`（**绝对路径，不再是裸名**）与 `node 直启：可用（…\node.exe → …\dsh\lib\bin.js）` 两行都在；③ 后端确实起来（`http://127.0.0.1:3080` 有响应、壳进入 DSH 页）；④ 关闭应用后自拉后端随之退出（Job 兜底仍有效）；⑤ 反例验证（可选）：把 node 从 PATH 摘掉再启动 → 自动回落 `cmd /C dsh …`，错误信息带「node 直启不可用（…）」而非静默失败 |
 
 ### 3.2 桌宠
 
@@ -222,6 +225,57 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 协议不支持 | 对 `api` 不属于三种协议之一的路由测试 | 「该协议暂不支持探测」（不发请求） |
 | 无副作用 | 上述各项执行后检查 `~/.dsh/settings.yaml` | 内容未被改动（探测只读配置，结果只存在于页面运行态） |
 
+### 3.8 用量统计（第八线 `dsh-token-monitor` v0.6.0，2026-09-26）
+
+**两条「干净」的实机判据**：① 官方桌面端 profile 隔离为纯净官方版后**只挂回这一条**插件；
+② **账本按 profile 分区**，官方桌面端统计只记载官方消耗。装法与口径隔离设计见
+[dsh-miasaki-usage/README.md](../../dsh-miasaki-usage/README.md)。
+
+| 检查项 | 步骤 | 通过判据 |
+|---|---|---|
+| 插件加载 | 重启官方桌面端（`desktop` profile）→ 刷新页面 | 侧栏脚部出现「用量统计」入口；会话页出现「用量」Tab |
+| host 半生效 | `curl -s http://127.0.0.1:<host 端口>/dsh-token-monitor/global`（官方桌面端当前为 19387，自制壳固定 3080 —— 端口随实例而变，别照抄） | 返回 JSON 且含 `"profile":"desktop"`（**404 = host 半未加载**） |
+| **口径隔离（本次主目标）** | 打开「用量统计」浮窗 | 内容顶部显示「口径：本页只统计当前 profile（desktop）的消耗 · 与其它 profile 的账本完全隔离」；**数字只含官方桌面端自己的消耗** —— 自制壳 / 浏览器 GUI 跑过的会话不计入 |
+| **分区落盘** | 看 `~/.dsh/plugins-data/dsh-token-monitor/` | 出现 `desktop/` 分区（首次为空登账、随用随增）；`miasaki/` 分区在自制壳下次启动后出现，内含分区前那份历史账本 |
+| 历史归位 | 启动一次自制壳（`miasaki` profile） | `usage-log.jsonl` + `config.json` + `.bak-*` 已从数据根目录搬进 `miasaki/`；自制壳统计页数字**与迁移前一致**（一个数字都不丢） |
+| 隔离未被破坏 | 探针 profile（复制 `desktop` 清单 + junction 复用其 `node_modules`）跑 `dsh --profile <探针名> --dump-config` | 输出里 `token-monitor` 出现，而 `@miasaki` / pet-panel / model-probe / free-model-pool / session-log-move **计数为 0** |
+| 会话 Tab 不受影响 | 任一官方桌面端会话 → 「用量」Tab | 上下文剩余 / 会话用量总览 / 按模型明细 / 工具调用正常（纯会话口径、与会话绑定，与账本分区无关） |
+
+#### 实测记录（2026-09-26，官方桌面端 `desktop` profile）
+
+| 判据 | 状态 | 证据 |
+|---|---|---|
+| host 半生效 | ✅ 通过 | `GET http://127.0.0.1:19387/dsh-token-monitor/global` → **HTTP 200**；响应顶层含 `"profile":"desktop"`（404 才是未加载） |
+| **口径隔离** | ✅ 通过（数据面） | `note` 原文含「账本按 profile 分区 —— 本页只统计当前 profile（desktop）的消耗，官方桌面端与自制壳 / 浏览器 GUI 各记各的账、互不混入」；`stats.since = 2026-09-26`、`activeDays = 1` —— 官方侧**从零累计**，未掺入自制环境消耗 |
+| **分区落盘** | ✅ 通过 | `~/.dsh/plugins-data/dsh-token-monitor/desktop/usage-log.jsonl` 存在且持续续写（当日 11:10 仍在写，43,894 B） |
+| 历史归位 | ✅ 通过（数据面） | `miasaki/` 下已有 `usage-log.jsonl`（3,419,914 B）+ `config.json` + `usage-log.jsonl.bak-20260910101548`；数据根目录**无散落账本**（归位完整）。自制壳统计页数字与迁移前一致 —— 待下次启动自制壳目视 |
+| 隔离未被破坏 | ✅ 通过 | 探针 profile `--dump-config` 1290 行：`token-monitor` 3 处，其余自制插件计数全 0（见本文件变更记录 2026-09-26 行） |
+| 插件加载（GUI 层） | ⏳ 待目视 | 侧栏脚部「用量统计」入口、会话页「用量」Tab —— 需在页面上确认 |
+| 会话 Tab 不受影响 | ⏳ 待目视 | 同上（纯会话口径，与账本分区无关） |
+
+> 数据面五项已闭环；剩余两项是**视觉确认**，不阻塞本线收尾。
+
+### 3.9 会话存储按 profile 隔离（desktop 线，2026-09-26）
+
+| 检查项 | 判据 | 结果 |
+|---|---|---|
+| 读取侧 | 无头 Edge 实载 `dsh --profile miasaki --no-open --port 31877`，捕获全部会话载荷 | ✅ 180 个会话 id 中 **179 个属新 root**；唯一属全局 root 的经上下文核对出自 canvas 工作区数据（`sessionIds`），非会话列表 |
+| 写入侧 | 后端运行期间新建会话落哪个 root | ✅ 落**新 root**（11:27:16 `session-0cfe7de0…`）；同一时段全局 root **零新增**（最新会话仍停在 11:17:28） |
+| 差分标记 | 复制时**刻意排除** kulumi 项目（7 个会话）：若列表来自全局 root，这 7 个 id 必然出现 | ✅ 6 个出现 0 次；第 7 个仅出现在 canvas 的工作区引用里 |
+| 启动 | 插件树无 `did not activate` / `pending`、无启动屏报错、console 错误 0 | ✅ |
+| 官方侧边界 | `profiles/desktop` 的 `cordis.patch.yml` / `package.json` 哈希前后一致 | ✅ `8948F53D…` / `963CB662…` |
+| 语法闸门 | 补丁层改动过 `dsh --profile miasaki --dump-config`（DSH 自身解析器） | ✅ exit 0，覆盖条目在场 |
+| 历史完整性 | 新 root 与全局 root 对账 | ✅ 两侧均 8 个项目目录 / 231 个会话 |
+| 回滚路径 | `~/.dsh/profiles/miasaki/cordis.patch.yml.bak-20260926-112206-before-sessionsplit` | ✅ 在场（19438 B） |
+
+> **判据为何必须做成「差分标记」**：新 root 是全局 root 在 11:22 的**超集快照**，
+> 所以「列表里有没有某个常见会话」根本区分不出两者 —— 只有**刻意不复制**的那部分才能当判据。
+> 同理：会话 header 无来源标记 ⇒ 历史无法事后分类，本项验收**只覆盖「从现在开始隔离」**。
+> **操作纪律三条**（踩坑换来的，详见 desktop 线 CHANGELOG 同条）：
+> ① 不要用 PowerShell here-string 拼含反引号的 YAML（PS 的反引号是转义符）；
+> ② 补丁层改动的验收必须走 `--dump-config`（离线 YAML 校验会漏掉「CR 落在注释行内」这类损坏）；
+> ③ **`--dump-config` 不是只读操作** —— `prepareProfile` 会重写该 profile 的 `cordis.yml`。
+
 ## 4. L4：跨线联动
 
 | 链路 | 步骤 | 通过判据 |
@@ -299,3 +353,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 2026-09-24（三轮复审） | **文档基线归位 + 两处 P3 断言修复 + live 审计纳入第八件补丁**：第三轮独立复审复跑实测 **98 项 / desktop 22 / `cargo test` 35**，与文档口径 96/20/28 矛盾且与本文档 §1 历史行自相矛盾 ⇒ §0 L1 行与 §1 表头、desktop 行同批校正为现行基线（**历史记录行的旧数字一律不改写**，只在最新基线块标注现行值）。`ui/loading.html` 就绪正则死分支码位 `\u5c31\u7ed3`（就结）→ `\u5c31\u7eea`（就绪），测试错字同步 + 新增「**仅**『已就绪』」区分力用例；`ui/test/loading-visual.test.js` 性能预算改为按花括号深度配平取**整块**（原先只截到首个 `}`，第二个及以后 stop 的布局属性全漏）。两处均做变异自证（回退即红）。**审计盲区收口**：`scripts/patch-live-audit.mjs` 新增 `shared-docs` 补丁根 + 多目标契约 `LIVE_TARGETS` + 每个 profile 的 `<profile>/node_modules` 探测 ⇒ 本机 **9 个目标 / 8 件补丁全 patched**（第八件 `@yeesy369/dsh-browser-playwright` 双半各一行；假 profile 根注入原版 → client 行判 `original … 回归！` + 退出码 1，host 仍 patched）；该补丁同批补 `import.meta.url` CLI 守卫与 `LIVE_TARGETS`，其 `verify` 的 `spawn EPERM` 由「语法校验失败」改为诚实 ⚠（shell 层 `node --check` 双半 exit 0 复核）。`00-boot` 兜底链对 `dsh-auth-*` **非 HttpOnly** 的隐式依赖，已在 desktop 线 `design/auth-cookie-prepinject.md` §3 钉为显式契约 |
 | 2026-09-24（拖拽上传实施） | **拖拽上传附件到会话 S1–S3 落地**（用户点名需求，`design/drag-drop-attachment-upload.md` 定稿后实施）：S1 `main.rs` 主窗 `.disable_drag_drop_handler()`（cargo check 通过）；S2 `themes/src/09-dropguard.js` 安全网新片 + MANIFEST.order 登记 + gen-init（10 片/87KB/令牌校验过）+ `themes/test/dropguard.test.js` 4 例（登记/产物含片/三判据/自包含形态）；S3 `ui/loading.html` 最小防默认（判据与注入层逐条一致，loading 测试 10 → **11 例**）。官方上传链路全量复用、壳侧零业务逻辑。`verify-all` desktop **22 → 23 项**、全量 **98 → 99 项**。实机验收十项（§3.1 新行）待用户重启桌面壳执行 |
 | 2026-09-25 | **sidebar 右栏终端退役（v0.10.0-miasaki.0，用户拍板「沿用官方策略」）**：0.1.7-rc 线官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目不再自建右栏终端——`client.js` 注销终端 tab 类型（kind `miasaki-terminal`）、删除 `TerminalTab` 组件与 `.dsh-sidebar-term*` 样式、跨容器移位菜单与右栏 `×`，`active` 收敛为 `{ bottom }`，React 快照机制随唯一消费者一并删除；**host 半零改动**（TerminalHub / WS / 路由与容器无关）。§3.4 标题与表项改版：「入口胶囊」由两个改一个、「终端 tab」行改为「底部终端面板」行（含多标签与刷新恢复判据）、「插件加载」版本号改为跟随现行版。sidebar 单测 **57 通过 / 5 环境跳过**（62 项总数不变）、`verify-all sidebar` **10/10**。**实机待重启 `dsh web` 验收**：引导页只剩「审查」；底部面板全能力不变；历史 localStorage 旧终端 tab 记录恢复时落官方终端（一次性，关掉重开） |
+| 2026-09-26 | **新增第八线 `dsh-miasaki-usage`（用量统计由 desktop 线迁出）+ 账本按 profile 分区**（用户澄清「干净接入是指**统计要干净**，官方桌面端统计只记载官方消耗」）：`git mv dsh-miasaki-desktop/plugins/dsh-token-monitor/ → dsh-miasaki-usage/`（9 文件全部 R 重命名；desktop 线插件数 5 → 4）；**账本与限额按 profile 分区**（`~/.dsh/plugins-data/dsh-token-monitor/<profile>/`，profile 名取宿主 `profileContext.name` → `DSH_PROFILE` → `default` 软降级），分区前的混合账**一次性归位**到 `miasaki/`、官方桌面端从零累计；装法 `file:` → `link:`（官方 desktop / web / miasaki 三处同改，实测旧副本 `client.js` 已落后源码 262 B）；`verify-client-bundle --sync` 语义改为**核对安装点**；`dedupe-usage-ledger.mjs` 增 `--profile`；**`verify-all` 七线 → 八线**（`usage` **3/3**）、§0 L1 行与 §2 同步、**§3.8 新增实机判据七项**。验证：探针 profile `--dump-config` **1290 行**里 `token-monitor` 3 处、其余自制插件计数全 0；分区逻辑离线冒烟（双假 profile 各建独立分区、旧账本 3,419,757 B 零改动）；`usage` 3/3 PASS |
+| 2026-09-26（桌面端启动故障） | **`miasaki` 桌面端停在启动屏：第三方补丁被 profile 重装冲掉 + 补丁工具只认单 profile**（用户报「miasaki 桌面端打不开了」）：现象与 2026-09-23 的 0.1.7 事故**逐字相同**（`web boot: 1 entry did not activate` / `@yeesy369/dsh-browser-playwright: pending (waiting for service: settingsScope)`），但成因不同 —— 壳走 `dsh --profile miasaki`（`backend_profile_name`），而该插件双半兼容补丁在 09-26 10:43 **该 profile 重装依赖时被覆盖**（两半哈希回到 baseline 原版 `0DA733A8…` / `3FDFD5BB…`；`web` profile 补丁仍在场 `AC63F3AD…` / `B859A6C3…`，故只有 miasaki 桌面端打不开——官方桌面端与浏览器 GUI 都正常）。**结构性原因**：`patch-live-audit` 的判据本就是对的（当时即报 `original … 需重打`），但 `patch.mjs` 的自动探测**只认 `web` 一个 profile** ⇒ 修复动作天然漏掉 miasaki。**处置**：① 给 miasaki 重打两半；② `patch.mjs` 探测改为**遍历 `~/.dsh/profiles/*` 中所有装了本插件的 profile**（status / apply / revert / rebuild-baseline 全覆盖；`--target-dir` 退化为单目标；`DSH_PROFILE_DIR` 显式优先），顺带修掉 `smokeHost` 里遗留的 `detectTargetDir()` 单目标引用（verify 会即时炸出来）；③ 补丁 README 增「多 profile 语义」与二次复发记录 + desktop 线 `design/CHANGELOG.md` 同日条。**自证**：`patch.mjs verify` **VERIFY PASS（27 项）**、`status` 两 profile 双半 **PATCHED**、`apply --yes` 两 profile 幂等跳过、`scripts/patch-live-audit.mjs` **9 个目标 / 8 件补丁全 patched**；**端到端**：`dsh --profile miasaki --no-open --port 3099` + 无头 Edge 实载 ⇒ 启动屏消失，会话列表 / 插件入口 / SSH 胶囊 / 模型选择正常渲染（`_refs/scripts-archive/bootcheck-miasaki-20260926/boot.png`）。**纪律**：任一次 profile 依赖重装后必跑 `node patch.mjs apply --yes`（补）与 `node scripts/patch-live-audit.mjs`（验） |
+| 2026-09-26（会话隔离） | **会话记录按 profile 隔离**（用户「如果不能实现之前的会话分类，至少现在开始 miasaki 和 dsh 的会话得隔离开吧」）：会话 header 只有 `cwd`/`createdAt`/`agentPreset`、**无来源标记** ⇒ 历史无法事后分类，只做「从现在开始隔离」。官方 `dsh-base` 的默认 `root: !!js dshHomePath('sessions')` 是**与 profile 无关的全局目录**（三个 profile 混写一处），`root` 为单值、列表直接枚举它 ⇒ 只给 `miasaki` profile 补丁层覆写为 `profiles/miasaki/sessions`，**官方 `desktop` profile 一个字节未动**（`8948F53D…` / `963CB662…` 前后一致）；历史**整体复制**一份（8 项目目录 / 231 会话 / 约 220 MB，canvas 引用的老会话照常可开）。**实机双向验证**：捕获 180 个会话 id 中 **179 个属新 root**（唯一例外经上下文核对出自 canvas 工作区数据）；后端运行期新建会话**落新 root**、同期全局 root **零新增**；`--dump-config` exit 0、插件树无未激活项。**§3.9 新增**（含「差分标记」判据设计与操作纪律三条）。**踩坑入纪律**：PS here-string 的反引号是转义符，注释里的 `` `root: `` 变成 CR+`oot:` 把 YAML 劈坏 —— 离线 YAML 校验**漏掉**（CR 仍在注释行内）、`--dump-config` 抓到 ⇒ ① 别用 PS here-string 拼含反引号的 YAML ② 补丁验收必走 `--dump-config` ③ **`--dump-config` 会重写该 profile 的 `cordis.yml`，不是只读操作** |
+| 2026-09-26（晚） | **两条既存缺陷闭环（用户点名「一并处理」）**：① **canvas 会话布同步恒 400** —— `POST /canvas/api/sessions/sync` 每次发**全量**会话列表，本机 239 个会话 ≈ 40KB 越 `MAX_BODY_BYTES = 32KiB`（≈190 条即越界），于是每次同步都 `请求内容过大`，而 client 侧的空 catch 把它吞得一干二净（画布里 DSH 节点长期不更新却毫无信号）⇒ 该路由独占 `MAX_SYNC_BODY_BYTES = 2MiB`（其余 CRUD 路由仍守 32KiB）、超限报错带**实际字节数与上限**、client 端两条失败路径限频留痕一次。实测：**64,129 B 的 POST 由 400 转 200**，无头实载 4xx 归零。② **`dsh-session-log-move` 启动警告**（`slot "conversation.session.header.utilities" is not declared`）：查实 `dsh.client.inject` 只保**模块加载顺序**，而 0.1.7 的槽声明是**多级异步链**（`conversation` 自己也在等父槽声明），插件 apply 时的同步 register **必然抢跑**；且该 id `session-log-download` 自 0.1.5-rc.1 起由官方 `dsh-session-log-export` 占用，同 id 替换**永远冲突** ⇒ 删除这条注定失败的死路（`inject` 去掉 `slots`，DOM 隐藏成为唯一路径）。**附带查明**：0.1.7 官方已把该入口改成「更多操作 ⋯」菜单（`aria-label="更多操作"` 的 `Menu` 锚点），头部**根本没有可隐藏的胶囊** —— 插件的「搬走入口」目标已由官方演进自然满足，`[class*="sessionLogButton"]` 锚点在 0.1.7 全库零命中。`verify-all` desktop **30 → 33 项**（语法 2 + 契约测试 4 例）、canvas 用例 96 → **98**、全量 **107 → 113 项**八线全 PASS（`cargo test` 实测 **81 例**）。实机：`dsh --profile miasaki --no-open --port 3099` + 无头 Edge ⇒ 启动屏消失、**console 错误 0 / 4xx 0**。证据 `_refs/scripts-archive/bootcheck-miasaki-20260926/` |

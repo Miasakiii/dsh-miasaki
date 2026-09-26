@@ -38,26 +38,32 @@
 // 代价：profile 的 node_modules 是 npm/pnpm 安装产物（且 lib/*.js 与 pnpm store 是硬链，
 // 链接数 2），重装/升级该插件会冲掉补丁，需重跑 `apply`。
 //
+// ⚠️ 多 profile（2026-09-26 补）：本机同时有两个 profile 装了该插件 —— `web`（浏览器 GUI）
+// 与 `miasaki`（`miasaki.exe` 桌面端拉起的口径，见 dsh-miasaki-desktop 的 backend_profile_name）。
+// 历史上探测只认 `web`，于是 miasaki profile 在 2026-09-26 重装依赖冲掉补丁后无人察觉，
+// 桌面端直接停在「Failed to load plugins / 1 entry did not activate」。
+// 现改为**默认遍历所有装了该插件的 profile**（status/apply/revert/rebuild-baseline 全覆盖），
+// `--target-dir` 退化为单目标覆盖；`DSH_PROFILE_DIR` 在场时仍只认它（显式优先）。
+//
 // 用法：
 //   node patch.mjs verify            # 离线自检：两半 baseline 重建 SHA 比对 + 语法 + 双世界行为断言
-//   node patch.mjs status            # 查看两个目标 bundle 当前状态
-//   node patch.mjs apply [--yes]     # 备份 + 应用（幂等）
+//   node patch.mjs status            # 查看所有 profile 里两个目标 bundle 的当前状态
+//   node patch.mjs apply [--yes]     # 备份 + 应用（幂等；覆盖全部已安装 profile）
 //   node patch.mjs revert            # 从 .dsh-bak 还原
-//   通用参数：--target-dir <插件 lib 目录>  覆盖自动探测
+//   通用参数：--target-dir <插件 lib 目录>  只针对单个目标（覆盖多 profile 自动探测）
 
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { copyFile, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const BASELINE = join(HERE, 'baseline')
 
 export const TARGET_PACKAGE = '@yeesy369/dsh-browser-playwright'
-export const TARGET_VERSION = '0.8.1'
 export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
 
 /**
@@ -93,19 +99,49 @@ const valueOf = (name) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : undefined
 }
 
-/** 自动探测 profile 安装位置，返回插件 lib 目录。 */
-function detectTargetDir() {
+/** 某 profile 目录下的插件 lib 路径。 */
+const profileLib = (profileDir) => join(profileDir, 'node_modules', TARGET_PACKAGE, 'lib')
+
+/**
+ * 自动探测**所有**装了该插件的 profile 安装位置，返回插件 lib 目录数组。
+ * 顺序：`DSH_PROFILE_DIR`（显式指定 ⇒ 只认它）→ `$DSH_HOME/profiles/*`（按名字排序，输出稳定）。
+ * 2026-09-26：此前只探 `web` 一个 profile，导致 `miasaki`（桌面端口径）掉队后无人发现。
+ */
+function detectTargetDirs() {
   const home = process.env.USERPROFILE ?? homedir()
-  const candidates = [
-    process.env.DSH_PROFILE_DIR && join(process.env.DSH_PROFILE_DIR, 'node_modules', TARGET_PACKAGE, 'lib'),
-    join(home, '.dsh', 'profiles', 'web', 'node_modules', TARGET_PACKAGE, 'lib'),
-  ].filter(Boolean)
-  return candidates.find((p) => existsSync(join(p, 'client.js')))
+  if (process.env.DSH_PROFILE_DIR) {
+    const explicit = profileLib(process.env.DSH_PROFILE_DIR)
+    if (existsSync(join(explicit, 'client.js'))) return [explicit]
+  }
+  const root = join(home, '.dsh', 'profiles')
+  let names = []
+  try {
+    names = readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() || d.isSymbolicLink())
+      .map((d) => d.name)
+      .sort()
+  } catch {
+    return []
+  }
+  return names
+    .map((name) => profileLib(join(root, name)))
+    .filter((lib) => existsSync(join(lib, 'client.js')))
 }
 
-const targetDir = valueOf('--target-dir') ?? detectTargetDir()
-const CLIENT_TARGET = targetDir ? join(targetDir, 'client.js') : undefined
-const HOST_TARGET = targetDir ? join(targetDir, 'index.js') : undefined
+/** 多目标输出用的 profile 名标签；认不出 profile 形状时回退到目录名。 */
+function profileLabel(libDir) {
+  const m = libDir.replace(/\\/g, '/').match(/\/profiles\/([^/]+)\/node_modules\//)
+  return m ? m[1] : basename(libDir)
+}
+
+const explicitTargetDir = valueOf('--target-dir')
+const targetDirs = explicitTargetDir ? [explicitTargetDir] : detectTargetDirs()
+/** 只想按单目标渲染（status 单 profile 时省掉标题）时用。 */
+const allTargets = () => {
+  const empty = targetDirs.length === 0
+  if (empty) { console.log('未找到目标插件目录（用 --target-dir 指定）'); process.exitCode = 1 }
+  return !empty
+}
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex').toUpperCase()
 
@@ -523,7 +559,8 @@ export async function smokeHost(patchedSource) {
   const results = []
   const check = (name, ok, detail) => results.push({ half: 'host', name, ok, detail })
 
-  const realLib = detectTargetDir()
+  // 2026-09-26：探测改为多 profile 后取首个（各 profile 装的是同一插件版本，任一皆可）。
+  const realLib = targetDirs[0]
   if (!realLib) throw new Error('smokeHost 需要可探测的 profile 安装目录')
 
   const dir = await mkdtemp(join(tmpdir(), 'dsh-bp-host-'))
@@ -690,80 +727,99 @@ const HALVES = [
 ]
 
 async function cmdStatus() {
-  if (!targetDir) { console.log('未找到目标插件目录（用 --target-dir 指定）'); process.exitCode = 1; return }
-  for (const half of HALVES) {
-    const target = join(targetDir, half.file)
-    if (!existsSync(target)) { console.log(`[${half.key}] 目标不存在: ${target}`); continue }
-    const buf = await readFile(target)
-    const original = await readFile(join(BASELINE, half.original))
-    const transform = half.key === 'client' ? transformClient : transformHost
-    const patched = Buffer.from(transform(original.toString('utf8')), 'utf8')
-    const state = Buffer.compare(buf, original) === 0 ? 'ORIGINAL' : Buffer.compare(buf, patched) === 0 ? 'PATCHED' : 'UNKNOWN'
-    console.log(`[${half.key}] ${target}\n        sha256 = ${sha256(buf)}\n        state  = ${state}`)
+  if (!allTargets()) return
+  for (const dir of targetDirs) {
+    if (targetDirs.length > 1) console.log(`\n== profile: ${profileLabel(dir)} ==`)
+    for (const half of HALVES) {
+      const target = join(dir, half.file)
+      if (!existsSync(target)) { console.log(`[${half.key}] 目标不存在: ${target}`); continue }
+      const buf = await readFile(target)
+      const original = await readFile(join(BASELINE, half.original))
+      const transform = half.key === 'client' ? transformClient : transformHost
+      const patched = Buffer.from(transform(original.toString('utf8')), 'utf8')
+      const state = Buffer.compare(buf, original) === 0 ? 'ORIGINAL' : Buffer.compare(buf, patched) === 0 ? 'PATCHED' : 'UNKNOWN'
+      console.log(`[${half.key}] ${target}\n        sha256 = ${sha256(buf)}\n        state  = ${state}`)
+    }
   }
 }
 
 async function cmdApply() {
-  if (!targetDir) { console.log('未找到目标插件目录（用 --target-dir 指定）'); process.exitCode = 1; return }
+  if (!allTargets()) return
   if (!flag('--yes')) {
-    console.log('dry-run：将要写入 ' + targetDir + ' 下的 client.js / index.js（加 --yes 确认）')
+    console.log('dry-run：将要写入下列目标的 client.js / index.js（加 --yes 确认）：')
+    for (const dir of targetDirs) console.log(`  [${profileLabel(dir)}] ${dir}`)
     return
   }
-  for (const half of HALVES) {
-    const target = join(targetDir, half.file)
-    if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }
-    const buf = await readFile(target)
-    const original = await readFile(join(BASELINE, half.original))
-    const transform = half.key === 'client' ? transformClient : transformHost
-    const patched = Buffer.from(transform(original.toString('utf8')), 'utf8')
-    if (Buffer.compare(buf, patched) === 0) { console.log(`[${half.key}] 已是当前版补丁，跳过（幂等）`); continue }
-    if (buf.includes(half.marker)) {
-      // 标记在但字节不同 → 装的是旧版补丁；除非 --force，否则拒绝（旧补丁可能锚点已漂移）。
-      if (!flag('--force')) {
-        console.log(`[${half.key}] 目标已打过【旧版】补丁（与当前补丁字节不同）。先 revert 再 apply，或 --force 强刷`)
+  for (const dir of targetDirs) {
+    if (targetDirs.length > 1) console.log(`\n== profile: ${profileLabel(dir)} ==`)
+    for (const half of HALVES) {
+      const target = join(dir, half.file)
+      if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }
+      const buf = await readFile(target)
+      const original = await readFile(join(BASELINE, half.original))
+      const transform = half.key === 'client' ? transformClient : transformHost
+      const patched = Buffer.from(transform(original.toString('utf8')), 'utf8')
+      if (Buffer.compare(buf, patched) === 0) { console.log(`[${half.key}] 已是当前版补丁，跳过（幂等）`); continue }
+      if (buf.includes(half.marker)) {
+        // 标记在但字节不同 → 装的是旧版补丁；除非 --force，否则拒绝（旧补丁可能锚点已漂移）。
+        if (!flag('--force')) {
+          console.log(`[${half.key}] 目标已打过【旧版】补丁（与当前补丁字节不同）。先 revert 再 apply，或 --force 强刷`)
+          process.exitCode = 1
+          continue
+        }
+        console.log(`[${half.key}] --force：旧版补丁强刷为当前版`)
+      } else if (Buffer.compare(buf, original) !== 0) {
+        console.log(`[${half.key}] 目标 bundle 与 baseline 不一致——版本可能已变，先 rebuild-baseline 再 apply`)
         process.exitCode = 1
         continue
       }
-      console.log(`[${half.key}] --force：旧版补丁强刷为当前版`)
-    } else if (Buffer.compare(buf, original) !== 0) {
-      console.log(`[${half.key}] 目标 bundle 与 baseline 不一致——版本可能已变，先 rebuild-baseline 再 apply`)
-      process.exitCode = 1
-      continue
+      const backup = target + '.dsh-bak'
+      if (!existsSync(backup)) await copyFile(target, backup)
+      // 先写临时文件再 rename：lib/*.js 与 pnpm store 是硬链（链接数 2），
+      // 就地截断写会污染 store 里的同一 inode；rename 换目录项可保 store 原版不动。
+      const tmp = target + '.patched.tmp'
+      await writeFile(tmp, patched, 'utf8')
+      await rename(tmp, target)
+      console.log(`[${half.key}] 已应用补丁 → ${target}（备份 ${backup}）`)
     }
-    const backup = target + '.dsh-bak'
-    if (!existsSync(backup)) await copyFile(target, backup)
-    // 先写临时文件再 rename：lib/*.js 与 pnpm store 是硬链（链接数 2），
-    // 就地截断写会污染 store 里的同一 inode；rename 换目录项可保 store 原版不动。
-    const tmp = target + '.patched.tmp'
-    await writeFile(tmp, patched, 'utf8')
-    await rename(tmp, target)
-    console.log(`[${half.key}] 已应用补丁 → ${target}（备份 ${backup}）`)
   }
 }
 
 async function cmdRevert() {
-  if (!targetDir) { console.log('未找到目标插件目录'); process.exitCode = 1; return }
-  for (const half of HALVES) {
-    const target = join(targetDir, half.file)
-    const backup = target + '.dsh-bak'
-    if (!existsSync(backup)) { console.log(`[${half.key}] 没有 .dsh-bak 备份`); continue }
-    await copyFile(backup, target)
-    await rm(backup, { force: true })
-    console.log(`[${half.key}] 已还原 ${target}`)
+  if (!allTargets()) return
+  for (const dir of targetDirs) {
+    if (targetDirs.length > 1) console.log(`\n== profile: ${profileLabel(dir)} ==`)
+    for (const half of HALVES) {
+      const target = join(dir, half.file)
+      const backup = target + '.dsh-bak'
+      if (!existsSync(backup)) { console.log(`[${half.key}] 没有 .dsh-bak 备份`); continue }
+      await copyFile(backup, target)
+      await rm(backup, { force: true })
+      console.log(`[${half.key}] 已还原 ${target}`)
+    }
   }
 }
 
 /** 升级专用：以当前安装的官方原版重建 baseline（仅重打两半 original，不动 patched 常量）。 */
 async function cmdRebuildBaseline() {
-  if (!targetDir) { console.log('未找到目标插件目录（用 --target-dir 指定）'); process.exitCode = 1; return }
-  for (const half of HALVES) {
-    const target = join(targetDir, half.file)
-    if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }
-    const buf = await readFile(target)
-    if (buf.includes(half.marker)) { console.log(`[${half.key}] 当前已是补丁态，先 revert 再重建`); continue }
-    const dest = join(BASELINE, half.original)
-    await copyFile(target, dest)
-    console.log(`[${half.key}] 已重建 ${dest} (SHA-256 ${sha256(buf)})`)
+  if (!allTargets()) return
+  const seen = {}
+  for (const dir of targetDirs) {
+    if (targetDirs.length > 1) console.log(`\n== profile: ${profileLabel(dir)} ==`)
+    for (const half of HALVES) {
+      const target = join(dir, half.file)
+      if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }
+      const buf = await readFile(target)
+      if (buf.includes(half.marker)) { console.log(`[${half.key}] 当前已是补丁态，先 revert 再重建`); continue }
+      // 多 profile 下若两处原版不一致（不同插件版本并存），后写会覆盖先写：显式告警，别让基准悄悄漂移。
+      if (seen[half.key] && Buffer.compare(seen[half.key], buf) !== 0) {
+        console.log(`[${half.key}] ⚠ profile ${profileLabel(dir)} 的原版与先前写入的 baseline 不一致（多版本并存），已用本目标覆盖——请人工确认基准`)
+      }
+      seen[half.key] = buf
+      const dest = join(BASELINE, half.original)
+      await copyFile(target, dest)
+      console.log(`[${half.key}] 已重建 ${dest} (SHA-256 ${sha256(buf)}) ← profile ${profileLabel(dir)}`)
+    }
   }
   console.log('下一步：检查 transform 锚点是否仍命中（node patch.mjs freeze 会大声报错），再同步 patched 常量与 README。')
 }
@@ -780,6 +836,7 @@ if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.
   const cmd = positional[0]
   if (!cmd || !commands[cmd]) {
     console.log('用法: node patch.mjs <verify|status|apply|revert|freeze|rebuild-baseline> [--yes] [--target-dir <lib 目录>]')
+    console.log('      status/apply/revert/rebuild-baseline 默认遍历所有装了本插件的 profile；--target-dir 只打单个目标')
     process.exitCode = cmd ? 1 : 0
   } else {
     await commands[cmd]()
