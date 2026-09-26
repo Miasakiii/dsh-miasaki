@@ -83,6 +83,16 @@ ssh B1–B4 让位修复、DSH 平台调研）与仓库清仓一并提交：**�
 > 实为活代码、`card-positions` 迁移代码非死代码、`states/idle.png` 归属看串行、`pet-hide/pet-show` 与
 > `hide/show` 是两对值）——「零引用」结论必须写清判据，否则极易把迁移代码、兼容回退与活模板调用当垃圾清掉。
 
+**同批修复与空间回收（2026-09-26 深夜·续）** `[实测]`：
+① **appearance 配置写盘失败不再假报成功** —— 失败一律 `500 + error:'persist-failed' + changed:false` +
+人类可读原因，`client.js` 文案优先级改 `message > error > HTTP <status>`；`lib/store.js` 的原子写临时名加
+pid/时间戳（防多实例互踩半截 JSON）；新增 EEXIST 故障注入回归闸门 1 例（appearance 单测 95 → **98 例**、闸门 16/16）。
+② **playwright 补丁基线常量对齐** —— `BASELINE_DSH_VERSION` 由 `0.1.7-alpha.2` 改为 `0.1.7-rc.2`，
+此前它让 `scripts/patch-live-audit.mjs` 把本件的任何「未打上」都解释成版本漂移，`exit 1` 的真回归分支永不触发。
+③ **回收 10.42 GB** 可回收空间（外部工具 tmp 缓存 / 探针项目 / 二进制与画布数据备份 / 参考克隆 / 外部会话目录）；
+**刻意保留** `_refs/miasaki-codesign.pfx`（签名私钥）、`_refs/scripts-archive/`、`vendor/`（官方源码对照）、
+`dsh-miasaki-desktop/dist/`（已签名发布产物）。修复后全量回归仍 **113/113 全 PASS**。
+
 > ※ **【2026-09-19 已修】** sidebar 的 `terminal-hub.test.js` 曾在受限沙箱下整片失败（2026-09-12 归因）：
 > `resolvePtyBin` 用 `where.exe` 解析 shell 绝对路径并**捕获其输出**，而受限沙箱禁止管道捕获
 > （`EPERM`）⇒ 落入 catch 后抛「未安装或找不到 powershell.exe」。根子是 `hub._pty` 注入了、

@@ -64,7 +64,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const BASELINE = join(HERE, 'baseline')
 
 export const TARGET_PACKAGE = '@yeesy369/dsh-browser-playwright'
-export const BASELINE_DSH_VERSION = '0.1.7-alpha.2'
+export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
 
 /**
  * live 审计契约（`scripts/patch-live-audit.mjs`）：本补丁有 **两半**，各有独立目标文件，

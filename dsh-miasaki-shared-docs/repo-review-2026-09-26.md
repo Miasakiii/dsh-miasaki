@@ -7,6 +7,32 @@
 
 ---
 
+## 〇、2026-09-26 深夜更新（同一日后半段）
+
+> 本报告主体写于当日清仓批次推送之时（`18a26b4`）；随后按用户指示「修复 + 可回收就删掉」又做了一轮，
+> 结果如下。**下文 §一–§八 保留当时口径**，被本段改变的状态以此段为准。
+
+1. **P0-1 已修（appearance 配置写盘失败假报成功）** `[实测]`：`index.js` 的写盘链改为把成败显式带回 ——
+   失败一律 `500 + error:'persist-failed' + changed:false` + 当前（未生效的旧）配置 + 人类可读
+   `message`（`配置写入失败：<OS 原因>`）；`client.js` 的 `requestJson` 文案优先级改为 `message` > `error` > `HTTP <status>`。
+   另加固 `lib/store.js` 的原子写临时名（`${file}.<pid>-<ts>.tmp`，防多实例互踩半截 JSON）。
+   **新增回归闸门 1 例**（`test/host.test.js`，把 `dataDir` 指向普通文件造出可复现的 EEXIST），钉死三件事：
+   失败必须 500 且 `changed:false`、内存配置与修订号不得变动、失败后链路仍可继续。
+2. **P0-2 已修（playwright 补丁基线常量）** `[实测]`：`BASELINE_DSH_VERSION` 由 `0.1.7-alpha.2` 对齐到
+   `0.1.7-rc.2`（与其余八件补丁一致），README 增补该常量的取值依据与「为何旧值会让 🔴 真回归分支永不触发」。
+   `patch.mjs verify` 仍 PASS（baseline 四文件字节与 README 的 SHA 表逐项一致）。
+3. **可回收空间已清理 10.42 GB** `[实测]`：`.openclaw/tmp/d0`（9.85 GB Edge 测试 profile 缓存）、
+   `_refs/` 下的探针与备份与参考克隆（wv2-probe / bin-archive / zcode / canvas-backup / dsh-tavern /
+   deepseek-harness / edge-stream-profile / diag 等）、外部 agent 会话目录 `2026-09-1*`、`.opencode/`。
+   **刻意保留**：`_refs/miasaki-codesign.pfx`（代码签名私钥，删了只能重签）、`_refs/scripts-archive/`
+   （本仓约定的归档区）、`vendor/`（589 MB 官方源码对照，多处文档与补丁注释引用；重新 clone 成本高于磁盘收益）、
+   `dsh-miasaki-desktop/dist/`（63 MB 已签名发布产物，重建需证书 + 构建）、`.vs/`（VS 私有状态，不可再生）。
+4. **回归仍全绿** `[实测]`：`node scripts/verify-all.mjs` → **113/113**（sidebar 10 / canvas 12 / fleet 15 /
+   desktop 33 / ssh 12 / dual-model 12 / appearance 16 / usage 3）。
+5. **仍未动的 P0**：实机验收批次积压、dual-model 静默丢图风险（§五 P0-3、P0-4 原样）。
+
+---
+
 ## 一、核心判断（六条）
 
 1. **09-14 → 09-26 的十二天里工作大量沉淀，但全部堆在工作区未提交。** `[实测]` HEAD 仍是 `b3badb3`
@@ -221,11 +247,11 @@ desktop Rust 69`[文档]`。
 
 **P0（应立刻处理）**
 
-1. **appearance 写失败吞错**：用户改设置静默回滚且无提示 —— 唯一被代码级证实、却仍无测试覆盖的真缺陷。
-   修法：`writeChain` 的 `.catch` 改为**明确失败响应**（500 + 错误信息 + `changed:false`），并补故障注入用例
-   （mock `store.save` 抛错）。
-2. **shared-docs 的 playwright 补丁 `BASELINE_DSH_VERSION` 仍是 `0.1.7-alpha.2`**（其余 7 件已随 rc.2）⇒
-   `scripts/patch-live-audit.mjs` 对该件补丁的「🔴 回归」分支**永不触发** —— 而它恰是 09-26 复发事故的那一件。
+1. ~~**appearance 写失败吞错**~~ → **已于 2026-09-26 深夜修复**（见 §〇.1：500 + `changed:false` + 可读原因，
+   附 EEXIST 故障注入回归闸门）。原描述：用户改设置静默回滚且无提示 —— 唯一被代码级证实、却仍无测试覆盖的真缺陷。
+2. ~~**shared-docs 的 playwright 补丁 `BASELINE_DSH_VERSION` 仍是 `0.1.7-alpha.2`**~~ → **已于 2026-09-26 深夜对齐到
+   `0.1.7-rc.2`**（见 §〇.2）。原描述：`scripts/patch-live-audit.mjs` 对该件补丁的「🔴 回归」分支永不触发 ——
+   而它恰是 09-26 复发事故的那一件。
 3. **实机验收批次积压**：ssh / dual-model / sidebar 四版 / appearance 视觉 / desktop（P10 + 桌宠 + 让位）/
    canvas 走查，全部等一次重启。越晚做，改动叠加后定位成本非线性上升。
 4. **dual-model 的静默丢图风险**：准入放行与路由未实机闭环，设计文档自陈「绝不静默降级」。

@@ -19,6 +19,12 @@
 > `rebuild-baseline` 全覆盖，`--target-dir` 退化为单目标），并把本机 `web` / `miasaki`
 > 两个 profile 都重打到位（无头 Edge 实载验证：启动屏消失，会话列表 / 插件入口 /
 > SSH 胶囊 / 模型选择正常渲染）。npm `latest` 至今仍是 0.8.1。
+>
+> **基线版本 `BASELINE_DSH_VERSION` = `0.1.7-rc.2`**（2026-09-26 与其余八件补丁对齐）。
+> 此前该常量停在 `0.1.7-alpha.2`，而 live 安装早已是 rc.2 —— `scripts/patch-live-audit.mjs:166`
+> 的判据是「live 版本 ≠ baseline ⇒ 记作升级漂移（🟡、退出码 0）」，于是本件**任何一次「未打上」
+> 都被解释成版本漂移**，`exit 1` 的真回归分支永不触发 —— 而本件 09-26 复发的形态恰恰就是「未打上」。
+> 改的只是常量：`patch.mjs verify` 仍 PASS（baseline 四个文件的字节与下表 SHA 逐项一致）。
 
 ## 症状与两级破坏
 
