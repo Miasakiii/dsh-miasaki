@@ -21,7 +21,7 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > **M2.6 面板风格对齐官方「通用设置」页（2026-09-21）**：整栏面板重做为官方行式风格
 > （0.5px 分隔线 + 16px 行距 / 14px 标题 / 12px 说明 / 明暗立方 / 步进器），交互控件
 > 直接复用官方 primitives（`Button / Switch / Pill / 图标`，前端壳 seed 模块，零新依赖）；
-> 行为逻辑零变化。
+> 行为逻辑零变化。（其中的明暗立方已于 2026-09-26 随去重移除，见下。）
 >
 > **M2.7 应用图标预设已实现（2026-09-21）**：外观设置里的「软件头像」升级为**「应用图标」**，
 > 内置**两款预设** —— **默认**（本线程序化生成的几何徽记）与**头像**（用户提供的图，trim 黑边后
@@ -57,6 +57,27 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > **教训**：官方 seed 模块的导出名以 `dsh-web-frontend` 的 `index-*.js` 冻结表为准，
 > 单测 stub 必须用真实名——用同错名顶替会让冒烟永远绿、实机永远白。
 > 详见 [变更记录](design/CHANGELOG.md) 同日条目。
+>
+> **2026-09-26 · 与官方「通用」设置页对照去重**：用户「通用设置里有的，外观设置就不需要有了」。
+> 官方「通用」页（`settings.general.item` 槽）现有 6 行，其中**明暗偏好**（`AppearanceRow`）与
+> **正文字号**（`FontSizeRow`）与本线重合——外观页自 M1 起的「同一偏好第二入口」**整行移除**，
+> 「主题」组只留官方三立方没有的「皮肤」。连带删除 `config.theme` 的
+> `scheme` / `accent` / `fontSize` 三个镜像死字段（配置 v3 → v4；官方偏好由官方
+> settingsScope 持久化，本线再存一份只会漂移）与无消费者的 `data-mia-scheme` 属性。
+> 对照取证、D1–D5 决策与持续推进路线（M3 动效 → Boot Splash → M4 会话效果，
+> 及「上新设项先过通用页对照」纪律）见
+> [去重与路线设计](design/2026-09-26-appearance-page-dedup-and-roadmap.md)。
+>
+> **2026-09-26 · 视觉统一 V1 已实施**：用户「不够美观、和 dsh 设置页设计语言不够统一」。
+> 根因是**控件形态选错**——官方设置行的单选标准控件是**选择丸 + 下拉菜单**
+> （`LanguageRow`/`PermissionRow` 规格 + 官方 `Menu`），本线却用了一排 Pill（官方 Pill 是
+> view switcher/filter 用语；长文件名一多就换行）。V1 把**皮肤 / 壁纸图源 / 玻璃档位 /
+> 我的上传**四处单选换成官方选择丸，九宫格换官方卡片语言（r16 + border-l4）、表面四旋钮换
+> 官方双列字段网格、M3/M4 占位换官方 dashed 卡、运行信息收敛为底部一行；Pill 整类退场。
+> 所需 primitives（`Menu` / `IconChevronDownOutlineRegular`）已对**本机实装 seed 冻结表**
+> 逐名核实。行为逻辑与配置零变化，单测 **101 例**、静态回归 16/16；
+> 功能路线（M3 动效 → Boot Splash 实施 → M4 会话效果 → 恢复默认/导入导出）见
+> [视觉统一与功能路线](design/2026-09-26-appearance-visual-unification-and-roadmap.md)。
 
 ---
 
@@ -87,7 +108,7 @@ dsh-miasaki-appearance/
 │   ├── icon-presets.js    # 应用图标预设：手写 PNG 编码 + SDF 绘制 + 预设表（程序化生成）
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 98 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
+├── test/                  # 101 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host 契约）
 ├── design/                # 规划设计 + M1/M2/M2.5/M2.6/M2.7 实施 + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
@@ -98,9 +119,8 @@ dsh-miasaki-appearance/
 
 | 能力 | 说明 |
 |---|---|
-| 设置页「外观」 | `settings.section`，`id: appearance`、`order: 5`（紧跟官方「通用」，位于「模型」之前）；**M2.6 起整栏重做为官方「通用设置」页行式风格**（0.5px 分隔线行 / 14px 标题 / 12px 说明 / 明暗立方 / 步进器，控件复用官方 primitives） |
-| 明暗偏好 | 直通官方 `ctx.theme.setTheme()` —— 与官方「通用 → 外观」是**同一个偏好**，改动立即生效 |
-| 正文字号 | 直通官方 `ctx.theme.setFontSize()`（12–17px） |
+| 设置页「外观」 | `settings.section`，`id: appearance`、`order: 5`（紧跟官方「通用」，位于「模型」之前）；**M2.6 起整栏重做为官方「通用设置」页行式风格**（0.5px 分隔线行 / 14px 标题 / 12px 说明 / 步进器 / **选择丸 + 官方 Menu**）；**2026-09-26 去重后只剩官方通用页没有的行**（皮肤 / 壁纸 / 应用图标 / 动效 / 会话效果 / 总开关 / 契约自检），运行信息收敛为面板底部一行 |
+| 与官方通用页的分工 | 明暗偏好与正文字号是**官方「通用」设置页自己的行**（`settings.general.item` 槽的 `AppearanceRow` / `FontSizeRow`）——本页**不提供第二入口也不做只读回显**（去重决策 D1，`test/client.test.js` 有回归闸门）；皮肤选中时仍调一次官方 `ctx.theme.setTheme(preferredScheme)`（M2 §3.2） |
 | 总开关 | 门控 `html[data-mia-appearance]`，关闭时零影响 |
 | 契约自检 | 浏览器采集事实 → Host 侧判定 → 面板显示状态条（缺插槽/接口/锚点/token 时给黄条而非崩溃） |
 | 让位检测 | 检测到桌面壳注入层（`html[data-miasaki-theme]`）时提示按让位协议处理 |
@@ -141,6 +161,10 @@ dsh-miasaki-appearance/
   `.mia-*` 前缀 CSS 注入，行为逻辑零变化；
 - **M2.7 应用图标预设**（[设计](design/2026-09-21-appearance-icon-presets-design.md)）：九宫格预设、
   程序化 PNG 生成、位图预设，跨线契约零变更；
+- **与官方「通用」页对照去重**（[设计](design/2026-09-26-appearance-page-dedup-and-roadmap.md)，
+  2026-09-26）：移除明暗偏好与正文字号两行（官方 `AppearanceRow` / `FontSizeRow` 自有），
+  删除 `config.theme` 的 scheme / accent / fontSize 镜像字段（配置 v4），定下「上新设项先过
+  通用页对照」纪律；
 - **Boot Splash 首帧启动画**（[设计](design/2026-09-22-appearance-boot-splash-design.md)，
   跨线新增项，2026-09-22 定稿）：3080 首帧全屏启动画（纹章动效 + 退场双信号 + 2.5s 超时兜底），
   配置面 `motion.bootSplash`，与 desktop「Loading 2.0」契约见 cross 文档；
@@ -169,6 +193,10 @@ dsh-miasaki-appearance/
 ## 纪律
 
 - **零影响**：总开关关闭时不覆盖任何 token、不注入任何样式；
+- **不让官方重复**：官方「通用」设置页已有的行（明暗偏好 / 正文字号 / 语言 / 会话视图 /
+  回车行为 / 权限预设）一律不做第二入口——上新设项先过 `settings.general.item` 对照，
+  DSH 升级后按 vendor 源码重跑取证（2026-09-26 立，见
+  [去重与路线设计](design/2026-09-26-appearance-page-dedup-and-roadmap.md) §6）；
 - **让位协议**：桌面壳主题引擎在位时不抢 token（M2 起按 `design/` 里的协议执行，当前只做检测与提示）；
 - **锚点纪律**：动效与装饰只挂 `[data-slot="…"]` 稳定锚点 + 自有 `.mia-*` 前缀，**不依赖哈希类名**；
 - **不改 shell**：需要改官方源码的能力（如聊天列独立不透明度）默认不做，确需时并入
@@ -178,7 +206,7 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test --test-isolation=none "test/*.test.js"     # 98 例（8 个测试文件）
+node --test --test-isolation=none "test/*.test.js"     # 101 例（8 个测试文件）
 node ../scripts/verify-all.mjs appearance              # 统一回归入口（16 项）
 ```
 
@@ -207,5 +235,11 @@ factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条�
   文件名白名单）、为什么走配置文件而非页面通道、为什么收敛到 PNG、上传链路与边界；
 - [M2.7 应用图标预设设计](design/2026-09-21-appearance-icon-presets-design.md) —— 为什么程序化生成、
   渲染管线（PNG 编码 / SDF / 合成）、骨架四版目检、位图预设的黑边坑、为什么跨线契约零变更；
+- [与官方「通用」页对照去重 + 持续推进规划](design/2026-09-26-appearance-page-dedup-and-roadmap.md)
+  —— 通用页 6 行取证、重合判定、D1–D5 去重决策、v4 配置迁移，以及「上新设项先过通用页对照」
+  纪律与 M3 → Boot Splash → M4 推进路线；
+- [视觉统一与功能完善路线](design/2026-09-26-appearance-visual-unification-and-roadmap.md)
+  —— 官方设计语言取证表（行/选择丸/立方/卡片/dashed 空态，逐条带 CSS 值）、现状差距对照、
+  V1 控件替换规格（已实施）、功能完善 P1–P6 路线、实装 seed 可用性核对；
 - [变更记录](design/CHANGELOG.md)。
 

@@ -2,6 +2,126 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-26 · V1 视觉统一实施（选择丸 + 官方 Menu；官方卡片语言；dashed 占位）
+
+- **起因**：用户「外观设计页现在不够美观，和 dsh 设置页面的设计语言不够统一」。方案见
+  [视觉统一与功能路线](2026-09-26-appearance-visual-unification-and-roadmap.md)（同日定稿 + 实施）。
+- **核心改动（`client.js`，行为逻辑零变化、配置零改动）**：
+  - **四处单选从 Pill 排换官方「选择丸 + Menu」**：皮肤 / 壁纸图源 / 玻璃档位 / 我的上传。
+    选择丸照抄官方 `LanguageRow.selector` 规格（h36 / r18 / `bg-module-platform` / gap12 /
+    右缀 `IconChevronDownOutlineRegular`）；下拉是官方 `Menu` 原语（`align="end"` +
+    `portal`，键盘 ↑↓/Home/End/Esc 全自带）；菜单项直接来自配置白名单（皮肤 3 / 玻璃 4 /
+    图源 1+3+本地 / 头像 1+上传数），本地长文件名在选择丸内截断、`title` 与 Menu 行给全名。
+  - **九宫格换官方卡片语言**（models `rowCard` 先例）：`border-l4` + `r16`（原 r12 透明边）、
+    图 r12；选中态不变（`bg-module-platform` + `neutral-bluish-400`，与 `themeCube` 同语言）。
+  - **表面四旋钮换官方双列字段网格**：`mia-fieldGrid`（models `modelAdvanced` 规格）+
+    `mia-fieldLabel` 12px/18/500 secondary（原自绘 knobLabel）。
+  - **M3/M4 占位换官方 dashed 卡**（models `addButton` 的 dashed border-l3 / r16）——
+    「将来这里有东西」的官方说法，取代一行灰字；不可交互、不做假动作。
+  - **运行信息收敛**为面板底部一行 12px/18 tertiary（原独占组标题）；组间距统一 24px、
+    组标题 14px/22/500（官方 `editorTitle` 档）、组内末行去分隔线（同官方
+    `GeneralSection` 的 last-child 规则）。
+  - **Pill 整类退场**：`pill()` helper 与 `.mia-picker` / `.mia-knobGrid` / `.mia-knobLabel`
+    CSS 一并删除（不留死代码）；`primitives` 解构只剩 `Button / Switch`，Menu 与图标经
+    primitives 命名空间取（引用闭环闸门可见）。
+- **新增面板 state `openMenu`**（同时只开一个菜单，官方 Menu 同理）：面板 state 7 → 8 个。
+- **回归闸门**：① 新增「V1：单选设置行走官方选择丸 + Menu，Pill 排整类退场」——驱动完整
+  渲染路径后断言三个 Menu 在位、选择丸触发器合规、菜单项 = 配置白名单（防「UI 少给选项」
+  静默降级）、无 `.mia-picker` 复活；② 风格契约改写：`.mia-select{`（h36/r18/module 底）与
+  `.mia-dashed{`（dashed border-l3）必须在、`.mia-cube{`/`.mia-picker{`/`.mia-knobGrid{`
+  不得在；③「我的上传」断言从文本节点改为 Menu `items` prop（stub 不渲染子组件，
+  新增 `collectMenuAnchors` 走 props.anchor）；④ 去重闸门补「皮肤行必须是选择丸」。
+- **跨 VM realm 坑（新记录）**：client.js 跑在独立 VM context，其数组原型与本 realm 不同，
+  `assert.deepEqual` 直接比跨 realm 数组会失败——必须先展开（`[...items]`）再断言。
+- **验证**：单测 **100 → 101 例**（client 15 → 17：V1 闸门 + 我的上传 Menu 化改写）；
+  `node --check` 七文件通过；`verify-all appearance` **16/16**、`repo` **2/2**。
+  **实机待用户重启 `dsh web` 后验收**（四个选择丸开合 / 菜单键盘 / dashed 占位 / 三主题）。
+- **下一步（S2 起，见设计文档 §4）**：P1 M3 动效 → P2 Boot Splash 实施 → P3 M4 会话效果 →
+  P4 每板块恢复默认 → P5 配置导入导出 → P6 壁纸亮暗双图 + URL 源。
+- 触摸点：`client.js`（面板重排 + `.mia-select`/Menu + CSS）、`test/client.test.js`
+  （V1 闸门 + 风格契约 + 三个队列 +1 格 openMenu）、`README.md`、本文件、
+  `design/2026-09-26-appearance-visual-unification-and-roadmap.md`（§5 标记 S1 完成）。
+
+## 2026-09-26 · 外观页视觉统一方案定稿（V1，未实施）+ 功能完善路线
+
+- **起因**：用户「外观设计页现在不够美观，和 dsh 设置页面的设计语言不够统一。功能也不完善，
+  准备推进」。
+- **差距取证**（vendor 源码逐条对 CSS）：根因不是颜色/间距（那两部分 M2.6 已对齐官方），
+  而是**控件形态选错**——官方设置行的单选标准控件是**选择丸 + 下拉菜单**
+  （`LanguageRow` / `PermissionRow` 的 `.selector`：h36 / r18 / module 底 / gap12 +
+  chevron + 官方 `Menu`），而本线把皮肤 / 玻璃 / 壁纸图源 / 头像清单全做成了**一排 Pill**
+  （Pill 在官方是 view switcher / filter 用语，primitives README 原话；本地壁纸与头像的
+  长文件名一多就换行成两三行）。次要差距：分组标题无官方对应物（官方通用页是纯行列；
+  models/plugins 才用 16px/500 页标题）、九宫格自绘语言（应对齐 plugins/models 的 rowCard：
+  r16 + border-l4 + pad 12/14）、M3/M4 占位是一行灰字（官方「空」的先例是 models 的
+  dashed 添加卡 h44）、运行信息块无官方形态。
+- **V1 方案**（行为逻辑零变化）：四处单选换**选择丸 + 官方 Menu**；九宫格换官方卡片语言；
+  表面四旋钮换 models 双列字段网格规格（12px/500 secondary 标签）；M3/M4 占位换 dashed 卡；
+  运行信息收敛为面板底部一行；组标题规格靠拢官方 `editorTitle`（14px/22/500）、组间距统一 24px。
+- **实机核对（不是推断）**：从本机实装 seed 产物
+  （`@deepseek-ai/dsh-web-frontend/dist/assets/index-*.js` 的 `qb=Object.freeze(...)` 冻结表）
+  逐名确认可用：`Menu` / `Pill` / `Switch` / `Button` / `Tag` / `Toast` / `Tooltip` / `Modal` /
+  `Checkbox` / `Input` / `DisclosureRow` / `HoverCard` / `StateDot` / `useAnchoredPosition` /
+  `useDismissOnOutsidePointer`，以及 `IconChevronDownOutlineRegular`、
+  `IconSlidersTwoOutlineRegular`、`IconPlusOutlineRegular`、`IconDownloadOutlineRegular`、
+  `IconTrashOutlineRegular`。命名规律与 2026-09-23 事故结论一致（`Icon<名称>Outline<Medium|Regular>`）。
+- **功能完善路线**：P1 M3 动效（配置字段已在 v4，补面板 + CSS 层 + reduced-motion 降级）→
+  P2 Boot Splash 实施（S1–S5，设计早已定稿）→ P3 M4 会话效果 → P4 每板块恢复默认
+  （models `linkButton` 形态）→ P5 配置导入/导出 → P6 壁纸亮暗双图 + URL 源入口。
+- **回归闸门（实施时同步）**：设置行单选必须走 `.mia-select`（Pill 排退场）、
+  渲染树无 undefined 元素类型（Menu anchor/chevron 在树上）、四个选择丸的 Menu
+  items 数 = 配置白名单数（防「UI 少给选项」静默降级）。
+- 设计文档：[2026-09-26-appearance-visual-unification-and-roadmap.md](2026-09-26-appearance-visual-unification-and-roadmap.md)
+  （§1 官方设计语言取证表 / §2 差距逐项对照 / §3 V1 规格 / §4 功能路线 / §6 风险）。
+- 触摸点（预期）：`client.js`（面板重排 + `.mia-select`/Menu）、`test/client.test.js`
+  （风格契约改写 + 三道新闸门）、`README.md`、本文件、回归矩阵 §3.5。
+
+## 2026-09-26 · 与官方「通用」设置页对照去重（移除明暗偏好与正文字号第二入口）
+
+- **起因**：用户「通用设置和外观设置对照一下，通用设置里有的，外观设置就不需要有了」。
+  逐行取证（vendor 源码，非记忆）后确认：官方「通用」页（`settings.general.item` 槽）现有
+  **6 行** —— `language`(0) / `appearance`(10，浅色·深色·跟随系统) / `font-size`(11，
+  12–17px) / `transcript-view`(12) / `composer-enter`(20) / `permission`(-20)；
+  其中**明暗偏好与正文字号**与本线重合（M1 起就是「同一官方偏好的第二入口」）。
+- **推翻 M1 规划 §1.2 的「第二入口」决策**：第二入口解决的是「找不到」，而官方通用页就在
+  设置面板第一栏；重复入口的真实代价是两处文案各自漂移，以及配置里三个与官方状态赛跑的
+  镜像字段。详见 [去重与路线设计](2026-09-26-appearance-page-dedup-and-roadmap.md) D1–D5。
+- **client 半（`client.js`）**：删除 `SCHEME_CUBES` + `schemeCubes()`、`readThemeFacts()`、
+  `themeFacts` state、`applyScheme()`、`stepFontSize()` 与字号行 `px` 单位节点；
+  「主题」组收敛为「皮肤」一行（说明里显式告知「明暗偏好与正文字号在『通用』设置页」）；
+  `PANEL_CSS` 删 `.mia-cube*` / `.mia-selected` / `.mia-unit`（步进器规则保留——壁纸四旋钮在用）；
+  save 成功路径不再同步 `data-mia-scheme`。
+- **host 半（`lib/config.js`）**：`CONFIG_VERSION` 3 → 4；`DEFAULT_CONFIG.theme` 收敛为
+  `{ skin: 'pure' }`，`sanitizeConfig` 的 theme 板块同步收敛；删除 `SCHEMES` /
+  `FONT_SIZE_MIN` / `FONT_SIZE_MAX` 常量与 `toAccent()`（`accent` 移除后零调用方，按
+  「不留死代码」纪律同批删）；`buildBootScript` 不再写 `data-mia-scheme`
+  （全仓检索确认该属性无消费者；官方明暗由 `body[data-ds-dark-theme]` 驱动，皮肤 boot style
+  双段选择器不受影响）。`migrateConfig` 补 v3→v4 注释：删除字段无需搬运，sanitize 直接丢弃。
+- **`accent` 是从未接 UI 的死字段**：M1 规划 §5.1 的信息架构里有「强调色（色板 + 取色 +
+  从壁纸派生）」，但从未实现面板入口，只在 sanitize 里被验证——本次一并移除，不留在
+  config 里当「将来的坑」。
+- **回归闸门（`test/client.test.js` 新增 1 例 + 三条既有断言改写）**：
+  ① **去重闸门**——驱动完整渲染路径后断言面板**不渲染**「正文字号」「跟随系统」文本、
+  **无** `.mia-cube` 节点、**无** `px` 单位节点（控件形态与只读回显两种复活都禁），
+  而「皮肤」「外观定制总开关」必须在；② styleQueue 少一格（`themeFacts` state 移除，
+  顺序改为 state / contract / error / busy / wallpapers / avatars / presets）；
+  ③ 风格契约去掉立方断言、增「`.mia-cube{` 不得复活」；④ primitives stub 同步移除三枚
+  立方图标（stub 与 client.js 引用集同步收敛）。
+- **config/store 测试**：theme 夹具改「死字段进、`{skin}` 出」；新增「已移除镜像字段一律
+  丢弃」与「v3→v4 丢弃死字段」两例；`mergeConfig` 深合用例改锚 wallpaper 字段
+  （theme 单字段后原用例失去意义）；`buildBootScript` 增 `data-mia-scheme` 缺席断言；
+  store 往返与归一化两例改锚 `{ skin: 'pure' }`。
+- **验证**：单测 **100 例全绿**（config 32 / client 16 / host 16 / avatar 8 /
+  icon-presets 8 / skins 7 / store 7 / fence 6；98 → 100，净 +2）；`node --check` 七文件通过；
+  `node ../scripts/verify-all.mjs appearance` **16/16 PASS**；`verify-all.mjs repo` **2/2 PASS**。
+  **实机待用户重启 `dsh web` 后验收**（面板少两行 + `data-mia-scheme` 缺席；「关掉即原生」契约不变）。
+- **持续推进**：立下「上新设项先过 `settings.general.item` 对照、DSH 升级后按 vendor 源码
+  重跑取证」纪律；路线 P1 M3 动效 → P2 Boot Splash 实施 → P3 M4 会话效果 → P4 实机验收清偿，
+  见设计文档 §6。
+- 触摸点：`client.js`、`lib/config.js`、`test/{client,config,store}.test.js`、`README.md`、
+  `design/2026-09-26-appearance-page-dedup-and-roadmap.md`（新）、本文件、
+  `../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md`（§3.5 判据与日志）。
+
 ## 2026-09-26（深夜·续）· 修：`package.json` 的 `files` 缺 `assets/` —— 位图预设会在安装时静默丢失
 
 **缺陷**（由同批新落地的仓库级闸门 `scripts/check-silent-guards.mjs` 的 **R4「声明清单缺口」首跑抓出**）：

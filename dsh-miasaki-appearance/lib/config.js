@@ -7,23 +7,16 @@
 import { avatarFileFromSource } from './avatar.js'
 
 /** 配置版本；结构不兼容变更时 +1，并在 migrateConfig 里补一条迁移分支。 */
-export const CONFIG_VERSION = 3
+export const CONFIG_VERSION = 4
 
 /** 皮肤白名单。M1 只有「纯净」；M2 下沉 desktop 线的刻刻帝 / 狂狂帝。 */
 export const SKINS = Object.freeze(['pure', 'zafkiel', 'kurkuriel'])
-
-/** 明暗偏好 —— 取值必须与官方 ctx.theme.setTheme 接受的一致。 */
-export const SCHEMES = Object.freeze(['light', 'dark', 'system'])
 
 /** 动效预设（M3）。 */
 export const MOTION_PRESETS = Object.freeze(['fluid', 'elegant', 'minimal'])
 
 /** 会话密度（M4）。 */
 export const DENSITIES = Object.freeze(['comfortable', 'compact'])
-
-/** 官方字号轴边界（与 dsh-client-ui-theme 的 FONT_SIZE_MIN/MAX 对齐）。 */
-export const FONT_SIZE_MIN = 12
-export const FONT_SIZE_MAX = 17
 
 /** 壁纸模糊档位边界（px）。 */
 export const BLUR_MIN = 0
@@ -64,7 +57,12 @@ const MAX_TEXT = 512
 export const DEFAULT_CONFIG = Object.freeze({
   version: CONFIG_VERSION,
   enabled: false,
-  theme: Object.freeze({ skin: 'pure', scheme: 'system', accent: '', fontSize: 14 }),
+  // theme 只留 skin：明暗偏好与正文字号是**官方「通用」设置页自己的行**
+  // （ui-theme 的 AppearanceRow / FontSizeRow，settings.general.item 槽），
+  // 2026-09-26 按「通用设置里有的、外观页就不再放」去重，scheme / accent /
+  // fontSize 三个镜像字段一并移除（官方偏好由官方 settingsScope 持久化，
+  // 本线再存一份只会漂移）。设计见 design/2026-09-26-appearance-page-dedup-and-roadmap.md。
+  theme: Object.freeze({ skin: 'pure' }),
   wallpaper: Object.freeze({
     source: '', light: '', dark: '', blur: 0, scrim: 0,
     fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
@@ -114,12 +112,6 @@ function toText(value, fallback = '') {
   return trimmed.length > MAX_TEXT ? trimmed.slice(0, MAX_TEXT) : trimmed
 }
 
-/** 强调色只接受 #rgb / #rrggbb 或空串（空 = 跟随主题品牌色）。 */
-function toAccent(value) {
-  const text = toText(value)
-  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(text) ? text.toLowerCase() : ''
-}
-
 /** 壁纸图源只接受空串、内置 id、同源绝对路径、http(s) URL。 */
 function toWallpaperSource(value) {
   const text = toText(value)
@@ -166,6 +158,9 @@ export function migrateConfig(raw) {
   // 全部纯新增，sanitizeConfig 对缺失字段回退默认，这里只需抬版本号让 sanitize 补齐。
   // v2 → v3：avatar 板块（软件头像）—— 同样纯新增，旧配置补 `avatar.source = ''`（= 不设置，
   // 桌面壳继续用出厂图标），因此没有需要搬运的旧字段。
+  // v3 → v4：**去重**——theme 的 scheme / accent / fontSize 三个字段移除（明暗与字号归
+  // 官方「通用」设置页，本线不再做第二入口与镜像）。删除字段不需要搬运：sanitizeConfig
+  // 不认识它们、直接丢弃，抬版本号让旧配置在下次写入时清净落盘。
   return { ...source, version: CONFIG_VERSION }
 }
 
@@ -187,9 +182,6 @@ export function sanitizeConfig(raw) {
     enabled: toBoolean(source.enabled, DEFAULT_CONFIG.enabled),
     theme: {
       skin: pickEnum(theme.skin, SKINS, DEFAULT_CONFIG.theme.skin),
-      scheme: pickEnum(theme.scheme, SCHEMES, DEFAULT_CONFIG.theme.scheme),
-      accent: toAccent(theme.accent),
-      fontSize: clampInt(theme.fontSize, FONT_SIZE_MIN, FONT_SIZE_MAX, DEFAULT_CONFIG.theme.fontSize),
     },
     wallpaper: {
       source: toWallpaperSource(wallpaper.source),
@@ -277,11 +269,12 @@ export function buildBootScript(config) {
   const safe = sanitizeConfig(config)
   const state = JSON.stringify(safe.enabled ? 'on' : 'off')
   const skin = JSON.stringify(safe.theme.skin)
-  const scheme = JSON.stringify(safe.theme.scheme)
   const glass = JSON.stringify(safe.enabled ? safe.wallpaper.glass : 'off')
   // 壁纸标记：desktop 装饰层据此把自家光晕（#miasaki-aurora）降为透明，避免两层氛围打架。
   const wallpaper = JSON.stringify(safe.enabled && safe.wallpaper.source !== '' ? 'on' : 'off')
-  return `(() => { try { const r = document.documentElement; r.setAttribute('data-mia-appearance', ${state}); r.setAttribute('data-mia-skin', ${skin}); r.setAttribute('data-mia-scheme', ${scheme}); r.setAttribute('data-mia-glass', ${glass}); r.setAttribute('data-mia-wallpaper', ${wallpaper}) } catch (e) { /* 首帧注入不得抛错 */ } })()`
+  // 明暗偏好不在这里：它是官方「通用」设置页自己的行（body[data-ds-dark-theme] 由官方
+  // presenter 驱动），本线 2026-09-26 去重时移除了 scheme 镜像与 data-mia-scheme 属性。
+  return `(() => { try { const r = document.documentElement; r.setAttribute('data-mia-appearance', ${state}); r.setAttribute('data-mia-skin', ${skin}); r.setAttribute('data-mia-glass', ${glass}); r.setAttribute('data-mia-wallpaper', ${wallpaper}) } catch (e) { /* 首帧注入不得抛错 */ } })()`
 }
 
 /**
@@ -443,11 +436,14 @@ export function evaluateContract(probe) {
   const issues = []
 
   if (services.theme !== true) {
-    issues.push({ level: 'error', code: 'theme-service-missing', message: '未取到官方主题服务（ctx.theme）——明暗与字号不可用，请确认 DSH 版本 ≥ 0.1.5-rc.1' })
+    issues.push({ level: 'error', code: 'theme-service-missing', message: '未取到官方主题服务（ctx.theme）——皮肤接管不可用，请确认 DSH 版本 ≥ 0.1.5-rc.1' })
   } else {
+    // 四件套是官方主题服务的完整性探针（明暗偏好与正文字号 2026-09-26 起归官方
+    // 「通用」设置页，本线只消费 setTheme（皮肤选中拨一次原生明暗）与 overrideTokens
+    // （皮肤/参数层）；getTheme/setFontSize 一并校验，缺任何一件都说明服务形态变了。
     for (const [name, label] of [['getTheme', 'getTheme'], ['setTheme', 'setTheme'], ['setFontSize', 'setFontSize'], ['overrideTokens', 'overrideTokens']]) {
       if (methods[name] !== true) {
-        issues.push({ level: 'error', code: `theme-method-missing:${name}`, message: `主题服务缺少 ${label}()——DSH 可能已升级并调整了接口，该板块已自动禁用` })
+        issues.push({ level: 'error', code: `theme-method-missing:${name}`, message: `主题服务缺少 ${label}()——DSH 可能已升级并调整了接口，皮肤层已自动禁用` })
       }
     }
   }

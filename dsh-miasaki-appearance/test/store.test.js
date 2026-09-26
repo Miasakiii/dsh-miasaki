@@ -27,14 +27,14 @@ test('load：配置文件不存在时回退出厂配置', async () => {
 test('save → load：往返一致且磁盘格式可读', async () => {
   await withTempDir(async (dir) => {
     const store = new AppearanceStore(dir)
-    const saved = await store.save({ enabled: true, theme: { skin: 'zafkiel', fontSize: 16 } })
+    const saved = await store.save({ enabled: true, theme: { skin: 'zafkiel' } })
     assert.equal(saved.enabled, true)
     assert.equal(saved.theme.skin, 'zafkiel')
 
     const raw = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
     assert.equal(raw.enabled, true)
     assert.equal(raw.theme.skin, 'zafkiel')
-    assert.equal(raw.version, CONFIG_VERSION) // M2 S5 起 v2；M2.5 的 avatar 板块抬到 v3
+    assert.equal(raw.version, CONFIG_VERSION) // M2 S5 起 v2；M2.5 的 avatar 板块抬到 v3；2026-09-26 去重抬到 v4
 
     assert.deepEqual(await store.load(), saved)
   })
@@ -43,10 +43,13 @@ test('save → load：往返一致且磁盘格式可读', async () => {
 test('save：落盘前归一化（非法值不进入磁盘）', async () => {
   await withTempDir(async (dir) => {
     const store = new AppearanceStore(dir)
-    await store.save({ theme: { accent: '红色', fontSize: 999 }, wallpaper: { source: 'javascript:x' } })
+    await store.save({
+      theme: { skin: '不存在的皮肤', scheme: 'dark', accent: '红色', fontSize: 999 },
+      wallpaper: { source: 'javascript:x' },
+    })
     const raw = JSON.parse(await readFile(join(dir, 'config.json'), 'utf8'))
-    assert.equal(raw.theme.accent, '')
-    assert.equal(raw.theme.fontSize, 17)
+    // 2026-09-26 去重：scheme / accent / fontSize 已移除，非法皮肤名白名单回退
+    assert.deepEqual(raw.theme, { skin: 'pure' })
     assert.equal(raw.wallpaper.source, '')
   })
 })

@@ -37,9 +37,9 @@ test('sanitizeConfig：未知字段被丢弃，已知字段被钳制', () => {
     额外字段: { a: 1 },
   })
   assert.equal(result.theme.skin, 'pure', '白名单外的皮肤回退纯净')
-  assert.equal(result.theme.scheme, 'dark')
-  assert.equal(result.theme.accent, '#aabbcc', '强调色归一化为小写')
-  assert.equal(result.theme.fontSize, 17, '字号夹到官方上界')
+  // 2026-09-26 去重：scheme / accent / fontSize 随「明暗与字号归官方通用页」一并移除，
+  // 旧配置里的残留必须被丢弃（否则 theme 板块会留下永远无人写的第二状态源）。
+  assert.deepEqual(Object.keys(result.theme), ['skin'], 'theme 板块只剩 skin')
   assert.equal(result.wallpaper.blur, 60)
   assert.equal(result.wallpaper.scrim, 0)
   assert.equal(result.motion.scale, 1.5)
@@ -48,9 +48,13 @@ test('sanitizeConfig：未知字段被丢弃，已知字段被钳制', () => {
   assert.equal('注入' in result.theme, false)
 })
 
-test('sanitizeConfig：非法强调色与壁纸图源被清空', () => {
-  assert.equal(sanitizeConfig({ theme: { accent: 'red' } }).theme.accent, '')
-  assert.equal(sanitizeConfig({ theme: { accent: '#12' } }).theme.accent, '')
+test('sanitizeConfig：已移除的镜像字段（scheme/accent/fontSize）一律丢弃', () => {
+  assert.deepEqual(
+    sanitizeConfig({ theme: { accent: 'red', scheme: 'dark', fontSize: 9 } }).theme,
+    { skin: 'pure' },
+    '明暗/强调色/字号已归官方「通用」设置页，本线配置不再镜像',
+  )
+  assert.deepEqual(sanitizeConfig({ theme: { accent: '#12' } }).theme, { skin: 'pure' })
   assert.equal(sanitizeConfig({ wallpaper: { source: 'javascript:alert(1)' } }).wallpaper.source, '')
   assert.equal(sanitizeConfig({ wallpaper: { source: '//evil.example.com/x.png' } }).wallpaper.source, '')
   assert.equal(sanitizeConfig({ wallpaper: { source: 'builtin:night-01' } }).wallpaper.source, 'builtin:night-01')
@@ -64,20 +68,27 @@ test('migrateConfig：无版本号的旧配置被补上当前版本', () => {
 })
 
 test('mergeConfig：按板块深合并，未提及的字段保持原值', () => {
-  const base = sanitizeConfig({ enabled: true, theme: { scheme: 'dark', fontSize: 15 }, motion: { preset: 'elegant' } })
-  const merged = mergeConfig(base, { theme: { fontSize: 16 } })
+  const base = sanitizeConfig({
+    enabled: true,
+    theme: { skin: 'zafkiel' },
+    wallpaper: { glass: 'frost', scrim: 30 },
+    motion: { preset: 'elegant' },
+  })
+  const merged = mergeConfig(base, { wallpaper: { scrim: 50 } })
   assert.equal(merged.enabled, true)
-  assert.equal(merged.theme.scheme, 'dark', '同板块其它字段不被清掉')
-  assert.equal(merged.theme.fontSize, 16)
+  assert.equal(merged.theme.skin, 'zafkiel', '其它板块不被清掉')
+  assert.equal(merged.wallpaper.glass, 'frost', '同板块未提及的字段保持原值')
+  assert.equal(merged.wallpaper.scrim, 50)
   assert.equal(merged.motion.preset, 'elegant', '其它板块不受影响')
 })
 
 test('mergeConfig：非法增量不会污染现有配置', () => {
   const base = sanitizeConfig({ enabled: true, theme: { skin: 'zafkiel' } })
-  const merged = mergeConfig(base, { theme: { skin: 'oops', accent: 'not-a-color' } })
+  const merged = mergeConfig(base, { theme: { skin: 'oops', accent: 'not-a-color', scheme: 'dark' } })
   assert.equal(merged.theme.skin, 'pure')
-  assert.equal(merged.theme.accent, '')
-  assert.equal(merged.enabled, true)})
+  assert.equal('accent' in merged.theme, false, '已移除字段不得借合并回到配置里')
+  assert.equal(merged.enabled, true)
+})
 
 test('configEquals：忽略键序与非法输入差异', () => {
   assert.equal(configEquals({ enabled: true }, { enabled: true }), true)
@@ -93,6 +104,9 @@ test('buildBootScript：写入门控属性且随开关翻转', () => {
   assert.match(on, /"on"/)
   assert.match(on, /"zafkiel"/)
   assert.match(on, /try \{/, '首帧脚本必须自带异常兜底')
+  // 2026-09-26 去重：明暗偏好由官方 presenter 驱动（body[data-ds-dark-theme]），
+  // 首帧脚本不再写 data-mia-scheme 镜像属性。
+  assert.doesNotMatch(on, /data-mia-scheme/, 'scheme 镜像属性已移除')
 })
 
 test('buildBootScript：皮肤取值经 JSON 转义，无法逃逸出字符串', () => {
@@ -234,6 +248,14 @@ test('migrateConfig：旧版本抬到当前版本（新增字段由 sanitize 补
   assert.deepEqual(safe.avatar, { source: '' })
 })
 
+test('migrateConfig：v3 配置升到 v4 时丢弃 scheme/accent/fontSize 死字段', () => {
+  // 2026-09-26 去重：这三个字段是「外观页给官方偏好做第二入口」时代的镜像，
+  // 迁移不需要搬运——sanitize 直接丢弃，下次写入即落盘清净。
+  const safe = sanitizeConfig({ version: 3, theme: { skin: 'zafkiel', scheme: 'dark', accent: '#fff', fontSize: 16 } })
+  assert.equal(safe.version, CONFIG_VERSION)
+  assert.deepEqual(safe.theme, { skin: 'zafkiel' }, '死字段不得在迁移后存活')
+})
+
 test('buildSurfaceTokens：全部 100 → null；降了的部分映射正确端点（dark 用深端、light 用浅端）', () => {
   assert.equal(buildSurfaceTokens({ enabled: true, wallpaper: { source: 'builtin:aurora' } }), null)
   const tokens = buildSurfaceTokens({
@@ -343,7 +365,7 @@ test('sanitizeConfig：avatar.source 只接受本线头像路由下的白名单�
 test('mergeConfig：头像单字段可独立更新，不被同板块或其它板块影响', () => {
   const base = sanitizeConfig({ enabled: true, avatar: { source: '/appearance/avatar/a-1.png' } })
   assert.equal(mergeConfig(base, { avatar: { source: '/appearance/avatar/b-2.png' } }).avatar.source, '/appearance/avatar/b-2.png')
-  assert.equal(mergeConfig(base, { theme: { fontSize: 16 } }).avatar.source, '/appearance/avatar/a-1.png', '改别的板块不动头像')
+  assert.equal(mergeConfig(base, { wallpaper: { scrim: 50 } }).avatar.source, '/appearance/avatar/a-1.png', '改别的板块不动头像')
   assert.equal(mergeConfig(base, { avatar: { source: '' } }).avatar.source, '', '清空是合法操作')
   assert.equal(mergeConfig(base, { avatar: { source: 'https://evil/x.png' } }).avatar.source, '', '非法值不得写进配置')
 })

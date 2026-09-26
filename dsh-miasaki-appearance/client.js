@@ -1,22 +1,30 @@
 // @miasaki/dsh-appearance — Client half.
 //
 // 在「设置」里注册一栏「外观」（settings.section，id=appearance，order=5，紧跟官方「通用」）。
-// M1 只做底座与契约自检：面板骨架 + 明暗/字号直通官方 API + 契约黄条 + 配置读写闭环；
+// M1 只做底座与契约自检：面板骨架 + 契约黄条 + 配置读写闭环；
 // 皮肤 / 壁纸 / 动效 / 会话效果分别在 M2–M4 接入同一套管线。
+//
+// **与官方「通用」设置页的分工（2026-09-26 去重）**：明暗偏好与正文字号是官方自己的行
+// （ui-theme 的 AppearanceRow / FontSizeRow，注册在 settings.general.item 槽）——
+// 本页**不再提供第二入口**，theme 板块只剩「皮肤」；config.theme 的 scheme / accent /
+// fontSize 三个镜像字段同批移除（判定规则详见 design/2026-09-26-appearance-page-dedup-and-roadmap.md）。
+// 皮肤选中时仍会调一次官方 ctx.theme.setTheme(preferredScheme)（M2 §3.2，只此一次不锁定）。
 //
 // 形态说明：正式插件的 client bundle 由 `window.__ModuleLoader__.load` 装载，
 // **没有** `host.call`（那是动态插件的 builtin），因此与 Host 的通信走同源
 // JSON 路由 `/appearance/api/*`。也不能 require 第三方包 —— 只用 `react` 与
 // 前端壳 staticModules 里的官方 seed 模块。
 //
-// 面板风格（2026-09-21，M2.6）：全面对齐官方「通用设置」页 —— 0.5px 分隔线 +
-// 16px 行距、14px/22 标题、12px/18 三级说明、明暗立方与步进器控件，取值一律
-// 照 `@deepseek-ai/dsh-client-ui-theme`（AppearanceRow / FontSizeRow）与
-// `@deepseek-ai/dsh-client-ui-settings-general`（SettingsRoot）的官方 CSS；
-// 交互控件直接复用官方 primitives（Button / Switch / Pill / 图标）—— 它们是
+// 面板风格（2026-09-21 M2.6 行式化，2026-09-26 V1 控件统一）：全面对齐官方「通用设置」页 ——
+// 0.5px 分隔线 + 16px 行距、14px/22 标题、12px/18 三级说明；**单选行走官方
+// 「选择丸 + Menu」**（LanguageRow.selector 规格），数值走官方步进器，布尔走官方
+// Switch，操作走官方 Button；取值一律照 `@deepseek-ai/dsh-client-ui-theme`
+// （FontSizeRow）与 `@deepseek-ai/dsh-client-ui-settings-general`（SettingsRoot）的
+// 官方 CSS，卡片/空态借 models 与 plugins 两个 section 的先例。
+// 交互控件直接复用官方 primitives（Button / Switch / Menu / 图标）—— 它们是
 // 前端壳 seed 模块（staticModules），`require` 即得，无需 `dsh.client.external`
 // 声明（seed 词不产生图边）。自有样式经 `.mia-*` 前缀 CSS 注入，不依赖官方
-// 哈希类名（锚点纪律见 README）。
+// 哈希类名（锚点纪律见 README）。明暗立方 2026-09-26 随去重移除（官方通用页自有该行）。
 //
 // 设计文档：design/2026-09-11-appearance-m1-design.md
 window.__ModuleLoader__.load({
@@ -27,8 +35,11 @@ window.__ModuleLoader__.load({
     const module = { exports: {} }
     const react = require('react')
     // 官方 UI 原语：与「通用设置」页同源（前端壳 staticModules 的 seed 模块）。
+    // Button / Switch 直接解构；Menu 与图标经 primitives 命名空间取——client.test.js 的
+    // 「primitives 引用闭环」闸门按该形态镜像 seed 导出名（2026-09-23 事故教训：
+    // 名字必须与 dsh-web-frontend 的 index-*.js 冻结表逐字一致）。
     const primitives = require('@deepseek-ai/dsh-client-ui-primitives')
-    const { Button, Switch, Pill } = primitives
+    const { Button, Switch } = primitives
 
     const API = '/appearance/api'
     const BOOT_FLAG = '__DSH_APPEARANCE_BOOTED__'
@@ -261,64 +272,58 @@ window.__ModuleLoader__.load({
       input.click()
     }
 
-    /** 读取官方主题快照里的叶子字段（不整体复制 live 对象）。 */
-    function readThemeFacts(theme) {
-      if (theme === undefined || typeof theme.getTheme !== 'function') return null
-      try {
-        const snapshot = theme.getTheme()
-        return {
-          preference: String(snapshot.preference),
-          fontSize: Number(snapshot.fontSize),
-          activeId: String(snapshot.active.id),
-        }
-      } catch {
-        return null
-      }
-    }
-
-    // ------------------------------------------------------- 面板样式（M2.6）
+    // ------------------------------------------------------- 面板样式（M2.6 → V1）
     // 取值逐条对照官方「通用设置」页：行 = FontSizeRow.row（0.5px 分隔线 + 16px 行距）、
-    // 标题/说明 = row.title / row.desc、明暗立方 = AppearanceRow.themeCube（选中态
-    // bg-module-platform + neutral-bluish-400 边）、步进器 = FontSizeRow.stepper
-    // （悬停露出上下箭头）。token 全部走 --dsw-* 官方变量，跟着皮肤与明暗自动解析。
+    // 标题/说明 = row.title / row.desc、步进器 = FontSizeRow.stepper（悬停露出上下箭头）、
+    // **选择丸 = LanguageRow.selector + 官方 Menu**（单选行的标准控件，V1 起取代 Pill 排）。
+    // 明暗立方（AppearanceRow.themeCube）2026-09-26 随去重移除——那是官方通用页自己的行。
+    // token 全部走 --dsw-* 官方变量，跟着皮肤与明暗自动解析。
     const PANEL_CSS = `
 .mia-panel{max-width:720px;color:var(--dsw-alias-label-primary);flex-direction:column;display:flex}
 .mia-group{flex-direction:column;display:flex}
-.mia-groupTitle{color:var(--dsw-alias-label-primary);margin:0;padding:20px 0 0;font-size:14px;font-weight:500;line-height:22px}
-.mia-group>:last-child{padding-bottom:20px}
+.mia-group + .mia-group{margin-top:24px}
+.mia-groupTitle{color:var(--dsw-alias-label-primary);margin:0;padding:0 0 4px;font-size:14px;font-weight:500;line-height:22px}
 .mia-row{border-bottom:.5px solid var(--dsw-alias-border-l2);align-items:center;gap:8px;padding:16px 0;display:flex}
 .mia-group>.mia-row:last-child{border-bottom:none}
 .mia-rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px;display:flex}
 .mia-title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}
 .mia-desc{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400;line-height:18px}
 .mia-control{align-items:center;gap:8px;display:inline-flex}
-.mia-cubeRow{flex-wrap:wrap;align-items:stretch;gap:8px;display:flex}
-.mia-cube{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);font:inherit;color:var(--dsw-alias-label-primary);cursor:pointer;background:0 0;border-radius:20px;flex-direction:column;flex:180px;justify-content:center;align-items:center;gap:4px;padding:20px 32px;font-size:14px;line-height:22px;display:flex}
-.mia-cube:hover:not(.mia-selected){background:var(--dsw-alias-interactive-bg-hover)}
-.mia-cube:disabled{cursor:default;opacity:.5}
-.mia-selected{background:var(--dsw-alias-bg-module-platform);border-color:var(--dsw-static-neutral-bluish-400)}
+/* 选择丸：官方 LanguageRow.selector 规格（h36 / r18 / module 底 / gap12 / 右缀 chevron）。
+   单选设置行的官方标准控件——取代 M2.6 的 Pill 排（Pill 在官方是 view switcher/filter 用语）。 */
+.mia-select{box-sizing:border-box;border:none;font:inherit;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-module-platform);cursor:pointer;border-radius:18px;align-items:center;gap:12px;height:36px;max-width:280px;padding:0 6px 0 14px;display:inline-flex}
+.mia-select:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.mia-select:disabled{cursor:default;opacity:.5}
+.mia-selectLabel{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
+.mia-selectChevron{flex:none;color:var(--dsw-alias-label-caption)}
 .mia-stepper{background:var(--dsw-alias-bg-module-platform);border-radius:18px;justify-content:center;align-items:center;min-width:72px;height:36px;display:inline-flex;position:relative}
 .mia-value{text-align:center;font-variant-numeric:tabular-nums;min-width:18px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}
-.mia-unit{color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}
 .mia-arrows{opacity:0;flex-direction:column;gap:2px;display:flex;position:absolute;right:8px}
 .mia-stepper:hover .mia-arrows,.mia-stepper:focus-within .mia-arrows{opacity:1}
 .mia-arrow{background:color-mix(in srgb, var(--dsw-alias-bg-layer-1) 75%, transparent);width:17px;height:12px;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;border-radius:3px;justify-content:center;align-items:center;padding:0;display:inline-flex}
 .mia-arrow:hover:not(:disabled){background:var(--dsw-alias-bg-layer-1)}
 .mia-arrow:disabled{color:var(--dsw-alias-label-caption);cursor:default}
-.mia-knobGrid{grid-template-columns:auto 1fr auto 1fr;gap:8px 12px;align-items:center;display:grid}
-.mia-knobLabel{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
-.mia-picker{flex-wrap:wrap;align-items:center;gap:8px;display:flex}
-.mia-notice{color:var(--dsw-alias-state-warn-label);margin:0;padding:20px 0 0;font-size:12px;line-height:18px}
+/* 表面不透明度四旋钮：官方 models fieldLabel（12px/18/500 secondary）+ modelAdvanced 双列网格 */
+.mia-fieldGrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;align-items:center;display:grid}
+.mia-fieldLabel{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;line-height:18px}
+.mia-notice{color:var(--dsw-alias-state-warn-label);margin:0;padding:0 0 12px;font-size:12px;line-height:18px}
 .mia-noticeOk{color:var(--dsw-alias-state-success-primary)}
-.mia-error{color:var(--dsw-alias-state-error-primary);margin:0;padding:8px 0 0;font-size:12px;line-height:18px}
+.mia-error{color:var(--dsw-alias-state-error-primary);margin:0;padding:0 0 12px;font-size:12px;line-height:18px}
 .mia-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:18px}
+/* 应用图标九宫格：官方卡片语言（models rowCard：border-l4 / r16 / pad 12 14 收敛为图标格） */
 .mia-iconGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;padding:16px 0 4px;display:grid}
-.mia-iconCell{box-sizing:border-box;border:.5px solid transparent;background:0 0;border-radius:12px;flex-direction:column;align-items:center;gap:8px;padding:12px 6px 10px;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;display:flex}
+.mia-iconCell{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:0 0;border-radius:16px;flex-direction:column;align-items:center;gap:8px;padding:12px 6px 10px;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;display:flex}
 .mia-iconCell:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .mia-iconCell:disabled{cursor:default;opacity:.5}
 .mia-iconCell.is-active{border-color:var(--dsw-static-neutral-bluish-400);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary)}
-.mia-iconImg{border-radius:14px;width:56px;height:56px;object-fit:cover;background:0 0;display:block}
+.mia-iconImg{border-radius:12px;width:56px;height:56px;object-fit:cover;background:0 0;display:block}
 .mia-iconLabel{text-align:center;font-size:12px;line-height:18px}
+/* M3 / M4 占位：官方 models「添加」先例的 dashed 规格（1px dashed border-l3 / r16） */
+.mia-dashed{border:1px dashed var(--dsw-alias-border-l3);border-radius:16px;flex-direction:column;align-items:center;gap:2px;padding:12px 16px;text-align:center;display:flex}
+.mia-dashedTitle{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;line-height:18px}
+.mia-dashedDesc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+/* 运行信息：面板底部一行三级说明（不再独占组标题） */
+.mia-runinfo{color:var(--dsw-alias-label-tertiary);margin:24px 0 0;font-size:12px;line-height:18px}
 `
     const PANEL_CSS_ID = '@miasaki/dsh-appearance/panel.css'
     // 与官方 client 插件同一注入式（factory 体内、按 data-plugin-css 去重）：
@@ -362,15 +367,48 @@ window.__ModuleLoader__.load({
       return react.createElement('div', { key: `h-${text}`, className: 'mia-hint' }, text)
     }
 
-    /** 官方 Pill 原语：分段选择（皮肤 / 玻璃档位 / 图源 / 头像清单）。 */
-    function pill(text, active, onClick, disabled) {
-      return react.createElement(Pill, {
-        key: text,
-        active: active === true,
-        'aria-pressed': active === true,
-        disabled: disabled === true,
-        onClick,
-      }, text)
+    /**
+     * 选择丸 + 官方 Menu 下拉（V1，2026-09-26）。
+     *
+     * 形态逐条对照官方 `LanguageRow`：`.selector` 选择丸（h36 / r18 /
+     * `--dsw-alias-bg-module-platform` 底 / gap12 / 右缀 chevron）+ 官方 `Menu`
+     * 原语（键盘 ↑↓/Home/End/Esc 全自带，`align="end"` + `portal`）。
+     * menuId 是本行在面板 `openMenu` 状态里的键——同时只开一个菜单（官方菜单同理）。
+     * @param {string} menuId - 菜单唯一键（同时只开一个）。
+     * @param {string} value - 当前选中值（空串 = 第一项的「无」类选项）。
+     * @param {Array<{id:string,label:string,title?:string}>} options - 全量选项。
+     * @param {(id:string)=>void} onPick - 选中回调（直接写配置）。
+     * @param {string|null} openMenu - 面板当前打开的菜单键。
+     * @param {(id:string|null)=>void} setOpenMenu - 开合状态 setter。
+     * @param {boolean} disabled - 配置未加载 / 写入中时为 true。
+     */
+    function selectControl(menuId, value, options, onPick, openMenu, setOpenMenu, disabled) {
+      const open = openMenu === menuId
+      const current = options.find(option => option.id === value)
+      const close = () => setOpenMenu(null)
+      return react.createElement(primitives.Menu, {
+        key: `sel-${menuId}`,
+        open,
+        align: 'end',
+        portal: true,
+        items: options.map(option => ({ id: option.id, label: option.label })),
+        selectedId: value,
+        onSelect: (id) => { close(); onPick(id) },
+        onClose: close,
+        anchor: react.createElement('button', {
+          key: 'a',
+          type: 'button',
+          className: 'mia-select',
+          'aria-haspopup': 'menu',
+          'aria-expanded': open,
+          disabled: disabled === true,
+          title: current === undefined ? undefined : current.title,
+          onClick: () => setOpenMenu(open ? null : menuId),
+        }, [
+          react.createElement('span', { key: 'l', className: 'mia-selectLabel' }, current === undefined ? '—' : current.label),
+          react.createElement(primitives.IconChevronDownOutlineRegular, { key: 'c', className: 'mia-selectChevron', size: 14 }),
+        ]),
+      })
     }
 
     /** 官方 Button 原语（outline = 主操作，ghost = 次操作，sm 尺寸）。 */
@@ -391,35 +429,6 @@ window.__ModuleLoader__.load({
         title: '关闭时本线对页面零影响',
         onChange: (next) => onClick(next === true),
       })
-    }
-
-    /**
-     * 明暗立方：与官方「通用 → 外观」同一控件（图标 + 文案，选中态平台底）。
-     * 图标名必须跟前端壳 primitives seed 的实际导出一致：seed 的命名是
-     * `Icon<名称>Outline<Medium|Regular>`（尺寸走 props，不在名字里）——
-     * 2026-09-23 实机空白事故：误用旧版 `*Outline16` 名字 → undefined →
-     * createElement(undefined) 首渲染即抛 → 整栏被槽位机制罚下。对照见
-     * `@deepseek-ai/dsh-client-ui-theme` 的 AppearanceRow（同一套立方）。
-     */
-    const SCHEME_CUBES = [
-      { id: 'light', label: '浅色', Icon: primitives.IconLightOutlineMedium },
-      { id: 'dark', label: '深色', Icon: primitives.IconDarkOutlineMedium },
-      { id: 'system', label: '跟随系统', Icon: primitives.IconFollowsystemOutlineMedium },
-    ]
-
-    function schemeCubes(preference, onPick, disabled) {
-      return react.createElement('div', { key: 'cubes', className: 'mia-cubeRow' }, SCHEME_CUBES.map(({ id, label, Icon }) =>
-        react.createElement('button', {
-          key: id,
-          type: 'button',
-          className: `mia-cube${preference === id ? ' mia-selected' : ''}`,
-          'aria-pressed': preference === id,
-          disabled: disabled === true,
-          onClick: () => onPick(id),
-        }, [
-          react.createElement(Icon, { key: 'i' }),
-          label,
-        ])))
     }
 
     /**
@@ -448,7 +457,6 @@ window.__ModuleLoader__.load({
     function AppearancePanel() {
       const [state, setState] = react.useState(null)
       const [contract, setContract] = react.useState(null)
-      const [themeFacts, setThemeFacts] = react.useState(null)
       const [error, setError] = react.useState(null)
       const [busy, setBusy] = react.useState(false)
       const [wallpapers, setWallpapers] = react.useState(null)
@@ -457,15 +465,15 @@ window.__ModuleLoader__.load({
       const [avatars, setAvatars] = react.useState(null)
       // M2.7：应用图标预设清单（九宫格消费；来自 /presets，host 会顺带把图标落进 avatars/）。
       const [presets, setPresets] = react.useState(null)
+      // V1：当前展开的选择丸菜单键（同时只开一个，官方 Menu 同理）。
+      const [openMenu, setOpenMenu] = react.useState(null)
 
       const ctx = runtime === null ? null : runtime.ctx
-      const theme = runtime === null ? undefined : runtime.theme
 
       const refresh = async () => {
         try {
           const next = await requestJson('/state', { method: 'GET' })
           setState(next)
-          setThemeFacts(readThemeFacts(theme))
           if (ctx !== null) {
             const verdict = await requestJson('/contract', { method: 'POST', body: { probe: collectProbe(ctx, next) } })
             setContract(verdict)
@@ -506,7 +514,6 @@ window.__ModuleLoader__.load({
             const config = next.config
             r.setAttribute('data-mia-appearance', config.enabled ? 'on' : 'off')
             r.setAttribute('data-mia-skin', config.theme.skin)
-            r.setAttribute('data-mia-scheme', config.theme.scheme)
           } catch { /* 属性同步不允许影响面板 */ }
           // 皮肤相关的写入（总开关/皮肤选择）变化后重同步 override 层；
           // 选了新皮肤时把官方三立方拨到皮肤原生明暗（M2 §3.2，只此一次不锁定）。
@@ -544,32 +551,6 @@ window.__ModuleLoader__.load({
           .finally(() => setBusy(false))
       }
 
-      /** 明暗与字号直通官方 API —— 它们是官方偏好的第二个入口，不受总开关约束。 */
-      const applyScheme = (scheme) => {
-        if (theme === undefined || typeof theme.setTheme !== 'function') return
-        try {
-          theme.setTheme(scheme)
-        } catch (e) {
-          setError(String(e && e.message ? e.message : e))
-          return
-        }
-        setThemeFacts(readThemeFacts(theme))
-        save({ theme: { scheme } })
-      }
-
-      const stepFontSize = (delta) => {
-        if (themeFacts === null || theme === undefined || typeof theme.setFontSize !== 'function') return
-        const next = Math.min(17, Math.max(12, themeFacts.fontSize + delta))
-        try {
-          theme.setFontSize(next)
-        } catch (e) {
-          setError(String(e && e.message ? e.message : e))
-          return
-        }
-        setThemeFacts(readThemeFacts(theme))
-        save({ theme: { fontSize: next } })
-      }
-
       const children = []
 
       // ---- 契约状态条（官方 notice 规格：12px/18，warn / success 着色）
@@ -599,41 +580,50 @@ window.__ModuleLoader__.load({
         ),
       ]))
 
-      // ---- 主题（M1 可用部分；明暗立方与步进器照官方通用设置页）
+      // ---- 主题皮肤（2026-09-26 去重：明暗偏好与正文字号归官方「通用」设置页，
+      // 本页不再提供第二入口；这里只留官方 AppearanceRow 没有的「皮肤」）
       children.push(group('主题', [
-        schemeCubes(
-          themeFacts === null ? 'system' : themeFacts.preference,
-          applyScheme,
-          theme === undefined,
-        ),
-        row(
-          '正文字号',
-          '官方字号轴 12–17px，仅影响会话内容。',
-          [
-            stepper(themeFacts === null ? null : themeFacts.fontSize, 12, 17, 1, stepFontSize, themeFacts === null || theme === undefined, '字号'),
-            react.createElement('span', { key: 'u', className: 'mia-unit' }, 'px'),
-          ],
-        ),
         row(
           '皮肤',
-          '刻刻帝以深色为原生设计、狂狂帝以浅色为原生设计（选中即拨一次官方三立方，此后不锁定）——切到另一明暗会使用自动派生的对应色阶（M2 §3.1）。',
-          reactElementSkinPicker(state === null ? 'pure' : state.config.theme.skin, busy, save),
+          '刻刻帝以深色为原生设计、狂狂帝以浅色为原生设计（选中即拨一次官方三立方，此后不锁定）——切到另一明暗会使用自动派生的对应色阶（M2 §3.1）。明暗偏好与正文字号在「通用」设置页。',
+          selectControl(
+            'skin',
+            state === null ? 'pure' : state.config.theme.skin,
+            SKIN_OPTIONS,
+            id => save({ theme: { skin: id } }),
+            openMenu, setOpenMenu,
+            state === null || busy,
+          ),
         ),
       ]))
 
-      // ---- 壁纸（M2 S5）
+      // ---- 壁纸（M2 S5；V1 起图源/玻璃换官方选择丸）
       const wallpaper = state === null ? null : state.config.wallpaper
+      const localWallpapers = wallpapers === null ? [] : wallpapers.local
       children.push(group('壁纸', wallpaper === null ? [hint('配置未加载。')] : [
         row(
           '图源',
           '内置为程序化渐变（零请求）；「本地」条目来自 ~/.dsh/miasaki-appearance/wallpapers/；留空即无壁纸。',
-          reactElementWallpaperPicker(wallpaper.source, wallpapers === null ? [] : wallpapers.local, busy, save),
+          selectControl(
+            'wallpaper-source',
+            wallpaper.source,
+            wallpaperSourceOptions(localWallpapers),
+            id => save({ wallpaper: { source: id } }),
+            openMenu, setOpenMenu,
+            busy,
+          ),
         ),
         row(
           '玻璃档位',
           '关闭 = 原生；轻 / 磨砂 / 云母 逐级增强模糊（仅侧栏 / 会话 / 右栏三个主表面，输入框降级为纯透明分层）。',
-          react.createElement('div', { key: 'glass', className: 'mia-picker' }, GLASS_LEVELS.map(level =>
-            pill(level.label, wallpaper.glass === level.id, () => save({ wallpaper: { glass: level.id } }), busy))),
+          selectControl(
+            'wallpaper-glass',
+            wallpaper.glass,
+            GLASS_LEVELS.map(level => ({ id: level.id, label: level.label })),
+            id => save({ wallpaper: { glass: id } }),
+            openMenu, setOpenMenu,
+            busy,
+          ),
         ),
         row(
           '暗色遮罩',
@@ -652,7 +642,7 @@ window.__ModuleLoader__.load({
         ),
       ]))
 
-      // ---- 应用图标（M2.5 自定义 + M2.7 预设）
+      // ---- 应用图标（M2.5 自定义 + M2.7 预设；V1 起「我的上传」换选择丸）
       const avatar = state === null || state.config === null || state.config === undefined || state.config.avatar === undefined
         ? null
         : state.config.avatar
@@ -668,23 +658,40 @@ window.__ModuleLoader__.load({
           outlineButton('上传图片…', () => pickImageFile(uploadAvatar, setError), busy),
           ghostButton('清除', () => save({ avatar: { source: '' } }), busy || avatar.source === ''),
         ]),
-        myFiles.length === 0 ? null : reactElementAvatarPicker(avatar.source, myFiles, busy, save),
+        myFiles.length === 0 ? null : row(
+          '我的上传',
+          '从 avatars/ 目录里已上传的图片中选（含手动放入的文件）。',
+          selectControl(
+            'avatar-source',
+            avatar.source,
+            avatarSourceOptions(myFiles),
+            id => save({ avatar: { source: id } }),
+            openMenu, setOpenMenu,
+            busy,
+          ),
+        ),
         hint(
           '点选即用：桌面端（Miasaki.exe）读同一份配置，约 1–2 秒内窗口 / 任务栏 / 托盘图标跟着变；' +
           '「清除」回退出厂图标。注意：EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标属于构建期资源，不随此处变化。',
         ),
       ]))
 
-      // ---- 后续板块占位
-      children.push(group('动效', [hint('M3：会话入场 / 侧栏 / 新会话 / 设置面板，三套预设 + 强度倍率 + 减弱动态降级。')]))
-      children.push(group('会话效果', [hint('M4：消息密度与最大宽度 / 流式光标 / 代码块与引用样式 / 工具卡折叠 / 字体。')]))
+      // ---- 后续板块占位（V1：官方 models「添加」先例的 dashed 卡，取代一行灰字）
+      children.push(group('动效', [dashedPlaceholder(
+        '动效（M3，未实现）',
+        '会话入场 / 侧栏 / 新会话 / 设置面板，三套预设 + 强度倍率 + 减弱动态降级。',
+      )]))
+      children.push(group('会话效果', [dashedPlaceholder(
+        '会话效果（M4，未实现）',
+        '消息密度与最大宽度 / 流式光标 / 代码块与引用样式 / 工具卡折叠 / 字体。',
+      )]))
 
-      // ---- 运行信息
-      children.push(group('运行信息', [hint(
-        `配置修订 ${state === null ? '—' : state.revision} · ` +
+      // ---- 运行信息（V1：收敛为面板底部一行，不再独占组标题）
+      children.push(react.createElement('div', { key: 'runinfo', className: 'mia-runinfo' },
+        `运行信息：配置修订 ${state === null ? '—' : state.revision} · ` +
         `持久化 ${state !== null && state.persistent === true ? '已启用' : '未启用（dataDir 缺失，改动仅存在于内存）'} · ` +
         `皮肤门控 ${document.documentElement.getAttribute('data-mia-appearance') ?? '—'}`,
-      )]))
+      ))
 
       return react.createElement('div', { className: 'mia-panel' }, children)
     }
@@ -711,49 +718,61 @@ window.__ModuleLoader__.load({
       }))
     }
 
-    /** 头像选择器：目录里已有的文件（含手动放入的）+ 「不使用」。 */
-    function reactElementAvatarPicker(source, localList, busy, save) {
-      const buttons = [pill('不使用', source === '', () => save({ avatar: { source: '' } }), busy)]
-      for (const file of localList) {
-        const url = `${AVATAR_PREFIX}${encodeURIComponent(file)}`
-        const short = file.length > 18 ? `${file.slice(0, 15)}…` : file
-        buttons.push(pill(short, source === url, () => save({ avatar: { source: url } }), busy))
-      }
-      return react.createElement('div', { key: 'avatar-sources', className: 'mia-picker' }, buttons)
-    }
+    /** 皮肤选项表（与 lib/config.js 的 SKINS 一致；bundle 不能 import，两侧靠 host 白名单把关）。 */
+    const SKIN_OPTIONS = [
+      { id: 'pure', label: '纯净' },
+      { id: 'zafkiel', label: '刻刻帝' },
+      { id: 'kurkuriel', label: '狂狂帝' },
+    ]
 
-    /** 壁纸图源选择器：内置渐变 + 本地文件 + 留空（无壁纸）。
-     * 注意 local 清单由组件经参数传入（本函数在 factory 作用域，看不到组件的 state）。 */
-    function reactElementWallpaperPicker(source, localList, busy, save) {
-      const buttons = [pill('无', source === '', () => save({ wallpaper: { source: '' } }), busy)]
+    /**
+     * 壁纸图源选项表：无 / 内置渐变 / 本地文件。
+     * 本地文件名可能很长——选择丸截断显示，title 与 Menu 行给全名。
+     */
+    function wallpaperSourceOptions(localList) {
+      const options = [{ id: '', label: '无壁纸', title: '不使用壁纸' }]
       for (const { id, label } of BUILTIN_WALLPAPERS) {
-        buttons.push(pill(`内置 · ${label}`, source === `builtin:${id}`, () => save({ wallpaper: { source: `builtin:${id}` } }), busy))
+        options.push({ id: `builtin:${id}`, label: `内置 · ${label}` })
       }
       for (const file of localList) {
-        const short = file.length > 14 ? `${file.slice(0, 11)}…` : file
-        const url = `/appearance/wallpaper/local/${encodeURIComponent(file)}`
-        buttons.push(pill(short, source === url, () => save({ wallpaper: { source: url } }), busy))
+        options.push({
+          id: `/appearance/wallpaper/local/${encodeURIComponent(file)}`,
+          label: file,
+          title: file,
+        })
       }
-      return react.createElement('div', { key: 'wallpaper-sources', className: 'mia-picker' }, buttons)
+      return options
     }
 
-    /** 皮肤选择器（M2 S4 起三皮肤全部可选）。 */
-    function reactElementSkinPicker(skin, busy, save) {
-      const options = [
-        { id: 'pure', label: '纯净' },
-        { id: 'zafkiel', label: '刻刻帝' },
-        { id: 'kurkuriel', label: '狂狂帝' },
-      ]
-      return react.createElement('div', { key: 'skins', className: 'mia-picker' }, options.map(option =>
-        pill(
-          option.label,
-          skin === option.id,
-          () => save({ theme: { skin: option.id } }),
-          busy,
-        )))
+    /**
+     * 应用图标的「我的上传」选项表：不使用 + 目录里的用户文件。
+     * 值走 `avatar.source` 的跨线契约形态（本线头像路由下的白名单路径）。
+     */
+    function avatarSourceOptions(myFiles) {
+      const options = [{ id: '', label: '不使用', title: '回退出厂图标' }]
+      for (const file of myFiles) {
+        options.push({
+          id: `${AVATAR_PREFIX}${encodeURIComponent(file)}`,
+          label: file,
+          title: file,
+        })
+      }
+      return options
     }
 
-    /** 表面不透明度四旋钮（2×2 网格：侧栏 / 会话 / 输入框 / 浮层）。 */
+    /**
+     * M3 / M4 占位（V1）：官方 models「添加」先例的 dashed 卡规格
+     * （1px dashed border-l3 / r16 / 12px 两级文字）——「将来这里有东西」的官方说法。
+     * 不可交互（不做假动作）。
+     */
+    function dashedPlaceholder(title, desc) {
+      return react.createElement('div', { key: `ph-${title}`, className: 'mia-dashed' }, [
+        react.createElement('div', { key: 't', className: 'mia-dashedTitle' }, title),
+        react.createElement('div', { key: 'd', className: 'mia-dashedDesc' }, desc),
+      ])
+    }
+
+    /** 表面不透明度四旋钮（V1：官方 models 双列字段网格规格，标签 12px/18/500）。 */
     function reactElementSurfaceKnobs(surface, busy, save) {
       const knobs = [
         { key: 'sidebar', label: '侧栏' },
@@ -763,7 +782,7 @@ window.__ModuleLoader__.load({
       ]
       const cells = []
       for (const knob of knobs) {
-        cells.push(react.createElement('span', { key: `l-${knob.key}`, className: 'mia-knobLabel' }, knob.label))
+        cells.push(react.createElement('span', { key: `l-${knob.key}`, className: 'mia-fieldLabel' }, knob.label))
         cells.push(react.createElement('span', { key: `s-${knob.key}` }, stepper(
           surface[knob.key], 0, 100, 10,
           v => save({ wallpaper: { surface: { [knob.key]: v } } }),
@@ -771,7 +790,7 @@ window.__ModuleLoader__.load({
           `${knob.label}不透明度`,
         )))
       }
-      return react.createElement('div', { key: 'surface-knobs', className: 'mia-knobGrid' }, cells)
+      return react.createElement('div', { key: 'surface-knobs', className: 'mia-fieldGrid' }, cells)
     }
 
     module.exports.inject = ['slots']
