@@ -9,25 +9,35 @@
  * `failed to import loader entry …: pct is not defined`，且 V8 报错行号落在
  * 模板字符串内部、极难定位。
  *
- * 本脚本做两件事，任一失败即 exit 1：
+ * 本脚本做三件事（外加 --sync 时的第四项），任一失败即 exit 1：
  *  1) 语法解析：把文件当脚本 eval（不执行 factory），抓 SyntaxError。
  *  2) 真实工厂执行：喂一个最简 react stub，capture factory 抛出的
  *     ReferenceError / TypeError（能在 import 期暴露的错）。
  *  3) 模板字符串平衡：逐字符状态机（识别 `\`` 与 `\${`），报告字面量内部的
  *     裸反引号行号——即历史事故的根因模式。
+ *  --sync 时另做 4) 安装点核对（见下）。
  *
  * 用法：
  *   node verify-client-bundle.mjs <client.js> [...更多 client.js]
- *   node verify-client-bundle.mjs --sync   # 额外把源码同步到 profile 安装副本
+ *   node verify-client-bundle.mjs <client.js> --sync
+ *     --sync：逐个核对各 DSH profile 的安装点。link: 装法（本线 2026-09-26 起）
+ *     下源码即真源 —— 安装点是链接且指回本线即为一致，无需拷贝；若遇到历史遗留的
+ *     file: 普通拷贝副本（v0.5.2 及以前的装法），则按旧行为覆盖后提示改用 link:。
  */
 import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
 import os from 'os';
+import { fileURLToPath } from 'url';
 
 const args = process.argv.slice(2);
 const doSync = args.includes('--sync');
 const files = args.filter((a) => !a.startsWith('--'));
+
+/** 本插件（本线）根目录，用于核对 profile 安装点的链接指向。 */
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+/** 需要核对的 profile（官方桌面端 / 官方浏览器 GUI / miasaki 桌面壳）。 */
+const PROFILES = ['desktop', 'web', 'miasaki'];
 
 if (files.length === 0) {
   console.log('usage: node verify-client-bundle.mjs <client.js> [...] [--sync]');
@@ -101,35 +111,6 @@ function scanTemplateLiterals(src) {
   return offenders;
 }
 
-// 简化版：直接找「CSS 模板字面量内部的奇数反引号」——用 vm 解析兜底更可靠，
-// 故 scanTemplateLiterals 仅作辅助提示；主判据是 vm 执行。
-function reportTemplateHint(src) {
-  const lines = src.split('\n');
-  const inTpl = [];
-  let state = 'code', tplOpenLine = 0;
-  for (let li = 0; li < lines.length; li++) {
-    const l = lines[li];
-    for (let j = 0; j < l.length; j++) {
-      const c = l[j], n = l[j + 1];
-      if (state === 'code') {
-        if (c === '/' && n === '/') break;
-        if (c === '/' && n === '*') { state = 'block'; j++; continue; }
-        if (c === '"' || c === "'") { /* 行内简单跳过 */ }
-        if (c === '`') { state = 'tpl'; tplOpenLine = li + 1; }
-      } else if (state === 'tpl') {
-        if (c === '\\') { j++; continue; }
-        if (c === '`') { state = 'code'; }
-        else if (c === '`') { state = 'code'; }
-      } else if (state === 'block') {
-        if (c === '*' && n === '/') { state = 'code'; j++; }
-      }
-    }
-    if (state === 'tpl' && li + 1 > tplOpenLine) {
-      // 若本行在模板内又出现反引号（已由内层处理），记录可疑
-    }
-  }
-}
-
 let failed = 0;
 for (const file of files) {
   console.log('=== ' + file + ' ===');
@@ -195,18 +176,51 @@ for (const file of files) {
     failed++;
   }
 
-  // 3) 同步到 profile 安装副本
+  // 3) 模板字符串平衡（静态扫描）：历史事故的根因模式 —— CSS 注释里的反引号在模板
+  //    字面量内部提前闭合。vm 执行能抓到多数后果，但闭合后语法恰好合法时会漏，
+  //    故保留独立静态防线（2026-09-26 接线：此前该扫描器写好但从未被调用）。
+  const offenders = scanTemplateLiterals(src);
+  if (offenders.length === 0) {
+    console.log('  [OK]   模板字面量平衡（无裸反引号 / 未闭合字面量）');
+  } else {
+    for (const offender of offenders) {
+      console.log('  [FAIL] 模板字面量第 ' + offender.line + ' 行：' + offender.reason);
+    }
+    failed++;
+  }
+
+  // 4) 安装点核对
+  //    link: 装法下安装点是指回本线的目录链接 —— 源码即真源，只需核对指向；
+  //    历史遗留的 file: 普通拷贝副本按旧行为覆盖，并提示改用 link:。
   if (doSync && runtimeOk) {
-    const installed = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-token-monitor', 'lib', path.basename(file));
-    if (fs.existsSync(path.dirname(installed))) {
+    const base = path.basename(file);
+    for (const profile of PROFILES) {
+      const target = path.join(os.homedir(), '.dsh', 'profiles', profile, 'node_modules', 'dsh-token-monitor');
+      if (!fs.existsSync(target)) {
+        console.log('  [SKIP] ' + profile + ' profile 未安装本插件');
+        continue;
+      }
+      let isLink = false;
+      try { isLink = fs.lstatSync(target).isSymbolicLink(); } catch { isLink = false; }
+      if (isLink) {
+        let real = '';
+        try { real = fs.realpathSync(target); } catch { real = ''; }
+        const same = !!real && path.resolve(real).toLowerCase() === PLUGIN_ROOT.toLowerCase();
+        console.log('  [' + (same ? 'OK' : 'FAIL') + ']   ' + profile + ' profile 安装点 → ' + real +
+          (same ? '（link 指回本线，源码即真源）' : '（未指回本线：' + PLUGIN_ROOT + '）'));
+        if (!same) failed++;
+        continue;
+      }
+      const installed = path.join(target, 'lib', base);
+      if (!fs.existsSync(path.dirname(installed))) {
+        console.log('  [SKIP] ' + profile + ' profile 安装点结构异常：' + path.dirname(installed));
+        continue;
+      }
       fs.copyFileSync(file, installed);
-      const a = fs.readFileSync(file);
-      const b = fs.readFileSync(installed);
-      const same = Buffer.compare(a, b) === 0;
-      console.log('  [' + (same ? 'OK' : 'FAIL') + ']   已同步安装副本：' + installed);
+      const same = Buffer.compare(fs.readFileSync(file), fs.readFileSync(installed)) === 0;
+      console.log('  [' + (same ? 'OK' : 'FAIL') + ']   ' + profile + ' profile 是 file: 拷贝副本，已覆盖：' + installed);
+      console.log('         ↑ 建议改用 link: 装法（README「安装」段）—— 拷贝副本会与源码静默漂移');
       if (!same) failed++;
-    } else {
-      console.log('  [SKIP] 安装副本目录不存在：' + path.dirname(installed));
     }
   }
 }

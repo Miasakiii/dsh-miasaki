@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 七线统一静态回归入口（L0 静态检查 + L1 单线单测）。
+// 八线统一静态回归入口（L0 静态检查 + L1 单线单测）。
 //
 // 只跑「无外部依赖、可在任意机器复现」的检查：语法、单测、总线校验、令牌漂移、
 // 运行时补丁离线自证。需要运行中的 DSH host 或桌面壳的实机项（L2 插件加载 /
@@ -7,9 +7,9 @@
 // dsh-miasaki-shared-docs/cross/smoke-test-matrix.md。
 //
 // 用法：
-//   node scripts/verify-all.mjs                      # 全部七线
+//   node scripts/verify-all.mjs                      # 全部八线
 //   node scripts/verify-all.mjs dual-model           # 只跑指定线
-//                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance）
+//                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage）
 //
 // 实现注记：子进程一律 stdio: 'inherit'，不做管道捕获——受限沙箱下捕获另一个
 // 程序的 stdio 会以 EPERM 失败，而 inherit 不会。因此本脚本以退出码判定成败，
@@ -22,7 +22,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance']
+const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance', 'usage']
 
 /** Run one command, inheriting stdio; resolves to the exit code. */
 function run(cmd, args, cwd) {
@@ -195,6 +195,18 @@ function planDesktop() {
     args: [join(dir, 'themes', 'test', 'hash-fields.test.js')],
     cwd: dir,
   })
+  // 2026-09-26「一直在刷新」修复 P3：`syncHash` 每 1.5s 被 05-sensors 的状态扫描触发，
+  // 而 pet-panel 的心跳时间戳（petts）每轮都是新值 —— 旧实现无条件 replaceState，壳侧
+  // 因此每轮都判为「fragment 变化」并重设桌宠（pet.log 实测 1.32 行/秒 × 5 小时 =
+  // 156945 行 / 4.7MB）。闸门钉住判重的**两侧**：逐字节一致时一次都不写；任何真字段
+  // （含心跳推进）变化时必须照写 —— 防判重退化成「永不写」。
+  checks.push({
+    line: 'desktop',
+    name: 'test hash-sync (syncHash 写入判重)',
+    cmd: process.execPath,
+    args: [join(dir, 'themes', 'test', 'hash-sync.test.js')],
+    cwd: dir,
+  })
   // W1（2026-09-25）桌面壳↔渲染层契约 v1：`window.miasakiDesktop` 给七线插件一个
   // 有版本号、可探测、可降级的能力面（对齐官方 dshDesktop 的 frame 降级语义）。闸门钉住
   // 三条纪律：子 frame 只给空壳、能力表与暴露面一致、契约内不得开写通道（否则立刻造出
@@ -342,6 +354,21 @@ function planDesktop() {
       cwd: join(dir, 'plugins/dsh-free-model-pool'),
     })
   }
+  // 会话日志入口迁移（plugins/dsh-session-log-move，2026-09-26 纳入）：0.1.7 起槽声明
+  // 随 entry 加载（dsh-client-ui-slots 的 register 要求 spec 已在场），要注册
+  // conversation.session.header.utilities 就必须在 dsh.client.inject 里声明承载它的
+  // entry —— 漏了会让 client 半整条激活失败（`slot … is not declared`，插件在 UI 上
+  // 静默消失，只在 console 留一行）。契约测试钉住声明本身 + 日志分级 + 重试收手条件。
+  for (const entry of ['lib/index.js', 'lib/client.js']) {
+    checks.push({ line: 'desktop', name: `syntax plugins/dsh-session-log-move/${entry}`, cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-session-log-move', entry)], cwd: dir })
+  }
+  checks.push({
+    line: 'desktop',
+    name: 'test session-log-move (槽声明契约 + 日志分级)',
+    cmd: process.execPath,
+    args: [join(dir, 'plugins/dsh-session-log-move/test/contract.test.js')],
+    cwd: join(dir, 'plugins/dsh-session-log-move'),
+  })
   // Rust 侧单测（pulse stale 语义 + 立绘回落链）。cargo 常不在 PATH，回落到
   // rustup 默认安装位置；找不到时跳过而非报失败——非 Rust 环境仍应能跑完前几项。
   const cargo = cargoBin()
@@ -407,6 +434,18 @@ async function planAppearance() {
   checks.push({ line: 'appearance', name: 'derive-skins --check', cmd: process.execPath, args: ['scripts/derive-skins.mjs', '--check'], cwd: dir })
 }
 
+function planUsage() {
+  const dir = join(ROOT, 'dsh-miasaki-usage')
+  // 本线（原 desktop 线内置插件 dsh-token-monitor，2026-09-26 迁出独立成线）的 L0/L1：
+  // host 半语法 + client bundle 加载前自检。后者是本线的关键闸门——它把 client.js 当脚本
+  // 真实执行并喂 react stub，能抓出「CSS 模板字符串被反引号提前闭合」那类**整包加载失败**
+  // （2026-09-10 事故：报错落在 CSS 注释行、裸标识符看不懂）。都不碰 DSH 运行时，
+  // 任意机器可复现；实机项（用量 Tab / 侧栏入口 / 账本续写）见 smoke-test-matrix.md。
+  checks.push({ line: 'usage', name: 'syntax lib/index.js', cmd: process.execPath, args: ['--check', join(dir, 'lib/index.js')], cwd: dir })
+  checks.push({ line: 'usage', name: 'syntax scripts/dedupe-usage-ledger.mjs', cmd: process.execPath, args: ['--check', join(dir, 'scripts/dedupe-usage-ledger.mjs')], cwd: dir })
+  checks.push({ line: 'usage', name: 'verify-client-bundle (client 半装载契约)', cmd: process.execPath, args: [join(dir, 'scripts/verify-client-bundle.mjs'), join(dir, 'lib/client.js')], cwd: dir })
+}
+
 /** 定位 cargo：优先 CARGO_HOME，其次 rustup 默认安装位置（PATH 里常没有）。 */function cargoBin() {
   const exe = process.platform === 'win32' ? 'cargo.exe' : 'cargo'
   const home = process.env.CARGO_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.cargo')
@@ -430,6 +469,7 @@ if (selected.includes('desktop')) planDesktop()
 if (selected.includes('ssh')) await planSsh()
 if (selected.includes('dual-model')) await planDualModel()
 if (selected.includes('appearance')) await planAppearance()
+if (selected.includes('usage')) planUsage()
 
 console.log(`[verify-all] ${selected.join(' / ')} — ${checks.length} 项检查\n`)
 

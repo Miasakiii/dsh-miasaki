@@ -14,7 +14,12 @@
  * 用法：
  *   node dedupe-usage-ledger.mjs                 # 预演（默认，只打印不写盘）
  *   node dedupe-usage-ledger.mjs --apply         # 执行（先自动备份 .bak-<时间戳>）
- *   node dedupe-usage-ledger.mjs --file <path>   # 指定账本（默认宿主数据目录）
+ *   node dedupe-usage-ledger.mjs --file <path>   # 指定账本文件
+ *   node dedupe-usage-ledger.mjs --profile <名>  # 指定 profile 分区（默认 miasaki）
+ *
+ * 账本自 2026-09-26 起**按 profile 分区**（官方桌面端只记官方消耗），路径为
+ * `~/.dsh/plugins-data/dsh-token-monitor/<profile>/usage-log.jsonl`；分区之前是全局单文件，
+ * 那份历史归在 `miasaki` 分区，故本脚本默认作用于它。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -23,9 +28,11 @@ import path from 'node:path';
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
 const fileArg = args.indexOf('--file');
+const profArg = args.indexOf('--profile');
+const PROFILE = profArg >= 0 && args[profArg + 1] ? args[profArg + 1] : 'miasaki';
 const FILE = fileArg >= 0 && args[fileArg + 1]
   ? path.resolve(args[fileArg + 1])
-  : path.join(os.homedir(), '.dsh', 'plugins-data', 'dsh-token-monitor', 'usage-log.jsonl');
+  : path.join(os.homedir(), '.dsh', 'plugins-data', 'dsh-token-monitor', PROFILE, 'usage-log.jsonl');
 
 /** 把账本行解析为 {use[], spanRows[]}，坏行计数但不丢弃（原样保留）。 */
 function parse(raw) {

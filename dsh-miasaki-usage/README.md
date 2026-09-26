@@ -1,13 +1,35 @@
-## DSH 插件：Token 用量监控（`plugins/dsh-token-monitor/`）
+# dsh-miasaki-usage — Token 用量统计（DSH web 插件 `dsh-token-monitor`）
+
+> **第八线**：2026-09-26 由 `dsh-miasaki-desktop/plugins/dsh-token-monitor/` 迁出、独立成线
+> （迁移记录与理由见 `design/CHANGELOG.md`）。本线只装一个包：`dsh-token-monitor`。
+>
+> 「干净移植到官方 DSH」由两件事合起来构成：
+>
+> 1. **接入干净** —— 本仓唯一「纯官方契约、零 miasaki 耦合」的插件：host 半只用官方
+>    `webServer` 服务 + `llm/stream` / `tools/result` 事件 + `sessionProjections` /
+>    `tokenMeter` / `sessionQuery` 投影；client 半只用官方三个槽位
+>    （`conversation.view` / `sidebar.footer.action` / `shell.overlay`）与
+>    `window.__ModuleLoader__`。不碰主题、不碰 desktop 的 `patches/`、不依赖任何其它
+>    miasaki 插件 —— 所以官方桌面端（`~/.dsh/profiles/desktop`）隔离成纯净官方版之后，
+>    只挂回这一条即可。
+> 2. **统计干净** —— **账本按 profile 分区**：官方桌面端只记载官方自己这个实例的消耗，
+>    不会把自制壳（`miasaki` profile）或浏览器 GUI（`web` profile）的用量算进来。
+>    分区之前三个 profile 混写同一个 `usage-log.jsonl`，官方侧的「今日用量 / 热力图 /
+>    趋势 / 模型占比」里一直掺着自制环境的消耗 —— 这正是本次要修的东西。见下文
+>    「口径隔离」。
+>
+> **包名保持 `dsh-token-monitor` 不改**（迁移只为解耦与分区，不做重命名）：这个字符串同时是
+> 插件 id、client bundle entry id、HTTP 路由前缀与数据目录名 —— 改名等于让历史账本
+> 「搬家」、历史统计断档。
 
 **一刀切信息架构（v0.4.0）**：会话内的一切 → 会话视图「用量」Tab；跨会话的一切 →
-左侧边栏脚部「用量统计」入口的全局浮窗。两个视图互不掺和。同一插件同一账本，
-client 半注册三个槽位条目：
+左侧边栏脚部「用量统计」入口的全局浮窗。两个视图互不掺和。同一插件同一账本
+（该账本**按 profile 分区**，见下文「口径隔离」），client 半注册三个槽位条目：
 
 > **v0.5.0**：全局浮窗内的「会话用量 Top N」升级为「**会话活跃分布**」，并把会话
 > 身份（标题 / 工作目录）从会话日志折叠出来——修的是"整列 `session-<uuid>`、认不出
 > 是哪个会话"。**会话「用量」Tab 无改动**。设计依据与根因见
-> `../../design/usage-stats-redesign.md` §12。
+> `design/usage-stats-redesign.md` §12。
 >
 > **v0.5.1**：①修掉 span 快照在 host 退出时被重复回写（本机实测账本 19% 是纯冗余，
 > 详见下文「账本纪律」）；②分布条改柱状、修正口径标注、加行分隔线等显示优化。
@@ -17,6 +39,10 @@ client 半注册三个槽位条目：
 > 轮询，手动重拉须做强反馈才可感知：图标保证 ≥0.5s 旋转 + 头部追加「更新于
 > HH:MM:SS」。布局注意：把两个钮推向右端的 `margin-left:auto` 必须挂在**刷新钮**
 > 上（挂关闭钮会把刷新钮一起留在左端、两者被隔开）。
+>
+> **v0.6.0（2026-09-26）**：**账本按 profile 分区**（官方桌面端只记载官方消耗，不与自制壳 /
+> 浏览器 GUI 混账，见下文「口径隔离」）；同批把插件由 desktop 线迁出、独立成第八线，
+> profile 装法 `file:` → `link:`，`--sync` 语义改为核对安装点。
 
 | 槽位 | id | 职责 | 轮询 |
 |---|---|---|---|
@@ -57,7 +83,9 @@ renderSlot 输出 Fragment 无包裹层，本元素即 flex 子项；收起态 3
   **380 天**，启动只载窗口内尾部、文件超 8MB 只解析尾 8MB）；条目另带 `calls`
   （当日实报次数 ≈ 轮消息）与 `type:'span'` 会话活跃跨度快照（min first / max last
   合并，推进 ≥60s 才落盘，支撑「最长聊天时长」）。限额配置存 `config.json`。
-  数据目录优先宿主插件数据目录服务，否则 `~/.dsh/plugins-data/dsh-token-monitor/`。
+  数据目录优先宿主插件数据目录服务，否则 `~/.dsh/plugins-data/dsh-token-monitor/`；
+  **其下再按 profile 分区**（`<dataDir>/<profile>/`，见上文「口径隔离」）——
+  官方桌面端只记官方消耗。
 - **会话身份折叠**（v0.5.0 新增，全局浮窗会话排行的标题来源）：账本只存
   `sessionId`，而 `session-<uuid>` 排成一列等于没有信息；且 `ctx.sessions.get`
   是**内存 store**，只认当前活着的会话，已归档会话一律 `undefined`（旧实现在这里
@@ -86,7 +114,7 @@ span 实测只占账本体积 **1.1%**（76 行 / 12 KB）、实际写入间隔�
 （「最长聊天时长」），调大省不到 1% —— 故维持。增长主因是**用量行**：`flushLedger`
 每 5s 把 `pending` 每个键写成一行，活跃时段约 8 行/分钟；但当前 1.0 MB / 30 天，
 离 `TAIL_BYTES = 8MB` 的启动解析窗口尚远，也维持 5s。极端情形（长时满负荷会话）
-与逼近 8MB 时的处置见 `../../design/usage-stats-redesign.md` §13.3。
+与逼近 8MB 时的处置见 `design/usage-stats-redesign.md` §13.3。
 
 通信（host 半 **必须 `inject: ['webServer']` 声明等待**，否则插件行激活时
 `ctx.get('webServer')` 可能尚不可用而静默跳过，表现为路由 404；`{ok, error}` 包装
@@ -103,15 +131,15 @@ span 实测只占账本体积 **1.1%**（76 行 / 12 KB）、实际写入间隔�
   `agentPreset` / `titleSource`；`byCwd` = 第二维度，按工作目录把同项目会话叠加
   （`rows[]` / `unresolved` / `matched` / `totalAll` / `callsAll` / `limit`）；
   两个维度的下发上限均为 Top 50，排序/搜索/条数/维度切换由客户端在其上做）、
-  `since`、限额配置，全局浮窗 5 秒轮询；
+  `since`、限额配置、**当前 profile 名 `profile`**（口径可见性），全局浮窗 5 秒轮询；
 - `GET /dsh-token-monitor/heatmap`——稀疏每日账单 `{date, total, calls}`（热力图
   数据源，仅含有活动的日子，空日由客户端按日历补齐），浮窗开启期间 60 秒轮询；
 - `GET|POST /dsh-token-monitor/config`——读取 / 设置 `{dailyTokenLimit: number|null}`
-  （正数 ≤1e12 或 null）；
-- `POST /dsh-token-monitor/reset`——清空跨会话账本（内存聚合 + `usage-log.jsonl`，
-  限额配置保留，不可恢复）。启动载入磁盘存量只进内存聚合、绝不回写（回写会使
-  账本每重启翻倍，v0.3.1 修复）；历史失真数据用此路由（或浮窗「重置账本」按钮）
-  清零重计。
+  （正数 ≤1e12 或 null）；配置落在**本 profile 分区**；
+- `POST /dsh-token-monitor/reset`——清空跨会话账本（内存聚合 + **本 profile 分区**的
+  `usage-log.jsonl`，限额配置保留，不可恢复）。启动载入磁盘存量只进内存聚合、绝不回写
+  （回写会使账本每重启翻倍，v0.3.1 修复）；历史失真数据用此路由（或浮窗「重置账本」
+  按钮）清零重计。
 - **旧 `GET /dsh-token-monitor/summary` 于 v0.4.0 退役移除**（插件自用、无外部
   消费者；职责拆入 `/session` + `/global`）。
 
@@ -212,18 +240,63 @@ client 半仍为手写 `window.__ModuleLoader__.load` bundle：无 JSX、无图�
 的拖拽调节——手柄挂在会话根、输入框挂在滚动容器层，均在视图区之外，故以
 `:has(.tokmn-pane)` 作用域 CSS 实现，样式随用量视图挂载/卸载、切走即恢复。
 
-安装：同其它 profile bundle —— `%USERPROFILE%\.dsh\profiles\web\package.json` 的
-`dependencies` + `dsh.profile.bundles` 加 `dsh-token-monitor`（file: 依赖），profile 目录
-`pnpm install` 后 **host 重启**生效（web bundle 图重建；动态插件版本的重复注册已停止，
-避免同 id Tab 冲突）。
+## 口径隔离：账本按 profile 分区（「统计要干净」）
 
-**改动源码后的同步与重启顺序（v0.4.0 目检踩坑，顺序错了会出新旧混搭）**：
-file: 依赖在 profile 顶层 node_modules 是普通拷贝，且 `pnpm install` 对其是
-no-op（lockfile directory resolution 无内容指纹，`--force` 亦无效）——小改动直接
-`cp` 覆盖顶层对应文件（或删掉顶层目录再 `pnpm install` 重拷）。**host 半在 boot 时
-import、client 半按请求读盘**：必须等拷贝动作完全落盘后再重启 host，否则会出现
-「新 client + 旧 host 半」——按钮/浮窗都在但 `/session`、`/global` 404（host 路由
-未注册）。
+**问题**：账本原先落在**全局单文件** `~/.dsh/plugins-data/dsh-token-monitor/usage-log.jsonl`，
+所有 profile 的 host 都往里写 —— 官方桌面端（`desktop`）、自制壳（`miasaki`）、浏览器 GUI
+（`web`）的消耗混在一本账里。官方桌面端的「今日用量 / 热力图 / 趋势 / 模型占比」于是永远掺着
+自制环境的消耗，反向同理。
+
+**修法**：`resolveProfileName()` 取当前 profile 名（宿主 `profileContext` 服务的 `name` 字段
+→ 回落 `process.env.DSH_PROFILE` → 再回落 `default`），账本与限额配置一起落到分区目录：
+
+```
+~/.dsh/plugins-data/dsh-token-monitor/<profile>/usage-log.jsonl
+~/.dsh/plugins-data/dsh-token-monitor/<profile>/config.json
+```
+
+即**一个 profile 一本账**。日限额跟着账本走、两者同住一个分区，限额进度条才自洽
+（账本隔离而限额共享的话，进度条分母就对不上了）。结果：官方桌面端的统计只记载官方消耗；
+自制壳的历史仍在 `miasaki/` 分区里，一个数字都不丢。
+
+**历史归位（一次性）**：分区之前那份全局账本是混合账，**无法事后拆分归属**。插件在
+`miasaki` 分区首次启动、且该分区还没有账本时，把全局文件（连同 `config.json` 与
+`.bak-*` 备份）整体搬进 `miasaki/`；官方桌面端与 web 侧从零开始累计 —— 「只记官方消耗」
+在物理上没有别的实现方式。想把这段历史改判给其它 profile：停掉所有 host，把 `miasaki/`
+目录改名即可。
+
+**降级链**：`profileContext` → `DSH_PROFILE` → `default`。三档都拿不到时退化为旧的
+「全局单账本」语义（**不丢数据，只是不隔离**），因此本改造对宿主契约的依赖是软依赖。
+
+**可见性**：全局浮窗内容顶部显示「口径：本页只统计当前 profile（xxx）的消耗 · 与其它
+profile 的账本完全隔离」，`GET /dsh-token-monitor/global` 响应也带 `profile` 字段 ——
+分区后官方桌面端首次打开是空账本，这行提示让「空」是预期而不是故障。
+
+## 安装（`link:` 到目标 profile）
+
+任意官方 DSH profile 都能装它 —— 官方**桌面端**用 `~/.dsh/profiles/desktop`，浏览器 GUI 用
+`~/.dsh/profiles/web`，miasaki 桌面壳用 `~/.dsh/profiles/miasaki`。以官方桌面端为例，
+`%USERPROFILE%\.dsh\profiles\desktop\package.json` 加两处：
+
+```json
+"dependencies": {
+  "dsh-token-monitor": "link:C:/Users/Asakii/Desktop/dsh-miasaki/dsh-miasaki-usage"
+},
+"dsh": { "profile": { "bundles": [ "@deepseek-ai/dsh-base", "…", "dsh-token-monitor" ] } }
+```
+
+profile 目录跑 `pnpm install`（或等价地在 `node_modules/` 建同名目录链接），然后 **host 重启**
+生效（bundle 图重建）。bundle 列表是唯一的加载口径 —— `node_modules` 里留着但不在
+`bundles` 里的插件不会被加载，所以**隔离的官方桌面端可以只装这一条**，无需引入任何其它
+miasaki 插件。
+
+**为什么用 `link:` 而不是 `file:`（v0.4.0–v0.5.2 旧装法，踩过坑）**：`file:` 依赖在 profile
+顶层 `node_modules` 是**普通拷贝**，且 `pnpm install` 对其是 no-op（lockfile 的 directory
+resolution 不带内容指纹，`--force` 也无效）——改源码必须手工 `cp`。而 **host 半在 boot 时
+import、client 半按请求读盘**，拷贝没落盘就重启会得到「新 client + 旧 host 半」：按钮 / 浮窗
+都在，但 `/session`、`/global` 404（host 路由未注册）。2026-09-26 迁移时实测旧副本的
+`client.js` 已落后源码 262 字节，正是这个机制的产物。改 `link:` 后**源码即真源**，无副本
+漂移，改完直接重启 host。
 
 **排障：`failed to import loader entry …: X is not defined`（v0.5.1 事故）**：
 症状是插件整块加载失败、报一个**看不懂的裸标识符**，且 V8 给出的行号**落在 CSS
@@ -233,11 +306,14 @@ import、client 半按请求读盘**：必须等拷贝动作完全落盘后再�
 引用类名不要加反引号**（直接写 `.tokmn-pct` 或用中文引号）。定位与自检：
 
 ```bash
-# 加载前自检（语法 + 真实 factory 执行 + 可选的安装副本同步）
-node dsh-miasaki-desktop/plugins/dsh-token-monitor/scripts/verify-client-bundle.mjs \
-  dsh-miasaki-desktop/plugins/dsh-token-monitor/lib/client.js --sync
+# 加载前自检（语法 + 真实 factory 执行 + 模板字面量平衡；加 --sync 时顺带核对各 profile 安装点）
+node dsh-miasaki-usage/scripts/verify-client-bundle.mjs \
+  dsh-miasaki-usage/lib/client.js --sync
 ```
 
 脚本在**修复前**会精确报出 `ReferenceError: pct is not defined at …client.js:65:46`，
 修复后显示 `[OK] factory 执行通过`；改动 client 半后建议先过一遍再重启 host。
+`--sync` 在 `link:` 装法下的语义已改为**核对**：逐个 profile 检查
+`node_modules/dsh-token-monitor` 是否指向本线源码（是链接即为一致），若遇到历史遗留的
+`file:` 普通拷贝副本则按旧行为覆盖并给出「建议改 link」的提示。
 

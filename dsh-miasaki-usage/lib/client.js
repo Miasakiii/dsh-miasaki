@@ -1064,6 +1064,13 @@ window.__ModuleLoader__.load({
 			return react.createElement("div", { className: "tokmn-ov-body" },
 				error ? react.createElement("p", { style: { color: "var(--dsw-alias-state-error-primary)", fontSize: 12 } }, "加载失败: " + error) : null,
 
+				// 口径隔离标记（2026-09-26「统计要干净」）：账本按 profile 分区，本页只统计
+				// 当前 profile 的消耗 —— 官方桌面端与自制壳 / 浏览器 GUI 各记各的账。
+				// 分区后首次打开本来会是空的（没有历史可混），这行让"空"是预期而不是故障。
+				react.createElement("p", { className: "tokmn-meta", style: { margin: "0 0 10px" } },
+					"口径：本页只统计当前 profile" + (data && data.profile ? "（" + data.profile + "）" : "") +
+					"的消耗 · 与其它 profile 的账本完全隔离"),
+
 				// 总览六卡
 				react.createElement("div", { className: "tokmn-stats6" },
 					stat6(fmtCn(overview.totalTokens), "累计 Token 数", full(overview.totalTokens) + " tokens"),
@@ -1265,7 +1272,7 @@ window.__ModuleLoader__.load({
 
 				react.createElement("p", { className: "tokmn-foot" },
 					(data && data.note) ||
-					"全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按各会话自身峰值分档，标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，取不到时降级显示截断 ID）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口）。"));
+					"全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；账本按 profile 分区 —— 本页只统计当前 profile 的消耗，官方桌面端与自制壳 / 浏览器 GUI 各记各的账；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按各会话自身峰值分档，标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，取不到时降级显示截断 ID）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口），同样按 profile 分区。"));
 		}
 
 		/**

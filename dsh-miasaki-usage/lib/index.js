@@ -106,6 +106,28 @@ function resolveDataDir(ctx) {
 	return path.join(os.homedir(), '.dsh', 'plugins-data', name);
 }
 
+/**
+ * 当前 profile 名 —— **账本口径的隔离键**（2026-09-26「统计要干净」）：
+ * 官方桌面端（`desktop`）、自制壳（`miasaki`）、浏览器 GUI（`web`）各记各的账，
+ * 官方桌面端的统计里不会再混进自制壳的消耗。来源优先宿主 `profileContext` 服务
+ * （`profile-boot` 提供，字段 `name`），其次进程环境变量 `DSH_PROFILE`（launcher 注入），
+ * 最后回落 `default`——三档都拿不到时退化为旧的「全局单账本」语义，不会丢数据。
+ */
+function resolveProfileName(ctx) {
+	try {
+		const pc = ctx.get('profileContext');
+		if (pc && typeof pc.name === 'string' && pc.name.trim()) return pc.name.trim();
+	} catch (e) { /* 服务缺席：走环境变量 */ }
+	const env = process.env.DSH_PROFILE;
+	if (typeof env === 'string' && env.trim()) return env.trim();
+	return 'default';
+}
+
+/** profile 名净化成目录名：只留字母数字与 `._-`，其余换 `_`，空则 `default`。 */
+function safeProfileDir(profile) {
+	return String(profile || '').replace(/[^A-Za-z0-9._-]+/g, '_') || 'default';
+}
+
 export function apply(ctx) {
 	const live = { calls: {}, tools: {} };
 	/** sessionId -> {first, last}：本进程内会话活跃跨度（会话页「活跃时长」，实时口径）。 */
@@ -230,8 +252,15 @@ export function apply(ctx) {
 	// ---- 跨会话账本与限额配置 ------------------------------------------
 
 	const dataDir = resolveDataDir(ctx);
-	const ledgerFile = path.join(dataDir, 'usage-log.jsonl');
-	const configFile = path.join(dataDir, 'config.json');
+	/**
+	 * **按 profile 分区**（2026-09-26）：账本与限额同住一个 profile 子目录 ——
+	 * 官方桌面端只记载官方自己这个实例的消耗，自制壳 / 浏览器 GUI 各记各的。
+	 * 分区前是全局单文件，历史归位见 migrateLegacyLedger()。
+	 */
+	const profileName = resolveProfileName(ctx);
+	const profileDir = path.join(dataDir, safeProfileDir(profileName));
+	const ledgerFile = path.join(profileDir, 'usage-log.jsonl');
+	const configFile = path.join(profileDir, 'config.json');
 
 	/** date -> Map("sessionId|provider|model" -> 分项累计)；仅保留 LEDGER_DAYS 天。 */
 	const ledgerDays = new Map();
@@ -834,8 +863,9 @@ export function apply(ctx) {
 			since: ledgerSince || localDate(),
 			config: { dailyTokenLimit: config.dailyTokenLimit },
 			error: ledgerError,
+			profile: profileName,
 			sampledAt: now(),
-			note: '全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按所选行自身峰值分档（按会话看时间跨度天生短，按工作目录看才是同一项目的叠加形态），标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，冷读约 0.3s/会话，命中缓存后零成本；取不到时降级显示截断 ID，不参与目录聚合）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口）。'
+			note: '全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；账本按 profile 分区 —— 本页只统计当前 profile（' + profileName + '）的消耗，官方桌面端与自制壳 / 浏览器 GUI 各记各的账、互不混入；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按所选行自身峰值分档（按会话看时间跨度天生短，按工作目录看才是同一项目的叠加形态），标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，冷读约 0.3s/会话，命中缓存后零成本；取不到时降级显示截断 ID，不参与目录聚合）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口），同样按 profile 分区。'
 		};
 	}
 
@@ -962,8 +992,35 @@ export function apply(ctx) {
 		handler: resetHandler
 	});
 
-	// 账本初始化：建目录 → 载入近 LEDGER_DAYS 天 → 载入限额配置 → 5s 节流落盘。
-	try { fs.mkdirSync(dataDir, { recursive: true }); } catch (e) { ledgerError = String(e && e.message || e); }
+	/**
+	 * 一次性历史归位（2026-09-26 分区改造的配套）：分区之前账本是**全局单文件**
+	 * `<dataDir>/usage-log.jsonl`，desktop / web / miasaki 三个 profile 混写在一起、
+	 * 无法事后拆分归属。分区后它只归**自制环境**（`miasaki` 分区）——官方桌面端必须
+	 * 从零开始，否则历史里混着的自制壳消耗会永久污染「官方消耗」口径。
+	 * 只在 miasaki 分区首次启动、且该分区还没有账本时搬一次；跨卷 / 被占用导致搬不动
+	 * 就留在原地并记 error，不影响新账本从零起算。
+	 * 想把这段历史改判给别的 profile：停掉所有 host，把 `miasaki/` 目录改名即可。
+	 */
+	function migrateLegacyLedger() {
+		try {
+			if (safeProfileDir(profileName) !== 'miasaki') return;
+			if (fs.existsSync(ledgerFile)) return;
+			const legacyLedger = path.join(dataDir, 'usage-log.jsonl');
+			if (!fs.existsSync(legacyLedger)) return;
+			fs.mkdirSync(profileDir, { recursive: true });
+			fs.renameSync(legacyLedger, ledgerFile);
+			const legacyConfig = path.join(dataDir, 'config.json');
+			if (fs.existsSync(legacyConfig) && !fs.existsSync(configFile)) fs.renameSync(legacyConfig, configFile);
+			for (const f of fs.readdirSync(dataDir)) {
+				if (!f.startsWith('usage-log.jsonl.bak-')) continue;
+				try { fs.renameSync(path.join(dataDir, f), path.join(profileDir, f)); } catch (e) { /* 备份搬不动无妨 */ }
+			}
+		} catch (e) { ledgerError = '历史账本归位失败：' + String(e && e.message || e); }
+	}
+
+	// 账本初始化：建目录 →（首次）历史归位 → 载入近 LEDGER_DAYS 天 → 载入限额配置 → 5s 节流落盘。
+	try { fs.mkdirSync(profileDir, { recursive: true }); } catch (e) { ledgerError = String(e && e.message || e); }
+	migrateLegacyLedger();
 	loadLedger();
 	loadConfig();
 	pruneOld();
