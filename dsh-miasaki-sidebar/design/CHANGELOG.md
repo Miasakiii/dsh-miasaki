@@ -2,6 +2,25 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-26（深夜）· 壳时代残留清理 + README 两处自相矛盾订正
+
+仓库级死代码审计后的清理。本线入库文件仅 26 个、壳退役两阶段清理本来做得较彻底，本次只剩三处壳时代/未实施
+功能的残留（合计约 10 行），**均零运行时与测试引用**：
+
+| 项 | 位置 | 判定证据 |
+|---|---|---|
+| `closeNativeDetails()` | `client.js:1405-1411` | 全仓 1 命中＝定义本身。它是退役自研壳「打开右栏即收官方详情列」的让步逻辑，且依赖的 `ctx.layout` 并未出现在 `module.exports.inject`（`client.js:1398` = `['slots','sessions','sidebarRightTabs']`）⇒ 即使补上调用也会被自身 try/catch 静默吞掉 |
+| `bottomPanel.pushInjected` | `client.js:1150` | 只写不读；其配套的「推挤能力检测」已被 `client.js:1528` 的纯 CSS 常驻规则取代 |
+| `.dsh-sidebar-menuicon` 两条 CSS | `client.js:1437-1438` | JS 侧零引用（66 个类 token 中唯一反查为 0 的）；对应从未实现的「外部程序」菜单图标 |
+
+**README 订正两处**（文档路径被 `index.js:488` 的 `verifyDocSync` 硬编码为「改代码必须同批改文档」的判据，
+`test/review-data.test.js:82` 逐字断言，故只改措辞、不改文件名）：
+- `README.md:104` 把 `terminal-hub.test.js` 写成「单会话语义 7 项」，与本文件 `:173` 的「15」自相矛盾 ⇒ 改为 15；
+- `README.md:113` 把 `2026-09-12-rightbar-optimization-plan.md` 标为「未写代码」，而该文档状态行 `:4` 与
+  README `:14-16` 都记「P0/P1/P2 均已实现」⇒ 去掉「未写代码」。
+
+验证：`node scripts/verify-all.mjs sidebar` **10/10 PASS**。
+
 ## 2026-09-25
 
 - **v0.10.0-miasaki.0：右栏终端退役——沿用官方策略，右栏只留「审查」一个 tab 类型（用户拍板）** ——

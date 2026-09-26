@@ -101,7 +101,7 @@ dsh-miasaki-sidebar/
 │   ├── review-view-store.test.js # 审查视图持久化：默认值 / 非法回退 / 订阅通知 / 私有模式降级（源码抽取，6 项）
 │   ├── rightbar-guide.test.js   # 官方右栏 guide 条目契约：title / description 必须是函数（源码抽取，4 项）
 │   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
-│   ├── terminal-hub.test.js     # 内嵌终端 host 半：PTY 枚举纪律 / 回放环 / 一次性 token / 围栏 / 单会话语义（fake pty 注入，7 项）
+│   ├── terminal-hub.test.js     # 内嵌终端 host 半：PTY 枚举纪律 / 回放环 / 一次性 token / 围栏 / 多会话隔离与回收（fake pty 注入，15 项）
 │   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单 / diff 新契约（12 项）
 └── design/
     ├── 2026-09-06-sidebar-roadmap-design.md   # 路线 D 总设计（**§3 壳设计 / §3.2 tab 框架已被 2026-09-10 迁移取代**，§1 红线与 §4–§6 内容设计仍有效）
@@ -110,7 +110,7 @@ dsh-miasaki-sidebar/
     ├── 2026-09-08-sidebar-review-redesign-implementation.md # 审查改版 + 浏览器式标签页实施方案（v0.5.0；标签栏部分随壳退役）
     ├── 2026-09-09-sidebar-launcher-design.md # 标题栏启动器组：外部程序跳转 + 终端展开（内嵌终端面板，M3 立项）
     ├── 2026-09-10-migrate-to-official-rightbar.md # 迁移官方右栏：壳退役映射表 + 官方契约要点 + 丢失能力补偿（当前形态的设计依据）
-    ├── 2026-09-12-rightbar-optimization-plan.md  # **优化规划设计（2026-09-12，未写代码）**：审查基线不一致缺陷 + diff 阅读器重做 + 终端改判右栏内嵌 + 宿主自带 PTY 栈核查 + spike T1–T6
+    ├── 2026-09-12-rightbar-optimization-plan.md  # **优化规划设计（2026-09-12，P0/P1/P2 均已实现；仅右栏 tab 形态于 2026-09-25 退役）**：审查基线不一致缺陷 + diff 阅读器重做 + 终端改判右栏内嵌 + 宿主自带 PTY 栈核查 + spike T1–T6
     ├── 2026-09-12-rightbar-mockup.html           # 上述设计的界面示意（现状 vs 建议，浏览器打开）
     ├── 2026-09-19-terminal-multi-tab-plan.md     # **内嵌终端「标签栏多开」补充设计（2026-09-19，已实施）**：协议 v2 加维 / 单集合纪律 / 每容器独立活动标签 / 最小尺寸仲裁 / 上限 8 / 孤儿会话收口 + 9 项待拍板（已按推荐项实施）
     ├── 2026-09-19-terminal-tabs-mockup.html      # 上述设计的可交互原型（标签栏复刻参考图 + 两形态 + 三主题 + 决策卡，浏览器直接打开）

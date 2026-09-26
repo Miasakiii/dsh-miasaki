@@ -1147,7 +1147,6 @@ window.__ModuleLoader__.load({
       statusText: null,
       statusActs: null,
       listeners: new Set(),
-      pushInjected: false,
       subscribe(listener) { bottomPanel.listeners.add(listener); return () => bottomPanel.listeners.delete(listener) },
       emit() { for (const listener of bottomPanel.listeners) listener() },
 
@@ -1402,14 +1401,6 @@ window.__ModuleLoader__.load({
       if (window.__DSH_SIDEBAR_BOOTED__) return
       window.__DSH_SIDEBAR_BOOTED__ = true
 
-      const closeNativeDetails = () => {
-        // One-way concession: opening the sidebar folds the native details
-        // column so the two right-side consumers never squeeze the center
-        // together (design §3.1.1 constraint 3). Opening details while the
-        // sidebar is open stays allowed — user's call, no interference.
-        try { ctx.layout.closeDetails() } catch { /* root entry 未挂载时 layout 未接线，忽略 */ }
-      }
-
       const style = document.createElement('style')
       // Colors come from DSH alias tokens so the panel follows the three themes
       // (web dark/light + desktop brand themes) without any bridge. Type and
@@ -1434,8 +1425,6 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-menuitem[disabled]{opacity:.45;cursor:not-allowed}`,
         `.dsh-sidebar-menuitem[aria-checked="true"]{font-weight:600}`,
         `.dsh-sidebar-menutick{flex:none;width:12px;font:var(--dsw-font-xxxs-11,11px/14px system-ui)}`,
-        `.dsh-sidebar-menuicon{flex:none;display:flex;color:var(--dsw-alias-label-secondary,#6b7280)}`,
-        `.dsh-sidebar-menuicon svg{width:14px;height:14px}`,
         // 正文容器：不自带 padding（官方右栏的 pane 已有自己的内边距），
         // 只管滚动与字阶。
         `.dsh-sidebar-body{flex:1;min-height:0;overflow:auto;font:var(--dsw-font-xs-13,13px/20px system-ui);color:var(--dsw-alias-label-secondary,#6b7280);scrollbar-width:thin;scrollbar-color:var(--dsw-alias-scrollbar-bg-l2,rgba(127,127,127,.3)) transparent}`,
