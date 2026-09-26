@@ -1,5 +1,23 @@
 # 变更记录 — dsh-miasaki-dual-model
 
+## 2026-09-26（深夜）· 死代码清理（2 项；其余 4 项待随 M2 一并处理）
+
+仓库级死代码审计结论：本线文件级零冗余（21 个追踪文件 == 21 个磁盘文件，无备份/空目录/探针/误入库产物），
+只做两处**零读取字段**的删除。验证：`node scripts/verify-all.mjs dual-model` **12/12 PASS**
+（33 例单测 + 图片准入补丁离线自证）。
+
+| 项 | 位置 | 判定证据 |
+|---|---|---|
+| `/state` 响应字段 `stickWithinTurn` | `index.js:259` | client.js 与 test 全仓零读取；设计文档 `2026-09-10-dual-model-design.md:474` **自陈该配置项「不需要实现」**（M1 简化决策），只是把它留在了响应体里 |
+| `resolveRouteCapability()` 返回的 `known` 字段 | `lib/capability.js:107` | 返回值唯一消费点 `index.js:248-249` 只读 `.vision` 与 `.name`；全仓 `known` 仅 JSDoc 与赋值两处，JSDoc 同批订正 |
+
+**留待 M2 处理（低风险死码，但涉及契约或数据链，不在实机验收前动）**：
+`lib/routing.js:83-92` 的 `selectVisionModels()`（生产零调用，仅 `test/routing.test.js` 引用；JSDoc 说是给 client
+下拉用，但 client 半结构上无法 `require lib/`，属**未接线的实现**，删则须同批删该测试用例）；
+`index.js:267` 透传的 `providers`（client 与 test 零读取，删除须连带 `lib/capability.js` 的 providerEntries 链）；
+`client.js:85` 的 `shortModel` 兜底分支（4 处调用全传 `''`，不可达）；`lib/capability.js:70-73` 的
+`snapshot(force)` 强制刷新分支（唯一调用点无参调用）。
+
 ## 2026-09-23（二轮复审）
 
 ### Client 半回归修复 — 触发钮死件（`/state` 失败后错误面板不可达）+ client 契约测试

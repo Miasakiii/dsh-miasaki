@@ -95,7 +95,7 @@ export function createCapabilityIndex(ctx) {
  * @param {object} ctx - 插件上下文。
  * @param {string} provider - provider 路由。
  * @param {string} model - 模型 id。
- * @returns {Promise<{ vision: boolean, known: boolean, name: string } | undefined>} 能力；查询失败返回 undefined。
+ * @returns {Promise<{ vision: boolean, name: string } | undefined>} 能力；查询失败返回 undefined。
  */
 export async function resolveRouteCapability(ctx, provider, model) {
   const llm = ctx.get('llm')
@@ -104,7 +104,6 @@ export async function resolveRouteCapability(ctx, provider, model) {
     const info = await llm.resolveModelInfo(provider, model)
     return {
       vision: supportsImage(info.inputModalities),
-      known: info.inputModalities !== undefined,
       name: String(info.name),
     }
   } catch {

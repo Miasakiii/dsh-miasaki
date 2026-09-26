@@ -256,7 +256,6 @@ export async function apply(ctx, config) {
     return {
       enabled: state.enabled,
       assist: { provider: state.assistProvider, model: state.assistModel },
-      stickWithinTurn: true,
       primary: primary ?? null,
       primaryVision,
       assistVision,
