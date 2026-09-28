@@ -319,10 +319,6 @@ window.__ModuleLoader__.load({
 .mia-iconCell.is-active{border-color:var(--dsw-static-neutral-bluish-400);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary)}
 .mia-iconImg{border-radius:12px;width:56px;height:56px;object-fit:cover;background:0 0;display:block}
 .mia-iconLabel{text-align:center;font-size:12px;line-height:18px}
-/* M3 / M4 占位：官方 models「添加」先例的 dashed 规格（1px dashed border-l3 / r16） */
-.mia-dashed{border:1px dashed var(--dsw-alias-border-l3);border-radius:16px;flex-direction:column;align-items:center;gap:2px;padding:12px 16px;text-align:center;display:flex}
-.mia-dashedTitle{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;line-height:18px}
-.mia-dashedDesc{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 /* 运行信息：面板底部一行三级说明（不再独占组标题） */
 .mia-runinfo{color:var(--dsw-alias-label-tertiary);margin:24px 0 0;font-size:12px;line-height:18px}
 `
@@ -359,8 +355,15 @@ window.__ModuleLoader__.load({
     const MOTION_CSS = `
 .mia-mo-rise{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
 /* 时长梯（规划 §5.5）：会话大表面 medium 420 / 侧栏·右栏·设置面板 standard 300 */
-[data-slot="main.conversation"] > *{animation:mia-mo-rise calc(var(--mia-mo-d-med) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
-[data-slot="rightbar"] > *,[data-slot="sidebar"] > *{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
+[data-slot="main.conversation"] > *{animation:mia-mo-rise calc(var(--mia-mo-d-med) * var(--mia-mo-dur-scale)) var(--mia-mo-ease) 60ms}
+/* 竖条横向滑入的理由与轻错峰节奏：贴官方侧栏折叠的横向语汇（SidebarRoot 的 rail-in
+   从右 49px 滑入 + crossfade，SidebarRoot.module.css L155-175）——竖向 rise 是宽扁
+   容器的语言，套在竖条上是整列背景板「哆嗦」，且 scale 会让实色背景板
+   （--dsw-specific-sidebar-fill）边缘露缝，故竖条去缩放只留横向位移 + 淡入。
+   轻错峰（加载节奏，非强度参数）：侧栏 → 会话（+60ms）→ 右栏（+120ms）的扫描顺序。 */
+[data-slot="sidebar"] > *{--mia-mo-slide-x:-12px;animation:mia-mo-slide calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
+[data-slot="rightbar"] > *{--mia-mo-slide-x:12px;animation:mia-mo-slide calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease) 120ms}
+@keyframes mia-mo-slide{from{opacity:0;transform:translateX(var(--mia-mo-slide-x,-12px))}to{opacity:1;transform:none}}
 .mia-panel{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
 @keyframes mia-mo-rise{from{opacity:0;transform:translateY(var(--mia-mo-move)) scale(var(--mia-mo-scale))}to{opacity:1;transform:none}}
 /* 错峰（M3.1 消息贴类器消费）：tagged 元素按文档序 min(i*stagger, 320ms) */
@@ -419,6 +422,153 @@ window.__ModuleLoader__.load({
         const state = await requestJson('/state', { method: 'GET' })
         applyMotion(state.config)
       } catch { /* 动效层应用失败保持原生观感 */ }
+    }
+
+    // ------------------------------------------------------- 会话效果层（M4）
+    // 设计：M4 会话效果（密度 / 最大宽度 / 正文字体 / 流式光标 / 引用与代码块）。
+    // 锚点纪律同 M3：只用官方稳定事实，不碰官方类名与 transition——
+    //   [data-slot="main.conversation"] = ui-conversation 注册的官方 slot 包装
+    //     （ui-renderer/scoped-slots.tsx 的 <div data-slot={slotKey}>）；
+    //   [data-chat-flow] = ChatView 消息列自身的属性锚点（ChatView.tsx 的 column）；
+    //   [data-streaming] = ui-chat AssistantMarkdown 的流式事实属性（true 时才在）；
+    //   blockquote / pre = markdown 渲染器输出的原生语义标签（ui-primitives render.tsx）。
+    // 落地方式全部是**官方 CSS 变量**（host 侧 lib/config.js 的 M4 白名单把关取值）：
+    //   --dsh-chat-flow-gap      消息流间距（ChatView.column，官方 fallback 16px）；
+    //   --dsh-chat-content-width 会话内容宽度（ConversationRoot.body 定义，
+    //                            在 data-chat-flow 上覆盖即赢层叠——比 .body 更深）；
+    //   --dsw-font-family         正文字体族（ui-theme base.css 全局定义，
+    //                            slot 子树内覆盖只影响会话内容，官方字号
+    //                            --dsh-content-font-size 一行不碰）。
+    // 门控与 M3 同构：总开关关闭 ⇒ 属性/变量/style 三层全清（「关掉即原生」）。
+    // 首帧说明：与动效层同款为 client 侧注入（boot style 撑首帧只服务皮肤），
+    // 重启后会话列先原生后套用——已知限制，记录在 CHANGELOG。
+    const CONV_CSS_ID = '@miasaki/dsh-appearance/conversation.css'
+    const CONV_CSS = `
+ /* 密度：compact = 8px（与官方 process-answer 紧邻档同值，一屏更多轮次） */
+ html[data-mia-cv-density="compact"] [data-chat-flow]{--dsh-chat-flow-gap:8px}
+ /* 最大宽度：连续值走变量（未注入 = 官方默认）；0 = 不注入 */
+ html[data-mia-cv-width="on"] [data-chat-flow]{--dsh-chat-content-width:var(--mia-cv-width,920px)}
+ /* 正文字体：只覆盖会话子树（slot 限定），默认档 system 不注入 */
+ html[data-mia-cv-font="serif"] [data-slot="main.conversation"]{--dsw-font-family:Georgia,'Times New Roman','Songti SC',SimSun,'Noto Serif CJK SC',serif}
+ html[data-mia-cv-font="mono"] [data-slot="main.conversation"]{--dsw-font-family:'SF Mono','Cascadia Code','JetBrains Mono',Consolas,'Courier New',monospace}
+ /* 流式光标：挂在流式正文最后一个块的末尾（两层 last-child = root > body > 末块）；
+    颜色取官方品牌静态端（与 ChatView 流式状态行 shimmer 同色） */
+ html[data-mia-cv-cursor] [data-slot="main.conversation"] [data-streaming] > *:last-child > *:last-child::after{content:'';display:inline-block;margin-left:2px;background:var(--dsw-static-deepseek-500);animation:mia-cv-blink 1s steps(2,jump-none) infinite}
+ html[data-mia-cv-cursor="bar"] [data-slot="main.conversation"] [data-streaming] > *:last-child > *:last-child::after{width:2px;height:1em;vertical-align:-2px}
+ html[data-mia-cv-cursor="block"] [data-slot="main.conversation"] [data-streaming] > *:last-child > *:last-child::after{width:.55em;height:1em;vertical-align:-2px}
+ html[data-mia-cv-cursor="underline"] [data-slot="main.conversation"] [data-streaming] > *:last-child > *:last-child::after{width:.9em;height:2px;vertical-align:-2px}
+ @keyframes mia-cv-blink{50%{opacity:0}}
+ @media (prefers-reduced-motion: reduce){
+ html[data-mia-cv-cursor] [data-slot="main.conversation"] [data-streaming] > *:last-child > *:last-child::after{animation:none}
+ }
+ /* 引用与代码块：default 档不注入（官方观感）；plain / strong 两档 */
+ html[data-mia-cv-qc="plain"] [data-slot="main.conversation"] blockquote{border-left:none;padding-left:16px}
+ html[data-mia-cv-qc="plain"] [data-slot="main.conversation"] pre{padding:12px}
+ html[data-mia-cv-qc="strong"] [data-slot="main.conversation"] blockquote{border-left:3px solid var(--dsw-static-deepseek-500);background:var(--dsw-alias-markdown-inline-code);padding:8px 14px}
+ html[data-mia-cv-qc="strong"] [data-slot="main.conversation"] pre{padding:20px}
+ `
+    /** 会话密度选项（id 与 lib/config.js 的 DENSITIES 一致）。 */
+    const DENSITY_OPTIONS = [
+      { id: 'comfortable', label: '舒适' },
+      { id: 'compact', label: '紧凑' },
+    ]
+    /** 正文字体选项（id 与 lib/config.js 的 FONTS 一致；system = 不注入）。 */
+    const FONT_OPTIONS = [
+      { id: 'system', label: '默认' },
+      { id: 'serif', label: '衬线' },
+      { id: 'mono', label: '等宽' },
+    ]
+    /** 流式光标形态选项（id 与 lib/config.js 的 CURSOR_STYLES 一致，去掉 off）。 */
+    const CURSOR_STYLE_OPTIONS = [
+      { id: 'bar', label: '细条' },
+      { id: 'block', label: '方块' },
+      { id: 'underline', label: '下划线' },
+    ]
+    /** 引用与代码块档位选项（id 与 lib/config.js 的 QUOTE_CODE_LEVELS 一致）。 */
+    const QUOTE_CODE_OPTIONS = [
+      { id: 'default', label: '默认' },
+      { id: 'plain', label: '简约' },
+      { id: 'strong', label: '强调' },
+    ]
+    /** 会话最大宽度边界（px；与 lib/config.js 的 MAX_WIDTH_MIN/MAX 一致，host 最终把关）。 */
+    const CONV_WIDTH_MAX = 1600
+
+    /** 取（按 id 去重）会话效果层 style 节点；不存在则创建。 */
+    function convStyleTag() {
+      if (typeof document === 'undefined') return null
+      const existing = document.querySelector(`style[data-plugin-css="${CONV_CSS_ID}"]`)
+      if (existing !== null) return existing
+      const tag = document.createElement('style')
+      tag.dataset.plugin = '@miasaki/dsh-appearance'
+      tag.dataset.pluginCss = CONV_CSS_ID
+      tag.textContent = CONV_CSS
+      document.head.appendChild(tag)
+      return tag
+    }
+
+    /** 清空会话效果层的 html 档位属性、宽度变量与整层样式（总开关关闭 / 清理时调用）。 */
+    function convClear() {
+      for (const name of ['data-mia-cv-density', 'data-mia-cv-font', 'data-mia-cv-cursor', 'data-mia-cv-qc', 'data-mia-cv-width']) {
+        document.documentElement.removeAttribute(name)
+      }
+      const style = document.documentElement.style
+      if (style !== undefined && style !== null && typeof style.removeProperty === 'function') {
+        style.removeProperty('--mia-cv-width')
+      }
+      const tag = document.querySelector(`style[data-plugin-css="${CONV_CSS_ID}"]`)
+      if (tag !== null) tag.remove()
+    }
+
+    /**
+     * 应用会话效果层：写 html 档位属性 + 宽度变量 + 注入整层样式。
+     * 门控与 boot style / 动效层同源——总开关关闭（或 conversation 板块缺失，
+     * 旧 host）时三层全清（「关掉即原生」）。
+     * 每行的「原生档」（comfortable / system / off / default / 0）一律**不写**
+     * 对应属性，属性缺席即规则不命中 ⇒ 官方观感。
+     * @param {object} config - 已归一化配置（/state 或 save 响应里的 config）。
+     */
+    function applyConversation(config) {
+      if (config === null || config === undefined || typeof document === 'undefined') return
+      const conversation = config.conversation
+      if (config.enabled !== true || conversation === null || conversation === undefined) {
+        convClear()
+        return
+      }
+      const tag = convStyleTag()
+      if (tag === null) return
+      const root = document.documentElement
+      // 档位属性：原生档值不写（属性缺席 = 规则不命中）。
+      const setFlag = (name, value, nativeValues) => {
+        if (typeof value === 'string' && !nativeValues.includes(value)) root.setAttribute(name, value)
+        else root.removeAttribute(name)
+      }
+      setFlag('data-mia-cv-density', conversation.density, ['comfortable'])
+      setFlag('data-mia-cv-font', conversation.font, ['system'])
+      setFlag('data-mia-cv-cursor', conversation.cursor, ['off'])
+      setFlag('data-mia-cv-qc', conversation.quoteCode, ['default'])
+      // 宽度是连续值：>0 才注变量（0 = 官方默认，连属性一起清）。
+      const width = Number.isFinite(conversation.maxWidth) ? Math.round(conversation.maxWidth) : 0
+      if (width > 0) {
+        root.setAttribute('data-mia-cv-width', 'on')
+        const style = root.style
+        if (style !== undefined && style !== null && typeof style.setProperty === 'function') {
+          style.setProperty('--mia-cv-width', `${width}px`)
+        }
+      } else {
+        root.removeAttribute('data-mia-cv-width')
+        const style = root.style
+        if (style !== undefined && style !== null && typeof style.removeProperty === 'function') {
+          style.removeProperty('--mia-cv-width')
+        }
+      }
+    }
+
+    /** 会话效果同步（页面加载与每次保存后调用）：配置经 /state 取，失败静默。 */
+    async function syncConversation() {
+      try {
+        const state = await requestJson('/state', { method: 'GET' })
+        applyConversation(state.config)
+      } catch { /* 会话效果层应用失败保持原生观感 */ }
     }
 
     // ------------------------------------------------------------- 行构造
@@ -521,24 +671,27 @@ window.__ModuleLoader__.load({
 
     /**
      * 官方步进器：－ 值 ＋ 收进一枚平台底胶囊，悬停 / 聚焦时右缘露出上下箭头。
-     * value 为 null 时显示占位符并禁用（配置未加载）。
+     * value 为 null 时显示占位符并禁用（配置未加载）。unit 为可选单位文本
+     * （动效倍率的 × / 会话宽度的 px——单位在控件内，不再由调用方另挂节点）。
      */
-    function stepper(value, min, max, step, onStep, disabled, label) {
+    function stepper(value, min, max, step, onStep, disabled, label, unit) {
       const shown = value === null || value === undefined ? '—' : String(value)
       const off = disabled === true || value === null || value === undefined
-      return react.createElement('div', { key: `s-${label}-${shown}`, className: 'mia-stepper' }, [
-        react.createElement('span', { key: 'v', className: 'mia-value' }, shown),
-        react.createElement('span', { key: 'a', className: 'mia-arrows' }, [
-          react.createElement('button', {
-            key: 'up', type: 'button', className: 'mia-arrow', 'aria-label': `增大${label}`,
-            disabled: off || value >= max, onClick: () => onStep(Math.min(max, value + step)),
-          }, react.createElement(primitives.IconChevronUpOutlineRegular, { key: 'i', size: 9 })),
-          react.createElement('button', {
-            key: 'down', type: 'button', className: 'mia-arrow', 'aria-label': `减小${label}`,
-            disabled: off || value <= min, onClick: () => onStep(Math.max(min, value - step)),
-          }, react.createElement(primitives.IconChevronDownOutlineRegular, { key: 'i', size: 9 })),
-        ]),
-      ])
+      const children = [react.createElement('span', { key: 'v', className: 'mia-value' }, shown)]
+      if (typeof unit === 'string' && unit !== '') {
+        children.push(react.createElement('span', { key: 'u', className: 'mia-unit' }, unit))
+      }
+      children.push(react.createElement('span', { key: 'a', className: 'mia-arrows' }, [
+        react.createElement('button', {
+          key: 'up', type: 'button', className: 'mia-arrow', 'aria-label': `增大${label}`,
+          disabled: off || value >= max, onClick: () => onStep(Math.min(max, value + step)),
+        }, react.createElement(primitives.IconChevronUpOutlineRegular, { key: 'i', size: 9 })),
+        react.createElement('button', {
+          key: 'down', type: 'button', className: 'mia-arrow', 'aria-label': `减小${label}`,
+          disabled: off || value <= min, onClick: () => onStep(Math.max(min, value - step)),
+        }, react.createElement(primitives.IconChevronDownOutlineRegular, { key: 'i', size: 9 })),
+      ]))
+      return react.createElement('div', { key: `s-${label}-${shown}`, className: 'mia-stepper' }, children)
     }
 
     // ------------------------------------------------------------------ 面板
@@ -610,6 +763,8 @@ window.__ModuleLoader__.load({
             && patch.theme.skin !== undefined)
           // M3：动效层随写随生效（只更新变量值/整层移除，不重写规则）。
           try { applyMotion(next.config) } catch { /* 动效应用失败不影响面板 */ }
+          // M4：会话效果层随写随生效（html 档位属性 + 宽度变量 + 整层注入/移除）。
+          try { applyConversation(next.config) } catch { /* 会话效果应用失败不影响面板 */ }
           setError(null)
         } catch (e) {
           if (e && e.status === 409) {
@@ -812,18 +967,87 @@ window.__ModuleLoader__.load({
         row(
           '强度倍率',
           '0.5×–1.5×，作用于所有动效时长（改的是时长倍率，不改位移与缓动）。',
-          [
-            stepper(motion.scale, 0.5, 1.5, 0.1, v => save({ motion: { scale: Math.round(v * 10) / 10 } }), !motionLive || busy || motion.enabled !== true, '强度倍率'),
-            react.createElement('span', { key: 'u', className: 'mia-unit' }, '×'),
-          ],
+          stepper(motion.scale, 0.5, 1.5, 0.1, v => save({ motion: { scale: Math.round(v * 10) / 10 } }), !motionLive || busy || motion.enabled !== true, '强度倍率', '×'),
         ),
       ]))
 
-      // ---- 会话效果占位（M4；V1 起用官方 dashed 卡形态）
-      children.push(group('会话效果', [dashedPlaceholder(
-        '会话效果（M4，未实现）',
-        '消息密度与最大宽度 / 流式光标 / 代码块与引用样式 / 工具卡折叠 / 字体。',
-      )]))
+      // ---- 会话效果（M4：密度 / 最大宽度 / 正文字体 / 流式光标 / 引用与代码块；
+      // 全部跟随总开关门控，与动效组同一「关掉即原生」路径。范围说明：路线里的
+      // 「工具卡折叠」未纳入本轮——官方工具卡的展开是受控 React state
+      // （ui-tool ToolRow 的 expanded prop，非原生 details），默认折叠属产品行为
+      // 决策而非外观参数，留待单独取证拍板。）
+      const masterLive = state !== null && state.config.enabled === true
+      const conversation = state === null ? null : state.config.conversation
+      children.push(group('会话效果', conversation === null ? [hint('配置未加载。')] : [
+        row(
+          '消息密度',
+          '舒适 = 官方默认（消息间距 16px）；紧凑 = 8px，同屏容纳更多轮次。与官方「会话视图」的普通 / 紧凑不是一回事——那是已完成回合的呈现模式，这里是消息流间距。',
+          selectControl(
+            'conv-density',
+            conversation.density ?? 'comfortable',
+            DENSITY_OPTIONS,
+            id => save({ conversation: { density: id } }),
+            openMenu, setOpenMenu,
+            !masterLive || busy,
+          ),
+        ),
+        row(
+          '会话最大宽度',
+          '单位 px；0 = 官方默认（随窗口自适应、上限 920px）。设定后由本线接管宽度——官方左右拖拽手柄在此期间让位，改回 0 即交还。只作用于会话消息列，输入卡片宽度不变。',
+          stepper(
+            conversation.maxWidth ?? 0, 0, CONV_WIDTH_MAX, 40,
+            v => save({ conversation: { maxWidth: v } }),
+            !masterLive || busy, '会话最大宽度', 'px',
+          ),
+        ),
+        row(
+          '正文字体',
+          '只替换会话正文的字族（官方字号 12–17px 的调节在「通用」设置页，不在此处）。默认 = 官方系统栈；衬线 / 等宽覆盖常见阅读偏好。',
+          selectControl(
+            'conv-font',
+            conversation.font ?? 'system',
+            FONT_OPTIONS,
+            id => save({ conversation: { font: id } }),
+            openMenu, setOpenMenu,
+            !masterLive || busy,
+          ),
+        ),
+        row(
+          '流式光标',
+          '流式输出期间在正文末尾显示光标；系统「减少动画效果」时不闪烁。',
+          masterSwitch(
+            (conversation.cursor ?? 'off') !== 'off',
+            next => save({ conversation: { cursor: next ? 'bar' : 'off' } }),
+            !masterLive || busy,
+            '流式光标',
+            '流式输出时在正文末尾显示光标',
+          ),
+        ),
+        row(
+          '光标样式',
+          '细条 = 输入框式竖线；方块 = 终端式实心块；下划线 = 底部横条。',
+          selectControl(
+            'conv-cursor',
+            (conversation.cursor ?? 'off') === 'off' ? 'bar' : conversation.cursor,
+            CURSOR_STYLE_OPTIONS,
+            id => save({ conversation: { cursor: id } }),
+            openMenu, setOpenMenu,
+            !masterLive || busy || (conversation.cursor ?? 'off') === 'off',
+          ),
+        ),
+        row(
+          '引用与代码块',
+          '简约 = 引用去边框、代码块内边距收紧；强调 = 引用品牌色粗边加淡底、代码块内边距放宽。默认 = 官方观感。',
+          selectControl(
+            'conv-quote-code',
+            conversation.quoteCode ?? 'default',
+            QUOTE_CODE_OPTIONS,
+            id => save({ conversation: { quoteCode: id } }),
+            openMenu, setOpenMenu,
+            !masterLive || busy,
+          ),
+        ),
+      ]))
 
       // ---- 运行信息（V1：收敛为面板底部一行，不再独占组标题）
       children.push(react.createElement('div', { key: 'runinfo', className: 'mia-runinfo' },
@@ -899,18 +1123,6 @@ window.__ModuleLoader__.load({
       return options
     }
 
-    /**
-     * M3 / M4 占位（V1）：官方 models「添加」先例的 dashed 卡规格
-     * （1px dashed border-l3 / r16 / 12px 两级文字）——「将来这里有东西」的官方说法。
-     * 不可交互（不做假动作）。
-     */
-    function dashedPlaceholder(title, desc) {
-      return react.createElement('div', { key: `ph-${title}`, className: 'mia-dashed' }, [
-        react.createElement('div', { key: 't', className: 'mia-dashedTitle' }, title),
-        react.createElement('div', { key: 'd', className: 'mia-dashedDesc' }, desc),
-      ])
-    }
-
     /** 表面不透明度四旋钮（V1：官方 models 双列字段网格规格，标签 12px/18/500）。 */
     function reactElementSurfaceKnobs(surface, busy, save) {
       const knobs = [
@@ -953,6 +1165,8 @@ window.__ModuleLoader__.load({
       void syncSkin(false)
       // M3：页面加载即按配置应用动效层（与皮肤同步的时机）。
       void syncMotion()
+      // M4：页面加载即按配置应用会话效果层（与皮肤/动效同步的时机）。
+      void syncConversation()
 
       // P2 Boot Splash 退场主信号（2026-09-26）：client 半装载 ⇒ shell 已挂载，
       // 调首帧脚本挂到 globalThis 的退场函数。兜底（MutationObserver + 2.5s 超时）

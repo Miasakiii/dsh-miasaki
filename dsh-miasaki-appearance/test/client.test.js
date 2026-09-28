@@ -14,6 +14,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
+// M4 白名单直接从 host 半取——client bundle 不能 import（装载器只给 require），
+// 两侧同源靠这些常量比对（bundle 里的选项表必须与 host sanitize 白名单一致）。
+import { DENSITIES, FONTS, CURSOR_STYLES, QUOTE_CODE_LEVELS } from '../lib/config.js'
 
 const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
 
@@ -41,23 +44,61 @@ const MOTION_CSS_SOURCE = (() => {
 function capture() {
   let descriptor = null
   const window = { __ModuleLoader__: { load(d) { descriptor = d } } }
+  // elementCalls 记录 setAttribute / removeAttribute / style 写变量（M4 行为闸门用）。
+  const elementCalls = { set: [], removed: [], props: {} }
+  const documentElement = {
+    getAttribute: name => (name === 'data-mia-native-mica'
+      ? 'on'
+      : (Object.hasOwn(elementCalls.props, name) ? elementCalls.props[name] : null)),
+    hasAttribute: () => false,
+    setAttribute(name, value) { elementCalls.set.push([name, value]); elementCalls.props[name] = value },
+    removeAttribute(name) { elementCalls.removed.push(name); delete elementCalls.props[name] },
+    style: {
+      setProperty(name, value) { elementCalls.set.push([`style:${name}`, value]); elementCalls.props[`style:${name}`] = value },
+      removeProperty(name) { elementCalls.removed.push(`style:${name}`); delete elementCalls.props[`style:${name}`] },
+    },
+  }
   const document = {
     body: { append() {} },
     // dataset 供面板 CSS 注入打 data-plugin-css 标记（官方 client 插件同一注入式）。
     createElement: () => ({ style: {}, dataset: {}, append() {}, remove() {}, setAttribute() {} }),
     head: { append() {}, appendChild() {} },
-    documentElement: {
-      getAttribute: name => (name === 'data-mia-native-mica' ? 'on' : null),
-      hasAttribute: () => false,
-      setAttribute() {},
-    },
+    documentElement,
     querySelector: () => null,
     querySelectorAll: () => [],
   }
-  const context = vm.createContext({ window, document, console })
+  // fetch stub：/state 与 /skin 由 CONV_FETCH_CONFIG / skin 夹具应答——apply 时
+  // syncSkin / syncMotion / syncConversation 三个协程都会打 /state。
+  const fetchStub = (url) => Promise.resolve({
+    ok: true,
+    status: 200,
+    json: async () => String(url).endsWith('/skin')
+      ? { id: 'pure', tokens: null, wallpaperActive: false, surface: null, meta: { preferredScheme: 'dark' } }
+      : { config: CONV_FETCH_CONFIG, revision: 1, persistent: true },
+  })
+  const context = vm.createContext({ window, document, console, fetch: fetchStub })
   vm.runInContext(source, context, { filename: 'client.js' })
   assert.notEqual(descriptor, null, 'client.js 必须调用 window.__ModuleLoader__.load()')
-  return { descriptor, window, context }
+  return { descriptor, window, context, document, elementCalls }
+}
+
+/** apply 时各 sync* 协程（经 fetch stub）消费的配置夹具；行为测试可整体替换。 */
+const CONV_FETCH_CONFIG = {
+  enabled: true,
+  theme: { skin: 'pure' },
+  wallpaper: {
+    source: '', light: '', dark: '', blur: 0, scrim: 0,
+    fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+    surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+  },
+  avatar: { source: '' },
+  motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'off' },
+  conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+}
+
+/** 等 sync* 协程落定（stub 全部同步 resolve，一个宏任务 tick 即排空 microtask 队列）。 */
+function flushAsync() {
+  return new Promise(resolve => { setTimeout(resolve, 0) })
 }
 
 // React stub：createElement 保留 children 便于断言；hooks 惰性化，组件可被调用一次。
@@ -206,8 +247,8 @@ test('面板挂载官方「通用设置」页风格：mia-* 行式 + 官方 toke
   // 选择丸：官方 LanguageRow.selector 规格（h36 / r18 / module 底）
   assert.match(PANEL_CSS_SOURCE, /\.mia-select\{[^}]*border-radius:18px/)
   assert.match(PANEL_CSS_SOURCE, /\.mia-select\{[^}]*var\(--dsw-alias-bg-module-platform\)/)
-  // M3/M4 占位：官方 models dashed 规格
-  assert.match(PANEL_CSS_SOURCE, /\.mia-dashed\{[^}]*border:1px dashed var\(--dsw-alias-border-l3\)/)
+  // M3/M4 占位（V1）：官方 models dashed 规格——M4 落地后占位整类退场（无消费者）
+  assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-dashed\{/, 'M4 面板落地后 dashed 占位样式必须删除')
   assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-cube\{/, '明暗立方样式必须随去重移除')
   assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-picker\{/, 'Pill 排样式必须随 V1 退场')
   assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-knobGrid\{/, '自绘旋钮网格换成官方双列字段网格')
@@ -248,10 +289,11 @@ test('V1：单选设置行走官方选择丸 + Menu， Pill 排整类退场', ()
     const element = view()
     // Menu 原语本体与它的 anchor 触发器（选择丸按钮在 props.anchor 上）
     const menus = collectNodes(element, node => node.type === primitivesStub.Menu)
-    // 皮肤 / 壁纸图源 / 玻璃档位 / 动效预设 = 4 个（我的上传此时无文件不渲染）
-    assert.equal(menus.length, 4, '四个单选行都必须是官方 Menu')
+    // 皮肤 / 壁纸图源 / 玻璃档位 / 动效预设 + M4 会话效果四行（密度/字体/光标样式/
+    // 引用与代码块）= 8 个（我的上传此时无文件不渲染）
+    assert.equal(menus.length, 8, '八个单选行都必须是官方 Menu')
     const selectButtons = collectMenuAnchors(element).filter(node => node.type === 'button')
-    assert.equal(selectButtons.length, 4, '四个选择丸触发器')
+    assert.equal(selectButtons.length, 8, '八个选择丸触发器')
     for (const button of selectButtons) {
       assert.equal(button.props.className, 'mia-select', '触发器必须是官方 selector 规格的选择丸')
       assert.equal(button.props['aria-haspopup'], 'menu', '选择丸必须挂官方 Menu')
@@ -407,8 +449,10 @@ test('与官方「通用」设置页不重复：面板不再渲染明暗偏好�
     assert.equal(texts.includes('跟随系统'), false, '明暗三选一是官方 AppearanceRow 的控件')
     const cubes = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className.includes('mia-cube'))
     assert.equal(cubes.length, 0, '明暗立方控件必须移除')
-    const units = collectNodes(element, node => node.type === 'span' && node.props.className === 'mia-unit')
-    assert.equal(units.filter(u => u.children.includes('px')).length, 0, 'px 单位只服务于字号行（已随去重移除）')
+    // px 单位的精准判据（M4 起宽度行有正当 px 消费）：禁的是「字号步进器」复活，
+    // 不是一切单位——aria-label 含「字号」的箭头即 FontSizeRow 第二入口的签名。
+    const unitArrows = collectNodes(element, node => node.type === 'button' && typeof node.props['aria-label'] === 'string' && node.props['aria-label'].endsWith('字号'))
+    assert.equal(unitArrows.length, 0, '字号步进器（官方 FontSizeRow 的第二入口）不得复活')
     // 官方通用页没有的能力必须仍在：皮肤是 overrideTokens 层，官方三立方管不了
     assert.equal(texts.includes('皮肤'), true, '皮肤是本线独有能力，必须保留')
     assert.equal(texts.includes('外观定制总开关'), true)
@@ -425,6 +469,13 @@ test('M3 动效层 CSS 合规：只动 transform/opacity、禁 linear、reduced-
   assert.match(MOTION_CSS_SOURCE, /@keyframes mia-mo-rise\{from\{opacity:0;transform:translateY/, '入场必须带位移+缩放，不允许只有 opacity')
   assert.match(MOTION_CSS_SOURCE, /calc\(var\(--mia-mo-d-std\) \* var\(--mia-mo-dur-scale\)\)/, '时长走变量×强度倍率（切预设只改变量值）')
   assert.match(MOTION_CSS_SOURCE, /\[data-slot="main.conversation"\] > \*\{animation:mia-mo-rise calc\(var\(--mia-mo-d-med\)/, '会话大表面走 medium 档（规格表 420ms 级）')
+  // 2026-09-27 竖条形态修正（用户反馈侧栏动效欠缺）：窄高竖条换横向滑入，贴官方侧栏
+  // 折叠的横向语汇（SidebarRoot rail-in）；不缩放（实色背景板边缘露缝）。宽扁容器
+  // （会话大表面 / 设置面板）保持竖向 rise；轻错峰 = 侧栏 / 会话 +60ms / 右栏 +120ms。
+  assert.match(MOTION_CSS_SOURCE, /\[data-slot="sidebar"\] > \*\{--mia-mo-slide-x:-12px;animation:mia-mo-slide /, '侧栏走横向滑入（-12px）')
+  assert.match(MOTION_CSS_SOURCE, /\[data-slot="rightbar"\] > \*\{--mia-mo-slide-x:12px;animation:mia-mo-slide [^}]*120ms\}/, '右栏同款横向滑入（+12px）+ 错峰 120ms')
+  assert.match(MOTION_CSS_SOURCE, /@keyframes mia-mo-slide\{from\{opacity:0;transform:translateX\(var\(--mia-mo-slide-x,-12px\)\)\}to\{opacity:1;transform:none\}\}/, 'slide 保留横向位移（禁纯淡入）、不缩放')
+  assert.match(MOTION_CSS_SOURCE, /\[data-slot="main.conversation"\] > \*\{animation:mia-mo-rise calc\(var\(--mia-mo-d-med\) \* var\(--mia-mo-dur-scale\)\) var\(--mia-mo-ease\) 60ms\}/, '会话大表面错峰 60ms（侧栏 / 会话 / 右栏的加载节奏）')
   assert.match(MOTION_CSS_SOURCE, /@media \(prefers-reduced-motion: reduce\)/, '降级媒体查询')
   assert.match(MOTION_CSS_SOURCE, /animation:mia-mo-fade 100ms ease/, 'reduced-motion 统一 100ms 淡入')
   assert.match(MOTION_CSS_SOURCE, /\.mia-mo-tagged\{animation-delay:calc\(var\(--mia-mo-i, 0\) \* var\(--mia-mo-stagger\)\)\}/, '错峰槽位（M3.1 贴类器消费）')
@@ -463,8 +514,9 @@ test('M3 动效板块：总开关 + 预设选择丸 + 强度步进器（不再�
     const element = view()
     const texts = collectText(element)
     assert.equal(texts.includes('动效'), true, '板块标题必须在')
+    // Switch：总开关 + 动效 + M4 流式光标 = 3 个（都是官方 Switch，各带无障碍名）
     const switches = collectNodes(element, node => node.type === primitivesStub.Switch)
-    assert.equal(switches.length, 2, '总开关 + 动效开关都是官方 Switch')
+    assert.equal(switches.length, 3, '总开关 + 动效 + 流式光标都是官方 Switch')
     const master = switches.find(node => node.props.label === '外观定制总开关')
     const motionSwitch = switches.find(node => node.props.label === '动效')
     assert.notEqual(master, undefined, '总开关必须有无障碍名')
@@ -477,9 +529,10 @@ test('M3 动效板块：总开关 + 预设选择丸 + 强度步进器（不再�
     assert.equal(presetMenu.length, 1, '预设必须是官方选择丸')
     assert.deepEqual([...presetMenu[0].props.items].map(item => item.id), ['fluid', 'elegant', 'minimal'], '三套预设必须在菜单里')
     assert.equal(presetMenu[0].props.selectedId, 'fluid')
-    // 强度步进器（官方 stepper 规格）+ × 单位（壁纸另有 6 枚旋钮，按 aria-label 找强度那枚）
+    // 强度步进器（官方 stepper 规格）+ × 单位（单位收进 stepper 内，M4 起宽度行走同款）；
+    // 7 枚壁纸/表面旋钮 + 强度 + M4 宽度 = 8 枚（按 aria-label 定位强度那枚）
     const steppers = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className === 'mia-stepper')
-    assert.equal(steppers.length, 7, '6 枚壁纸/表面旋钮 + 1 枚强度倍率')
+    assert.equal(steppers.length, 8, '6 枚壁纸/表面旋钮 + 强度倍率 + 会话最大宽度')
     const scaleStepper = steppers.find(node => collectNodes(node, n => n.props['aria-label'] === '增大强度倍率').length > 0)
     assert.notEqual(scaleStepper, undefined, '强度倍率必须是步进器（官方 stepper 规格）')
     assert.equal(texts.includes('×'), true, '倍率单位')
@@ -717,6 +770,185 @@ test('primitives 图标命名合规：无尺寸后缀（seed 只有 Medium/Regul
     assert.match(name, /^Icon\w+Outline(?:Medium|Regular)$/,
       `图标名 ${name} 不符合 seed 命名约定 Icon<名称>Outline<Medium|Regular>（尺寸后缀名在 seed 里不存在）`)
   }
+})
+
+/** 会话效果层 CSS 正文：从 bundle 源里截出 CONV_CSS 模板字面量（M4 合规断言用）。 */
+const CONV_CSS_SOURCE = (() => {
+  const start = source.indexOf('const CONV_CSS = `')
+  assert.notEqual(start, -1, 'client.js 必须定义 CONV_CSS 模板字面量')
+  const end = source.indexOf('`\n    /** 会话密度选项', start)
+  assert.notEqual(end, -1)
+  return source.slice(start, end)
+})()
+
+test('M4 会话效果层 CSS 合规：只写官方变量与属性锚点、原生档不注入、reduced-motion 降级', () => {
+  // M4 锚点纪律（vendor 取证结论，逐条可复核）：
+  //   [data-chat-flow]  = ChatView 消息列自身属性锚点（覆盖 --dsh-chat-content-width
+  //                        赢 ConversationRoot.body 的官方定义——比它更深）
+  //   --dsh-chat-flow-gap    = 官方消息流间距变量（ChatView.column，fallback 16px）
+  //   --dsw-font-family      = 官方正文字体族变量（ui-theme base.css；slot 限定只影响会话）
+  //   [data-streaming]       = ui-chat AssistantMarkdown 流式事实属性
+  //   blockquote / pre       = markdown 渲染器输出的原生语义标签（ui-primitives）
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-density="compact"\] \[data-chat-flow\]\{--dsh-chat-flow-gap:8px\}/, '密度走官方间距变量（compact = 8px）')
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-width="on"\] \[data-chat-flow\]\{--dsh-chat-content-width:var\(--mia-cv-width,920px\)\}/, '宽度走官方内容宽度变量（连续值）')
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-font="serif"\] \[data-slot="main.conversation"\]\{--dsw-font-family:/, '衬线档只覆盖会话子树内的正文字体族')
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-font="mono"\] \[data-slot="main.conversation"\]\{--dsw-font-family:/, '等宽档同款')
+  assert.doesNotMatch(CONV_CSS_SOURCE, /--dsh-content-font-size/, '官方字号变量一行不碰（那是「通用」设置页的 FontSizeRow）')
+  // 流式光标：挂官方流式属性 + 品牌静态端取色 + 禁止清单
+  assert.match(CONV_CSS_SOURCE, /\[data-mia-cv-cursor\] \[data-slot="main.conversation"\] \[data-streaming\] > \*:last-child > \*:last-child::after\{/, '光标挂流式正文末块（两层 last-child）')
+  assert.match(CONV_CSS_SOURCE, /background:var\(--dsw-static-deepseek-500\)/, '光标色与官方流式状态行 shimmer 同源')
+  assert.match(CONV_CSS_SOURCE, /@keyframes mia-cv-blink\{50%\{opacity:0\}\}/)
+  assert.match(CONV_CSS_SOURCE, /@media \(prefers-reduced-motion: reduce\)\{[\s\S]*animation:none/, 'reduced-motion 禁闪烁')
+  // 引用与代码块：default 档不注入；plain / strong 两套规则
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-qc="plain"\] \[data-slot="main.conversation"\] blockquote\{border-left:none;padding-left:16px\}/)
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-qc="strong"\] \[data-slot="main.conversation"\] blockquote\{border-left:3px solid var\(--dsw-static-deepseek-500\);background:var\(--dsw-alias-markdown-inline-code\);padding:8px 14px\}/)
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-qc="plain"\] \[data-slot="main.conversation"\] pre\{padding:12px\}/)
+  assert.match(CONV_CSS_SOURCE, /html\[data-mia-cv-qc="strong"\] \[data-slot="main.conversation"\] pre\{padding:20px\}/)
+  // 禁止清单与 M3 同款：不抢官方 transition、不写哈希类名
+  assert.doesNotMatch(CONV_CSS_SOURCE, /transition/, '只做声明式规则，不碰官方 transition')
+  assert.doesNotMatch(CONV_CSS_SOURCE, /linear/, '禁 linear 缓动（闪烁走 steps）')
+  // 注入与去重在源码层可见（data-plugin-css 同构）
+  assert.match(source, /const CONV_CSS_ID = '@miasaki\/dsh-appearance\/conversation\.css'/)
+  assert.match(source, /tag\.dataset\.pluginCss = CONV_CSS_ID/, '会话效果层注入与动效层同构（按 id 去重）')
+})
+
+test('M4 会话效果板块：密度 / 宽度 / 字体 / 流式光标 / 光标样式 / 引用与代码块', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'pure' },
+        wallpaper: {
+          source: '', light: '', dark: '', blur: 0, scrim: 0,
+          fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: '' },
+        motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+        conversation: { density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'block', quoteCode: 'strong' },
+      },
+      revision: 12,
+      persistent: true,
+    },
+    null, null, false, null, { local: [] }, { presets: [] }, null,
+  ]
+  try {
+    const element = view()
+    const texts = collectText(element)
+    for (const title of ['会话效果', '消息密度', '会话最大宽度', '正文字体', '流式光标', '光标样式', '引用与代码块']) {
+      assert.equal(texts.includes(title), true, `「${title}」行必须在`)
+    }
+    assert.equal(texts.includes('会话效果（M4，未实现）'), false, '占位文案必须消失')
+    // 流式光标开关（官方 Switch，各带无障碍名）
+    const cursorSwitch = collectNodes(element, node => node.type === primitivesStub.Switch && node.props.label === '流式光标')
+    assert.equal(cursorSwitch.length, 1, '流式光标必须是官方 Switch')
+    assert.equal(cursorSwitch[0].props.checked, true, 'cursor=block 时开关为开')
+    // 四个单选行走选择丸 + Menu，菜单项 = host 白名单（防「UI 少给选项」静默降级）
+    const menus = collectNodes(element, node => node.type === primitivesStub.Menu)
+    const idsOf = wanted => [...menus.find(menu => menu.props.items.some(item => item.id === wanted)).props.items].map(item => item.id)
+    assert.deepEqual(idsOf('compact'), [...DENSITIES], '密度菜单 = 白名单')
+    assert.deepEqual(idsOf('serif'), [...FONTS], '字体菜单 = 白名单')
+    assert.deepEqual(idsOf('block'), [...CURSOR_STYLES].filter(id => id !== 'off'), '光标样式菜单 = 白名单（不含 off）')
+    assert.deepEqual(idsOf('strong'), [...QUOTE_CODE_LEVELS], '引用与代码块菜单 = 白名单')
+    // 当前值同步给 Menu（selectedId）
+    for (const wanted of ['compact', 'serif', 'block', 'strong']) {
+      assert.equal(menus.find(menu => menu.props.selectedId === wanted).props.selectedId, wanted, `${wanted} 必须是当前选中值`)
+    }
+    // 宽度步进器（官方 stepper 规格）+ px 单位（单位收在控件内）
+    const widthStepper = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className === 'mia-stepper'
+      && collectNodes(node, n => n.props['aria-label'] === '增大会话最大宽度').length > 0)
+    assert.equal(widthStepper.length, 1, '会话最大宽度必须是步进器')
+    assert.equal(collectNodes(widthStepper[0], n => n.type === 'span' && n.props.className === 'mia-unit').length, 1, '宽度带 px 单位')
+  } finally {
+    react.stateQueue = null
+  }
+  // 总开关关闭 ⇒ 整组禁用（与动效组同一「关掉即原生」门控）
+  react.stateQueue = [
+    {
+      config: {
+        enabled: false,
+        theme: { skin: 'pure' },
+        wallpaper: {
+          source: '', light: '', dark: '', blur: 0, scrim: 0,
+          fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: '' },
+        motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+        conversation: { density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'block', quoteCode: 'strong' },
+      },
+      revision: 13,
+      persistent: true,
+    },
+    null, null, false, null, { local: [] }, { presets: [] }, null,
+  ]
+  try {
+    const element = view()
+    // 只断 M4 组的四个单选（皮肤/壁纸组按既有设计不随总开关禁用——那条路径由
+    // 「关掉即原生」的 CSS 门控保证，不禁用是刻意留给总开关关闭时仍可预览配置的）。
+    const menus = collectNodes(element, node => node.type === primitivesStub.Menu)
+    const convMenus = menus.filter(menu => ['compact', 'serif', 'block', 'strong'].includes(menu.props.selectedId))
+    assert.equal(convMenus.length, 4, 'M4 四个选择丸（密度/字体/光标样式/引用与代码块）')
+    for (const menu of convMenus) {
+      assert.equal(menu.props.anchor.props.disabled, true, '总开关关闭时 M4 选择丸禁用')
+    }
+    const arrows = collectNodes(element, node => node.type === 'button' && typeof node.props['aria-label'] === 'string' && node.props['aria-label'].startsWith('增大会话最大宽度'))
+    assert.equal(arrows[0].props.disabled, true, '总开关关闭时宽度步进器禁用')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('M4 会话效果层行为：档位属性与宽度变量随配置写入，原生档不写，关闭即全清', async () => {
+  // apply() 里 syncConversation() 经 fetch stub 拉配置后调 applyConversation。
+  // 三个场景各自独立 capture（新 VM + 新 documentElement 记录）互不污染。
+  // ① 全定制档 ⇒ 五个 html 属性 + 宽度变量
+  {
+    const { descriptor, elementCalls } = capture()
+    const ctx = fakeCtx()
+    CONV_FETCH_CONFIG.conversation = { density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'block', quoteCode: 'strong' }
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    assert.equal(elementCalls.props['data-mia-cv-density'], 'compact')
+    assert.equal(elementCalls.props['data-mia-cv-font'], 'serif')
+    assert.equal(elementCalls.props['data-mia-cv-cursor'], 'block')
+    assert.equal(elementCalls.props['data-mia-cv-qc'], 'strong')
+    assert.equal(elementCalls.props['data-mia-cv-width'], 'on')
+    assert.equal(elementCalls.props['style:--mia-cv-width'], '1080px')
+  }
+  // ② 全原生档（comfortable/system/off/default/0）⇒ 一个属性都不写（官方观感）
+  {
+    const { descriptor, elementCalls } = capture()
+    const ctx = fakeCtx()
+    CONV_FETCH_CONFIG.conversation = { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' }
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    for (const name of ['data-mia-cv-density', 'data-mia-cv-font', 'data-mia-cv-cursor', 'data-mia-cv-qc', 'data-mia-cv-width']) {
+      assert.equal(Object.hasOwn(elementCalls.props, name), false, `${name} 在原生档下不得写入`)
+    }
+    assert.equal(Object.hasOwn(elementCalls.props, 'style:--mia-cv-width'), false, '宽度 0 = 官方默认，不写变量')
+  }
+  // ③ 总开关关闭（含旧 host 无 conversation 板块）⇒ 三层全清
+  for (const withoutBoard of [false, true]) {
+    const { descriptor, elementCalls } = capture()
+    const ctx = fakeCtx()
+    CONV_FETCH_CONFIG.conversation = { density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'block', quoteCode: 'strong' }
+    CONV_FETCH_CONFIG.enabled = false
+    if (withoutBoard) delete CONV_FETCH_CONFIG.conversation
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    for (const name of ['data-mia-cv-density', 'data-mia-cv-font', 'data-mia-cv-cursor', 'data-mia-cv-qc', 'data-mia-cv-width']) {
+      assert.equal(Object.hasOwn(elementCalls.props, name), false, '关闭时必须移除档位属性')
+    }
+    assert.equal(elementCalls.removed.includes('style:--mia-cv-width'), true, '关闭时必须清掉宽度变量')
+  }
+  // 还原夹具（其它用例的 CONV_FETCH_CONFIG 默认态）
+  CONV_FETCH_CONFIG.enabled = true
+  CONV_FETCH_CONFIG.conversation = { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' }
 })
 
 test('渲染树无 undefined/null 元素类型（空白色事故的直接签名）', () => {

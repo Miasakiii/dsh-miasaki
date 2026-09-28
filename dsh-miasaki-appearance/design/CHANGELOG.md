@@ -2,6 +2,82 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-27 · M3 竖条形态修正：侧栏 / 右栏换横向滑入 + 轻错峰
+
+- **起因**：用户「侧边栏动效有欠缺需要优化」。诊断（vendor 取证）：M3 给所有容器统一用
+  `mia-mo-rise`（translateY + scale 的竖向浮起）——那是**宽扁容器**（会话大表面 / 设置
+  面板）的语言；侧边栏是**窄高竖条 + 实色背景板**（`SidebarRoot.module.css` 的 `.root`
+  带 `--dsw-specific-sidebar-fill` 满高背景），而 `[data-slot]` 包装是 `display:contents`
+  ⇒ 规则实际挂在整列根元素上：竖条下浮 8px + 整体缩 98% = 整块背景板「哆嗦」，缩放还让
+  实色板边缘露出布局缝；且官方侧栏自身的动效是**横向**语言（折叠时 rail-in 从右 49px
+  滑入 + crossfade，`SidebarRoot.module.css` L155-175），两套方向语汇互相打架。
+- **修法（形态分工 + 加载节奏）**：
+  ① 侧栏 / 右栏改用新 keyframes `mia-mo-slide`（`translateX(var(--mia-mo-slide-x))` +
+  淡入，**去缩放**），侧栏 -12px / 右栏 +12px——横向是竖条的语言，且与官方 rail-in
+  同向；② 轻错峰（静态加载节奏，不是预设强度参数）：侧栏 0 → 会话 `+60ms` → 右栏
+  `+120ms`，符合 L2R 扫描顺序；③ 宽扁容器（会话大表面 / 设置面板 `.mia-panel`）保持
+  竖向 rise 不变；④ reduced-motion 分支原选择器已覆盖三容器（统一 100ms 淡入、
+  delay 归零——shorthand 重写 animation 即重置 delay）。
+- **回归闸门**：M3 CSS 合例补四条断言——侧栏规则带 `--mia-mo-slide-x:-12px` 且
+  animation 为 `mia-mo-slide`、右栏 +12px 且 120ms delay、`mia-mo-slide` keyframes
+  保留横向位移（禁纯淡入）且无 scale、会话大表面带 60ms delay；既有禁令（linear /
+  transition）不变。
+- **验证**：单测 120 例全绿（client 23）；`verify-all appearance` **18/18**、`repo` 2/2
+  （本轮零新增用例——四条断言并入 M3 合例）。**实机待用户重启 `dsh web` 后验收**：
+  强刷页面应见侧栏从左缘轻掠入 → 会话表面随后浮起 → 右栏最后；折叠 / 展开维持官方
+  原生动效（150-200ms crossfade + rail-in，本线不碰）。
+- 触摸点：`client.js`（MOTION_CSS）、`test/client.test.js`（M3 合例 +4 断言）、
+  `README.md`、本文件、回归矩阵 §3.5 动效行。
+
+## 2026-09-27 · P3 M4 会话效果实施（替代 dashed 占位）
+
+- **起因**：用户「继续推进外观线」——按 [视觉统一与功能路线](2026-09-26-appearance-visual-unification-and-roadmap.md)
+  §4 的 P3 开工（P1 动效 / P2 Boot Splash 已实施）。设计与取证表见
+  [M4 会话效果设计](2026-09-27-appearance-m4-conversation-design.md)。
+- **落地方式：全部走官方 CSS 变量与属性锚点**（vendor 逐条取证，不碰官方类名与
+  transition）：密度 = `--dsh-chat-flow-gap`（ChatView 消息流间距，compact = 8px 与官方
+  process-answer 紧邻档同值）；宽度 = `--dsh-chat-content-width`，覆盖点选消息列自身的
+  官方属性锚点 `[data-chat-flow]`（比官方定义的 `.body` 更深，层叠赢；接管期间官方拖拽
+  手柄自然让位，改回 0 交还，面板文案明示）；字体 = `--dsw-font-family` 栈替换
+  （`[data-slot="main.conversation"]` 子树限定，只影响会话正文）；流式光标 = 官方流式事实
+  属性 `[data-streaming]`（ui-chat AssistantMarkdown）+ 品牌静态端 `--dsw-static-deepseek-500`
+  取色（与官方流式状态行 shimmer 同源），两层 `> *:last-child` 挂正文末块（挂 body 会在
+  flex column 里独占一行）；引用与代码块 = markdown 原生 `blockquote` / `pre` 语义标签
+  两套档位（官方 `.block :where(pre)` 特异性 0,1,0，本层 0,2,2 赢）。
+- **原生档不注入**：每行首档（comfortable / system / off / default / 0）一律不写 html
+  档位属性（`data-mia-cv-density` / `-font` / `-cursor` / `-qc` / `-width` 五个），
+  属性缺席即规则不命中 ⇒ 官方观感；门控与 M3 同构（总开关 + conversation 板块在位），
+  关闭即属性 / `--mia-cv-width` 变量 / style 三层全清。
+- **范围决策（工具卡折叠不纳入）**：官方工具卡的展开是受控 React state
+  （`ui-tool/ToolRow` 的 expanded prop，非原生 `<details>`），默认折叠属产品行为决策而
+  非外观参数；稳定锚点（`[data-tool]` / `data-state`）已取证，留作 M4.1 单独拍板。
+- **host 半**：配置 **v5 → v6**——`conversation` 新增 `font` / `cursor` / `quoteCode`
+  （纯新增；`density` / `maxWidth` 是 v5 起预留、本次才接 UI 的字段）；新增 `FONTS` /
+  `CURSOR_STYLES` / `QUOTE_CODE_LEVELS` 白名单，sanitize 非法值一律回退首档。
+- **client 半**：`CONV_CSS` + `convStyleTag` / `convClear` / `applyConversation` /
+  `syncConversation`（与 M3 动效层同构的注入式与双调用点）；「会话效果」组六行
+  （密度 / 宽度 / 字体 / 光标开关 / 光标样式 / 引用与代码块）替换 V1 的 dashed 占位；
+  dashed 占位与 `.mia-dashed*` CSS 整类删除（无消费者）；`stepper()` 加可选 `unit`
+  参数（动效 × 与宽度 px 的单位收进控件内）。
+- **回归闸门**：client +3 例——① M4 CSS 合规（官方变量/锚点/原生档/禁 transition·
+  linear/禁 `--dsh-content-font-size`/reduced-motion 禁闪）；② M4 板块控件（六行标题、
+  四个 Menu items = host 白名单（直接 import `lib/config.js` 常量）、宽度步进器 aria-label
+  与 px、总开关关闭时 M4 组禁用）；③ M4 行为三态（全定制写五属性+变量 / 全原生一属性
+  不写 / 关闭含旧 host 无板块时三层全清）。既有闸门同步：V1 Menu 数 4→8、M3 Switch
+  2→3 与步进器 7→8、去重闸门「无 px 单位」收紧为「无字号步进器」（aria-label 判据——
+  宽度行的 px 是正当消费）、风格契约 dashed 断言反转为「占位样式必须删除」。
+  config +3 例：三字段白名单收窄（maxWidth 上下钳 0/1600、出厂全首档）/ v5→v6 迁移补
+  默认 / conversation 单字段深合并不被同板块污染。
+- **验证**：单测 **114 → 120 例**（client 23 / config 35）；`node --check` 通过；
+  `verify-all appearance` **18/18**、`repo` **2/2**、`check-doc-versions` 一致。
+- **实机待用户重启 `dsh web` 后验收**（与 M3 / P2 同批）：六行控件、密度收紧、宽度
+  接管与交还、字体只改会话、流式光标（含 reduced-motion 不闪）、引用/代码块两档；
+  判据见 [回归矩阵 §3.5](../../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 与
+  台账 D8。
+- 触摸点：`lib/config.js`（v6 + 三白名单 + DEFAULT/sanitize/migrate）、`client.js`
+  （CONV_CSS 层 + 六行面板 + stepper unit + dashed 退场）、`test/{client,config}.test.js`、
+  `README.md`、设计文档（新）、回归矩阵 §3.5 + §3.0 D8 + §1 基线 + 变更记录、本文件。
+
 ## 2026-09-27 · P1 M3 动效实施 + 「无可见效果」提示
 
 - **起因**：用户「p2 开工」后「继续推吧」——按 [视觉统一与功能路线](2026-09-26-appearance-visual-unification-and-roadmap.md)

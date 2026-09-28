@@ -7,7 +7,7 @@
 import { avatarFileFromSource } from './avatar.js'
 
 /** 配置版本；结构不兼容变更时 +1，并在 migrateConfig 里补一条迁移分支。 */
-export const CONFIG_VERSION = 5
+export const CONFIG_VERSION = 6
 
 /** 皮肤白名单。M1 只有「纯净」；M2 下沉 desktop 线的刻刻帝 / 狂狂帝。 */
 export const SKINS = Object.freeze(['pure', 'zafkiel', 'kurkuriel'])
@@ -18,8 +18,20 @@ export const MOTION_PRESETS = Object.freeze(['fluid', 'elegant', 'minimal'])
 /** Boot Splash 开关（P2 首帧启动画）：auto = 总开关开启时注入；off = 永不注入。 */
 export const BOOT_SPLASH_MODES = Object.freeze(['auto', 'off'])
 
-/** 会话密度（M4）。 */
+/** 会话密度（M4）：comfortable = 官方默认 16px 消息流间距；compact = 8px。 */
 export const DENSITIES = Object.freeze(['comfortable', 'compact'])
+
+/**
+ * 会话正文字体族（M4；与官方「通用」页的字号行不重合——那是 --dsh-content-font-size
+ * 的数值调节，这里是 font-family 栈替换，官方通用页没有对应行）。
+ */
+export const FONTS = Object.freeze(['system', 'serif', 'mono'])
+
+/** 流式光标（M4）：off = 不显示；bar / block / underline = 三种形态。 */
+export const CURSOR_STYLES = Object.freeze(['off', 'bar', 'block', 'underline'])
+
+/** 引用与代码块样式档位（M4）：default = 官方默认观感。 */
+export const QUOTE_CODE_LEVELS = Object.freeze(['default', 'plain', 'strong'])
 
 /** 壁纸模糊档位边界（px）。 */
 export const BLUR_MIN = 0
@@ -76,7 +88,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   // 因此这里的字段是跨线契约，改动需同步 dsh-miasaki-desktop 的 launcher_icon 模块。
   avatar: Object.freeze({ source: '' }),
   motion: Object.freeze({ enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' }),
-  conversation: Object.freeze({ density: 'comfortable', maxWidth: 0 }),
+  // 会话效果（M4）：全部经官方 CSS 变量 / 属性锚点落地（client 半 CONV_CSS，
+  // 不碰官方类名与 transition）。maxWidth 0 = 官方默认；font/cursor/quoteCode
+  // 的首档（system/off/default）= 不注入任何规则（「关掉即原生」同款硬契约）。
+  conversation: Object.freeze({
+    density: 'comfortable',
+    maxWidth: 0,
+    font: 'system',
+    cursor: 'off',
+    quoteCode: 'default',
+  }),
 })
 
 // ---------------------------------------------------------------------------
@@ -166,6 +187,10 @@ export function migrateConfig(raw) {
   // 不认识它们、直接丢弃，抬版本号让旧配置在下次写入时清净落盘。
   // v4 → v5：motion.bootSplash（Boot Splash 首帧启动画开关，'auto' | 'off'）——
   // 纯新增字段，旧配置补默认 'auto'（总开关关闭仍不注入，见 lib/splash.js 门控）。
+  // v5 → v6：M4 会话效果落地——conversation 新增 font / cursor / quoteCode 三个字段
+  // （纯新增）。density / maxWidth 早在 v5 就是预留死字段（从未有面板入口），
+  // 本次接上控件；旧配置的三个新字段由 sanitize 回退默认（system / off / default
+  // = 不注入规则），无需搬运。
   return { ...source, version: CONFIG_VERSION }
 }
 
@@ -217,6 +242,9 @@ export function sanitizeConfig(raw) {
     conversation: {
       density: pickEnum(conversation.density, DENSITIES, DEFAULT_CONFIG.conversation.density),
       maxWidth: clampInt(conversation.maxWidth, MAX_WIDTH_MIN, MAX_WIDTH_MAX, DEFAULT_CONFIG.conversation.maxWidth),
+      font: pickEnum(conversation.font, FONTS, DEFAULT_CONFIG.conversation.font),
+      cursor: pickEnum(conversation.cursor, CURSOR_STYLES, DEFAULT_CONFIG.conversation.cursor),
+      quoteCode: pickEnum(conversation.quoteCode, QUOTE_CODE_LEVELS, DEFAULT_CONFIG.conversation.quoteCode),
     },
   }
 }

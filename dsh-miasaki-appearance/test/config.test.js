@@ -393,3 +393,60 @@ test('evaluateContract：host 半不认识 avatar 字段时给重启提示（旧
   assert.equal(evaluateContract({ ...base, avatarField: true }).issues.some(i => i.code === 'avatar-host-stale'), false)
   assert.equal(evaluateContract(base).issues.some(i => i.code === 'avatar-host-stale'), false)
 })
+
+test('sanitizeConfig：M4 会话效果三字段白名单收窄（v6；首档 = 不注入规则）', () => {
+  // M4：conversation 新增 font / cursor / quoteCode。首档 system/off/default 是
+  // 「原生档」——client 半据此不写任何 html 属性与变量；非法值一律回退首档。
+  const safe = sanitizeConfig({
+    conversation: { density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'block', quoteCode: 'strong' },
+  })
+  assert.deepEqual(safe.conversation, {
+    density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'block', quoteCode: 'strong',
+  })
+  const narrowed = sanitizeConfig({
+    conversation: { density: 'x', maxWidth: 99999, font: 'comic-sans', cursor: 'spinner', quoteCode: 'rainbow', 注入: 1 },
+  })
+  assert.deepEqual(narrowed.conversation, {
+    // maxWidth 上钳 1600（MAX_WIDTH_MAX），其余回退首档
+    density: 'comfortable', maxWidth: 1600, font: 'system', cursor: 'off', quoteCode: 'default',
+  })
+  assert.equal('注入' in narrowed.conversation, false)
+  // 非数字 maxWidth（面板未加载时的 undefined / 字符串）回退 0 = 官方默认
+  assert.equal(sanitizeConfig({ conversation: { maxWidth: undefined } }).conversation.maxWidth, 0)
+  assert.equal(sanitizeConfig({ conversation: { maxWidth: '920' } }).conversation.maxWidth, 920)
+  assert.equal(sanitizeConfig({ conversation: { maxWidth: -5 } }).conversation.maxWidth, 0)
+  // 出厂配置 = 全首档（「未配置的外观线对页面零影响」）
+  assert.deepEqual(sanitizeConfig(DEFAULT_CONFIG).conversation, {
+    density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default',
+  })
+})
+
+test('migrateConfig：v5 配置升到 v6 时 M4 新字段补默认（纯新增、无搬运）', () => {
+  // v5 的 conversation 只有 density/maxWidth（M3 前的预留字段）；v5→v6 加
+  // font/cursor/quoteCode——sanitize 对缺失字段回退首档即可，无迁移代码。
+  const safe = sanitizeConfig({
+    version: 5,
+    conversation: { density: 'compact', maxWidth: 720 },
+  })
+  assert.equal(safe.version, CONFIG_VERSION)
+  assert.deepEqual(safe.conversation, {
+    density: 'compact', maxWidth: 720, font: 'system', cursor: 'off', quoteCode: 'default',
+  }, '旧配置保留 density/maxWidth，新字段补首档')
+  assert.equal(migrateConfig({ version: 5 }).version, CONFIG_VERSION)
+  // v6 及以上原样返回（幂等）
+  assert.equal(migrateConfig({ version: 6 }).version, 6)
+  assert.equal(migrateConfig({ version: 99 }).version, 99)
+})
+
+test('mergeConfig：会话效果单字段可独立更新，不被同板块或其它板块影响', () => {
+  // 面板每次只发改动的那一格（选择丸/步进器），深合并必须保住同板块其它字段。
+  const current = sanitizeConfig({
+    conversation: { density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'block', quoteCode: 'strong' },
+  })
+  const next = mergeConfig(current, { conversation: { cursor: 'underline' } })
+  assert.deepEqual(next.conversation, {
+    density: 'compact', maxWidth: 1080, font: 'serif', cursor: 'underline', quoteCode: 'strong',
+  })
+  // 只碰别的板块时 conversation 原样保留
+  assert.deepEqual(mergeConfig(current, { motion: { enabled: true } }).conversation, current.conversation)
+})

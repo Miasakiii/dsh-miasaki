@@ -90,6 +90,17 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 > `prefers-reduced-motion` 一律降级 100ms 淡入；关闭即整层移除（与总开关同门控）。
 > 同批落地 **「无可见效果」提示**——纯净皮 + 全不透明表面 + 云母档走系统材质时告诉用户改哪里
 > （此前三叠加 = 「开启了没什么效果」）。消息级错峰贴类器（M3.1）待实机锚点取证后补。
+>
+> **2026-09-27 · M4 会话效果已实施（P3）**：「会话效果」板块从虚线占位升级为**六行真控件**——
+> 消息密度（舒适 / 紧凑）、会话最大宽度（步进器 0–1600px，0 = 官方默认）、正文字体（默认 / 衬线 /
+> 等宽）、流式光标（开关 + 细条 / 方块 / 下划线）、引用与代码块（默认 / 简约 / 强调）。
+> 全部经**官方 CSS 变量与属性锚点**落地（密度 `--dsh-chat-flow-gap` / 宽度
+> `--dsh-chat-content-width`（覆盖在官方 `[data-chat-flow]` 消息列上，接管期间官方拖拽手柄
+> 让位，改回 0 交还）/ 字体 `--dsw-font-family`（只影响会话正文，官方字号一行不碰）/
+> 流式 `[data-streaming]` / 引用与代码块的原生 `blockquote`·`pre`）；原生档一律不写属性
+> ⇒ 规则不命中 = 官方观感；关闭即三层全清。路线里的「工具卡折叠」未纳入（官方工具卡展开是
+> 受控 React state，属产品行为决策，留 M4.1），已知限制与决策见
+> [M4 设计](design/2026-09-27-appearance-m4-conversation-design.md)。
 
 ---
 
@@ -112,7 +123,7 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 ```
 dsh-miasaki-appearance/
 ├── index.js               # Host 半：/appearance/api/* 路由 + 首帧注入（boot script/style + splash 三行）
-├── client.js              # Client 半：设置页「外观」（官方通用设置页风格）+ 契约自检 + 应用管线 + splash 退场
+├── client.js              # Client 半：设置页「外观」（官方通用设置页风格）+ 契约自检 + 应用管线 + splash 退场 + 动效层 + 会话效果层
 ├── assets/presets/        # 位图预设图标（portrait.png + 来源/处理链 README）
 ├── lib/
 │   ├── config.js          # 配置模型：默认值 / 收窄钳制 / 深合并 / 迁移 / 首帧脚本 / 契约判定
@@ -121,7 +132,7 @@ dsh-miasaki-appearance/
 │   ├── icon-presets.js    # 应用图标预设：手写 PNG 编码 + SDF 绘制 + 预设表（程序化生成）
 │   ├── store.js           # 配置持久化（临时文件 + rename 原子写）
 │   └── fence.js           # 浏览器信任围栏（Host 头 / Origin / sec-fetch-site）
-├── test/                  # 114 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host / splash 契约）
+├── test/                  # 120 例纯逻辑单测（配置 / 头像 / 预设渲染 / 围栏 / 持久化 / client / host / splash 契约）
 ├── design/                # 规划设计 + M1/M2/M2.5/M2.6/M2.7 + 去重/视觉统一路线 + P2 Boot Splash + 变更记录
 └── cordis.patch.yml       # web profile 的装载行（dataDir / trustedHosts）
 ```
@@ -168,11 +179,22 @@ dsh-miasaki-appearance/
 | 能力 | 说明 |
 |---|---|
 | 面板控件 | 总开关（官方 Switch）+ 预设选择丸（流畅 / 优雅 / 极简）+ 强度倍率步进器（0.5×–1.5×，作用于所有时长）；总开关关闭时三条禁用并注明 |
-| 动效层 | **纯 CSS**（`@keyframes mia-mo-rise` + `--mia-mo-*` 变量）：会话大表面 medium 420 档、侧栏 / 右栏 / 设置面板 standard 300 档；位移 4–12px + 缩放 0.97–0.99（禁「只有 opacity」与 linear）；写入即改变量值、零重建 |
+| 动效层 | **纯 CSS**（`@keyframes mia-mo-rise` + `--mia-mo-*` 变量）：会话大表面 medium 420 档、侧栏 / 右栏 / 设置面板 standard 300 档；位移 4–12px + 缩放 0.97–0.99（禁「只有 opacity」与 linear）；写入即改变量值、零重建。**窄高竖条（侧栏 / 右栏）单独走横向滑入**（`mia-mo-slide`，侧栏 -12px / 右栏 +12px，去缩放）——贴官方侧栏折叠的横向语汇（SidebarRoot 的 rail-in）；竖向 rise 是宽扁容器的语言，套竖条上会整列背景板「哆嗦」且缩放让实色背景板边缘露缝；轻错峰：侧栏 → 会话（+60ms）→ 右栏（+120ms） |
 | 降级 | `prefers-reduced-motion: reduce` ⇒ 全部入场改 100ms 淡入、无位移无错峰 |
 | 门控 | 与总开关同源：`enabled && motion.enabled` 才注入整层；关闭即移除（含变量清理） |
 | 锚点纪律 | 只挂 `[data-slot]` 稳定锚点 + 自有 `.mia-mo-*` 前缀，不碰官方 transition、不改官方类名 |
 | 未含（M3.1） | 消息级错峰贴类器（`min(i*40,320)ms`）——槽位 CSS（`.mia-mo-tagged`）已在层内，贴类器待实机锚点取证后补 |
+
+### M4 会话效果（2026-09-27 实施）
+
+| 能力 | 说明 |
+|---|---|
+| 面板控件 | 消息密度选择丸（舒适 / 紧凑）+ 会话最大宽度步进器（0–1600px、步进 40、0 = 官方默认）+ 正文字体选择丸（默认 / 衬线 / 等宽）+ 流式光标（官方 Switch + 样式选择丸细条 / 方块 / 下划线）+ 引用与代码块选择丸（默认 / 简约 / 强调）；整组跟随总开关门控 |
+| 落地方式 | **全部官方 CSS 变量与属性锚点**（零自建规则、零官方类名）：密度 `--dsh-chat-flow-gap`（compact = 8px，与官方紧邻档同值）；宽度 `--dsh-chat-content-width`（覆盖点 = 官方 `[data-chat-flow]` 消息列自身，层叠赢 `.body` 的官方定义；接管期间官方拖拽手柄让位，0 = 交还）；字体 `--dsw-font-family`（slot 子树限定，只影响会话正文）；光标 `[data-streaming]` 官方流式属性 + 品牌静态端取色；引用与代码块 = markdown 原生 `blockquote` / `pre` |
+| 原生档不注入 | 每行首档（comfortable / system / off / default / 0）不写 html 档位属性（五个 `data-mia-cv-*`），属性缺席 ⇒ 规则不命中 ⇒ 官方观感；关闭即属性 / 宽度变量 / style 三层全清 |
+| 降级 | `prefers-reduced-motion: reduce` ⇒ 流式光标静止（不闪烁） |
+| 未含（M4.1） | 工具卡折叠——官方工具卡展开是受控 React state（`ToolRow` 的 expanded prop，非原生 `<details>`），默认折叠属产品行为决策，稳定锚点已取证（`[data-tool]` / `data-state`）待单独拍板 |
+| 已知限制 | 与动效层同为客户侧注入（boot style 撑首帧只服务皮肤）：重启后会话列先原生、client 装载后套用 |
 
 ### 里程碑
 
@@ -195,7 +217,11 @@ dsh-miasaki-appearance/
 - **M3 动效**（2026-09-27 实施）：CSS 动效层（`--mia-mo-*` 变量 + `mia-mo-rise` 入场）挂
   `[data-slot]` 锚点、三套预设（流畅 / 优雅 / 极简）+ 强度倍率 + `prefers-reduced-motion`
   强制降级；消息级错峰（M3.1）待实机锚点取证；
-- **M4 会话效果**：消息密度与最大宽度、流式光标、代码块与引用样式、工具卡折叠、字体。
+- **M4 会话效果**（2026-09-27 实施，[设计](design/2026-09-27-appearance-m4-conversation-design.md)）：
+  消息密度（舒适 / 紧凑）、会话最大宽度（0–1600px，接管官方宽度、拖拽手柄让位）、
+  正文字体（默认 / 衬线 / 等宽，不动官方字号）、流式光标（三形态 + reduced-motion 禁闪）、
+  引用与代码块（默认 / 简约 / 强调）——全部经官方 CSS 变量与属性锚点落地，
+  原生档不注入、关闭即三层全清；工具卡折叠留 M4.1（官方受控 React state，属产品行为决策）。
 
 ## 两个关键决策（为什么这么做）
 
@@ -232,8 +258,8 @@ dsh-miasaki-appearance/
 
 ```powershell
 node --check index.js; node --check client.js          # 语法
-node --test --test-isolation=none "test/*.test.js"     # 114 例（9 个测试文件）
-node ../scripts/verify-all.mjs appearance              # 统一回归入口（16 项）
+node --test --test-isolation=none "test/*.test.js"     # 120 例（9 个测试文件）
+node ../scripts/verify-all.mjs appearance              # 统一回归入口（18 项）
 ```
 
 > 沙箱提示：受限环境里 `node --test` 会为每个测试文件 spawn 子进程而撞 `EPERM`。
@@ -270,5 +296,9 @@ factory 并断言导出形状 —— 2026-09-11 的启动失败即由这一条�
 - [Boot Splash 首帧启动画设计](design/2026-09-22-appearance-boot-splash-design.md) —— 跨线新增项：
   2026-09-22 定稿、2026-09-26 P2 实施（S1 index-inject 取证 / S2 `lib/splash.js` 三纯函数 /
   S3 host 三行注入 / S4 client 退场钩子；实施期偏离点 §6.1）；S5 实机验收判据见该文 §7；
+- [M4 会话效果设计](design/2026-09-27-appearance-m4-conversation-design.md) —— 官方 CSS 变量与
+  属性锚点取证表（`--dsh-chat-flow-gap` / `--dsh-chat-content-width` / `--dsw-font-family` /
+  `[data-streaming]` / 原生 `blockquote`·`pre`，逐条带 vendor 出处）、D1–D4 决策（含宽度覆盖点
+  为何选 `[data-chat-flow]`、光标为何两层 last-child、「工具卡折叠」为何留 M4.1）、实施记录与实机判据；
 - [变更记录](design/CHANGELOG.md)。
 

@@ -134,9 +134,9 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
 
 | # | 事项 | 内容 | 依赖 |
 |---|---|---|---|
-| P1 | **M3 动效** | ✅ **已实施（2026-09-27）**：面板三控件（Switch + 预设选择丸 + 强度步进器，masterSwitch label 参数化）+ 纯 CSS 动效层（`--mia-mo-*` 变量、时长梯 160/300/420、位移+缩放入场、禁 linear、reduced-motion 降级 100ms 淡入、关闭即整层移除、**不碰官方 transition**）；消息级错峰贴类器留 M3.1（`.mia-mo-tagged` 槽位 CSS 已在层内，贴类器待实机锚点取证） | V1 的选择丸；M1 规划 §5.5 设计 |
+| P1 | **M3 动效** | ✅ **已实施（2026-09-27）**：面板三控件（Switch + 预设选择丸 + 强度步进器，masterSwitch label 参数化）+ 纯 CSS 动效层（`--mia-mo-*` 变量、时长梯 160/300/420、位移+缩放入场、禁 linear、reduced-motion 降级 100ms 淡入、关闭即整层移除、**不碰官方 transition**）；消息级错峰贴类器留 M3.1（`.mia-mo-tagged` 槽位 CSS 已在层内，贴类器待实机锚点取证）。**2026-09-27 竖条形态修正**（用户「侧边栏动效有欠缺」）：侧栏 / 右栏（窄高竖条 + 实色背景板）从通用 rise 换为横向滑入 `mia-mo-slide`（-12px / +12px、去缩放，贴官方 SidebarRoot rail-in 语汇），并加轻错峰（侧栏 → 会话 +60ms → 右栏 +120ms）；宽扁容器保持竖向 rise | V1 的选择丸；M1 规划 §5.5 设计 |
 | P2 | **Boot Splash 实施** | ✅ **已实施（2026-09-26，§5.1）**：`lib/splash.js` 三纯函数 + host `index-inject` 三行（首次启用官方 `html` 行 kind）+ client 退场钩子（双信号 + 2.5s 兜底 + 幂等）；配置 v5 `motion.bootSplash`；S5 实机待验收 | 跨线契约 `cross/boot-loading-2026-09-22.md` |
-| P3 | **M4 会话效果** | 密度 / 最大宽度 / 流式光标 / 代码块与引用样式 / 工具卡折叠 / 字体；面板每行一个选择丸或步进器；密度与宽度**不得**与通用页「会话视图」混淆（那是视图模式） | V1；M3 的注入与锚点纪律 |
+| P3 | **M4 会话效果** | ✅ **已实施（2026-09-27）**：六行控件（密度 / 最大宽度 / 正文字体 / 流式光标 + 样式 / 引用与代码块）；全部经官方 CSS 变量与属性锚点落地（`--dsh-chat-flow-gap` / `--dsh-chat-content-width`（覆盖点 `[data-chat-flow]`，接管期间官方拖拽手柄让位）/ `--dsw-font-family` / `[data-streaming]` / 原生 `blockquote`·`pre`），原生档不注入、关闭三层全清；「工具卡折叠」留 M4.1（官方受控 React state，属产品行为决策）。配置 v6 `conversation.{font,cursor,quoteCode}`。取证表与 D1–D4 见 [M4 设计](2026-09-27-appearance-m4-conversation-design.md) | V1；M3 的注入与锚点纪律 |
 | P4 | **每板块恢复默认** | models `linkButton` 形态（h28/r14/12px tertiary）；按板块重置（theme/wallpaper/avatar/motion/conversation） | V1 |
 | P5 | **配置导入 / 导出** | M5 规划项：一段 JSON 下载/上传，sanitize 全量收窄后整体替换；导入前二次确认 | V1 |
 | P6 | 壁纸亮暗双图 + URL 源入口 | 配置面早已支持（`wallpaper.light/dark`、http(s) 源），面板按需开放（URL 源有外链风险，入口加确认） | V1 |
@@ -158,7 +158,7 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
    类型」走查全路径（Menu anchor 在 props.anchor 上，新增 `collectMenuAnchors` 遍历）。
    单测 **100 → 101 例**（client 15 → 17）；`verify-all appearance` **16/16**、
    `repo` **2/2**。**实机待用户重启 `dsh web` 验收**。
-2. **S2 P1 M3 动效** → ~~**S3 P2 Boot Splash**~~ ✅ **已实施（2026-09-26，见 §5.1）** → **S4 P3 M4**，各自带单测与 CHANGELOG。
+2. ~~**S2 P1 M3 动效**~~ ✅ **已实施（2026-09-27）** → ~~**S3 P2 Boot Splash**~~ ✅ **已实施（2026-09-26，见 §5.1）** → ~~**S4 P3 M4 会话效果**~~ ✅ **已实施（2026-09-27，见 [M4 设计](2026-09-27-appearance-m4-conversation-design.md)）**，各自带单测与 CHANGELOG。**下一步 P4 每板块恢复默认 / P5 配置导入导出 / P6 壁纸亮暗双图 + URL 源**。
 
 ### 5.1 P2 Boot Splash 实施记录（2026-09-26）
 
