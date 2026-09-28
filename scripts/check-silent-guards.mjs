@@ -20,6 +20,8 @@
 //   · **构建链与工具链**：`scripts/**`、`workers/**`、`patches/*/{patch,rebuild-baseline}.mjs`
 // 判据：这两类位置的产物是「安装到 profile 的插件」与「打包/注入的产物」—— 静默降级
 // 不会让人看见，只会让东西消失。浏览器半的降级至少还有 UI 可观察。
+// 另有**路径前缀级**排除（`SKIP_PATH_PREFIXES`）：外部工具链产出、本仓无源码、重生成会整体覆盖的
+// 编译产物 —— 就地豁免会被冲掉，故按目录排除；新增排除项必须同时给出替代检查（见该常量注释）。
 //
 // ── 四类规则（含各自的生效范围）─────────────────────────────────────────────
 //   R1 静默跳过守卫 —— `if (!existsSync(x))` 的分支只 return/continue/break，不 throw/exit。
@@ -92,6 +94,21 @@ const SKIP_DIRS = new Set([
 
 /** 闸门自身不参与扫描（否则它的正则字面量会自我命中）。 */
 const SELF_SKIP = new Set(['scripts/check-silent-guards.mjs', 'scripts/check-doc-versions.mjs'])
+
+/**
+ * 按**相对路径前缀**排除：外部带入的编译产物 —— 本仓不含其源码、由外部工具链产出、
+ * 重新生成会**整体覆盖**（就地写 `guard-ok` 也会被冲掉，属可预测的复发）。
+ * 与 `SKIP_DIRS` 里的 `vendor`（外部源码）/ `baseline`（补丁产物）同族：产物不按本仓源码标准审。
+ * 代价（刻意接受）：该目录失去本闸门的可见性 —— **补偿手段是 verify-all 的语法检查项**，
+ * 不是放任（新增排除项时必须同时给出替代检查，否则等于隐藏）。
+ */
+const SKIP_PATH_PREFIXES = [
+  // 上游 deepseek-harness-orb 的 tsdown 产物（源码在 _refs/orb-computer-use/，gitignore）。
+  // 2026-09-28：命中 R1 两处，均为 `uniqueDirectory()` 里「目标目录名可用性探测」
+  // （`if (!existsSync(base)) return base`）—— existsSync 为假即「名字可用」，
+  // 是函数核心语义，与 R1 要抓的「输入缺件却继续跑」不同族，属规则局限下的误报。
+  'dsh-miasaki-desktop/plugins/dsh-computer-use/lib/',
+]
 
 const RESOURCE_EXT = /\.(?:png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf)$/i
 const EXPLICIT_FAILURE = /throw\b|process\.exit\b|process\.exitCode\b|errors\.push|failures\.push|problems\.push|issues\.push|\bfailed\b|\bfailures\b/
@@ -337,6 +354,7 @@ function collect() {
     for (const full of collectFiles(root, [])) {
       const rel = relOf(full)
       if (SELF_SKIP.has(rel)) continue
+      if (SKIP_PATH_PREFIXES.some(prefix => rel.startsWith(prefix))) continue
       const text = readFileSync(full, 'utf8')
       hits.push(...scanR1(text, rel), ...scanR2(text, rel), ...scanR3(text, rel))
     }

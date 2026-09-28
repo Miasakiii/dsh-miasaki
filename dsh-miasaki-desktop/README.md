@@ -17,6 +17,18 @@
 > 历史会话已整体复制一份进专属目录，本壳列表与 canvas 引用照常可用。会话 header
 > 只有 `cwd`/`createdAt`/`agentPreset`、**没有来源标记**，历史无法事后分类，故只做「从现在开始隔离」。
 >
+> **分组账本同样已按 profile 隔离（2026-09-27 补齐，修「重启后会话整批掉进未分组」）**：
+> 上面那次只隔离了**会话正文**，而侧边栏的**工作区分组账本**（`storage-json`，官方默认 root 是
+> `!!js dshHomePath('storages')` → `~/.dsh/storages/workspace.json`）仍是 home 级共享、被三个实例同写一份。
+> 归组要求「账本登记了该会话」**且**「本实例能读到它的 header 且 `cwd` 的 realpath 等于 `workspace.path`」
+> （`dsh-workspace` 的 `sessionIds` getter 会实时过滤），于是**别的实例登记进来的会话在本 profile 读不到 header
+> ⇒ 被过滤 ⇒ 掉进「未分组」**；又因账本 `initialized:true` 之后不再全量回填，跨 root 登记一旦发生就永久留痕
+> （启动日志形态：`filtered session '<id>' from membership: session header is missing`）。
+> 现把整个 storage root 也覆写为 `profiles/miasaki/storages`：本壳拥有自己的分组账本与会话投影缓存，
+> 新账本从零按 `cwd` 全量回填 —— **实测 242 个会话归位 237 个**（dsh-miasaki 227 / kulumi 7 / Dhow 2 / Asakii 1），
+> 其余 5 个的 `cwd` 目录已不存在（官方本就不归组）。全局 `~/.dsh/storages/` 归 web 与官方桌面端继续共用，
+> **两侧互不可见的分组各自正确**。回滚 = 删掉 `storage-json` 条目并删 `profiles/miasaki/storages/`。
+>
 > **⚠ 隔离的可见性边界（2026-09-27 实机排查后补）**：`web` profile 与本壳 profile 装的插件
 > **完全相同**、界面几乎无法区分，但两者**各有一份会话库** ⇒ 在浏览器 GUI（`dsh web`，默认
 > `127.0.0.1:19387`）里聊的会话，**在壳（`127.0.0.1:3080`）里看不到**，反之亦然。这正是用户
@@ -35,7 +47,9 @@
 >   }
 >   ```
 > **要「两处都能看到」只有一条路：取消隔离**（删掉 `profiles/miasaki/cordis.patch.yml` 里
-> `session-persistence-jsonl` 的 `root` 覆写，回到共用一份；`root` 是单值，**没有"双 root"可配**）。
+> `session-persistence-jsonl` 与 `storage-json` **两条** `root` 覆写，回到共用一份；两者的 `root` 都是单值，
+> **没有"双 root"可配**）。**只删一条是错配** —— 会话正文在一个库、分组账本在另一个库，
+> 那正是 2026-09-27「重启后会话没丢、却掉进未分组」的成因。
 > 复制/镜像会造出同一 `sessionId` 的两份分叉记录，**不建议**。
 
 ## 快速开始
@@ -56,7 +70,7 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 
 ```bash
-node ../scripts/verify-all.mjs desktop   # 30 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×6 / 插件单测 / cargo test（81 例）
+node ../scripts/verify-all.mjs desktop   # 40 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×8 / 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（100 例）
 ```
 
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
@@ -172,6 +186,32 @@ powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -FixShortcuts 
 > # 必须晚于最后一次源码改动时间；否则跑的还是上一版
 > ```
 
+**改完素材也必须走同一趟（2026-09-28 实测教训）**：`assets.rs::read()` 是
+「**磁盘 `ui/`（EXE 旁）优先，内嵌兜底**」—— 部署目录里的旧素材会**遮蔽**新编译进去的新素材。
+2026-09-27/28 接入的 whale 图集与重画的反转狂三，就因为只跑了切片脚本、没重建没部署，
+在实机上**一个都没生效**（部署目录的 `frames.json` 停在 8-31、`whale\frames\` 根本不存在）。
+
+素材改完的自查判据两条，缺一不可：
+
+```powershell
+# ① 部署目录的素材与仓库逐字节一致（robocopy /MIR 保证「该删的也会删」）
+(Get-FileHash C:\ProgramData\MiasakiApp\ui\pets\frames.json).Hash -eq (Get-FileHash ui\pets\frames.json).Hash
+# ② 部署 exe 的时间戳晚于最后一次素材改动
+Get-Item C:\ProgramData\MiasakiApp\Miasaki.exe | Select-Object LastWriteTime
+```
+
+**`dist\` 是手工组装的分发目录（没有生成脚本）**，`npm run build` 并不直接产出它：
+
+```powershell
+npm run build                                                    # → src-tauri\target\release\miasaki.exe
+Copy-Item src-tauri\target\release\miasaki.exe dist\Miasaki.exe -Force
+robocopy ui dist\ui /MIR /R:1 /W:1 /NJH /NJS /NDL /NP            # 素材镜像（含删除陈旧文件）
+npm run deploy                                                   # → C:\ProgramData\MiasakiApp
+```
+
+> MSI 环节失败（受限会话里 WiX `light.exe` 拿不到临时目录，见 §打包（MSI）失败排查）
+> **不影响 exe** —— exe 的编译与签名在该环节之前就已完成，照上面的路径分发即可。
+
 再用桌面「Miasaki 桌面端」快捷方式验证。失败弹窗自本次起按启动位置**分流**：exe 在
 `%USERPROFILE%` 之下时直接点名「改用 `C:\ProgramData\MiasakiApp\Miasaki.exe`」，不再给
 「加安全软件白名单」这类无效建议；同时打印**启动位置**，并说明低权进程连 `pet.log` 都写不进去
@@ -235,19 +275,21 @@ light 的完整命令行与 stderr。
 
 ## DSH 运行时补丁（本体例外）
 
-`patches/` 存放**六处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
+`patches/` 存放**八处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
 **DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件均已入库，可重建/可校验/可回退。
 
 | 补丁 | 目标包 | 做什么 |
 |---|---|---|
 | [`dsh-client-ui-settings-models`](patches/dsh-client-ui-settings-models/README.md) | 官方设置页 | 逐模型「思考强度」下拉 + 「测试连通性」按钮 |
-| [`dsh-client-ui-conversation`](patches/dsh-client-ui-conversation/README.md) | 官方会话头 | 窄宽度溢出保护：`headerActions` 改可收缩 + 横向可滚，消除右栏展开时的控件压叠 |
+| [`dsh-client-ui-conversation`](patches/dsh-client-ui-conversation/README.md) | 官方会话头 | 窄宽度溢出保护：`headerActions` 改可收缩 + 横向可滚，消除右栏展开时的控件压叠；**展开态放行溢出**，修 0.1.7「后台任务展开栏点不开」（浮层被 `overflow:hidden` 裁掉，2026-09-28） |
 | [`dsh-client-ui-trajectory`](patches/dsh-client-ui-trajectory/README.md) | 官方轨迹页 | 首 token 计时可恢复：实时 chunk 缺位时从 `assistant/message` 紧凑流恢复，修掉「首 token 时间不可用」 |
 | [`dsh-client-ui-chat`](patches/dsh-client-ui-chat/README.md) | 官方聊天区 | 同上，作用于消息气泡的「首 token 用时（TTFT）」与窗口口径兜底统计 |
 | [`dsh-client-ui-attachment`](patches/dsh-client-ui-attachment/README.md) | 官方消息图片画廊 | 多图 tile 宽高比保持：64×64 定宽 cover 方块改为按原始比例自适应（44–220）+ contain 完整显示，修「截图被裁成方块」 |
+| [`dsh-client-ui-sidebar`](patches/dsh-client-ui-sidebar/README.md) | 官方侧边栏 | 头部悬浮提示 portal 化：6 处 Tooltip 加 `portal: true`，气泡改挂 body（z 1100），修左上角悬停提示被中栏盖住/裁掉 |
+| [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 miasaki 化：`sidebar.brand.name` occupant 换成部署实现，deepseek 字标 8 path 逐字节保留、胶囊几何不变，徽标 HARNESS → MIASAKI |
 | [`dsh-cordis-host-runner`](patches/dsh-cordis-host-runner/README.md) | 官方 host 侧 Cordis runner | `cordis_inspect_query`(client) 永久挂起修复：记下页面的拒绝原因 + 15s 兜底超时，把「无限挂起」变成「带原因的报错」 |
 
-> 前五个作用于浏览器 bundle，改完**刷新页面**即生效；第六个作用于 **host 侧 Node 包**
+> 前七个作用于浏览器 bundle，改完**刷新页面**即生效；第八个作用于 **host 侧 Node 包**
 > （`lib/index.js`），改完必须**重启 DSH host 进程**才生效（Node 已加载的模块不会热更新）。
 > 另有一件作用于 host 侧的图片准入补丁属 dual-model 线（`../dsh-miasaki-dual-model/patches/`），
 > 同样需重启 dsh 后端才生效。
@@ -263,13 +305,18 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 ```
 
 > **当前基线：DSH 0.1.7-rc.2（2026-09-25 升级重打，EDITS 零改）**。本机全局 DSH 已实装
-> `0.1.7-rc.2`（`next` 轨；`latest` 仍是 0.1.5-rc.3，勿用）。七个本体补丁当日全部重打，
+> `0.1.7-rc.2`（`next` 轨；`latest` 仍是 0.1.5-rc.3，勿用）。八个本体补丁当日全部重打，
 > **7/7 增量与升级评估文档给出的预期值逐字节一致**，是锚点未漂移的强证据：
 > attachment `45064→45175`（+111）、chat `530699→532563`（+1864）、
 > conversation `712829→712954`（+125）、settings-models `186454→201924`（+15470）、
 > trajectory `421649→423513`（+1864）、cordis-host-runner `102835→103592`（+757；**其 rc.2
 > 原版与 alpha.2 逐字节相同**，故常量未变）、图片准入 `124151→124896`（+745，
 > 见 `../dsh-miasaki-dual-model/patches/`）。
+> **2026-09-28 例外（唯一一次 EDITS 非零改）**：conversation 补丁增补第二条规则修
+> 「后台任务展开栏打不开」，产物由 `712954 / 727C86DD…` 变为 **`713019 / 668FD5F0…`**（+65）；
+> 基线原版未动（仍 `712829 / 40EF6D13…`）。同日起 `verify`/`apply` 增加 **产物语法守卫**
+> `assertParsable()` —— 起因是一次真实事故：替换文本里的裸引号截断了目标文件的字符串字面量，
+> SHA 自证照样 PASS、页面却全量白屏（详见该补丁 README「引号纪律与语法守卫」）。
 > **两个计时补丁要一起重打**才完整（同一个 `firstTokenTime` 的两处显示）。
 > cordis-host-runner 是本目录里**唯一作用于 host 侧 Node 包**的补丁（其余都是浏览器 bundle）
 > ——host 侧两个补丁（它 + 图片准入）**需重启 dsh 后端生效**，client 侧刷页面即生效。
@@ -278,9 +325,25 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 > ① `status` 报 `unknown`（新版覆盖）→ ② 把安装目录的新版原版复制为 `baseline/*.original.js`
 > 并同步 `ORIGINAL_SHA256` + `BASELINE_DSH_VERSION` → ③ `rebuild`（A 类）或 `seal`
 > （api-session-controller）重建 golden 产物并回填 `PATCHED_SHA256`；B 类补丁（chat /
-> conversation / trajectory / cordis-host-runner）**不存 patched 全文**，其 `verify` 在常量
-> 未同步时会以 FAIL **打印**重建 SHA，据此回填即可 → ④ `verify`（须 PASS）→ ⑤ `apply`。
-> **本目录不存在 `rebuild-baseline.mjs`**（历史文档中的该命令名有误）。
+> conversation / trajectory / cordis-host-runner / sidebar / brand-official）**不存 patched
+> 全文**，其 `verify` 在常量未同步时会以 FAIL **打印**重建 SHA，据此回填即可 → ④ `verify`
+> （须 PASS）→ ⑤ `apply`。
+> **`rebuild-baseline.mjs` 除 `dsh-client-ui-attachment` 外各补丁目录都有**（chat / conversation /
+> settings-models / trajectory / cordis-host-runner / sidebar / brand-official；attachment 的重建
+> 做在 `patch.mjs rebuild` 子命令里——功能不缺、只缺同形脚本。8 个目录 2026-09-28 实测）。旧文档中
+> 「本目录不存在该命令」的表述作废——2026-09-28 起多数补丁已改用该脚本重建 baseline）。
+>
+> **2026-09-28 新增第七处补丁 `dsh-client-ui-sidebar`**（侧边栏头部悬浮提示 portal 化，
+> 修左上角悬停提示被中栏盖住；基线即 0.1.7-rc.2，`32052→32168`（+116，6 条 JS 编辑各插一行
+> `portal: true,`），产物 `655ED7D5…`；2026-09-28 已 apply 到全局安装，status=patched。
+> 目录带 `rebuild-baseline.mjs`（与 chat / conversation 等兄弟补丁同型）。
+>
+> **2026-09-28 新增第八处补丁 `dsh-client-ui-brand-official`**（品牌徽标 HARNESS→MIASAKI，
+> 客户要求「把这个改成 Miasaki」；基线即 0.1.7-rc.2，`1863→8286`（+6423，2 条 JS 编辑：
+> 插入 MiasakiBrandName 组件 + 改 OfficialBrandName 返回），产物 `821DD9B3…`；
+> 2026-09-28 已 apply 到全局安装，status=patched，用户实机截图确认生效。
+> 目录带 `rebuild-baseline.mjs`；字标 8 path 为软依赖 primitives `BrandWordmark`
+> data，升级后需按 README 第 2 步重新提取校验）。
 >
 > 历史基线记录（0.1.7-alpha.2 时期，2026-09-23 全量重打）：六个补丁（含 dual-model 线的图片准入
 > 补丁）当日全部重打、`EDITS` 零改：settings-models（`B2D7D445…` → `9F2F1EE8…`，probe 自动选中
@@ -295,11 +358,12 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 > trajectory / chat 于 2026-09-10 新建（`73A878B4…` → `C3485ADF…`、`4F9CFFF8…` → `BE4C68D5…`）；
 > cordis-host-runner 于 2026-09-21 新建（`58EF79A0…` → `8B81500A…`）。
 > 下次升级的流程（各补丁**各自独立**）：`status` 报 `unknown` → 用新版原版刷新
-> `baseline/*.original.js` 与 `ORIGINAL_SHA256` → `rebuild`／`seal` 重建产物并按打印值回填
-> `PATCHED_SHA256` → `verify` → `apply`。**注意：本目录不存在 `rebuild-baseline.mjs`**，
-> 旧记载中的该命令名有误（2026-09-25 实测修正）。
+> `baseline/*.original.js` 与 `ORIGINAL_SHA256` → `rebuild`／`seal`（或
+> `rebuild-baseline.mjs`）重建产物并按打印值回填
+> `PATCHED_SHA256` → `verify` → `apply`。**注意：`rebuild-baseline.mjs` 只 `dsh-client-ui-attachment`
+> 没有**——它的重建在 `patch.mjs rebuild` 子命令里（2026-09-28 逐目录实测修正；其余 7 个目录均有该脚本）。
 
-详见六个补丁各自的 README，以及
+详见各补丁各自的 README，以及
 [模型设置工具包设计](../dsh-miasaki-shared-docs/cross/model-settings-toolkit-design-2026-09-07.md)、
 [会话头部挤压修复设计](../dsh-miasaki-canvas/design/2026-09-10-conversation-header-crowding-fix.md)
 与[首 token 计时恢复设计](design/trajectory-ttft-restore.md)。
@@ -342,10 +406,17 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 |---|---|---|
 | `pure` | DS 鲸鱼娘 | `ui/pets/whale/`（deepseek-whale-pet，MIT） |
 | `zafkiel` | 狂三（Q 版） | `ui/pets/kurumi/`（hatch-pet-kurumi，作者自产） |
-| `kurkuriel` | 反转狂三（Q 版） | 同狂三图集 + CSS 反转滤镜（白化/降饱和/血红辉光） |
+| `kurkuriel` | 反转狂三 | `ui/pets/inverse/`（**三态立绘** idle/work/deep，不走图集；**2026-09-28 按原作造型重画**：纯白长发 + 白色军装 + 军帽金冠 + 左蓝右红异色瞳 + 右手短枪 / 左手军刀） |
 
 - 图集兼容 Codex 宠物 V1/V2 格式（8 列 192×208，自动探测每行非空帧）；kurumi 已切全 9 行语义帧
-  （idle/runRight/runLeft/wave/jump/failed/wait/run/review），whale idle 为帧序列（idle.gif 拆分 6 帧）
+  （idle/runRight/runLeft/wave/jump/failed/wait/run/review）。
+  **whale 也接了图集（2026-09-27，v5 L0-3）**：它的 `spritesheet.png` 实测 **8 列 × 11 行**，
+  此前只拆了 `idle.gif`、11 行图集**零使用**（接线缺失，不是素材缺失）；现切 **r0–r6 共 7 行 46 帧**
+  （idle/runRight/runLeft/wave/jump/failed/wait，实测内嵌 +2.31 MB），whale 与 kurumi 走同一条
+  行选择 / 回退链，六态姿态与散步第一次对它也可读（`deep` 强度档仍保留立绘覆盖）。
+  **注意：行号是生成模板的约定、不是跨主题语义**——kurumi `r7` 是坐姿打字，whale `r7` 是站姿待机，
+  连 r0 帧数都不同（6 vs 7）；故切片脚本改用**每主题行名表**（`cut-frames.mjs` 的 `ATLAS_SPECS`），
+  详见 [design/pet-v5-motion-plan.md](design/pet-v5-motion-plan.md) §2.3
 - 交互（v3 M1，2026-09-12 重排；**R1/R2 于 2026-09-16 补窗口层**）：**拖动**移动 / **单击**「撸一下」
   跳跃+气泡（**不抢焦点**——窗口已带 `WS_EX_NOACTIVATE`，点击不会夺走前台与键盘焦点，
   在被遮挡的应用里 Ctrl+C/V 照常可用；等待审批或主窗口最小化/隐藏时单击为**唤起主窗口**）/
@@ -371,11 +442,30 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
   **红线**：只在用户显式点击时决策、只发这两个枚举、不做「全部允许 / 记住选择」；
   点完**先本地收起**，若 3s 内该审批仍在（未生效）则回显「需要你的批准」提示去 DSH 界面处理，
   **绝不假装成功**。拿不到官方 `key` 的审批不挂可交互气泡（身份门禁）
+- **绘制层动效（L1，2026-09-28）**：呼吸 / 摇摆 / 挤压脉冲，全部在**绘制层**用变换完成、**零新素材**
+  （设计见 [design/pet-v5-motion-plan.md](design/pet-v5-motion-plan.md) §3）：
+  **呼吸**覆盖**全部静止姿态**（图集行 ±2px、三态立绘 ±3px，周期 3.2s；此前只有 `idle`/`wait` 会呼吸，
+  其余姿态是彻底静止的死图）；**摇摆**绕**底边中心** pivot ±2°（周期 5.6s，与呼吸**错相**），
+  宿主为 `idle` 与工作态 `run`，inverse 的 `idle`/`work` 立绘同样受益——
+  **反转狂三此前三态全是不会动的画**；**挤压脉冲**（220ms，横向 +10% / 纵向 −15%）在 Done 庆祝
+  与单击跳跃落地时各触发一次（whale 图集无 `review` 行，Done 原本只落回 idle，
+  挤压正是它的零素材庆祝表达）。
+  实现：`src-tauri/src/pet_native/xform.rs`（纯逻辑、无 Win32 依赖、可单测）承载变换与相位；
+  `blit_center_bottom` 改为**逆向映射采样**（目标像素 → 逆变换 → 源图双线性），遍历范围取变换后的
+  **外接包围盒**，基准位置按**最大**摇摆角预留余量——否则摇摆会退化成「边弹边摆」，
+  且最低点会被窗口下沿切掉脚尖。
+  **命中判定零改动**：R2 查的是最终合成缓冲，旋转/形变天然跟随
+  （motion-plan §3.3 原列的「命中必须与绘制同批改造」是参考实现的前提，对我方**不成立**）。
+  挤压期间**强制关摇摆**：两者叠加是横向最坏情况（包围盒 282px vs `WIN_W` 286，仅余 4px）。
 - 自主动作（环境编排）：静止且空闲时低频随机小动作（挥手/检查/等待，偶发跳跃——表演 1.2~2.2s、
-  休息 8~18s、首次 5.5s 延迟；指针按下即打断）；等待审批 / fleet 指示 / busy 工作态期间
-  散步与小动作**停触发**（工作姿态可读，不被环境动作打断）
+  休息 8~18s、首次 5.5s 延迟；指针按下即打断）；定时散步**按方向选行**（2026-09-27 v5 L0-1：
+  向右走播 `runRight`、向左走播 `runLeft`——这 16 帧早已切好，却因 `slot_row` 丢掉 `dx` 而从未上场）；
+  等待审批 / fleet 指示 / busy 工作态期间散步与小动作**停触发**（工作姿态可读，不被环境动作打断）
 - **工作动态 + 权限申请提示**（v3 M2 2026-09-12 重做；**R0 2026-09-16 改为跨会话聚合**）：
-  桌宠反映六态 `idle / thinking / waiting / error / done / fleet-blocked`——**主信号 = DSH 官方契约**：
+  桌宠反映六态 `idle / thinking / waiting / error / done / fleet-blocked`（**thinking 于 2026-09-27
+  v5 L0-2 改播 r7「坐姿敲键盘」**——此前与 idle 同姿态，「在干活」在画面上读不出来；
+  该行原名为 `run`、曾被当散步播，现专属于工作态，散步改用 runRight/runLeft）
+  ——**主信号 = DSH 官方契约**：
   `dsh-pet-panel` 插件读官方 `ctx.sessions`（**跨会话聚合**：任一非子代理会话 `running` = 忙，
   修掉「先完成的会话把仍在干活的顶成 idle」）+ `ctx.uiSession.pendingInteractions`
   （**遍历全部会话**找审批——切走会话后仍能看到后台会话的待审批，这是「快捷提权」的价值前提；
@@ -536,6 +626,7 @@ desktop/
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
 ├─ plugins/dsh-session-log-move/ # DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧，见下）
 ├─ plugins/dsh-model-probe/      # DSH web profile bundle：模型连通性真实探测（host only，设置页「测试连通性」的 B 档能力，见下）
+├─ plugins/dsh-computer-use/     # DSH profile bundle：Computer Use GUI 工具（桌宠 v4 能力底座；上游 orb 移植 + 本地重构建，产物入库，见该目录 README）
 ├─ scripts/build-init.mjs    # 打包内联 + 令牌完备性强制校验
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
 ├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）
@@ -546,6 +637,7 @@ desktop/
    ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh 后端（专属 profile miasaki）/导航 + 后端存活看门狗 + fleet 脉冲看门狗
    ├─ src/launcher_icon.rs   # 软件头像 → 窗口/托盘图标（读 appearance 线配置，1.5s 巡检跟随）
    ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
+   ├─ src/pet_native/xform.rs # 绘制变换与动效相位（纯逻辑、无 Win32 依赖；pet-v5 M1–M3 的数学层）
    ├─ injected/theme-init.js # 构建产物（include_str! 注入，勿手改）
    └─ capabilities/          # 最小权限（core:default）
 ```

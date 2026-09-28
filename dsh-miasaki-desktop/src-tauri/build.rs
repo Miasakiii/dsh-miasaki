@@ -37,11 +37,16 @@ fn gen_assets() {
             files.push(format!("{prefix}/{n}"));
         }
     };
-    pngs(
-        &ui_root.join("pets").join("kurumi").join("frames"),
-        "pets/kurumi/frames",
-        &mut files,
-    );
+    // v5 L0-3(design/pet-v5-motion-plan.md):**图集行**——kurumi 与 whale 各一份。
+    // whale 此前只内嵌 `states/`（三态立绘），其 11 行图集即使切了也进不了 EXE；
+    // 本清单是显式登记，新增图集主题必须在这里补一行，否则运行时静默回落到立绘。
+    for mode in ["kurumi", "whale"] {
+        pngs(
+            &ui_root.join("pets").join(mode).join("frames"),
+            &format!("pets/{mode}/frames"),
+            &mut files,
+        );
+    }
     for mode in ["whale", "inverse"] {
         pngs(
             &ui_root.join("pets").join(mode).join("states"),

@@ -2,6 +2,458 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-28（续六）· 入库整理：产物闸门接入 + 当前态台账订正
+
+**本条不含功能改动**——是这批积压改动的收尾整理（用户指令「更新文档，整理文件，提交推送」）。
+
+### 一、`dsh-computer-use` 产物接入语法闸门（desktop 35 → **40** 项）
+
+`plugins/dsh-computer-use/lib/*.js` 是上游 orb 工具链的 tsdown 产物（本仓无源码，见该目录
+README），此前**没有任何闸门**——它是唯一无闸门的已装机插件，而产物损坏在实机上的表现
+只是「工具不见了」。现按 `dsh-model-probe` 同形补 5 条 `node --check`。
+
+**动态枚举而非硬编码文件名**：chunk 名带内容 hash（`backend-DNT4VCU7.js` 之类），重新编译即变，
+硬编码＝静默断链（本仓 2026-09-10 教训）；目录缺失时该检查**显式失败**，不静默跳过。
+
+### 二、静默守卫闸门：本批新增命中就地闭环（命中 64 → 60，新增 0）
+
+`check-silent-guards` 在本批改动上判红 4 处，逐条处置：
+
+| 命中 | 判定 | 处置 |
+|---|---|---|
+| `patches/dsh-client-ui-{sidebar,brand-official}/rebuild-baseline.mjs` 的 `catch { /* 继续向上找 */ }` | **探测逻辑**，非吞错：逐级向上（≤8 层）找 `@deepseek-ai/dsh` 安装位置，全找不到时返回 null，调用方**显式打印**「未能从安装目录读出，请手动填写」 | 就地写 `// guard-ok: <理由>`（与既有 5 个同构文件的区别：那 5 个是基线存量，本轮**新建**的应就地决策而非进基线） |
+| `plugins/dsh-computer-use/lib/code-agent.js` 两处 `if (!existsSync(base)) return base` | **R1 规则局限下的误报**：那是 `uniqueDirectory()` 的「目标目录名可用性探测」——`existsSync` 为假即「名字可用」，是函数核心语义，与「输入缺件却继续跑」不同族 | 闸门新增 `SKIP_PATH_PREFIXES`（按目录排除**外部编译产物**），该目录同时以上面的语法闸门作**替代检查**——排除而不加替代检查＝把风险藏起来 |
+
+`SKIP_PATH_PREFIXES` 是新机制（此前只有按目录名的 `SKIP_DIRS` 与按文件的 `SELF_SKIP`）：
+它排除的是「本仓无源码、由外部工具链产出、重新生成会整体覆盖」的产物——就地写豁免会被下次
+编译冲掉，属可预测的复发。**新增排除项必须同时给出替代检查**，这条写进了闸门注释。
+
+### 三、当前态台账订正（本条最琐碎但最该做）
+
+| 位置 | 原值（失真） | 实际（本轮实跑） |
+|---|---|---|
+| `README.md` 静态回归行 | 35 项 / `patch verify` ×7 / `cargo test` 90 例 | **40 项** / ×8 / **100 例** |
+| `design/ARCHITECTURE.md` 构建链 | `cut-frames.mjs` 只写「whale 拆 idle.gif」；`inverse-states.mjs` 写「需 `raw/blue-*.png`」 | whale **图集切 7 行** + 立绘帧序列；源为 **`raw/canon-*.png`**（背景色四角采样） |
+| `README.md` 目录树 | 缺 `plugins/dsh-computer-use/` 与 `src-tauri/src/pet_native/xform.rs` | 均补 |
+| `README.md` 补丁脚本说明（两处） | 「`rebuild-baseline.mjs` 仅存在于部分补丁目录」 | 8 个补丁目录里**只有 `dsh-client-ui-attachment` 没有**（其重建在 `patch.mjs rebuild` 子命令里，功能不缺） |
+
+> **`raw/blue-*.png` 的删除**：活脚本零引用（`inverse-states.mjs` 已改指 `canon-*`），旧源
+> 12 MB 归档在 `_refs/pet-asset-audit-2026-09-28/legacy-raw/`（gitignore 区，不入库）。
+> `canon-*.png` 是**构建链输入**（`cutout()` 的唯一输入 + `check-pet-assets.mjs` 登记的再生源），
+> 入库；`whale/frames/` 46 帧是切图产物，按 `kurumi/frames/`（57 帧已入库）的既有约定同样入库。
+
+**验证**：`node scripts/verify-all.mjs desktop` = **40/40 PASS**（`cargo test` 100 passed / 0 warning）；
+`node scripts/check-silent-guards.mjs` = 新增 0 / 可回收 0；全量 `verify-all` 见根 README 的 2026-09-28 基线。
+
+**顺带记两条实机提示（未处理，如实登记）**：① `check-pet-assets` 对 kurumi 与 whale 各报一条
+「源 `spritesheet.png` 比派生帧新」——但两个图集的内容与 HEAD 一致（`git status` 无 M），
+判定是 mtime 噪声、非断链，故**未重跑切片**（重跑有制造无关二进制 diff 的风险）；若实机见帧
+不匹配，重跑 `node scripts/cut-frames.mjs` 即可。② 部署目录 `C:\ProgramData\MiasakiApp\`
+的新鲜度判据（exe 时间戳 / `pet.log` 的 `whale_rows=7`）已入回归矩阵 §3.2.1。
+
+
+## 2026-09-28（续五）· L1 绘制层动效落地（呼吸 / 摇摆 / 挤压）+「昨天的新素材没上屏」根因
+
+**本条两件事：一件是用户点名要的动效，一件是它的前提——素材根本没送到屏幕上。**
+
+### 一、先修前提：昨天的新素材一个都没生效（部署目录的陈旧外置素材把内嵌新素材遮蔽了）
+
+**现象**：9-27 接入的 whale 图集（46 帧）、9-28 重画的反转狂三白军装三态，
+以及 9-27 的 L0-1「散步按方向选行」/L0-2「r7 坐姿工作态」，在实机桌宠上**全部不可见**。
+
+**根因（两条叠加，缺一不成灾）**：
+
+1. `assets.rs::read()` 的策略是「**磁盘 `ui/`（EXE 旁）优先，编译期内嵌兜底**」；
+2. 部署目录 `C:\ProgramData\MiasakiApp\ui\pets\` 停留在 **8-31**（`frames.json` 1920B，
+   无 whale 行集；`inverse\states\*.png` 是黑裙旧造型；`whale\frames\` 根本不存在），
+   而 `dist\` 从未在 9-27/9-28 的素材改动之后重新构建过（exe 停在 **9-26 12:47**）。
+
+于是**磁盘的旧 `frames.json` 赢了内嵌的新版**：`load_frames` 里 `whale.rows` 取不到 ⇒
+`whale_rows` 为空 ⇒ whale 回落三态立绘（L0-3 整条链接不上）；inverse 继续读旧立绘。
+这**不是**构建脚本的锅——`deploy-local.ps1` 用的是 `robocopy /MIR`（镜像，含删除多余文件），
+问题在于**源 `dist/` 本身没更新**。
+
+**修复**：`npm run build` → `npm run deploy`（部署时 `-Force` 结束占用实例）。
+
+**教训（写进纪律）**：**「磁盘优先」策略要求部署目录与源码同批刷新**。
+素材改完只跑切片脚本、不重建不部署，等于没改——
+这条与 2026-09-28（续三）的「素材派生物要顺着构建链一起重跑」是同一族的两个面：
+那次漏的是**同一条链的下游**（徽章），这次漏的是**整条链的末端**（部署目录）。
+自查判据：`Get-Item C:\ProgramData\MiasakiApp\Miasaki.exe` 的时间戳必须晚于最后一次素材改动。
+
+### 二、L1 绘制层动效落地（M1 呼吸 / M2 摇摆 / M3 挤压脉冲）
+
+设计见 [`pet-v5-motion-plan.md`](pet-v5-motion-plan.md) §3，用户本次拍板范围为 **M1–M3（不含 M4 拖动尾随）**。
+
+| 项 | 内容 | 宿主 |
+|---|---|---|
+| **M1 呼吸** | ±2px（图集行）/ ±3px（立绘），周期 3.2s | **全部静止姿态**（此前仅 `idle`/`wait`） |
+| **M2 摇摆** | 绕底边中心 ±2°，周期 5.6s、与呼吸错相 | `idle`（长静置）/ `run`（打字起伏）；inverse 的 `idle`/`work` 立绘 |
+| **M3 挤压** | 220ms 单脉冲，`sx=1+0.10·sin(πp)`、`sy=1−0.15·sin(πp)` | Done 庆祝、jump 落地 |
+
+**新增 `src-tauri/src/pet_native/xform.rs`**（纯逻辑，无 Win32 依赖，10 例单测）：
+变换数学（`DrawXform` 正向/逆向/包围盒）+ 动效相位（`breath_offset`/`sway_angle`/`squash_scales`）。
+`blit_center_bottom` 改为**逆向映射采样**：目标像素 → 相对底边中心 pivot 的偏移 → 逆变换 →
+未变换框内坐标 → 源图双线性采样（逆向映射从结构上消除旋转空洞）。
+
+**三处设计判断（都写进了代码注释，避免后人重推）**：
+
+1. **motion-plan §3.3 的「命中判定必须与绘制同批改造」在本仓不成立**（订正）。
+   那条约束是参考实现的前提——它为每种元素单独维护 mask，旋转后 mask 与画面脱钩。
+   我方 R2 的 `is_transparent_at` 查的是**最终合成缓冲** `buf`，变换在写入时就已完成，
+   命中天然跟随绘制。**本轮对命中路径零改动**，这是架构红利不是遗漏。
+2. **摇摆的布局余量按「最大角」而非「当前角」预留**。若按当前角补偿 pivot，
+   底边基线会随相位上下浮动，摇摆就变成「边弹边摆」；固定余量 ⇒ 只有姿态在摇。
+3. **挤压期间强制关摇摆**。两者叠加是横向最坏情况（包围盒 282px vs `WIN_W` 286，仅余 4px），
+   几何上放得下但余量太薄，且观感是「歪着压扁」——取保守口径，单测钉住这条依据。
+
+**首版缺陷与纠正（值得记）**：包围盒最初写成**对称**解析式（`±(sx·w/2·cosθ + sy·h·sinθ)`），
+被新单测当场证伪——**横向是不对称的**：底边只随旋转平移 `±sx·w/2·cosθ`，
+而顶边（相对 pivot 的 y=−h）整体还横移 `sy·h·sinθ`，正角右移、负角左移。
+同一轮还纠正了另一个误判：**包围盒不必包含未变换的原框**（`sy<1` 压缩时顶边下移是对的），
+真正的硬判据是「**不裁内容**」（框内任意点的正向变换都落在包围盒内）。
+现实现改为逐角求解（每帧一次，不在像素循环里），单测同时验「不裁内容」与「最小性」。
+
+**验证**：`cargo test --bin miasaki` = **100 passed / 0 warning**（原 90，新增 10）；
+`node scripts/verify-all.mjs desktop` = **35/35 PASS**；构建链零新增 GDI 对象、采样就地写 `buf`。
+
+## 2026-09-28（续四）· 顶栏「后台任务」展开栏点不开 —— headerActions 把自己的弹层裁掉了
+
+**事件**：用户报「miasaki 桌面端顶栏的后台运行项目展开栏打不开」——点任务控件没任何反应。
+
+**归因（逐环实测，非推测）**：
+
+1. DSH 0.1.7 新增的「后台任务」列表来自 `@deepseek-ai/dsh-client-ui-jobs`，它把触发器与弹层注册到
+   `conversation.session.header.actions` 槽（`order: 20`）；
+2. 官方会话头把槽内容**直接**渲染进 `headerActions` div（`children: renderSlot(...)`）——**没有 portal**；
+3. 该弹层是普通绝对定位子元素：`.QsffPG_root{position:relative}` +
+   `ul.QsffPG_menu{position:absolute;top:calc(100% + 5px);z-index:100}`；
+4. 而本项目 2026-09-10 的会话头补丁给同一个容器加了 `overflow-x:auto; overflow-y:hidden`
+   —— 非 `visible` 的 overflow **必然裁剪后代**（绝对定位后代照样裁）。
+
+于是点击后 `aria-expanded` 变 `true`、DOM 里确有那个 `<ul>`，屏幕上却是空的。
+**这是两条既有决策的相撞**：补丁假设「headerActions 里只有内联控件」，0.1.7 的 jobs 包假设
+「headerActions 不裁剪」——两条假设各自都合理，撞在一起就是「点了没反应」。
+
+**修复**（`patches/dsh-client-ui-conversation/patch.mjs`，唯一一次 `EDITS` 非零改）：补一条
+`.wSkVaW_headerActions:has([aria-expanded=true]){overflow:visible}` —— **仅在控件展开期间放行溢出**，
+其余时刻照旧裁剪。不选「把 jobs 弹层 portal 化」的理由：那是改官方包、每版重打，且只修好这一个控件；
+`:has()` 是面向**全部插件**的一次性兜底。
+
+**实测证据**（真实 miasaki 实例 3080 + 真实会话头 `wSkVaW_headerActions`，弹层 CSS/DOM 取自 jobs 产物原文）：
+
+| 状态 | 容器 overflow | 弹层可见比例 | 命中测试 |
+|---|---|---|---|
+| 修复前 | `auto/hidden` | **0**（119px 全被裁） | false |
+| 修复后·展开 | `visible/visible` | **1** | true |
+| 修复后·收起 | `auto/hidden` | — | — |
+
+另记一条**反直觉的部署事实**：DSH host **不缓存**前端 bundle（改完 `lib/client.js` 后新开的页面
+直接拿到新字节，`&rev=` 随之变化）⇒ **client 侧补丁刷新页面即生效，无需重启后端**；
+host 侧补丁（cordis-host-runner、图片准入）仍需重启。
+
+**事故与加固（本条最该记住的部分）**：首版把规则写成 `[aria-expanded="true"]` ——
+本包的 CSS 常量是**双引号字符串**（`const css$4 = ".wSkVaW_root{…}"`），裸双引号**提前终止了字符串
+字面量**，整个 `client.js` 变成语法错误。后果是 host 立刻向所有客户端下发坏 bundle，页面
+`Failed to load plugins` 全量白屏；而 `node patch.mjs verify` **照样 PASS** —— 因为它的 SHA 自证只回答
+「重建产物 == 记录产物」，对「产物是否还是合法 JS」一言不发。约 3 分钟内定位并 `revert` 恢复，
+再以无引号写法（`[aria-expanded=true]`，CSS 对合法标识符值允许不加引号）重打。
+
+**新增守卫**：`patch.mjs` 的 `verify` 与 `apply` 均调用 `assertParsable()`（`new Function(产物)`），
+语法错误在**写盘前**显式失败。反向测试已做：换回含引号写法 → `verify` 以
+`产物语法校验失败：Unexpected string` 退出码 1 失败。跨补丁审计：其余 8 个本体补丁（含 dual-model 的
+图片准入）产物语法均 OK、状态均 patched、`EDITS` 内无裸引号，本事故仅此一处。
+
+**验证**：`node scripts/verify-all.mjs desktop` → **35/35 PASS**（patch verify 已并入）；
+补丁 `verify`/`status` 均 PASS，安装目录 SHA-256 `668FD5F0…` 与记录一致。
+实机端到端由一次性 CDP 脚本闭环（规则判据 + 真实会话头三态：未展开 `auto/hidden` → 展开
+`visible/visible`+弹层完整可见 → 收起复原），探针脚本用完已删（`_refs/probe-jobs-popover/`）。
+
+**影响面**：补丁打在全局安装的 DSH 上，**本壳与浏览器 GUI、官方桌面端同时受益**；
+用户侧只需刷新页面（桌面壳重启非必需）。
+
+## 2026-09-28（续三）· 反转狂三：deep 刀尖收进画面 + 主题徽章同步重出
+
+**背景**：续二留了两项「已知未修」——① deep 态军刀刀尖切到画面右上边缘；② `ui/icons/theme-inverse.png`
+主题徽章仍是旧造型。本条把两项一并核销。
+
+**① deep 重画**：前两次在 prompt 里明写「禁止刀尖出画」均告失败——模型画「举剑」有把剑身顶出画布的
+固有倾向。本次改为**改持刀方向**：军刀不再举向斜上方，改为斜向下垂在身侧、刀尖指向画面内下方。
+四边留白实测（`_refs/scripts-archive/check-edge.mjs`）：右侧 **18px → 55px**，四周不再有任何一边
+贴到 2px 以内。`states/deep.png` 由 397×540 变 386×540，spritesheet 由 1054×540 变 1043×540。
+
+**② 徽章重出**：徽章不是单独画的——它的源就是 `ui/pets/inverse/states/idle.png`，由
+`scripts/make-icons.mjs` 的自适应头部定位裁切而成。续二换了 idle 却没重跑该脚本，所以徽章停在旧造型。
+重跑后 `theme-inverse.png` 由「旧黑裙造型」变为「白军帽 + 金冠 + 左红右蓝异色瞳 + 破碎血红环」；
+同批输出的 `theme-pure.png` / `theme-zafkiel.png` / `app.png` 三张 hash 未变，确认脚本幂等、无误伤。
+
+**教训**：**素材派生物要顺着构建链一起重跑**。`states/idle.png` 是「三态立绘」与「主题徽章」两条链的
+共同输入，换素材时只重跑前者就会漏掉后者——这是 2026-09-10「删素材前必查脚本输入」那条纪律的延伸。
+
+**验证**：`node scripts/check-pet-assets.mjs` → PASS（警告 0 条）；三态铺浅蓝底逐张目检，无白边残留，
+异色瞳方向三态一致（画面左红、画面右蓝）。
+
+## 2026-09-28（续二）· 反转狂三立绘按原作造型重画（白军装三态）
+
+**事件**：用户指出「现在的反转狂三完全不还原」。逐张读图 + 联网核对原作设定后确认：
+`ui/pets/inverse/` 的素材其实是「**只把发色改白的正常狂三**」——黑色哥特萝莉裙、金色
+钟表眼、金齿轮配饰全部保留，而这三样恰是反转形态该换掉的特征（原作反转形态为**白色军装 +
+军帽／王冠 + 左蓝右红异色瞳 + 短枪与军刀**）。素材本身没被处理链画歪：`raw/blue-*.png`
+与 `states/*.png` 逐张一致，问题在造型设定。
+
+**修复**：以旧 `states/idle.png` 作**身份锚点**（只保脸型 / 头身比 / 绘画语言），走 `image_edit`
+图生图重画三态；先出定妆图确认造型，再批量出 idle / work / deep。源图更名
+`raw/canon-{idle,work,deep}.png`（白底，替代蓝底 `blue-*.png`；旧源归档
+`_refs/pet-asset-audit-2026-09-28/legacy-raw/`，12 MB → 1.2 MB）。`pet.json` 描述同步改写为
+「纯白长发、白色军装,左蓝右红异色瞳;一手短枪一手军刀」。
+
+**顺带修掉的既有不一致**：
+
+- `scripts/inverse-states.mjs` 的背景识别原写死「深蓝纯色（B 显著占优）」。换白底后**一个背景
+  像素都认不出**，flood-fill 无种子、bbox 退化成整张画布，输出带底白图 → 改为**四角 12×12
+  采样取中位数 + 通道差容差（BG_TOL=8）**，深蓝底 / 纯白底都能吃；与背景同色的前景（白军装、
+  白发）靠轮廓描边 + flood-fill 连通性隔离，实测未漏吃。
+- `scripts/check-pet-assets.mjs` 的再生源清单仍写 `raw/blue-*.png`，素材改名后误报 3 项 FAIL
+  （「删改素材必须同步脚本输入」那条 2026-09-10 教训的同型复发）→ 同步为 `raw/canon-*.png`，
+  并在该处加交叉引用注释。
+- `spritesheet.png` 停留在 396×208 旧版（states 已升到 540 高，属 v1 遗留断层）→ 重拼为 1054×540。
+
+**验证**：`node scripts/check-pet-assets.mjs` → **PASS**（三态在位、警告 0 条）；三态铺浅蓝底
+逐张目视，**无白边残留**、异色瞳方向三态一致（画面左红、画面右蓝）。
+
+**已知未修**：① deep 态军刀刀尖切到画面右上边缘——模型画「举剑」的固有倾向，连续两次 prompt
+明确禁止仍复现；② `ui/icons/theme-inverse.png` 主题徽章仍是旧造型，未同步重出。
+
+## 2026-09-28（续）· 品牌徽标 HARNESS → miasaki 部署名补丁（第八处本体补丁）
+
+**事件**：用户对侧边栏左上角品牌行（鲸鱼 + deepseek 字标 + 黑胶囊
+「HARNESS」）提出「把这个改成 Miasaki 怎么样」——只替换胶囊徽标文字。
+
+**归因**：`sidebar.brand.name` slot 的官方 occupant（brand-official）渲染
+`BrandWordmark{includeMark:false}`（primitives 唯一实现，纯 SVG：8 字标
+path + 胶囊 rect + 7 个 HARNESS 转曲字母）。single slot 后注册者胜出，官方
+预留了部署替换通道。
+
+**修复**：新增运行时补丁 `patches/dsh-client-ui-brand-official/` —— 2 条
+锚点编辑：插入 `MiasakiBrandName`（字标 8 path 与官方**逐字节一致**，胶囊
+rect 几何不变，徽标 HARNESS → MIASAKI 用 SVG `<text>` + 官方同款反色
+token）+ `OfficialBrandName` 改渲染它。鲸鱼 mark 不动。选补丁而非新插件：
+生效链路短（client-hmr/刷页面）、复用既有补丁基建、无需宿主重载 profile。
+
+**验证**：`patch.mjs verify` PASS（1863 B → 8286 B，SHA `821DD9B3…`）；
+已 apply（`.dsh-bak` 备份就位）；verify-all desktop 35/35 PASS；用户实机
+截图确认生效。字标保真经 Edge 无头双 svg 对照证明（「deepse」与「k」
+之间的间隙是官方 wordmark 原几何，非补丁引入）。教训：8 个 path 曾人工
+转写静默错 2 处，改为程序化提取 + 逐字节 diff 后才放行。设计文档
+`2026-09-28-miasaki-brand-wordmark.md`。
+
+## 2026-09-28 · 侧边栏头部悬浮提示 portal 化补丁（第七处本体补丁）
+
+**事件**：用户实机报告「鼠标悬浮在左上角时，悬浮提示会被遮盖」+ 两张截图。
+截图实测：侧边栏头部 brand 行右侧的「新建会话」tooltip（side 默认 right）
+从侧边栏列探入中栏时被后绘制的中间列内容盖住/裁掉（仅余 3px 弧条）。
+
+**归因**：SidebarRoot 头部 6 处 Tooltip 均不带 `portal`，内联渲染在 logoRow
+（overflow:hidden）里；侧边栏子树整体早于中间列入栈，中栏会话头的
+`container-type:inline-size`（titleRow）/`z-index:1`（tabs）等叠加上下文
+把 z-index:100 的内联气泡压在下面。web profile 五个社区插件、官方常驻
+z-index 层级、0.1.6 源码回归比对均已排除。
+
+**修复**：新增运行时补丁 `patches/dsh-client-ui-sidebar/` —— 6 处 Tooltip
+各加 `portal: true,`（官方逃生通道：气泡改挂 body，z 1100），几何与交互零
+变化；`patch.mjs verify` PASS（SHA `655ED7D5…`，+116 B，语法闸门过），已
+apply 到全局安装（0.1.7-rc.2，status=patched，刷页面即生效）。设计文档
+`2026-09-28-sidebar-tooltip-portal.md`；verify-all desktop 线 +1 项。
+
+## 2026-09-27（续五）· Computer Use 正式装入 miyasaki profile（五点拍板全确认）
+
+- **拍板（用户「五点全是」）**：触发器三件套（长按主+右键+热键 Ctrl+Alt+D）；展示态 dot 不常显；
+  ask_user 气泡按钮+抽屉卡片并存；截图缩略图首版不渲染；梯 1 先落地。已记录入设计文档 §6
+- **正式装机**（环境文件 `~/.dsh/profiles/miasaki/`）：`install.ps1 -Profile miasaki` 建 9 组 junctions
+  （插件 link + 依赖直链）；manifest `dependencies`（`link:`）+ `dsh.profile.bundles`（末位）登记
+- **零重启静态验证**：`dsh --profile miasaki --dump-config` → bundle 层 `# == @miasaki/dsh-computer-use`、
+  preset insert **一次无重复**、零 error（对比 cu-test 期 --patch 双份 insert 的教训：正式化走 bundles 单通道）
+- **生效条件**：patch 层启动时读取 ⇒ **用户重启壳后生效**；L3 实机验收清单（7 步，只读→写入→背景轨）
+  已写入插件 README。HID 输入类工具在 L3 前保持未触发态（普通会话无 GUI 工具，preset 隔离）
+
+## 2026-09-27（续四）· Computer Use 地基验证（L1+L2 全绿）+ v4 设计文档立档
+
+**事件**：调研 [deepseek-harness-orb](https://github.com/mini-yifan/deepseek-harness-orb)（dsh 0.1.7 非官方
+fork，Electron 悬浮球产品）→ 用户拍板**「集成到桌宠、不另做球」**→ 落 v4 设计文档
+（`2026-09-27-pet-v4-computer-use.md`，三梯度：①遥控器+状态镜 ②任务抽屉（WebView2 小窗挂在桌宠上）
+③搁置的气泡动态文本；五拍板点待用户）→ 地基验证实测收官。
+
+**新增自制插件 `plugins/dsh-computer-use/`**（`@miasaki/dsh-computer-use`，host-only）：
+
+- 上游 `packages/experimental/tool-computer-use`（lock commit `72f1d73`，npm 不发布、官方 rc.2 不带）
+  源码构建落 lib：`_refs/orb-computer-use/orb` 全量 checkout + toolchain（_refs，不进仓）；
+  tsc（paths 映射零 install，TS6059 rootDir 噪音不阻断 emit）→ tsdown 三 entry bundle
+- patch 唯一相对上游改动：tool 条目 name 改指本插件（`./code-agent` 子路径经 exports）
+- **解析链实证（本轮最实的坑）**：bundle 的 bare import 解析基点是 **lib 的 realpath**（仓内插件目录），
+  profile junctions 不生效 ⇒ `install.ps1` 在**插件自身 node_modules** 建 junctions 直链全局 dsh 树
+  （单实例；pnpm 副本双实例风险规避）。probe（createRequire 锚定 profile）复现并验证
+
+**验证（隔离 profile `cu-test`，sessions/storages root 隔离，bundles=base+web-app+本插件）**：
+
+| 层 | 结果 |
+|---|---|
+| dump-config preset insert | ✅ plugins 列表齐（tool-todo/present 为 preset 默认工具集自动补齐） |
+| probe-import | ✅ 117ms 加载，`name/inject/apply` 契约齐，koffi 原生加载过 |
+| cu-test web boot | ✅ 19388 起停正常、日志零 error（preset-registry eager register，失败仅 log） |
+| probe-backend | ✅ GDI 截屏 838KB PNG（2166×1322 实图核对）、inspectForeground 前台抓取正确 |
+
+**遗留**：HID 输入类工具（click/input_text/hotkey…）待 L3 实机会话验收；正式 `miasaki` profile
+未装（五拍板点：触发器/dot 常显/作答面/缩略图/梯 1 先行）。探针脚本 `_refs/orb-computer-use/probe-*.mjs`。
+
+## 2026-09-27（续三）· 桌宠 L0 接线：散步按方向选行 · r7 改派工作态 · whale 图集接入
+
+**事件**：桌宠线规划评审（L0「零素材接线」/ L1「绘制层动效」两层）。侦察确认四条接线缺口，
+**均属「已切好的素材没接上线 / 已上线的不动」，不是素材缺失**——这也是本轮全部改动零新增美术的原因。
+
+**一手证据**（含本次逐行视觉核验，非推断）：
+
+| 事实 | 位置 |
+|---|---|
+| `Action::Wander { dx }` 的 `dx` 在行选择处被丢弃、恒返 `"run"` ⇒ `runRight`/`runLeft` **16 帧**（早已切好并登记在清单里）**从未播放** | `pet_native/model.rs::slot_row` |
+| kurumi `r7`（行名 `run`）= **坐姿敲笔记本**；而 `Thinking` 态播 `idle`（"静默守候"）⇒ 工作态与待机视觉无差别 | `ui/pets/kurumi/frames/r7c*.png`、`model.rs::pick_state_row` |
+| whale `spritesheet.png` = **8 列 × 11 行**（79 格非空）完整图集，而 `cut-frames.mjs` **只拆了 `idle.gif`** ⇒ 图集零使用 | `ui/pets/whale/`、`scripts/cut-frames.mjs` |
+| 闸门把 `runRight`/`runLeft` 声明为"Rust 侧可产出"（与代码不符），且拿同一份行名去比对 states 型主题（两套行名空间不同源，报出来的全是噪声） | `scripts/check-pet-assets.mjs` |
+
+**一处必须先建立的新认知**：**图集行号是生成模板的约定，不是跨主题语义契约**。逐行核验实证——
+kurumi `r7` = 坐姿打字，whale `r7` = 站姿待机；whale `r8` 是待机而非 kurumi 的 `review`；
+连 r0 的帧数都不同（7 vs 6）。故 `cut-frames.mjs` 里原来的全局 `ROW_NAMES` **只对 kurumi 成立**。
+
+**实施（四条，全部零素材）**：
+
+1. **L0-1 散步按方向选行**：`slot_row` 依 `dx` 返 `runRight`/`runLeft`；挂槽时复位 `frame_idx`
+   （否则左右反转时相位延续，回头瞬间步态错位）。新增单测 `wander_picks_row_by_direction`。
+2. **L0-2 r7 改派工作态**：`pick_state_row(Thinking)` 由 `idle` 改 `run`。v3 当时取 idle 是
+   「无可用素材」的妥协，现按语义直译（Thinking 的来源正是官方 `running` = agent 真在干活）；
+   同时 `run` 行**不再**被散步占用（L0-1 已把散步移走），一行两义的问题一并消除。
+   既有单测 `busy_beats_gesture_and_ambient` 期望值随之变更（**契约变更，非回归**）。
+3. **L0-3 whale 图集接入**：`cut-frames.mjs` 引入**每主题行名表** `ATLAS_SPECS`，whale 切
+   **r0–r6 共 7 行 46 帧**（实测 2.31 MB；r7–r10 是待机变体群，留 L2）；`frames.json` 里 whale
+   变 `kind: atlas` 的 **rows + states 并存**形态（图集行 + `deep` 强度立绘）；`build.rs` 补上
+   **`pets/whale/frames` 内嵌通道**（此前只内嵌 `states/`，图集切了也进不了 EXE = 静默断链）；
+   `image.rs` 把回退链抽为 `Frames::atlas_row`（kurumi/whale 共用），`window.rs` 绘制分流为
+   「whale 有行集 ⇒ 走行选择；`intensity == deep` ⇒ 保留立绘覆盖；inverse ⇒ 维持三态立绘」；
+   **散步准入同时放宽**——由「`mode == "kurumi"` 专属」改为 `Frames::can_wander(mode)`
+   （该主题是否具备 `runRight`+`runLeft`），whale 因此**第一次可以散步**，inverse 恒 false
+   （否则会"平移但只能播 idle"的滑步假位移）；
+   `pet.log` 首帧自证新增 `whale_rows=`（0 = 图集未内嵌，运行时回落立绘，实机判据）。
+4. **L0-4 闸门订正**：`RUST_ROWS` 拆为 `STATE_ROWS`（pick_state_row）+ `ACTION_ROWS`（slot_row
+   ∪ ambient 池）；`references()` 支持 rows 与 states 并存；states 型主题不再做行名比对（改为如实
+   说明"行名空间不同源"）；whale 的 `spritesheet.png` 登记为再生源。
+
+**实测差异（预期，非缺陷，单测钉住）**：whale 图集无 `run`/`review` 行 ⇒ 它的 `Thinking` 落到
+`idle`（r7 是站姿待机，没有"坐姿工作"这一姿态）、`Done` 庆祝落到 `idle`（回退链序 idle → wave）；
+Done 的可见信号由 10s 完成气泡承担，真正的庆祝表达留给 L1 的挤压脉冲（零素材）。
+
+**构建链安全（先验证再动）**：`cut-frames.mjs` 是全量重生成，落地前实测**重跑后 kurumi 57 帧 +
+whale idle 6 帧 + frames.json 共 66 个文件逐字节一致**（幂等）⇒ 本次只产生"新增 `whale/frames/`
++ `frames.json` 增量"，未波及任何既有素材。
+
+**验证（本机）**：`cargo test --bin miasaki` = **90 passed**（原 88：新增 4、合并 2）；
+`node scripts/verify-all.mjs desktop` = **33/33 PASS**（含资产链闸门，警告 0）。
+实机走查项（散步朝向 / 工作态坐姿 / whale 六态）见设计文档 §7。
+
+**设计文档**：[`design/pet-v5-motion-plan.md`](pet-v5-motion-plan.md)——含 L1 绘制层动效
+（呼吸 / 摇摆 / 挤压拉伸 / 拖动尾随）的完整设计与**「命中判定必须与绘制同批改造」**这条硬约束。
+
+## 2026-09-27（续二）· 分组账本按 profile 隔离 —— 修「重启后会话没丢、却整批掉进未分组」
+
+**事件**：用户报「重启后虽然会话没丢失，但是分类错了，自动丢到未分组里面去了」，并追问隔离到底是怎么做的。
+
+**根因：9-26 那次隔离只做了一半。** 会话**正文**换到了 `profiles/miasaki/sessions`，但侧边栏的
+**工作区分组账本**属于另一个子系统 `storage-json`，官方默认 root 是 `!!js dshHomePath('storages')`
+⇒ `~/.dsh/storages/workspace.json` —— **仍是 home 级共享、被三个实例同写一份**。而 `dsh-workspace`
+的归组判据是三条同时成立：①账本登记了该会话；②本实例能读到它的 header；③`realpath(header.cwd)`
+等于 `workspace.path`。其中 `sessionIds` 是**实时过滤**的 getter（`lib/types/entity.js:51`），
+于是别的实例登记进来的会话在本 profile 读不到 header ⇒ 被过滤 ⇒ **掉进「未分组」**。更麻烦的是
+账本 `initialized:true` 之后**不再全量回填**（`lib/index.js:385-388`），跨 root 登记一旦发生就永久留痕。
+日志形态：`filtered session '<id>' from membership: session header is missing`（本机
+`~/.dsh/logs/startup-2026-09-26T03-24-03.308Z-*.log:297` 即有此例）。
+
+**修复前的账本状态（实测）**：
+
+| 事实 | 数值 |
+|---|---|
+| `profiles/miasaki/sessions` / `~/.dsh/sessions` | 242 / 272 个会话（交集 231、仅 profile 11、仅全局 41） |
+| 全局账本实际登记 | **仅 6 条**（dsh-miasaki 5 + kulumi 1） |
+| 其中只在全局 root 的 | `session-97e73994…`（21:26 正在写）、`session-b689020a…` —— 在本壳里必然 header missing |
+| ⇒ 本壳修复前的可见分组 | dsh-miasaki 仅 3 条、kulumi 1 条，**其余 238 条全落「未分组」** |
+
+**实施**（只加一处配置；官方 `desktop` profile 与 `web` profile 零改动）：
+
+- `~/.dsh/profiles/miasaki/cordis.patch.yml` 追加 `storage-json` 条目：
+  `config.root: !!js dshHomePath('profiles', 'miasaki', 'storages')` —— 本壳自此拥有自己的
+  分组账本与会话投影缓存。**新账本不存在 ⇒ `initialized:false` ⇒ 启动时 `replaceHeaderIndex` +
+  `bootstrap` 按会话 cwd 全量回填**，分类自动恢复（无需任何手工整理）；
+- **归档/置顶意图迁移**：全局账本 11 条 `archivedSessionIds`（核对 11/11 在本 profile 存在）合并进
+  新账本，`--merge-intent` 幂等去重，`initialized` / `workspaceIds` / `tables` 原样保留；
+- 备份：`_refs/audit-2026-09-27/backup/`（patch + 全局账本 + projcache，带时间戳）。
+
+**验证（实机，非推演）**：
+
+| 项 | 判据 | 实测 |
+|---|---|---|
+| 配置生效 | 新 root 是否生成自己的账本 | ✅ 改配置 **21:43:44** → 账本 **21:43:47** 出现（运行中的壳热重载该配置，3 秒内生效） |
+| 全量回填 | 242 个会话按 cwd 归组 | ✅ 归位 **237**：dsh-miasaki **227** / kulumi 7 / Dhow 2 / Asakii 1 |
+| 余 5 个未归组 | 其 `cwd` 目录是否还在 | ✅ **全部已不存在**（Prism / 新建文件夹 / 正大 / 临时目录）——官方按 `realpath(cwd)` 归组，目录没了本就不归组 |
+| 归档迁移 | 合并后账本字段 | ✅ `archived 0 → 11`，`initialized=true` 与 4 个工作区原样保留；脚本写后读回、schema 校验 PASS |
+| 隔离对侧 | 全局账本是否还被本壳写 | ✅ mtime 停在 **21:26:24**（本壳新 root 建立后零改动） |
+| 双份分叉 | 231 个同 id 会话逐字节比对 | ✅ 完全一致 **228**、已分叉 **3**（均全局侧更全，清单见下） |
+
+**副产品 · 双份分叉清单**：`_refs/audit-2026-09-27/session-fork-report.md`（工具
+`scripts/compare-session-roots.mjs` 可复跑；分层判据 L1 文件体积 → L2 SHA-256 → L3 帧级事件数）。
+3 个已分叉会话：`session-35eacfb0…`（profile 277 / 全局 575 事件）、`session-c108c947…`（802 / 988）、
+`session-96cea0dd…`（630 / 666）——都在 dsh-miasaki 项目，**全局侧更全**（浏览器 GUI 里续聊过）。
+两份是同一会话的两条时间线，**不能自动合并**；以哪边为准由用户决定。
+
+**工具与踩坑（写进纪律）**：
+
+- 迁移脚本 `migrate-storages.mjs` **不手写 JSON**，直接用官方 `JsonStorageBackend` +
+  `descriptorOf(workspaceDomainSpec)` 生成并写回 —— 产出必然是官方 single-unit 格式，
+  不存在「手写偏移 ⇒ 账本打不开 ⇒ 整个侧边栏出错」的风险；
+- **脚本自证抓到自己一个 bug**：`['--check','--write','--merge-intent'].find(f => argv.includes(f))`
+  返回的是**带 `--` 前缀**的元素，而分支比较用的是不带前缀的字符串 ⇒ 落进 else 分支并主动抛
+  「归档条目数少于源账本」。**账本一个字没动**（写前写后 mtime 相同即证据）。⇒ 两条纪律：
+  ① 模式开关解析必须比较**同一个字符串**；② **写入类脚本必须有写后读回校验**（这次正是它兜住的）；
+- **storage-json 的内存态是权威**（single unit 的原文注释）：运行中的实例写一次文件就会覆盖外部
+  改动 ⇒ `--merge-intent` 的执行纪律是「**目标实例关闭时执行**」。本次在实例运行中执行后，
+  连续观察确认未被覆盖（读回 archived 仍为 11）。
+
+**隔离语义边界（已同步进 README）**：会话正文 + 分组账本 + 投影缓存三者自此**同源同隔离**；
+`web` 与官方 `desktop` 继续共用全局 `~/.dsh/sessions` 与 `~/.dsh/storages`，**两者之间仍互相可见**
+（它们本就同源）。回滚 = 删掉 `storage-json` 条目并删 `profiles/miasaki/storages/`。
+
+**全局侧也已重置（同日 21:53，待 web host 重启生效）**：全局 `~/.dsh/storages/workspace.json` 本身
+同样卡在「`initialized:true` + 只登记 6 条」，因此 **web GUI 与官方桌面端的列表里有同样的大批
+「未分组」**。已用同一脚本 `--write` 把它重置为 `initialized:false`：`archivedSessionIds` 11 条保留、
+`tables` 里原有 2 条 workspace 记录**保留**（bootstrap 会按 `path` **复用**它们并把该 cwd 下的会话补进
+`sessionIds`，不是重建 id，所以归档/引用关系不散）；写后读回 schema 校验 PASS，**60 秒观察确认未被
+运行中的 web 实例覆盖**。
+
+⚠ **这一半要等 web host 重启才生效**：storage-json 的内存态是权威，运行中的实例下次写账本会把重置
+覆盖回去 ⇒ **重启前不要在浏览器 GUI 的侧边栏做新建 / 拖拽 / 归档 / 置顶**。
+**生效判据（已离线推演，重启后照此对照）**：重启后全局账本 `workspaceIds` 由 `0` 变回 `2`、
+`initialized` 回到 `true`，分组变为 **dsh-miasaki 257 / kulumi 7 / Dhow 2 / Asakii 1**
+（另 5 个会话的 `cwd` 目录已不存在，官方同样归不了组）。**这套推演判据可信**：同一脚本算 miasaki
+root 得 227/7/2/1，与自制壳侧账本的**实测值逐条吻合**。报告：
+`_refs/audit-2026-09-27/global-regroup-preview.md`（对照 `miasaki-regroup-preview.md`）。
+**离线预检**（不改数据）：
+
+```powershell
+$tmp = "$env:USERPROFILE\.dsh\profiles\_migrate-tmp"
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Copy-Item 'C:\Users\Asakii\Desktop\dsh-miasaki\_refs\scripts-archive\migrate-storages.mjs' $tmp
+node "$tmp\migrate-storages.mjs" "$env:USERPROFILE\.dsh\storages\workspace.json" "$env:USERPROFILE\.dsh\storages" --check
+Remove-Item $tmp -Recurse -Force
+```
+
+（脚本**必须**放在 `~/.dsh/profiles/` 下执行 —— 走裸说明符 import；直接在工作区跑会
+`ERR_MODULE_NOT_FOUND`。）
+
 ## 2026-09-27（续）· 让位量兜底改按「注入形态上界」——实机重叠事件订正 T1
 
 **事件**：用户报「右侧边栏按钮和终端按钮重叠」，附壳截图。**根因不是公式错，而是变量在运行期无人写**：

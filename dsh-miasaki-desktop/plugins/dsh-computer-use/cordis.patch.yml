@@ -1,0 +1,74 @@
+# Computer Use preset overlay（miasaki 二改版）
+#
+# 来源：deepseek-harness-orb @ main（lock commit 72f1d738458a223696685a909e806b683eff5885）
+#   packages/experimental/tool-computer-use/cordis.patch.yml
+# **唯一相对上游的改动**：tool-computer-use / tool-code-agent 两行的 name 从上游包名
+#   改指本插件（@miasaki/dsh-computer-use，exports 提供 ./code-agent 子路径）。
+#   其余（persona 文案 / bash|pwsh 平台条件 / compaction 组 / tool-web / postActionWaitMs）逐字保留。
+#
+# 装载：经 profile patch insert（见 README「L1 验证」）——Computer Use preset 与 standard
+# 预设隔离，GUI 工具只注册在 computer-use preset 内，普通编码会话零变化。
+#
+# 二改跟踪（待拍板项，见 design/2026-09-27-pet-v4-computer-use.md §6）：
+#   - persona 中文化与桌宠语气（当前为上游英文策略文案）
+#   - code-agent-unattended 的自动允许审批需评估关闭（桌宠红线：显式决策）
+
+- insert:
+    - id: preset-computer-use
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: computer-use
+        order: 20
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              suffix: Your working directory is {{cwd}}.
+              prefix: >-
+                You are a desktop GUI agent powered by the {{model}} model.
+                You operate the screen and decide each stretch yourself.
+                Do visible GUI, and a search or command that will answer or feed the next click, in this chat.
+                A second search that you expect will hit the point stays here.
+                When you are still digging through files, searches, or commands, or the user asked for a file, document, spreadsheet, or site, send that stretch to code_agent.
+                Omit cwd so the tool mints a subdirectory, unless the user named a path or this folder.
+                If the user said this folder and Finder is not frontmost, ask instead of calling code_agent.
+                After code_agent accepts, tell the user the background agent is running.
+                Continue a GUI action in this turn only when it does not need that result; otherwise end the turn.
+                Call code_agent_status or code_agent_stop when the user asks about or stops background work.
+                When a plugin notice reports that work finished, decide again: do remaining GUI, or call code_agent with that session_id for another stretch, then tell the user the short conclusion.
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: tool-computer-use
+            name: '@miasaki/dsh-computer-use'
+            config:
+              postActionWaitMs: 600
+          - id: tool-code-agent
+            name: '@miasaki/dsh-computer-use/code-agent'

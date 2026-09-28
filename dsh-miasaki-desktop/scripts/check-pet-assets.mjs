@@ -6,7 +6,7 @@
 // 源（图集/gif/立绘）→ 派生（逐帧 PNG）→ 清单（frames.json）→ 内嵌索引（assets.rs）。
 // 本脚本回答三个问题，任一失败即退出码 1：
 //   ① 派生链完整：frames.json 引用的每个 PNG 都在盘上（缺 = 运行时该姿态直接空白）；
-//   ② 再生源在位：kurumi/spritesheet.png、whale/idle.gif、inverse/raw/blue-*.png 存在
+//   ② 再生源在位：kurumi/whale 的 spritesheet.png、whale/idle.gif、inverse/raw/canon-*.png 存在
 //      （源缺 = 现在能显示、下次重切静默跳过，断链延迟暴露）；
 //   ③ 无孤儿派生：frames/ 与 states/ 里的 PNG 都被 frames.json 引用（重切后残留 = drift）。
 // 另输出两项**信息**（不影响退出码）：状态覆盖缺口（R15 量化）、frames 与源的新旧关系
@@ -31,8 +31,21 @@ function rel(p) {
   return relative(ROOT, p).replaceAll('\\', '/')
 }
 
-/** v3 六态 + 动作行：Rust 侧 pick_state_row/slot_row 可产出的全部行名（pet_native/model.rs）。 */
-const RUST_ROWS = ['idle', 'wait', 'failed', 'jump', 'wave', 'run', 'review', 'runRight', 'runLeft']
+/**
+ * 桌宠**行名空间**（Rust 侧，`pet_native/model.rs`）：回答「Rust 需要哪些行、图集里有没有」。
+ *
+ * ⚠ 与素材图集的**行号 ≠ 同一件事**：图集行号是生成模板的约定，同一行号在不同主题里
+ * 语义可能不同——2026-09-27 逐行核验实证：kurumi `r7` = 坐姿打字（= Rust 行名 `run`），
+ * whale `r7` = 站姿待机（与 `run` 无关），连 `r0` 的帧数都不同（6 vs 7）。
+ * 落到素材须经**每主题行名表**（`cut-frames.mjs` 的切片规格 + `frames.json`），
+ * 此处只做覆盖统计，不得据行号相等推断语义相等。见 design/pet-v5-motion-plan.md §2.3 / L0-4。
+ */
+/** 状态行：`model.rs::pick_state_row` 五个态各自可产出的行。 */
+const STATE_ROWS = ['idle', 'wait', 'failed', 'run', 'review']
+/** 动作行：`model.rs::slot_row` 可产出的行（ambient 池 wave/review/wait/jump 已含在内）。 */
+const ACTION_ROWS = ['jump', 'wave', 'runRight', 'runLeft']
+/** atlas 主题的覆盖分母 = 两空间并集。 */
+const RUST_ROWS = [...new Set([...STATE_ROWS, ...ACTION_ROWS])]
 
 const framesPath = join(PETS, 'frames.json')
 if (!existsSync(framesPath)) {
@@ -46,11 +59,16 @@ const manifest = JSON.parse(readFileSync(framesPath, 'utf8'))
 /** 主题 → 再生源清单（缺任一即「现在能显示、下次重生成静默跳过」）。 */
 const REGEN_SOURCES = {
   kurumi: [{ path: 'spritesheet.png', by: 'scripts/cut-frames.mjs（cutAtlas）' }],
-  whale: [{ path: 'idle.gif', by: 'scripts/cut-frames.mjs（cutWhaleIdleFrames）' }],
+  whale: [
+    // v5 L0-3：whale 的 11 行图集此前未被切片（只拆 idle.gif）——现在 r0–r6 由 cutAtlas 切出
+    { path: 'spritesheet.png', by: 'scripts/cut-frames.mjs（cutAtlas，图集 r0–r6）' },
+    { path: 'idle.gif', by: 'scripts/cut-frames.mjs（cutWhaleIdleFrames）' },
+  ],
   inverse: [
-    { path: 'raw/blue-idle.png', by: 'scripts/inverse-states.mjs' },
-    { path: 'raw/blue-work.png', by: 'scripts/inverse-states.mjs' },
-    { path: 'raw/blue-deep.png', by: 'scripts/inverse-states.mjs' },
+    // 文件名与 scripts/inverse-states.mjs 的 cutout 输入列表保持同步（素材改名时两边一起动）
+    { path: 'raw/canon-idle.png', by: 'scripts/inverse-states.mjs' },
+    { path: 'raw/canon-work.png', by: 'scripts/inverse-states.mjs' },
+    { path: 'raw/canon-deep.png', by: 'scripts/inverse-states.mjs' },
   ],
 }
 
@@ -59,19 +77,18 @@ const MANUAL_ASSETS = {
   whale: ['states/work.png', 'states/deep.png'],
 }
 
-/** 展平 frames.json 的引用：主题 → [{ state, file }]。 */
+/** 展平 frames.json 的引用：主题 → [{ state, file }]。
+ *  v5 L0-3：`rows`（图集行）与 `states`（立绘强度档）**可并存**——whale 就是这种混合形态
+ *  （图集 7 行 + `deep` 强度立绘），故两种形态都要登记，不能再按 `kind` 二选一。 */
 function references(theme) {
   const out = []
   const node = manifest[theme]
   if (node === undefined) return out
-  if (node.kind === 'atlas') {
-    for (const [row, cols] of Object.entries(node.rows ?? {})) {
-      for (const file of cols) out.push({ state: row, file: `frames/${file}` })
-    }
-  } else {
-    for (const [state, value] of Object.entries(node.states ?? {})) {
-      for (const file of Array.isArray(value) ? value : [value]) out.push({ state, file })
-    }
+  for (const [row, cols] of Object.entries(node.rows ?? {})) {
+    for (const file of cols) out.push({ state: row, file: `frames/${file}` })
+  }
+  for (const [state, value] of Object.entries(node.states ?? {})) {
+    for (const file of Array.isArray(value) ? value : [value]) out.push({ state, file })
   }
   return out
 }
@@ -123,13 +140,17 @@ for (const [theme, sources] of Object.entries(REGEN_SOURCES)) {
 for (const theme of Object.keys(manifest)) {
   const node = manifest[theme]
   if (node.kind !== 'atlas') {
+    // 立绘三态主题（whale/inverse）：它的键是强度档 idle/work/deep（服务 `eff_intensity`），
+    // 与 Rust 行名不同源。**不做行名比对**——此前用 RUST_ROWS 比 states 键，报出来的
+    // 「缺 jump/wave/…」全是噪声（两套空间本就不该相等）。
     const have = Object.keys(node.states ?? {})
-    const missing = RUST_ROWS.filter(row => !have.includes(row))
-    infos.push(`${theme}（states）：可表达 ${have.join('/')}；缺 ${missing.join('/')} → 这些姿态按 kurumi_row 回退链落到 idle（R15 待补，需美术资产）`)
+    infos.push(`${theme}（states）：立绘强度档 ${have.join('/')}；行名空间与 Rust 不同源，不做覆盖比对（atlas 化见 pet-v5-motion-plan.md L0-3）`)
   } else {
     const rows = Object.keys(node.rows ?? {})
     const missing = RUST_ROWS.filter(row => !rows.includes(row))
-    infos.push(`${theme}（atlas）：${rows.length}/${RUST_ROWS.length} 行在位${missing.length ? `，缺 ${missing.join('/')}` : ''}`)
+    const states = Object.keys(node.states ?? {})
+    // v5 L0-3：atlas 主题也可能带立绘强度档（whale 的 deep 立绘），一并报出避免"看不见的引用"
+    infos.push(`${theme}（atlas）：${rows.length}/${RUST_ROWS.length} 行在位${missing.length ? `，缺 ${missing.join('/')}（按 Frames::atlas_row 回退链落到 idle/wave，不落空白）` : ''}${states.length ? `；另带立绘强度档 ${states.join('/')}` : ''}`)
   }
 }
 

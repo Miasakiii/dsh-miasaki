@@ -50,23 +50,57 @@ export const ORIGINAL_SHA256 = '40EF6D13AC73E06289CFC42EA941BD96739884F1727E0FAC
  * 改存产物 SHA —— `verify` 用「由原始 baseline 重建后的 SHA 是否等于本常量」自证，
  * 与逐字节比对等价（SHA 相等即逐字节相等），锚点失配时仍会响亮报错。
  */
-export const PATCHED_SHA256 = '727C86DDC6157A1232B038D33D3FFA8343C456A52B0929E2A9D34D611F8D23E0'
+export const PATCHED_SHA256 = '668FD5F015433EA21F8DF059F545C617B826F823C9AD3F549CF9759037C42CE1'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
-const PATCH_MARKER = '.wSkVaW_headerActions{flex:0 1 auto'
+const PATCH_MARKER = '.wSkVaW_headerActions:has([aria-expanded=true]){overflow:visible}'
 
 // ---------------------------------------------------------------------------
 // 编辑规则。锚点是编译产物里的 CSS 片段原文（**不使用 hash 类名前缀做选择器**，
 // 但锚点文本本身含类名 —— DSH 升级若改了 hash 前缀，锚点会失配并响亮报错，
 // 这正是想要的行为：宁可失败，也不瞎改）。锚点必须全文件唯一。
+//
+// 2026-09-28 追加第二条规则（`:has(...)` 放行溢出），修「顶栏后台任务展开栏打不开」：
+// DSH 0.1.7 起 `dsh-client-ui-jobs` 把后台任务弹层**直接挂在 headerActions 内**
+// （`.QsffPG_root{position:relative}` + `ul.QsffPG_menu{position:absolute;top:calc(100% + 5px)}`，
+// 无 portal），而上面的 `overflow-x:auto;overflow-y:hidden` 会把这个 absolute 弹层整个裁掉
+// —— 点击后 DOM 里确有菜单，肉眼什么都看不到。展开态放行溢出即可，代价见 README。
+//
+// ⚠ 引号纪律（2026-09-28 事故教训，勿改）：本包的 CSS 常量是**双引号字符串**
+// （`const css$4 = ".wSkVaW_root{…}"`），因此替换文本里**绝不能出现裸引号**。
+// 首版曾写成 `[aria-expanded="true"]`，双引号提前终止了字符串字面量 ⇒ 整个 client.js
+// 语法错误 ⇒ 页面 `Failed to load plugins` 全量白屏（而 `verify` 的 SHA 自证照样 PASS，
+// 因为「重建 = 记录」与此无关）。故：属性选择器一律用**无引号标识符**写法
+// （`[aria-expanded=true]`，CSS 对合法标识符值允许不加引号），
+// 且 `verify`/`apply` 会强制跑一次 `assertParsable()` 兜底。
 // ---------------------------------------------------------------------------
 const EDITS = [
   {
-    id: 'header-actions-scrollable',
+    id: 'header-actions-scrollable-and-popover-escape',
     mode: 'replaceSubstring',
     anchor: '.wSkVaW_headerActions{flex:none;align-items:center;gap:8px;display:flex}',
-    replacement: '.wSkVaW_headerActions{flex:0 1 auto;min-width:0;align-items:center;gap:8px;display:flex;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}.wSkVaW_headerActions::-webkit-scrollbar{display:none}',
+    replacement: '.wSkVaW_headerActions{flex:0 1 auto;min-width:0;align-items:center;gap:8px;display:flex;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}.wSkVaW_headerActions::-webkit-scrollbar{display:none}.wSkVaW_headerActions:has([aria-expanded=true]){overflow:visible}',
   },
 ]
+
+/**
+ * 产物必须是可解析的 JS。
+ *
+ * 存在的理由（2026-09-28 实测事故）：`verify` 的 SHA 自证只回答「重建产物 == 记录产物」，
+ * 对「产物本身是否仍是合法 JS」一言不发 —— 替换文本里的一个裸引号就能截断目标文件的
+ * 字符串字面量，SHA 自证照样 PASS，直到浏览器把整包插件报成 `Failed to load plugins`。
+ * 语法错误必须**在写盘前**显式失败，这就是这道守卫。
+ */
+function assertParsable(code) {
+  try {
+    // 只解析不执行；产物是 `window.__ModuleLoader__.load({…})` 形式的脚本，不含顶层 import/export。
+    new Function(code)
+  } catch (error) {
+    throw new Error(
+      `产物语法校验失败：${error instanceof Error ? error.message : String(error)}`
+      + '（十有八九是替换文本里出现了未转义的引号，截断了目标文件的字符串字面量）',
+    )
+  }
+}
 
 /** 在 source 中定位唯一锚点并替换；不唯一或不存在即报错（宁可失败，也不瞎改）。 */
 export function applyPatch(source) {
@@ -107,10 +141,11 @@ function parseArgs(argv) {
   return args
 }
 
-/** verify：baseline 原始文件 → 重建 → 产物 SHA 必须等于记录的 PATCHED_SHA256。 */
+/** verify：baseline 原始文件 → 重建 → 语法自证 + 产物 SHA 必须等于记录的 PATCHED_SHA256。 */
 async function cmdVerify() {
   const original = await readFile(ORIGINAL_FILE, 'utf8')
   const rebuilt = applyPatch(original)
+  assertParsable(rebuilt)
   const sha = createHash('sha256').update(rebuilt, 'utf8').digest('hex').toUpperCase()
   if (sha !== PATCHED_SHA256) {
     console.error('[patch] FAIL 由 baseline 重建的产物与记录的 SHA 不一致')
@@ -164,6 +199,7 @@ async function cmdApply(args) {
     return
   }
   const patched = applyPatch(text)
+  assertParsable(patched) // 写盘前的最后一道守卫：坏产物绝不落进安装目录（那会让所有客户端白屏）
   const backup = `${target}.dsh-bak`
   if (!existsSync(backup)) await copyFile(target, backup)
   await writeFile(target, patched, 'utf8')

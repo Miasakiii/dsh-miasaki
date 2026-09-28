@@ -113,3 +113,35 @@ pub(crate) const WANDER_PX_PER_FRAME: i32 = 9; // 滑步修正:每帧移动(90px
 // —— D3 GDI 兜底阈值 ——
 pub(crate) const ULW_FAIL_STREAK_REBUILD: u32 = 10; // ULW 连续失败达此数 → 销毁重建表面
 pub(crate) const ULW_FAIL_LOG_EVERY: u32 = 300; // 持续失败时每 N 次追加一行日志（防刷屏）
+
+// —— L1（2026-09-28，design/pet-v5-motion-plan.md §3）：绘制层动效 ——
+// 相位与变换的纯函数在 `pet_native/xform.rs`；本段只放参数。
+/// M1 呼吸周期（沿用 v2 现值 3.2s）。
+pub(crate) const BREATH_PERIOD_MS: u64 = 3200;
+/// M1 呼吸幅度：**图集行**姿态（kurumi / whale）。沿用 v2 的 ±2px。
+pub(crate) const BREATH_PX_ROW: f32 = 2.0;
+/// M1 呼吸幅度：**三态立绘**（inverse / whale deep）。沿用既有的 ±3px。
+/// 立绘比图集帧高（540 源高 vs 208），同样像素数在视觉上更弱，故留较大值。
+pub(crate) const BREATH_PX_STATES: f32 = 3.0;
+/// M2 摇摆周期。**刻意不等于**呼吸周期，且叠加相位偏移 ⇒ 两者错相（见 `xform::sway_angle`）。
+pub(crate) const SWAY_PERIOD_MS: u64 = 5600;
+/// M2 摇摆相位偏移（与呼吸错相的第二重保证：即使周期巧合接近，极值也不会撞在一起）。
+pub(crate) const SWAY_PHASE_SHIFT_MS: u64 = 1300;
+/// M2 摇摆幅度（度）。取区间 1.5~2.5 的中偏保守值：最宽帧（192×208 → 249.2px 宽）
+/// 在 ±2° 时包围盒宽 267.8px，距 `WIN_W` 286 尚余 18px，为后续调整留出余量。
+pub(crate) const SWAY_MAX_DEG: f32 = 2.0;
+/// M3 挤压脉冲时长（单次，参考实现实测 220ms）。
+pub(crate) const SQUASH_MS: u64 = 220;
+/// M3 挤压峰值：横向拉伸 10%、纵向压缩 15%（参数取自参考实现实测）。
+pub(crate) const SQUASH_DX: f32 = 0.10;
+pub(crate) const SQUASH_DY: f32 = 0.15;
+/// 变换缩放的夹取边界。存在的硬理由：逆变换要除以 `sx`/`sy`，0 或 NaN 会污染整帧缓冲。
+/// 上限 2.0 远宽于任何动效需求（`SQUASH_DX` 峰值仅 1.10），只作为「上游算错时的最后一道闸」。
+pub(crate) const XF_MIN_SCALE: f32 = 0.5;
+pub(crate) const XF_MAX_SCALE: f32 = 2.0;
+
+/// M2 摇摆峰值（弧度）。`f32::to_radians` 不是 const fn，故以函数形式给出
+/// （小写命名遵 Rust 惯例；它不参与常量折叠，只在绘制与布局各算一次）。
+pub(crate) fn sway_max_rad() -> f32 {
+    SWAY_MAX_DEG.to_radians()
+}

@@ -1,5 +1,5 @@
 // cut-frames.mjs — 预切桌宠图集为逐帧 PNG + 帧清单（供原生分层窗口渲染）
-// kurumi：按 Codex 行切帧（全部 9 行，非空探测）；whale：拆 idle.gif 帧序列 + 立绘三态；
+// kurumi：按行切帧（全部 9 行，非空探测）；whale：图集 7 行 + idle.gif 帧序列 + 立绘三态；
 // inverse：立绘三态直接引用
 import sharp from 'sharp'
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
@@ -9,25 +9,38 @@ import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const CELL_W = 192, CELL_H = 208
-const ROW_NAMES = ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wait', 'run', 'review']
-// v2：全部语义行切出（非空自动探测；空行省略）。v1 曾只切 4 行（僵硬诊断 #1）
-const NEEDED = ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wait', 'run', 'review']
+/**
+ * **每主题的行名表**（图集行号 → Rust 行名空间）。
+ *
+ * ⚠ 行号是**生成模板的约定**，不是跨主题语义契约：不同主题同一行号的语义可能不同。
+ * 2026-09-27 逐行视觉核验实证——kurumi `r7` = 坐姿打字（Rust 行名 `run`，服务 Thinking），
+ * whale `r7` = 站姿待机（与 `run` 无关），连 `r0` 的帧数都不同（6 vs 7）。
+ * 故**不共用一份 ROW_NAMES**（v5 之前是全局数组，只对 kurumi 成立）。
+ * 见 design/pet-v5-motion-plan.md §2.3.2。
+ */
+const ATLAS_SPECS = {
+  kurumi: ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wait', 'run', 'review'],
+  // whale 图集实测 8 列 × 11 行：只取语义已核验的 r0–r6；
+  // r7–r10 为站姿待机变体群（进 ambient 池属 L2，先不切以控内嵌体积 ≈2.3MB）
+  whale: ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wait'],
+}
 
 const manifest = {
-  whale: { kind: 'states', states: {} },
+  // whale：atlas 行（行选择）+ states 立绘（强度档 deep 仍走立绘）并存
+  whale: { kind: 'atlas', rows: {}, states: {} },
   kurumi: { kind: 'atlas', rows: {} },
   inverse: { kind: 'states', states: {} }
 }
 
 async function cutAtlas(mode) {
+  const spec = ATLAS_SPECS[mode]
   const src = join(root, 'ui', 'pets', mode, 'spritesheet.png')
   const outDir = join(root, 'ui', 'pets', mode, 'frames')
   mkdirSync(outDir, { recursive: true })
   const meta = await sharp(src).metadata()
   const rows = Math.floor(meta.height / CELL_H)
   const frames = {}
-  for (const rowName of NEEDED) {
-    const r = ROW_NAMES.indexOf(rowName)
+  for (const [r, rowName] of spec.entries()) {
     if (r >= rows) continue
     const cols = []
     for (let c = 0; c < 8; c++) {
@@ -46,12 +59,13 @@ async function cutAtlas(mode) {
       cols.push(file)
     }
     frames[rowName] = cols
-    console.log(`${mode} ${rowName}: ${cols.length} frames`)
+    console.log(`${mode} ${rowName} (r${r}): ${cols.length} frames`)
   }
   manifest[mode].rows = frames
 }
 
 await cutAtlas('kurumi')
+await cutAtlas('whale')
 
 // GIF 透明替代色残留后处理:绿色主导像素 → alpha 0(纯绿 0,254,0 / 0,126,0 等描边即此类)
 async function stripGreenEdge(buf) {

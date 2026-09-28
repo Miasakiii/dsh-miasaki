@@ -1,0 +1,36 @@
+{
+  "name": "@miasaki/dsh-computer-use",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Computer Use GUI 工具插件（miasaki 二改版）：13 个桌面 GUI 工具（click/input_text/scroll/hotkey/wait/long_wait/screenshot/long_press/drag/open_in_browser/open_in_finder/list_apps/open_app）+ 首帧前台窗口截屏 + code_agent 后台派发。上游来源 deepseek-harness-orb（dsh 0.1.7 非官方 fork）packages/experimental/tool-computer-use，lock commit 72f1d738458a223696685a909e806b683eff5885。Windows 后端：GDI 截前台窗口并集 + SendInput，每监视器物理像素。",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./code-agent": {
+      "default": "./lib/code-agent.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-tools": ">=0.1.7-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-attachment": ">=0.1.7-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-brand": ">=0.1.7-rc.1 <0.3.0",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "zod": "^4.4.3",
+    "koffi": "^3.1.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

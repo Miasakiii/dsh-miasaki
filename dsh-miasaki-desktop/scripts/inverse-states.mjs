@@ -33,11 +33,9 @@ mkdirSync(OUT, { recursive: true })
 
 const TOL = 22
 
-// 核心背景:深蓝纯色(B 显著占优)—— 严格阈值,只识别背景本体
-function isBgCore(pr, pg, pb) {
-  const mx = Math.max(pr, pg)
-  return pb > 60 && (pb - mx) > 38
-}
+// 背景色不再写死:改由 cutout() 从四角采样(见下方),深蓝底 / 纯白底都能吃。
+// 旧判据是「深蓝纯色(B 显著占优)」——源图从蓝底换成白底后,一个背景像素都认不出来,
+// bbox 会退化成整张画布,输出带底的白图。
 
 // 相邻颜色接近(用于从核心背景向渐变区扩展)
 function near(pr, pg, pb, nr, ng, nb) {
@@ -48,6 +46,29 @@ async function cutout(name, outName) {
   const img = await sharp(join(RAW, `${name}.png`)).removeAlpha().raw().toBuffer({ resolveWithObject: true })
   const { data, info } = img
   const { width: w, height: h, channels: c } = info
+
+  // 背景色:四角 12×12 采样取中位数 —— 深蓝底、纯白底都能吃,不再写死颜色
+  const samples = []
+  const S = 12
+  for (const [ox, oy] of [[0, 0], [w - S, 0], [0, h - S], [w - S, h - S]]) {
+    for (let sy = 0; sy < S; sy++) {
+      for (let sx = 0; sx < S; sx++) {
+        const i = ((oy + sy) * w + (ox + sx)) * c
+        samples.push([data[i], data[i + 1], data[i + 2]])
+      }
+    }
+  }
+  const med = (k) => {
+    const a = samples.map((p) => p[k]).sort((m, n) => m - n)
+    return a[a.length >> 1]
+  }
+  const [BR, BG, BB] = [med(0), med(1), med(2)]
+  const BG_TOL = 8
+  // 核心背景:与采样背景色最大通道差 < BG_TOL —— 只认背景本体;
+  // 与背景同色的前景(白军装/白发)靠轮廓描边 + flood-fill 连通性隔离,不会漏吃
+  const isBgCore = (pr, pg, pb) =>
+    Math.max(Math.abs(pr - BR), Math.abs(pg - BG), Math.abs(pb - BB)) < BG_TOL
+  console.log(`[inverse-states] ${name}: 采样背景色 rgb(${BR},${BG},${BB}) tol=${BG_TOL}`)
 
   // —— flood-fill:核心背景特征 + 连通性扩展(渐变区可扩展,人物内部不连通则保留) ——
   const bg = new Uint8Array(w * h)
@@ -170,7 +191,7 @@ async function cutout(name, outName) {
   console.log(`[inverse-states] ${name}: bbox ${cw}x${ch} -> ${png.width}x${png.height}`)
 }
 
-for (const [src, out] of [['blue-idle', 'idle'], ['blue-work', 'work'], ['blue-deep', 'deep']]) {
+for (const [src, out] of [['canon-idle', 'idle'], ['canon-work', 'work'], ['canon-deep', 'deep']]) {
   await cutout(src, out)
 }
 console.log('[inverse-states] done')

@@ -48,6 +48,10 @@ pub(crate) fn load_png(bytes: &[u8]) -> Option<Image> {
 #[derive(Default)]
 pub(crate) struct Frames {
     pub(crate) kurumi: HashMap<String, Vec<Image>>,
+    /// v5 L0-3（design/pet-v5-motion-plan.md）：whale 的**图集行**——此前 whale 只有三态立绘，
+    /// 其 1536×2288 的 11 行图集零使用（"atlas 分支缺失，不是素材缺失"）。本次接入 r0–r6 共 7 行。
+    /// 与 `kurumi` 同为「行名 → 帧组」，走同一条行选择/回退链（`atlas_row`）。
+    pub(crate) whale_rows: HashMap<String, Vec<Image>>,
     // v2:三态值统一为帧组(单帧=长度1);idle 可为帧序列(whale idle.gif 拆分)
     pub(crate) whale_states: HashMap<String, Vec<Image>>,
     pub(crate) inverse_states: HashMap<String, Vec<Image>>,
@@ -64,8 +68,14 @@ impl Frames {
     /// D2 fallback 链（pet-v2-roadmap §D）：请求行 → idle → wave → jump → run →
     /// 首个可用非空行（字典序最小，保证确定性）；全缺/全空 → None（调用方跳过绘制）。
     /// 空帧组视为缺失（素材切帧探测到 0 非空帧时 load_frames 可能存入空 Vec）。
-    pub(crate) fn kurumi_row(&self, row: &str) -> Option<(&Vec<Image>, String)> {
-        if let Some(l) = self.kurumi.get(row) {
+    ///
+    /// v5：抽为关联函数——kurumi 与 whale 两份行集共用同一条链
+    /// （行名空间是 Rust 侧的，各主题的行帧素材分别映射进来，见 model.rs 与 cut-frames.mjs）。
+    pub(crate) fn atlas_row<'a>(
+        map: &'a HashMap<String, Vec<Image>>,
+        row: &str,
+    ) -> Option<(&'a Vec<Image>, String)> {
+        if let Some(l) = map.get(row) {
             if !l.is_empty() {
                 return Some((l, row.to_string()));
             }
@@ -74,16 +84,30 @@ impl Frames {
             if fb == row {
                 continue;
             }
-            if let Some(l) = self.kurumi.get(fb) {
+            if let Some(l) = map.get(fb) {
                 if !l.is_empty() {
                     return Some((l, fb.to_string()));
                 }
             }
         }
-        let mut names: Vec<&String> =
-            self.kurumi.iter().filter(|(_, l)| !l.is_empty()).map(|(k, _)| k).collect();
+        let mut names: Vec<&String> = map.iter().filter(|(_, l)| !l.is_empty()).map(|(k, _)| k).collect();
         names.sort();
-        names.first().map(|k| (self.kurumi.get(*k).unwrap(), (*k).clone()))
+        names.first().map(|k| (map.get(*k).unwrap(), (*k).clone()))
+    }
+
+    /// v5 L0-3：该主题**是否具备散步行**（决定 `compose` 是否触发 wander）。
+    ///
+    /// 此前散步硬编码为「kurumi 专属」（`mode == "kurumi"`）——因为只有她的图集有 `runRight`/`runLeft`。
+    /// whale 图集接入后它同样具备两行，散步对它才第一次可触发；
+    /// inverse 无图集 ⇒ 恒 false（不产生"走了但没行走帧、只能播 idle 平移"的假位移）。
+    pub(crate) fn can_wander(&self, mode: &str) -> bool {
+        let map = match mode {
+            "kurumi" => &self.kurumi,
+            "whale" => &self.whale_rows,
+            _ => return false,
+        };
+        let has = |row: &str| map.get(row).map(|l| !l.is_empty()).unwrap_or(false);
+        has("runRight") && has("runLeft")
     }
 }
 
@@ -98,19 +122,60 @@ mod tests {
     #[test]
     fn fallback_chain() {
         let mut f = Frames::default();
-        assert!(f.kurumi_row("idle").is_none());
+        assert!(Frames::atlas_row(&f.kurumi, "idle").is_none());
         f.kurumi.insert("run".to_string(), one());
         // 请求缺失行 → chain 末端首个可用
-        assert_eq!(f.kurumi_row("idle").unwrap().1, "run");
-        assert_eq!(f.kurumi_row("wait").unwrap().1, "run");
+        assert_eq!(Frames::atlas_row(&f.kurumi, "idle").unwrap().1, "run");
+        assert_eq!(Frames::atlas_row(&f.kurumi, "wait").unwrap().1, "run");
         // 空 idle 视为缺失，继续回退
         f.kurumi.insert("idle".to_string(), Vec::new());
-        assert_eq!(f.kurumi_row("idle").unwrap().1, "run");
+        assert_eq!(Frames::atlas_row(&f.kurumi, "idle").unwrap().1, "run");
         // idle 恢复后优先命中；直接命中的行返回自身
         f.kurumi.insert("idle".to_string(), one());
-        assert_eq!(f.kurumi_row("idle").unwrap().1, "idle");
+        assert_eq!(Frames::atlas_row(&f.kurumi, "idle").unwrap().1, "idle");
         f.kurumi.insert("jump".to_string(), one());
-        assert_eq!(f.kurumi_row("jump").unwrap().1, "jump");
+        assert_eq!(Frames::atlas_row(&f.kurumi, "jump").unwrap().1, "jump");
+    }
+
+    /// v5 L0-3:whale 行集与 kurumi 共用同一条回退链。whale 图集**没有** `review` 行
+    /// （其 r8 实为站姿待机，语义核验见 pet-v5-motion-plan.md §2.3.2）⇒ Done 庆祝按链落到
+    /// **idle**（链序 idle → wave → jump → run，idle 先命中）。这是**已知且可接受的差异**：
+    /// Done 的可见信号主要由 10s 完成气泡承担，庆祝表达留给 L1 的挤压脉冲（零素材）。
+    /// 本测试钉住的是「不得落成空白、不得跨主题串味」，不是"庆祝要有专属帧"。
+    #[test]
+    fn whale_row_shares_fallback_chain() {
+        let mut f = Frames::default();
+        assert!(Frames::atlas_row(&f.whale_rows, "any").is_none(), "空行集不得 panic、不得伪造行");
+        f.whale_rows.insert("idle".to_string(), one());
+        f.whale_rows.insert("wave".to_string(), one());
+        assert_eq!(Frames::atlas_row(&f.whale_rows, "idle").unwrap().1, "idle");
+        // 链序：idle 优先于 wave
+        assert_eq!(Frames::atlas_row(&f.whale_rows, "review").unwrap().1, "idle");
+        // 两套行集互不串味：kurumi 补上 review 后，whale 侧仍回退 idle
+        f.kurumi.insert("review".to_string(), one());
+        assert_eq!(Frames::atlas_row(&f.whale_rows, "review").unwrap().1, "idle");
+        assert_eq!(Frames::atlas_row(&f.kurumi, "review").unwrap().1, "review");
+    }
+
+    /// v5 L0-3:散步准入由「kurumi 专属」放宽为「该主题具备行走帧」——
+    /// whale 图集接入后散步对它才第一次可触发；缺任一行或换来的主题恒 false
+    /// （否则会"平移但只能播 idle"，表现为滑步假位移）。
+    #[test]
+    fn wander_admission_follows_available_rows() {
+        let mut f = Frames::default();
+        assert!(!f.can_wander("kurumi"), "两行都缺 ⇒ 不散步");
+        assert!(!f.can_wander("whale"), "图集未接入 ⇒ 不散步");
+        assert!(!f.can_wander("inverse"), "无图集主题恒不散步");
+        assert!(!f.can_wander("unknown"), "未知主题不得散步");
+        f.kurumi.insert("runRight".to_string(), one());
+        assert!(!f.can_wander("kurumi"), "只有一行 ⇒ 仍不散步（另一方向会滑步）");
+        f.kurumi.insert("runLeft".to_string(), one());
+        assert!(f.can_wander("kurumi"));
+        // 两主题各自独立判定：kurumi 具备不使 whale 具备
+        assert!(!f.can_wander("whale"));
+        f.whale_rows.insert("runRight".to_string(), one());
+        f.whale_rows.insert("runLeft".to_string(), one());
+        assert!(f.can_wander("whale"));
     }
 }
 
@@ -156,21 +221,32 @@ pub(crate) fn load_frames() -> Frames {
     if let Some(bytes) = crate::assets::read("pets/frames.json") {
         if let Ok(txt) = String::from_utf8(bytes) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
-                // 行帧图集(kurumi)
-                if let Some(rows) = v.get("kurumi").and_then(|m| m.get("rows")).and_then(|r| r.as_object()) {
-                    for (row, files) in rows {
-                        let mut imgs = Vec::new();
-                        if let Some(arr) = files.as_array() {
-                            for name in arr {
-                                let rel = format!("pets/kurumi/frames/{}", name.as_str().unwrap_or(""));
-                                if let Some(b) = crate::assets::read(&rel) {
-                                    if let Some(img) = load_png(&b) {
-                                        imgs.push(img);
+                // 行帧图集(kurumi / v5:whale)——同一 schema,按主题分流到各自的行集
+                for theme in ["kurumi", "whale"] {
+                    if let Some(rows) =
+                        v.get(theme).and_then(|m| m.get("rows")).and_then(|r| r.as_object())
+                    {
+                        for (row, files) in rows {
+                            let mut imgs = Vec::new();
+                            if let Some(arr) = files.as_array() {
+                                for name in arr {
+                                    let rel = format!(
+                                        "pets/{theme}/frames/{}",
+                                        name.as_str().unwrap_or("")
+                                    );
+                                    if let Some(b) = crate::assets::read(&rel) {
+                                        if let Some(img) = load_png(&b) {
+                                            imgs.push(img);
+                                        }
                                     }
                                 }
                             }
+                            if theme == "kurumi" {
+                                f.kurumi.insert(row.clone(), imgs);
+                            } else {
+                                f.whale_rows.insert(row.clone(), imgs);
+                            }
                         }
-                        f.kurumi.insert(row.clone(), imgs);
                     }
                 }
                 // 立绘三态(whale / inverse);v2:值可为帧组数组(idle 帧序列)或单帧字符串

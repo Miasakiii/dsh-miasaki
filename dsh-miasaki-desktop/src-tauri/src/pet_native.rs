@@ -17,6 +17,8 @@ pub(crate) mod model;
 pub(crate) mod persist;
 #[path = "pet_native/window.rs"]
 pub(crate) mod window;
+#[path = "pet_native/xform.rs"]
+pub(crate) mod xform;
 
 /// M2(v3):桌宠六态（pet-v3-roadmap.md M2.1）。官方契约通道（hash pet= 字段，白名单归一化）
 /// 优先；DOM 扫描（act=/wait=）兜底；fleet 脉冲叠加 FleetBlocked。

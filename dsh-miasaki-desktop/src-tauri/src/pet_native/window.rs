@@ -8,6 +8,7 @@ use super::ffi::*;
 use super::image::*;
 use super::model::*;
 use super::persist::*;
+use super::xform::*;
 use super::{PetShared, PetState};
 pub(crate) struct PetWin {
     hwnd: isize,
@@ -28,6 +29,10 @@ pub(crate) struct PetWin {
     swallow_next_up: bool,
     /// M2:Done 庆祝已播(一次性 review,不循环;state 离开 Done 后复位)
     done_celebrated: bool,
+    /// L1(v5,2026-09-28):挤压脉冲起始时刻。两个触发点——Done 庆祝挂 `review` 槽时、
+    /// `Jump` 到期转 `JumpHold`（落地）时。**到期即清**（compose 内清 None），
+    /// 与 `ActionSlot` 同哲学：绝不留残留形变（`squash_scales` 两端恒回中性）。
+    squash_start: Option<std::time::Instant>,
     next_ambient: std::time::Instant,
     /// R4(2026-09-16):提醒（气泡）——取代 v3 的单槽 `Option<(usize, Instant)>`，
     /// 带稳定 id + 优先级 + 常驻标记（模型见 `model.rs::Alert`）。
@@ -169,6 +174,9 @@ impl PetWin {
             });
             self.frame_idx = 0;
             self.last_tick = now - std::time::Duration::from_secs(10);
+            // L1(v5) M3:庆祝起手挤压一次 —— whale 图集没有 review 行（Done 按回退链落 idle，
+            // 见 image.rs 的 whale_row_shares_fallback_chain），挤压脉冲正是给它的零素材庆祝表达。
+            self.squash_start = Some(now);
             dirty = true;
         } else if state != PetState::Done {
             self.done_celebrated = false;
@@ -186,6 +194,8 @@ impl PetWin {
                             started: now,
                             duration: std::time::Duration::from_millis(HOP_HOLD_MS),
                         });
+                        // L1(v5) M3:落地挤压一次（与 Done 庆祝共用同一脉冲通道）。
+                        self.squash_start = Some(now);
                     }
                     Action::Wander { .. } => {
                         // M1.4:散步自然结束同步悬浮球,隐藏后恢复入口不脱节
@@ -198,7 +208,7 @@ impl PetWin {
             }
         }
 
-        // —— 待机随机行为：定时气泡台词 + 定时散步（kurumi 专属,左右移动贴边吸附） ——
+        // —— 待机随机行为：定时气泡台词 + 定时散步（有行走帧的主题才散步,左右移动贴边吸附） ——
         if now >= self.next_quote && self.alert.is_none() {
             self.next_quote = now + std::time::Duration::from_millis(rand_range(40000, 90000));
             let idx = {
@@ -214,18 +224,24 @@ impl PetWin {
         if self.action.is_none() && now >= self.next_wander {
             // v2026-08-30:waiting 期间禁止散步(强制桌宠站定在审批气泡旁)
             // X2:fleet 指示期间同样站定;M2(v3):非 Idle 六态(工作/告警/出错/庆祝)全部站定
-            let (is_kurumi, fleet_running) = {
+            // v5 L0-3:散步的准入从「kurumi 专属」改为「该主题是否具备散步行」——
+            // whale 图集接入后同样有 runRight/runLeft，散步对它才第一次可触发；
+            // inverse 无图集恒 false（否则会"平移但只能播 idle"，表现为滑步假位移）。
+            let (can_walk, fleet_running) = {
                 let s = self.shared.lock().unwrap();
-                (s.mode == "kurumi", s.fleet_running)
+                (self.frames.can_wander(&s.mode), s.fleet_running)
             };
             let blocked = state != PetState::Idle || fleet_running;
-            if is_kurumi && !blocked {
+            if can_walk && !blocked {
                 let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
                 self.action = Some(ActionSlot {
                     action: Action::Wander { dx: dir },
                     started: now,
                     duration: std::time::Duration::from_millis(rand_range(1100, 2400)),
                 });
+                // L0-1(v5):散步行按 dx 选 runRight/runLeft,左右切换时从该行首帧起播
+                // ——否则沿用上一行的相位,回头瞬间步态错位(ambient 分支同款复位)。
+                self.frame_idx = 0;
                 dirty = true;
             }
             self.next_wander = now + std::time::Duration::from_millis(rand_range(45000, 120000));
@@ -289,6 +305,30 @@ impl PetWin {
                 let s = self.shared.lock().unwrap();
                 (s.mode.clone(), s.intensity.clone(), s.fleet_running)
             };
+            // —— L1(v5,2026-09-28)：本帧动效值（design/pet-v5-motion-plan.md §3）——
+            // **单值来源**：整帧只算一次，行集分支与三态立绘分支共用同一份 ⇒ 绘制与命中天然一致
+            // （`is_transparent_at` 查的就是本段写出的 `buf`，无需任何配套改动；订正说明见 xform.rs 头部）。
+            // 相位函数都是纯函数（入参只有毫秒数），此处只负责取时刻与推进脉冲状态。
+            let t_ms = now_ms();
+            // M3 挤压脉冲：Done 庆祝 / jump 落地各起一次，`SQUASH_MS` 内推进；**到期即清**。
+            let squash_p = match self.squash_start {
+                Some(t0) => {
+                    let p = now.duration_since(t0).as_secs_f32() * 1000.0 / SQUASH_MS as f32;
+                    if p < 1.0 { Some(p) } else { None }
+                }
+                None => None,
+            };
+            if squash_p.is_none() {
+                self.squash_start = None;
+            }
+            let (sq_sx, sq_sy) = match squash_p {
+                Some(p) => squash_scales(p),
+                None => (1.0, 1.0),
+            };
+            // 挤压期间**必须**关摇摆：`sx = 1.10` 与 ±2° 叠加会让包围盒横向越出 `WIN_W`
+            // （xform.rs 的 `squash_plus_sway_would_overflow_so_is_forbidden` 钉住了这件事）。
+            // 语义上也自洽：脉冲是「压扁—弹回」的纵向动效，此刻不摆。
+            let can_sway = squash_p.is_none();
             // —— M2(v3):六态 → whale/inverse 三态立绘映射 ——
             // Waiting/Error/Done/FleetBlocked → work 立绘(会话有事发生);
             // Thinking → 沿用推理强度(intensity=idle 时升 work);Idle → intensity(fleet_running 例外升 work)
@@ -375,8 +415,16 @@ impl PetWin {
                     // 帧更新块末尾已无条件置脏（见下方 `dirty = true`），此处不重复赋值
                 }
             }
-            if mode == "whale" || mode == "inverse" {
-                let key = if eff_intensity == "deep" {
+            // —— v5 L0-3:whale 图集接入后的绘制分流（design/pet-v5-motion-plan.md）——
+            // whale 有行集（`whale_rows` 非空）⇒ 与 kurumi 走同一条**行选择**路径，
+            // 六态与动作姿态第一次对 whale 也可读（此前只有三态立绘 = 非 idle 态近乎静止）。
+            // 两个例外（都需要"立绘"这个更重的表达）：
+            //   ① whale `intensity == "deep"`：深度推理档，图集无语义对等的强度指示，保留立绘；
+            //   ② inverse：没有图集（真素材缺口），维持三态立绘。
+            let whale_atlas = mode == "whale" && !self.frames.whale_rows.is_empty();
+            let whale_deep_overlay = whale_atlas && intensity == "deep";
+            if mode == "inverse" || whale_deep_overlay {
+                let key = if whale_deep_overlay || eff_intensity == "deep" {
                     "deep"
                 } else if eff_intensity == "work" {
                     "work"
@@ -390,29 +438,34 @@ impl PetWin {
                 };
                 // 三态立绘对应三个思考等级(小/中/大或不同姿态),强度来自 DSH 推理等级,切换稳定
                 // frames 加载后不可变:裸指针解引用安全(同时规避 self 借用冲突)
-                // D2:缺行时回退 idle(与 kurumi_row 同哲学,仅一层,避免误用它态语义)
+                // D2:缺行时回退 idle(与 Frames::atlas_row 同哲学,仅一层,避免误用它态语义)
                 let list_ptr = states.get(key).or_else(|| states.get("idle")).map(|l| l as *const Vec<Image>);
                 if let Some(ptr) = list_ptr {
                     let list = unsafe { &*ptr };
-                    let bob = if key == "idle" {
-                        let phase = (std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() % 3200) as f32 / 1600.0 * std::f32::consts::PI;
-                        phase.sin() * 3.0
+                    // L1(v5) M1：呼吸覆盖**全部三态** —— 此前只有 idle 会呼吸，work/deep 是彻底静止的
+                    // 死图，「反转狂三是一张不会动的画」说的正是这条。立绘分支**不看动作槽**：
+                    // 动作槽在这条分支上没有任何视觉表达（inverse 不可散步、ambient 行也不被消费），
+                    // 看它只会让呼吸莫名其妙地停一拍。
+                    let bob = breath_offset(t_ms, BREATH_PX_STATES);
+                    // L1(v5) M2：摇摆给 idle / work —— inverse 因此第一次真正「活起来」。
+                    // deep 档**只呼吸不摇摆**：那是深度推理档，取「凝神」语义，与 whale deep
+                    // 保留立绘覆盖同一取舍（强度档优先表达档位，不再叠姿态噪声）。
+                    let sway = if can_sway && matches!(key, "idle" | "work") {
+                        sway_angle(t_ms)
                     } else {
                         0.0
                     };
+                    let xf = DrawXform::new(sway, sq_sx, sq_sy);
                     if list.len() > 1 {
                         // v2:帧序列状态(idle.gif 拆帧),6fps 循环 + bob
                         self.anim_ms = 1000 / 6;
                         let idx = self.frame_idx % list.len();
                         self.frame_idx += 1;
-                        self.blit_center_bottom(&list[idx], bob, 1.0);
+                        self.blit_center_bottom(&list[idx], bob, 1.0, &xf);
                     } else if let Some(img) = list.first() {
-                        // 单帧:静态 + bob(与历史行为一致)
+                        // 单帧:静态 + bob + 摇摆
                         self.anim_ms = 1000;
-                        self.blit_center_bottom(img, bob, 1.0);
+                        self.blit_center_bottom(img, bob, 1.0, &xf);
                     }
                 }
             } else {
@@ -427,47 +480,45 @@ impl PetWin {
                     _ => 8,
                 };
                 self.anim_ms = 1000 / fps;
-                let pick = {
-                    // D2 fallback 链:请求行 → idle → wave → jump → run → 首个可用;
-                    // 返回实际命中行名(旧代码回退后仍用请求行名重查 → 查不到 → 空白,现修复)
-                    match self.frames.kurumi_row(&row) {
-                        Some((l, row_key)) => {
-                            // 落地定格窗口:JumpHold 槽期间锁定 jump 末帧,不推进
-                            // (Ambient 恰好抽中 jump 行时 kind 不是 JumpHold,照常推进)
-                            let holding_jump =
-                                matches!(&self.action, Some(s) if matches!(s.action, Action::JumpHold));
-                            let idx = if holding_jump {
-                                l.len() - 1
-                            } else {
-                                self.frame_idx % l.len()
-                            };
-                            if !holding_jump {
-                                self.frame_idx += 1;
-                            }
-                            Some((idx, row_key))
+                // v5 L0-3:帧集按主题分流(kurumi / whale),回退链共用 Frames::atlas_row
+                let map =
+                    if mode == "whale" { &self.frames.whale_rows } else { &self.frames.kurumi };
+                // D2 fallback 链:请求行 → idle → wave → jump → run → 首个可用;
+                // 返回实际命中行名(旧代码回退后仍用请求行名重查 → 查不到 → 空白,现修复)。
+                // 一次性把「命中帧组的裸指针 + 下标」取出,随后 blit 需要 &mut self,
+                // 沿用既有范式(frames 加载后不可变 ⇒ 裸指针解引用安全)规避借用冲突。
+                let picked: Option<(*const Vec<Image>, usize)> = match Frames::atlas_row(map, &row) {
+                    Some((l, _row_key)) => {
+                        // 落地定格窗口:JumpHold 槽期间锁定 jump 末帧,不推进
+                        // (Ambient 恰好抽中 jump 行时 kind 不是 JumpHold,照常推进)
+                        let holding_jump =
+                            matches!(&self.action, Some(s) if matches!(s.action, Action::JumpHold));
+                        let idx = if holding_jump { l.len() - 1 } else { self.frame_idx % l.len() };
+                        if !holding_jump {
+                            self.frame_idx += 1;
                         }
-                        _ => None,
+                        Some((l as *const Vec<Image>, idx))
                     }
+                    None => None,
                 };
-                if let Some((idx, row_key)) = pick {
-                    let ptr = self.frames.kurumi.get(&row_key).map(|l| l as *const Vec<Image>);
-                    if let Some(ptr) = ptr {
-                        let list = unsafe { &*ptr };
-                        // v2 呼吸 bob:基线(idle/wait)且无动作槽时 ±2px 上下呼吸
-                        let calm = (row == "idle" || row == "wait") && self.action.is_none();
-                        let bob = if calm {
-                            let phase = (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() % 3200) as f32
-                                / 1600.0
-                                * std::f32::consts::PI;
-                            phase.sin() * 2.0
-                        } else {
-                            0.0
-                        };
-                        self.blit_center_bottom(&list[idx % list.len()], bob, 1.0);
-                    }
+                if let Some((ptr, idx)) = picked {
+                    let list = unsafe { &*ptr };
+                    // L1(v5) M1：呼吸从「仅 idle/wait」放宽到**全部静止姿态**（无动作槽即可）——
+                    // 工作态的坐姿打字、wait、failed 此前都是完全静止的死图。
+                    // 有动作槽（jump/wave/ambient/wander）时不呼吸：动作本身已经在动，
+                    // 且此时的 `bob` 会与帧内位移叠加成抖。
+                    let calm = self.action.is_none();
+                    let bob = if calm { breath_offset(t_ms, BREATH_PX_ROW) } else { 0.0 };
+                    // L1(v5) M2：摇摆给 idle（长静置）与 run（打字时轻微起伏）；
+                    // 其余是限时动作/事件帧（jump/wave/failed/wait/runRight/runLeft），
+                    // 帧内自带位移，再叠旋转会与动作打架，故不接。
+                    let sway = if can_sway && calm && matches!(row.as_str(), "idle" | "run") {
+                        sway_angle(t_ms)
+                    } else {
+                        0.0
+                    };
+                    let xf = DrawXform::new(sway, sq_sx, sq_sy);
+                    self.blit_center_bottom(&list[idx % list.len()], bob, 1.0, &xf);
                 }
             }
             // 气泡与角色同帧绘制(帧更新清空 buf 后重画,避免每 tick 文本渲染)
@@ -495,9 +546,11 @@ impl PetWin {
             let s = self.shared.lock().unwrap();
             let non_zero = self.buf.iter().filter(|p| **p != 0).count();
             pet_log_line(&format!(
-                "[native-pet] tick{} mode={} int={} whale_states={} kurumi_rows={} buf_nonzero={}\n",
+                "[native-pet] tick{} mode={} int={} whale_states={} whale_rows={} kurumi_rows={} buf_nonzero={}\n",
                 tick, s.mode, s.intensity,
                 self.frames.whale_states.len(),
+                // v5 L0-3:whale 图集行数（0 = 图集未内嵌/未切，运行时回落三态立绘）——实机判据
+                self.frames.whale_rows.len(),
                 self.frames.kurumi.get("idle").map(|v| v.len()).unwrap_or(0),
                 non_zero
             ));
@@ -508,28 +561,69 @@ impl PetWin {
         }
     }
 
-    fn blit_center_bottom(&mut self, img: &Image, bob: f32, scale: f32) {
+    /// L1(v5)：把一帧图像**变换后**写进合成缓冲 —— 等比缩放到 `CELL_H·scale` 高、水平居中、
+    /// 底部对齐，再绕**底边中心** pivot 做旋转 / 非等比缩放。
+    ///
+    /// 采样路径 = **逆向映射**：目标像素 → 相对 pivot 的偏移 → `xf.inverse_offset`
+    /// → 未变换框内坐标 → 源图双线性采样。逆向映射（而非正向撒点）从结构上消除旋转采样空洞；
+    /// 又因为写入的是**最终合成缓冲** `buf`，命中判定（`is_transparent_at` 直接查 `buf`）
+    /// 天然跟随绘制、不需要任何配套改造 —— 这一点与参考实现不同，订正见 `xform.rs` 头部。
+    ///
+    /// 布局：遍历范围取**变换后外接包围盒**（`DrawXform::bounds`，恒包含原框）；
+    /// 基准 `y0` 预先扣掉 `sway_layout_margin`（按**最大**摇摆角算，不是当前角）——
+    /// 于是摇摆全程底边基线恒定（不会「边摇边上下弹」），最低点也不越过 `WIN_H − 2`。
+    ///
+    /// 性能：全程就地写缓冲，**零分配、零新增 GDI 对象**（motion-plan §3.6 的硬约束）。
+    /// 包围盒比原框大约 11%（±2° 摇摆的最坏情况），仍在 33ms 预算内。
+    fn blit_center_bottom(&mut self, img: &Image, bob: f32, scale: f32, xf: &DrawXform) {
         let h = (CELL_H as f32 * scale) as i32;
         let w = (img.w as f32 / img.h as f32 * h as f32) as i32;
-        let x0 = (WIN_W - w) / 2;
-        let y0 = WIN_H - h - 2 + bob as i32;
         if w <= 0 || h <= 0 {
             return;
         }
         let src_w = img.w as i32;
         let src_h = img.h as i32;
-        // 源坐标中心对齐:(目标像素中心 → 源空间),避免偏一像素的非对称采样
-        // sx = (x + 0.5) * src.w / w - 0.5
-        for y in 0..h {
-            let syf = (y as f32 + 0.5) * (src_h as f32) / (h as f32) - 0.5;
-            let sy0 = syf.floor() as i32;
-            let fy = (syf - sy0 as f32).clamp(0.0, 1.0);
-            let sy1 = sy0 + 1;
-            for x in 0..w {
-                let sxf = (x as f32 + 0.5) * (src_w as f32) / (w as f32) - 0.5;
+        let (fw, fh) = (w as f32, h as f32);
+        let (hw, hh) = (fw / 2.0, fh);
+        // 未变换框左上角（窗口坐标）。底部留白 2px 之外再让出摇摆余量：旋转让底边两端
+        // 一高一低，低的那一端会低于 pivot，不让位就会被窗口下沿切掉「脚尖」。
+        let x0 = (WIN_W as f32 - fw) / 2.0;
+        let y0 = WIN_H as f32 - fh - 2.0 - sway_layout_margin(fw) + bob;
+        let pivot_x = x0 + hw;
+        let pivot_y = y0 + hh;
+        // 外接包围盒（相对未变换框左上角）→ 窗口坐标下的整数遍历区间
+        let (bl, bt, br, bb) = xf.bounds(fw, fh);
+        let ix0 = (x0 + bl).floor() as i32;
+        let iy0 = (y0 + bt).floor() as i32;
+        let ix1 = (x0 + br).ceil() as i32;
+        let iy1 = (y0 + bb).ceil() as i32;
+        for dy in iy0..=iy1 {
+            if dy < 0 || dy >= WIN_H {
+                continue;
+            }
+            for dx in ix0..=ix1 {
+                if dx < 0 || dx >= WIN_W {
+                    continue;
+                }
+                // 目标像素中心 → 相对 pivot 的偏移 → 逆变换 → 未变换框内坐标
+                let (lx, ly) =
+                    xf.inverse_offset(dx as f32 + 0.5 - pivot_x, dy as f32 + 0.5 - pivot_y);
+                let ux = lx + hw;
+                let uy = ly + hh;
+                // 框外不采样：包围盒那四个空转角正是在这里被跳过
+                if ux < 0.0 || uy < 0.0 || ux >= fw || uy >= fh {
+                    continue;
+                }
+                // 源坐标中心对齐:(目标像素中心 → 源空间),避免偏一像素的非对称采样
+                // sx = (x + 0.5) * src.w / w - 0.5（`ux` 已含 +0.5）
+                let sxf = ux * (src_w as f32) / fw - 0.5;
+                let syf = uy * (src_h as f32) / fh - 0.5;
                 let sx0 = sxf.floor() as i32;
+                let sy0 = syf.floor() as i32;
                 let fx = (sxf - sx0 as f32).clamp(0.0, 1.0);
+                let fy = (syf - sy0 as f32).clamp(0.0, 1.0);
                 let sx1 = sx0 + 1;
+                let sy1 = sy0 + 1;
                 // 边界 clamp:边缘像素只取存在的邻居
                 let cx0 = sx0.clamp(0, src_w - 1);
                 let cy0 = sy0.clamp(0, src_h - 1);
@@ -561,11 +655,6 @@ impl PetWin {
                 let r = blend(16);
                 let g = blend(8);
                 let b = blend(0);
-                let dx = x0 + x;
-                let dy = y0 + y;
-                if dx < 0 || dy < 0 || dx >= WIN_W || dy >= WIN_H {
-                    continue;
-                }
                 let dst = &mut self.buf[(dy * WIN_W + dx) as usize];
                 let da = (*dst >> 24) & 0xFF;
                 let inv = 255 - a;
@@ -619,6 +708,12 @@ impl PetWin {
     /// 直接查当前合成缓冲 `buf`——它已是「立绘 + 气泡」逐像素 over 之后的**最终结果**，
     /// 因此不必像参考实现那样为每种元素单独维护 mask（`pet/window.py:_sync_mask`）：
     /// 阈值 `CLICK_THROUGH_ALPHA` 之下的像素视为透明。
+    ///
+    /// L1(2026-09-28) 复核：**旋转/形变不需要本函数做任何配套改造**。变换在
+    /// `blit_center_bottom` 写入 `buf` 时就已完成，这里查到的就是变换后的轮廓 ——
+    /// 「看得见的必可点、看不见的必穿透」由「查最终缓冲」这一条架构决定自动成立。
+    /// （`pet-v5-motion-plan.md` §3.3 曾把「命中必须与绘制同批改造」列为 L1 硬约束，
+    ///  那是参考实现的前提：它为每元素单独维护 mask，旋转后 mask 与画面脱钩。我方无此问题。）
     fn is_transparent_at(&self, x: i32, y: i32) -> bool {
         if x < 0 || y < 0 || x >= WIN_W || y >= WIN_H {
             return true;
@@ -1171,6 +1266,18 @@ unsafe extern "system" fn dot_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) 
     }
 }
 
+/// L1(v5)：动效相位用的墙钟毫秒。
+///
+/// 用 `SystemTime` 而非 `Instant` 是刻意的：相位函数（`xform::breath_offset` /
+/// `sway_angle`）因此是**只依赖入参**的纯函数，单测无需构造时钟；且这与 v2 起既有
+/// 呼吸 bob 的取时方式一致（行为连续，不因引入 L1 而改变相位基准）。
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 /// R5:JSON 字符串字面量——把 key/decision 安全注入 eval 的 JS 片段（防注入）。
 fn json_lit(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
@@ -1302,6 +1409,7 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             click_pending: false,
             swallow_next_up: false,
             done_celebrated: false,
+            squash_start: None,
             next_ambient: std::time::Instant::now() + std::time::Duration::from_millis(AMBIENT_FIRST_DELAY_MS),
             alert: None,
             alert_shown_at: std::time::Instant::now(),

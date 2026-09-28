@@ -18,7 +18,7 @@
 // 各线的详细输出直接透传到当前终端。
 
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -264,6 +264,38 @@ function planDesktop() {
     args: [join(dir, 'scripts/check-pet-assets.mjs')],
     cwd: dir,
   })
+  // Computer Use 插件的产物语法（2026-09-28）：`lib/*.js` 由上游 orb 工具链编译入库
+  // （本仓无源码，无法就地维护），装进 profile 后装载失败只表现为「工具不见了」——
+  // 故以 `node --check` 兜住损坏的产物。该目录已被 check-silent-guards 的
+  // SKIP_PATH_PREFIXES 排除（外部编译产物），**本项就是那次排除的替代检查**：
+  // 排除而不加替代检查 = 把风险藏起来。
+  // 动态枚举而非硬编码文件名 —— tsdown 的 chunk 名带内容 hash（backend-DNT4VCU7.js 之类），
+  // 重新编译即变，硬编码＝静默断链（本仓 2026-09-10 教训）。目录本身缺失时显式失败。
+  {
+    const bundleDir = join(dir, 'plugins', 'dsh-computer-use', 'lib')
+    const bundles = existsSync(bundleDir)
+      ? readdirSync(bundleDir).filter(name => name.endsWith('.js')).sort()
+      : []
+    if (bundles.length === 0) {
+      checks.push({
+        line: 'desktop',
+        name: 'computer-use bundle (产物缺失)',
+        cmd: process.execPath,
+        args: ['-e', "console.error('plugins/dsh-computer-use/lib/*.js 缺失——插件装不上，且本项不得静默跳过'); process.exit(1)"],
+        cwd: dir,
+      })
+    }
+    for (const bundle of bundles) {
+      checks.push({
+        line: 'desktop',
+        name: `syntax computer-use/${bundle}`,
+        cmd: process.execPath,
+        args: ['--check', join(bundleDir, bundle)],
+        cwd: dir,
+      })
+    }
+  }
+
   // 模型设置运行时补丁的自证：由 baseline 原始文件重建补丁产物并逐字节比对。
   // 纯离线、不碰安装目录——DSH 升级覆盖补丁后这一项仍应 PASS，它证明的是
   // 「补丁规则与基线自洽」，而不是「补丁此刻在安装目录里」。
@@ -321,6 +353,29 @@ function planDesktop() {
     name: 'patch verify (消息画廊多图 tile 宽高比补丁可重建)',
     cmd: process.execPath,
     args: [join(dir, 'patches/dsh-client-ui-attachment/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  // 侧边栏头部悬浮提示 portal 化补丁（2026-09-28 新建，基线 0.1.7-rc.2）的自证。
+  // 6 条 JS 编辑（tooltip 加 portal: true）+ SHA 重建比对 + vm.Script 语法闸门
+  // （产物是合法经典脚本才允许落盘——client bundle 坏一个包全体失效）。
+  // 纯离线，升级覆盖补丁后这一项仍应 PASS。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (侧边栏悬浮提示 portal 化补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-client-ui-sidebar/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  // 品牌徽标 HARNESS → miasaki 部署名补丁（2026-09-28 新建，基线 0.1.7-rc.2）的自证。
+  // 2 条 JS 编辑（插入 MiasakiBrandName 组件 + 改 OfficialBrandName 返回）+
+  // SHA 重建比对 + vm.Script 语法闸门。字标 8 path 从 primitives 官方源码
+  // 逐字节提取，胶囊 rect 几何不变，仅徽标文字 HARNESS→MIASAKI。
+  // 纯离线，升级覆盖补丁后这一项仍应 PASS。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (品牌徽标 miasaki 化补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-client-ui-brand-official/patch.mjs'), 'verify'],
     cwd: dir,
   })
   // 「测试连通性 v2」的 host 侧能力（plugins/dsh-model-probe）：语法检查 +
@@ -464,13 +519,16 @@ function planUsage() {
 /**
  * 仓库级治理闸门（跨八线生效，不属于任何单线）。
  *
- * 这两项补的是「逐例修不解决问题」的那类漏洞 —— 同类 bug 反复出现时，缺的不再是修法，
+ * 这三项补的是「逐例修不解决问题」的那类漏洞 —— 同类 bug 反复出现时，缺的不再是修法，
  * 而是让第 N 例无法悄悄进来的闸门（评审报告 §五.P2.10）：
  *   · silent-guards：守卫必须显式失败。四类形态（静默跳过 / 静默吞错 / 静默回退读取 /
  *     声明清单缺口），存量冻结在 scripts/silent-guard-baseline.json，**新增即失败**；
  *   · doc-versions：根 README 的版本台账必须与八线 package.json 逐字一致，
- *     治「文档说一个版本、代码是另一个版本」这类当前态失真。
- * 两项都零依赖、纯离线，受限沙箱与 CI 同样可跑。
+ *     治「文档说一个版本、代码是另一个版本」这类当前态失真；
+ *   · message-sources：会话消息的 `source.kind` 不得用 DSH 0.1.7 起已退役的 v3 写法
+ *     （`{ kind: "plugin", plugin: … }` ⇒ v4 准入硬拒 ⇒ 整轮运行失败）。除仓库内源码外，
+ *     顺带体检本机 `~/.dsh/profiles/<profile>/node_modules` 的非官方插件；CI 无该目录时显式跳过。
+ * 三项都零依赖、纯离线，受限沙箱与 CI 同样可跑。
  */
 function planRepo() {
   checks.push({
@@ -485,6 +543,17 @@ function planRepo() {
     name: 'doc-versions (版本台账 vs package.json)',
     cmd: process.execPath,
     args: [join(ROOT, 'scripts', 'check-doc-versions.mjs')],
+    cwd: ROOT,
+  })
+  // 2026-09-27 实机故障（「本轮运行失败 format v4 message requires a producer-owned
+  // source kind」）的直接产物：第三方记忆插件按 v3 写法注入消息，v4 准入在落盘前硬拒，
+  // 每轮必失败而磁盘上查不到任何痕迹。闸门扫仓库内源码（含自证：正例必命中、反例必不误报），
+  // 并顺带体检本机已装插件 —— 后者是本机环境健康检查，CI 上显式跳过（不静默）。
+  checks.push({
+    line: 'repo',
+    name: 'message-sources (会话消息来源不得用退役 v3 写法)',
+    cmd: process.execPath,
+    args: [join(ROOT, 'scripts', 'check-message-sources.mjs')],
     cwd: ROOT,
   })
 }

@@ -39,7 +39,8 @@ Miasaki.exe (Tauri 2, 单进程)
 | 桌宠状态源 = 官方契约为主 + DOM 兜底(v3 M2 2026-09-12;R0 2026-09-16 改为**跨会话聚合**) | `dsh-pet-panel` 读官方 `ctx.sessions`/`ctx.uiSession.pendingInteractions`(inject 白名单实证),hash `pet=` 上报;DOM 扫描仅通道死亡时兜底。单写者:注入运行时 syncHash 合并 pet 字段,pet-panel 只写全局对象。**R0 起**:审批遍历全部会话的 `pendingInteractions`(切走会话也能看到后台待审批),运行态「任一非子代理会话 running = 忙」;审批带出 `sessionId`/`reason`,**无稳定身份不显示** |
 | 桌宠窗口 = 不夺前台(`WS_EX_NOACTIVATE`,R1 2026-09-16) | 点击桌宠不再夺走前台/键盘焦点——否则用户在原应用的 Ctrl+C/V 会落到桌宠窗口(参考实现 issue #98 的「整机复制粘贴失效」观感)。**只改扩展样式位、不重建原生窗口**;鼠标/键盘消息照常送达,点击/拖动/双击不受影响 |
 | 桌宠窗口 = 透明区域逐像素穿透(R2 2026-09-16) | 10ms 光标轮询(`IDT_HIT`) + 查**当前合成缓冲 `buf`** 的 alpha(阈值 `CLICK_THROUGH_ALPHA=16`) → 动态置位/清除 `WS_EX_TRANSPARENT`。**必须轮询**:置位后本窗口收不到鼠标消息,恢复判定无从由事件得知。拖拽/隐藏中恒不穿透;只改样式位不重建窗口(重建会闪烁) |
-| 桌宠位置 = pet.json v2 比例 + 屏幕身份(R3 2026-09-16) | 「**角色可见区域**中心」相对所在工作区的比例 `rx/ry` + 工作区几何(屏幕身份) + 绝对坐标兜底 + hide;v1 按 `version` 分流读取并自动升级。可见性判据 = **角色可见区域 ∩ 工作区 ≥ 25%**(角色区域 = 底部 `CELL_H` 带,与 `blit_center_bottom` 几何一致)。旧「窗口中心点」判据在 M4.1 peek 缩边时必然误判「不可见」→ 拉回默认位置 |
+| 桌宠绘制变换 = 绘制层完成、命中**零**配套(L1 2026-09-28) | 呼吸 / 摇摆 / 挤压脉冲全部在 `blit_center_bottom` 的**逆变换采样**里完成(`xform.rs` 纯逻辑承载矩阵与相位):目标像素 → 相对**底边中心 pivot** 的偏移 → 逆变换 → 源图双线性。遍历范围取**变换后外接包围盒**(**横向不对称**——顶边随旋转整体横移 `sy·h·sinθ`,底边不动,首版对称解析式即栽在此处),基准位置按**最大**摇摆角预留 `sway_layout_margin`(按当前角补偿会让摇摆退化成「边弹边摆」,最低点还会被窗口下沿切掉)。**命中判定零改动**:R2 查的是最终合成缓冲,变换在写入时已完成 ⇒ 天然一致(motion-plan §3.3 原列的「命中必须与绘制同批改造」是参考实现的前提——它为每元素单独维护 mask——对本仓**不成立**)。零新增 GDI 对象、零分配;挤压期间强制关摇摆(两者叠加是横向最坏情况:包围盒 282px vs `WIN_W` 286) |
+| 桌宠位置 = pet.json v2 比例 + 屏幕身份(R3 2026-09-16) | 「**角色可见区域**中心」相对所在工作区的比例 `rx/ry` + 工作区几何(屏幕身份) + 绝对坐标兜底 + hide;v1 按 `version` 分流读取并自动升级。可见性判据 = **角色可见区域 ∩ 工作区 ≥ 25%**(角色区域 = 底部 `CELL_H` 带,与 `blit_center_bottom` 几何一致;**L1 变换后角色带底部上移了 `sway_layout_margin`(最宽帧 ≲4.4px),顶部另受包围盒外扩影响,二者都远小于带的尺度,25% 判据的鲁棒性不变**)。旧「窗口中心点」判据在 M4.1 peek 缩边时必然误判「不可见」→ 拉回默认位置 |
 | 桌宠气泡 = 提醒模型 `Alert`(R4/R7 2026-09-16) | 单槽 → `{ id, frame, priority, sticky, until }`;优先级 **审批(0) > 告警(1) > 状态(2) > 台词(3)**;同 id **就地更新**(不重置计时,状态抖动不闪);**按 id 精确移除**(`resolve_alert`);低优先级受 `ALERT_MIN_DWELL_MS=900ms` 最小驻留保护,审批/告警**恒可立即抢占**。未采纳参考实现的「被抢占项回队首」(我方同时只展示一个气泡) |
 | 桌宠内联审批 = 单向链 + 官方 `answer()`(R5/M3.2 2026-09-16) | **Rust 不持有任何 DSH API**:命中区(`approval.png` 固定矩形)→ `decide_approval` → 乐观收起 + 单调 `seq` → `wv.eval` 派发 `miasaki-approval-decision` → `dsh-pet-panel` 在跨会话 `pendingInteractions` 中按 `key` 匹配 → 官方 `PendingApproval.answer('allowed-once'\|'rejected')`。红线:仅用户显式点击、仅两个枚举、seq 去重、**失败不假装成功**(`DECISION_FALLBACK_MS=3000ms` 后回落「需要你的批准」);**无 `key` 不挂可交互气泡**(身份门禁) |
 | 桌宠状态扫描(DOM 兜底) = 节奏分级 + 零强制布局(2026-09-08) | 原实现每轮对每个 button 求 `offsetParent`(强制布局)、且每轮重算含 `elementFromPoint`/`getComputedStyle` 的 diag;长会话+流式输出下实测每 1.5s 出现 15~47ms 主线程尖峰,表现为输入发涩/发送无响应。改为 activity 每轮、effort/approval 每 2 轮、hidden 时每 4 轮,diag 按 10s 节流重算 |
@@ -96,7 +97,10 @@ main.rs parse_fragment(结构体) + start_hash_watchdog（兼容期保留:老注
 compose 六态合成(pet_native.rs PetState):
   官方(5s 心跳内,白名单归一化) > DOM 兜底(waiting/busy) > fleet 叠加(告警;Waiting>FleetBlocked)
   行选择 pick_state_row:Waiting(wait 行) > FleetBlocked/Error(failed) > Done(review 一次)
-    > Thinking(idle 静默守候) > Idle(动作槽)
+    > Thinking(run 行=坐姿打字,2026-09-27 v5 L0-2 由 idle 改派) > Idle(动作槽:
+    wander 按 dx 选 runRight/runLeft,2026-09-27 v5 L0-1)
+  素材分流(kurumi/whale 走行选择,回退链 Frames::atlas_row 共用;inverse 三态立绘;
+    whale 的 intensity=deep 保留立绘覆盖) —— 见 design/pet-v5-motion-plan.md
   气泡:waiting→等待审批 / error→出错了 / done→完成了(10s) / thinking·fleet_running→忙碌中
 ```
 **DOM 兜底校准**:`__miasakiProbe()`(window 全局)dump 当前候选按钮文本,Operator 按 DSH
@@ -122,8 +126,8 @@ compose 六态合成(pet_native.rs PetState):
 
 ```powershell
 # desktop 目录
-node scripts/cut-frames.mjs    # 图集切帧(kurumi 切 9 行 + whale 拆 idle.gif;内置 despeckle 杀散点/光晕)
-node scripts/inverse-states.mjs # 反转狂三立绘处理(1px 净色环带 + despeckle;需 raw/blue-*.png 源)
+node scripts/cut-frames.mjs    # 图集切帧(kurumi 切 9 行 + whale 图集切 7 行 + whale 立绘 idle.gif 帧序列;内置 despeckle 杀散点/光晕)
+node scripts/inverse-states.mjs # 反转狂三立绘处理(1px 净色环带 + despeckle;需 raw/canon-*.png 源;背景色四角采样,蓝底白底通吃)
 node scripts/make-icons.mjs    # 主题徽章 + 应用图标(源 src-tauri/icon-new.png,圆角 24% 边长)
 node scripts/gen-init          # 注入包 + 令牌完备性校验
 powershell -File scripts/gen-bubbles.ps1 # 桌宠气泡精灵表(20 帧:17 台词 + 3 状态帧;改 quote_pool 后必跑)

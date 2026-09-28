@@ -1,6 +1,68 @@
 {
   "whale": {
-    "kind": "states",
+    "kind": "atlas",
+    "rows": {
+      "idle": [
+        "r0c0.png",
+        "r0c1.png",
+        "r0c2.png",
+        "r0c3.png",
+        "r0c4.png",
+        "r0c5.png",
+        "r0c6.png"
+      ],
+      "runRight": [
+        "r1c0.png",
+        "r1c1.png",
+        "r1c2.png",
+        "r1c3.png",
+        "r1c4.png",
+        "r1c5.png",
+        "r1c6.png",
+        "r1c7.png"
+      ],
+      "runLeft": [
+        "r2c0.png",
+        "r2c1.png",
+        "r2c2.png",
+        "r2c3.png",
+        "r2c4.png",
+        "r2c5.png",
+        "r2c6.png",
+        "r2c7.png"
+      ],
+      "wave": [
+        "r3c0.png",
+        "r3c1.png",
+        "r3c2.png",
+        "r3c3.png"
+      ],
+      "jump": [
+        "r4c0.png",
+        "r4c1.png",
+        "r4c2.png",
+        "r4c3.png",
+        "r4c4.png"
+      ],
+      "failed": [
+        "r5c0.png",
+        "r5c1.png",
+        "r5c2.png",
+        "r5c3.png",
+        "r5c4.png",
+        "r5c5.png",
+        "r5c6.png",
+        "r5c7.png"
+      ],
+      "wait": [
+        "r6c0.png",
+        "r6c1.png",
+        "r6c2.png",
+        "r6c3.png",
+        "r6c4.png",
+        "r6c5.png"
+      ]
+    },
     "states": {
       "idle": [
         "states/idle-00.png",

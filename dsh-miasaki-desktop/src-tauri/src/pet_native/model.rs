@@ -33,7 +33,7 @@ impl ActionSlot {
 }
 
 /// M1.2/M2(v3) 状态优先级行选择（高 → 低）:
-///   Waiting(审批) > FleetBlocked > Error > Done(庆祝让位一次性槽) > Thinking(静默守候) > Idle
+///   Waiting(审批) > FleetBlocked > Error > Done(庆祝让位一次性槽) > Thinking(工作态:坐姿打字) > Idle
 /// 状态由 compose 的六态合成给出（官方契约优先,DOM 兜底,fleet 叠加）;
 /// 动作槽在 Idle/Waiting 态下的行为:Idle 时播放,Waiting 时被状态压住(M1.3 验收 ③)。
 /// 返回 kurumi 渲染分支应播放的行名。
@@ -45,7 +45,7 @@ pub(crate) fn pick_state_row(state: PetState, action: Option<&ActionSlot>) -> St
             "wait".to_string()
         }
         PetState::FleetBlocked | PetState::Error => {
-            // fleet 告警(blocked/error)/会话出错:播 failed 行(缺行由 kurumi_row 回退链兜底)
+            // fleet 告警(blocked/error)/会话出错:播 failed 行(缺行由 Frames::atlas_row 回退链兜底)
             let _ = action;
             "failed".to_string()
         }
@@ -55,10 +55,12 @@ pub(crate) fn pick_state_row(state: PetState, action: Option<&ActionSlot>) -> St
             None => "idle".to_string(),
         },
         PetState::Thinking => {
-            // 思考中/busy=静默守候(同 idle 姿态)。wait 行留给审批等待;
-            // busy 不原地跑步、不做小动作(真实工作状态:干活时站定)
+            // 工作态 = 坐姿敲键盘(r7,行名 run)。见 design/pet-v5-motion-plan.md L0-2:
+            // v3 当时取 idle 是「无可用素材」的妥协,现改为语义直译——Thinking 的来源正是
+            // 官方 running(agent 真在干活),r7 是「在干活」的一手姿态。
+            // wait 行仍留给审批等待;busy 不做环境小动作(槽被本分支压住)。
             let _ = action;
-            "idle".to_string()
+            "run".to_string()
         }
         PetState::Idle => match action {
             Some(slot) => slot_row(slot),
@@ -67,11 +69,16 @@ pub(crate) fn pick_state_row(state: PetState, action: Option<&ActionSlot>) -> St
     }
 }
 
+/// 动作槽 → 行名。`Wander` 按方向选行（L0-1，见 design/pet-v5-motion-plan.md）:
+/// 此前 `dx` 被丢弃、恒返 `"run"`，导致 runRight/runLeft 这 16 帧已切好却从未上场
+/// （且 `run` 实为「坐姿打字」，被当散步播属语义错配——现两处各归其位：
+///  散步 → runRight/runLeft，工作态 → run）。
 fn slot_row(slot: &ActionSlot) -> String {
     match &slot.action {
         Action::Jump | Action::JumpHold => "jump".to_string(),
         Action::Wave => "wave".to_string(),
-        Action::Wander { .. } => "run".to_string(),
+        // dx 取值域是 ±1（window.rs 只产生这两种），`>= 0` 兼作 0 的兜底
+        Action::Wander { dx } => if *dx >= 0 { "runRight" } else { "runLeft" }.to_string(),
         Action::Ambient { row } => row.clone(),
     }
 }
@@ -199,14 +206,36 @@ mod tests {
         assert_eq!(pick_state_row(PetState::Error, Some(&jump)), "failed");
     }
 
-    /// M2 回归:Error/FleetBlocked 播 failed;Thinking(静默守候)压过手势与环境编排。
+    /// M2 回归:Error/FleetBlocked 播 failed;Thinking(工作态)压过手势与环境编排,播 run(坐姿打字)。
     #[test]
     fn busy_beats_gesture_and_ambient() {
         let jump = slot(Action::Jump, 900);
         let amb = slot(Action::Ambient { row: "wave".into() }, 1500);
-        assert_eq!(pick_state_row(PetState::Thinking, Some(&jump)), "idle");
-        assert_eq!(pick_state_row(PetState::Thinking, Some(&amb)), "idle");
-        assert_eq!(pick_state_row(PetState::Thinking, None), "idle");
+        assert_eq!(pick_state_row(PetState::Thinking, Some(&jump)), "run");
+        assert_eq!(pick_state_row(PetState::Thinking, Some(&amb)), "run");
+        assert_eq!(pick_state_row(PetState::Thinking, None), "run");
+    }
+
+    /// L0-1(v5):散步按方向选行——`dx` 不再被丢弃,runRight/runLeft 各 8 帧首次上场。
+    #[test]
+    fn wander_picks_row_by_direction() {
+        let right = slot(Action::Wander { dx: 1 }, 1800);
+        let left = slot(Action::Wander { dx: -1 }, 1800);
+        assert_eq!(pick_state_row(PetState::Idle, Some(&right)), "runRight");
+        assert_eq!(pick_state_row(PetState::Idle, Some(&left)), "runLeft");
+        // 兜底:dx=0(当前不产生)按向右处理,不落进非法行名
+        let still = slot(Action::Wander { dx: 0 }, 1800);
+        assert_eq!(pick_state_row(PetState::Idle, Some(&still)), "runRight");
+    }
+
+    /// L0-2(v5):`run`(坐姿打字)专属工作态——散步槽不再占用它,
+    /// 否则「工作态可读」与「散步方向正确」会互相污染(同一行名两种语义)。
+    #[test]
+    fn working_row_is_reserved_for_thinking() {
+        let walk = slot(Action::Wander { dx: 1 }, 1800);
+        assert_eq!(pick_state_row(PetState::Thinking, Some(&walk)), "run");
+        assert_eq!(pick_state_row(PetState::Idle, Some(&walk)), "runRight");
+        assert_eq!(pick_state_row(PetState::Idle, None), "idle");
     }
 
     #[test]
@@ -215,7 +244,7 @@ mod tests {
         let wander = slot(Action::Wander { dx: 1 }, 1800);
         let hold = slot(Action::JumpHold, 200);
         assert_eq!(pick_state_row(PetState::Idle, Some(&amb)), "review");
-        assert_eq!(pick_state_row(PetState::Idle, Some(&wander)), "run");
+        assert_eq!(pick_state_row(PetState::Idle, Some(&wander)), "runRight");
         assert_eq!(pick_state_row(PetState::Idle, Some(&hold)), "jump");
         assert_eq!(pick_state_row(PetState::Idle, None), "idle");
     }
