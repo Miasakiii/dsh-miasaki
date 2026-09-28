@@ -5,7 +5,16 @@ window.__ModuleLoader__.load({
     const react = require('react')
     const currentSession = ctx => {
       const snapshot = ctx.sessions.list.getSnapshot()
-      const id = snapshot.current
+      // 主视图会话 = `retainedBy.mainView > 0`（官方 ui-session publishMain 同款
+      // 判据；mainView retain 源由官方 ui-workspace 打开主视图会话时持有）。
+      // **会话列表快照没有 current 字段**——SessionListState 恒为
+      // `{ ids, byId, phase, projectionsBySession }`（运行版
+      // `@deepseek-ai/dsh-api-session-controller/lib/types/client/sessions/service.js`
+      // 的 createSnapshotStore 初值与 projectList 的 list.set 为证）。曾按
+      // `snapshot.current` 取数 ⇒ 恒 undefined ⇒ 画布永远不高亮当前会话
+      // （sidebar 线 2026-09-27「终端打不开」同根因的复发面）。
+      const row = Object.values(snapshot.byId).find(candidate => (candidate.retainedBy?.mainView ?? 0) > 0)
+      const id = row?.id
       if (id === undefined) return null
       const session = snapshot.byId[id]
       return session === undefined ? null : { id, title: session.displayTitle, cwd: session.cwd ?? null }

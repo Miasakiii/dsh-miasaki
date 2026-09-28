@@ -23,6 +23,8 @@ DSH（DeepSeek Harness）web 画布插件：可浏览、可分支、**可合并*
 
 **DSH 0.1.7 API 适配**（2026-09-27，v0.5.0-miasaki.7）：DSH 0.1.7 起 `ISessions` 契约删除 `open(id)`，会话导航统一收敛到 `ctx.uiWorkspace.openSession(target)`——桥接层 `client.js` 原来调用的 `ctx.sessions.open` 每次都是 `TypeError`，却被空 `catch` 一律显示成误导性的「关联的 DSH 会话已不可用」（会话其实活着，只是点卡片/跳回 DSH 必报错）。本次：① `inject` 增加 `uiWorkspace`，三处导航（卡片选中联动 / 跳回 DSH / 画布发消息）全部改走 `ctx.uiWorkspace.openSession`；② 发消息路径先 `openSession` 再借 `ctx.sessions.scope()`——0.1.7 的 scope 只对已 retain 的世代有效（`openSession` 同步 materializeScope），未在前台打开过的会话直接取 scope 恒为 `undefined`；③ 两处空 `catch` 改为 `console.warn` 留痕 + toast 带真实原因。契约见 [`test/canvas-runtime.test.js`](test/canvas-runtime.test.js)。
 
+**2026-09-27 补（currentSession 死取数订正）**：`currentSession()` 曾按 `ctx.sessions.list.getSnapshot().current` 取「当前会话」，而会话列表快照**没有 `current` 字段**（SessionListState 恒为 `{ ids, byId, phase, projectionsBySession }`，运行版 `dsh-api-session-controller` 的 `service.js` 为证）⇒ `canvas:current-session` 恒发 `session: null`，画布永远不高亮当前会话节点。判据改为官方 ui-session publishMain 同款的 `retainedBy.mainView > 0`（mainView retain 源由官方 ui-workspace 持掌）。与 sidebar 线同日「终端打不开」同一根因（该线 `client.js` 全文见其 CHANGELOG 2026-09-27 续二条）。
+
 ## 合并怎么用
 
 1. 进入「会话布」，一条线**线尾卡**上的 ◇ 按钮（或 Ctrl 点选两张不同线的卡，或把一张卡拖到另一条线的卡上）发起合并；

@@ -2,6 +2,29 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-27（续）· currentSession 死取数订正：会话快照没有 `current` 字段
+
+**症状（缺陷）**：`canvas:current-session` 消息恒发 `session: null` —— 画布 iframe 永远
+不高亮当前会话节点。`currentSession()` 按 `ctx.sessions.list.getSnapshot().current` 取
+「当前会话」，而 SessionListState 恒为 `{ ids, byId, phase, projectionsBySession }`
+（运行版 `@deepseek-ai/dsh-api-session-controller/lib/types/client/sessions/service.js` 的
+createSnapshotStore 初值与 projectList 的 `list.set` 为证），`snapshot.current` 恒 undefined。
+
+**根因同源**：与 sidebar 线 `2026-09-27（续二）`「终端打不开」是同一个死字段——本线
+`currentSession` 是同一取数形态的复发面（影响面更窄：只丢 iframe 内当前会话高亮，
+不影响切换按钮与画布主体）。
+
+**修复（`client.js`，判据换官方同款）**：主视图会话 id 改用 `retainedBy.mainView > 0`
+—— 官方 ui-session publishMain 同款判据（运行版
+`@deepseek-ai/dsh-client-ui-session/lib/client.js`），retain 源 `'mainView'` 由官方
+ui-workspace 打开主视图会话时持有。byId 行自带 `retainedBy`（随 publishRetention 落进
+list 快照），无需实时兜底；行缺省时 `?.` 与 `?? 0` 静默按「无主会话」处理（`id === undefined
+⇒ return null`，与原返回契约一致）。
+
+**验证**：`node scripts/verify-all.mjs canvas` ⇒ **13/13 PASS**（既有 `canvas-runtime.test.js`
+对 `canvas:current-session` 消息处理切片的锚点断言不受影响）；全仓 `snapshot.current` 活代码
+命中归零（仅剩注释与回归测试中的根因记录）。
+
 ## 2026-09-27 · 让位取数契约化：消费 `miasakiDesktop.chrome.bounds/onChange`，修掉「无需监听」的错误前提
 
 **症状（缺陷）**：画布工具条（`.canvas-controls`）与错误条（`.status-message`）用 `--canvas-chrome-reserve`
