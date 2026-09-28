@@ -2,6 +2,203 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-28（续二）· **M2.1 辅助对话最小闭环落地** + 实机验收
+
+**用户拍板**：设计 §8 六项全部按建议通过（原话「按建议的来」），进 M2.1。
+
+**落地范围（全在本线 `client.js`，host 半零改动）**：
+
+| 件 | 内容 |
+|---|---|
+| 侧线登记表 | 模块级 store（`useSyncExternalStore`，与审查视图同构）+ 5 个纯函数 `sideChatLinesFor / ActiveFor / AddLine / SetActive / DropLine`；localStorage 键 `miasaki-sidebar:sidechat:v1`，按 `parentSessionId` 直接索引 |
+| 侧线创建 | `createSideChat(parentId)`：`ctx.sessions.fork({ sessionId, increaseTitle: true })`，**不传 `atSeq`**；`pendingCreations` 同手势去重、**`finally` 里释放 key**（不退化成单例）；fork 成功**同一刻**写登记表 |
+| 失败可见化 | `sideChatForkErrorText`：把宿主的 `session/fork-unavailable: … has no completed turn to fork from` 翻成「先让主会话跑完一轮，再开侧线」——空白父会话是**新会话的常态** |
+| 侧线 tab 正文 | `SideChatTab`：父标题 · 侧线切换器（>1 条时出现）· 新建侧线 · 固定提示条 · 嵌入式官方会话；`tab.visible && pageVisible` 两道门 |
+| 子槽正文 | `SideChatConversation` + `SideChatFixedChatView`：`renderFactorySlot('conversation.content', { variant:'embedded', phase, hero })`，`phase` 只取 settling/hero/active 且 `hero` 必填 |
+| 注册 | `RIGHT_BAR_TABS` 增至两项（`sidechat` / id `@miasaki/dsh-sidebar/sidechat`），带 `children: { 'miasaki.sidebar.sidechat.conversation': { kind:'single', scope:'session' } }`；子槽正文用 `ctx.slots.inject` 挂载 |
+| 决策② 落地 | 侧线头常驻提示：**「侧线继承主会话的历史：说『继续』等于接着做主线未完成的活；只想问问题就直接问。」**（S8 实测的越界路径，写具体行为而非泛泛提示） |
+
+**实机验收（隔离实例 `--profile web` + 无头 Edge，走真实 UI 路径）**：
+
+| # | 判据 | 结果 |
+|---|---|---|
+| 1 | 引导页出现「辅助对话」胶囊 → 点开 tab 挂载 | ✅ |
+| 2 | 「新建侧线」→ fork → 官方 embedded 会话渲染出继承的父历史 + 原生 composer | ✅（`_refs/spikes-m2/m21.png`） |
+| 3 | 登记表落盘 + 官方持久化 tab（`{kind:'sidechat', contentId:'sidebar://sidechat'}`） | ✅ |
+| 4 | **主会话运行中**开侧线：fork 成功、主会话继续跑完、继承历史不含进行中增量（**S3 取证**） | ✅ |
+| 5 | 主会话**首轮运行中**（0 完成轮次）开侧线：给人话引导 | ✅ |
+| 6 | 审查 tab 回归（注册循环改动后） | ✅ |
+| 7 | 控制台错误 / HTTP ≥400 | 零 |
+
+**测试**：新增 `test/sidechat-registry.test.js` **13 项**（登记表纯函数 7 + 源码契约 6：锁死「fork 即写盘」「pendingCreations finally 释放」「phase 三值 + hero 必填」「自名子槽 + slots.inject」「『继续』语义提示」「空白父会话引导」）；
+单测 **86 通过**；`node scripts/verify-all.mjs sidebar` → **13/13 PASS**（新增测试文件使检查项 12 → 13）。
+
+**与设计的偏差（已同步设计文档 §4.3 / §7.2）**：① 登记表去掉了 `workspaceKey` 一层；② 关 tab 的 release 走 React effect cleanup（未用 `registerCloseHandler`，M2.3 按需再补）；③ 隐藏时释放 retain 并卸载会话（设计原意，代价是切回时重新加载）。
+
+**后置**：M2.2（侧线树 / `parentId` 对账 / running 徽标）、M2.3（tab 菜单动作 / 在主区打开 / 复制兜底 / 深链接 params）。
+
+**待人工复验**：本轮验收跑在隔离 `web` profile 实例；**miasaki 桌面端 / 浏览器 GUI 刷新后复验**（同一 link: 安装路径，刷新即生效）。
+
+## 2026-09-28 · M2 辅助对话设计复核修订：核对底本换代 + ZCode 源码级对标
+
+**触发**：用户问「侧边栏辅助对话规划设计好了吗，可以参考一下 zcode 官方仓库」。设计本体（2026-09-27 定稿）在，
+但复核发现**核对底本用错了版本**，且 ZCode 官方仓（本地克隆 `_refs/zcode` @ v3.14.3 / commit `29628c9`）源码级实读
+翻出一处被误判为「无差异」的真实缺口。**纯设计修订，零代码。**
+
+**产出**：修订 [design/2026-09-27-sidebar-m2-sidechat-design.md](2026-09-27-sidebar-m2-sidechat-design.md)——
+新增 §2.0（版本底座）、§5.1（ZCode 源码级复核）；订正 C1/C5、§4.2/§4.3/§4.4/§4.6；新增 C14–C16、S7–S9、§8 两项拍板。
+
+**四条硬发现**：
+
+1. **核对底本落后一整条版本线**。初稿写「全部经 `vendor/deepseek-harness` 源码核对，DSH 0.1.7 线」——
+   该副本实为 **0.1.6-alpha.2**，而部署目标是 **0.1.7-rc.2**（全局实装）；两份底本的 5 个关键契约文件
+   （`contract/sessions.ts`、`ui-sidebar-right/service.ts`、`persistence.ts`、`ui-subagent/sidebar-chat/index.tsx`、
+   `ui-conversation/apply.ts`）**逐一哈希比对全部 DIFF**。已经咬到语义层：同一个 `fork({atSeq})`，
+   0.1.6 契约写「open turn 内 **unavailable**」、0.1.7 写「**宿主侧补合成收尾**」，两版**互相冲突**。
+   **幸运的是核心赌注（不传 `atSeq` ⇒ 取最新已完成轮次前缀）两版措辞一致**，设计成立性未受影响。
+   自此确立取证纪律：契约以**运行版**（`%APPDATA%\npm\node_modules\@deepseek-ai\dsh\...\lib\types\**\*.d.ts`）为准，
+   源码级阅读用 `vendor/deepseek-harness-0.1.7-alpha.2`（与 rc.2 关键措辞逐字一致）。
+2. **持久化结论反了**（rc.2 实读证实）。初稿 §4.6 写「官方右栏不持久化 tab」——**错**：官方按会话把布局持久化到
+   `dsh.sidebar-right.v1.<sessionId>`，`sidechat` tab **会自己还原**。但持久化的 tab 记录只有
+   `{ id, kind, contentId, title }`，**不含 `params`**，还原时 occurrence 取 `params: void 0`。
+   ⇒ 登记表（§4.3）从「对账索引」**升格为刷新后唯一还原通道**，且必须在 fork 成功时同步写盘。
+3. **偏差④（本轮最大缺口）**：ZCode 在 child 继承历史尾部**无条件插入**一条 model-only 边界声明
+   （「前文仅供参考 / 不要自动接着做父任务的活 / 只在明确要求时改工作区」），并**显式剥离 goal**（boundary strip、
+   verifier 置空、快照 `[]`）。初稿把这一层判成「无差异、也不需要」——**是错的**：没有它，模型会把父任务当成自己的活继续做。
+   DSH 插件没有写入位（红线），只能退化为 UI 提示 + 向上游提需求；**新增 §8 拍板项**，并加 S8/S9 实测取证。
+4. **两处注册写法会直接抛**（C15）：往 `sidebar.right.pane.tab` 注册必须走 `ctx.slots.inject(父槽, …)`
+   （该槽由 shell **异步声明**，裸 `register` 进未声明槽抛错），且父注册必须带 `inject: { hooks: { tabInfo } }`
+   （`useTabInfo` 不是常驻席位，漏写则组件取不到）。§4.4 代码示意已按官方先例（`ui-subagent/sidebar-chat`）改写。
+
+**顺带订正**：`increaseTitle` 的命名产物**已实读确认**——无尾号标题从 ` (1)` 起、已有尾号则自增（`foo(3)`→`foo(4)`），
+半角/全角括号各自保持（`lib/client.js:3062-3071`），初稿 §2 的「标题 2」作废；
+**`conversation.content` 的 `phase` 只有 `settling`/`hero`/`active` 三值且 `hero` 必填**——初稿 §4.4 自造的 `'engaging'`/`'blank'` 直传会失败（代码示意已改）；
+`fork` 抛错 ≠ 没建出 child（改名失败发生在创建**之后**）⇒ §4.2 补孤儿对账；C5 补 `replaceTab` 在控制器侧是 `TabId`、
+在 tab 动作侧是布尔的类型分歧；C16 补 `registerCloseHandler` 重复注册抛错、`uiWorkspace.openSession` 返回 `void`；
+C17 记「再 `openTab(kind,{params})` 可覆盖已开 tab 的 params 并自增 revision」（本线 `client.js` 顶部「没有改 params 的通道」注释需一并改正）；
+C18 记 tab 菜单动作**必须调 `dismiss()`**。
+
+**验证**：本轮全部为只读取证（4 个只读子代理 + 主 agent 实读），未改任何代码与测试；
+`git status` 仅 `design/` 两文件变动（本轮为纯只读取证）。待用户拍板 §8 **六项**后进 M2.1（其后当日已补做 S1/S2/S7–S9 实机取证，见上一条）。
+
+## 2026-09-28（续）· M2 四个 spike 实机取证：S1/S2/S7 通过、S8 风险复现、S9 必须补偿
+
+**背景**：用户选 B「先取证再动代码」。设计文档 §7 的 S1/S2/S7–S9 全部落地实测，
+**设计成立性已无未证假设**，待拍板项从「能不能做」变成「产品取舍」。
+
+**环境（可复现）**：`dsh --profile web --patch _refs/spikes-m2/isolate.patch.yml --no-open --port 3099`
+（overlay 把会话正文与账本落到 `_refs/`，**不碰任何 profile 配置与用户真实数据**）；
+无头 Edge + Playwright（`~/.dsh/profiles/miasaki/node_modules/playwright`）驱动；模型 `deepseek-official / deepseek-flash`。
+探针 = 临时插入 `client.js` 的 `[PROBE M2]` 块（含自动开 tab、fork/retain、自名 child slot、官方工厂复用）。
+
+**结果**：
+
+| # | 结果 | 一句话证据 |
+|---|---|---|
+| S1 | ✅ 通过 | 裸 `register` 与 `slots.inject` 两种写法都成功；tab 正文 props 实测含 `sessionId`/`SessionProvider`/`renderFactorySlot`/`useTabInfo` |
+| S2 | ✅ 通过 | `scopeSessionId === boundSessionId === childId`；副屏渲染出官方 transcript + 原生 composer |
+| S7 | ✅ 通过 | 同上下文 reload：框架自行还原 tab、登记表命中、**未重复 fork**、childId 稳定、还原时 `revision: 0` |
+| S8 | ⚠️ **风险复现** | 无关问题不越界；**一句「继续」→ 侧线按父计划执行下一步** |
+| S9 | ⚠️ **必须补偿** | fork 零类型过滤拷贝日志前缀 ⇒ goal/plan/todo/preset 全继承，仅 goal activation 被 disarm |
+
+**由此回改的设计（同日，均已落入设计文档）**：
+
+1. **C15 订正（本轮的第二个反转）**：`inject` 属于**槽声明本身**，注册方**不需要**写
+   `inject: { hooks: { tabInfo } }`——初稿那条「漏写则取不到 `useTabInfo`」是错的（实测 + 本线审查 tab 既有代码双重证伪）。
+2. **空白父会话不能 fork**（新增）：`session/fork-unavailable: … has no completed turn to fork from`。
+   这是**新会话的常态**，入口必须给引导文案而不是错误条。
+3. **`increaseTitle` 区分度不足**（新增）：同一父连续 fork 出的三条侧线**全都叫「…(1)」**（自增是相对父标题，而父标题无尾号）。
+   ⇒ 偏差① 原写的「靠命名可辨」不成立，侧线头必须自带区分。
+4. **偏差④ 升级为实测复现**：S8b 的原话已记入设计 §5.1(A)；UI 提示要写**具体行为**（「说『继续』= 接着做主线未完成的活」）。
+5. **偏差⑤ 新增**：goal/plan 随 fork 继承（§5.2），goal 有官方 `goals.clear` 补偿 API（留 tombstone），plan 无客户端 API。
+6. **§8 增加决策⑥**（goal 是否补偿）——待拍板项由五项变六项。
+
+**纪律与验证**：探针代码**已整块删除**，`client.js` 还原至 2324 行 / LF（删除时误写成 CRLF 曾被
+`rightbar-guide` / `session-cwd` 两个静态断言测试抓出，已修正为 LF）；`node scripts/verify-all.mjs sidebar` **12/12 PASS**；
+测试实例已停、3099 端口已释放、测试会话数据已清；证据归档在 `_refs/spikes-m2/`（ignore 目录：`FINDINGS.md` + 脚本 + 截图）。
+
+## 2026-09-27（续二）· 终端打不开的根因：会话快照没有 `current` 字段
+
+**现象**：用户点终端按钮，底部面板正常展开，但里面只有空态「打开一个带工作区的会话后即可启动终端」，
+xterm 出不来；新建按钮也没有。审查 tab 同样不取数（同一 store）。
+
+**根因（两段，都是实机取证）**：
+
+1. **`currentSessionCwd()` 读的字段不存在**。它按
+   `ctx.sessions.list.getSnapshot().current` 取「当前会话」，而 SessionListState 恒为
+   `{ ids, byId, phase, projectionsBySession }` —— 运行版
+   `@deepseek-ai/dsh-api-session-controller/lib/types/client/sessions/service.js` 的
+   createSnapshotStore 初值（`:165-167`）与 projectList 的 `list.set`（`:561`）逐字为证，
+   cordis client inspect 的 sessions 方法目录亦无 `current`。于是 `snapshot.current`
+   恒 undefined ⇒ `reviewCwd` 恒 null ⇒ 终端的 cwd 守卫（`当前会话没有工作区`）与
+   autoOpen 的 `if (cwd === null) return` 双双把面板钉在空态。
+2. **autoOpen 是一次性检查**。它只在 `terminalTabs.mount` 的 `refreshFromHost().then`
+   里跑一次；若面板在会话列表 ready 之前展开（刷新后立刻点终端按钮），彼时 cwd 还是
+   null 就直接 return，之后 cwd 到位也不再补开。
+
+**host 半无责**：探针（`_refs/scripts-archive/probe-terminal-ws.mjs`，一次性、已归档）
+实测 token → WS upgrade → attach → `powershell.exe` spawn → 输出回显全通；
+`/sidebar/api/terminal/options` 返回 `fallback: "powershell"`（wt/pwsh 未装，powershell/cmd 可用）。
+
+**改法（判据换官方同款，不是猜版本号）**：主视图会话 id 改用
+`retainedBy.mainView > 0` —— 官方 ui-session 的 publishMain 同款判据（运行版
+`@deepseek-ai/dsh-client-ui-session/lib/client.js:283`），retain 源 `'mainView'` 由官方
+ui-workspace 打开主视图会话时持有（同包 `lib/client.js:970`）。retainedBy 随
+publishRetention 落进 list 快照（service.js `:443-449`），故 `list.subscribe` 能感知
+主视图切换；`mainSessionIdOf` 第二路 find 用 `retainInfo().getSnapshot()` 的**实时读**
+兜底切换瞬间的快照行尚未刷新。autoOpen 提取为 `autoOpenOnce()` 并由 store 订阅驱动：
+cwd 从无到有的那一刻补开、空态重绘（`removeEmpty` 后重建，文案与新建按钮依赖 cwd），
+unmount 退订。**canvas 线同根因复发面同批修**：其 `currentSession()` 同样读
+`snapshot.current`，导致画布永远不高亮当前会话（只影响 iframe 内高亮，不影响按钮）。
+
+- **触摸点**：`client.js`（新增 `mainSessionIdOf`；`currentSessionCwd` 改走该判据；
+  `terminalTabs.mount` 的 autoOpen 改 store 订阅驱动 + 空态随 cwd 重绘 + unmount 退订）、
+  `test/session-cwd.test.js`（新，8 项：快照无 current 时按 mainView 取数 / retainInfo
+  实时兜底 / 无主会话返回 undefined / retainInfo 抛收口 / 旧取数法回归对照 / 两条源码
+  静态断言）、`README.md`、本文件。
+- **验证**：`node --test test/*.test.js` **73 项 PASS**；`node scripts/verify-all.mjs sidebar`
+  **12/12 PASS**（+1 个测试文件）；`check-silent-guards.mjs` 无新增。
+- **待实机**（刷新页面即生效，client 半无需重启 dsh web）：① 点终端按钮，底部面板直接
+  开出 PowerShell 标签（host 已证可 spawn）；② 切换会话后面板/标签随新工作区；
+  ③ 审查 tab 恢复取数；④ canvas iframe 的当前会话节点高亮。
+
+## 2026-09-27 · M2 辅助对话设计定稿（page 型右栏 tab + fork 侧线 + 官方会话工厂）
+
+**产出**：[design/2026-09-27-sidebar-m2-sidechat-design.md](2026-09-27-sidebar-m2-sidechat-design.md)（纯设计，零代码）。
+取代 `2026-09-06-sidebar-roadmap-design.md` §5 的实现路径（定位/边界/红线不变，订正处已在该文 §5 头部标注）。
+
+**调研依据**：官方 `vendor/deepseek-harness`（0.1.7 线）源码逐条核对 + 官方右栏会话先例
+（`ui-subagent/sidebar-chat`：资源地址 → retain → SessionProvider → `conversation.content`
+embedded 工厂）+ ZCode（zai-org/ZCode）SelectionSideChat 对标。关键发现：
+
+- **DSH 原生 fork 自带 ZCode 手搓语义**：`sessions.fork` 契约为「已完成轮次前缀」
+  （`contract/sessions.ts:127-136`），主会话 running 中开侧线自动切在过去边界，不打断、不带增量；
+- **聊天 UI 零自研**：`conversation.content` 工厂有 `embedded` 变体，官方 subagent chat
+  即用它把子会话嵌进右栏 tab——本线照此复用，composer / 流式 / 工具确认全部原生；
+- **page 型 tab 同格天然去重**（`service.ts:123-126`），guide 胶囊连点不堆 tab；
+  `ctx.sidebarRight` 另有 `focus` / `tabsIn` / `registerCloseHandler` 可收官生命周期。
+
+**对 2026-09-06 §5 的三处订正**（详见新文档 §5 偏差声明）：
+
+1. 「侧线不在主会话列表出现」→ **不承诺**：DSH fork child 是官方列表可见的真会话
+   （靠 `increaseTitle` 的 "标题 (1)" 可辨）。ZCode 的四层隐藏依赖宿主侧 taskType /
+   visibility 字段，第三方插件无对等写入位；
+2. 「保存为新会话」→ 降级为「在主区打开」（`ctx.uiWorkspace.openSession(childId)`）——
+   child 本就是真会话，ZCode 该动作的存在前提（隐藏 child）在此不成立；
+3. 「带回主对话（composer 注入引用）」→ DSH 无对等注入 API，本期只给**复制兜底**，
+   正式入口留 M3。
+
+**里程碑拆分**：M2.1 最小闭环（tab + guide 入口 + fork + 嵌入式会话 + 单侧线切换）→
+M2.2 侧线树（登记表 + `parentId` 对账 + 刷新重建）→ M2.3 体验收口（tab 菜单动作 +
+复制兜底 + 深链接 params + 三主题走查）。
+
+**生死项**：S1/S2 spike——动态插件（本线 `link:` 装入）能否声明自名 session 作用域 child slot
+并复用官方 `conversation.content` 工厂 / `SessionProvider(session=reference)`。官方先例是内置静态包，
+本线是动态 client 半，**先 spike 再写代码**；失败则回退自研极简转录渲染（+3–5 天，放弃原生工具确认卡片）。
+
+**待用户拍板**（新文档 §8）：① 列表可见是否接受；② 入口是否维持「仅 guide + tab 菜单」；
+③ 「带回」本期只给复制兜底是否接受。
+
 ## 2026-09-27 · 让位量改为「能力门控兜底」——实机重叠事件订正上一条
 
 **事件**：用户报「右侧边栏按钮和终端按钮重叠」，附桌面壳截图。上一条（同日早先）把让位量

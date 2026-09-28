@@ -161,6 +161,15 @@
 
 ## 5. 辅助对话 tab 设计（M2）
 
+> **2026-09-27 订正**：本节**定位、边界与红线仍然有效**，但**实现路径已被
+> [2026-09-27-sidebar-m2-sidechat-design.md](2026-09-27-sidebar-m2-sidechat-design.md) 取代**——
+> 官方右栏的 page 型 tab + fork 侧线 + 官方 `conversation.content` embedded 工厂复用。
+> 三处能力订正（详见新文档 §5 偏差声明）：①「侧线不在主会话列表出现」**不承诺**
+> （DSH fork child 是列表可见的真会话，靠 increaseTitle 命名可辨）；②「保存为新会话」
+> 降级为「在主区打开」（`uiWorkspace.openSession`）；③「带回主对话」本期只给复制兜底，
+> composer 注入 API 无对等物，留 M3。下文 §5.1「侧线隐藏性二选一」与「侧线树」的
+> **索引对账思路仍被新文档继承**（localStorage 登记表 + `SessionSummary.parentId` 对账）。
+
 定位：Codex `/side` 同款——**上下文隔离 + 不打断主任务**的轻量侧线追问（铁律 1）。
 
 ### 5.1 底座（复用 canvas merge 内核已验证链路）

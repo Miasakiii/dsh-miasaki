@@ -49,6 +49,81 @@ window.__ModuleLoader__.load({
       },
     }
 
+    // --- M2 辅助对话：侧线登记表（design/2026-09-27-sidebar-m2-sidechat-design.md §4.3）---
+    // 官方右栏会按会话持久化 tab 骨架（键 `dsh.sidebar-right.v1.<sessionId>`），但持久化的
+    // tab 记录只有 { id, kind, contentId, title } —— **不含 params**，还原时 params 恒为
+    // undefined。⇒ 这张登记表不是缓存，而是刷新后**唯一**能回答「这条侧线是哪条」的地方，
+    // 必须在 fork 成功的同一刻写盘。
+    // 形态（按父会话 id 直接索引：sessionId 全局唯一，无需再套一层 workspaceKey）：
+    //   { [parentSessionId]: { activeChildId, lines: [{ childSessionId, createdAt }] } }
+    const SIDECHAT_REGISTRY_KEY = 'miasaki-sidebar:sidechat:v1'
+
+    /** Read the registry, degrading to empty on absent/corrupt/private-mode storage. */
+    const readSideChatRegistry = () => {
+      try {
+        const raw = localStorage.getItem(SIDECHAT_REGISTRY_KEY)
+        if (!raw) return {}
+        const parsed = JSON.parse(raw)
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+      } catch { return {} }
+    }
+
+    // Module-level + useSyncExternalStore, same shape as the review-view store above:
+    // every sidechat tab instance and the switcher see one value.
+    const sideChatRegistry = {
+      value: readSideChatRegistry(),
+      listeners: new Set(),
+      get: () => sideChatRegistry.value,
+      subscribe(listener) {
+        sideChatRegistry.listeners.add(listener)
+        return () => sideChatRegistry.listeners.delete(listener)
+      },
+      /** Apply `mutator` to a copy and persist; no-op when the value is unchanged. */
+      update(mutator) {
+        const next = mutator(sideChatRegistry.value)
+        if (next === sideChatRegistry.value) return
+        sideChatRegistry.value = next
+        try { localStorage.setItem(SIDECHAT_REGISTRY_KEY, JSON.stringify(next)) } catch { /* 私有模式：仅内存生效 */ }
+        for (const listener of sideChatRegistry.listeners) listener()
+      },
+    }
+
+    /** The registered side lines of one parent, newest last; never undefined. */
+    const sideChatLinesFor = (registry, parentSessionId) => {
+      const entry = registry[parentSessionId]
+      return entry && Array.isArray(entry.lines) ? entry.lines : []
+    }
+    /** The remembered active line of one parent, or null. */
+    const sideChatActiveFor = (registry, parentSessionId) => {
+      const entry = registry[parentSessionId]
+      return entry && typeof entry.activeChildId === 'string' ? entry.activeChildId : null
+    }
+    /** Register a freshly forked child and make it active. */
+    const sideChatAddLine = (registry, parentSessionId, childSessionId, createdAt) => {
+      const lines = sideChatLinesFor(registry, parentSessionId).filter(line => line.childSessionId !== childSessionId)
+      return {
+        ...registry,
+        [parentSessionId]: {
+          activeChildId: childSessionId,
+          lines: [...lines, { childSessionId, createdAt }],
+        },
+      }
+    }
+    /** Remember which line the tab should show. */
+    const sideChatSetActive = (registry, parentSessionId, childSessionId) => {
+      const entry = registry[parentSessionId]
+      if (!entry || entry.activeChildId === childSessionId) return registry
+      return { ...registry, [parentSessionId]: { ...entry, activeChildId: childSessionId } }
+    }
+    /** Drop one line (its child session is gone or was archived). */
+    const sideChatDropLine = (registry, parentSessionId, childSessionId) => {
+      const entry = registry[parentSessionId]
+      if (!entry) return registry
+      const lines = sideChatLinesFor(registry, parentSessionId).filter(line => line.childSessionId !== childSessionId)
+      const activeChildId = entry.activeChildId === childSessionId ? (lines.length > 0 ? lines[lines.length - 1].childSessionId : null) : entry.activeChildId
+      return { ...registry, [parentSessionId]: { activeChildId, lines } }
+    }
+
     // Module-level store for the content layer. The shell's fields (open / width /
     // tabs / active / dragging / drawerOffset / chromeReserve / titlebarVisible /
     // viewport / sessionId) retired with the shell on 2026-09-11.
@@ -639,7 +714,42 @@ window.__ModuleLoader__.load({
         }
         renderTabs(inst)
         renderPanes(inst)
-        // 刷新恢复：host 侧存活的 pty 在这里变成可见标签（否则它们没有入口可关）。
+        // 「点开终端就默认有一个终端」（2026-09-19 二次调整）：一个标签都没有、
+        // 当前有工作区且未达上限时直接开一个，不停在空态。shell 探测是 spawn 的
+        // 前提（null 会被 host 拒绝），故先 ensureShellPicked。
+        // **跟随 reviewCwd 到位，不再一次性**：面板完全可能在会话列表 ready
+        // 之前就展开（刷新后立刻点终端按钮 / 切 tab 回来），彼时 cwd 还是 null，
+        // 旧代码在 refreshFromHost().then 里做一次性检查 ⇒ 面板被永久留在空态
+        // （2026-09-27 实机「终端打不开」的第二段原因）。故由 store 订阅驱动：
+        // cwd 从无到有那一刻补开，标签一旦出现即不再触发。
+        const autoOpenOnce = () => {
+          if (options.autoOpen === false) return
+          if (terminalTabs.instances.get(id) !== inst) return
+          if (terminalClient.order.length > 0) return
+          const cwd = store.get().reviewCwd
+          if (cwd === null || cwd === undefined) return
+          terminalClient.ensureShellPicked().then(() => {
+            if (terminalTabs.instances.get(id) !== inst) return
+            if (terminalClient.order.length > 0 || terminalClient.wantedShell === null) return
+            addTab(inst)
+          })
+        }
+        // 空态随 cwd 到位而刷新：文案（「打开一个带工作区的会话后即可启动终端」→
+        // 「当前没有终端标签 — 工作目录 …」）与新建按钮都依赖 reviewCwd，晚到的
+        // cwd 必须重绘空态，否则用户看到的是过期提示、也没有新建入口。
+        let lastCwd = store.get().reviewCwd
+        const offStore = store.subscribe(() => {
+          if (terminalTabs.instances.get(id) !== inst) return
+          const cwd = store.get().reviewCwd
+          if (cwd === lastCwd) return
+          lastCwd = cwd
+          if (terminalClient.active[inst.key] !== null) return
+          removeEmpty(inst)
+          renderTabs(inst)
+          renderPanes(inst)
+          autoOpenOnce()
+        })
+        inst.offStore = offStore
         terminalClient.refreshFromHost().then(() => {
           if (terminalTabs.instances.get(id) !== inst) return
           if (terminalClient.active[key] === null && terminalClient.order.length > 0) {
@@ -648,17 +758,7 @@ window.__ModuleLoader__.load({
           }
           renderTabs(inst)
           renderPanes(inst)
-          // 「点开终端就默认有一个终端」（2026-09-19 二次调整）：一个标签都没有、
-          // 当前有工作区且未达上限时直接开一个，不停在空态。shell 探测是 spawn 的
-          // 前提（null 会被 host 拒绝），故先 ensureShellPicked。
-          if (options.autoOpen === false || terminalClient.order.length > 0) return
-          const cwd = store.get().reviewCwd
-          if (cwd === null || cwd === undefined) return
-          terminalClient.ensureShellPicked().then(() => {
-            if (terminalTabs.instances.get(id) !== inst) return
-            if (terminalClient.order.length > 0 || terminalClient.wantedShell === null) return
-            addTab(inst)
-          })
+          autoOpenOnce()
         })
         return () => terminalTabs.unmount(id)
       },
@@ -671,6 +771,7 @@ window.__ModuleLoader__.load({
         removeEmpty(inst)
         inst.tabHost.textContent = ''
         inst.paneHost.textContent = ''
+        if (inst.offStore !== undefined && inst.offStore !== null) { inst.offStore(); inst.offStore = null }
         terminalTabs.instances.delete(id)
       },
 
@@ -1553,6 +1654,19 @@ window.__ModuleLoader__.load({
         `.dsh-sidebar-dmore:hover{background:var(--dsw-alias-interactive-bg-hover,#f3f4f6);color:var(--dsw-alias-label-primary,#111827)}`,
         `.dsh-sidebar-diffnote{padding:8px;font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
         `.dsh-sidebar-emptyhint{padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary,#9ca3af);font:var(--dsw-font-xxs-12,12px/18px system-ui)}`,
+        // --- M2 辅助对话（侧线）------------------------------------------------
+        // 侧线头一行：父标题 · 切换器 · 新建；正文交给官方 embedded 会话，样式不越界。
+        `.dsh-sidebar-sidechat{display:flex;flex-direction:column;min-height:0;height:100%}`,
+        `.dsh-sidebar-sidechat-head{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:.5px solid var(--dsw-alias-border-l3,rgba(0,0,0,.08));flex:0 0 auto}`,
+        `.dsh-sidebar-sidechat-parent{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:var(--dsw-font-xxs-12,12px/18px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af)}`,
+        `.dsh-sidebar-sidechat-select{max-width:110px;height:24px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);background:var(--dsw-alias-bg-layer-1,transparent);color:var(--dsw-alias-label-primary,#111827);font:var(--dsw-font-xxxs-11,11px/14px system-ui)}`,
+        `.dsh-sidebar-sidechat-new{height:24px;padding:0 8px;border:1px solid var(--dsw-alias-border-l2,#d1d5db);border-radius:6px;background:transparent;color:var(--dsw-alias-label-primary,#111827);cursor:pointer;font:var(--dsw-font-xxxs-11,11px/14px system-ui);white-space:nowrap}`,
+        `.dsh-sidebar-sidechat-new:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover,#f3f4f6)}`,
+        `.dsh-sidebar-sidechat-new[disabled]{opacity:.5;cursor:default}`,
+        `.dsh-sidebar-sidechat-body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}`,
+        `.dsh-sidebar-sidechat-note{padding:6px 8px;font:var(--dsw-font-xxxs-11,11px/14px system-ui);color:var(--dsw-alias-label-tertiary,#9ca3af);border-bottom:.5px dashed var(--dsw-alias-border-l3,rgba(0,0,0,.08))}`,
+        `.dsh-sidebar-sidechat-empty{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;height:100%;padding:20px;text-align:center;color:var(--dsw-alias-label-secondary,#6b7280);font:var(--dsw-font-xxs-12,12px/18px system-ui)}`,
+        `.dsh-sidebar-sidechat-error{margin:8px;padding:8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#dc2626) 12%,transparent);color:var(--dsw-alias-label-primary,#111827);font:var(--dsw-font-xxs-12,12px/18px system-ui)}`,
       ].join('')
       document.head.append(style)
 
@@ -1651,11 +1765,44 @@ window.__ModuleLoader__.load({
       function usePageVisible() {
         return react.useSyncExternalStore(store.subscribe, () => store.get().pageVisible)
       }
+
+      /** 侧线登记表的订阅读（M2）：所有侧线 tab 实例共享同一份值。 */
+      function useSideChatRegistry() {
+        return react.useSyncExternalStore(sideChatRegistry.subscribe, sideChatRegistry.get)
+      }
+      /**
+       * 主视图会话 id。判据与官方 ui-session 的 publishMain 同款：
+       * `retainedBy.mainView > 0`（retain 源 `'mainView'` 由官方 ui-workspace
+       * 在打开主视图会话时持有，见运行版
+       * `@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 的 `source: "mainView"`）。
+       *
+       * **会话列表快照没有 `current` 字段**：SessionListState 恒为
+       * `{ ids, byId, phase, projectionsBySession }`（运行版
+       * `@deepseek-ai/dsh-api-session-controller/lib/types/client/sessions/service.js`
+       * 的 createSnapshotStore 初值 `:165-167` 与 projectList 的 `list.set` `:561`
+       * 为证）。曾按 `snapshot.current` 取数 ⇒ 恒 undefined ⇒ reviewCwd 恒 null：
+       * 底部终端面板永远停在「打开一个带工作区的会话后即可启动终端」空态，
+       * 终端按钮打不开；审查 tab 同样不取数（2026-09-27 实机故障根因）。
+       *
+       * retainedBy 随 publishRetention 落进 list 快照（同文件 `:443-449`），
+       * 故 `list.subscribe` 能感知主视图切换；第二路 find 用 retainInfo 的
+       * **实时读**（`retentionSnapshot` 直达 scopes record）兜底切换瞬间的
+       * 快照行尚未刷新。
+       */
+      const mainSessionIdOf = snapshot => {
+        const rows = Object.values(snapshot?.byId ?? {})
+        const listed = rows.find(row => (row?.retainedBy?.mainView ?? 0) > 0)
+        if (listed !== undefined) return listed.id
+        try {
+          return rows.find(row => (ctx.sessions.retainInfo(row.id).getSnapshot().retainedBy.mainView ?? 0) > 0)?.id
+        } catch { return undefined }
+      }
+
       /** Current DSH session cwd (best-effort; null when no session is open). */
       const currentSessionCwd = () => {
         try {
           const snapshot = ctx.sessions.list.getSnapshot()
-          const id = snapshot.current
+          const id = mainSessionIdOf(snapshot)
           if (id === undefined) return null
           const session = snapshot.byId[id]
           return typeof session?.cwd === 'string' && session.cwd !== '' ? session.cwd : null
@@ -2152,12 +2299,179 @@ window.__ModuleLoader__.load({
           }, `还有 ${(totalLines - renderedLines).toLocaleString()} 行——显示更多`))
       }
 
+      // --- M2 辅助对话：侧线 tab 正文 + 其子槽正文 ---------------------------
+      // 依据 design/2026-09-27-sidebar-m2-sidechat-design.md §4.4，写法照 2026-09-28 的
+      // S1/S2 实测（隔离实例 + 无头 Edge，见该文 §7.1）：
+      //   · tab 正文由框架经 owner props 下发 sessionId（所在主会话）、SessionProvider、
+      //     renderSlot、useTabInfo —— propKeys 已实测确认，**无需**自己写 inject；
+      //   · 侧线 = ctx.sessions.fork（**不传 atSeq** ⇒ 宿主自动取「最后一个已完成轮次前缀」）；
+      //   · 渲染零自研：SessionProvider(session=reference) → 自名 child slot →
+      //     renderFactorySlot('conversation.content', { variant:'embedded', phase, hero })。
+      const SIDECHAT_CHILD_SLOT = 'miasaki.sidebar.sidechat.conversation'
+      // retain 的 source 是声明合并可扩展的字典键；运行时任意字符串均可（S1 实测）。
+      const SIDECHAT_SOURCE = 'miasaki-sidechat'
+
+      // 同一个用户手势在 fork 未完成期间只创建一次；**resolve 后立刻释放 key** ——
+      // 这样「新建侧线」的下一次点击能开出新侧线，而不是退化回单例
+      //（ZCode selectionSideChatRuntime.ts 的同款语义）。
+      const pendingSideChatCreations = new Map()
+
+      /** Fork one side line off `parentSessionId`, deduplicating concurrent gestures. */
+      const createSideChat = parentSessionId => {
+        const inflight = pendingSideChatCreations.get(parentSessionId)
+        if (inflight) return inflight
+        const pending = ctx.sessions.fork({ sessionId: parentSessionId, increaseTitle: true })
+          .finally(() => {
+            if (pendingSideChatCreations.get(parentSessionId) === pending) pendingSideChatCreations.delete(parentSessionId)
+          })
+        pendingSideChatCreations.set(parentSessionId, pending)
+        return pending
+      }
+
+      // 「空白父会话」是**新会话的常态**而非异常：宿主返回
+      // `session/fork-unavailable: … has no completed turn to fork from`（S1 实测），
+      // 这里翻译成人话，而不是把宿主错误串直接甩给用户。
+      const sideChatForkErrorText = message => {
+        if (/no completed turn/i.test(message)) {
+          return '主会话还没有完成任何一轮。侧线只能从「已完成的轮次」切出去——先让主会话跑完一轮，再开侧线。'
+        }
+        return message
+      }
+
+      /** 只渲染 child 的 chat 视图（官方 FixedChatConversationView 同款）。 */
+      function SideChatFixedChatView(viewProps) {
+        return react.createElement(react.Fragment, null, viewProps.renderSlot('conversation.session', { view: 'chat' }))
+      }
+
+      /** 子槽正文：把一个**显式给定的** child 会话渲染成官方 embedded 会话。 */
+      function SideChatConversation(props) {
+        const session = props.useSession(value => value)
+        const conversation = props.useConversation(value => value)
+        const summary = props.useSessions(state => state.byId[props.sessionId])
+        const shellPhase = (conversation.activeTargets.size > 0 || (!session.blank && !session.awaitingFirstTurn) || session.running)
+          ? 'active'
+          : (session.promptAttempted ? 'engaging' : 'blank')
+        const settling = shellPhase === 'blank' && session.openState === 'loading' && (summary ? summary.blank : undefined) !== true
+        const hero = shellPhase === 'blank' && (session.openState === 'open' || (summary ? summary.blank : undefined) === true)
+        // phase 只有 settling / hero / active 三值，且 hero 必填（契约事实 C8）——
+        // 初稿自造的 'engaging' / 'blank' 直传会失败，官方也是「先算 shellPhase 再折叠」。
+        return props.renderFactorySlot('conversation.content',
+          { variant: 'embedded', phase: settling ? 'settling' : (hero ? 'hero' : 'active'), hero },
+          { slots: { views: SideChatFixedChatView } })
+      }
+
+      /** 侧线 tab 正文：侧线头（父标题 · 切换器 · 新建）+ 嵌入式官方会话。 */
+      function SideChatTab(props) {
+        const tabInfo = props.useTabInfo()
+        const windowVisible = usePageVisible()
+        const registry = useSideChatRegistry()
+        const parentSessionId = props.sessionId ?? null
+        const parentTitle = props.useSessions(state => (parentSessionId === null ? undefined : state.byId[parentSessionId]?.displayTitle))
+        const lines = parentSessionId === null ? [] : sideChatLinesFor(registry, parentSessionId)
+        const remembered = parentSessionId === null ? null : sideChatActiveFor(registry, parentSessionId)
+        const activeChildId = remembered !== null && lines.some(line => line.childSessionId === remembered)
+          ? remembered
+          : (lines.length > 0 ? lines[lines.length - 1].childSessionId : null)
+        const [creating, setCreating] = react.useState(false)
+        const [failure, setFailure] = react.useState(null)
+        // 两道可见性门（审查 tab 同款）：官方 tab.visible 管 tab 自身，页面级隐藏另算。
+        // 侧线内是活会话（有流式订阅），隐藏时必须停订阅，不能靠 tab.signal——
+        // 它只在记录消失/插件卸载时 abort，隐藏与切会话都不 abort（契约事实 C3）。
+        const visible = tabInfo.tab.visible && windowVisible
+
+        const reference = react.useMemo(() => {
+          if (activeChildId === null || !visible) return null
+          try {
+            return ctx.sessions.retain(activeChildId, { source: SIDECHAT_SOURCE })
+          } catch (err) {
+            console.warn('[sidebar] retain 侧线失败:', activeChildId, err)
+            return null
+          }
+        }, [activeChildId, visible])
+
+        react.useEffect(() => {
+          if (reference === null) return undefined
+          let live = true
+          reference.ready.catch(err => {
+            if (live) setFailure(sideChatForkErrorText(String((err && err.message) || err)))
+          })
+          return () => {
+            live = false
+            try { reference.release() } catch { /* 已释放：重复 release 无害 */ }
+          }
+        }, [reference])
+
+        const createLine = () => {
+          if (parentSessionId === null || creating) return
+          setCreating(true)
+          setFailure(null)
+          createSideChat(parentSessionId)
+            .then(childId => {
+              // 登记与新侧线落盘必须同步发生：官方右栏不持久化 params，刷新后
+              // 只有这张表能说明「这条 tab 该显示哪条侧线」（契约事实 C14）。
+              sideChatRegistry.update(reg => sideChatAddLine(reg, parentSessionId, childId, Date.now()))
+            })
+            .catch(err => setFailure(sideChatForkErrorText(String((err && err.message) || err))))
+            .finally(() => setCreating(false))
+        }
+
+        const switchLine = childId => {
+          if (parentSessionId === null) return
+          sideChatRegistry.update(reg => sideChatSetActive(reg, parentSessionId, childId))
+        }
+
+        const head = react.createElement('div', { className: 'dsh-sidebar-sidechat-head' },
+          react.createElement('span', { className: 'dsh-sidebar-sidechat-parent', title: parentTitle || '' },
+            parentTitle ? `主会话：${parentTitle}` : '主会话'),
+          lines.length > 1 && react.createElement('select', {
+            className: 'dsh-sidebar-sidechat-select',
+            value: activeChildId ?? '',
+            onChange: event => switchLine(event.target.value),
+            title: '切换侧线',
+            'aria-label': '切换侧线',
+          }, lines.map((line, index) => react.createElement('option', {
+            key: line.childSessionId,
+            value: line.childSessionId,
+          }, `侧线 ${index + 1}`))),
+          react.createElement('button', {
+            type: 'button',
+            className: 'dsh-sidebar-sidechat-new',
+            onClick: createLine,
+            disabled: creating || parentSessionId === null,
+            title: '从主会话最后一个已完成轮次切出一条新侧线',
+          }, creating ? '创建中…' : '新建侧线'))
+
+        let body
+        if (failure !== null) {
+          body = react.createElement('div', { className: 'dsh-sidebar-sidechat-error' }, failure)
+        } else if (reference !== null) {
+          body = react.createElement(props.SessionProvider, { session: reference },
+            props.renderSlot(SIDECHAT_CHILD_SLOT, {}))
+        } else {
+          body = react.createElement('div', { className: 'dsh-sidebar-sidechat-empty' },
+            react.createElement('div', null, lines.length === 0 ? '还没有侧线' : '侧线已隐藏'),
+            react.createElement('div', null, '侧线会继承主会话「已完成的轮次」，提问不会打断主任务。'),
+            react.createElement('button', {
+              type: 'button',
+              className: 'dsh-sidebar-sidechat-new',
+              onClick: createLine,
+              disabled: creating || parentSessionId === null,
+            }, creating ? '创建中…' : '开一条侧线'))
+        }
+
+        return react.createElement('div', { className: 'dsh-sidebar-sidechat' },
+          head,
+          // 决策②：把「继续」的真实行为写在脸上（S8 实测：一句「继续」会让侧线接着做
+          // 父任务）。泛泛的「这是侧线」没用，要写具体行为。
+          react.createElement('div', { className: 'dsh-sidebar-sidechat-note' },
+            '侧线继承主会话的历史：说「继续」等于接着做主线未完成的活；只想问问题就直接问。'),
+          react.createElement('div', { className: 'dsh-sidebar-sidechat-body' }, body))
+      }
+
       // --- 官方右栏 tab 类型注册（自研壳 2026-09-10 退役）-------------------
-      // 只注册审查一个 tab 类型。终端曾是第二个类型，2026-09-25 退役：
-      // 官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方
-      // 策略不再自建右栏终端，内嵌终端收敛为底部面板单形态（Ctrl+` / 标题栏
-      // 按钮）；决策记录见 design/CHANGELOG.md 2026-09-25 条。
-      // 辅助对话待 M2 实现后再注册类型。
+      // 注册两个 tab 类型：审查（M1）与辅助对话（M2）。终端曾是第三个类型，2026-09-25 退役：
+      // 官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建
+      // 右栏终端，内嵌终端收敛为底部面板单形态（Ctrl+` / 标题栏按钮）；决策见 CHANGELOG。
       // 打开入口：官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊。
       const RIGHT_BAR_TABS = [
         {
@@ -2168,6 +2482,18 @@ window.__ModuleLoader__.load({
           order: 10,
           Body: ReviewTab,
         },
+        {
+          id: '@miasaki/dsh-sidebar/sidechat',
+          kind: 'sidechat',
+          title: '辅助对话',
+          description: '上下文隔离的侧线追问，不打断主任务',
+          order: 20,
+          Body: SideChatTab,
+          // children = 声明 + 授权（客户端 slot 纪律）：「我渲染的子槽就是这些」。
+          // child slot 是**自名**的（官方 ui-subagent 的 'sidebar.chat.conversation' 同款），
+          // scope:'session' 让框架自动下发 SessionProvider，正文据此绑定到 child。
+          children: { [SIDECHAT_CHILD_SLOT]: { kind: 'single', scope: 'session' } },
+        },
       ]
       ctx.effect(() => {
         const disposers = []
@@ -2176,7 +2502,8 @@ window.__ModuleLoader__.load({
           // guide 条目的 title / description 必须是**函数**（见 rightBarGuideEntry）。
           //
           // priority 显式写 'extension'（2026-09-21）：与官方默认值相同，写出来是**为了让它可见**。
-          // 说明：审查 tab 的 kind 是 'review'，官方的改动审阅用 'changes-review'，二者不撞。
+          // 说明：审查 tab 的 kind 是 'review'，官方的改动审阅用 'changes-review'，二者不撞；
+          // 辅助对话用 'sidechat'，与官方内置 kind 也不撞。
           disposers.push(ctx.sidebarRightTabs.register({
             id: tab.id,
             kind: tab.kind,
@@ -2184,11 +2511,24 @@ window.__ModuleLoader__.load({
             title: () => tab.title,
             guide: [rightBarGuideEntry(tab.title, tab.description, tab.order)],
           }))
-          // ② 正文：key 是**类型 id**（不是 kind）。
-          disposers.push(ctx.slots.register({ name: 'sidebar.right.pane.tab', key: tab.id }, tab.Body))
+          // ② 正文：key 是**类型 id**（不是 kind——同一 kind 可被别的扩展顶替）。
+          // children 只有本插件声明的槽才写；不写则沿用官方对该槽的 inject 隔间
+          //（useTabInfo 属于槽声明本身，注册方不需要也不应该再写 inject —— §7.1 实测）。
+          disposers.push(ctx.slots.register(
+            tab.children
+              ? { name: 'sidebar.right.pane.tab', key: tab.id, children: tab.children }
+              : { name: 'sidebar.right.pane.tab', key: tab.id },
+            tab.Body))
         }
         return () => { for (const dispose of disposers.reverse()) dispose() }
       }, 'sidebar: official right-bar tab types')
+
+      // ③ 自名子槽的正文：用 slots.inject 等父注册把该槽声明出来再挂载
+      //（官方 ui-subagent 的 'sidebar.chat.conversation' 就是这么挂的）。父注册与子注册
+      // 分属两个 effect、顺序不定，裸 register 进未声明槽会抛错——这里走 inject 是防御性写法。
+      ctx.effect(() => ctx.slots.inject(SIDECHAT_CHILD_SLOT, () => ctx.slots.register(
+        { name: SIDECHAT_CHILD_SLOT },
+        SideChatConversation)), 'sidebar: sidechat conversation slot')
 
       // --- Session 跟随：审查 tab 需要当前会话的 cwd -----------------------
       // 原壳的推挤 / watchdog / chrome reserve 随壳退役，这里只留内容层需要的同步。

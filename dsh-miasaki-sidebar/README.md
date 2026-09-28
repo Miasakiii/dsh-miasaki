@@ -1,6 +1,6 @@
 # @miasaki/dsh-sidebar
 
-DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献「审查」一个右栏 tab 类型（辅助对话待 M2）；内嵌终端自 **2026-09-25（v0.10.0-miasaki.0）起收敛为底部面板单形态**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建右栏终端，决策记录见 [design/CHANGELOG.md](design/CHANGELOG.md) 当日条。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码已删除，不再留死代码）。
+DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献**「审查」「辅助对话」两个右栏 tab 类型**（辅助对话 M2.1 已落地，见 [design/2026-09-27-sidebar-m2-sidechat-design.md](design/2026-09-27-sidebar-m2-sidechat-design.md) §7.2）；内嵌终端自 **2026-09-25（v0.10.0-miasaki.0）起收敛为底部面板单形态**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建右栏终端，决策记录见 [design/CHANGELOG.md](design/CHANGELOG.md) 当日条。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码已删除，不再留死代码）。
 
 - 路线 D（2026-09-06 拍板）：不安装 `dsh-better-sidebar` 基座，完全自研；与 canvas 线同构技术栈，零代码耦合；
 - 产品理念参考：Codex `/side` 侧边对话、GitHub Copilot 右栏范式、CHI'25 常显侧面板研究（详见设计文档 §2 调研来源）；
@@ -87,7 +87,7 @@ DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepsee
 | 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08）；v0.8.0 起收进终端 tab 折叠区，**2026-09-19 起收进底部面板 `＋` 右键菜单**（原右栏终端 tab 的折叠区随「下半部分」一并移除，能力不变；2026-09-25 右栏终端退役后入口即在底部面板） |
 | 内嵌终端（底部面板单形态） | **底部横贯面板**（node-pty 路线 B + WS + xterm；保活 + 重连回放 + restart 语义；标题栏终端按钮 + Ctrl+`）；多标签多会话（上限 8）。右栏 tab 形态（v0.8.0–v0.9.0）已于 **2026-09-25 退役**：官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建右栏终端（决策见 [design/CHANGELOG.md](design/CHANGELOG.md) 当日条） | M3 / v0.8.0 → 收敛于 v0.10.0 | **已实机验证**（2026-09-12 拍板两形态并存，见优化规划 §6；T2 spike 通过：预编译命中 + resize 生效）；**单形态收敛待重启后实机确认**（2026-09-25） |
 | 内嵌终端多标签（多会话） | **标签栏多开**：会话集合（上限 8）+ 活动标签记忆 + 最小尺寸仲裁 + 帧协议 v2；`＋`/`×`/中键/双击重命名/右键菜单/`▾` 溢出 + `Ctrl+Shift+`` / `Ctrl+PageUp·Down` / `Alt+1..8`；标签栏最右 `×` = 收起底部面板；**终端是一整块**（标签栏 + xterm，无下半部分），状态条只在报错/退出/工作区变更时出现；`＋` 右键选 shell / 开系统终端 | M3.1 / v0.9.0 | **已实施，待实机验证**（2026-09-19；见[补充设计](design/2026-09-19-terminal-multi-tab-plan.md)与[可视原型](design/2026-09-19-terminal-tabs-mockup.html)——两文中「右栏 tab 容器」的表述以 2026-09-25 退役为准；单测 57 通过 / 5 环境跳过，前端 DOM 桩冒烟 52 断言全过） |
-| 辅助对话 tab | fork+注入侧线（复用 canvas merge 内核链路）+ 侧线树 + 保存为新会话 | M2 | 设计完成（待实现后再注册官方 tab 类型） |
+| 辅助对话 tab | page 型官方右栏 tab（kind `sidechat`：侧线头 + 切换器 + 新建侧线）+ **嵌入式官方会话**（复用 `conversation.content` embedded 工厂，零自研聊天 UI）；侧线 = `ctx.sessions.fork`（不传 `atSeq` ⇒ 宿主取最后一个已完成轮次前缀，主会话运行中可开）；引导页胶囊入口 | **M2.1 已完成** | **已实施并实机验收（2026-09-28，[design/2026-09-27-sidebar-m2-sidechat-design.md](design/2026-09-27-sidebar-m2-sidechat-design.md) §7.2）**：引导页胶囊 → tab → 「新建侧线」→ 官方 embedded 会话渲染出继承的父历史 + 原生 composer；**主会话运行中开侧线不打断主任务**（S3 实测）；fork 成功即写侧线登记表（刷新后唯一的侧线身份来源）；空白父会话给人话引导；审查 tab 回归无恙；单测 **86 通过**、`verify-all sidebar` **13/13**。**待人工复验**：miasaki 桌面端 / 浏览器 GUI 刷新后走一遍。**M2.2/M2.3 未做**：侧线树与 `parentId` 对账、tab 菜单动作、在主区打开、复制兜底、深链接 params。**已知偏差**：侧线在官方会话列表可见（命名含 ` (1)`，且同一父的多条侧线同名）；「说『继续』= 接着做主线未完成的活」已在侧线头提示（S8 实测）；fork 会继承父会话 goal/plan（S9），goal 补偿见设计 §5.2 |
 | 标题栏启动器组 | ~~底部内嵌终端面板（xterm + node-pty + WS 回放）~~ → **已按 2026-09-12 拍板落地为「内嵌终端底部面板」**（见上；2026-09-25 起为唯一形态）；外部程序跳转按钮（explorer / VS Code 菜单）仍为未实现残留 | M3（已部分落地） | 终端部分 = **v0.8.0 已实现**；外部跳转按钮未实现（前提已随壳退役重建，待另立项） |
 | ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线）。~~桌面壳让位~~ **不在退役列**：标题栏终端按钮仍在（壳内插 `.tb-group` 首位），让位量由桌面壳用 `ResizeObserver` 自动计算；本线仅在**旧壳**（无 `chrome.bounds` 能力）时按同源公式补位（2026-09-27 实机重叠事件后订正） |
 
@@ -102,16 +102,19 @@ dsh-miasaki-sidebar/
 ├── index.js                # host 半：/sidebar/api 路由族（review + terminal + health）
 │                           #   + /sidebar/ws/terminal（内嵌终端 WS，一次性 token + 三道围栏）
 │                           #   + /sidebar/asset/terminal/*（xterm UMD 静态 serve）
-├── client.js               # client 半：官方右栏 tab 类型注册（2026-09-25 起只注册「审查」）
-│                           #   + 审查 tab 正文 + 内嵌终端（底部面板 / 标题栏按钮 / Ctrl+`，多标签）
+├── client.js               # client 半：官方右栏 tab 类型注册（审查 / 辅助对话 两个类型）
+│                           #   + 审查 tab 正文 + 辅助对话（侧线：登记表 + fork + 官方 embedded 会话复用）
+│                           #   + 内嵌终端（底部面板 / 标题栏按钮 / Ctrl+`，多标签）
 │                           #   壳层已于 2026-09-11 全部删除；右栏终端（TerminalTab 等）2026-09-25 删除，不再留死代码
 ├── test/
 │   ├── review-data.test.js      # diff 解析器（含 hunk header）/ 文档同步检测 / checklists 持久化单测（5 项）
 │   ├── review-view.test.js      # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（10 项）
 │   ├── review-grouping.test.js  # 审查列表目录分组与组内统计求和（源码抽取，3 项）
 │   ├── review-view-store.test.js # 审查视图持久化：默认值 / 非法回退 / 订阅通知 / 私有模式降级（源码抽取，6 项）
+│   ├── sidechat-registry.test.js # M2 侧线登记表：纯函数 7 项（幂等/回退/通知/私有模式）+ 源码契约 6 项（fork 即写盘 / pendingCreations finally 释放 / phase 三值 + hero 必填 / 自名子槽 + slots.inject / 「继续」语义提示 / 空白父会话引导）
 │   ├── rightbar-guide.test.js   # 官方右栏 guide 条目契约：title / description 必须是函数（源码抽取，4 项）
 │   ├── titlebar-button.test.js  # 标题栏终端按钮写域边界：让位量须过 chrome.bounds 能力门控、按 .tb-group 实宽算、清理受 wroteReserve 门控，且注入逻辑仍在（源码静态断言，4 项）
+│   ├── session-cwd.test.js      # 主视图会话取数契约：会话快照无 current 字段 ⇒ 判据为 retainedBy.mainView > 0（官方 ui-session 同款），autoOpen 由 store 订阅驱动（源码抽取 + 静态断言，8 项）
 │   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
 │   ├── terminal-hub.test.js     # 内嵌终端 host 半：PTY 枚举纪律 / 回放环 / 一次性 token / 围栏 / 多会话隔离与回收（fake pty 注入，15 项）
 │   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单 / diff 新契约（12 项）
@@ -126,6 +129,7 @@ dsh-miasaki-sidebar/
     ├── 2026-09-12-rightbar-mockup.html           # 上述设计的界面示意（现状 vs 建议，浏览器打开）
     ├── 2026-09-19-terminal-multi-tab-plan.md     # **内嵌终端「标签栏多开」补充设计（2026-09-19，已实施）**：协议 v2 加维 / 单集合纪律 / 每容器独立活动标签 / 最小尺寸仲裁 / 上限 8 / 孤儿会话收口 + 9 项待拍板（已按推荐项实施）
     ├── 2026-09-19-terminal-tabs-mockup.html      # 上述设计的可交互原型（标签栏复刻参考图 + 两形态 + 三主题 + 决策卡，浏览器直接打开）
+    ├── 2026-09-27-sidebar-m2-sidechat-design.md  # **M2 辅助对话设计定稿（2026-09-27）**：page 型官方右栏 tab + fork 侧线（完成轮次边界）+ 官方 conversation.content embedded 工厂复用；对标 ZCode SelectionSideChat 与官方 ui-subagent 先例；含三处偏差声明、M2.1–M2.3 拆分、S1–S6 spike、三项待拍板。**2026-09-28 修订**：核对底本换代（0.1.6 → 0.1.7-rc.2）+ ZCode 源码级对标（新增偏差④与 §5.1）、契约 C14–C18、spike S7–S9、拍板项增至六项；**同日实机取证收官**（§7.1）：S1/S2/S7 全部通过、S8 复现「一句『继续』就让侧线接着做父任务」、S9 证实 goal/plan 继承；**§7.2 = M2.1 已实施并实机验收**（引导页胶囊 → 侧线 → 官方 embedded 会话；运行中开侧线不打断主任务），M2.2/M2.3 后置
     └── CHANGELOG.md                            # 本线变更记录
 ```
 
@@ -181,14 +185,16 @@ socket `bufferedAmount` 超 8MB 丢帧（终端输出有损可接受），不无
 ## 验证
 
 ```powershell
-# 本线单测（66 项：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
-#            右栏 guide 契约 4 + 标题栏按钮写域 4 + 终端 launcher 7 + 内嵌终端 hub 15 + 路由 12）
+# 本线单测（86 例：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
+#            右栏 guide 契约 4 + 标题栏按钮写域 4 + 终端 launcher 7 + 内嵌终端 hub 15 + 路由 12 +
+#            主视图会话取数 7 + 辅助对话登记表 13）
 node test/review-data.test.js
 node test/review-view.test.js        # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过）
 node test/review-grouping.test.js    # 审查列表目录分组与组内统计求和（从 client.js 抽取纯函数求值）
 node test/review-view-store.test.js  # 审查视图持久化（抽取 client.js 的 reviewView，注入 mock localStorage）
 node test/rightbar-guide.test.js     # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
 node test/titlebar-button.test.js    # 标题栏终端按钮写域边界：让位量写入必须过 chrome.bounds 能力门控、公式按 .tb-group 实宽算、清理受 wroteReserve 门控（4 项静态断言）
+node test/session-cwd.test.js        # 主视图会话取数契约：会话快照无 current 字段 ⇒ 判据是 retainedBy.mainView > 0（官方 ui-session publishMain 同款）；含 retainInfo 实时兜底与 autoOpen 由 store 订阅驱动的源码静态断言（8 项）
 node test/terminal-launcher.test.js
 node test/terminal-hub.test.js       # 内嵌终端 host 半（fake pty + fake resolveBin 双注入，不需要真实 shell）：多会话隔离 / 定向广播 / 未知 id 静默丢弃 / 上限 8 / 关闭回收 / 最小尺寸仲裁 / dispose 全杀
 node test/api-routing.test.js        # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、浏览器信任三道、视图白名单与 /review/diff 新契约
