@@ -461,7 +461,6 @@ export function apply(ctx, config) {
           else await removeDir(sftp, opPath)
         })
         return sendJson(res, 200, { ok: true })
-        return sendJson(res, 400, { error: `不支持的操作: ${op}` })
       }
 
       // P1-1：~/.ssh/config 别名导入（只读本机 config；host 半解析，页面只渲染）

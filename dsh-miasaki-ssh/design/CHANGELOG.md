@@ -2,6 +2,40 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-28 · G1/G2 实机验收（真路由 × 真协议 sshd，23/23）
+
+**背景**：[2026-09-27 引擎加固](2026-09-27-ssh-dshweb-engine-gap-plan.md)落地后，用户定向「做实机验收」。
+基座与 [ssh-a1-live](../../_refs/scripts-archive/ssh-a1-live/) 同一隔离纪律（不碰用户真实连接库、不动
+profile 文件）：隔离 dataDir + `dsh --profile web --patch … --port 3099` 独立实例 + 真 `ssh2.Server`
+（带最小 SFTP 子系统 / 关子系统控制 / 洪水 shell），探针**纯 HTTP + WS 走真实路由**驱动（fence、票据、
+`withSftp`、背压全是产品代码路径）。基座与证据归档 `_refs/scripts-archive/ssh-g1g2-live/`。
+
+### G1（12/12）：SFTP 会话中途死亡后自动重开
+
+票据签发 → 首列成功（服务端子系统打开计数 +1）→ 经 exec `a1-sftp-close` 让**服务端关掉全部 SFTP
+子系统** → 第二次 list 仍 200 且服务端子系统打开计数再 +1（**自动重开的实证**）→ stat /
+上传 12B / 远端列表可见 / 下载 bytes 与 content-length 一致 / op(mkdir) 全过。
+REST 侧 `list/stat/op` 走 `withSftp`（可重放当次重开一次）、下载/上传中段只 `invalidateSftp`
+（源流不可回放）的分层在真实路由上各归各位。
+
+### G2（10/10）：慢 viewer 背压从「断开」改「暂停/恢复」
+
+attach 票据 + WS attach 拿到真 `ready` 帧 → 敲 `a1-flood` 起 6.4MB/s 洪水，探针**暂停底层
+socket 8 秒不读**（慢 consumer）→ 收到 `output.paused`（走暂停路径）且**未发生 1011** →
+drain 后收到 `output.resumed` → `echo g2-alive` 有回显（终端仍有活性）→ 全程 `/ssh/api/state`
+保持 `connected`。洪水期约 33.5MB 真实流过 WS。
+
+### 探针侧踩的坑（已记入归档 README，非产品缺陷）
+
+- dsh webserver 的 WS 层把控制帧也按 binary 投递（`ready`/`output.paused` 到客户端是 Buffer）——
+  客户端必须二进制也试 `JSON.parse`；
+- `waitFor` 超时返回 `null`，断言写 `!== undefined` 会假性 PASS；
+- 假 sshd 的 SFTP opcode 表（MKDIR=14/RMDIR=15/LSTAT=7/FSTAT=8）与 `Buffer.concat` 拼属性。
+
+**未覆盖项（如实登记）**：状态栏文案的浏览器视觉层由 `app.js`/`session.js` 的静态契约与既有
+轮次覆盖，本轮验到帧层（`output.paused`/`output.resumed` 真实到达）为止；浏览器视觉复验可在
+下次重启 `dsh web` 时顺手过。
+
 ## 2026-09-27 · G1/G2 引擎层加固（对标 dsh-web：SFTP 自愈 + 背压暂停）
 
 **背景**：[dsh-web 引擎差距方案](2026-09-27-ssh-dshweb-engine-gap-plan.md) 对标 `zhu1090093659/dsh-web` `packages/dsh-ssh` 后识别出 2 项必修缺陷（G3–G5 候选未动）。用户定向按 G1 → G2 实施。

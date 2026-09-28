@@ -139,7 +139,8 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **G1 SFTP 会话自愈**：`sftpSession()` 挂 `close` 监听清死引用 + `isSftpTransportFailure()`（`NO_CONNECTION`/`CONNECTION_LOST`/`Not connected`/`sftp-session`）+ `withSftp()` 通道级失败时**当次重开一次**（仅一次，防死循环）。服务端关子系统 / 通道超时后文件面板不再整条连接全废。list/stat/op 走 `withSftp`；下载/上传中段失败只清缓存（单次 HTTP 源流不可回放）。
 - **G2 慢 viewer 背压改暂停/恢复**：`ShellChannel.pauseOutput()/resumeOutput()`（ssh2 stream 原生 pause/resume）+ 水位（**2MiB 暂停** / **512KiB 全 drain 恢复** / 暂停超 **30s** 或缓冲超 **8MiB** 才兜底断开）。新帧 `output.paused`/`output.resumed` 只做 host→browser 状态栏展示（无上行新权限）。弱网/休眠恢复/`top` 狂刷不再反复掉线。
 - 单测 **299 → 310 例**、`verify-all ssh` **31/31**；真协议探针归档 `_refs/scripts-archive/ssh-g1-g2-probe/`（G1 关子系统自动重开 **7/7**、G2 慢 consumer 暂停而非断开 **11/11**）。
-- **生效条件**：改的是 `lib/runtime.js` / `lib/sftp.js` / `index.js` / `session.js` / `app.js` ⇒ **必须重启 `dsh web`**（`cachedAsset` 进程内缓存，浏览器强刷不够）。实机判据见[回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 新增两行。
+- **2026-09-28 实机验收 23/23**（真 DSH 实例 × 真协议 sshd × 真实路由/票据/围栏，隔离 dataDir）：G1 十二项——服务端关掉 SFTP 子系统后第二次 list 经真实 `/ssh/api/sftp/*` 仍 200 且服务端子系统计数再 +1（自动重开实证），stat/上传/下载/op(mkdir) 全过；G2 十项——洪水 33.5MB 真实流过 WS，慢 consumer 收到 `output.paused` 且零 1011，drain 后 `output.resumed`，echo 回环活性、连接全程 `connected`。证据归档 `_refs/scripts-archive/ssh-g1g2-live/`（`evidence.txt` + 全帧 `frames.log`）。
+- **生效条件**：改的是 `lib/runtime.js` / `lib/sftp.js` / `index.js` / `session.js` / `app.js` ⇒ **必须重启 `dsh web`**（`cachedAsset` 进程内缓存，浏览器强刷不够）。实机判据见[回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 两行（**已验收**，判据正文在）。
 
 **2026-09-26 对标方案落地：P0 三件套 + U2.2 SFTP + P1-1 ssh config 导入**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户拍板「按建议开工」D1②/D5②/D2①，实施记录见 [CHANGELOG](design/CHANGELOG.md)）：
 
@@ -230,7 +231,7 @@ dsh-miasaki-ssh/
 ├── sftp-ui.js              # 前端（iframe 内）：远程文件面板抽屉（U2.2）—— 面包屑/列表/上传队列/变更操作，自包含 IIFE（window.SshFiles）
 ├── app.js                  # 前端（iframe 内）：主机导航 / 多标签 / 编辑悬浮窗 / 工具区 / 状态栏 / 主题应用 / 送往对话（A0）/ 结构化标签与写权只读条（U2.1）/ 工作区快照（U2.3）/ 文件面板入口与 ssh config 导入（U2.2/P1-1）
 ├── styles.css              # 工作区布局 + --ssh-* 语义令牌（原生明暗兜底，宿主桥接覆盖）
-├── test/                   # 单测 299 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑/keepalive 与错误词汇 ↔
+├── test/                   # 单测 310 例（store: 围栏/归一化/持久化 ↔ runtime: TOFU/U0 故障注入/v2 票据与多 shell/就绪补绑/keepalive 与错误词汇 ↔
 │                           #   session: 二进制/销毁隔离/重附着/主题查找/缓冲快照/写权与序列化快照/未绑定不发帧/按 seq 匹配 ↔
 │                           #   exec: POSIX 包装/exit 早于 data/排空窗口/超时/协议行扫描/signal 取消 ↔ paths: 词法归一/NUL/控制字符/~ 展开 ↔
 │                           #   sftp: 状态词汇/进度节流/列目录映射/上传降级链(sftp→exec pipe)/下载计数 ↔ http-sftp: 真实 HTTP 端到端（票据/fence/409/413/降级）↔
