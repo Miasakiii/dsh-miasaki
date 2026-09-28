@@ -2,6 +2,211 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-29 · 插件页右上角叠压修复：顶部安全区让位（`--ms-titlebar-clearance`）
+
+**现象**（用户截图报障「优化 miasaki 插件页右上角，有一点重叠」）：插件页页面标题行右侧的
+「⟳ 刷新 / ＋ 添加插件」落在窗口右上角**窗控三键 + 主题徽记**底下 —— 胶囊上沿被压住一截。
+
+**实测**（截图 1972×1318 = 986 CSS px @2x，连通域量取）：
+
+| 元素 | 矩形（CSS px） |
+|---|---|
+| 窗控组 `.tb-group`（徽记 16 + 三键 26×3 + gap 2） | `x[869,977] y[11,37]` |
+| 官方「＋ 添加插件」胶囊 | `x[845,940] y[27,59]` |
+| ⇒ 重叠 | **10px 高 × 71px 宽**（胶囊上沿比窗控带下沿深 10px） |
+
+**根因**：窗控组是**零占位浮层**（V3 起，`#miasaki-titlebar{height:0}`，只有按钮组本身
+`top:11px` + 26px 键高），而官方有**两处页面级标题行**走「左标题 + 右动作」布局，动作区
+右上角正落在这一带：
+
+- 插件页 `dsh-client-ui-plugin-manager` 的 `.X_2TxG_pageHead`（`padding-top:28px`）；
+- 日程页 `dsh-client-ui-schedule` 的 `.t-XoWW_pageHeading`（同 28px）。
+
+官方**本来就有**这套让位，但只写在 darwin 分支：
+`[data-platform=darwin] .X_2TxG_pageHead{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}`
+（`dsh-client-ui-primitives` 注释：「marks `<html>` with `data-platform="darwin"`; plain web never
+sets it」）。Windows 侧官方只有两条路：**原生边框**（官方 dsh-desk）或
+`[data-windows-titlebar]` 的**整帧 `padding-top`** —— 都不适用于本壳的零占位形态，于是这一格
+一直没人补。
+
+| 项 | 内容 |
+|---|---|
+| 做法 | `03-switcher.js` 的注入样式串新增 `:root{--ms-titlebar-clearance:21px;}` 与 `#root [class*="_pageHead"]{margin-top:var(--ms-titlebar-clearance);}`（与既有横向让位 `--ms-titlebar-reserve` 并列，不新增分片） |
+| 取值 | = 窗控带下沿 `11+26=37` + 呼吸位 `12`（与 `TB_RESERVE_GAP` 同源）− 官方页头自有 `padding-top 28` = **21** ⇒ 动作区上沿落到 49px，离窗控带 12px |
+| 为什么**纵向**而不是横向 | 页头是「左标题 + 右动作」的**一整行**：照会话头那样让出 `--ms-titlebar-reserve`（156px）会在动作区右侧留一大块空白 —— 页面级动作本该贴右缘。整行下移一格后标题与动作仍成一行、仍贴右缘，官方 darwin 分支也是同一手法 |
+| 为什么用 `margin-top` 而不覆写 `padding-top` | 那 28px 是**官方的**值，叠加式让位不必抄过来；官方调大调小都自动跟随，失败面退化为「多让一点」而不是「把官方 padding 顶掉」 |
+| 选择器口径 | 用 `_pageHead` **子串**匹配（CSS Module 前缀实测 `X_2TxG_` / `t-XoWW_` 随版本变，类名后缀才稳）；`_pageHead` 同时命中 `_pageHeading`，两处官方页头一并覆盖 —— 与既有 `_headerActions` / `_headerCorner` 同一口径 |
+| 无壳环境 | 规则只随壳的注入脚本存在；浏览器直开 `http://127.0.0.1:3080` 时 `--ms-titlebar-clearance` 不存在 ⇒ `margin-top` 不生效，页面与官方**逐像素一致**（降级 = 不干预） |
+| 耦合点（写在此处，防失真） | ① 壳改窗控几何（`top:11px` / 键高 26px）② 官方改页头 `padding-top` ③ 官方改 CSS Module 类名 —— 三者任一变动，21 这个数或选择器就要同改；①② 已被 `contract.test.js` 的算术闸门盯住，③ 由 `verify-themes.mjs` §6.6 的「找不到即显式 skip」兜住 |
+
+**验证**：
+
+- 新增算术闸门 `themes/test/contract.test.js`「★ 顶部安全区：官方页面标题行（`_pageHead`）不得落进窗控带」：
+  规则必须在**注入的样式串**里、且 `让位量 + 官方 padding-top ≥ 窗控带下沿 + 呼吸位`
+  （上界同时卡住「多让 > 12px」）。**负向自证**：把 21 改成 5 → 该例立刻失败并报出
+  `官方页头上沿 33px < 窗控带下沿 37px + 呼吸位 12px`；还原后 20/20 通过。
+- `verify-themes.mjs` 新增 **§6.6**（3 项）：真实页面上打开插件页，断言「页头可见内容 /
+  动作区 / 末键」与窗控组重叠面积均为 0、且动作区退到窗控带之下（≥8px）。
+- `node scripts/verify-all.mjs desktop` → **36/36 PASS**（含 `cargo test` 100 例、8 件补丁离线自证）；
+  `verify-all repo` → **3/3 PASS**。
+- **实机自证**（另起一次性 `dsh --profile web --port 3099` 实例，`DSH_HOME` 指到临时目录，
+  全程不碰用户 profile；探针与截图归档 `_refs/scripts-archive/pagehead-clearance-2026-09-29/`）：
+
+  | | 动作区 × 窗控组重叠 | 动作区上沿 − 窗控带下沿 | `--ms-titlebar-clearance` |
+  |---|---|---|---|
+  | 修复前（旧注入产物） | **701.1 px²** | −9 px | 空（变量不存在） |
+  | 修复后（新注入产物） | **0 px²** | +12 px | 21px |
+
+  用户截图（986 CSS px @2x）反推的重叠 10×71 ≈ 710 px² 与探针 701.1 px² 同口径吻合。
+  `verify-themes`：旧产物 **22/27**（§6.6 三项如实失败，证明判据有区分力），新产物 + 干净
+  profile **27/27**。
+- **一条判据教训（已写进 §6.6 注释）**：首版判据量的是**页头容器**，而 `.X_2TxG_pageHead` 是
+  **全宽 flex 行**（border box 从 y=0 起算）——下移后它与窗控带仍有 16px 的**矩形相交**
+  （1088 px²），但那是空白 padding 区、肉眼零叠压 ⇒ 判据恒假失败。**必须量内容**
+  （标题块 / 动作区 / 末键），不能量容器。
+
+**下一步（用户执行）**：`npm run deploy`（或 `npm run build`）**重编 exe** —— 注入脚本是
+`include_str!` 编译期内嵌（`main.rs:22`），不重编则新规则不会进入页面；重启桌面端后打开插件页
+目检（判据见 `smoke-test-matrix.md` §3.1 同名行 / E10）。
+
+## 2026-09-28（续九）· DSH 本体升到 0.2.0-rc.1：八件补丁重打实测 + 一次 npm 中断事故
+
+**背景**：官方 `next` 轨发布 `0.2.0-rc.1`（2026-09-28，复查见
+[`dsh-official-repo-review-2026-09-28.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-28.md)）。
+本轮把全局 npm 实装（`%APPDATA%\npm\node_modules\@deepseek-ai\dsh`，亦即
+`~/.dsh/profiles/node_modules/@deepseek-ai/dsh` 这个 **Junction 的目标**）由 `0.1.7-rc.2` 升到 `0.2.0-rc.1`，
+并按既定纪律重打本线八件本体补丁（另加 dual-model 一件）。
+
+### 一、补丁重打：`EDITS` 零改动 `[实测]`
+
+判据：由新版官方原版重建 baseline → 同步三常量 → `patch.mjs verify` 逐件自证 →
+`apply` 落盘 → `patch-live-audit.mjs` 复核。
+
+| 补丁 | 0.2.0-rc.1 原版 SHA（前 8） | 产物 SHA（前 8） | 目标文件较 0.1.7-rc.2 |
+|---|---|---|---|
+| `attachment` | `538711EF` | `DDDBFA94` | **逐字节未变** |
+| `brand-official` | `22BB7E18` | `821DD9B3` | **逐字节未变** |
+| `trajectory` | `71FA00F0` | `2BBC3E66` | **逐字节未变** |
+| `cordis-host-runner` | `AC73F866` | `D3126110` | **逐字节未变** |
+| `chat` | `09AE7BFE` | `3D6074A2` | 有改动，锚点仍全部唯一命中 |
+| `conversation` | `6A9CBE7C` | `20F93977` | 有改动，锚点仍全部命中 |
+| `settings-models` | `7674ED0B` | `950BE235` | 有改动，锚点仍全部命中 |
+| `sidebar` | `57C5C6AC` | `CE314B96` | 有改动，锚点仍全部命中 |
+
+跨线一件：`dual-model` 的 `dsh-api-session-controller`（`FB0F7B96` → `40A032EF`，**未变**）。
+第三方 `@yeesy369/dsh-browser-playwright` 双半**无需重打**——其目标属第三方包，且 live 审计仍为 `patched`。
+
+**复核** `[实测]`：`patch-live-audit.mjs` → **11 个目标 / 10 件补丁，patched 11 / 未生效 0 / 未安装 0**；
+`verify-all` 全量 **153 项 PASS**（desktop **36/36**，含 `cargo test` 100 例）。
+
+### 二、⚠️ 事故：在 DSH 运行时升级 DSH，npm 会死锁在一处文件锁上
+
+**现象**：`npm i -g @deepseek-ai/dsh@0.2.0-rc.1` 在 `reify` 阶段**静默僵死 15 分钟**（日志零增量、CPU 零增量），
+停在 `reify mark deleted [...\@img\sharp-win32-x64]`。根因是 `libvips-42.dll` 等 `.node` 正被运行中的
+`DeepSeek Harness.exe` 加载并锁定，Windows 不允许覆盖。
+
+**中断后遗症**（三处，均已修复）：
+
+| 症状 | 修复 |
+|---|---|
+| `dsh` 命令消失（旧的 bin shim 已删、新的未写） | 调 npm 内置 `cmd-shim` 重建 `dsh` / `dsh.cmd` / `dsh.ps1`，`dsh --version` → `0.2.0-rc.1` ✓ |
+| `@img/sharp-win32-x64` 缺 `package.json` | 由 `npm pack` 取回权威 package.json 写回；sharp 真调用复测（JPEG 输出、libvips 8.18.7）✓ |
+| `@deepseek-ai/libreoffice-kit-win32-x64` 半解包（缺 `package.json` 与 `prebuilds.json`） | 见下节 |
+
+**教训（应写入升级手册）**：**升级 DSH 本体前必须先退出正在运行的 DSH 进程**；
+`npm i -g` 在宿主存活时可能死锁，且中断会留下半安装状态。历史升级未撞上属运气。
+
+### 三、`libreoffice-kit` 引擎包：主包判定为 incompatible 的完整条件
+
+主包 `lib/index.js:1267-1302` 的判据是**两道**：① `require.resolve('<引擎包>/package.json')` 成功；
+② 读 `prebuilds.json` 后校验 `manifest.version === pkg.version`、`schemaVersion === 1`、
+`status === 'built'`、`platform === 'win32-x64'`，且 `pkg.version` 必须等于 `ENGINE_VERSIONS['win32-x64']`
+（当前 **0.1.2**）。实测 `discoverRuntime()` / `createConverter()` 均以
+`Installed LibreOfficeKit package is incomplete: @deepseek-ai/libreoffice-kit-win32-x64` 拒绝
+⇒ **Office 转换（office-docx/pptx/xlsx 技能依赖）在本包修好前不可用**。
+缓存里只有 **0.1.1** 的 tarball（版本不符，用不上），须取 0.1.2 完整包。
+> 说明：`@deepseek-ai/libreoffice-kit` 的 Node API 版本与各平台引擎版本**独立**——0.1.2 的 API 配 Windows 引擎 0.1.2。
+
+### 四、影响边界（澄清一个易误判的点）
+
+官方桌面端 `F:\sud\dsh-desk` **自带独立运行时**：`resources/app.asar` 内 `dsh/package.json` =
+`@deepseek-ai/dsh-desktop-runtime`，且 `dsh/node_modules/` 有 14,999 个文件。
+**它不经过全局 npm**，因此本次升级不影响官方桌面端，也不影响当时正在运行的会话。
+另注：官方桌面端自身在同期经 `nightly` 通道自动更新到了 `0.2.0-rc.1`
+（`resources/runtime/primary-runtime/runtime.json` 实测），与本次升级版本一致。
+**受影响的边界是 `dsh web` 与 miasaki 桌面壳**（二者加载全局实装）。
+
+### 五、待办
+
+1. **重启生效**：`dsh-cordis-host-runner` 与 `dsh-api-session-controller` 属 host 半，不重启不加载新 bundle；
+   client 半刷页面即可（或由 client-hmr 热推）。
+2. **实机验收**：桌面壳浮层/tooltip 定位（官方本轮修了一批 Windows 标题栏与浮层间隙）、品牌字标、
+   九件补丁的可见效果；按 [`smoke-test-matrix.md`](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.0 台账走。
+3. **行为面收尾**（官方 0.2.0 侧）：Schedule 已转 opt-in bundle（如依赖自动化任务需显式启用）、
+   desktop profile 新增 OTLP 上报路径（General 设置里确认偏好）、首启「预览版说明」弹窗会再弹一次。
+
+## 2026-09-28（续八）· 修复 brand-official 补丁的 `--target` / `--yes` 解析缺陷（0.2.0-rc.1 预检连带）
+
+**起因**：0.2.0-rc.1 升级预检（[`dsh-0.2.0-rc1-upgrade-assessment-2026-09-28.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc1-upgrade-assessment-2026-09-28.md)）
+对九件补丁逐个跑 `apply --target <副本>` 时，**本件报「已应用，跳过（幂等）」而副本始终未变**，
+其余八件同命令同顺序均正常应用。
+
+**根因** `[实测]`：`patches/dsh-client-ui-brand-official/patch.mjs:203-210` 的 `parseArgs` 拿
+`args[i]` 去比 `--yes` / `--target` —— `args` 是**结果对象**，`args[i]` 恒为 `undefined`，
+两个分支永不进入 ⇒ `args.target` 恒 `null`（回落 `defaultTarget()` = live 安装目录）、
+`args.yes` 恒 `false`。**全仓九件补丁里只有本件这么写**，其余八件均为 `argv[i]`。
+
+**影响**（两条）：
+
+1. 任何以 `--target` 做隔离验证的流程（含本仓既有升级评估惯例）对本件**静默失真** ——
+   live 已打过补丁时报「幂等跳过」，**看似通过而实际根本没验证**。属静默回退读取形态，
+   与 `scripts/check-silent-guards.mjs` 的 R3 类同源，但藏在补丁工具里、闸门扫不到；
+2. `--yes` 失效使 `unknown` 状态无法强制应用（方向安全，不会误写，但文档承诺的能力不存在）。
+
+`patch.mjs` 头部注释（第 30 行）与 `README.md`（第 84 行）**都声明了** `--target` 支持 ——
+属「文档承诺、实现失效」，故一并补注。
+
+**修复**：两处 `args[i]` → `argv[i]`（单行 ×2）。**`EDITS` 与 baseline 零改动**。
+
+**验证** `[实测]`：把 `baseline/client.original.js` 复制到 `_refs/` 作隔离副本，
+① `status --target <副本>` 的「目标」栏由 live 路径变为**副本路径**；
+② `apply --target <副本> --yes` 真正写入副本（1,863 → 8,286 B，SHA-256 `821DD9B3…` **与记录一致**）；
+③ live 安装目录 SHA-256 前后一致，**未被误写**。
+
+**连带订正**：2026-09-25 那份升级评估用的是同一方法，其对本件的「预检通过」证据同样不可信
+（**最终 live 状态无误** —— 该件在 rc.2 上确已 apply 成功；存疑的是当时的验证链）。
+
+## 2026-09-28（续七）· 免费模型池迁出本线 → 独立第九线（更名 + 信任围栏）
+
+**本线插件数 5 → 4**：`plugins/dsh-free-model-pool/` 整体 `git mv` 到
+[`../../dsh-miasaki-free-model/`](../../dsh-miasaki-free-model/)（**9 个文件全部被 git 识别为重命名**），
+独立成第九线并在同批更名 `dsh-free-model-pool` → `@miasaki/dsh-free-model`（路由前缀
+`/freepool-api/*` → `/freemodel-api/*`，槽 id `free-model-pool` → `free-model`）。
+
+**迁出理由**（三条撞在同一个判断上）：① 它做的事（免费模型发现 / 能力画像 / 显式写入配置）
+与桌面壳无关 —— 与用量统计 2026-09-26 迁出的处境同构；② 名字装不下新定位（目标从"扫自配平台"
+扩到"多来源聚合"，要收编免 Key 车道）；③ **一条真实安全债**：4 条 exact 路由不经过内核
+`/api` 准入链，而 `/apply` 是写配置动作 —— 迁出同批用 `lib/trust.js` 补上围栏。
+
+**本线侧的同步改动**（迁出的连带面，逐条）：
+
+| 位置 | 改动 |
+|---|---|
+| `README.md` 的池章节 | 改为「**已迁出本线**（2026-09-28）」指路页；旧安装说明划删除线并指向新线 |
+| `README.md` 目录树 | 删掉 `plugins/dsh-free-model-pool/` 一行（插件数 5 → 4） |
+| `plugins/dsh-model-probe/README.md` | "与 `dsh-free-model-pool` 的 apply 有本质区别" → `@miasaki/dsh-free-model` |
+| `plugins/dsh-model-probe/lib/index.js` | 注释里的路径 `plugins/dsh-free-model-pool` → `dsh-miasaki-free-model` |
+| `plugins/dsh-model-probe/test/settings-read.test.js` | 同上（注释） |
+| `patches/dsh-client-ui-settings-models/README.md` | 指向 `lib/client.js` 的路径更新为新线 |
+
+**本仓库级同步**（不属本线但同批）：`verify-all.mjs` 的 `LINES` 加 `free-model`、原 desktop 类的
+4 个免费模型池检查项迁入 `planFreeModel()`（连同新增的 trust / client-bundle 两项共 **7 项**；同日晚 M1 起为 **10 项**）；`check-doc-versions.mjs` 台账加第九线；
+`silent-guard-baseline.json` 的冻结项路径同步；根 `README.md` 八线 → 九线。
+
+**验证** `[实测]`：`verify-all free-model` **7/7 PASS**（含同批新增的 client-bundle 4 例）、`verify-all repo` **3/3 PASS**；
+新线单测 trust 15 例 + routes 5 例 + settings-read 10 例全绿。完整记录见
+[`../../dsh-miasaki-free-model/design/CHANGELOG.md`](../../dsh-miasaki-free-model/design/CHANGELOG.md)。
+
 ## 2026-09-28（续六）· 入库整理：产物闸门接入 + 当前态台账订正
 
 **本条不含功能改动**——是这批积压改动的收尾整理（用户指令「更新文档，整理文件，提交推送」）。

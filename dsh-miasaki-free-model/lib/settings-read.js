@@ -1,5 +1,5 @@
 /**
- * dsh-free-model-pool — settings 读取双轨（≤0.1.6 与 0.1.7 兼容）。
+ * @miasaki/dsh-free-model — settings 读取双轨（≤0.1.6 与 0.1.7 兼容）。
  *
  * DSH 0.1.7 重写设置机制：`settings/updated` 事件与 **`ctx.settings.get(ns)`**
  * 一起在全树移除（0.1.6 有 19 处 → 0.1.7 零处），服务本身（`SettingsForms`）
@@ -14,11 +14,11 @@
  * inject，正常不可达，兜底不给启动屏添风险）。
  *
  * 落地起因：0.1.7 上不双轨时 `ctx.settings.get is not a function`，
- * 设置页模型栏的免费模型池面板整块报错（2026-09-23 线上实测，
- * `/freepool-api/status` 原样返回该错误）。配套评估：
+ * 设置页模型栏的免费模型面板整块报错（2026-09-23 线上实测，
+ * `/freemodel-api/status` 原样返回该错误）。配套评估：
  * `dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-upgrade-assessment-2026-09-23.md` §7.4。
  *
- * @module dsh-free-model-pool/settings-read
+ * @module @miasaki/dsh-free-model/settings-read
  */
 
 /**

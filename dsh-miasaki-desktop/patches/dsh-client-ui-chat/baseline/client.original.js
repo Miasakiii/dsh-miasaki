@@ -211,7 +211,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/MessageItem.module.css.mjs
-		const css$17 = ".Sixlwa_userRow{flex-direction:column;align-items:flex-end;gap:6px;display:flex}.Sixlwa_userStack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702), 82%);flex-direction:column;align-items:flex-end;gap:8px;display:flex}.Sixlwa_bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:100%;font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}.Sixlwa_referenceSummary{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_contextRow{padding:2px 0}.Sixlwa_compactionRow{--dsh-compaction-header-height:calc(24px + var(--dsh-content-font-delta,0px));padding:2px 0}.Sixlwa_compactionButton{width:100%;height:var(--dsh-compaction-header-height);border-radius:var(--dsw-radius-sm);min-width:0;color:inherit;font:inherit;text-align:left;background:0 0;border:none;align-items:center;padding:0;display:flex}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton{z-index:7;background:var(--dsw-alias-bg-base);border-radius:0;position:sticky;top:0}.Sixlwa_compactionBody :has(>[data-code-block-banner]){top:var(--dsh-compaction-header-height)}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.Sixlwa_compactionButton:not(:disabled){cursor:pointer}.Sixlwa_compactionButton:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}.Sixlwa_compactionLeading{width:calc(16px + var(--dsh-content-font-delta,0px));height:calc(16px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-secondary);flex:none;place-items:center;margin-right:6px;display:inline-grid}.Sixlwa_compactionLeading svg{width:calc(14px + var(--dsh-content-font-delta,0px));height:calc(14px + var(--dsh-content-font-delta,0px))}.Sixlwa_compactionContextIcon,.Sixlwa_compactionDisclosureIcon{grid-area:1/1;justify-content:center;align-items:center;display:inline-flex}.Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionContextIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionContextIcon{opacity:0}.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionDisclosureIcon{opacity:1}.Sixlwa_compactionTitle{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary-dimmed);flex:none}.Sixlwa_compactionSep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.Sixlwa_compactionSummary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.Sixlwa_compactionBody{padding:4px 0 4px calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px))}.Sixlwa_retryRow{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_retrySummary{border-radius:var(--dsw-radius-sm);width:fit-content;color:inherit;cursor:pointer;user-select:none;align-items:center;gap:7px;padding:2px 0;list-style:none;display:inline-flex}.Sixlwa_retrySummary::-webkit-details-marker{display:none}.Sixlwa_retrySummary:after{content:\"\";opacity:.8;border-bottom:1.5px solid;border-right:1.5px solid;width:6px;height:6px;transition:transform .12s;transform:rotate(-45deg)}.Sixlwa_retrySummary:hover{color:var(--dsw-alias-label-secondary)}.Sixlwa_retrySummary:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}.Sixlwa_retryText{color:inherit}.Sixlwa_retryRow[data-active] .Sixlwa_retryText{background:linear-gradient(90deg, var(--dsw-alias-label-tertiary) 0%, var(--dsw-alias-label-tertiary) 40%, var(--dsw-alias-label-secondary) 50%, var(--dsw-alias-label-tertiary) 60%, var(--dsw-alias-label-tertiary) 100%);color:#0000;background-position:100%;background-size:200% 100%;background-clip:text;animation:1.6s ease-in-out infinite Sixlwa_retry-shimmer}.Sixlwa_retryRow[open] .Sixlwa_retrySummary:after{transform:rotate(45deg)}.Sixlwa_retryDetails{overflow-wrap:anywhere;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px));gap:2px;margin-top:3px;padding-left:14px;display:grid}.Sixlwa_retryDetailLabel{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorRow{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));grid-template-columns:10px minmax(0,1fr) auto;align-items:start;gap:8px;padding:2px 0;display:grid}.Sixlwa_turnErrorDot{margin-top:5px}.Sixlwa_turnErrorCopy{overflow-wrap:anywhere;min-width:0}.Sixlwa_turnErrorTitle{color:var(--dsw-alias-state-error-primary);margin-right:6px;font-weight:600}.Sixlwa_turnErrorMessage{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorCode{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-markdown-code-block-small)}.Sixlwa_maxTokensTitle{color:var(--dsw-alias-state-warn-primary);margin-right:6px;font-weight:600}@keyframes Sixlwa_retry-shimmer{0%{background-position:100%}to{background-position:0}}@media (prefers-reduced-motion:reduce){.Sixlwa_retryRow[data-active] .Sixlwa_retryText{color:inherit;background:0 0;animation:none}}.Sixlwa_attachmentRow{flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:100%;display:flex}.Sixlwa_fileCard{border:.5px solid var(--dsw-alias-border-l2,#0000001f);border-radius:var(--dsw-radius-xl);background:var(--dsw-specific-input-major,transparent);box-sizing:border-box;flex:0 0 240px;align-items:center;gap:10px;width:240px;min-height:64px;padding:8px 12px;display:inline-flex}.Sixlwa_fileIcon{flex:none;width:28px;height:28px}.Sixlwa_fileContent{flex-direction:column;flex:1;min-width:0;display:flex}.Sixlwa_fileName{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:22px;overflow:hidden}.Sixlwa_fileMeta{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-tertiary,#00000073);font-size:12px;line-height:15px;overflow:hidden}";
+		const css$17 = ".Sixlwa_userRow{flex-direction:column;align-items:flex-end;gap:6px;display:flex}.Sixlwa_userStack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702), 82%);flex-direction:column;align-items:flex-end;gap:8px;display:flex}.Sixlwa_bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:100%;font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}.Sixlwa_referenceSummary{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_contextRow{padding:2px 0}.Sixlwa_compactionRow{--dsh-compaction-header-height:calc(24px + var(--dsh-content-font-delta,0px));padding:2px 0}.Sixlwa_compactionButton{width:100%;height:var(--dsh-compaction-header-height);border-radius:var(--dsw-radius-sm);min-width:0;color:inherit;font:inherit;text-align:left;background:0 0;border:none;align-items:center;padding:0;display:flex}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton{z-index:7;background:var(--dsw-alias-bg-base);border-radius:0;position:sticky;top:0}.Sixlwa_compactionBody :has(>[data-code-block-banner]){top:var(--dsh-compaction-header-height)}.Sixlwa_compactionRow:has(.Sixlwa_compactionBody) .Sixlwa_compactionButton:hover{background:var(--dsw-alias-interactive-bg-hover-solid)}.Sixlwa_compactionButton:not(:disabled){cursor:pointer}.Sixlwa_compactionButton:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}.Sixlwa_compactionLeading{width:calc(16px + var(--dsh-content-font-delta,0px));height:calc(16px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-secondary);flex:none;place-items:center;margin-right:6px;display:inline-grid}.Sixlwa_compactionLeading svg{width:calc(14px + var(--dsh-content-font-delta,0px));height:calc(14px + var(--dsh-content-font-delta,0px))}.Sixlwa_compactionContextIcon,.Sixlwa_compactionDisclosureIcon{grid-area:1/1;justify-content:center;align-items:center;display:inline-flex}.Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionContextIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionContextIcon{opacity:0}.Sixlwa_compactionButton:not(:disabled):hover .Sixlwa_compactionDisclosureIcon,.Sixlwa_compactionButton:not(:disabled):focus-visible .Sixlwa_compactionDisclosureIcon{opacity:1}.Sixlwa_compactionTitle{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary-dimmed);flex:none}.Sixlwa_compactionSep{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.Sixlwa_compactionSummary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;flex:auto;overflow:hidden}.Sixlwa_compactionBody{padding:4px 0 4px calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px))}.Sixlwa_retryRow{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px))}.Sixlwa_retrySummary{border-radius:var(--dsw-radius-sm);width:fit-content;max-width:100%;color:inherit;cursor:pointer;user-select:none;align-items:center;gap:7px;padding:2px 0;list-style:none;display:inline-flex}.Sixlwa_retrySummary::-webkit-details-marker{display:none}.Sixlwa_retrySummary:after{content:\"\";opacity:.8;border-bottom:1.5px solid;border-right:1.5px solid;flex:none;width:6px;height:6px;margin-right:2px;transition:transform .12s;transform:rotate(-45deg)}.Sixlwa_retrySummary:hover{color:var(--dsw-alias-label-secondary)}.Sixlwa_retrySummary:focus-visible{outline:1.5px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}.Sixlwa_retryText{overflow-wrap:anywhere;min-width:0}.Sixlwa_retryRow[open] .Sixlwa_retrySummary:after{transform:rotate(45deg)}.Sixlwa_retryDetails{overflow-wrap:anywhere;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px));gap:2px;margin-top:3px;padding-left:14px;display:grid}.Sixlwa_retryDetailLabel{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorRow{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));grid-template-columns:10px minmax(0,1fr) auto;align-items:start;gap:8px;padding:2px 0;display:grid}.Sixlwa_turnErrorDot{margin-top:5px}.Sixlwa_turnErrorCopy{overflow-wrap:anywhere;min-width:0}.Sixlwa_turnErrorTitle{color:var(--dsw-alias-state-error-primary);margin-right:6px;font-weight:600}.Sixlwa_turnErrorMessage{color:var(--dsw-alias-label-secondary)}.Sixlwa_turnErrorCode{color:var(--dsw-alias-label-tertiary);font:var(--dsw-font-markdown-code-block-small)}.Sixlwa_maxTokensTitle{color:var(--dsw-alias-state-warn-primary);margin-right:6px;font-weight:600}.Sixlwa_attachmentRow{flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:100%;display:flex}.Sixlwa_fileCard{border:.5px solid var(--dsw-alias-border-l2,#0000001f);border-radius:var(--dsw-radius-xl);background:var(--dsw-specific-input-major,transparent);box-sizing:border-box;flex:0 0 240px;align-items:center;gap:10px;width:240px;min-height:64px;padding:8px 12px;display:inline-flex}.Sixlwa_fileIcon{flex:none;width:28px;height:28px}.Sixlwa_fileContent{flex-direction:column;flex:1;min-width:0;display:flex}.Sixlwa_fileName{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-primary);font-size:14px;font-weight:500;line-height:22px;overflow:hidden}.Sixlwa_fileMeta{white-space:nowrap;text-overflow:ellipsis;color:var(--dsw-alias-label-tertiary,#00000073);font-size:12px;line-height:15px;overflow:hidden}";
 		const tagId$17 = "@deepseek-ai/dsh-client-ui-chat/MessageItem.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$17) + "]") === null) {
 			const tag = document.createElement("style");
@@ -240,7 +240,6 @@ window.__ModuleLoader__.load({
 			"fileName": "Sixlwa_fileName",
 			"maxTokensTitle": "Sixlwa_maxTokensTitle",
 			"referenceSummary": "Sixlwa_referenceSummary",
-			"retry-shimmer": "Sixlwa_retry-shimmer",
 			"retryDetailLabel": "Sixlwa_retryDetailLabel",
 			"retryDetails": "Sixlwa_retryDetails",
 			"retryRow": "Sixlwa_retryRow",
@@ -1269,11 +1268,14 @@ window.__ModuleLoader__.load({
 					children: (0, react_jsx_runtime.jsx)("span", {
 						className: MessageItem_module_css_default.retryText,
 						role: "status",
-						children: t("message.retry.status", {
-							label,
-							retry: node.retry,
-							maximum,
-							seconds
+						children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.TextShimmer, {
+							active,
+							children: t("message.retry.status", {
+								label,
+								retry: node.retry,
+								maximum,
+								seconds
+							})
 						})
 					})
 				}), (0, react_jsx_runtime.jsxs)("div", {
@@ -1627,7 +1629,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/ChatView.module.css.mjs
-		const css$13 = ".EvIC1a_frame{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;container-type:inline-size}.EvIC1a_root{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;overflow:visible clip}.EvIC1a_scroll{min-height:0;padding:16px calc(var(--dsh-composer-side-clearance) + 16px);flex:auto;overflow-y:auto;container-type:inline-size}.EvIC1a_root[data-chat-following-tail] .EvIC1a_scroll,[data-conversation-scroll]:has(.EvIC1a_root[data-chat-following-tail]){overflow-anchor:none}[data-conversation-scroll] .EvIC1a_frame,[data-conversation-scroll] .EvIC1a_root{flex:none;height:auto;min-height:auto}[data-conversation-scroll] .EvIC1a_scroll{flex:none;min-height:auto;overflow:visible}.EvIC1a_column{max-width:var(--dsh-chat-content-width);flex-direction:column;width:100%;margin:0 auto;display:flex}.EvIC1a_column>:not([hidden]):not(.EvIC1a_flowItem:empty)~:not([hidden]):not(.EvIC1a_flowItem:empty){margin-top:var(--dsh-chat-flow-gap,16px)}.EvIC1a_flowItem{min-width:0}.EvIC1a_flowItem[data-turn-process-answer]{--dsh-chat-flow-gap:8px}.EvIC1a_flowItem:empty{height:0}.EvIC1a_callRow{border-radius:var(--dsw-radius-sm)}.EvIC1a_hint{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_openError{color:var(--dsw-alias-state-error-primary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_older{justify-content:center;display:flex}.EvIC1a_older button{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover-solid);cursor:pointer;border:none;padding:4px 12px;font-size:12px}.EvIC1a_older button:disabled{cursor:default;opacity:.6}.EvIC1a_toBottomSlot{z-index:8;height:0;padding-right:max(calc(var(--dsh-composer-side-clearance) + 16px), calc((100% - var(--dsh-chat-content-width)) / 2));pointer-events:none;justify-content:flex-end;display:flex;position:absolute;bottom:16px;left:0;right:0}[data-conversation-scroll] .EvIC1a_toBottomSlot{bottom:calc(var(--dsh-composer-height,152px) + 16px);position:sticky}.EvIC1a_toBottom{--dsw-elevation-stroke-color:var(--dsw-alias-border-l3);corner-shape:round;width:34px;height:34px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-button-floating-fill);box-shadow:var(--dsw-elevation-panel);cursor:pointer;pointer-events:auto;border:0;border-radius:100px;justify-content:center;align-items:center;margin-top:-34px;padding:0;display:flex}.EvIC1a_toBottom:hover{background:var(--dsw-alias-button-floating-hover)}.EvIC1a_modalAction{min-width:72px}";
+		const css$13 = ".EvIC1a_frame{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;container-type:inline-size}.EvIC1a_root{flex-direction:column;flex:auto;min-height:0;display:flex;position:relative;overflow:visible clip}.EvIC1a_scroll{min-height:0;padding:16px calc(var(--dsh-composer-side-clearance) + 16px);flex:auto;overflow-y:auto;container-type:inline-size}.EvIC1a_root[data-chat-following-tail] .EvIC1a_scroll,[data-conversation-scroll]:has(.EvIC1a_root[data-chat-following-tail]){overflow-anchor:none}[data-conversation-scroll] .EvIC1a_frame,[data-conversation-scroll] .EvIC1a_root{flex:none;height:auto;min-height:auto}[data-conversation-scroll] .EvIC1a_scroll{flex:none;min-height:auto;overflow:visible}.EvIC1a_column{max-width:var(--dsh-chat-content-width);flex-direction:column;width:100%;margin:0 auto;display:flex}.EvIC1a_column>:not([hidden]):not(.EvIC1a_flowItem:is(:empty,:has(>[data-slot=\"conversation.chat.node\"]:empty)))~:not([hidden]):not(.EvIC1a_flowItem:is(:empty,:has(>[data-slot=\"conversation.chat.node\"]:empty))){margin-top:var(--dsh-chat-flow-gap,6px)}.EvIC1a_flowItem[data-chat-group-part=response],.EvIC1a_column>[data-chat-group-part=response]:not([hidden]):not(:empty)+:not([hidden]):not(.EvIC1a_flowItem:is(:empty,:has(>[data-slot=\"conversation.chat.node\"]:empty))):not(.EvIC1a_running){--dsh-chat-flow-gap:12px}.EvIC1a_flowItem{min-width:0}.EvIC1a_flowItem[data-chat-flow-kind=turn-process],.EvIC1a_flowItem[data-turn-process-answer],.EvIC1a_column>[data-chat-flow-kind=turn-process]+:not([hidden]):not(.EvIC1a_flowItem:is(:empty,:has(>[data-slot=\"conversation.chat.node\"]:empty))):not(.EvIC1a_running){--dsh-chat-flow-gap:16px}.EvIC1a_flowItem:is(:empty,:has(>[data-slot=\"conversation.chat.node\"]:empty)){height:0}.EvIC1a_callRow{border-radius:var(--dsw-radius-sm)}.EvIC1a_hint{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_running{--dsh-chat-flow-gap:12px;--dsw-alias-label-shimmer:var(--dsw-alias-label-deep-diving-shimmer);color:var(--dsw-alias-label-deep-diving);font-size:calc(var(--dsh-content-font-size,14px) - 2px);line-height:calc(22px + var(--dsh-content-font-delta,0px));flex-direction:column;align-items:flex-start;display:flex}.EvIC1a_column>:nth-last-child(2 of :not([hidden]):not(.EvIC1a_flowItem:is(:empty,:has(>[data-slot=\"conversation.chat.node\"]:empty)))):is(.EvIC1a_flowItem:not([data-chat-flow-kind=user]):not([data-chat-flow-kind=steering]):not([data-chat-flow-kind=turn-trigger]),[data-chat-group-key])~.EvIC1a_running>.EvIC1a_runningDivider{display:block}.EvIC1a_runningDivider{background:color-mix(in srgb, var(--dsw-alias-border-l1) 75%, var(--dsw-alias-border-l2));pointer-events:none;width:100%;height:.5px;margin:8px 0 10px;display:none}.EvIC1a_runningContent{align-items:center;gap:6px;min-width:0;display:inline-flex}.EvIC1a_runningText{font-variant-numeric:tabular-nums;min-width:0}.EvIC1a_runningIcon{width:calc(14px + var(--dsh-content-font-delta,0px));height:calc(14px + var(--dsh-content-font-delta,0px));flex:none;display:inline-flex}.EvIC1a_runningWhaleStill{display:none}@media (prefers-reduced-motion:reduce){.EvIC1a_runningWhaleAnimated{display:none}.EvIC1a_runningWhaleStill{display:initial}}.EvIC1a_openError{color:var(--dsw-alias-state-error-primary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}.EvIC1a_older{justify-content:center;display:flex}.EvIC1a_older button{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover-solid);cursor:pointer;border:none;padding:4px 12px;font-size:12px}.EvIC1a_older button:disabled{cursor:default;opacity:.6}.EvIC1a_toBottomSlot{z-index:8;height:0;padding-right:max(calc(var(--dsh-composer-side-clearance) + 16px), calc((100% - var(--dsh-chat-content-width)) / 2));pointer-events:none;justify-content:flex-end;display:flex;position:absolute;bottom:16px;left:0;right:0}[data-conversation-scroll] .EvIC1a_toBottomSlot{bottom:calc(var(--dsh-composer-height,152px) + 16px);position:sticky}.EvIC1a_toBottom{--dsw-elevation-stroke-color:var(--dsw-alias-border-l3);corner-shape:round;width:34px;height:34px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-button-floating-fill);box-shadow:var(--dsw-elevation-panel);cursor:pointer;pointer-events:auto;border:0;border-radius:100px;justify-content:center;align-items:center;margin-top:-34px;padding:0;display:flex}.EvIC1a_toBottom:hover{background:var(--dsw-alias-button-floating-hover)}.EvIC1a_modalAction{min-width:72px}";
 		const tagId$13 = "@deepseek-ai/dsh-client-ui-chat/ChatView.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$13) + "]") === null) {
 			const tag = document.createElement("style");
@@ -1646,6 +1648,13 @@ window.__ModuleLoader__.load({
 			"older": "EvIC1a_older",
 			"openError": "EvIC1a_openError",
 			"root": "EvIC1a_root",
+			"running": "EvIC1a_running",
+			"runningContent": "EvIC1a_runningContent",
+			"runningDivider": "EvIC1a_runningDivider",
+			"runningIcon": "EvIC1a_runningIcon",
+			"runningText": "EvIC1a_runningText",
+			"runningWhaleAnimated": "EvIC1a_runningWhaleAnimated",
+			"runningWhaleStill": "EvIC1a_runningWhaleStill",
 			"scroll": "EvIC1a_scroll",
 			"toBottom": "EvIC1a_toBottom",
 			"toBottomSlot": "EvIC1a_toBottomSlot"
@@ -2157,7 +2166,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/ChatGroupSeat.module.css.mjs
-		const css$12 = ".O_Ebla_root{min-width:0}.O_Ebla_title{max-width:100%;color:var(--dsw-alias-label-secondary);font:inherit;font-size:var(--dsh-content-font-size,14px);text-align:left;cursor:pointer;background:0 0;border:0;align-items:center;gap:6px;padding:0;transition:color .1s;display:flex}.O_Ebla_title:hover{color:var(--dsw-alias-label-primary)}.O_Ebla_leading{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex;position:relative}.O_Ebla_activityIcon,.O_Ebla_chevron{justify-content:center;align-items:center;transition:opacity .1s;display:inline-flex;position:absolute;inset:0}.O_Ebla_activityIcon{opacity:1}.O_Ebla_chevron,.O_Ebla_title:is(:hover,:focus-visible) .O_Ebla_activityIcon{opacity:0}.O_Ebla_title:is(:hover,:focus-visible) .O_Ebla_chevron{opacity:1}.O_Ebla_title[aria-expanded=true] .O_Ebla_activityIcon{opacity:0}.O_Ebla_title[aria-expanded=true] .O_Ebla_chevron{opacity:1}.O_Ebla_title[aria-expanded=true]{padding-bottom:16px}.O_Ebla_body{--dsh-chat-flow-gap:8px;overscroll-behavior-y:auto;scrollbar-gutter:stable;max-height:min(400px,50vh);overflow-y:auto}.O_Ebla_label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.O_Ebla_fadeTop{mask-image:linear-gradient(#0000 0,#000 24px 100%)}.O_Ebla_fadeBottom{mask-image:linear-gradient(#000 0 calc(100% - 24px),#0000 100%)}.O_Ebla_fadeTop.O_Ebla_fadeBottom{mask-image:linear-gradient(#0000 0,#000 24px calc(100% - 24px),#0000 100%)}@media (prefers-reduced-motion:reduce){.O_Ebla_title,.O_Ebla_activityIcon,.O_Ebla_chevron{transition:none}}.O_Ebla_content{flex-direction:column;display:flex}.O_Ebla_content>*{flex-shrink:0}.O_Ebla_content>:not([hidden]):not(:empty)~:not([hidden]):not(:empty){margin-top:var(--dsh-chat-flow-gap,8px)}.O_Ebla_expandedBody{--dsh-chat-flow-gap:16px;scrollbar-gutter:auto;max-height:none;overflow:visible}";
+		const css$12 = ".O_Ebla_root{min-width:0}.O_Ebla_title{max-width:100%;color:var(--dsw-alias-label-secondary);font:inherit;font-size:var(--dsh-content-font-size,14px);text-align:left;cursor:pointer;background:0 0;border:0;align-items:center;gap:6px;padding:0;transition:color .1s;display:flex}.O_Ebla_title:hover{color:var(--dsw-alias-label-primary)}.O_Ebla_leading{width:16px;height:16px;color:var(--dsw-alias-label-tertiary);flex:none;justify-content:center;align-items:center;display:inline-flex;position:relative}.O_Ebla_activityIcon,.O_Ebla_chevron{justify-content:center;align-items:center;transition:opacity .1s;display:inline-flex;position:absolute;inset:0}.O_Ebla_activityIcon{opacity:1}.O_Ebla_chevron,.O_Ebla_title:is(:hover,:focus-visible) .O_Ebla_activityIcon{opacity:0}.O_Ebla_title:is(:hover,:focus-visible) .O_Ebla_chevron{opacity:1}.O_Ebla_title[aria-expanded=true] .O_Ebla_activityIcon{opacity:0}.O_Ebla_title[aria-expanded=true] .O_Ebla_chevron{opacity:1}.O_Ebla_title[aria-expanded=true]{padding-bottom:8px}.O_Ebla_body{--dsh-chat-flow-gap:6px;overscroll-behavior-y:auto;scrollbar-gutter:stable;max-height:min(400px,50vh);overflow-y:auto}.O_Ebla_label{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}.O_Ebla_fadeTop{mask-image:linear-gradient(#0000 0,#000 24px 100%)}.O_Ebla_fadeBottom{mask-image:linear-gradient(#000 0 calc(100% - 24px),#0000 100%)}.O_Ebla_fadeTop.O_Ebla_fadeBottom{mask-image:linear-gradient(#0000 0,#000 24px calc(100% - 24px),#0000 100%)}@media (prefers-reduced-motion:reduce){.O_Ebla_title,.O_Ebla_activityIcon,.O_Ebla_chevron{transition:none}}.O_Ebla_content{flex-direction:column;display:flex}.O_Ebla_content>*{flex-shrink:0}.O_Ebla_content>:not([hidden]):not(:empty)~:not([hidden]):not(:empty){margin-top:var(--dsh-chat-flow-gap,6px)}.O_Ebla_expandedBody{scrollbar-gutter:auto;max-height:none;overflow:visible}";
 		const tagId$12 = "@deepseek-ai/dsh-client-ui-chat/ChatGroupSeat.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$12) + "]") === null) {
 			const tag = document.createElement("style");
@@ -2278,8 +2287,10 @@ window.__ModuleLoader__.load({
 					})]
 				}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.TextShimmer, {
 					active: !data.closed,
-					className: ChatGroupSeat_module_css_default.label,
-					children: title
+					children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.TextShimmer, {
+						className: ChatGroupSeat_module_css_default.label,
+						children: title
+					})
 				})]
 			});
 		});
@@ -2414,7 +2425,7 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 		//#region ../../../node_modules/.pnpm/@tanstack+virtual-core@3.17.7/node_modules/@tanstack/virtual-core/dist/esm/utils.js
-		function memo$11(getDeps, fn, opts) {
+		function memo$12(getDeps, fn, opts) {
 			let deps = opts.initialDeps ?? [];
 			let result;
 			let isInitial = true;
@@ -2724,7 +2735,7 @@ window.__ModuleLoader__.load({
 					var _a, _b;
 					(_b = (_a = this.options).onChange) == null || _b.call(_a, this, sync);
 				};
-				this.maybeNotify = memo$11(() => {
+				this.maybeNotify = memo$12(() => {
 					this.calculateRange();
 					return [
 						this.isScrolling,
@@ -2879,7 +2890,7 @@ window.__ModuleLoader__.load({
 					this.scrollOffset = this.scrollOffset ?? (typeof this.options.initialOffset === "function" ? this.options.initialOffset() : this.options.initialOffset);
 					return this.scrollOffset;
 				};
-				this.getMeasurementOptions = memo$11(() => [
+				this.getMeasurementOptions = memo$12(() => [
 					this.options.count,
 					this.options.paddingStart,
 					this.options.scrollMargin,
@@ -2903,7 +2914,7 @@ window.__ModuleLoader__.load({
 						gap
 					};
 				}, { key: false });
-				this.getMeasurements = memo$11(() => [this.getMeasurementOptions(), this.itemSizeCacheVersion], ({ count, paddingStart, scrollMargin, getItemKey, enabled, lanes, laneAssignmentMode, gap }, _itemSizeCacheVersion) => {
+				this.getMeasurements = memo$12(() => [this.getMeasurementOptions(), this.itemSizeCacheVersion], ({ count, paddingStart, scrollMargin, getItemKey, enabled, lanes, laneAssignmentMode, gap }, _itemSizeCacheVersion) => {
 					const itemSizeCache = this.itemSizeCache;
 					if (!enabled) {
 						this.measurementsCache = [];
@@ -3022,7 +3033,7 @@ window.__ModuleLoader__.load({
 					key: false,
 					debug: () => this.options.debug
 				});
-				this.calculateRange = memo$11(() => [
+				this.calculateRange = memo$12(() => [
 					this.getMeasurements(),
 					this.getSize(),
 					this.getScrollOffset(),
@@ -3038,7 +3049,7 @@ window.__ModuleLoader__.load({
 					key: false,
 					debug: () => this.options.debug
 				});
-				this.getVirtualIndexes = memo$11(() => {
+				this.getVirtualIndexes = memo$12(() => {
 					let startIndex = null;
 					let endIndex = null;
 					const range = this.calculateRange();
@@ -3152,7 +3163,7 @@ window.__ModuleLoader__.load({
 						this.notify(adjustedSync);
 					}
 				};
-				this.getVirtualItems = memo$11(() => [this.getVirtualIndexes(), this.getMeasurements()], (indexes, measurements) => {
+				this.getVirtualItems = memo$12(() => [this.getVirtualIndexes(), this.getMeasurements()], (indexes, measurements) => {
 					const virtualItems = [];
 					for (let k = 0, len = indexes.length; k < len; k++) {
 						const measurement = measurements[indexes[k]];
@@ -3854,6 +3865,131 @@ window.__ModuleLoader__.load({
 		* a stationary pointer.
 		*/
 		const TurnNavigator = (0, react.memo)((0, react.forwardRef)(TurnNavigatorRail));
+		//#endregion
+		//#region lib/types/client/chat/RunningWhaleTail.js
+		/** Native SVG contour animation for the whale Chat shows while the Session runs. */
+		const REST_PATH = "M8.844 13.742C8.967 12.328 8.45 10.4 8.45 9.65C8.45 8.94 8.88 8.43 9.6 8.43C11.285 8.43 12.106 8.281 12.685 8.104C13.71 7.791 14.585 6.768 15.055 5.945C15.137 5.803 14.99 5.641 14.829 5.671C13.829 5.86 12.828 5.376 11.827 4.978C10.659 4.514 9.491 4.707 8.935 4.876C8.805 4.915 8.658 4.819 8.636 4.686C8.468 3.643 7.405 2.615 5.498 2.238C4.54 2.048 3.748 1.574 3.347 1.202C3.252 1.113 3.088 1.125 3.03 1.242C2.628 2.059 2.168 3.82 5.248 6.115C5.82 6.494 6.31 6.785 6.574 7.637C6.72 8.104 6.157 9.168 6.061 9.368C5.157 11.27 5.089 12.19 4.926 13.742";
+		/** Same cubic segments in every pose keep both tail-base endpoints stationary. */
+		const MOTION_PATHS = [
+			REST_PATH,
+			REST_PATH,
+			"M8.844 13.742C8.967 12.328 8.453 10.404 8.455 9.655C8.457 8.946 8.89 8.438 9.61 8.441C11.295 8.448 12.116 8.302 12.696 8.127C13.722 7.818 14.601 6.796 15.074 5.97C15.156 5.827 15.01 5.663 14.849 5.693C13.848 5.881 12.848 5.391 11.849 4.989C10.681 4.521 9.513 4.712 8.956 4.88C8.827 4.919 8.679 4.823 8.658 4.689C8.492 3.645 7.429 2.615 5.523 2.237C4.565 2.047 3.773 1.572 3.373 1.201C3.277 1.112 3.113 1.124 3.056 1.241C2.653 2.057 2.193 3.808 5.267 6.11C5.837 6.49 6.326 6.782 6.587 7.636C6.73 8.103 6.164 9.165 6.068 9.365C5.157 11.265 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.476 10.437 8.498 9.697C8.519 8.997 8.969 8.506 9.689 8.533C11.373 8.596 12.198 8.481 12.784 8.327C13.82 8.055 14.734 7.049 15.232 6.219C15.318 6.075 15.177 5.903 15.015 5.93C14.009 6.092 13.025 5.562 12.037 5.128C10.883 4.62 9.709 4.785 9.148 4.939C9.018 4.975 8.873 4.874 8.856 4.739C8.717 3.685 7.676 2.629 5.778 2.213C4.824 2.004 4.041 1.515 3.649 1.136C3.555 1.045 3.391 1.054 3.331 1.17C2.912 1.978 2.423 3.678 5.425 6.063C5.984 6.458 6.463 6.766 6.695 7.627C6.823 8.099 6.221 9.144 6.12 9.342C5.154 11.226 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.473 10.432 8.492 9.69C8.51 8.989 8.957 8.495 9.676 8.519C11.361 8.573 12.186 8.453 12.771 8.298C13.805 8.023 14.714 7.034 15.213 6.234C15.299 6.095 15.158 5.929 14.996 5.954C13.99 6.106 13.007 5.59 12.021 5.158C10.87 4.655 9.696 4.804 9.134 4.952C9.003 4.987 8.859 4.886 8.842 4.752C8.712 3.706 7.688 2.639 5.797 2.19C4.847 1.964 4.073 1.459 3.688 1.072C3.595 0.98 3.431 0.986 3.369 1.101C2.936 1.901 2.407 3.656 5.406 6.06C5.964 6.459 6.443 6.767 6.679 7.628C6.808 8.099 6.212 9.147 6.111 9.346C5.155 11.233 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.457 10.41 8.463 9.662C8.469 8.955 8.904 8.45 9.624 8.458C11.309 8.475 12.131 8.335 12.713 8.167C13.741 7.87 14.627 6.885 15.113 6.112C15.198 5.978 15.055 5.821 14.893 5.846C13.889 6.004 12.898 5.52 11.908 5.109C10.752 4.629 9.579 4.78 9.019 4.932C8.889 4.967 8.744 4.868 8.726 4.736C8.587 3.701 7.565 2.64 5.676 2.183C4.726 1.954 3.954 1.444 3.57 1.055C3.479 0.962 3.314 0.967 3.252 1.082C2.815 1.881 2.27 3.708 5.305 6.084C5.87 6.477 6.353 6.777 6.607 7.633C6.747 8.102 6.174 9.161 6.077 9.361C5.156 11.258 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.425 10.366 8.403 9.607C8.383 8.888 8.794 8.361 9.513 8.335C11.197 8.276 12.012 8.096 12.585 7.897C13.598 7.547 14.436 6.515 14.883 5.708C14.961 5.569 14.81 5.417 14.65 5.45C13.655 5.661 12.641 5.221 11.631 4.858C10.452 4.434 9.289 4.648 8.737 4.828C8.608 4.871 8.459 4.779 8.434 4.647C8.242 3.618 7.163 2.612 5.252 2.261C4.29 2.084 3.492 1.618 3.087 1.252C2.99 1.164 2.826 1.178 2.77 1.296C2.378 2.118 1.937 3.949 5.086 6.167C5.669 6.531 6.167 6.806 6.461 7.649C6.623 8.111 6.097 9.191 6.008 9.393C5.161 11.31 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.426 10.368 8.407 9.61C8.388 8.892 8.8 8.365 9.52 8.342C11.204 8.286 12.019 8.107 12.592 7.907C13.605 7.553 14.443 6.483 14.878 5.614C14.954 5.464 14.8 5.302 14.641 5.34C13.649 5.577 12.629 5.12 11.611 4.759C10.422 4.338 9.264 4.59 8.716 4.786C8.589 4.832 8.437 4.742 8.409 4.608C8.193 3.567 7.074 2.592 5.15 2.321C4.183 2.185 3.365 1.758 2.945 1.409C2.845 1.326 2.682 1.347 2.631 1.467C2.275 2.305 1.917 4.029 5.086 6.183C5.673 6.536 6.174 6.807 6.469 7.649C6.63 8.11 6.101 9.189 6.012 9.391C5.16 11.307 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.439 10.385 8.43 9.631C8.421 8.917 8.843 8.399 9.563 8.388C11.248 8.362 12.066 8.198 12.642 8.008C13.661 7.672 14.517 6.601 14.963 5.717C15.04 5.564 14.889 5.396 14.729 5.433C13.735 5.663 12.719 5.181 11.705 4.804C10.52 4.364 9.36 4.611 8.81 4.803C8.682 4.847 8.531 4.755 8.505 4.621C8.297 3.572 7.181 2.589 5.257 2.315C4.29 2.178 3.473 1.751 3.053 1.402C2.953 1.319 2.79 1.34 2.739 1.46C2.382 2.297 2.024 3.975 5.165 6.16C5.747 6.519 6.244 6.796 6.524 7.643C6.678 8.106 6.131 9.178 6.038 9.379C5.159 11.288 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.462 10.417 8.472 9.671C8.481 8.965 8.921 8.464 9.64 8.476C11.325 8.505 12.149 8.371 12.731 8.204C13.761 7.908 14.653 6.889 15.135 6.057C15.218 5.913 15.074 5.746 14.913 5.775C13.91 5.954 12.916 5.448 11.919 5.034C10.757 4.551 9.586 4.735 9.028 4.899C8.898 4.937 8.752 4.839 8.732 4.705C8.575 3.656 7.517 2.618 5.613 2.231C4.655 2.037 3.865 1.56 3.467 1.186C3.372 1.097 3.208 1.108 3.149 1.225C2.743 2.039 2.278 3.763 5.327 6.093C5.893 6.478 6.379 6.776 6.629 7.632C6.766 8.101 6.186 9.157 6.088 9.356C5.156 11.25 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.463 10.418 8.474 9.673C8.485 8.968 8.925 8.468 9.645 8.482C11.33 8.513 12.153 8.381 12.736 8.218C13.766 7.929 14.661 6.94 15.152 6.153C15.237 6.017 15.095 5.856 14.933 5.881C13.928 6.038 12.94 5.541 11.951 5.122C10.796 4.633 9.623 4.786 9.062 4.937C8.932 4.972 8.787 4.873 8.77 4.739C8.633 3.699 7.608 2.638 5.717 2.189C4.766 1.963 3.993 1.457 3.607 1.07C3.515 0.977 3.351 0.983 3.288 1.098C2.855 1.899 2.321 3.692 5.344 6.075C5.906 6.47 6.388 6.773 6.635 7.631C6.771 8.101 6.189 9.155 6.09 9.355C5.156 11.248 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.436 10.381 8.425 9.626C8.414 8.911 8.833 8.391 9.553 8.377C11.238 8.344 12.055 8.178 12.631 7.987C13.649 7.65 14.502 6.601 14.953 5.753C15.031 5.607 14.88 5.446 14.72 5.48C13.725 5.696 12.712 5.229 11.702 4.853C10.522 4.414 9.359 4.64 8.807 4.824C8.679 4.867 8.529 4.774 8.504 4.641C8.308 3.599 7.214 2.601 5.297 2.282C4.333 2.122 3.527 1.674 3.115 1.315C3.017 1.229 2.854 1.246 2.799 1.365C2.423 2.193 2.02 3.939 5.152 6.154C5.733 6.518 6.229 6.797 6.512 7.644C6.666 8.107 6.124 9.18 6.032 9.382C5.159 11.292 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.449 10.399 8.448 9.648C8.447 8.938 8.876 8.427 9.596 8.426C11.282 8.423 12.102 8.272 12.681 8.092C13.705 7.774 14.577 6.731 15.041 5.876C15.121 5.728 14.973 5.562 14.812 5.595C13.813 5.8 12.808 5.309 11.802 4.916C10.628 4.456 9.462 4.671 8.909 4.849C8.78 4.89 8.631 4.795 8.608 4.661C8.425 3.613 7.339 2.602 5.424 2.27C4.461 2.103 3.658 1.649 3.249 1.287C3.152 1.201 2.988 1.217 2.933 1.335C2.55 2.161 2.137 3.872 5.235 6.128C5.81 6.5 6.302 6.787 6.569 7.638C6.716 8.104 6.154 9.168 6.059 9.369C5.157 11.272 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.472 10.431 8.491 9.69C8.509 8.988 8.956 8.494 9.676 8.517C11.36 8.571 12.185 8.451 12.77 8.294C13.804 8.016 14.712 7.011 15.207 6.188C15.293 6.046 15.151 5.876 14.989 5.903C13.984 6.066 12.998 5.545 12.008 5.115C10.853 4.614 9.68 4.779 9.119 4.934C8.989 4.97 8.844 4.869 8.826 4.735C8.686 3.684 7.646 2.629 5.748 2.211C4.793 2.001 4.012 1.511 3.62 1.13C3.526 1.039 3.362 1.048 3.302 1.164C2.882 1.971 2.388 3.691 5.399 6.068C5.96 6.463 6.44 6.768 6.677 7.628C6.807 8.099 6.211 9.147 6.111 9.346C5.155 11.233 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.47 10.428 8.487 9.686C8.503 8.983 8.949 8.488 9.668 8.509C11.353 8.558 12.178 8.435 12.762 8.279C13.795 8.002 14.701 7.021 15.2 6.237C15.286 6.102 15.145 5.939 14.983 5.963C13.977 6.11 12.994 5.602 12.009 5.173C10.859 4.672 9.685 4.813 9.122 4.959C8.992 4.993 8.848 4.892 8.832 4.758C8.705 3.717 7.69 2.645 5.804 2.178C4.855 1.943 4.087 1.43 3.705 1.039C3.613 0.946 3.449 0.95 3.386 1.064C2.945 1.861 2.395 3.646 5.393 6.06C5.951 6.46 6.43 6.768 6.668 7.628C6.799 8.1 6.206 9.149 6.106 9.348C5.155 11.237 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.457 10.409 8.462 9.662C8.468 8.954 8.903 8.449 9.623 8.456C11.308 8.472 12.13 8.332 12.711 8.164C13.739 7.866 14.625 6.882 15.111 6.111C15.195 5.978 15.052 5.821 14.891 5.846C13.886 6.003 12.896 5.521 11.906 5.11C10.75 4.63 9.577 4.781 9.017 4.932C8.886 4.967 8.742 4.869 8.724 4.736C8.585 3.702 7.564 2.64 5.675 2.182C4.725 1.952 3.954 1.441 3.571 1.052C3.479 0.959 3.315 0.964 3.252 1.078C2.815 1.877 2.267 3.708 5.303 6.084C5.867 6.477 6.351 6.777 6.606 7.633C6.745 8.102 6.173 9.161 6.076 9.361C5.156 11.259 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.432 10.376 8.418 9.62C8.404 8.904 8.82 8.382 9.54 8.364C11.225 8.323 12.041 8.152 12.616 7.961C13.633 7.623 14.483 6.603 14.94 5.806C15.019 5.669 14.87 5.516 14.71 5.547C13.712 5.744 12.704 5.295 11.699 4.92C10.525 4.482 9.359 4.68 8.805 4.853C8.676 4.894 8.527 4.801 8.504 4.668C8.325 3.638 7.262 2.618 5.355 2.239C4.397 2.048 3.605 1.57 3.206 1.198C3.11 1.109 2.946 1.12 2.888 1.238C2.485 2.054 2.016 3.888 5.137 6.146C5.716 6.517 6.211 6.799 6.496 7.645C6.652 8.109 6.115 9.184 6.024 9.385C5.159 11.298 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.429 10.371 8.411 9.614C8.394 8.897 8.808 8.372 9.528 8.351C11.212 8.301 12.028 8.125 12.602 7.927C13.616 7.578 14.458 6.518 14.899 5.663C14.975 5.515 14.823 5.354 14.664 5.391C13.67 5.619 12.653 5.161 11.638 4.796C10.453 4.37 9.293 4.61 8.743 4.801C8.616 4.846 8.465 4.755 8.438 4.622C8.23 3.582 7.123 2.596 5.202 2.303C4.236 2.156 3.424 1.718 3.007 1.364C2.908 1.28 2.745 1.299 2.692 1.419C2.326 2.252 1.947 3.995 5.104 6.173C5.689 6.531 6.188 6.804 6.479 7.648C6.639 8.11 6.107 9.187 6.017 9.389C5.16 11.304 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.438 10.384 8.428 9.629C8.419 8.915 8.839 8.397 9.559 8.384C11.244 8.356 12.062 8.191 12.638 8.001C13.657 7.664 14.512 6.597 14.959 5.721C15.036 5.57 14.884 5.403 14.725 5.44C13.73 5.667 12.715 5.189 11.701 4.813C10.518 4.373 9.357 4.616 8.807 4.806C8.679 4.851 8.528 4.759 8.502 4.625C8.296 3.577 7.184 2.591 5.262 2.309C4.295 2.167 3.481 1.736 3.062 1.385C2.962 1.301 2.799 1.321 2.748 1.441C2.387 2.276 2.02 3.969 5.16 6.159C5.742 6.519 6.239 6.797 6.52 7.643C6.674 8.107 6.128 9.179 6.036 9.38C5.159 11.289 5.089 12.19 4.926 13.742",
+			"M8.844 13.742C8.967 12.328 8.45 10.4 8.45 9.65C8.451 8.941 8.881 8.431 9.601 8.431C11.286 8.432 12.107 8.283 12.686 8.107C13.711 7.796 14.587 6.785 15.061 5.98C15.143 5.841 14.997 5.681 14.836 5.71C13.835 5.89 12.836 5.41 11.838 5.011C10.673 4.544 9.503 4.725 8.946 4.89C8.816 4.928 8.67 4.832 8.649 4.698C8.488 3.659 7.437 2.622 5.536 2.221C4.579 2.02 3.793 1.534 3.398 1.157C3.303 1.067 3.139 1.077 3.08 1.193C2.667 2.005 2.182 3.794 5.253 6.109C5.824 6.491 6.312 6.784 6.576 7.636C6.72 8.104 6.157 9.167 6.062 9.368C5.157 11.27 5.089 12.19 4.926 13.742",
+			REST_PATH,
+			REST_PATH
+		].join(";");
+		const MOTION_TIMES = "0;0.028571;0.057143;0.095238;0.114286;0.133333;0.171429;0.2;0.219048;0.257143;0.285714;0.380952;0.409524;0.447619;0.47619;0.495238;0.52381;0.552381;0.571429;0.638095;0.8;1";
+		/**
+		* Loop the tail every three seconds after a 0.3s delay.
+		* @returns animated and resting contours switched by the reduced-motion stylesheet.
+		*/
+		function RunningWhaleTail() {
+			return (0, react_jsx_runtime.jsx)("span", {
+				className: ChatView_module_css_default.runningIcon,
+				"aria-hidden": "true",
+				children: (0, react_jsx_runtime.jsxs)("svg", {
+					width: "100%",
+					height: "100%",
+					viewBox: "0 0 16 16",
+					fill: "none",
+					children: [(0, react_jsx_runtime.jsx)("path", {
+						className: ChatView_module_css_default.runningWhaleAnimated,
+						d: REST_PATH,
+						stroke: "currentColor",
+						strokeWidth: 1,
+						children: (0, react_jsx_runtime.jsx)("animate", {
+							attributeName: "d",
+							values: MOTION_PATHS,
+							keyTimes: MOTION_TIMES,
+							calcMode: "linear",
+							begin: "0.3s",
+							dur: "3s",
+							repeatCount: "indefinite"
+						})
+					}), (0, react_jsx_runtime.jsx)("path", {
+						className: ChatView_module_css_default.runningWhaleStill,
+						d: REST_PATH,
+						stroke: "currentColor",
+						strokeWidth: 1
+					})]
+				})
+			});
+		}
+		//#endregion
+		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/accessibility.module.css.mjs
+		const css$10 = ".TTCZqG_visuallyHidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}";
+		const tagId$10 = "@deepseek-ai/dsh-client-ui-chat/accessibility.module.css";
+		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$10) + "]") === null) {
+			const tag = document.createElement("style");
+			tag.dataset.plugin = "@deepseek-ai/dsh-client-ui-chat";
+			tag.dataset.pluginCss = tagId$10;
+			tag.textContent = css$10;
+			document.head.appendChild(tag);
+		}
+		var accessibility_module_css_default = { "visuallyHidden": "TTCZqG_visuallyHidden" };
+		//#endregion
+		//#region lib/types/client/chat/RunningStatus.js
+		/** Running Turn clock isolated from the transcript's render cycle. */
+		/**
+		* Show live elapsed time after the current Turn's content without announcing ticks.
+		* @param props - Current Turn start time and localized copy.
+		* @returns the blue running indicator; mount only while the Session is running.
+		*/
+		const RunningStatus = (0, react.memo)(function RunningStatus({ startTime, t }) {
+			const [now, setNow] = (0, react.useState)(Date.now);
+			(0, react.useEffect)(() => {
+				if (startTime === void 0) return;
+				setNow(Date.now());
+				const timer = setInterval(() => {
+					setNow(Date.now());
+				}, LIVE_RUN_CLOCK_INTERVAL_MS);
+				return () => {
+					clearInterval(timer);
+				};
+			}, [startTime]);
+			const label = startTime === void 0 ? t("chat.deepDiving") : t("chat.deepDivingFor", { duration: formatLiveRunDuration(Math.max(1e3, now - startTime), t) });
+			return (0, react_jsx_runtime.jsxs)("div", {
+				className: ChatView_module_css_default.running,
+				"data-chat-running": true,
+				children: [
+					(0, react_jsx_runtime.jsx)("span", {
+						className: accessibility_module_css_default.visuallyHidden,
+						role: "status",
+						"aria-live": "polite",
+						"aria-atomic": "true",
+						children: t("chat.deepDiving")
+					}),
+					(0, react_jsx_runtime.jsx)("span", {
+						className: ChatView_module_css_default.runningDivider,
+						"aria-hidden": "true"
+					}),
+					(0, react_jsx_runtime.jsxs)("span", {
+						className: ChatView_module_css_default.runningContent,
+						children: [(0, react_jsx_runtime.jsx)(RunningWhaleTail, {}), (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.TextShimmer, {
+							active: true,
+							className: ChatView_module_css_default.runningText,
+							children: label
+						})]
+					})
+				]
+			});
+		});
 		//#endregion
 		//#region ../../util/brand/lib/index.js
 		/**
@@ -5049,6 +5185,11 @@ window.__ModuleLoader__.load({
 			})), [groupedEntries, order]);
 			const nodeStore = useChat((s) => s.nodes);
 			const turnNavigationItems = useChat((s) => s.navigation.items());
+			const latestTurnAnchor = turnNavigationItems.at(-1)?.anchorKey;
+			const runningStartTime = useChatNode(latestTurnAnchor ?? "", (node) => {
+				const location = node?.location;
+				return location?.kind === "turn" || location?.kind === "step" ? location.turn.status === "open" ? location.turn.start?.time : void 0 : void 0;
+			});
 			const turnOutline = useProjection("turnOutline");
 			const railItems = (0, react.useMemo)(() => mergeTurnRailItems(turnNavigationItems, turnOutline), [turnNavigationItems, turnOutline]);
 			const inbox = useProjection("inbox");
@@ -5211,6 +5352,10 @@ window.__ModuleLoader__.load({
 											renderSlot,
 											t
 										})
+									}),
+									running && (0, react_jsx_runtime.jsx)(RunningStatus, {
+										startTime: runningStartTime,
+										t
 									})
 								]
 							})
@@ -5319,12 +5464,11 @@ window.__ModuleLoader__.load({
 			"message.trigger.subagent": "子任务状态更新",
 			"message.trigger.github": "收到 GitHub 事件",
 			"message.trigger.webhook": "收到外部事件",
-			"message.trigger.schedule": "定时任务",
+			"message.trigger.schedule": "自动化任务",
 			"message.trigger.job": "后台任务状态更新",
 			"message.trigger.plugin": "插件状态更新",
 			"message.trigger.explanation": "这条通知触发了本轮回复。",
 			"message.turnProcess.worked": "已完成工作",
-			"message.turnProcess.deepDivingFor": "深度求索中，用时{duration}",
 			"message.turnProcess.took": "用时 {duration}",
 			"message.turnProcess.failed": "处理失败",
 			"view.chat": "对话",
@@ -5349,7 +5493,8 @@ window.__ModuleLoader__.load({
 			"chat.loadError": "历史加载失败：{message}（{code}）",
 			"chat.loadOlder": "加载更早",
 			"chat.toBottom": "回到底部",
-			"chat.deepDiving": "深度求索中",
+			"chat.deepDiving": "深度求索中...",
+			"chat.deepDivingFor": "深度求索中，用时 {duration}...",
 			"chat.turnNavigation.label": "轮次导航",
 			"chat.turnNavigation.jump": "跳转到第 {turn} 轮",
 			"chat.turnNavigation.jumpLoad": "加载并跳转到第 {turn} 轮",
@@ -5508,12 +5653,11 @@ window.__ModuleLoader__.load({
 			"message.trigger.subagent": "Subtask status updated",
 			"message.trigger.github": "GitHub event received",
 			"message.trigger.webhook": "External event received",
-			"message.trigger.schedule": "Scheduled task",
+			"message.trigger.schedule": "Automation task",
 			"message.trigger.job": "Background task updated",
 			"message.trigger.plugin": "Plugin status updated",
 			"message.trigger.explanation": "This notification triggered this response.",
 			"message.turnProcess.worked": "Worked",
-			"message.turnProcess.deepDivingFor": "Deep diving for {duration}",
 			"message.turnProcess.took": "Took {duration}",
 			"message.turnProcess.failed": "Failed",
 			"view.chat": "Chat",
@@ -5539,6 +5683,7 @@ window.__ModuleLoader__.load({
 			"chat.loadOlder": "Load earlier",
 			"chat.toBottom": "Back to bottom",
 			"chat.deepDiving": "Deep diving...",
+			"chat.deepDivingFor": "Deep diving for {duration}...",
 			"chat.turnNavigation.label": "Turn navigation",
 			"chat.turnNavigation.jump": "Jump to turn {turn}",
 			"chat.turnNavigation.jumpLoad": "Load and jump to turn {turn}",
@@ -5644,20 +5789,8 @@ window.__ModuleLoader__.load({
 			"clock.ymd": "{y}-{m}-{d}"
 		};
 		//#endregion
-		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/accessibility.module.css.mjs
-		const css$10 = ".TTCZqG_visuallyHidden{clip:rect(0 0 0 0);white-space:nowrap;width:1px;height:1px;position:absolute;overflow:hidden}";
-		const tagId$10 = "@deepseek-ai/dsh-client-ui-chat/accessibility.module.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$10) + "]") === null) {
-			const tag = document.createElement("style");
-			tag.dataset.plugin = "@deepseek-ai/dsh-client-ui-chat";
-			tag.dataset.pluginCss = tagId$10;
-			tag.textContent = css$10;
-			document.head.appendChild(tag);
-		}
-		var accessibility_module_css_default = { "visuallyHidden": "TTCZqG_visuallyHidden" };
-		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/ReasoningRow.module.css.mjs
-		const css$9 = ".lcKema_root{flex-direction:column;display:flex}.lcKema_root:not([data-expanded]){contain:size layout;height:calc(24px + var(--dsh-content-font-delta,0px))}.lcKema_row{position:relative;overflow:hidden}.lcKema_root[data-expanded] [data-open] [data-disclosure-row]{z-index:1;background:var(--dsw-alias-bg-base);position:sticky;top:0}.lcKema_root[data-state=running] .lcKema_row:after{content:\"\";inset-block:0;background:linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--dsw-alias-bg-base) 60%, transparent) 55%, transparent 100%);pointer-events:none;width:300px;animation:2.6s ease-out infinite lcKema_dsh-reasoning-row-sweep;position:absolute;left:0}@keyframes lcKema_dsh-reasoning-row-sweep{0%{left:-300px}90%,to{left:100%}}.lcKema_leading{flex-shrink:0}.lcKema_chevron{color:var(--dsw-alias-label-secondary)}.lcKema_title{font-weight:400}.lcKema_separator{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.lcKema_summary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));white-space:nowrap;flex:auto;overflow:hidden}.lcKema_summaryText{text-overflow:ellipsis;display:block;overflow:hidden}.lcKema_summary[data-streaming]{mask-image:linear-gradient(90deg,#000 calc(100% - 48px),#0000)}.lcKema_summary[data-streaming] .lcKema_summaryText{text-overflow:clip;overflow:visible}.lcKema_root:not([data-preview]) .lcKema_separator,.lcKema_root:not([data-preview]) .lcKema_summary{display:none}.lcKema_thinkBody{padding:4px 0 4px calc(22px + var(--dsh-content-font-delta,0px));min-width:0}@media (prefers-reduced-motion:reduce){.lcKema_root[data-state=running] .lcKema_row:after{animation:none}}";
+		const css$9 = ".lcKema_root{flex-direction:column;display:flex}.lcKema_root:not([data-expanded]){contain:size layout;height:calc(24px + var(--dsh-content-font-delta,0px))}.lcKema_row{position:relative;overflow:hidden}.lcKema_root[data-expanded] [data-open] [data-disclosure-row]{z-index:1;background:var(--dsw-alias-bg-base);position:sticky;top:0}.lcKema_leading{flex-shrink:0}.lcKema_chevron{color:var(--dsw-alias-label-secondary)}.lcKema_title{font-weight:400}.lcKema_separator{background:var(--dsw-alias-label-caption);border-radius:1px;flex:none;width:2px;height:2px;margin:0 8px}.lcKema_summary{min-width:0;color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));white-space:nowrap;flex:auto;overflow:hidden}.lcKema_summaryText{text-overflow:ellipsis;display:block;overflow:hidden}.lcKema_summary[data-streaming]{mask-image:linear-gradient(90deg,#000 calc(100% - 48px),#0000)}.lcKema_summary[data-streaming] .lcKema_summaryText{text-overflow:clip;overflow:visible}.lcKema_root:not([data-preview]) .lcKema_separator,.lcKema_root:not([data-preview]) .lcKema_summary{display:none}.lcKema_thinkBody{padding:4px 0 4px calc(22px + var(--dsh-content-font-delta,0px));min-width:0}";
 		const tagId$9 = "@deepseek-ai/dsh-client-ui-chat/ReasoningRow.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$9) + "]") === null) {
 			const tag = document.createElement("style");
@@ -5668,7 +5801,6 @@ window.__ModuleLoader__.load({
 		}
 		var ReasoningRow_module_css_default = {
 			"chevron": "lcKema_chevron",
-			"dsh-reasoning-row-sweep": "lcKema_dsh-reasoning-row-sweep",
 			"leading": "lcKema_leading",
 			"root": "lcKema_root",
 			"row": "lcKema_row",
@@ -5723,13 +5855,14 @@ window.__ModuleLoader__.load({
 			const preview = usePresentation((policy) => !expanded && summary !== "" && (running || policy.settledReasoningPreview));
 			const collapsedContent = (0, react.useMemo)(() => (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("span", {
 				className: ReasoningRow_module_css_default.separator,
+				"data-shimmer-decoration": true,
 				"aria-hidden": true
 			}), (0, react_jsx_runtime.jsx)("span", {
 				className: ReasoningRow_module_css_default.summary,
 				"data-streaming": running || void 0,
 				children: (0, react_jsx_runtime.jsx)("span", {
 					className: ReasoningRow_module_css_default.summaryText,
-					children: summary
+					children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.TextShimmer, { children: summary })
 				})
 			})] }), [running, summary]);
 			const content = (0, react.useMemo)(() => expanded ? (0, react_jsx_runtime.jsx)("div", {
@@ -5762,6 +5895,7 @@ window.__ModuleLoader__.load({
 					chevronClassName: ReasoningRow_module_css_default.chevron,
 					icon: THINK_ICON,
 					title: t("message.think"),
+					running,
 					open: expanded,
 					expandable: true,
 					expandOnRowClick: true,
@@ -5977,14 +6111,12 @@ window.__ModuleLoader__.load({
 			}, []);
 			const collapsedContent = (0, react.useMemo)(() => (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("span", {
 				className: GenericCommandCard_module_css_default.separator,
+				"data-shimmer-decoration": true,
 				"aria-hidden": true
 			}), (0, react_jsx_runtime.jsx)("span", {
 				className: GenericCommandCard_module_css_default.summary,
 				"data-error": state === "error" || void 0,
-				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.TextShimmer, {
-					active: running,
-					children: summary
-				})
+				children: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.TextShimmer, { children: summary })
 			})] }), [
 				running,
 				state,
@@ -6127,7 +6259,7 @@ window.__ModuleLoader__.load({
 		});
 		//#endregion
 		//#region \0dsh-css:/home/runner/work/deepseek-harness/deepseek-harness/packages/client/ui-chat/src/client/chat/TurnProcessNodeView.module.css.mjs
-		const css$6 = ".l_V-RG_root{box-sizing:border-box;width:100%;min-width:0;height:calc(33px + var(--dsh-content-font-delta,0px));border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);cursor:pointer;text-align:left;background:0 0;align-items:center;padding:0 0 8px;transition:color .1s;display:flex}.l_V-RG_root:disabled{cursor:default}.l_V-RG_root:not(:disabled):hover{color:var(--dsw-alias-label-primary)}.l_V-RG_root:not([data-open]){margin-bottom:8px}.l_V-RG_chevron{width:14px;height:14px;color:var(--dsw-alias-label-caption);flex:none;margin-left:4px;transition:transform .1s}.l_V-RG_root[data-open] .l_V-RG_chevron{transform:rotate(180deg)}.l_V-RG_label{min-width:0;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;overflow:hidden}@media (prefers-reduced-motion:reduce){.l_V-RG_root,.l_V-RG_chevron{transition:none}}";
+		const css$6 = ".l_V-RG_root{box-sizing:border-box;width:100%;min-width:0;height:calc(33px + var(--dsh-content-font-delta,0px));border:none;border-bottom:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);cursor:pointer;text-align:left;background:0 0;align-items:center;padding:0 0 8px;transition:color .1s;display:flex}.l_V-RG_root:disabled{cursor:default}.l_V-RG_root:not(:disabled):hover{color:var(--dsw-alias-label-primary)}.l_V-RG_chevron{width:14px;height:14px;color:var(--dsw-alias-label-caption);flex:none;margin-left:4px;transition:transform .1s}.l_V-RG_root[data-open] .l_V-RG_chevron{transform:rotate(180deg)}.l_V-RG_label{min-width:0;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));text-overflow:ellipsis;white-space:nowrap;overflow:hidden}@media (prefers-reduced-motion:reduce){.l_V-RG_root,.l_V-RG_chevron{transition:none}}";
 		const tagId$6 = "@deepseek-ai/dsh-client-ui-chat/TurnProcessNodeView.module.css";
 		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId$6) + "]") === null) {
 			const tag = document.createElement("style");
@@ -6148,26 +6280,13 @@ window.__ModuleLoader__.load({
 			if (turnProcess === void 0) throw new Error("turn-process node requires Turn process owner state");
 			const open = !turnProcess.foldable || turnProcess.open;
 			const turn = node.location.kind === "turn" || node.location.kind === "step" ? node.location.turn : void 0;
-			const [now, setNow] = (0, react.useState)(Date.now);
-			const ticking = turn?.status === "open" && turn.start !== void 0;
-			(0, react.useEffect)(() => {
-				if (!ticking) return;
-				setNow(Date.now());
-				const timer = setInterval(() => {
-					setNow(Date.now());
-				}, LIVE_RUN_CLOCK_INTERVAL_MS);
-				return () => {
-					clearInterval(timer);
-				};
-			}, [ticking]);
-			if (turn?.start === void 0 && turn?.status !== "closed") return null;
+			if (turn?.status !== "closed") return null;
 			const canCollapse = turnProcess.foldable && turnProcess.hasContent && !turnProcessAlwaysOpen(node);
-			const running = turn.status === "open";
 			const reason = turn.end?.data.reason.kind;
-			const elapsedMs = turn.start === void 0 ? void 0 : Math.max(1e3, (turn.end?.time ?? now) - turn.start.time);
-			const duration = elapsedMs === void 0 ? void 0 : running ? formatLiveRunDuration(elapsedMs, t) : formatRunDuration(elapsedMs, t);
-			const label = running ? duration === void 0 ? t("chat.deepDiving") : t("message.turnProcess.deepDivingFor", { duration }) : reason === "aborted" ? t("message.stopped") : reason === "error" ? t("message.turnProcess.failed") : duration === void 0 ? t("message.turnProcess.worked") : t("message.turnProcess.took", { duration });
-			const announcement = running ? t("chat.deepDiving") : reason === "aborted" ? t("message.stopped") : reason === "error" ? t("message.turnProcess.failed") : t("message.turnProcess.worked");
+			const elapsedMs = turn.start === void 0 || turn.end === void 0 ? void 0 : Math.max(1e3, turn.end.time - turn.start.time);
+			const duration = elapsedMs === void 0 ? void 0 : formatRunDuration(elapsedMs, t);
+			const label = reason === "aborted" ? t("message.stopped") : reason === "error" ? t("message.turnProcess.failed") : duration === void 0 ? t("message.turnProcess.worked") : t("message.turnProcess.took", { duration });
+			const announcement = reason === "aborted" ? t("message.stopped") : reason === "error" ? t("message.turnProcess.failed") : t("message.turnProcess.worked");
 			return (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [(0, react_jsx_runtime.jsx)("span", {
 				className: accessibility_module_css_default.visuallyHidden,
 				role: "status",
@@ -6637,7 +6756,7 @@ window.__ModuleLoader__.load({
 			subagent: _deepseek_ai_dsh_client_ui_primitives.IconAgentPresetOutlineRegular,
 			github: _deepseek_ai_dsh_client_ui_primitives.IconBranchOutlineRegular,
 			webhook: _deepseek_ai_dsh_client_ui_primitives.IconGlobeOutlineRegular,
-			schedule: _deepseek_ai_dsh_client_ui_primitives.IconAlarmClockOutlineRegular,
+			schedule: _deepseek_ai_dsh_client_ui_primitives.IconClockOutlineRegular,
 			job: _deepseek_ai_dsh_client_ui_primitives.IconQueueOutlineRegular,
 			plugin: _deepseek_ai_dsh_client_ui_primitives.IconCordisPluginOutlineRegular
 		};
@@ -11836,7 +11955,7 @@ window.__ModuleLoader__.load({
 			"verbose"
 		];
 		/**
-		* Saved value from the two-mode generation of this setting. Read as `standard`;
+		* Saved value from the two-mode generation of this setting. Read as `detailed`;
 		* never offered as a choice and never written back.
 		*/
 		const LEGACY_TRANSCRIPT_VIEW_MODE = "normal";
@@ -11848,8 +11967,8 @@ window.__ModuleLoader__.load({
 			LEGACY_TRANSCRIPT_VIEW_MODE,
 			LEGACY_EXPANDED_TRANSCRIPT_VIEW_MODE
 		];
-		/** Standard process summaries for users without an explicit preference. */
-		const DEFAULT_TRANSCRIPT_VIEW_MODE = "standard";
+		/** Default work details for non-Desktop Web clients. */
+		const DEFAULT_TRANSCRIPT_VIEW_MODE = "detailed";
 		/** Performance and usage detail levels accepted by user settings. */
 		const PERFORMANCE_USAGE_MODES = ["compact", "detailed"];
 		/** Preserve detailed accounting for users without an explicit preference. */
@@ -11858,7 +11977,7 @@ window.__ModuleLoader__.load({
 		const ChatSettingsFields = {
 			linkOpening: Schema.union(["sidebar", "new-tab"]).default("sidebar"),
 			performanceUsage: Schema.union([...PERFORMANCE_USAGE_MODES]).default(DEFAULT_PERFORMANCE_USAGE),
-			[TRANSCRIPT_VIEW_FIELD]: Schema.union([...TRANSCRIPT_VIEW_SETTING_VALUES]).default(DEFAULT_TRANSCRIPT_VIEW_MODE).loose()
+			[TRANSCRIPT_VIEW_FIELD]: Schema.union([...TRANSCRIPT_VIEW_SETTING_VALUES]).loose()
 		};
 		Schema.object(ChatSettingsFields);
 		//#endregion
@@ -11968,14 +12087,18 @@ window.__ModuleLoader__.load({
 		/** Live work-details preference consumed by Chat and its Settings row. */
 		var TranscriptViewPolicy = class {
 			host;
+			defaultMode;
 			unsubscribe;
-			/** Reactive current mode; defaults to Standard before Host settings arrive. */
-			mode = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(DEFAULT_TRANSCRIPT_VIEW_MODE);
+			/** Reactive current mode, including the client default before Host settings arrive. */
+			mode;
 			/**
 			* @param host - durable Chat settings scope.
+			* @param defaultMode - presentation used without an explicit saved mode.
 			*/
-			constructor(host) {
+			constructor(host, defaultMode = DEFAULT_TRANSCRIPT_VIEW_MODE) {
 				this.host = host;
+				this.defaultMode = defaultMode;
+				this.mode = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(defaultMode);
 				this.unsubscribe = host.subscribe(() => {
 					this.adopt();
 				});
@@ -11999,7 +12122,7 @@ window.__ModuleLoader__.load({
 				const section = this.host.getSnapshot().value;
 				if (section === void 0) return;
 				const saved = section.transcriptView;
-				const mode = saved === "normal" ? "standard" : saved === "expanded" ? "detailed" : saved;
+				const mode = saved === "normal" || saved === "expanded" ? "detailed" : saved ?? this.defaultMode;
 				if (this.mode.getSnapshot() !== mode) this.mode.set(mode);
 			}
 		};
@@ -12267,7 +12390,7 @@ window.__ModuleLoader__.load({
 					})
 				}, LinkOpeningRow));
 			});
-			const transcriptView = new TranscriptViewPolicy(chatSettings);
+			const transcriptView = new TranscriptViewPolicy(chatSettings, "dshDesktop" in globalThis ? "standard" : DEFAULT_TRANSCRIPT_VIEW_MODE);
 			const presentation = derivePresentationPolicy(transcriptView.mode);
 			const performancePolicy = new PerformanceUsagePolicy(chatSettings);
 			ctx.effect(() => () => {
@@ -12362,10 +12485,19 @@ window.__ModuleLoader__.load({
 								read: () => chatScrollPositions.get(sessionId) ?? null
 							},
 							forkAt: (seq) => {
+								const messageId = [...chat.getSnapshot().timeline.turns.values()].find((turn) => turn.end?.seq === seq)?.data.get("turn-tail")?.closing?.finalNode.messageId;
 								ctx.sessions.fork({
 									sessionId,
 									atSeq: seq,
-									increaseTitle: true
+									increaseTitle: true,
+									onCreated: (childId) => {
+										ctx.get("productAnalytics")?.track("branch_session_click", {
+											session_id: childId,
+											parent_session_id: sessionId,
+											...messageId === void 0 ? {} : { parent_message_id: messageId },
+											click_position: "footer"
+										});
+									}
 								}).then((childId) => {
 									ctx.uiWorkspace.openSession(childId);
 								}).catch(() => {});

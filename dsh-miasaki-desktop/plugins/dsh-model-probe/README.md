@@ -94,7 +94,7 @@ host 只回稳定 `kind`，**文案在客户端本地化**（中英各一份）�
 - **信任栅栏**：Host 必须是 loopback 或 `trustedHosts` 配置项；`sec-fetch-site: cross-site`
   拒绝；存在 Origin 时必须与本机主机名一致（与 sidebar / canvas 的 `/api` 栅栏同构）。
   防的是 DNS rebinding 与跨站触发，不是鉴权；
-- **无副作用**：除一次极小模型调用外，不改配置、不写文件（这与 `dsh-free-model-pool`
+- **无副作用**：除一次极小模型调用外，不改配置、不写文件（这与 `@miasaki/dsh-free-model`
   的 `apply` 有本质区别）。
 
 ### settings 读取双轨（v0.2.1，2026-09-23）

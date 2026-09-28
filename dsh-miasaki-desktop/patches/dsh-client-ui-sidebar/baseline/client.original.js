@@ -167,7 +167,7 @@ window.__ModuleLoader__.load({
 		const SCROLLBAR_LINGER_MS = 2e3;
 		/** Format complete-build metadata for the local brand badge. */
 		function localBuildVersion() {
-			return `0.1.7-rc.2-c127551` + ({}.DSH_CLIENT_GIT_DIRTY === "true" ? "-dirty" : "");
+			return `0.2.0-rc.1-62962ee` + ({}.DSH_CLIENT_GIT_DIRTY === "true" ? "-dirty" : "");
 		}
 		/** Each panel row subscribes only to its own selection state. */
 		function PanelRow({ id, label, wide, usePanelInfo, selectPanel, renderSlot }) {
@@ -481,6 +481,7 @@ window.__ModuleLoader__.load({
 					ctx.layout.toggleSidebar();
 				},
 				selectPanel: (id) => {
+					if (id === "plugins" || id === "schedules") ctx.get("productAnalytics")?.track("sidebar_menu_click", { menu_name: id === "plugins" ? "plugin" : "cron" });
 					ctx.layout.selectPanel(id);
 				},
 				hooks: {

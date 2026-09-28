@@ -3831,7 +3831,7 @@ window.__ModuleLoader__.load({
 				switch (ev.type) {
 					case "draft-changed": return this.onDraftChanged(ev.draft);
 					case "claim": return this.onClaim(ev.claim);
-					case "enter": return this.onEnter(ev.mode, ev.draft);
+					case "enter": return this.onEnter(ev.mode, ev.draft, ev.submission);
 					case "adjudicated": return this.onAdjudicated(ev.attempt, ev.outcome);
 					case "adjudication-failed": return this.onAdjudicationFailed(ev.attempt, ev.message);
 					case "submit-settled": return this.onSubmitSettled(ev);
@@ -3857,7 +3857,7 @@ window.__ModuleLoader__.load({
 				return [];
 			}
 			/** Mint an attempt and controller without assigning its lifecycle owner. */
-			mintAttempt(mode, draft) {
+			mintAttempt(mode, draft, submission) {
 				const controller = new AbortController();
 				this.seq += 1;
 				return {
@@ -3865,20 +3865,21 @@ window.__ModuleLoader__.load({
 						seq: this.seq,
 						signal: controller.signal,
 						draftSnapshot: draft,
-						mode
+						mode,
+						...submission === void 0 ? {} : { submission }
 					},
 					controller
 				};
 			}
 			/** Mint the frozen command/adjudication attempt. */
-			beginAttempt(mode, draft) {
-				const flight = this.mintAttempt(mode, draft);
+			beginAttempt(mode, draft, submission) {
+				const flight = this.mintAttempt(mode, draft, submission);
 				this.inflight = flight;
 				return flight.attempt;
 			}
 			/** Mint an ordinary send that leaves the phase plain. */
-			beginDetached(mode, draft) {
-				const flight = this.mintAttempt(mode, draft);
+			beginDetached(mode, draft, submission) {
+				const flight = this.mintAttempt(mode, draft, submission);
 				this.detached.set(flight.attempt.seq, flight.controller);
 				this.claim = void 0;
 				this.phase = "plain";
@@ -3896,10 +3897,10 @@ window.__ModuleLoader__.load({
 					retainSuffixOf: attempt.draftSnapshot
 				}];
 			}
-			onEnter(mode, draft) {
+			onEnter(mode, draft, submission) {
 				if (this.phase === "adjudicating" || this.phase === "submitting") return [];
 				if (this.phase === "claimed" && this.claim !== void 0) {
-					const attempt = this.beginAttempt(mode, draft);
+					const attempt = this.beginAttempt(mode, draft, submission);
 					this.phase = "submitting";
 					return [{
 						type: "begin-submit",
@@ -3911,7 +3912,7 @@ window.__ModuleLoader__.load({
 				const trimmed = draft.trim();
 				if (trimmed === "") return [];
 				if (trimmed.startsWith("/")) {
-					const attempt = this.beginAttempt(mode, draft);
+					const attempt = this.beginAttempt(mode, draft, submission);
 					this.phase = "adjudicating";
 					return [{
 						type: "adjudicate",
@@ -3919,7 +3920,7 @@ window.__ModuleLoader__.load({
 						draft
 					}];
 				}
-				return this.detachedEffects(this.beginDetached(mode, draft));
+				return this.detachedEffects(this.beginDetached(mode, draft, submission));
 			}
 			onAdjudicated(attempt, outcome) {
 				const flight = this.inflight;
@@ -13622,7 +13623,19 @@ window.__ModuleLoader__.load({
 			* (adjudicating/submitting) force-closes the transient layers: the popup
 			* dismisses and the menu tracks frozen.
 			*/
-			submit(mode = "queue") {
+			submit(mode = "queue", source) {
+				if (this.disposed) return;
+				const timestamp = Date.now();
+				let state;
+				if (this.snapshot.phase === "plain" && (this.snapshot.draft.trim() !== "" || this.attachmentIds.length > 0)) try {
+					state = this.deps.submissionState?.();
+				} catch (_error) {}
+				const submission = Object.freeze({
+					timestamp,
+					mode,
+					...source === void 0 ? {} : { source },
+					...state === void 0 ? {} : { state }
+				});
 				if (this.snapshot.draft.trim() === "" && this.attachmentIds.length > 0) {
 					if (this.snapshot.phase === "plain") {
 						const attachmentIds = [...this.attachmentIds];
@@ -13634,6 +13647,7 @@ window.__ModuleLoader__.load({
 							attachmentIds
 						});
 						this.commitSend(attachmentIds);
+						this.notifySubmission(submission);
 						this.deps.defaultSink("", attachmentIds, mode, controller.signal).then((outcome) => {
 							if (this.disposed || !this.attachmentFlights.delete(flight)) return;
 							if (outcome.kind === "success") return;
@@ -13655,7 +13669,8 @@ window.__ModuleLoader__.load({
 				this.dispatchRun({
 					type: "enter",
 					mode,
-					draft: this.projection.clipboardText
+					draft: this.projection.clipboardText,
+					submission
 				});
 				const phase = this.snapshot.phase;
 				if (phase === "adjudicating" || phase === "submitting") {
@@ -13881,7 +13896,8 @@ window.__ModuleLoader__.load({
 			/** Dispatch + execute, refreshing the claim decoration when the styled token flips. */
 			dispatchRun(ev) {
 				const beforeToken = this.activeClaimToken();
-				this.run(this.core.dispatch(ev));
+				const effects = this.core.dispatch(ev);
+				this.run(effects);
 				if (this.activeClaimToken() !== beforeToken) this.draftEditor.refreshClaimDecoration();
 			}
 			run(effects) {
@@ -13931,6 +13947,7 @@ window.__ModuleLoader__.load({
 			* its editor snapshot. Chip-free drafts skip the async detour.
 			*/
 			sinkSerialized(attempt, draft, mode) {
+				this.notifySubmission(attempt.submission);
 				const attachmentIds = [...this.attachmentIds];
 				this.attachmentIds = [];
 				const occurrences = this.projection.occurrences;
@@ -13971,6 +13988,12 @@ window.__ModuleLoader__.load({
 					const message = error instanceof Error ? error.message : String(error);
 					this.settleDetachedFailure(attempt, message);
 				});
+			}
+			notifySubmission(submission) {
+				if (submission === void 0) return;
+				try {
+					this.deps.messageSubmitted?.(submission);
+				} catch (_error) {}
 			}
 			/** Settle one detached default send independently of other sends. */
 			settleSink(attempt, pending) {
@@ -14135,6 +14158,27 @@ window.__ModuleLoader__.load({
 			}
 		};
 		//#endregion
+		//#region lib/types/client/input/submission-analytics.js
+		/**
+		* Report the original message occurrence without reading newer Session facts.
+		* @param ctx - client context.
+		* @param submission - original occurrence and Session snapshot.
+		*/
+		function reportMessageSubmission(ctx, submission) {
+			const { state, timestamp, mode } = submission;
+			if (state === void 0) return;
+			const model = state.model;
+			ctx.get("productAnalytics")?.track("send_button_click", {
+				...state.sessionId === void 0 ? {} : { session_id: state.sessionId },
+				...model === void 0 ? {} : {
+					model_name: `${model.provider}/${model.name}`,
+					...model.effort === void 0 ? {} : { thinking_effort: model.effort }
+				},
+				run_mode: state.runMode,
+				msg_type: state.running ? mode : "default"
+			}, timestamp);
+		}
+		//#endregion
 		//#region lib/types/client/input/hub.js
 		/** Session-addressed input facade registry (SessionInputResolver face + composer-layer extras). */
 		var InputHub = class {
@@ -14175,6 +14219,26 @@ window.__ModuleLoader__.load({
 				const { session, ctx: actx } = binding;
 				const shell = new SessionInputShell({
 					actx,
+					submissionState: () => {
+						const state = session.getSnapshot();
+						const model = session.projections.faceOf("modelSelection").getSnapshot();
+						const plan = session.projections.faceOf("plan").getSnapshot();
+						const goal = session.projections.faceOf("goal").getSnapshot();
+						const selection = model?.next ?? model?.lastUsed;
+						return Object.freeze({
+							...state.blank ? {} : { sessionId: state.sessionId },
+							...selection == null ? {} : { model: Object.freeze({
+								provider: selection.provider,
+								name: selection.model,
+								...selection.reasoningEffort === void 0 ? {} : { effort: selection.reasoningEffort }
+							}) },
+							runMode: plan?.active ? "plan" : goal?.goal.phase === "active" ? "goal" : "default",
+							running: state.running
+						});
+					},
+					messageSubmitted: (submission) => {
+						reportMessageSubmission(this.rootCtx, submission);
+					},
 					inputTriggers: () => this.controller(actx),
 					popup: () => this.popup(actx),
 					inbox: session.projections.faceOf("inbox"),
@@ -14549,10 +14613,10 @@ window.__ModuleLoader__.load({
 			"tool.title.searchSessions": "搜索会话",
 			"tool.title.traceSession": "追踪会话",
 			"tool.title.listModels": "查看可用模型",
-			"tool.title.subagent": "创建代理",
-			"tool.title.listAgents": "查看代理",
+			"tool.title.subagent": "创建子智能体",
+			"tool.title.listAgents": "查看子智能体",
 			"tool.title.sendMessage": "发送消息",
-			"tool.title.interruptAgent": "中断代理",
+			"tool.title.interruptAgent": "中断智能体",
 			"tool.title.listJobs": "查看后台任务",
 			"tool.title.readJob": "读取任务输出",
 			"tool.title.killJob": "取消后台任务",
@@ -14625,14 +14689,14 @@ window.__ModuleLoader__.load({
 			"detail.field.turn": "轮次",
 			"detail.field.step": "步骤",
 			"detail.field.callId": "调用 ID",
-			"detail.field.agents": "启动代理数",
+			"detail.field.agents": "启动智能体数",
 			"detail.field.result": "结果",
 			"detail.field.parent": "父级",
 			"detail.field.depth": "层级",
 			"detail.field.exitCode": "退出码",
 			"detail.field.signal": "信号",
 			"detail.field.previousStatus": "中断前状态",
-			"detail.field.agent": "代理 ID",
+			"detail.field.agent": "智能体 ID",
 			"detail.field.job": "任务 ID",
 			"detail.field.task": "任务内容",
 			"detail.field.processGroup": "进程组",
@@ -14640,7 +14704,7 @@ window.__ModuleLoader__.load({
 			"detail.field.bestMatch": "最相关事件",
 			"detail.field.target": "目标事件",
 			"detail.field.surface": "记录状态",
-			"detail.agents.count": "{count} 个代理",
+			"detail.agents.count": "{count} 个智能体",
 			"detail.jobs.count": "{count} 个后台任务",
 			"detail.terminals.count": "{count} 个终端",
 			"detail.tasks.count": "{count} 个团队任务",
@@ -14659,15 +14723,15 @@ window.__ModuleLoader__.load({
 			"detail.wait.title": "子智能体状态",
 			"detail.wait.timeout": "等待超时",
 			"detail.wait.changed": "检测到变化",
-			"detail.agent.reply": "代理回复",
+			"detail.agent.reply": "智能体回复",
 			"detail.models.title": "可用模型",
 			"detail.output.lines": "第 {begin}–{end} 行，共 {total} 行",
 			"detail.output.truncated": "输出已截断",
 			"detail.providers.count": "{count} 个检查提供方",
 			"detail.plugins.count": "{count} 个动态插件",
 			"detail.workflow.script": "工作流脚本",
-			"detail.ralph.reportedComplete": "代理报告完成",
-			"detail.ralph.reportedBlocker": "代理报告受阻",
+			"detail.ralph.reportedComplete": "智能体报告完成",
+			"detail.ralph.reportedBlocker": "智能体报告受阻",
 			"detail.ralph.limit": "已达到轮次上限",
 			"detail.report.nextSteps": "待完成事项",
 			"detail.trace.replacedBy": "被替换为",
@@ -16759,7 +16823,7 @@ window.__ModuleLoader__.load({
 						g.showToast(g.t("file.stillUploading"));
 						return;
 					}
-					keyboard.submit(resolveSubmitMode(g.busyEnter, g.running, accelerated ? "accelerated" : "enter", g.steeringAvailable));
+					keyboard.submit(resolveSubmitMode(g.busyEnter, g.running, accelerated ? "accelerated" : "enter", g.steeringAvailable), "enter");
 				},
 				intakeFiles: (files, directories) => {
 					gate.current.intakeFiles(files, directories);
@@ -17335,7 +17399,7 @@ window.__ModuleLoader__.load({
 				}
 				if (keyboard === void 0) return;
 				/* v8 ignore next -- defensive: the primary button is disabled for empty, disabled, and pending-upload states. */
-				if (!empty && !disabled && !machineBusy && !uploadsPending) keyboard.submit(primarySubmitMode);
+				if (!empty && !disabled && !machineBusy && !uploadsPending) keyboard.submit(primarySubmitMode, "click");
 			};
 			const claimActive = (input?.phase === "claimed" || input?.phase === "submitting") && input.claim !== void 0 && draft.startsWith(input.claim.token);
 			const rawHint = claimActive && input.claim.hint !== void 0 && draft.slice(input.claim.token.length).trim() === "" ? input.claim.hint : null;

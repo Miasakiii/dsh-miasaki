@@ -8,6 +8,11 @@
 //      正是 W0-T0.2 刚修掉的竞态；
 //   ③ 子 frame 只给空壳（initialization_script 注入每个文档；08-ready.js:3-8 有"iframe 里
 //      浮出两套假窗控"的实机教训）。
+//
+// 另驻两条**让位几何**算术闸门（同属「壳 ↔ 官方 UI」的隐式契约，故并在这里）：
+//   · v1.2 横向让位量 `--ms-titlebar-reserve` 由壳观测窗控组实宽自动写；
+//   · 2026-09-29 纵向让位量 `--ms-titlebar-clearance`（官方页面标题行下移一格）。
+// 浏览器里的真实几何判据在 scripts/verify-themes.mjs（需活动 DSH host）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
@@ -302,4 +307,41 @@ test('★ v1.2：让位量由壳自动计算（06-titlebar 观测实宽；契约
   assert.match(titlebar, /--ms-titlebar-reserve/, '06-titlebar 必须写让位量变量')
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   assert.doesNotMatch(code, /--ms-titlebar-reserve/, '契约不得自己写让位量（那是 06-titlebar 的职责）')
+})
+
+// 2026-09-29 用户报障：插件页右上角「+ 添加插件」胶囊与窗控组叠压。根因是窗控组是**零占位
+// 浮层**（纵向占 [top, top+键高]），而官方两处**页面级**标题行（`.X_2TxG_pageHead` 插件页 /
+// `.t-XoWW_pageHeading` 日程页）的动作区正好落在这一带；官方只在 darwin 分支加 clearance
+// （`[data-platform=darwin] …{padding-top:calc(28px + var(--dsh-frame-top-clearance))}`），
+// Windows 侧官方走原生边框或 `[data-windows-titlebar]` 的整帧 padding-top，都不适用于本壳。
+//
+// 本条是**算术闸门**：让位量不是随手挑的数，它由窗控几何推导而来 —— 任一侧被改动
+// （壳的 top / 键高 / 呼吸位，或官方 pageHead 的 padding-top）都必须重新配平，否则
+// 这行数字就悄悄失真、实机重新叠压。浏览器里的真实几何判据在
+// scripts/verify-themes.mjs §6.6（需活动 DSH host，故不进 verify-all）。
+test('★ 顶部安全区：官方页面标题行（_pageHead）不得落进窗控带', () => {
+  const switcher = readFileSync(join(desktop, 'themes', 'src', '03-switcher.js'), 'utf8')
+  const titlebar = readFileSync(join(desktop, 'themes', 'src', '06-titlebar.js'), 'utf8')
+
+  // ① 规则本身：必须落在注入的样式串里，且是**叠加式**让位（margin-top，不覆写官方 padding-top）
+  assert.match(switcher, /:root\{--ms-titlebar-clearance:\d+px;\}/,
+    '03-switcher 必须定义顶部让位量 --ms-titlebar-clearance')
+  assert.match(switcher, /#root \[class\*="_pageHead"\]\{margin-top:var\(--ms-titlebar-clearance\);\}/,
+    '官方页面标题行必须整体下移（子串匹配 _pageHead，兼收 _pageHeading）')
+
+  // ② 算术：让位量 + 官方 pageHead 自有 padding-top ≥ 窗控带下沿 + 呼吸位
+  const clearance = Number(switcher.match(/--ms-titlebar-clearance:(\d+)px/)[1])
+  const top = Number(switcher.match(/#miasaki-titlebar \.tb-group\{position:fixed;top:(\d+)px/)[1])
+  const btnH = Number(switcher.match(/#miasaki-titlebar \.tb-btn\{width:\d+px;height:(\d+)px/)[1])
+  // 呼吸位与横向让位（--ms-titlebar-reserve 的 +12）同源：同一个常量，两个方向
+  const gap = Number(titlebar.match(/var TB_RESERVE_GAP = (\d+)/)[1])
+  // 官方 CSS Module 实测值（`lib/client.js` 内联样式串）：两处页头都是 padding-top:28px
+  const OFFICIAL_PAGE_HEAD_PADDING_TOP = 28
+
+  const bandBottom = top + btnH
+  const headTop = OFFICIAL_PAGE_HEAD_PADDING_TOP + clearance
+  assert.ok(headTop >= bandBottom + gap,
+    `让位量不足：官方页头上沿 ${headTop}px < 窗控带下沿 ${bandBottom}px + 呼吸位 ${gap}px —— 插件页会重新叠压`)
+  assert.ok(headTop <= bandBottom + gap + 12,
+    `让位量过大：官方页头上沿 ${headTop}px 比「窗控带下沿 + 呼吸位」多出 ${headTop - bandBottom - gap}px（>12px）—— 多让只会留白，且常用于掩盖几何变动`)
 })

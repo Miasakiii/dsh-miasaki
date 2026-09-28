@@ -1,22 +1,23 @@
 # dsh-miasaki
 
-> Miasaki 专属 DSH（DeepSeek Harness）周边项目 monorepo —— 桌面端 / 多 Agent 编排 / 画布插件 / 右侧边栏 / SSH / 双模型 / 外观 / 用量统计八条线，零耦合、单仓承载。
+> Miasaki 专属 DSH（DeepSeek Harness）周边项目 monorepo —— 桌面端 / 多 Agent 编排 / 画布插件 / 右侧边栏 / SSH / 双模型 / 外观 / 用量统计 / 免费模型九条线，零耦合、单仓承载。
 
-## 八条线
+## 九条线
 
 | 线 | 目录 | 定位与现状 |
 |---|---|---|
-| 桌面端 | [`dsh-miasaki-desktop/`](dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；五个 DSH profile 插件：免费模型池、桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）、Computer Use GUI 工具（dsh-computer-use，桌宠 v4 能力底座）——**用量监控已于 2026-09-26 迁出本线，见第八线**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**2026-09-27/28 桌宠 v4–v5**：whale 图集接入（`cut-frames.mjs` 按主题行名表切 7 行，行号语义不跨主题共享）、反转狂三白军装重画（`inverse-states.mjs` 背景色四角采样，蓝底白底通吃）、`pet_native/xform.rs` 绘制变换层（逆向映射采样 + M1 呼吸 / M2 摇摆 / M3 挤压，cargo 100 例单测）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的**八个**运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。 |
+| 桌面端 | [`dsh-miasaki-desktop/`](dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH profile 插件：桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）、Computer Use GUI 工具（dsh-computer-use，桌宠 v4 能力底座）——**用量监控已于 2026-09-26 迁出本线（见第八线），免费模型池已于 2026-09-28 迁出并升级为多来源聚合器（见第九线）**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**2026-09-27/28 桌宠 v4–v5**：whale 图集接入（`cut-frames.mjs` 按主题行名表切 7 行，行号语义不跨主题共享）、反转狂三白军装重画（`inverse-states.mjs` 背景色四角采样，蓝底白底通吃）、`pet_native/xform.rs` 绘制变换层（逆向映射采样 + M1 呼吸 / M2 摇摆 / M3 挤压，cargo 100 例单测）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的**八个**运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。 |
 | Fleet | [`dsh-miasaki-fleet/`](dsh-miasaki-fleet/) | 多 Agent CLI 编排（`package.json` 0.20.0）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）/ G0–G4 图工程判定层（契约、图与就绪度、能力图、异构验证者选取）。 |
 | Canvas | [`dsh-miasaki-canvas/`](dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.7，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
 | Sidebar | [`dsh-miasaki-sidebar/`](dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.10.0-miasaki.0）：**接入官方右侧 Sidebar**，只注册「审查」一个 tab 类型（辅助对话归 M2）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除）；**2026-09-25 右栏终端退役**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），沿用官方策略不再自建，内嵌终端收敛为**底部面板单形态**（Ctrl+` / 标题栏按钮唤起，多标签多会话、node-pty 路线 B、一次性 token 闸门、回放环 + 背压淘汰，host 半与容器无关零改动）。单测 **86 例**（81 通过 / 5 环境跳过）、静态回归 **13/13**（11 个测试文件）；**M2.1 辅助对话已落地（2026-09-28）**——右栏第二个 tab（侧线 = `ctx.sessions.fork` 不传 `atSeq`，主会话运行中可开；嵌入式官方会话，零自研聊天 UI），实机验收 7/7，M2.2/M2.3 未做。 |
 | SSH | [`dsh-miasaki-ssh/`](dsh-miasaki-ssh/) | DSH web SSH 插件 `@miasaki/dsh-ssh`（全新自研，2026-09-09 立项）：**会话头第一行**「SSH」段（与「对话 / 会话布」同一个胶囊，三段一体）+ **画布页面内部**那组按钮旁的「SSH」（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器。**M1 代码完成，已 link 安装**；U0 可靠性闭环 + U1 统一工作区（2026-09-12）、A0 上下文桥（2026-09-14）、D1–D4 全屏浮层改造与**四轮真机验收**（2026-09-15）、**U2 主体落地**（2026-09-16：U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复）、**主页入口判据与落点收敛**（2026-09-25 B1/B2：只在主页 + 与会话头胶囊结构性互斥；2026-09-26 B3/B4：同排官方 chrome 实测让位 + 让位量的取数时机（过渡期逐帧跟随、安全线变化的同步重测），修与官方「▭」的按钮盒叠压）均已实施。**2026-09-26 对标 zcode（zai-org/ZCode）方案落地**（[对标调研与方案](dsh-miasaki-ssh/design/2026-09-26-ssh-zcode-benchmark-plan.md)）：P0 三件套（keepalive 15s×3 + `buildConnectConfig()` 纯函数 + ssh2 `level` 错误词汇与私钥口令两码；`lib/exec.js` exec 前置；U2.2 SFTP 注入 zcode 降级链——sftp 视图无目录或会话打不开 ⇒ 零字节消耗直降 `mkdir -p && cat >`，mid-stream 失败记 `execOnlyUpload` 下次直走命令通道）+ P1-1 `~/.ssh/config` 别名导入（`ssh -G` 优先 + 自研解析回退，只导直连 alias）。单测 **310 例**、静态回归 **31/31**；**U3（跳板 / 本地转发）与 A1 工具面已于 2026-09-26 实施**（真协议探针 8/8，A1 工具面已实机验收）；**G1 SFTP 会话自愈 + G2 慢 viewer 背压暂停/恢复 2026-09-28 实机验收 23/23**（真 DSH 实例 × 真协议 sshd × 真实路由/票据/围栏，隔离 dataDir）。**仍待验**：真跳板建连 / 本地转发实机、真实云主机 SFTP 往返。 |
 | 双模型 | [`dsh-miasaki-dual-model/`](dsh-miasaki-dual-model/) | DSH web 双模型插件 `@miasaki/dsh-dual-model`（2026-09-10 立项）：会话级「主模型 + 辅助模型」，只要其一支持图片即可上传图片，输入框右下角（`conversation.input.right`）快速配置。**M1 实现完成，待实机验证**——M0 六项技术假设实测全部成立；准入走一行本体补丁（可选服务探测，未装插件零退化，规则 + 双基线入库并可离线自证）；单测 33 例、`verify-all dual-model` 12/12。设计文档与变更记录见其 `design/`。 |
 | 外观 | [`dsh-miasaki-appearance/`](dsh-miasaki-appearance/) | DSH web 外观插件 `@miasaki/dsh-appearance`（2026-09-11 立项）：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果。**M2 已收官（2026-09-12）**——M1 底座（设置栏 + 首帧注入 + 契约自检）实机六项全过后，S1–S6 依次落地 **皮肤层**（`derive-skins.mjs` 编译 105 token 表 + 首帧防闪色 boot style）、**壁纸与玻璃档位**（配置 v2、内置程序化渐变 + 本地图源、`color-mix` 表面透明度自动跟皮肤跟明暗）、**桌面壳让位协议**（`data-miasaki-theme-yield` 免刷新翻转、冲突自检）。走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject`，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约。**2026-09-26 与官方「通用」设置页对照去重**：明暗偏好与正文字号是通用页 `AppearanceRow` / `FontSizeRow` 自己的行，外观页**不再做第二入口**，「主题」组只留官方没有的「皮肤」；`config.theme` 的 scheme / accent / fontSize 三个镜像字段同批删除（配置 v4），并立下「上新设项先过通用页对照」纪律（去重决策与 M3 → Boot Splash → M4 推进路线见该线 `design/2026-09-26-appearance-page-dedup-and-roadmap.md`）；同日 **V1 视觉统一**——单选控件全线换成官方「选择丸 + 下拉菜单」（`LanguageRow` 规格 + 官方 `Menu`），九宫格/表面旋钮/占位卡/运行信息同步对齐官方卡片与空态语言（见该线 `design/2026-09-26-appearance-visual-unification-and-roadmap.md`）；**2026-09-27 P1+P2 连续落地**——P2 Boot Splash 首帧启动画（`lib/splash.js` + `index-inject` 三行，首次启用官方 `html` 行 kind；配置 v5 `motion.bootSplash`；退场双信号 + 2.5s 兜底）、P1 M3 动效（纯 CSS 变量驱动层 + 三预设 + 强度倍率 + reduced-motion 降级），并加了「无可见效果」面板提示。单测 **120 例**、静态回归 **18/18**；M4 会话效果与恢复默认/导入导出待推。**2026-09-22 Boot Splash 首帧启动画设计定稿**（跨线新增项）：3080 首帧全屏启动画（三主题纹章动效 + 退场双信号 + 2.5s 超时兜底不挡错误页），与 desktop「Loading 2.0」契约见 `cross/boot-loading-2026-09-22.md`。 |
-| 用量统计 | [`dsh-miasaki-usage/`](dsh-miasaki-usage/) | DSH web 插件 `dsh-token-monitor`（v0.6.0，**2026-09-26 由桌面端线迁出、独立成第八线**）：会话「用量」Tab（纯当前会话视角 —— 上下文剩余 / 官方聚合 / 按会话过滤的实时明细 / 活跃时长）+ 侧栏脚部「用量统计」入口 → 全局浮窗（总览六卡 / 年热力图 / 使用趋势 / 模型用量 + 会话活跃分布 / 今日与限额）。**两条「干净」**：**① 接入干净** —— 本仓唯一「纯官方契约、零 miasaki 耦合」的插件（host 半只用官方 `webServer` / `llm/stream` / `tools/result` / `sessionProjections` / `tokenMeter` / `sessionQuery`，client 半只用官方三个槽位 `conversation.view` / `sidebar.footer.action` / `shell.overlay`），不碰主题、不碰补丁、不依赖其它 miasaki 包，因此可单独装进任意官方 DSH profile；**② 统计干净** —— **账本按 profile 分区**（`~/.dsh/plugins-data/dsh-token-monitor/<profile>/`），官方桌面端只记载官方自己这个实例的消耗，不再与自制壳（`miasaki`）/ 浏览器 GUI（`web`）混账；分区前的混合账一次性归位到 `miasaki/`，官方侧从零累计。2026-09-26 官方桌面端 profile 隔离为纯净官方版后**只挂回这一条**；装法由 `file:` 改 `link:`（消除副本漂移）。 |
+| 用量统计 | [`dsh-miasaki-usage/`](dsh-miasaki-usage/) | DSH web 插件 `dsh-token-monitor`（v0.6.1，**2026-09-26 由桌面端线迁出、独立成第八线**）：会话「用量」Tab（纯当前会话视角 —— 上下文剩余 / 官方聚合 / 按会话过滤的实时明细 / 活跃时长）+ 侧栏脚部「用量统计」入口 → 全局浮窗（总览六卡 / 年热力图 / 使用趋势 / 模型用量 + 会话活跃分布 / 今日与限额）。**两条「干净」**：**① 接入干净** —— 本仓唯一「纯官方契约、零 miasaki 耦合」的插件（host 半只用官方 `webServer` / `llm/stream` / `tools/result` / `sessionProjections` / `tokenMeter` / `sessionQuery`，client 半只用官方三个槽位 `conversation.view` / `sidebar.footer.action` / `shell.overlay`），不碰主题、不碰补丁、不依赖其它 miasaki 包，因此可单独装进任意官方 DSH profile；**② 统计干净** —— **账本按 profile 分区**（`~/.dsh/plugins-data/dsh-token-monitor/<profile>/`），官方桌面端只记载官方自己这个实例的消耗，不再与自制壳（`miasaki`）/ 浏览器 GUI（`web`）混账；分区前的混合账一次性归位到 `miasaki/`，官方侧从零累计。2026-09-26 官方桌面端 profile 隔离为纯净官方版后**只挂回这一条**；装法由 `file:` 改 `link:`（消除副本漂移）。**2026-09-29（v0.6.1）修掉全局浮窗「打开慢」**：标题折叠加**负缓存**（账本里 69% 的会话日志已不存在，旧实现只在成功时写缓存 ⇒ 折叠路径永不收敛、每 5 秒轮询都重跑一遍并付两次全量 `persistence.list()`）+ **首屏不再为折叠排队**（折叠整读会话日志、4 并发独占事件循环 3.3–4.5 秒，任何"等一小段"的定时器都会被饿死）—— 端到端实测首屏 **2761ms → 2ms**、稳态每请求 **327ms → 0–1ms**。 |
+| 免费模型 | [`dsh-miasaki-free-model/`](dsh-miasaki-free-model/) | DSH web 插件 `@miasaki/dsh-free-model`（v0.4.0，**2026-09-28 由桌面端线迁出、独立成第九线** —— 原 `plugins/dsh-free-model-pool`，迁出同批更名并扩容职责）：**多来源免费模型聚合器**。**① 免 Key 车道（M1 已落地）**：经**官方 `llm` 契约**枚举本机所有已注册 provider 路由（`listProviders × listModels × resolveModelInfo`），`dsh-our-free-model` 这类免 Key 车道与自配平台进**同一张模型卡、同一套 verdict** —— 只读官方契约、零改第三方、对方零配合；三条纪律：逐 provider 隔离失败（一个平台挂了只进 `partial[]`）／逐调用超时与失败回落／**能力只到能被证明的程度**（适配器不声明工具参数就标"未声明·需实测"，不猜 false）；免费判定含 **L0 provider 级免 Key 车道**（`/free/i` 命中，刻意不硬编码插件名）。**② 本机自配平台**：扫 `llm-pi-ai.providers` 中带 baseURL 的路由，分层规则（`:free` / `-free` 后缀 · 定价全零 · 名称含「免费·free」）检出免费模型并标注命中依据，给出能力画像（工具调用、tool_choice、视觉、推理、编码、长上下文、**子代理可用性**）与决策摘要，可显式写入 provider models、切换子代理后端。**路由信任围栏**：composition 的 `connection` 准入优先且**逐请求读取**，缺席时结构层复刻；围栏**先于 method 检查与业务**（此前 4 条 `/freemodel-api/*` 路由裸奔，而 `/apply` 是写配置的动作）。**界面**：M2 曾往模型页挂过两个落点（`settings.models.footer` 与 `settings.models.provider-card`），**都已撤销** —— 前者是"塞在别人页面底部"的设计问题；后者是**风险**问题（官方模型页的编辑面板也会 dispatch 那个槽，occupant 一出问题就整树白屏；闸门见 `client-bundle.test.js`）。⚠️ 2026-09-28 那次「点供应商编辑白屏」经浏览器自动化复盘确认**真凶是 desktop 线 `patches/dsh-client-ui-settings-models` 在 0.2.0-rc.1 上的运行时补丁产物**（`ModelListEditor` 运行时报 `react_jsx_runtime.jsx is not a function`），与本线无关。当前形态见下条。**界面（续五修订）**：设置里那一栏「**免费模型**」就是上游插件 `dsh-our-free-model` 的设置页本身 —— 本线用 [`patches/dsh-our-free-model/`](dsh-miasaki-free-model/patches/dsh-our-free-model/) 在它里面做**增量**（去掉公告分区与首启弹窗、左栏改名、模型清单后挂「本机自配平台」；五处锚点改写本机安装副本，可重放 / 可自检 / 可回退，它自升级后重打即可）。本线自己的 `settings.section` 改为**条件注册**：上游在场就让位（保证只有一个入口），它不在场时才顶上。**动作（M3）**：模型卡可「实测」（接 `dsh-model-probe` 的两段式探测，那个可选插件缺席时整块隐藏按钮）与「设为默认」（走**官方** `agentDefaultModel.saveSelection`，下一次会话立即生效）；**子代理指派的核实结论是"官方没有写路径"**（`subagentModelSelection` 只有只读 `current()`），故那条保留文件级改写并在 README 标注。闸门 `verify-all free-model` **15/15**（trust 15 / scan 15 / client-bundle **9** / default-model 7 / settings-read 10 / routes 6，合计 **62 例**；另含上游增量补丁的 3 件语法 + 1 件自证）。**2026-09-28 内核升到 `0.2.0-rc.1` 后复验**：契约面零适配（`settings.section` 与 `settings.models.provider-card` 逐字节未变、`llm` 五方法全在、`agentDefaultModel` 与 `connection.requestRejection` 未变），并起临时 host 打通三条业务路由；同批抓到并修掉一个真缺陷（webServer 的 exact 路由**按 path 去重**，同路径注册两条会让**整个插件不激活** —— 已加"路径唯一"闸门把该约束前移）。设计规划（M0–M4、来源取数与与第三方插件的边界）见 [`cross/free-model-unified-page-2026-09-28.md`](dsh-miasaki-shared-docs/cross/free-model-unified-page-2026-09-28.md)。 |
 | 共享参考 | [`dsh-miasaki-shared-docs/`](dsh-miasaki-shared-docs/) | `cross/` 跨线设计契约（如 A×B 桌宠↔fleet 联动、sidebar 路线讨论）、`dsh-platform/` DSH 平台调研与升级回归记录。 |
 
-八条线代码零耦合，仅共享 `dsh-miasaki-shared-docs/`；跨线引用使用 `../dsh-miasaki-shared-docs/…` 相对路径（同仓 clone 后不断）。
+九条线代码零耦合，仅共享 `dsh-miasaki-shared-docs/`；跨线引用使用 `../dsh-miasaki-shared-docs/…` 相对路径（同仓 clone 后不断）。
 
 <!-- version-ledger:start — 由 `scripts/check-doc-versions.mjs` 校验；改 package.json 版本后跑 `node scripts/check-doc-versions.mjs --update` -->
 **版本台账**（机器校验的唯一版本来源；上表正文里的版本号是叙述，冲突以本表为准）：
@@ -30,7 +31,8 @@
 | SSH | `dsh-miasaki-ssh/` | 0.1.0-miasaki.0 |
 | 双模型 | `dsh-miasaki-dual-model/` | 0.1.3-miasaki.0 |
 | 外观 | `dsh-miasaki-appearance/` | 0.1.0-miasaki.0 |
-| 用量统计 | `dsh-miasaki-usage/` | 0.6.0 |
+| 用量统计 | `dsh-miasaki-usage/` | 0.6.1 |
+| 免费模型 | `dsh-miasaki-free-model/` | 0.4.0 |
 <!-- version-ledger:end -->
 
 ## 仓库结构
@@ -45,20 +47,21 @@ dsh-miasaki/
 ├─ dsh-miasaki-dual-model/  # 双模型线（index.js + client.js + lib/ + test/ + patches/；design/ 在其内）
 ├─ dsh-miasaki-appearance/  # 外观线（index.js + client.js + lib/ + test/；design/ 在其内）
 ├─ dsh-miasaki-usage/       # 用量统计线（`dsh-token-monitor` 插件本体：package.json + lib/ + scripts/ + cordis.patch.yml；design/ 在其内）
+├─ dsh-miasaki-free-model/  # 免费模型线（`@miasaki/dsh-free-model` 插件本体：package.json + lib/ + test/ + cordis.patch.yml；design/ 在其内）
 ├─ dsh-miasaki-shared-docs/ # 跨线共享参考（含 cross/smoke-test-matrix.md 回归矩阵）
-├─ scripts/verify-all.mjs   # 八线统一静态回归入口（L0 + L1）
+├─ scripts/verify-all.mjs   # 九线统一静态回归入口（L0 + L1）
 └─ .gitignore               # _refs/ vendor/ dist/ .vs/ .workbuddy/ .learnings/ AGENTS.md 等均已忽略
 ```
 
-## 统一回归（八线）
+## 统一回归（九线）
 
-> 八线全部纳入统一回归；需要重启 host 或真机的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）不在此脚本内。
+> 九线全部纳入统一回归；需要重启 host 或真机的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）不在此脚本内。
 
 **CI 已接入（2026-09-14）**：`.github/workflows/verify-all.yml` 在 `windows-latest` 上跑同一套回归
 （push `main`/`master` + 任意 PR + 手动触发），使质量保证不再只依赖"维护者记得在本机跑一次"。
 runner 自带 MSVC，因此本地 Git Bash 下 `cargo test` 的 `link.exe` 环境假阴性在 CI 中变成真信号。
 CI 先装**三条有依赖的线**再跑闸门：sidebar 与 ssh 用 `pnpm install --frozen-lockfile`、
-desktop 用 `npm ci --omit=dev`；canvas / fleet / dual-model / appearance / usage 已核实零依赖、无需安装。
+desktop 用 `npm ci --omit=dev`；canvas / fleet / dual-model / appearance / usage / free-model 已核实零依赖、无需安装。
 （依赖缺失的实测后果、Node 22.19.0 与 pnpm 11 的版本取舍、45 分钟超时的理由，均写在该文件头部注释里。）
 
 > **EOL 纪律（2026-09-14 起）**：仓库用 `.gitattributes`（`* -text`）禁止一切换行符转换。本仓多项检查做
@@ -67,7 +70,7 @@ desktop 用 `npm ci --omit=dev`；canvas / fleet / dual-model / appearance / usa
 > `-text` 规则优先于本机 `core.autocrlf`，因此任何机器 checkout 出的字节都一致 —— 编辑文件时请勿引入 CRLF。
 
 ```bash
-node scripts/verify-all.mjs               # 八线 + 仓库级治理闸门（L0 静态检查 + L1 单线单测）
+node scripts/verify-all.mjs               # 九线 + 仓库级治理闸门（L0 静态检查 + L1 单线单测）
 node scripts/verify-all.mjs usage         # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / repo）
 ```
 
@@ -285,6 +288,23 @@ canvas **105**、fleet **119**、ssh **310**、dual-model **33**、appearance **
 **那几个语法项就是这次排除的替代检查**（排除而不加替代检查＝把风险藏起来）；② 静默守卫闸门的新增命中已就地闭环
 （2 处 `rebuild-baseline.mjs` 的向上探测 catch 写 `guard-ok` 理由；2 处是 `uniqueDirectory()` 的**目标路径可用性探测**
 被 R1 误判，随目录排除一并消失），命中 64 → 60、新增 0、可回收 0。
+
+**2026-09-29 基线（全量 161 项检查，九线 + 仓库级全 PASS）**`[实测]`：sidebar 13/13、canvas 13/13、fleet 17/17、
+desktop **36/36**（免费模型池迁出后 40 → 36 —— 那 4 项随插件迁入第九线）、ssh 31/31、dual-model 12/12、
+appearance 18/18、usage 3/3、**free-model 15/15**（新线首次入账）、repo 3/3。
+**本次收尾抓到两处真缺陷，同属「迁移时漏登记」这一族**：
+
+① **两个仓库级闸门都漏了第九线** —— `check-silent-guards.mjs` 的 `LINES` 与 `check-message-sources.mjs` 的
+`REPO_TARGETS` 在 2026-09-28 第九线迁出时都没补 `dsh-miasaki-free-model`，而前者的注释**已经写成「九线」**
+（注释与实现不一致，正是这类缺口的典型签名）⇒ 整条线对两道闸门**不可见**；连带把基线里那条 free-model
+条目报成「可回收」（判据是「当前命中里没有」，真相是「没去扫」）。
+**纪律**：这类「可回收」预警**不能照着提示删基线**，要先核扫描清单 —— 删了就等于把不可见固化成干净。
+修后复跑：`silent-guards` 扫描根 10 → **11**、命中 59、新增 0、可回收 0；`message-sources` 仓库内
+198 → **215** 个源码文件、命中 0。
+
+② **核销一条基线欠账** —— 上条 free-model 的 `if (!existsSync(p)) continue;`（三个 agent 预设各自独立安装，
+跳过未装的那个是**业务判据本身**，不是「缺件静默降级」）就地写 `guard-ok` 豁免并从基线移除，
+存量 **58 → 57 类**（这是债不是背书，核销才让基线将来真能抓住回归）。
 
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）

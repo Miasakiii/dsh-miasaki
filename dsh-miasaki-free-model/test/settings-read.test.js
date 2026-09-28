@@ -64,7 +64,7 @@ test('≤0.1.6: an unregistered namespace reads as null', () => {
 });
 
 test('≤0.1.6: a throwing get propagates — route handlers keep reporting it', () => {
-  // free-model-pool's listPlatforms/apply are wrapped by the route envelope,
+  // free-model's listPlatforms/apply are wrapped by the route envelope,
   // which turns a throw into `{ok:false,error}` for the panel. The helper must
   // not swallow on the old path, or that posture dies.
   const ctx = {

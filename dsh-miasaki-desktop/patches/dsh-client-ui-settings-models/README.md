@@ -51,7 +51,8 @@
 > **徽标是可选依赖**：路由 404（插件未装 / host 未重启）时静默无徽标，与探测降级同构。
 > **免费模型池合体（C 项）零补丁改动**：baseline 0.1.5-rc.1 的 models section 本就声明并渲染了
 > `settings.models.footer` 列表槽，插件改为优先注册到那里、失败才回退自有 section
-> （见 `plugins/dsh-free-model-pool/lib/client.js`）。
+> （2026-09-28 起该插件已迁出本线更名 `@miasaki/dsh-free-model`，路径见
+> [`../../../dsh-miasaki-free-model/lib/client.js`](../../../dsh-miasaki-free-model/lib/client.js)）。
 
 ## 为什么是「运行时补丁」而不是插件
 官方设置页刻意不提供逐模型思考强度控件，也不做逐模型连通性测试——上游取向是
@@ -73,8 +74,8 @@
 |---|---|
 | `patch.mjs` | **补丁规范**：13 条锚点编辑规则（其中 **#5 分两代变体**，见下文「双代变体」）+ CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建两份 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
-| `baseline/client.original.js` | DSH **0.1.7-alpha.2** 官方原版 client.js（184,096 B，SHA-256 `B2D7D445…`）。与安装目录的 `client.js.dsh-bak` 逐字节一致 |
-| `baseline/client.patched.js` | 应用补丁后的产物（199,566 B，SHA-256 `9F2F1EE8…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
+| `baseline/client.original.js` | DSH **0.2.0-rc.1** 官方原版 client.js（186,641 B，SHA-256 `7674ED0B…`）。与安装目录的 `client.js.dsh-bak` 逐字节一致 |
+| `baseline/client.patched.js` | 应用补丁后的产物（202,112 B，SHA-256 `9AF06957…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
 
 > 两份 baseline 是第三方产物而非本项目源码，但它们是不可再生的重建依据
 > （`vendor/` 不入库、安装目录会被升级覆盖），故随补丁规则一并版本化。
@@ -87,6 +88,8 @@
 > → `0.1.5-rc.1` + v3 模型页增强（2026-09-22，**官方原版未变**，13 条编辑，产物 `7D7D8494…`）。
 > → `0.1.7-alpha.2`（2026-09-23 升级重打，`B2D7D445…` / `9F2F1EE8…`；`EDITS` 零改，
 > 变体 probe 在 0.1.7 原版上自动选中 0.1.6+ 分支，legacy 分支退为历史形态）。
+> → `0.2.0-rc.1`（2026-09-28 升级重打，`7674ED0B…` / `9AF06957…`；**`EDITS` 改了 1 处** ——
+> 官方去掉了插入点的尾逗号，旧的 `insertAfterOffset` 踩了 ASI 陷阱，见下文「ASI 陷阱」）。
 > 旧基线见 git 历史。
 
 ## 用法
@@ -198,6 +201,7 @@ props 契约固定。所以让**闭包留在 Editor**，跨组件传递的是**�
 | 2 | 编辑规则的 `lines` 无稀疏空洞；`replaceLine`（字典展开）除末行外每行都有尾逗号 | `applyPatch` 入口守卫 | 当场报出「哪条编辑的第几行缺尾逗号」 |
 | 3 | **产物是可解析的经典脚本** | `applyPatch` 出口 `assertParses`（`vm.Script`） | 语法闸门抛错；`status` 单独报「语法 非法」 |
 | 4 | **变体探测命中**：至少要有一个 `probe` 在源文件里 trim 后整行全等 | `resolveEdits` | 抛出「没有任何变体的探测锚点命中」并列出试过的 probe —— **不静默跳过** |
+| 5 | **插入点不得踩 ASI 陷阱**：插入的第一行若以 (/[/`  ` 等开头，则其前一行必须以 ,/;/{/[ 等分隔符结尾 | —— （2026-09-28 事故后立的规矩：见下文「ASI 陷阱」） | 语法闸门**查不出来**（jsx(...)(jsx(...)) 是合法语法），只能在浏览器里运行时炸 |
 
 ### 为什么「逐字节一致」不够（2026-09-19 事故复盘）
 
@@ -269,6 +273,51 @@ SHA 与常量一致、产物却是坏的）。`verify` 同时校验 `PATCHED_SHA
 > 而非文件被外部改坏。修法：补两个逗号 → `rebuild` → 同步常量 → `verify` 三行 PASS →
 > `resync` 重打。全量复扫 15 个 client/host bundle（4 个本体补丁目标 + 10 个自研插件）语法，**0 例同类**。
 > `verify-all.mjs desktop` **11/11**。
+
+> **实操记录（2026-09-28，实装 0.2.0-rc.1 后重打）**：先用 `rebuild-baseline.mjs` 更新两份 baseline
+> 与三个常量（`BASELINE_DSH_VERSION` → `0.2.0-rc.1`、`ORIGINAL_SHA256 7674ED0B…`），`status` 报
+> `patched`、`verify` 三行 PASS、**语法合法** —— 但真机点平台型供应商（`opencode` 等）的「编辑」
+> **整页白屏**：
+>
+> ```
+> TypeError: (0 , react_jsx_runtime.jsx)(...) is not a function
+>     at ModelListEditor (…/dsh-client-ui-settings-models/client.js)
+> slot entry crashed in 'settings.section'
+> ```
+>
+> **根因**：`edit #13`（「测试全部」按钮）的 `insertAfterOffset` 落在 `})` 之后，而 0.2.0 上官方
+> **去掉了那一行的尾逗号**（该按钮成了 children 数组的最后一项）⇒ ASI 陷阱（见下一节）。0.1.7 上
+> 那行是 `}),`，所以旧规则一直没暴露。
+>
+> **修法**：拆成两条编辑 —— `test-all-button-comma`（`replaceLine` + `offset: 1`：把 `})` 改回 `}),`）
+> ＋ `test-all-button`（`insertAfterOffset`，`expect: '}),'`）；并给 `replaceLine` 加了可选 `offset`
+> （默认 0，老用法不受影响）。
+>
+> **验证**：`verify` 三行 PASS（14 条编辑，产物 **202,112 B / `9AF06957…`**）→ `apply` 成功 →
+> 临时 host + playwright 实机点「编辑」：**面板正常打开、无 pageerror**，「测试全部」按钮在位，
+> `ModelListEditor` 正常渲染（「添加模型」「模型目录」「恢复默认模型」都在）。
+>
+> **一条待办（未动，属产品决策）**：`思考强度` / `测试连通性` 挂在**模型行**的容量区里，而现有
+> provider 都走「模型目录」模式（`models` 数组为空）⇒ 这两项控件**在用户当前配置下看不到**。
+
+### ASI 陷阱（写插入类编辑必读）
+
+**插入的第一行以 `(` / `[` / `` ` `` / `+` / `-` / `/` 开头时，前一行必须以 `,` / `;` / `{` / `[` 结尾。**
+否则 JS 的 ASI *不会*补分号，两行连成一个表达式：
+
+```js
+})                                     // ← 没有逗号
+(0, react_jsx_runtime.jsx)("button",  // ← 被解析成"上一行返回值的调用"
+```
+
+产物**语法完全合法**，`vm.Script` 闸门、`verify`、`status` 全绿，只有浏览器里跑起来才炸
+（`TypeError: (0 , react_jsx_runtime.jsx)(...) is not a function`）。V8 的报错形态可用来辨认：
+`(0 , o.f) is not a function` 是**属性不是函数**，而 `(0 , o.f)(...) is not a function` 是
+**返回值又被调用**（`f(...)(...)`）—— 后者就是 ASI 症状。
+
+**防呆**：`insertAfterOffset` 的 `expect` 断言就是为此存在的 —— 它会核对锚点 +offset 行的实际内容。
+但 `expect: '})'` 只保证"见到了 `})`"，**不保证它带逗号**。新写插入类编辑时，要么把
+`expect` 写成带分隔符的形态（如 `'}),'`），要么先补一条 `replaceLine` 把分隔符补上。
 
 > 生效机制：`dsh-client-modules` 以 `/plugins/??<id>/client.js&rev=<hash>` 提供该文件，
 > `client-hmr` 每 500ms stat 一次，命中变化即经 SSE 推 rebuilt 帧热更；

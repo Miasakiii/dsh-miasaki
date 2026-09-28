@@ -583,6 +583,19 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
   `#miasaki-titlebar` 内，拖动排除自动生效。底座仍为
   **Win11 Mica**（DWM 直调 `DWMWA_SYSTEMBACKDROP_TYPE`，窗口底透明），`.shadow(true)`
   恢复圆角/阴影/描边；Mica 不可用（Win10）时回退主题实色底，pure 保持原版实色。
+- **顶部安全区让位（2026-09-29）**：让位到此分**两个方向** —— 横向
+  `--ms-titlebar-reserve`（官方会话头 / dockkit strip 让开窗控组，见上），纵向
+  `--ms-titlebar-clearance`（官方**页面级**标题行**整行下移一格**）。后者由来：插件页
+  `.X_2TxG_pageHead`（「＋ 添加插件」）与日程页 `.t-XoWW_pageHeading` 的右侧动作区落在窗控带
+  `y[11,37]` 里，实测与窗控组重叠 **10px 高 × 71px 宽**（2026-09-29 用户截图报障）。
+  取值 = 窗控带下沿（11+26=37）+ 呼吸位 12 − 官方页头自有 `padding-top` 28 = **21px**，用
+  `margin-top` **叠加**下发（不覆写官方 padding：官方调值自动跟随，失败面只是「多让一点」）。
+  官方对这两处本来就有让位，但只写在 `[data-platform=darwin]` 分支，Windows 侧官方走原生边框
+  或 `[data-windows-titlebar]` 的整帧 `padding-top` —— 零占位壳都不适用，故由壳补这一格。
+  选择器用 `_pageHead` **子串**（CSS Module 前缀随版本变、后缀才稳，与 `_headerActions`
+  同口径；`_pageHead` 同时命中 `_pageHeading`）。无壳直开页面时该变量不存在 ⇒ 规则不生效，
+  与官方逐像素一致。算术闸门见 `themes/test/contract.test.js`，实机判据见
+  `scripts/verify-themes.mjs` §6.6 与 `dsh-miasaki-shared-docs/cross/smoke-test-matrix.md` §3.1 / E10。
 - 气泡台词为**构建期预渲染**的位图帧（`ui/pets/bubbles.png`，20 帧：17 台词 + 3 状态帧
   「忙碌中…/等待审批/需要你的批准」），运行时零 GDI 字体调用：
   Windows 11 的 GDI 字体在多线程（WebView2 + 桌宠线程）并发使用时存在已知堆损坏，`CreateFontW`
@@ -622,7 +635,6 @@ desktop/
 │  │                         #   （00-boot.js 含 DSH 鉴权 cookie 注入：dsh 后端重启后
 │  │                         #    旧 cookie 失效黑屏时自动重签并重载，见 CHANGELOG 2026-09-05）
 │  └─ runtime.js             # legacy 回退源（build-init 缺 src/ 时使用）
-├─ plugins/dsh-free-model-pool/  # DSH web profile bundle：免费模型池插件（见下）
 ├─ plugins/dsh-pet-panel/        # DSH web profile bundle：桌宠设置面板（设置 → 桌宠）
 ├─ plugins/dsh-session-log-move/ # DSH web profile bundle：会话日志下载入口迁移（主界面 → 轨迹页搜索栏左侧，见下）
 ├─ plugins/dsh-model-probe/      # DSH web profile bundle：模型连通性真实探测（host only，设置页「测试连通性」的 B 档能力，见下）
@@ -650,7 +662,17 @@ desktop/
 > 桌面端 profile —— 官方桌面端现在只挂这一条，即可获得完整用量统计。搬迁理由、装法
 > （`link:`）与验证见该线 `README.md` 与 `design/CHANGELOG.md`。
 
-## DSH 插件：免费模型池（`plugins/dsh-free-model-pool/`）
+## DSH 插件：免费模型池 → **已迁出本线**（2026-09-28）
+
+> **本插件已于 2026-09-28 迁出桌面端线，独立成第九线 [`../dsh-miasaki-free-model/`](../dsh-miasaki-free-model/)**，
+> 同批**更名**（`dsh-free-model-pool` → `@miasaki/dsh-free-model`、路由前缀 `/freepool-api/*` →
+> `/freemodel-api/*`、槽 id `free-model-pool` → `free-model`）并**补上路由信任围栏**（`lib/trust.js`）。
+> 本线插件数 5 → 4。理由（职责不属于桌面壳 + 名字装不下"多来源"新定位 + 一条真实安全债）与完整
+> 变更记录见 [`../dsh-miasaki-free-model/design/CHANGELOG.md`](../dsh-miasaki-free-model/design/CHANGELOG.md)；
+> 后续路线（M1–M4）见跨线规划
+> [`../dsh-miasaki-shared-docs/cross/free-model-unified-page-2026-09-28.md`](../dsh-miasaki-shared-docs/cross/free-model-unified-page-2026-09-28.md)。
+>
+> 以下保留迁出前的行为要点，供本线历史记录对照 —— **这些描述自 2026-09-28 起由新线维护**：
 
 > **官方 dsh 0.1.2-rc.1 适配（2026-09-05）**：四个插件与 `@miasaki/dsh-canvas` 已核对
 > 并跟进官方 0.1.2 插件 API（peerDeps 对齐 `^0.1.2-rc.1`，canvas 清理已消失的
@@ -658,11 +680,13 @@ desktop/
 > `settings.yaml` 里模型 id 不在官方 catalog 的平台必须显式声明 `api` 与 `baseURL`
 > 才能整节通过校验（否则整节失效、免费模型池平台列表为空）。适配细节与排查记录见
 > `design/CHANGELOG.md`。
+>
+> 检出免费模型并给出能力画像与适用性决策。**2026-09-22 起面板挂「设置 → 模型」页底部**
+> （`settings.models.footer`，id `free-model`；该槽经 2026-09-28 核查为**官方原生**、并非
+> 模型页补丁所造 —— 迁出前的注释把它归因给补丁，是错的）；该槽尚未声明时回退自有
+> `settings.section` 栏，两个目标互斥、失败日志只记一次（v0.3.0）：
 
-检出免费模型并给出能力画像与适用性决策。**2026-09-22 起面板改挂「设置 → 模型」页底部**
-（`settings.models.footer` 列表槽，模型页补丁声明并渲染的现成挂点），不再单独占一栏；
-补丁缺席（未打 / 被升级覆盖）时自动回退自有 `settings.section`「免费模型池」栏，
-两个目标互斥、失败日志只记一次（v0.3.0）：
+以下为**迁出前的原文照录**（2026-09-28 之前的状态，最新描述在新线 README）：
 
 - **多平台扫描**：扫描 `llm-pi-ai.providers` 中**带 baseURL 的全部 OpenAI 兼容平台**（OpenRouter、
   自建网关、微信 chatapi 等），一个面板统一管理；新增平台只需在设置 → 模型页配置，
@@ -685,11 +709,14 @@ desktop/
   `ctx.settings.get is not a function`（线上实测）；配套评估见 shared-docs
   `dsh-0.1.7-upgrade-assessment-2026-09-23.md` §7.4。
 
-安装（host 重启后生效）：`plugins/dsh-free-model-pool` 为 `file:` 依赖，被
+~~安装（host 重启后生效）：`plugins/dsh-free-model-pool` 为 `file:` 依赖，被
 `%USERPROFILE%\.dsh\profiles\web\package.json` 的 `dsh.profile.bundles` 引用；修改源码后需在
 profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm file: store 缓存会滞后，
 务必核对文件哈希）。client bundle 为手写 `window.__ModuleLoader__.load` 格式（本机无 tsdown），
-勿用 JSX；面板经同源 `/freepool-api/*` JSON 路由与 host 通信（client bundle 无 `host.call`）。
+勿用 JSX；面板经同源 `/freepool-api/*` JSON 路由与 host 通信（client bundle 无 `host.call`）。~~
+**安装方式已随迁线改变**：新线包名 `@miasaki/dsh-free-model`、装法 `file:` → `link:`，
+见 [`../dsh-miasaki-free-model/README.md`](../dsh-miasaki-free-model/README.md) §安装。
+（client bundle 仍是手写 `window.__ModuleLoader__.load`、勿用 JSX 的约束不变。）
 
 ## DSH 插件：桌宠设置面板（`plugins/dsh-pet-panel/`）
 

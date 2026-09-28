@@ -50,7 +50,7 @@ const PATCHED_FILE = join(BASELINE, 'client.patched.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-attachment'
 /** DSH 版本基线：CSS 锚点与两份 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
+export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
 /** 官方原版 client.js 的 SHA-256。 */
 export const ORIGINAL_SHA256 = '538711EF1FD7CBEDD7C80817AFB878A2568868F7EF7E0E23D56843C32CF5E969'
 /** 应用本补丁后的 SHA-256。 */

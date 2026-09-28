@@ -82,7 +82,15 @@ node patch.mjs revert            # 从 .dsh-bak 还原
 node rebuild-baseline.mjs        # 升级后：用当前安装的官方原版重建 baseline
 
 # 通用参数：--target <client.js 路径> 覆盖自动探测（默认探测 %APPDATA%\npm 全局安装）
+#          --yes 允许对 unknown 状态的目标强制应用（original 状态无需）
 ```
+
+> **注（2026-09-28 修复）**：这两个参数在 2026-09-28 之前**双双失效** ——
+> `parseArgs` 把 `argv[i]` 误写成 `args[i]`（`args` 是结果对象，`args[i]` 恒为 `undefined`），
+> 于是 `--target` 被忽略、**恒回落到 live 安装目录**，`--yes` 恒为 false。
+> 已在同批修复并实测验证（见
+> [`../../design/CHANGELOG.md`](../../design/CHANGELOG.md) 2026-09-28（续八））。
+> **若你在旧提交上用 `--target` 做过离线预检，那次针对本件的结论不成立**（其余八件不受影响）。
 
 `verify` 是纯离线检查，不碰安装目录，已接入仓库级统一回归：
 

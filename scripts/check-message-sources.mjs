@@ -14,7 +14,7 @@
 //   dsh-0.1.7-session-v4-source-admission-2026-09-27.md。
 //
 // 本闸门做两件事：
-//   ① 仓库内（八线 + desktop 的 plugins/themes/ui/patches）一律禁止构造式旧写法；
+//   ① 仓库内（九线 + desktop 的 plugins/themes/ui/patches）一律禁止构造式旧写法；
 //   ② `--installed`（默认开启）顺带体检本机 `~/.dsh/profiles/*/node_modules` 下的
 //      **非官方**插件包 —— CI 上没有该目录时**显式打印跳过原因**（不静默）。
 //
@@ -65,6 +65,7 @@ const REPO_TARGETS = [
   'dsh-miasaki-dual-model',
   'dsh-miasaki-appearance',
   'dsh-miasaki-usage',
+  'dsh-miasaki-free-model',
   'dsh-miasaki-desktop/plugins',
   'dsh-miasaki-desktop/themes',
   'dsh-miasaki-desktop/ui',

@@ -1,0 +1,15 @@
+# @miasaki/dsh-free-model（第九线 · 多来源免费模型聚合器）
+#
+# DSH web profile bundle：免费模型插件（host 半身 + client 面板）。
+# - client 面板挂在 设置 → 免费模型（settings.section，id: free-model）
+# - client 经同源 JSON 路由 /freemodel-api/* 与 host 通信（面板在浏览器中运行，
+#   直接 fetch 本机 webServer；host 侧每个请求先过信任围栏，见 lib/trust.js）
+# - host 侧能力：
+#   /freemodel-api/status   —— 列出可扫描平台（llm-pi-ai.providers 中带 baseURL 的路由）
+#   /freemodel-api/detect   —— 拉取指定平台的 /models，按分层免费规则筛出免费模型 + 能力画像
+#   /freemodel-api/apply    —— 把检测结果写入该 provider 的 models（settings.update 深合并）
+#   /freemodel-api/subagent —— 更新 ~/.dsh/.agent-presets/<kurumi|whale|inverse>/agent.cordis.yml
+#                             中 tool-subagent / tool-subagent-fork 的 agentOptions
+- insert:
+    - id: free-model
+      name: '@miasaki/dsh-free-model'

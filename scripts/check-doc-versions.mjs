@@ -9,7 +9,7 @@
 //
 // ── 做法：单点台账，机器校验 ─────────────────────────────────────────────────
 // 根 `README.md` 里维护一块 `<!-- version-ledger -->` 区块，逐线记录 `package.json`
-// 的 version。本脚本校验该区块与八线 `package.json` 逐字一致：
+// 的 version。本脚本校验该区块与九线 `package.json` 逐字一致：
 //   · 数值不一致 → 失败；
 //   · 缺某条线 / 多出未知目录 → 失败。
 // 改版本后跑 `--update` 一键同步（diff 只动版本号那一格，易复核）。
@@ -35,7 +35,7 @@ const README_PATH = join(ROOT, 'README.md')
 const START_MARK = '<!-- version-ledger:start'
 const END_MARK = '<!-- version-ledger:end -->'
 
-/** 权威列表：八线的显示名与目录（顺序即台账顺序）。 */
+/** 权威列表：九线的显示名与目录（顺序即台账顺序）。 */
 const LINES = [
   ['桌面端', 'dsh-miasaki-desktop'],
   ['Fleet', 'dsh-miasaki-fleet'],
@@ -45,6 +45,7 @@ const LINES = [
   ['双模型', 'dsh-miasaki-dual-model'],
   ['外观', 'dsh-miasaki-appearance'],
   ['用量统计', 'dsh-miasaki-usage'],
+  ['免费模型', 'dsh-miasaki-free-model'],
 ]
 
 const ROW_RE = /^\|\s*([^|]+?)\s*\|\s*`?([\w-]+)\/?`?\s*\|\s*([^\s|]+)\s*\|\s*$/
@@ -59,7 +60,11 @@ function ledgerBounds(text) {
   const start = text.indexOf(START_MARK)
   const end = text.indexOf(END_MARK)
   if (start === -1 || end === -1 || end < start) return null
-  return { start, end }
+  // `end` 取 END_MARK **之后**的偏移，作为台账块的右边界（左闭右开）。
+  // 旧实现返回 END_MARK 的起始偏移，`--update` 里 `text.slice(bounds.end)` 于是
+  // 把**旧的** END_MARK 原样留在新块后面 —— 每跑一次 `--update` 就多一个 END_MARK
+  // （本机实测已被跑脏成 3 个）。标记重复不影响校验（取第一个），但会持续增生。
+  return { start, end: end + END_MARK.length }
 }
 
 /** 解析台账块里的行 → Map<目录, {name, version, raw}>。 */
@@ -141,4 +146,4 @@ if (mismatches.length > 0 || missing.length > 0 || unknown.length > 0) {
   console.error('  修法：node scripts/check-doc-versions.mjs --update，并复核 diff（只应动版本号那一格）。')
   process.exit(1)
 }
-console.log('\n[doc-versions] 版本台账与八线 package.json 一致。')
+console.log('\n[doc-versions] 版本台账与九线 package.json 一致。')

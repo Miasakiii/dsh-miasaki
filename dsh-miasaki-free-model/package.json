@@ -1,8 +1,8 @@
 {
-  "name": "dsh-free-model-pool",
-  "version": "0.3.1",
+  "name": "@miasaki/dsh-free-model",
+  "version": "0.4.0",
   "type": "module",
-  "description": "免费模型池：检测多个 OpenAI 兼容平台的免费模型，输出能力画像与适用性决策，一键写入模型配置并切换子代理后端。",
+  "description": "多来源免费模型聚合器：经官方 llm 契约枚举本机全部 provider（含免 Key 车道）与自配 OpenAI 兼容平台，检出免费模型并给出能力画像与适用性决策，可显式写入模型配置、指派子代理后端。",
   "license": "MIT",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

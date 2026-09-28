@@ -62,7 +62,7 @@ test('≤0.1.6: an unregistered namespace reads as null', () => {
 
 test('≤0.1.6: a throwing get propagates — call sites keep their own posture', () => {
   // model-probe wraps the read in try/catch (degrade to request fields);
-  // free-model-pool lets the route handler report it. The helper must not
+  // free-model (dsh-miasaki-free-model) lets the route handler report it. The helper must not
   // swallow on the old path, or that difference dies.
   const ctx = {
     settings: {

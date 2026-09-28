@@ -2,7 +2,7 @@
  * Route-level regression coverage for the dual-track settings read.
  *
  * The live 0.1.7 breakage was `ctx.settings.get is not a function` surfacing
- * verbatim from GET /freepool-api/status — the Models page's free-model pool
+ * verbatim from GET /freemodel-api/status — the Models page's free-model pool
  * panel rendered it as its error text. These cases boot the real `apply()`
  * with each world's settings service and drive the actual routes, so the
  * regression net covers the wiring, not just the helper:
@@ -19,8 +19,8 @@ import assert from 'node:assert/strict';
 import { apply } from '../lib/index.js';
 
 const NS = 'llm-pi-ai';
-const STATUS_PATH = '/freepool-api/status';
-const APPLY_PATH = '/freepool-api/apply';
+const STATUS_PATH = '/freemodel-api/status';
+const APPLY_PATH = '/freemodel-api/apply';
 
 /** The stored section: one scan-able route (a baseURL is what qualifies). */
 const STORED = {
@@ -55,6 +55,8 @@ function boot(settings) {
   apply({
     settings,
     webServer: { register: (entry) => routes.set(entry.path, entry.handler) },
+    // 信任围栏逐请求读 `connection`；这些用例的 composition 没有该服务 → 走结构层。
+    get: () => undefined,
   });
   return async (path, body) => {
     const handler = routes.get(path);
@@ -62,7 +64,8 @@ function boot(settings) {
     const text = body === undefined ? '' : JSON.stringify(body);
     const req = {
       method: body === undefined ? 'GET' : 'POST',
-      headers: {},
+      // 结构层要求回环 Host —— 越界与顺序断言见 test/trust.test.js。
+      headers: { host: '127.0.0.1:3080' },
       on(event, cb) {
         if (event === 'data' && text !== '') cb(Buffer.from(text));
         if (event === 'end') cb();
@@ -134,4 +137,22 @@ test('a settings service with neither read method degrades to an empty platform 
   const reply = await call(STATUS_PATH);
   assert.equal(reply.ok, true);
   assert.deepEqual(reply.platforms, []);
+});
+
+test('route table: 每个路径只注册一条 exact 路由（webServer 按 path 去重）', () => {
+  // 真机教训（2026-09-28，DSH 0.2.0-rc.1）：webServer 的 exact 表**按 path 去重**，
+  // 同一路径注册第二条会抛 `duplicate exact route` —— 而那是 apply 期抛错，
+  // 结果是**整个插件不激活**（启动日志：`1 entry did not activate`）。
+  // 离线测试的 mock webServer 只往表里塞，永远看不见这条约束，所以在闸门里前移它：
+  // 一个路径的多个方法必须在**同一条**路由内分派。
+  const routes = [];
+  apply({
+    settings: { get: (ns) => (ns === NS ? STORED : undefined) },
+    webServer: { register: (entry) => routes.push(entry) },
+    get: () => undefined,
+  });
+  const paths = routes.map((entry) => entry.path);
+  const duplicates = [...new Set(paths.filter((path, index) => paths.indexOf(path) !== index))];
+  assert.deepEqual(duplicates, [], `同一路径注册了多条：${duplicates.join('、')}`);
+  assert.equal(routes.length > 0, true, '至少要注册一条路由');
 });

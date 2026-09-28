@@ -52,7 +52,7 @@ const ORIGINAL_FILE = join(BASELINE, 'client.original.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-trajectory'
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
+export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
 /** 官方原版 client.js 的 SHA-256（安装目录中该文件尚无 .dsh-bak，即从未被改过）。 */
 export const ORIGINAL_SHA256 = '71FA00F0C3E92278E54E9203A819305F5ABF7103D5B32114AD52AFD467BB3B9C'
 /**

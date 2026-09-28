@@ -42,9 +42,9 @@ const PATCHED_FILE = join(BASELINE, 'client.patched.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-settings-models'
 /** DSH 版本基线：锚点文本与两份 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.1.7-rc.2'
+export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '67EBF868E5278F9E260D164B048A8ABB320A4DE16D63C05B6DAD7302071ABAA2'
+export const ORIGINAL_SHA256 = '7674ED0BA2EEF60FA7DB91B4BF8CEA4DC23E1F0A2F3DD1E6A2A67AD4C0D005FA'
 /**
  * 应用本补丁后的 SHA-256（v2 连通性探测 + locale 尾逗号修复，2026-09-19 起的状态）。
  *
@@ -53,7 +53,7 @@ export const ORIGINAL_SHA256 = '67EBF868E5278F9E260D164B048A8ABB320A4DE16D63C05B
  * 产物语法错误且让整份 client bundle 不注册。它之所以能通过 `verify` 并被打进生产，
  * 是因为当时的 `verify` 只做逐字节比对（可复现 ≠ 合法）——`assertParses` 因此加入。
  */
-export const PATCHED_SHA256 = '6C7DB5D18C91C71E2E6C041C49E828600AB40606A9DFE1C0F4FE772EEADDAB31'
+export const PATCHED_SHA256 = '9AF06957826A9E7551A1D98C3D594449D47DBE41169DDB2B223D567C9DA3898B'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = 'const REASONING_LEVELS = '
 
@@ -555,11 +555,21 @@ const EDITS = [
   {
     // B（UI 侧）：「测试全部」按钮，挂在模型列表头「获取可用模型」右侧。
     // 锚点是获取按钮的 children 行；+1 是其 `})`，插后即落在头部 children 数组内。
+    id: 'test-all-button-comma',
+    // 0.2.0-rc.1 起「获取可用模型」是这个 children 数组的**最后一项**、其 `})` 行
+    // **没有尾逗号** ⇒ 不能直接"在其后插入"（会踩 ASI 陷阱，见 applyOne 里 replaceLine 的注释）。
+    // 拆成两步：这条单行改写把逗号补回去（单行，能过"词条尾逗号"守卫），下一条再正常插入。
+    mode: 'replaceLine',
+    anchor: 'children: busy ? t("fetching") : t("fetchModels")',
+    offset: 1,
+    lines: ['\t\t\t\t\t\t\t}),'],
+  },
+  {
     id: 'test-all-button',
     mode: 'insertAfterOffset',
     anchor: 'children: busy ? t("fetching") : t("fetchModels")',
     offset: 1,
-    expect: '})',
+    expect: '}),',
     lines: [
       '\t\t\t\t\t\t\t(0, react_jsx_runtime.jsx)("button", {',
       '\t\t\t\t\t\t\t\ttype: "button",',
@@ -706,7 +716,17 @@ function applyOne(lines, edit) {
     }
     lines.splice(target + 1, 0, ...edit.lines)
   } else if (edit.mode === 'replaceLine') {
-    lines.splice(at, 1, ...edit.lines)
+    // `offset` 可选：默认替换锚点那一行；给了偏移就替换「锚点之后第 offset 行」。
+    //
+    // 2026-09-28 加（0.2.0-rc.1 适配）：官方把那处 `children` 数组的尾逗号去掉了，
+    // 于是"在 `})` 之后插入新元素"会踩 **ASI 陷阱** ——
+    //     })
+    //     (0, react_jsx_runtime.jsx)("button", { … }),
+    // 换行后跟 `(` 不会补分号，两行连成 `jsx(...)(jsx(...))`：语法合法，运行时才炸
+    // （`TypeError: (0 , react_jsx_runtime.jsx)(...) is not a function`，整页白屏）。
+    // 正确姿势是把那一行也纳入改写：补上逗号，再跟新元素。
+    const target = at + (edit.offset ?? 0)
+    lines.splice(target, 1, ...edit.lines)
   } else {
     throw new Error(`${edit.id}: 未知的编辑模式 ${edit.mode}`)
   }

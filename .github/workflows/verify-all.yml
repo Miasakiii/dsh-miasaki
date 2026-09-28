@@ -1,12 +1,12 @@
 # dsh-miasaki 统一回归 CI
 #
 # 落地评审报告 P0-1（无 CI）+ A2（把 desktop 的 cargo test 环境假阴性变成真信号）。
-# 在 windows-latest 上跑 `node scripts/verify-all.mjs`（八线 L0 静态检查 + L1 单线单测）。
+# 在 windows-latest 上跑 `node scripts/verify-all.mjs`（九线 L0 静态检查 + L1 单线单测）。
 #
 # ── 与 2026-09-13 草稿的差异（2026-09-14 审查修正，均已实测验证）────────────────
 #
 # 草稿的核心判断「七线中唯 ssh 有运行时依赖，其余六线零依赖」是错的（那是当时的线数，
-# 现已为八线），据此只装了
+# 现已为九线），据此只装了
 # ssh 依赖，会导致 CI 首次运行即有两条线必然失败。实际的依赖分布（读各线
 # package.json 核实）：
 #
@@ -75,7 +75,7 @@ permissions:
 
 jobs:
   verify-all:
-    name: 八线统一回归 (windows-latest)
+    name: 九线统一回归 (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -135,8 +135,8 @@ jobs:
         working-directory: dsh-miasaki-desktop
         run: npm ci --omit=dev
 
-      # 唯一质量闸门：八线统一回归。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
-      - name: 运行 verify-all（八线 L0 + L1）
+      # 唯一质量闸门：九线统一回归。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
+      - name: 运行 verify-all（九线 L0 + L1）
         run: node scripts/verify-all.mjs
 
       # 说明：以下实机项不在本 CI 内（需运行中的 DSH host 或桌面壳），

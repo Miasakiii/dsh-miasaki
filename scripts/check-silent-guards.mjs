@@ -36,7 +36,7 @@
 //                      范围：host 半 + 构建链。
 //   R4 声明清单缺口 —— `package.json` 的 `files` 与磁盘/代码引用的两向不一致
 //                      （正向：列了不存在；反向：代码引用的资源没被覆盖 = 第 ③ 例）。
-//                      范围：全部八线。
+//                      范围：全部九线。
 //
 // ── 本闸门**抓不到**的形态（别把它的绿灯当成全面保证）──────────────────────
 //   · 「写失败返回成功」（第 ④ 例 appearance 的原始形态）—— 需要行为测试，不是语法；
@@ -61,6 +61,10 @@ import { fileURLToPath } from 'node:url'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const BASELINE_PATH = join(ROOT, 'scripts', 'silent-guard-baseline.json')
 
+// 2026-09-29：第九线 `dsh-miasaki-free-model` 迁出时**漏登记在此** —— 本数组是扫描根的
+// 唯一来源，漏一条线 = 整条线对本闸门**不可见**（它同时让基线条目被误判为「可回收」：
+// 判据是「当前命中里没有」，而真相是「没去扫」）。注释当时已写「九线」而数组只有八条，
+// 评论与实现不一致正是这类缺口的典型签名 —— 加线时**以本数组为准**，别信注释。
 const LINES = [
   'dsh-miasaki-sidebar',
   'dsh-miasaki-canvas',
@@ -70,9 +74,10 @@ const LINES = [
   'dsh-miasaki-dual-model',
   'dsh-miasaki-appearance',
   'dsh-miasaki-usage',
+  'dsh-miasaki-free-model',
 ]
 
-/** 扫描根：八线 + 仓库脚本 + 跨线补丁（playwright）。 */
+/** 扫描根：九线 + 仓库脚本 + 跨线补丁（playwright）。 */
 const SCAN_ROOTS = [
   ...LINES.map(line => join(ROOT, line)),
   join(ROOT, 'scripts'),

@@ -332,6 +332,71 @@ try {
       `组宽 ${reserveAfterRemove.group.w}，reserve=${reserveAfterRemove.reserve}`)
   }
 
+  // ---------- 6.6 顶部安全区：官方页面标题行 × 窗控组（2026-09-29 用户报障） ----------
+  // 报障现象：插件页右上角「+ 添加插件」胶囊与窗控三键/主题徽记叠压（截图实测重叠
+  // 10px × 71px）。根因是窗控组为**零占位浮层**（纵向占 [11,37]px），而官方**页面级**
+  // 标题行（插件页 `.X_2TxG_pageHead`、日程页 `.t-XoWW_pageHeading`）的右侧动作区正落在
+  // 这一带 —— 官方只在 darwin 分支加顶部 clearance，Windows 侧官方走原生边框或
+  // `[data-windows-titlebar]` 的整帧 padding-top，都不适用于本壳的零占位形态。
+  // 修法：壳注入 `--ms-titlebar-clearance`（= 窗控带下沿 37 + 呼吸位 12 − 官方页头
+  // padding-top 28 = 21px），官方页头 `margin-top` 叠加式下移。本节在真实页面上**打开
+  // 插件页**并量矩形，断言「动作区 / 末键 / 页头内所有可见子元素」三者与窗控组互不相交，
+  // 且动作区退到窗控带之下。
+  //
+  // ⚠ 判据必须量**内容**，不能量页头容器（2026-09-29 首轮实机跑出来的教训）：
+  // `.X_2TxG_pageHead` 是**全宽 flex 行**，其 border box 从 y=0 起因自身 28px padding 起算，
+  // 下移后仍与窗控带有 16px 的**矩形相交**（1088px²）—— 但那是空白 padding 区，肉眼零叠压。
+  // 首版判据写成「整行不叠压」因此恒失败（实机 27 项里 2 项假失败）。
+  // 入口按 aria-label（中文「插件」/英文 Plugins）定位官方侧栏行，找不到即显式 skip ——
+  // 官方换类名 / 换文案时这里应表现为「跳过」，不得退化成误报通过。
+  const PAGEHEAD_GEOM = `(function(){
+    function rc(el){if(!el)return null;var r=el.getBoundingClientRect();
+      return {l:+r.left.toFixed(2),t:+r.top.toFixed(2),r:+r.right.toFixed(2),b:+r.bottom.toFixed(2)};}
+    function ov(a,b){if(!a||!b)return null;var w=Math.min(a.r,b.r)-Math.max(a.l,b.l);var h=Math.min(a.b,b.b)-Math.max(a.t,b.t);
+      return +(Math.max(0,w)*Math.max(0,h)).toFixed(2);}
+    var g=rc(document.querySelector('#miasaki-titlebar .tb-group'));
+    var head=document.querySelector('#root [class*="_pageHead"]');
+    var acts=head?(head.querySelector('[class*="_toolbar"]')||head.querySelector('[class*="_creationActions"]')):null;
+    var btns=acts?acts.querySelectorAll('button'):[];
+    var last=btns.length?rc(btns[btns.length-1]):null;
+    var hr=rc(head),ar=rc(acts);
+    // 页头**可见子元素**（标题块 / 动作区）—— 容器自身的 padding 区不参与判据
+    var kids=head?[].slice.call(head.children):[];
+    var worst=0,worstCls='';
+    for(var i=0;i<kids.length;i++){var o=ov(g,rc(kids[i]));if(o!==null&&o>worst){worst=o;worstCls=String(kids[i].className).slice(0,64);}}
+    return JSON.stringify({group:g,head:hr,acts:ar,btn:last,kids:kids.length,
+      overlapKids:worst,worstKid:worstCls,
+      overlapActs:ov(g,ar),overlapBtn:ov(g,last),
+      gapActs:(ar&&g)?+(ar.t-g.b).toFixed(2):null,
+      marginTop:head?getComputedStyle(head).marginTop:null,
+      clearance:getComputedStyle(document.documentElement).getPropertyValue('--ms-titlebar-clearance').trim()});
+  })()`
+
+  const pluginsEntry = await evaluate(`(function(){
+    var hit=null,rows=document.querySelectorAll('button[aria-label]');
+    for(var i=0;i<rows.length;i++){if(/插件|Plugins/i.test(rows[i].getAttribute('aria-label')||'')){hit=rows[i];break;}}
+    if(!hit){var all=document.querySelectorAll('button,[role="button"],a');
+      for(var j=0;j<all.length;j++){if((all[j].textContent||'').trim()==='插件'){hit=all[j];break;}}}
+    if(!hit)return 'no-entry';
+    hit.click();return 'clicked';
+  })()`)
+  await sleep(2500)
+  const ph = JSON.parse(await evaluate(PAGEHEAD_GEOM))
+  if (!ph.head) {
+    skip('插件页：官方页面标题行与窗控组不叠压',
+      `未找到 [class*="_pageHead"]（侧栏入口=${pluginsEntry}；官方换 CSS Module 类名或本 profile 未装 plugin-manager？）`)
+  } else {
+    check('插件页：页头可见内容（标题块 / 动作区）与窗控组不叠压',
+      ph.overlapKids === 0,
+      `overlap=${ph.overlapKids}px² 最差子元素=${ph.worstKid || '—'}（容器${span(ph.head)} 是全宽行，padding 区不算）`)
+    check('插件页：页头动作区（刷新 / + 添加插件）与窗控组不叠压',
+      ph.overlapActs === 0 && ph.overlapBtn === 0,
+      `动作区 overlap=${ph.overlapActs}px² 末键 overlap=${ph.overlapBtn}px² 动作区${span(ph.acts)}`)
+    check('插件页：动作区退到窗控带之下（留呼吸位）',
+      ph.gapActs !== null && ph.gapActs >= 8,
+      `动作区上沿 − 窗控带下沿 = ${ph.gapActs}px（--ms-titlebar-clearance=${ph.clearance}，margin-top=${ph.marginTop}）`)
+  }
+
   const failed = results.filter((r) => !r.ok).length
   console.log(`\n${results.length - failed}/${results.length} 项通过`)
   if (failed > 0) process.exitCode = 1

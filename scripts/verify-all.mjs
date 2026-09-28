@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// 八线 + 仓库级统一静态回归入口（L0 静态检查 + L1 单线单测）。
+// 九线 + 仓库级统一静态回归入口（L0 静态检查 + L1 单线单测）。
 //
 // 只跑「无外部依赖、可在任意机器复现」的检查：语法、单测、总线校验、令牌漂移、
 // 运行时补丁离线自证。需要运行中的 DSH host 或桌面壳的实机项（L2 插件加载 /
 // L3 冒烟 / L4 跨线联动）不在此脚本内——它们的清单在
 // dsh-miasaki-shared-docs/cross/smoke-test-matrix.md。
 //
-// `repo` 是**仓库级治理闸门**（跨八线生效，不属于任何单线）：见 planRepo()。
+// `repo` 是**仓库级治理闸门**（跨九线生效，不属于任何单线）：见 planRepo()。
 //
 // 用法：
-//   node scripts/verify-all.mjs                      # 全部八线 + 仓库级
+//   node scripts/verify-all.mjs                      # 全部九线 + 仓库级
 //   node scripts/verify-all.mjs dual-model           # 只跑指定线
 //                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / repo）
 //
@@ -24,7 +24,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance', 'usage', 'repo']
+const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance', 'usage', 'free-model', 'repo']
 
 /** Run one command, inheriting stdio; resolves to the exit code. */
 function run(cmd, args, cwd) {
@@ -400,22 +400,8 @@ function planDesktop() {
     args: [join(dir, 'plugins/dsh-model-probe/test/settings-read.test.js')],
     cwd: join(dir, 'plugins/dsh-model-probe'),
   })
-  // 免费模型池（plugins/dsh-free-model-pool）：与 model-probe 同一破绽的同孪生
-  // 修法——0.1.7 移除 ctx.settings.get 后，模型页面板整块报错。routes 测试用
-  // fetch 打桩驱动真实 /status 与 /apply 路由（唯一外部服务是平台 /models），
-  // 双世界各一遍；settings-read 测试锁 helper 契约。
-  for (const entry of ['lib/index.js', 'lib/settings-read.js']) {
-    checks.push({ line: 'desktop', name: `syntax plugins/dsh-free-model-pool/${entry}`, cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-free-model-pool', entry)], cwd: dir })
-  }
-  for (const file of ['test/settings-read.test.js', 'test/routes.test.js']) {
-    checks.push({
-      line: 'desktop',
-      name: `test free-model-pool (${file.replace('test/', '').replace('.test.js', '')})`,
-      cmd: process.execPath,
-      args: [join(dir, 'plugins/dsh-free-model-pool', file)],
-      cwd: join(dir, 'plugins/dsh-free-model-pool'),
-    })
-  }
+  // 免费模型池已于 2026-09-28 迁出本线 → 独立第九线 dsh-miasaki-free-model
+  // （更名 @miasaki/dsh-free-model）。原先挂在这里的三项闸门随迁，见 planFreeModel()。
   // 会话日志入口迁移（plugins/dsh-session-log-move，2026-09-26 纳入）：0.1.7 起槽声明
   // 随 entry 加载（dsh-client-ui-slots 的 register 要求 spec 已在场），要注册
   // conversation.session.header.utilities 就必须在 dsh.client.inject 里声明承载它的
@@ -517,13 +503,67 @@ function planUsage() {
 }
 
 /**
- * 仓库级治理闸门（跨八线生效，不属于任何单线）。
+ * 第九线：多来源免费模型聚合器（`@miasaki/dsh-free-model`）。
+ *
+ * 2026-09-28 由 desktop 线迁出并更名（原 `plugins/dsh-free-model-pool`）。
+ * 迁出同批补上了**路由信任围栏** —— 本插件的 exact 路由不经过内核 `/api` 的准入链，
+ * 围栏是唯一口子，因此它是本线的头号闸门。
+ *
+ * 四类检查：
+ *   · host 半语法：index.js / trust.js / settings-read.js / profile.js / scan.js；
+ *   · trust.test.js：结构层五条边界（回环 Host、非回环、Host 缺失 fail closed、
+ *     跨站 fetch、异源/opaque Origin）+ connection 服务两层语义（401/403/放行/抛错回落）
+ *     + **逐请求读取**（晚 provide 即接管）+ 「围栏先于 method 检查」的顺序断言；
+ *   · client-bundle.test.js：把 client.js 当脚本真实执行一次（迁线改动了 12 处字符串，
+ *     语法绿 ≠ 面板挂得上）—— 模块 id、导出面、`apply()` 注册到 `settings.models.footer`
+ *     的 id/order、以及旧命名零残留；
+ *   · scan.test.js（M1）：来源 A（官方 `llm` 契约枚举）的三条纪律 —— 逐 provider 隔离失败
+ *     （一个平台挂了只进 `partial[]`）、逐调用失败回落（`resolveModelInfo` 挂了条目仍产出）、
+ *     **能力只到能被证明的程度**（适配器不声明工具参数 ⇒ 标"未声明/需实测"而不是猜一个 false）；
+ *     外加 L0/L1 免费分层、解析缓存与 refresh、`/scan` 路由端到端；
+ *   · settings-read.test.js / routes.test.js：0.1.7 移除 `ctx.settings.get` 的双轨适配
+ *     与真实路由接线（随迁线平移，原 desktop 类里的同两项）；
+ *   · default-model.test.js（M3）：官方写路径 `agentDefaultModel.saveSelection` 的四种
+ *     失败形态 —— 服务缺席给语义化错误而不是 500、读失败按"读不到"处理、参数不合法时
+ *     不碰服务、官方抛错原因透传。
+ */
+function planFreeModel() {
+  const dir = join(ROOT, 'dsh-miasaki-free-model')
+  for (const entry of ['lib/index.js', 'lib/trust.js', 'lib/settings-read.js', 'lib/profile.js', 'lib/scan.js']) {
+    checks.push({ line: 'free-model', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
+  }
+  // 上游插件增量补丁（patches/dsh-our-free-model）：把「本机自配平台」接进它的设置页。
+  // 上游升级会覆盖 client.js、补丁一定会被冲掉，所以锚点是否仍与当前上游版本对得上
+  // 必须是闸门（self-test 三种状态各有明确处置：applied / pending → 副本上试打 / drift → 红）。
+  for (const entry of ['patches/dsh-our-free-model/patch.mjs', 'patches/dsh-our-free-model/self-test.mjs', 'patches/dsh-our-free-model/inject/platform-panel.js']) {
+    checks.push({ line: 'free-model', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
+  }
+  checks.push({
+    line: 'free-model',
+    name: 'ofm patch self-test (上游增量补丁锚点)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-our-free-model/self-test.mjs')],
+    cwd: join(dir, 'patches/dsh-our-free-model'),
+  })
+  for (const file of ['test/trust.test.js', 'test/client-bundle.test.js', 'test/scan.test.js', 'test/default-model.test.js', 'test/settings-read.test.js', 'test/routes.test.js']) {
+    checks.push({
+      line: 'free-model',
+      name: `test ${file.replace('test/', '').replace('.test.js', '')}`,
+      cmd: process.execPath,
+      args: [join(dir, file)],
+      cwd: dir,
+    })
+  }
+}
+
+/**
+ * 仓库级治理闸门（跨九线生效，不属于任何单线）。
  *
  * 这三项补的是「逐例修不解决问题」的那类漏洞 —— 同类 bug 反复出现时，缺的不再是修法，
  * 而是让第 N 例无法悄悄进来的闸门（评审报告 §五.P2.10）：
  *   · silent-guards：守卫必须显式失败。四类形态（静默跳过 / 静默吞错 / 静默回退读取 /
  *     声明清单缺口），存量冻结在 scripts/silent-guard-baseline.json，**新增即失败**；
- *   · doc-versions：根 README 的版本台账必须与八线 package.json 逐字一致，
+ *   · doc-versions：根 README 的版本台账必须与九线 package.json 逐字一致，
  *     治「文档说一个版本、代码是另一个版本」这类当前态失真；
  *   · message-sources：会话消息的 `source.kind` 不得用 DSH 0.1.7 起已退役的 v3 写法
  *     （`{ kind: "plugin", plugin: … }` ⇒ v4 准入硬拒 ⇒ 整轮运行失败）。除仓库内源码外，
@@ -582,6 +622,7 @@ if (selected.includes('ssh')) await planSsh()
 if (selected.includes('dual-model')) await planDualModel()
 if (selected.includes('appearance')) await planAppearance()
 if (selected.includes('usage')) planUsage()
+if (selected.includes('free-model')) planFreeModel()
 if (selected.includes('repo')) planRepo()
 
 console.log(`[verify-all] ${selected.join(' / ')} — ${checks.length} 项检查\n`)

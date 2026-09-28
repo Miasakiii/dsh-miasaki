@@ -125,6 +125,32 @@
     '#root [data-conversation-header-corner]{margin-right:0;}' +
     '#root [data-sidebar-right-panel] [data-dockkit-strip-chrome]{' +
     'margin-right:calc(var(--ms-titlebar-reserve) - 6px);}' +
+    // ---------- 顶部安全区:官方「页面标题行」整行下移(2026-09-29 用户报障) ----------
+    // 窗控组是**零占位浮层**,纵向占 [11,37]px(top:11 + 26 键高,见上方 .tb-group/.tb-btn)。
+    // 官方有两处**页面级**标题行走「左标题 + 右动作」布局,动作区右上角正落在这一带:
+    //   ① 插件页 `.X_2TxG_pageHead`(标题「插件」+ 右侧「刷新 / + 添加插件」)
+    //   ② 日程页 `.t-XoWW_pageHeading`(标题 + 右侧「新建」)
+    // 实测(用户截图 1972×1318 @2x ⇒ 986 CSS px)「+ 添加插件」胶囊 x[845,940] y[27,59],
+    // 窗控组 x[869,977] y[11,37] ⇒ 重叠 10px 高 × 71px 宽,胶囊上沿被 min 键与主题徽记压住。
+    // 官方本来就有这套让位,但只在 darwin 分支:
+    //   `[data-platform=darwin] .X_2TxG_pageHead{padding-top:calc(28px + var(--dsh-frame-top-clearance,0px))}`
+    // (`dsh-client-ui-primitives`:「marks <html> with data-platform="darwin"; plain web never
+    // sets it」⇒ Windows 侧官方走**原生边框**(dsh-desk)或 `[data-windows-titlebar]` 的**整帧
+    // padding-top**(UI 自带,同样不适用于本壳的零占位形态)⇒ 这一格只能由壳补。
+    // 为什么纵向而不横向:页头是「左标题 + 右动作」的**一整行**,照会话头那样让出
+    // var(--ms-titlebar-reserve)(156px)会在动作区右侧留一大块空白——页面级动作本该贴右缘;
+    // 整体下移一格则标题与动作仍成一行、仍贴右缘,官方 darwin 分支也是同一手法(整行下移)。
+    // 取值 = 窗控带下沿(11+26=37) + 呼吸位(12,与 TB_RESERVE_GAP 同源) − 官方 pageHead
+    // 自有 padding-top(28) = 21 ⇒ 动作区上沿落到 49px,离窗控带 12px。
+    // 用 margin-top 而**不**覆写 padding-top:那 28px 是官方的值,叠加式让位不必抄过来,
+    // 官方调大调小都自动跟随;失败面退化为「多让一点」而不是「把官方 padding 顶掉」。
+    // 选择器用 `_pageHead` 子串匹配:schema CSS Module 前缀(实测 X_2TxG_ / t-XoWW_)随版本变,
+    // 类名后缀才是稳定面——与上方 `_headerActions` / `_headerCorner` 同一口径;
+    // `_pageHead` 同时命中 `_pageHeading`(子串),两处官方页头一并覆盖。
+    // ⚠ 两个耦合点写在这里:壳若改窗控几何(上方 top:11px / .tb-btn 26px)或官方改 pageHead
+    // 的 padding-top,21 这个数要同改;判据在 themes/test/contract.test.js 的算术闸门。
+    ':root{--ms-titlebar-clearance:21px;}' +
+    '#root [class*="_pageHead"]{margin-top:var(--ms-titlebar-clearance);}' +
     // ---------- 基线同心:会话头控件与窗控/右栏 chrome 落在同一条中心线 ----------
     // 官方两处控件的垂直中心本来就不齐:会话头 titleRow = padding-top 10px + min-height
     // 30px,28px 控件居中 ⇒ 中心 25px;而 dockkit strip(10px + 28px)与窗控组(top:11px +

@@ -57,15 +57,6 @@
       "reason": "继续向上找"
     },
     {
-      "key": "dsh-miasaki-desktop/plugins/dsh-free-model-pool/lib/index.js|R1|if (!existsSync(p)) continue;",
-      "rule": "R1",
-      "file": "dsh-miasaki-desktop/plugins/dsh-free-model-pool/lib/index.js",
-      "line": 350,
-      "snippet": "if (!existsSync(p)) continue;",
-      "count": 1,
-      "reason": "（待补：触碰该文件时补理由）"
-    },
-    {
       "key": "dsh-miasaki-desktop/preset-sources/verify-presets.cjs|R2|try { return require(candidate) } catch { /* try next */ }",
       "rule": "R2",
       "file": "dsh-miasaki-desktop/preset-sources/verify-presets.cjs",

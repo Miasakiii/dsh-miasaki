@@ -63,9 +63,21 @@ const CWD_TOPN = 50;
 const TITLE_TTL_MS = 30 * 60 * 1000;
 /** 尚无标题（日志里还没落 title 事件的会话）的重试间隔。 */
 const TITLE_RETRY_MS = 2 * 60 * 1000;
-/** 全局页等待标题折叠的上限：超时则本次先用截断 ID，后台补完下一轮轮询即有。 */
-const TITLE_WAIT_MS = 2500;
-/** 账本载入后预热标题的延迟（先让宿主 boot 稳定，再去做磁盘侧折叠）。 */
+/**
+ * **全局页绝不为标题折叠排队**（v0.6.1 实测结论，替代旧的 TITLE_WAIT_MS = 2500）。
+ *
+ * 折叠的成本与阻塞特性：官方 `readTitleSnapshots` 为折一个标题要调
+ * `handle.read(0, undefined)` **整读会话日志**（每行一个 zstd 帧，解压是**同步**的），
+ * 4 并发、每 500ms 才让出一次事件循环。本机实测近 30 日窗口 45 个命中日志
+ * = 53.5 MB 压缩 / 115 MB 解压 / 14.8 万个 zstd 帧 / 19.5 万事件，4 并发约 3.4–4.5 秒。
+ *
+ * 关键约束（实测，不是推测）：**只要折叠任务在跑，任何"等一小段"的定时器都会被饿死**
+ * —— 4 路 worker 在 check 阶段各自排入长同步块，timers 阶段要等它们全部跑完才轮到。
+ * 最小复现：4 路并发同步块下，400ms 定时器实际 2401ms 才触发（单路时 600ms）。
+ * 因此旧实现（race 一个 2500ms 上限）每次冷启动都吃满上限；把它降到 400ms 同样无效
+ * （端到端复现：首屏 2761ms → 仍 3454ms）。**唯一可靠的做法是不等**：
+ * 发起折叠后立即用当前缓存出数，标题由后台补完、下一轮 5s 轮询或头部「刷新」钮带出。
+ */
 const TITLE_WARM_DELAY_MS = 1500;
 
 /** 本地时区日期键（YYYY-MM-DD，用户视角的"今日"）。 */
@@ -165,7 +177,17 @@ export function apply(ctx) {
 		return (Date.now() - c.at) < (c.title ? TITLE_TTL_MS : TITLE_RETRY_MS);
 	}
 
-	/** 折叠一批会话标题写入缓存；单会话失败被隔离，留待下轮重试。 */
+	/**
+	 * 折叠一批会话标题写入缓存；单会话失败被隔离。
+	 *
+	 * **失败也要写缓存（负缓存）**：账本里大量会话的日志早已不存在（本机实测近 30 日
+	 * 窗口 147 个会话里 102 个已无日志文件），`readTitleSnapshots` 对它们一律返回
+	 * rejected。若只在 fulfilled 时写缓存，`titleFresh` 对这些 id 恒为 false ——
+	 * 于是**每次** `/global`（浮窗开着时 5s 一次）都重新判定"有未解析会话"，重新走
+	 * ensureTitles → projectMany，**每轮付两遍全量 `persistence.list()`**（串行遍历
+	 * 全部会话目录 + 逐会话解首帧，实测单次 93–160ms），请求延迟被从 ~0ms 抬到 ~330ms。
+	 * 写负缓存后这些 id 落到 TITLE_RETRY_MS 窗口，折叠路径不再是每请求的固定开销。
+	 */
 	async function runTitleJob(ids) {
 		const q = ctx.get('sessionQuery');
 		if (!q || typeof q.readTitleSnapshots !== 'function') return;
@@ -173,7 +195,16 @@ export function apply(ctx) {
 		const at = Date.now();
 		for (const r of (results || [])) {
 			const id = r && r.sessionId ? String(r.sessionId) : '';
-			if (!id || !r || r.status !== 'fulfilled' || !r.value) continue;
+			if (!id || !r) continue;
+			if (r.status !== 'fulfilled' || !r.value) {
+				// 负缓存：查不到日志（已归档且被清理）/ 读取失败的会话同样落一条，
+				// title 为 null ⇒ titleFresh 走 TITLE_RETRY_MS（2 分钟）而非每请求重试。
+				titleCache.set(id, {
+					title: null, titleSource: null, cwd: null, cwdName: null,
+					createdAt: null, origin: null, agentPreset: null, at
+				});
+				continue;
+			}
 			const h = r.value.session || {};
 			const t = r.value.title || null;
 			const cwd = typeof h.cwd === 'string' && h.cwd ? h.cwd : null;
@@ -198,14 +229,6 @@ export function apply(ctx) {
 			if (!titleJob) titleJob = runTitleJob(missing).finally(() => { titleJob = null; });
 			await titleJob.catch((e) => { ledgerError = String(e && e.message || e); });
 		}
-	}
-
-	/** Promise.race 的超时腿（只放弃等待，不取消底下的折叠任务）。 */
-	function sleep(ms) {
-		return new Promise((resolve) => {
-			const t = setTimeout(resolve, ms);
-			if (t && typeof t.unref === 'function') t.unref();
-		});
 	}
 
 	/**
@@ -836,13 +859,9 @@ export function apply(ctx) {
 		// 结果随截断口径漂移。
 		const ids = rank.all.map((r) => r.sessionId);
 		if (ids.length > 0 && ids.some((id) => !titleFresh(id))) {
-			// 冷读（或 TTL 到期）时等一小段：首屏尽量带名字；超时则本次先用
-			// 截断 ID 兜底，折叠任务继续在后台跑完，下一轮 5s 轮询即有标题。
-			await Promise.race([
-				ensureTitles(ids).catch((e) => { ledgerError = String(e && e.message || e); }),
-				sleep(TITLE_WAIT_MS)
-			]);
-		} else if (ids.length > 0) {
+			// 只发起、不等待（理由见模块顶部 TITLE_WARM_DELAY_MS 上方的实测说明）：
+			// 折叠会长时间独占事件循环，首屏为它排队等于把 3–4 秒的冷读搬到用户面前；
+			// 数字与排行本就与标题无关，取不到标题时按既有降级链显示截断 ID。
 			ensureTitles(ids).catch((e) => { ledgerError = String(e && e.message || e); });
 		}
 		decorateSessions(rank.all);

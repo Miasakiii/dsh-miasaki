@@ -75,7 +75,7 @@ export interface FreeModelSubagent {
   maxTokens: number;
 }
 
-export const name = 'free-model-pool';
+export const name = 'free-model';
 export const inject = ['settings', 'webServer'] as const satisfies Injectable[];
 
 export function apply(ctx: { settings: Settings; webServer: WebServer }): void;

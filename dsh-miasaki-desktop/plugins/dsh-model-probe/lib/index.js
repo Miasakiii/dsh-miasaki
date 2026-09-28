@@ -9,7 +9,7 @@
  * registration for a namespace it already serves (`DUPLICATE_DISCOVERY`), so
  * the official catalog probe cannot be taken over; and adding a remote method
  * would mean patching the `dsh-llm` service class itself. A host route is the
- * shape this repo already ships four times (see plugins/dsh-free-model-pool),
+ * shape this repo already ships four times (see dsh-miasaki-free-model),
  * needs no build step, and is same-origin from the browser.
  *
  * Division of labour with the client patch:
