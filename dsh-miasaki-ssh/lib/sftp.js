@@ -37,6 +37,24 @@ export function isSftpCapabilityFailure(error) {
   return kind === 'sftp-session' || kind === 'sftp-write'
 }
 
+/**
+ * G1（2026-09-27）：通道级死亡 —— 会话/连接已不可用，清缓存重开一次就能自愈。
+ * 命中：SFTP status NO_CONNECTION(6)/CONNECTION_LOST(7)、文案 'Not connected'、
+ * 打开类 `uploadFailureKind === 'sftp-session'`。权限/路径错误不算（重开也改不了结果）。
+ */
+export function isSftpTransportFailure(error) {
+  if (error?.uploadFailureKind === 'sftp-session') return true
+  const code = error?.code
+  const label = sftpStatusLabel(typeof code === 'number' ? code : undefined)
+  if (label === 'NO_CONNECTION' || label === 'CONNECTION_LOST') return true
+  if (code === 'NO_CONNECTION' || code === 'CONNECTION_LOST') return true
+  const message = String(error?.message ?? error ?? '')
+  const text = message.toLowerCase()
+  return text.includes('not connected')
+    || text.includes('no connection')
+    || text.includes('connection lost')
+}
+
 function markFailure(error, kind, fallbackMessage) {
   const normalized = error instanceof Error ? error : new Error(String(error?.message ?? error ?? fallbackMessage))
   normalized.uploadFailureKind = kind

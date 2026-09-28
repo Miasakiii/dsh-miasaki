@@ -15,6 +15,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import ssh2 from 'ssh2'
 import { classifyError, SshRuntime, RuntimeConn, ShellChannel, MAX_SHELLS_PER_RUNTIME, MAX_SNAPSHOT_BYTES, buildConnectConfig } from '../lib/runtime.js'
 import { SshStore, fingerprintOf } from '../lib/store.js'
+import { EventEmitter } from 'node:events'
 
 // ssh2 是 CommonJS 包：命名导入只对 lexer 认出的成员可用，Server 要走默认导入再解构。
 const { Server: SshServer } = ssh2
@@ -305,8 +306,13 @@ function fakeStream() {
   return {
     writes: [],
     windows: [],
+    pauseCalls: 0,
+    resumeCalls: 0,
+    paused: false,
     write(data) { this.writes.push(data) },
     setWindow(rows, cols) { this.windows.push([rows, cols]) },
+    pause() { this.pauseCalls += 1; this.paused = true },
+    resume() { this.resumeCalls += 1; this.paused = false },
     on() { /* event stub */ },
     end() { /* event stub */ },
     stderr: { on() { /* event stub */ } },
@@ -735,6 +741,218 @@ test('BACKPRESSURE: a viewer that stops draining is dropped instead of buffering
     assert.ok(slow.closedWith !== null, 'slow viewer was closed with 1011 semantics')
     assert.equal(shell.viewers.has(slow), false)
     assert.equal(Buffer.from(healthy.sentBinary.at(-1)).toString(), 'tick', 'other viewers unaffected')
+  } finally {
+    await cleanup()
+  }
+})
+
+// ---- G2（2026-09-27）：慢 viewer 背压暂停/恢复（8MiB 断开只作最终兜底）----
+test('G2: 超高水位 ⇒ stream.pause + output.paused，而不是断开', async () => {
+  const { runtime, cleanup } = await freshRuntime({ scrollbackBytes: 4096, perRuntime: 16384 })
+  try {
+    const { rc, shell } = liveRuntime(runtime)
+    const slow = attachViewer(runtime, rc, shell)
+    const healthy = attachViewer(runtime, rc, shell)
+    slow.bufferedAmount = 2 * 1024 * 1024 + 1 // > HIGH，< MAX
+
+    runtime.pushTo(shell, Buffer.from('tick'))
+
+    assert.equal(shell.paused, true, '超过 HIGH ⇒ 暂停')
+    assert.equal(shell.stream.pauseCalls, 1, 'ssh2 stream 被 pause')
+    assert.equal(shell.stream.resumeCalls, 0)
+    assert.equal(slow.closedWith, null, '未到 8MiB 兜底线，不得断开')
+    assert.ok(slow.sentFrames.some(f => f.type === 'output.paused'), '广播 output.paused')
+    assert.ok(healthy.sentFrames.some(f => f.type === 'output.paused'))
+    assert.equal(Buffer.from(healthy.sentBinary.at(-1)).toString(), 'tick', '当前块仍送达')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('G2: 部分 drain（LOW～HIGH）不恢复；全 drain 后 resume + output.resumed', async () => {
+  const { runtime, cleanup } = await freshRuntime({ scrollbackBytes: 4096, perRuntime: 16384 })
+  try {
+    const { rc, shell } = liveRuntime(runtime)
+    const slow = attachViewer(runtime, rc, shell)
+    slow.bufferedAmount = 2 * 1024 * 1024 + 1
+    runtime.pushTo(shell, Buffer.from('a'))
+    assert.equal(shell.paused, true)
+
+    // 部分 drain：回落到 LOW～HIGH 区间 ⇒ 保持暂停
+    slow.bufferedAmount = 1 * 1024 * 1024
+    runtime.evaluateBackpressure(shell)
+    assert.equal(shell.paused, true, '部分 drain 不恢复（避免抖动）')
+    assert.equal(shell.stream.resumeCalls, 0)
+
+    // 全 drain：低于 LOW ⇒ resume + 广播
+    slow.bufferedAmount = 100 * 1024
+    runtime.evaluateBackpressure(shell)
+    assert.equal(shell.paused, false)
+    assert.equal(shell.stream.resumeCalls, 1, 'ssh2 stream 被 resume')
+    assert.ok(slow.sentFrames.some(f => f.type === 'output.resumed'), '广播 output.resumed')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('G2: 暂停超时仍不 drain ⇒ 慢 viewer 走兜底断开并恢复输出', async () => {
+  const { runtime, cleanup } = await freshRuntime({ scrollbackBytes: 4096, perRuntime: 16384 })
+  try {
+    const { rc, shell } = liveRuntime(runtime)
+    const slow = attachViewer(runtime, rc, shell)
+    slow.bufferedAmount = 2 * 1024 * 1024 + 1
+    runtime.pushTo(shell, Buffer.from('a'))
+    assert.equal(shell.paused, true)
+    const pausedAt = shell.pauseStartedAt
+
+    // 30s 内不 drain：仍暂停、不淘汰
+    clock = pausedAt + 29_000
+    runtime.evaluateBackpressure(shell)
+    assert.equal(shell.paused, true)
+    assert.equal(slow.closedWith, null)
+
+    // 超时：按慢 viewer 断开（最终兜底），无 viewer 后恢复输出
+    clock = pausedAt + 30_000
+    runtime.evaluateBackpressure(shell)
+    assert.ok(slow.closedWith !== null, '超时兜底断开 1011')
+    assert.equal(shell.viewers.has(slow), false)
+    assert.equal(shell.paused, false, '无慢 viewer 后恢复输出')
+    assert.equal(shell.stream.resumeCalls, 1)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('G2: ended shell 上 pause/resume 为 no-op', () => {
+  const rc = { id: 'rt-x', shells: new Map(), label: 'x' }
+  const shell = new ShellChannel(rc, 1, { cols: 80, rows: 24, title: 'x' })
+  shell.ended = true
+  shell.stream = fakeStream()
+  assert.equal(shell.pauseOutput(), false, 'ended 不进暂停')
+  assert.equal(shell.paused, false)
+  assert.equal(shell.stream.pauseCalls, 0)
+  // stream === null（shell 结束路径）同样 no-op
+  const shell2 = new ShellChannel(rc, 2, { cols: 80, rows: 24, title: 'y' })
+  shell2.stream = null
+  assert.equal(shell2.pauseOutput(), true) // 状态翻转，但 stream 不存在也不抛
+  assert.equal(shell2.paused, true)
+  assert.equal(shell2.resumeOutput(), true)
+  assert.equal(shell2.paused, false)
+})
+
+// ---- G1（2026-09-27）：SFTP 会话中途死亡后自愈 ----
+function fakeSftpSession() {
+  const sftp = new EventEmitter()
+  sftp.ended = false
+  sftp.end = () => { sftp.ended = true }
+  sftp.readdir = (path, cb) => cb(null, [{ filename: 'a.txt', attrs: { size: 1, isFile: () => true, mtime: 1, mode: 0o644 } }])
+  return sftp
+}
+
+function g1Runtime(runtime) {
+  const rc = new RuntimeConn(runtime, 'conn-g1', { host: 'box', label: 'example' }, { runtimeId: 'rt-g1' })
+  rc.status = 'connected'
+  runtime.conns.set(rc.id, rc)
+  runtime.byProfile.set('conn-g1', rc.id)
+  const opened = []
+  rc.client = {
+    sftp(cb) {
+      const sftp = fakeSftpSession()
+      opened.push(sftp)
+      process.nextTick(() => cb(null, sftp))
+    },
+  }
+  return { rc, opened }
+}
+
+test('G1: sftpSession 的 close 监听清缓存，下一次自动重开', async () => {
+  const { runtime, cleanup } = await freshRuntime()
+  try {
+    const { rc, opened } = g1Runtime(runtime)
+    const first = await runtime.sftpSession(rc)
+    assert.equal(rc.sftp, first)
+    assert.equal(opened.length, 1)
+
+    // 服务端关子系统 / 通道超时：session 是 EventEmitter，emit close
+    first.emit('close')
+    assert.equal(rc.sftp, null, 'close 后缓存清空')
+    assert.equal(rc.sftpPromise, null)
+
+    const second = await runtime.sftpSession(rc)
+    assert.equal(opened.length, 2, '下一次 sftpSession() 重新打开')
+    assert.equal(rc.sftp, second)
+    assert.notEqual(first, second)
+    // 旧 session 的 close 不再误清新 session
+    first.emit('close')
+    assert.equal(rc.sftp, second)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('G1: withSftp 传输层死亡清缓存并当次重开一次后成功', async () => {
+  const { runtime, cleanup } = await freshRuntime()
+  try {
+    const { rc, opened } = g1Runtime(runtime)
+    // 第一个会话的 readdir 通道级失败；重开后的会话正常
+    const origSftp = rc.client.sftp.bind(rc.client)
+    let opens = 0
+    rc.client.sftp = cb => {
+      opens += 1
+      origSftp((err, sftp) => {
+        if (sftp !== null && sftp !== undefined && opens === 1) {
+          sftp.readdir = (path, done) => process.nextTick(() => done(Object.assign(new Error('No connection'), { code: 6 })))
+        }
+        cb(err, sftp)
+      })
+    }
+
+    const entries = await runtime.withSftp(rc, sftp => listDirectoryVia(sftp, '/'))
+    assert.equal(entries.length, 1, '重开后 list 成功')
+    assert.equal(opened.length, 2, '通道级死亡后当次重开一次')
+    assert.equal(rc.sftp, opened[1])
+    assert.equal(opens, 2)
+  } finally {
+    await cleanup()
+  }
+})
+
+async function listDirectoryVia(sftp, path) {
+  const list = await new Promise((resolve, reject) => {
+    sftp.readdir(path, (err, entries) => (err ? reject(err) : resolve(entries)))
+  })
+  return list
+}
+
+test('G1: withSftp 只重开一次（再失败原样上抛），非传输层错误不重开', async () => {
+  const { runtime, cleanup } = await freshRuntime()
+  try {
+    const { rc, opened } = g1Runtime(runtime)
+    const alwaysDead = (path, cb) => process.nextTick(() => cb(Object.assign(new Error('Connection lost'), { code: 7 })))
+    const origSftp = rc.client.sftp.bind(rc.client)
+    rc.client.sftp = cb => {
+      origSftp((err, sftp) => {
+        if (sftp) sftp.readdir = alwaysDead
+        cb(err, sftp)
+      })
+    }
+    await assert.rejects(
+      runtime.withSftp(rc, sftp => listDirectoryVia(sftp, '/')),
+      error => error.code === 7,
+    )
+    assert.equal(opened.length, 2, '只重开一次，不死循环')
+
+    // 权限错误：不重开（invalidate 不该被触发）
+    rc.client.sftp = origSftp
+    await runtime.invalidateSftp(rc)
+    const before = opened.length
+    await runtime.sftpSession(rc)
+    opened.at(-1).readdir = (path, cb) => process.nextTick(() => cb(Object.assign(new Error('Permission denied'), { code: 3 })))
+    await assert.rejects(
+      runtime.withSftp(rc, sftp => listDirectoryVia(sftp, '/')),
+      error => error.code === 3,
+    )
+    assert.equal(opened.length, before + 1, '权限错误只走到已有会话，不重开')
   } finally {
     await cleanup()
   }

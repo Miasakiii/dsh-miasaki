@@ -41,6 +41,7 @@ import {
   ssh2ExecOpener,
   formatSftpError,
   sftpStatusLabel,
+  isSftpTransportFailure,
 } from './lib/sftp.js'
 import { normalizeRemotePath } from './lib/paths.js'
 import { listSshConfigAliases } from './lib/sshConfig.js'
@@ -343,8 +344,8 @@ export function apply(ctx, config) {
         const ctx = sftpContext(query.get('ticket'))
         if (ctx.error !== undefined) return sendJson(res, ctx.status, { error: ctx.error })
         const { home, path: dirPath } = await sftpPath(ctx.rc, query.get('path'))
-        const sftp = await runtime.sftpSession(ctx.rc)
-        const entries = await listDirectory(sftp, dirPath)
+        // G1：通道级死亡时 withSftp 清缓存并当次重开一次（列目录可重放）
+        const entries = await runtime.withSftp(ctx.rc, sftp => listDirectory(sftp, dirPath))
         return sendJson(res, 200, { path: dirPath, home, entries })
       }
 
@@ -353,8 +354,8 @@ export function apply(ctx, config) {
         const ctx = sftpContext(query.get('ticket'))
         if (ctx.error !== undefined) return sendJson(res, ctx.status, { error: ctx.error })
         const { path: filePath } = await sftpPath(ctx.rc, query.get('path'))
-        const sftp = await runtime.sftpSession(ctx.rc)
-        return sendJson(res, 200, { stat: await statRemote(sftp, filePath) })
+        const stat = await runtime.withSftp(ctx.rc, sftp => statRemote(sftp, filePath))
+        return sendJson(res, 200, { stat })
       }
 
       if (path === '/ssh/api/sftp/download' && req.method === 'GET') {
@@ -362,10 +363,14 @@ export function apply(ctx, config) {
         const ctx = sftpContext(query.get('ticket'))
         if (ctx.error !== undefined) return sendJson(res, ctx.status, { error: ctx.error })
         const { path: filePath } = await sftpPath(ctx.rc, query.get('path'))
-        const sftp = await runtime.sftpSession(ctx.rc)
-        let stats
+        // G1：stat 可重放 ⇒ withSftp 重开一次；中段流式失败只清缓存（源流不可回放）
+        let sftp, stats
         try {
-          stats = await statRemote(sftp, filePath)
+          const opened = await runtime.withSftp(ctx.rc, async session => {
+            return { sftp: session, stats: await statRemote(session, filePath) }
+          })
+          sftp = opened.sftp
+          stats = opened.stats
         } catch (error) {
           return sendJson(res, sftpErrorStatus(error), { error: formatSftpError(error) })
         }
@@ -379,6 +384,8 @@ export function apply(ctx, config) {
         })
         // 头已发出：mid-stream 失败只能断流（客户端看到截断的文件），错误进 host 日志
         await downloadToWritable(sftp, filePath, res, { totalBytes: stats.size ?? undefined }).catch(error => {
+          // G1：通道级死亡清缓存，下一次请求自动重开（本次流不可回放，不就地重试）
+          if (isSftpTransportFailure(error)) runtime.invalidateSftp(ctx.rc)
           ctx.logger.error(error instanceof Error ? error : new Error(String(error)))
           try { res.destroy() } catch { /* gone */ }
         })
@@ -411,6 +418,8 @@ export function apply(ctx, config) {
             const sftp = await runtime.sftpSession(ctx.rc)
             return await uploadResilient({ sftp, path: filePath, source: req, signal: controller.signal, onProgress, size: Number.isFinite(declared) && declared > 0 ? declared : undefined, overwrite, openExec })
           } catch (error) {
+            // G1：通道级死亡清缓存（本次源流不可回放，不就地重开重试）
+            if (isSftpTransportFailure(error)) runtime.invalidateSftp(ctx.rc)
             // sftp 会话打不开 ⇒ 源流未被消费 ⇒ 直接降级 exec（zcode 同款第一道降级）
             if (error?.uploadFailureKind === 'sftp-session') {
               return uploadViaExecPipe({ openExec, path: filePath, source: req, signal: controller.signal, onProgress })
@@ -439,24 +448,19 @@ export function apply(ctx, config) {
         if (ctx.error !== undefined) return sendJson(res, ctx.status, { error: ctx.error })
         const op = String(body?.op ?? '')
         const { path: opPath } = await sftpPath(ctx.rc, body?.path)
-        const sftp = await runtime.sftpSession(ctx.rc)
-        if (op === 'mkdir') {
-          await makeDir(sftp, opPath)
-          return sendJson(res, 200, { ok: true })
+        if (op !== 'mkdir' && op !== 'rename' && op !== 'unlink' && op !== 'rmdir') {
+          return sendJson(res, 400, { error: `不支持的操作: ${op}` })
         }
-        if (op === 'rename') {
-          const { path: toPath } = await sftpPath(ctx.rc, body?.to)
-          await renameRemote(sftp, opPath, toPath)
-          return sendJson(res, 200, { ok: true })
-        }
-        if (op === 'unlink') {
-          await removeFile(sftp, opPath)
-          return sendJson(res, 200, { ok: true })
-        }
-        if (op === 'rmdir') {
-          await removeDir(sftp, opPath)
-          return sendJson(res, 200, { ok: true })
-        }
+        // G1：变更类操作可重放（幂等 mkdir / 幂等删除场景下重开一次是安全的）
+        await runtime.withSftp(ctx.rc, async sftp => {
+          if (op === 'mkdir') await makeDir(sftp, opPath)
+          else if (op === 'rename') {
+            const { path: toPath } = await sftpPath(ctx.rc, body?.to)
+            await renameRemote(sftp, opPath, toPath)
+          } else if (op === 'unlink') await removeFile(sftp, opPath)
+          else await removeDir(sftp, opPath)
+        })
+        return sendJson(res, 200, { ok: true })
         return sendJson(res, 400, { error: `不支持的操作: ${op}` })
       }
 

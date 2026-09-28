@@ -7,6 +7,7 @@ import { Readable, Writable } from 'node:stream'
 import {
   sftpStatusLabel,
   formatSftpError,
+  isSftpTransportFailure,
   createProgressReporter,
   listDirectory,
   statRemote,
@@ -300,6 +301,22 @@ test('openSftpSession: 成功 / 回调错误 / 同步抛都带 sftp-session 标�
     openSftpSession({ sftp() { throw new Error('Not connected') } }),
     error => error.uploadFailureKind === 'sftp-session',
   )
+})
+
+// G1（2026-09-27）：通道级死亡谓词 —— 命中四类、权限/路径/写失败不命中。
+test('isSftpTransportFailure: NO_CONNECTION / CONNECTION_LOST / Not connected / sftp-session 命中', () => {
+  assert.equal(isSftpTransportFailure({ code: 6, message: 'No connection' }), true, 'SFTP status 6')
+  assert.equal(isSftpTransportFailure({ code: 7, message: 'Connection lost' }), true, 'SFTP status 7')
+  assert.equal(isSftpTransportFailure({ code: 'NO_CONNECTION' }), true, '字符串码')
+  assert.equal(isSftpTransportFailure(new Error('Not connected')), true, 'ssh2 同步抛文案')
+  assert.equal(isSftpTransportFailure(Object.assign(new Error('open failed'), { uploadFailureKind: 'sftp-session' })), true, '打开类标记')
+})
+
+test('isSftpTransportFailure: 权限 / 路径 / sftp-write 不算传输层死亡（重开也改不了结果）', () => {
+  assert.equal(isSftpTransportFailure({ code: 3, message: 'Permission denied' }), false, 'PERMISSION_DENIED')
+  assert.equal(isSftpTransportFailure({ code: 2, message: 'No such file' }), false, 'NO_SUCH_FILE')
+  assert.equal(isSftpTransportFailure(Object.assign(new Error('write failed'), { uploadFailureKind: 'sftp-write' })), false, 'sftp-write 是能力/写失败')
+  assert.equal(isSftpTransportFailure(new Error('quota exceeded')), false)
 })
 
 test('posixDirname: 远端路径恒 POSIX 语义', () => {

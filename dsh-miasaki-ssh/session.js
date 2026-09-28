@@ -246,6 +246,17 @@
       if (msg.type === 'write.granted') { setMode('write'); onStatus('ok', '已接管写入'); return }
       if (msg.type === 'write.revoked') { setMode('read'); onStatus('muted', '写入权已被其他查看器接管，你已转为只读'); return }
       if (msg.type === 'write.open') { onFrame({ type: 'write.open', shellId: msg.shellId }); return }
+      // G2（2026-09-27）：慢 viewer 背压 —— host→browser 单向展示帧，无上行新权限
+      if (msg.type === 'output.paused') {
+        onStatus('warn', '输出已暂停（对端繁忙）')
+        onFrame({ type: 'output.paused', shellId: msg.shellId })
+        return
+      }
+      if (msg.type === 'output.resumed') {
+        onStatus('ok', '输出已恢复')
+        onFrame({ type: 'output.resumed', shellId: msg.shellId })
+        return
+      }
       if (msg.type === 'status') {
         if (msg.state === 'waiting-fingerprint') { onStatus('warn', '首次连接：请确认主机指纹'); return }
         if (msg.state === 'connected') { onStatus('ok', `已连接 ${conn.host}`); return }

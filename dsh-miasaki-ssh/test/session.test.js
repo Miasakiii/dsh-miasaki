@@ -427,6 +427,29 @@ test('shell.opened resets sshEnded, parses seq from the title and reports to app
   assert.equal(FakeWebSocket.created.length, 2)
 })
 
+// G2（2026-09-27）：慢 viewer 背压的两个展示帧 —— 只做状态栏/状态模型，无上行
+test('G2: output.paused / output.resumed 只做展示（onStatus + onFrame），不断开 viewer', async () => {
+  const h = makeHarness()
+  const { statuses, frames } = h.create()
+  const ws = await h.openFirst()
+  ws.serverText({ type: 'ready', state: 'connected', shellId: 'sh-1', mode: 'write' })
+  ws.serverText({ type: 'output.paused', shellId: 'sh-1' })
+  assert.equal(statuses.at(-1).kind, 'warn')
+  assert.match(statuses.at(-1).text, /输出已暂停/)
+  assert.equal(frames.at(-1)?.type, 'output.paused')
+  assert.equal(frames.at(-1)?.shellId, 'sh-1')
+
+  ws.serverText({ type: 'output.resumed', shellId: 'sh-1' })
+  assert.equal(statuses.at(-1).kind, 'ok')
+  assert.match(statuses.at(-1).text, /输出已恢复/)
+  assert.equal(frames.at(-1)?.type, 'output.resumed')
+  // 展示帧不结束 viewer（sshEnded 不翻转 ⇒ 仍可继续收输出）
+  ws.drop()
+  h.pumpTimers()
+  await h.flush()
+  assert.equal(FakeWebSocket.created.length, 2, '暂停/恢复不是终态，断线后允许重附着')
+})
+
 test('malformed control frames are ignored without breaking the session', async () => {
   const h = makeHarness()
   const { statuses } = h.create()

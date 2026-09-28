@@ -18,7 +18,7 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **生命周期契约**：viewer WS 短断有界重附着（4 次、线性退避）；SSH 自身关闭 / 报错则不重附着；输入与尺寸改走 **viewer 绑定路由**（`ws.sshRc` 实例绑定），被替换代次的僵尸 viewer 会被拒绝（`STALE_VIEWER`）；
 - **指纹闭环**：确认窗口与 ssh2 握手**同一套 60s 时间预算**；确认 token 与连接实例 generation 绑定（旧确认不影响新连接）；信任记录**保存失败即拒绝连接**（不再吞错）；
 - **凭据与表单**：私钥口令在连接时临时输入（后端本就支持）；秘密对话框关闭即清空输入；
-- **尺寸与健壮性**：attach 初始尺寸送真实 PTY、`ResizeObserver` 观察容器 + rAF 合帧、resize 限界（2–1000 × 2–500）、WS 帧上限 256KB、慢 viewer 背压淘汰（`bufferedAmount > 8MB` 断开）。
+- **尺寸与健壮性**：attach 初始尺寸送真实 PTY、`ResizeObserver` 观察容器 + rAF 合帧、resize 限界（2–1000 × 2–500）、WS 帧上限 256KB、慢 viewer 背压（**2026-09-27 G2 起**：2MiB 暂停远端输出 / 512KiB 恢复，8MiB 与 30s 超时才断开）。
 
 **2026-09-12 U1 统一工作区完成**（规划 §3/§4/§6/§7 落地；界面与功能按概念稿 [`preview/2026-09-12-ssh-workspace-concept.html`](design/preview/2026-09-12-ssh-workspace-concept.html) 实施）：
 
@@ -133,6 +133,13 @@ DSH（DeepSeek Harness）web SSH 插件线：在**会话头第一行的视图切
 - **订阅**：`chrome.onChange` 驱动重测，退订挂 fiber teardown（漏退订会让壳在插件卸载后回调已销毁闭包）；**口径②（量官方 DSH chrome 与紧邻兄弟按钮、退到其左 8px）与 `rootObserver` 一字未动**；
 - **同批修测试夹具一处假阴性**：桩节点原是纯对象 ⇒ `instanceof HTMLElement` 恒 false，**DOM 兜底路径从未真被执行过**（改真类 `NodeHTMLElement` 并交给 VM）；
 - 单测 **276 → 299 例**（client 38 → 43）、`verify-all ssh` **31/31**（18 个测试文件 299 例全过）。
+
+**2026-09-27 G1/G2 引擎层加固**（[dsh-web 引擎差距方案](design/2026-09-27-ssh-dshweb-engine-gap-plan.md) §2/§3，对标 `dsh-web` 后识别的两项必修缺陷）：
+
+- **G1 SFTP 会话自愈**：`sftpSession()` 挂 `close` 监听清死引用 + `isSftpTransportFailure()`（`NO_CONNECTION`/`CONNECTION_LOST`/`Not connected`/`sftp-session`）+ `withSftp()` 通道级失败时**当次重开一次**（仅一次，防死循环）。服务端关子系统 / 通道超时后文件面板不再整条连接全废。list/stat/op 走 `withSftp`；下载/上传中段失败只清缓存（单次 HTTP 源流不可回放）。
+- **G2 慢 viewer 背压改暂停/恢复**：`ShellChannel.pauseOutput()/resumeOutput()`（ssh2 stream 原生 pause/resume）+ 水位（**2MiB 暂停** / **512KiB 全 drain 恢复** / 暂停超 **30s** 或缓冲超 **8MiB** 才兜底断开）。新帧 `output.paused`/`output.resumed` 只做 host→browser 状态栏展示（无上行新权限）。弱网/休眠恢复/`top` 狂刷不再反复掉线。
+- 单测 **299 → 310 例**、`verify-all ssh` **31/31**；真协议探针归档 `_refs/scripts-archive/ssh-g1-g2-probe/`（G1 关子系统自动重开 **7/7**、G2 慢 consumer 暂停而非断开 **11/11**）。
+- **生效条件**：改的是 `lib/runtime.js` / `lib/sftp.js` / `index.js` / `session.js` / `app.js` ⇒ **必须重启 `dsh web`**（`cachedAsset` 进程内缓存，浏览器强刷不够）。实机判据见[回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 新增两行。
 
 **2026-09-26 对标方案落地：P0 三件套 + U2.2 SFTP + P1-1 ssh config 导入**（[zcode 对标调研与方案](design/2026-09-26-ssh-zcode-benchmark-plan.md)，用户拍板「按建议开工」D1②/D5②/D2①，实施记录见 [CHANGELOG](design/CHANGELOG.md)）：
 

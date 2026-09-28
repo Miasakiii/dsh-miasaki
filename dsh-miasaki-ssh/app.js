@@ -1177,6 +1177,11 @@ function handleSessionFrame(conn, msg) {
     if (state.session !== null && state.session.isReadOnly() === true) {
       setStatusNote('写入权已空出，可从只读条点「接管写入」。')
     }
+  } else if (msg.type === 'output.paused') {
+    // G2：慢 viewer 背压 —— 状态栏展示，无交互副作用（host→browser 单向）
+    setStatusNote('输出已暂停（对端繁忙）：网络跟上后会自动恢复，连接不会断开。')
+  } else if (msg.type === 'output.resumed') {
+    setStatusNote('输出已恢复。')
   } else if (msg.type === 'forward') {
     // U3/P2-1：本地转发事件。listening / channel-open 是常态不进状态栏；
     // 失败（端口被占 EADDRINUSE / 服务端拒绝转发）必须让人看见。

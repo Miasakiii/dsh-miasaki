@@ -558,3 +558,14 @@ test('只读条判据：无会话 / 写权未决时必须收起', () => {
   assert.doesNotMatch(source, /bar\.hidden = writable/, '旧写法把「无会话」也算成只读 ⇒ 横幅常驻')
   assert.match(source, /isReadOnly\(\) === true.*接管写入|写入权已空出.*isReadOnly/s, '写权空出提示也要用「明确只读」，未决态不提示')
 })
+
+// G2（2026-09-27）：慢 viewer 背压两帧 —— 只做状态栏展示，无交互副作用、无上行。
+test('G2: output.paused / output.resumed 在 handleSessionFrame 里只做状态栏展示', () => {
+  assert.match(source, /msg\.type === 'output\.paused'/, 'app.js 要认识暂停帧')
+  assert.match(source, /msg\.type === 'output\.resumed'/, 'app.js 要认识恢复帧')
+  assert.match(source, /setStatusNote\('输出已暂停（对端繁忙）/, '暂停要有人话提示')
+  assert.match(source, /setStatusNote\('输出已恢复/, '恢复要有人话提示')
+  // 红线：新帧不得引入任何上行（fetch / ws.send）
+  const pausedBlock = source.slice(source.indexOf("msg.type === 'output.paused'"), source.indexOf("msg.type === 'forward'"))
+  assert.doesNotMatch(pausedBlock, /fetch\(|ws\.send\(/, '展示帧不得发起任何上行')
+})

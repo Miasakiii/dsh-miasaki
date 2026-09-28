@@ -16,7 +16,7 @@ import { Client } from 'ssh2'
 import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { hostKeyOf, fingerprintOf, splitHostPort } from './store.js'
-import { openSftpSession, resolveRemoteHome } from './sftp.js'
+import { openSftpSession, resolveRemoteHome, isSftpTransportFailure } from './sftp.js'
 import { createLocalForward, forwardSummaries } from './forward.js'
 import { SFTP_TICKET_TTL_MS } from './limits.js'
 
@@ -34,7 +34,20 @@ const DEFAULT_COLS = 120
 const DEFAULT_ROWS = 32
 const MAX_COLS = 1000
 const MAX_ROWS = 500
+// ---------------------------------------------------------------------------
+// G2 背压（2026-09-27）：慢 viewer 先**暂停远端 PTY 输出**，而不是直接断开。
+// 与 MAX_WS_BUFFERED_BYTES 的关系（唯一口径，改这里就是改全线）：
+//   HIGH (2MiB)  —— 任一 attached socket 超过 ⇒ shell.pauseOutput() + 广播 output.paused
+//   LOW  (512KiB) —— 全部 attached 回落到其下方 ⇒ shell.resumeOutput() + 广播 output.resumed
+//   MAX  (8MiB)  —— 仍是**最终兜底**断开线（1011 viewer-too-slow），暂停只是第一道防线
+//   MAX_MS (30s) —— 暂停持续超时仍不 drain ⇒ 按慢 viewer 断开（回到兜底语义）
+// 部分 drain（夹在 LOW 与 HIGH 之间）保持暂停，避免抖动反复 pause/resume。
 const MAX_WS_BUFFERED_BYTES = 8 * 1024 * 1024 // drop a viewer whose send buffer exceeds this
+export const WS_PAUSE_HIGH_WATER = 2 * 1024 * 1024
+export const WS_PAUSE_LOW_WATER = 512 * 1024
+export const WS_PAUSE_MAX_MS = 30_000
+// 暂停期间轮询 drain 的间隔（没有 data 事件时 pushTo 不会被再进，必须靠定时器）。
+const WS_PAUSE_POLL_MS = 250
 const WINDOWS_AGENT_PIPE = '\\\\.\\pipe\\openssh-ssh-agent'
 
 // U2 决策 1（2026-09-15 拍板）：同 runtime shell 上限 8，超出拒绝并给可读提示。
@@ -264,12 +277,22 @@ export class SshRuntime {
   }
 
   // ------------------------------------------------------------------ SFTP 会话（U2.2，连接级惰性共享）
-  /** 惰性打开并缓存连接的 SFTP 会话；失败清缓存（下次重试重新打开）。 */
+  /**
+   * 惰性打开并缓存连接的 SFTP 会话；失败清缓存（下次重试重新打开）。
+   * G1：打开成功后挂 close 监听 —— 服务端关子系统 / 通道超时等中途死亡时
+   * 立刻清掉死引用，下一次 sftpSession() 自然重开（否则文件面板整条连接全废）。
+   */
   async sftpSession(rc) {
     if (rc.disposed) throw Object.assign(new Error('连接已关闭'), { code: 'NOT_CONNECTED' })
     if (rc.sftp !== null && rc.sftp !== undefined) return rc.sftp
     if (rc.sftpPromise !== null) return rc.sftpPromise
     rc.sftpPromise = openSftpSession(rc.client).then(sftp => {
+      sftp.on('close', () => {
+        if (rc.sftp === sftp) {
+          rc.sftp = null
+          rc.sftpPromise = null
+        }
+      })
       rc.sftp = sftp
       rc.sftpPromise = null
       return sftp
@@ -281,11 +304,37 @@ export class SshRuntime {
     return rc.sftpPromise
   }
 
+  /** 清掉连接的 SFTP 会话缓存（死引用 / 通道级失败后调用）；幂等。 */
+  invalidateSftp(rc) {
+    const dead = rc.sftp
+    rc.sftp = null
+    rc.sftpPromise = null
+    if (dead !== null && dead !== undefined && typeof dead.end === 'function') {
+      try { dead.end() } catch { /* already gone */ }
+    }
+  }
+
+  /**
+   * G1：在连接的 SFTP 会话上跑一次操作；通道级死亡（NO_CONNECTION / CONNECTION_LOST /
+   * Not connected / sftp-session）时清缓存并**当次重开一次**（仅一次，防死循环）。
+   * 只用于可重放的操作（列目录 / stat / mkdir 等）；单次 HTTP 源流不可回放的上传/下载
+   * 中段不走这里重试 —— 那条路径只 invalidate 缓存，下一次请求自然重开。
+   */
+  async withSftp(rc, fn) {
+    const attempt = async () => fn(await this.sftpSession(rc))
+    try {
+      return await attempt()
+    } catch (error) {
+      if (!isSftpTransportFailure(error)) throw error
+      this.invalidateSftp(rc)
+      return attempt() // 仅一次；再失败原样上抛
+    }
+  }
+
   /** 远端 home（realpath('.')，缓存）；失败回落 '/'，不猜不写死。 */
   async sftpHome(rc) {
     if (rc.homeDir !== null && rc.homeDir !== undefined) return rc.homeDir
-    const sftp = await this.sftpSession(rc)
-    const home = await resolveRemoteHome(sftp)
+    const home = await this.withSftp(rc, sftp => resolveRemoteHome(sftp))
     rc.homeDir = home
     return home
   }
@@ -716,6 +765,9 @@ export class SshRuntime {
         // 标签保留为「会话已结束」，用户可在同一 runtime 重开 shell（方案 §4.1.5）
         stream.on('close', () => {
           shell.stream = null
+          this.clearPausePoll(shell)
+          shell.paused = false
+          shell.pauseStartedAt = null
           if (shell.ended) return
           shell.ended = true
           shell.writeOwner = null
@@ -775,12 +827,13 @@ export class SshRuntime {
       shell.sbLen -= dropped.length
     }
     this.trimRuntimeBudget(shell)
+    // G2：先按水位决定 pause/resume，再推给 viewer（当前块仍送达；pause 拦的是后续 data）
+    this.evaluateBackpressure(shell)
     if (shell.viewers.size > 0) {
       for (const ws of [...shell.viewers]) {
         try {
-          // backpressure: a viewer that stopped draining gets cut loose
-          // instead of buffering the PTY forever（plan §8 洪泛有界）——按 shell 判定
-          if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+          // 最终兜底：缓冲超 8MiB 的 viewer 仍直接淘汰（plan §8 洪泛有界精神不变）
+          if ((ws.bufferedAmount ?? 0) > MAX_WS_BUFFERED_BYTES) {
             this.unbindShell(ws)
             try { ws.close(1011, 'viewer-too-slow') } catch { /* gone */ }
             continue
@@ -788,6 +841,90 @@ export class SshRuntime {
           ws.send(u8)
         } catch { this.unbindShell(ws) }
       }
+    }
+  }
+
+  /**
+   * G2 背压判定（pushTo 与暂停轮询共用）：
+   *   任一 attached > HIGH ⇒ pause + output.paused
+   *   全部 < LOW          ⇒ resume + output.resumed
+   *   暂停超 MAX_MS 仍不 drain ⇒ 淘汰慢 viewer（回到 8MiB 兜底语义）
+   *   部分 drain（LOW～HIGH）⇒ 保持暂停，不抖动
+   */
+  evaluateBackpressure(shell) {
+    const dropSlow = () => {
+      for (const ws of [...shell.viewers]) {
+        if ((ws.bufferedAmount ?? 0) > WS_PAUSE_HIGH_WATER) {
+          this.unbindShell(ws)
+          try { ws.close(1011, 'viewer-too-slow') } catch { /* gone */ }
+        }
+      }
+    }
+    const resumeIfPaused = () => {
+      if (!shell.paused) return
+      shell.resumeOutput()
+      this.clearPausePoll(shell)
+      shell.broadcast({ type: 'output.resumed', shellId: shell.id })
+    }
+
+    if (shell.viewers.size === 0) {
+      resumeIfPaused()
+      return
+    }
+
+    const sockets = [...shell.viewers]
+    // 先兜底：超 8MiB 的直接淘汰（不进暂停等待 —— 已经不可救）
+    for (const ws of sockets) {
+      if ((ws.bufferedAmount ?? 0) > MAX_WS_BUFFERED_BYTES) {
+        this.unbindShell(ws)
+        try { ws.close(1011, 'viewer-too-slow') } catch { /* gone */ }
+      }
+    }
+    const remaining = [...shell.viewers]
+    if (remaining.length === 0) {
+      resumeIfPaused()
+      return
+    }
+
+    const overHigh = remaining.some(ws => (ws.bufferedAmount ?? 0) > WS_PAUSE_HIGH_WATER)
+    const allBelowLow = remaining.every(ws => (ws.bufferedAmount ?? 0) < WS_PAUSE_LOW_WATER)
+
+    if (overHigh) {
+      if (shell.paused) {
+        // 暂停超时仍不 drain ⇒ 按慢 viewer 断开（最终兜底），再看能否恢复
+        if (shell.pauseStartedAt !== null && this.now() - shell.pauseStartedAt >= WS_PAUSE_MAX_MS) {
+          dropSlow()
+          const left = [...shell.viewers]
+          if (left.length === 0 || left.every(ws => (ws.bufferedAmount ?? 0) < WS_PAUSE_LOW_WATER)) {
+            resumeIfPaused()
+          }
+        }
+        return
+      }
+      shell.pauseOutput(this.now())
+      this.armPausePoll(shell)
+      shell.broadcast({ type: 'output.paused', shellId: shell.id })
+      return
+    }
+
+    if (shell.paused && allBelowLow) resumeIfPaused()
+    // 部分 drain：保持暂停
+  }
+
+  /** 暂停期间没有 data 事件 ⇒ 用短轮询盯 bufferedAmount，drain 后才 resume。 */
+  armPausePoll(shell) {
+    if (shell._pausePoll !== null && shell._pausePoll !== undefined) return
+    shell._pausePoll = setInterval(() => {
+      if (!shell.paused) { this.clearPausePoll(shell); return }
+      this.evaluateBackpressure(shell)
+    }, WS_PAUSE_POLL_MS)
+    shell._pausePoll.unref?.()
+  }
+
+  clearPausePoll(shell) {
+    if (shell._pausePoll !== null && shell._pausePoll !== undefined) {
+      clearInterval(shell._pausePoll)
+      shell._pausePoll = null
     }
   }
 
@@ -1183,6 +1320,31 @@ export class ShellChannel {
     this.sbChunks = []
     this.sbLen = 0
     this.snapshotData = null  // U2.4：最近一次屏幕快照（serialize 串，内存态）
+    // G2：背压暂停状态（ssh2 stream 的 pause/resume；stream 为 null 即 shell 结束时 no-op）
+    this.paused = false
+    this.pauseStartedAt = null
+    this._pausePoll = null
+  }
+
+  /**
+   * G2：暂停远端 PTY 输出（ssh2 channel stream 是 Duplex，原生 pause）。
+   * shell 已结束（stream === null）时 no-op。返回是否真正进入暂停。
+   */
+  pauseOutput(nowMs = Date.now()) {
+    if (this.paused || this.ended) return false
+    this.paused = true
+    this.pauseStartedAt = nowMs
+    try { this.stream?.pause?.() } catch { /* stream gone */ }
+    return true
+  }
+
+  /** G2：恢复输出。已结束 / 未暂停时 no-op。返回是否真正恢复。 */
+  resumeOutput() {
+    if (!this.paused) return false
+    this.paused = false
+    this.pauseStartedAt = null
+    try { this.stream?.resume?.() } catch { /* stream gone */ }
+    return true
   }
 
   broadcast(json) {

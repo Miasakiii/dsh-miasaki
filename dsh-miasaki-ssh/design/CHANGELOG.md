@@ -2,6 +2,56 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-27 · G1/G2 引擎层加固（对标 dsh-web：SFTP 自愈 + 背压暂停）
+
+**背景**：[dsh-web 引擎差距方案](2026-09-27-ssh-dshweb-engine-gap-plan.md) 对标 `zhu1090093659/dsh-web` `packages/dsh-ssh` 后识别出 2 项必修缺陷（G3–G5 候选未动）。用户定向按 G1 → G2 实施。
+
+### G1：SFTP 会话中途死亡后无自愈
+
+**现状**：`sftpSession()` 缓存 `rc.sftp`，只在打开失败时清缓存；`openSftpSession()` 的 `sftp.on('error')` 是 no-op。服务端关子系统 / 通道超时后 `rc.sftp` 是死引用，文件面板在整条连接生命周期内全废。
+
+**修法**：
+
+1. `sftpSession()` 在 `.then` 里给 session 挂 `close` 监听：`rc.sftp === sftp` 时清 `rc.sftp` / `rc.sftpPromise`（旧 session 的迟到 close 不误清新 session）。
+2. `lib/sftp.js` 导出 `isSftpTransportFailure(error)`：命中 `NO_CONNECTION`(6) / `CONNECTION_LOST`(7) / 文案 `Not connected` / `uploadFailureKind === 'sftp-session'`；权限/路径/sftp-write **不**命中（重开也改不了结果）。
+3. `SshRuntime.invalidateSftp(rc)` + `withSftp(rc, fn)`：通道级失败清缓存并**当次重开一次**（仅一次，防死循环）。list / stat / op / `sftpHome` 走 `withSftp`；下载/上传**中段**失败只 `invalidateSftp`（单次 HTTP 源流不可回放，不就地重试）。
+4. 不改调用面：`sftpSession(rc)` 签名与缓存语义不变。
+
+### G2：慢 viewer 背压从「断开」改为「暂停/恢复」
+
+**现状**：`pushTo()` 在 `ws.bufferedAmount > 8MB` 时 `unbindShell + close(1011)`。弱网 / 休眠恢复 / `top` 狂刷时终端反复掉线。
+
+**修法**：
+
+1. `ShellChannel` 增 `paused` / `pauseOutput(nowMs)` / `resumeOutput()`（ssh2 stream 原生 pause/resume；`stream === null` 即 shell 结束时只翻状态不抛）。
+2. `pushTo()` 先 `evaluateBackpressure(shell)` 再推当前块：
+
+   | 条件 | 动作 |
+   |---|---|
+   | 任一 attached `bufferedAmount > WS_PAUSE_HIGH_WATER`（2MiB） | `pauseOutput()` + 广播 `{type:'output.paused'}` |
+   | 全部 attached `< WS_PAUSE_LOW_WATER`（512KiB） | `resumeOutput()` + 广播 `{type:'output.resumed'}` |
+   | 部分 drain（LOW～HIGH） | 保持暂停（不抖动） |
+   | 暂停持续 `≥ WS_PAUSE_MAX_MS`（30s）仍不 drain | 淘汰慢 viewer（回到兜底语义）后视情况恢复 |
+   | `bufferedAmount > MAX_WS_BUFFERED_BYTES`（8MiB） | 维持原有 1011 断开（最终兜底，不删） |
+
+3. 暂停期间没有 data 事件 ⇒ `armPausePoll` 250ms 轮询盯 drain（`unref`，shell close 时清掉）。
+4. 常量收在 `runtime.js` 顶部并导出 `WS_PAUSE_HIGH_WATER` / `WS_PAUSE_LOW_WATER` / `WS_PAUSE_MAX_MS`，注释写清与 `MAX_WS_BUFFERED_BYTES` 的关系（暂停是第一道防线，8MiB 仍是兜底线）。
+5. 前端 `session.js` / `app.js`：`onFrame` 收两个新帧只做状态栏展示（「输出已暂停（对端繁忙）/ 已恢复」）；**无上行新权限**（host→browser 单向）。
+
+### 测试（299 → 310 例，+11；`verify-all ssh` **31/31 PASS**）
+
+- **G1 +5**：`isSftpTransportFailure` 命中/不命中两例；`sftpSession` close 清缓存 + 下一次重开（含旧 session 迟到 close 不误清）；`withSftp` 传输层死亡重开一次后成功；`withSftp` 只重开一次 + 权限错误不重开。
+- **G2 +6**：超高水位 pause + `output.paused`（不断开）；部分 drain 保持 / 全 drain resume + `output.resumed`；暂停超时兜底断开并恢复；ended shell no-op；session.js 前端契约（展示帧 + 可重附着）；app.js 契约（认识两帧 + 展示块零上行）。
+- **真协议探针**归档 `_refs/scripts-archive/ssh-g1-g2-probe/`：G1「关子系统后自动重开」**7/7**、G2「慢 consumer 下 shell 被 pause 而非断开」**11/11**（真 `ssh2.Server`；踩坑记录见探针 README：subsystem 回调签名 `(accept, reject, info)`、SFTP status `OK=0`）。
+
+### 红线复核
+
+G1/G2 均不碰系统提示 / 模型请求 / 工具 schema；G2 新帧是 host→browser 单向展示帧，浏览器半无任何上行新权限。
+
+### 待实机验收
+
+先开 SSH、打开文件面板，让服务端关掉 SFTP 子系统后再列目录：应自动重开并成功。弱网 / `top` 狂刷 / 笔记本休眠恢复时状态栏出现「输出已暂停（对端繁忙）」后自动恢复，**终端不掉线**。判据见[回归矩阵 §3.6](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 新增两行。**需重启 `dsh web`**（`cachedAsset` 进程内缓存）。
+
 ## 2026-09-27 · T4：口径①「壳窗控口径」契约化（口径②与 rootObserver 不变）
 
 **背景**：桌面壳契约 v1.2 增补 `chrome.bounds()` / `chrome.onChange()`（见
