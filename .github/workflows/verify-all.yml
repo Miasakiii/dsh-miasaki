@@ -147,3 +147,13 @@ jobs:
       # sidebar 的 test/terminal-hub.test.js 在受限沙箱的本地环境会因
       # `where.exe` 输出捕获被禁（EPERM）而假阴性 9/10；CI runner 无此限制，
       # 应稳定为 10/10。见 README §统一回归 的 ※ 注记。
+      #
+      # 反向差异（2026-09-29 记）：本 CI 固定 Node **22.19.0**，而维护机常见 24.x ——
+      # **「本机全绿」不等于「CI 绿」**，反之亦然。实证：ssh 的 test/tools.test.js 曾因产品代码里
+      # `timeoutTimer.unref()`（刻意的：真实 host 常驻另有 ref 句柄，unref 只为不拖住进程退出）
+      # 在 Node 22 下「事件循环一空」就被 test runner 判成
+      # `Promise resolution is still pending but the event loop has already resolved`
+      # 并连锁失败 13 例（首个用例 0.5ms 即报错、不等满 1000ms 超时），而 Node 24 对 pending
+      # promise 更宽松 ⇒ 本机一直绿、本 CI 从 2026-09-26 红到 09-29。
+      # 改动后请用 `npx -y node@22.19.0 scripts/verify-all.mjs` 复跑一遍对齐本 CI 的 Node 版本；
+      # 完整定位过程与修法见 dsh-miasaki-ssh/design/CHANGELOG.md 的 2026-09-29 条。

@@ -306,6 +306,16 @@ appearance 18/18、usage 3/3、**free-model 15/15**（新线首次入账）、re
 跳过未装的那个是**业务判据本身**，不是「缺件静默降级」）就地写 `guard-ok` 豁免并从基线移除，
 存量 **58 → 57 类**（这是债不是背书，核销才让基线将来真能抓住回归）。
 
+③ **修掉自 2026-09-26 起持续的 CI 红** —— 本机 161 项全绿而 CI 每次 push 都红（Actions 日志需 admin，本机读不到）。
+按「空 `DSH_HOME` → `git clone --local` 干净树 → **对齐 CI 的 Node 版本**」三步在本机复现，根因是
+`ssh/test/tools.test.js` 踩了 **`unref()` 定时器 + Node 22 test runner** 的组合：`lib/exec.js` 的
+`timeoutTimer.unref()` 是刻意设计（真实 host 常驻另有 ref 句柄），但**测试进程里它是唯一句柄** ⇒
+事件循环立刻变空 ⇒ Node 22 判 `Promise resolution is still pending…` 且**不再等待**（用例 0.5ms 即报错、
+不等满 1000ms），连累后续 13 例。**修在测试侧**（补一个 ref 保活句柄），产品的 `unref()` 不动。
+Node **22.19.0** 与 **24.15.0** 各自 `tools.test.js` **31/31**、全量 **161 项全 PASS**。
+**纪律**：CI 固定 Node **22.19.0** 而本机常是 24.x ——「**本机全绿 ≠ CI 绿**」，
+改动后用 `npx -y node@22.19.0 scripts/verify-all.mjs` 复跑一次。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

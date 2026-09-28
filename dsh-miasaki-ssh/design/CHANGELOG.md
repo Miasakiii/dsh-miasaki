@@ -2,6 +2,49 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-09-29 · 修 CI 自 2026-09-26 起的持续红：`tools.test.js` 的 unref 定时器陷阱
+
+**现象**：CI（`.github/workflows/verify-all.yml`）自 2026-09-26 12:16 之后**每一次 push 都红**，
+而本机 `node scripts/verify-all.mjs` 一直 **161 项全绿**。失败步骤只有一句
+`Process completed with exit code 1`（无权限读 CI 日志，见下）。
+
+**定位过程**（本机复现，不靠猜）：
+
+| 步 | 做法 | 结果 |
+|---|---|---|
+| 1 | 空 `DSH_HOME` 跑全量（模拟 CI 无 `~/.dsh`） | 全绿 —— 排除本机 profile 差异 |
+| 2 | `git clone --local` 出干净树（无 `_refs/` `vendor/` `dist/`）+ 空 `DSH_HOME` | 全绿 —— 排除 fresh-clone 差异 |
+| 3 | **对齐 CI 的 Node 版本**：`npx -y node@22.19.0 scripts/verify-all.mjs` | **复现**：`ssh: 30/31`，失败项 `test/tools.test.js` |
+
+CI 的 `actions/setup-node` 固定 **22.19.0**，本机是 **v24.15.0** —— 差异只在这一处。
+
+**根因**：`lib/exec.js:112` 的 `timeoutTimer.unref?.()` 是**刻意设计**（真实 host 常驻进程另有
+ref 句柄，unref 是为了「别让一个工具的超时拖住进程退出」）。但在**测试进程**里它是**唯一** ref
+句柄 ⇒ unref 之后事件循环立刻变空 ⇒ **Node 22 的 test runner 判定
+`Promise resolution is still pending but the event loop has already resolved` 并且不再等待**
+（用例 18「超时 ⇒ TIMEOUT」在 CI 上 **0.5ms** 就报错，而不是等满 1000ms），随后 **19–31 共 13 例
+连锁失败**（`duration_ms 0`）。Node 24 对 pending promise 更宽松，所以本机一直绿。
+
+> 为什么从 09-26 起：**A1 工具面（`lib/tools.js` + `test/tools.test.js`）是 2026-09-26 12:2x 落地的**，
+> 而 CI 在 12:16 的那次还是 success —— 时间线与根因完全吻合。
+
+**修法（测试侧，不动产品行为）**：用例内加一个 **ref 的保活句柄**（`setTimeout(() => {}, 5000)`
++ `finally clearTimeout`），复现「进程常驻」这一真实前提；它只保活、不参与断言。
+**没有**去掉产品代码的 `unref()` —— 那是正确设计，改掉会让 host 进程被工具超时拖住。
+
+**验证** `[实测]`：
+
+| | Node 22.19.0（CI 版本） | Node 24.15.0（本机） |
+|---|---|---|
+| `test/tools.test.js` | **31/31** | **31/31** |
+| 全量 `verify-all.mjs` | **161 项全 PASS** | 161 项全 PASS |
+
+**教训（入纪律）**：① **CI 与本机的 Node 版本不同是刻意的**（CI 固定 22.19.0），
+「本机全绿」**不等于**「CI 绿」—— 改动后应至少用 `npx -y node@22.19.0 scripts/verify-all.mjs` 复跑
+一次；② **`unref()` 的定时器 + test runner 是天然的陷阱组合**：产品代码里 unref 正确，
+测试里必须自己补一个 ref 句柄，否则用例会以「pending promise」的形态假失败；
+③ 本机拿不到 CI 日志（Actions 日志 API 需 admin），**用 Node 版本对齐做本机复现**比读日志更快。
+
 ## 2026-09-28 · G1/G2 实机验收（真路由 × 真协议 sshd，23/23）
 
 **背景**：[2026-09-27 引擎加固](2026-09-27-ssh-dshweb-engine-gap-plan.md)落地后，用户定向「做实机验收」。

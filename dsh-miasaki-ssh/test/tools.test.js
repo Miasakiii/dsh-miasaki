@@ -360,9 +360,22 @@ test('ssh_exec: 超时 ⇒ TIMEOUT（命令不退出时不能挂死工具）', a
     connections: { h1: host() },
     runtimeOverrides: { isConnected: () => true, runtimeOf: () => ({ id: 'rt-1', status: 'connected', client }) },
   })
-  const result = await byName.ssh_exec.execute({ hostId: 'h1', command: 'cat /var/log/forever', timeoutMs: 1000 })
-  assert.equal(result.error, 'TIMEOUT')
-  assert.match(result.message, /1000ms/)
+  // ⚠️ 保活句柄（ref 的定时器），**不是**可有可无的装饰：
+  // 工具的超时定时器是 `unref()` 的（lib/exec.js 的 `timeoutTimer.unref?.()` —— 真实 host 里
+  // 常驻进程另有 ref 句柄，unref 是为了「别让一个工具的超时拖住进程退出」，是刻意设计）。
+  // 但在**测试进程**里它是唯一句柄 ⇒ unref 之后事件循环立即变空 ⇒ Node 22 的 test runner
+  // 判定 `Promise resolution is still pending but the event loop has already resolved` 并
+  // **不再等待**（0.5ms 就报错），随后的用例全部连锁失败。Node 24 对此宽松，于是本机一直绿、
+  // CI（node-version 22.19.0）自 2026-09-26 A1 工具面落地起一直红。
+  // 这里补一个 ref 的 hold，复现「进程常驻」这一真实前提；它只保活、不参与任何断言。
+  const keepAlive = setTimeout(() => {}, 5_000)
+  try {
+    const result = await byName.ssh_exec.execute({ hostId: 'h1', command: 'cat /var/log/forever', timeoutMs: 1000 })
+    assert.equal(result.error, 'TIMEOUT')
+    assert.match(result.message, /1000ms/)
+  } finally {
+    clearTimeout(keepAlive)
+  }
 })
 
 test('ssh_exec: cwd 经 POSIX 引用前置', async () => {
