@@ -16,4 +16,4 @@
 #   /global 跨会话账本统计 + 会话 Top N 聚合；旧 /summary 退役）。
 - insert:
     - id: dsh-token-monitor
-      name: 'dsh-token-monitor'
+      name: '@miasaki/dsh-token-monitor'

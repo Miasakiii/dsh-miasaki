@@ -1,96 +1,78 @@
-# Miasaki Dual Model
+# @miasaki/dsh-dual-model — 双模型
 
-> DSH web 双模型插件线 `@miasaki/dsh-dual-model` —— 会话级「主模型 + 辅助模型」，只要其一支持图片即可上传图片，输入框右下角快速配置。
+> DSH（DeepSeek Harness）插件：会话级「**主模型 + 辅助模型**」——
+> 只要其中一个支持图片，你就能往会话里发图。
 
-## 状态
+配置入口在**输入框右下角**（`conversation.input.right`）：折叠态显示「主 ▸ 辅」两个短名，点开选模型。
 
-**0.1.3-miasaki.0（2026-09-23）**：设置变更的缓存失效信号改为**新旧事件双轨监听**
-（`settings/updated` + `settings/document-updated`，见 `lib/invalidation.js`）——
-DSH 0.1.7 重写设置机制后旧事件被移除，双轨让本线在 0.1.5/0.1.6 与 0.1.7+ 上行为一致、
-升级零改动。详见 [`design/CHANGELOG.md`](design/CHANGELOG.md) 2026-09-23 条目。
+## 它解决什么
 
-**0.1.2-miasaki.0（2026-09-22）**：右下角「双模型」选择框 UI 优化 —— 全部配色切换到
-DSH 真实主题令牌（旧实现引用的 `--dsw-static-surface` / `--dsw-static-text` / `--dsw-static-border`
-在本体不存在，面板背景恒回退硬编码 GitHub 深色，浅色主题下不可读），弹层表面对齐官方
-ContextMeter 面板（`--dsw-specific-menu` + `--dsw-elevation-prominent` + 12px 圆角），
-折叠按钮对齐官方紧凑控件（28px / 999px 圆角 / `--dsw-specific-selector`）；折叠态改为
-「主 ▸ 辅」双短名（设计文档 §5.2 原意），面板新增主模型行与「看图 / 纯文本」能力徽标；
-新增 Esc / 点击面板外关闭。详见 [`design/CHANGELOG.md`](design/CHANGELOG.md) 2026-09-22
-UI 优化条目。
+DSH 里图片能不能发，取决于**当前模型**是否支持视觉。于是常见情形是：
+主力模型推理强但看不了图，而看得图的模型你又不想全程用它。
 
-0.1.1-miasaki.0（2026-09-22）：M1 的「配置模型」控件渲染崩溃已修复——
-标准 kit hook `useInput` 必须带 selector 调用（`bindSnapshotSelector` 无 identity 兜底，
-无参调用抛 `selector is not a function`，控件被 slot error boundary 吞掉）；
-字段名由 `imageIds` 更正为 `attachmentIds`。修复后按钮 / 面板 / 下拉在真实 GUI 实测可用，
-详见 [`design/CHANGELOG.md`](design/CHANGELOG.md) 2026-09-22 条目。
+双模型的解法：**会话里同时挂两个模型**——
 
-M1 原始实现见 2026-09-10 记录；M0 六项技术假设已实测全部成立，
-设计定稿见 [`design/2026-09-10-dual-model-design.md`](design/2026-09-10-dual-model-design.md)（§8 为 M0 实测结果）。
+- 纯文本对话走**主模型**（保持你原有的选择）；
+- 一旦上下文里有图片，**自动切到辅助模型**；
+- 两者都支持图片时保持主模型不变（不做无意义的切换抖动）。
 
-## 解决什么
+## 行为细节
 
-DSH 0.1.5-rc.1 的现状是：**图片能拖进输入框，发送时才被 host 拒绝**。
+| 情形 | 行为 |
+|---|---|
+| 未启用 / 未配置辅助模型 | 一律保持主模型（`keep`） |
+| 上下文无图片 | 保持主模型 |
+| 上下文有图片 + 已配置辅助模型 | 切换到辅助模型（`assist`） |
+| 辅助模型与当前路由相同 | 保持（不产生配置抖动） |
+| 模型能力**未知** | 按「可能支持」放行，不武断判负 |
 
-- 客户端 `canAcceptDrop` 与模型能力无关，图片随便拖入；
-- host `session.prompt` 按「当前会话模型是否声明支持图片」硬拒整条消息；
-- 若绕过该校验，`dsh-llm` 会把图片**静默替换成一行占位文本**（不报错）——比直接失败更糟。
-
-本线把「准入判定」与「实际执行者」统一到同一个能力真值源上，让图片在有任一支持图片的模型时即可用。
-
-> **痛点场景已实测确认**：本机 9 个 provider / 59 个模型中，`openrouter` 的 **21 个免费模型全部不支持图片** ——
-> 以免费池模型为主力时图片上传完全不可用。另有 16 个视觉模型可作辅助模型候选（`mimo-v2.5-free` 免费 → `deepseek-flash` → `claude-*`）。
-
-## 组成
-
-| 部分 | 位置 | 职责 |
-|---|---|---|
-| Host 半 | `index.js` + `lib/` | 提供 `dualModelVisionRoute` 可选服务；在 `agent/pre-step` 记录每步的图片上下文；在 `agent/request` 把含图步骤路由到辅助模型；`/dual-model/api/*` JSON 路由 |
-| Client 半 | `client.js` | `conversation.input.right` 控件：状态点 + 辅助模型选择 + 「图片将由谁处理」状态行 |
-| 运行时补丁 | `patches/dsh-api-session-controller/` | 把 `session.prompt` 的图片准入判定委托给上面的可选服务（详见其 [README](patches/dsh-api-session-controller/README.md)） |
-
-**补丁与插件必须同版本上线**：补丁负责「放行」，插件负责「真的有人能处理图片」。只打前者会出现放行后图片被静默丢弃的失败模式。
+切换时会**清空继承的 `reasoningEffort`** —— 避免把主模型的推理档位硬套到辅助模型上。
 
 ## 安装
 
-```powershell
-# 1) 注册到 DSH web profile（link 方式，改源码后重启 host 生效）
-#    在 %USERPROFILE%\.dsh\profiles\web\package.json 中：
-#      dependencies 加 "@miasaki/dsh-dual-model": "link:<仓库路径>/dsh-miasaki-dual-model"
-#      dsh.profile.bundles 加 "@miasaki/dsh-dual-model"
-cd $env:USERPROFILE\.dsh\profiles\web ; pnpm install
-
-# 2) 应用图片准入补丁（会备份为 .dsh-bak，可 revert）
-cd <仓库路径>\dsh-miasaki-dual-model\patches\dsh-api-session-controller
-node patch.mjs apply
-
-# 3) 重启 dsh web（host 半与补丁都只在启动时加载）
+```bash
+dsh plugin add @miasaki/dsh-dual-model
 ```
 
-## 验证
+装完**重启 DSH**并刷新页面。
+
+### 可选：本体准入补丁
+
+DSH 对「当前模型是否支持图片」的准入判定在本体里。本插件自带一个**一行改动**的补丁
+（`patches/dsh-api-session-controller/`），把准入改成**可选服务探测**：
+
+- 插件**没装**时行为与原生**完全一致**（零退化）；
+- 插件在场时才接管判定。
+
+```powershell
+cd patches\dsh-api-session-controller
+node patch.mjs apply      # 应用（会备份为 .dsh-bak）
+node patch.mjs verify     # 离线自证：由 baseline 重建产物并逐字节比对
+node patch.mjs revert     # 回退
+```
+
+**升级 DSH 后需要重打**（补丁按 baseline 校验，升级会让 baseline 漂移，`verify` 会明确报出来）。
+
+## 边界
+
+- 插件**不直接调模型**：它只决定「这一轮用哪个已注册路由」；
+- 不改系统提示、不改工具 schema；
+- 模型能力来自官方 `resolveModelInfo`，**适配器不声明就当未知**，不猜 `false`。
+
+## 状态
+
+核心交互（触发钮 / 配置面板 / 模型下拉 / 主题令牌）已在真实 GUI 实测可用。
+**端到端的图片准入链路与辅助模型路由仍在实机验收中** —— 这是本插件上线前的最后一项。
+
+## 开发
 
 ```bash
-node ../scripts/verify-all.mjs dual-model     # 静态检查 + 33 项单测 + 补丁离线自证
+pnpm install
+pnpm run build        # node --check 入口与 lib/
+pnpm test             # 33 例单测
+pnpm run patch:verify # 本体补丁离线自证
 ```
 
-单测不碰 DSH 运行时：`routing` / `store` / `content` / `invalidation` 是纯逻辑，`client` 在
-**无 `module` 的 VM 上下文**里跑 factory 并驱动真实渲染路径（含 `/state` 失败态 —— 触发钮
-必须可用，否则错误只渲染在面板里、控件会变死件；见 `design/CHANGELOG.md` 2026-09-23 二轮复审条）。
+仓库级统一回归：`node ../scripts/verify-all.mjs dual-model`。
 
-实机验证点（需运行中的 DSH host）：右下角出现「双模型」控件；配好辅助模型后拖入图片，
-状态行显示「图片将由「X」处理」；切换主模型到纯文本模型后仍可发送带图消息且模型能读到图。
-
-## 关键设计结论
-
-1. **三层拆解**：准入（能不能传）/ 路由（谁来看图）/ 配置（在哪配、存哪）—— 三者必须共享同一个能力真值源。
-2. **路由判据取自 `agent/pre-step`**：官方 `prepareRequest` 契约是 "before admitting model-visible input"，
-   `agent/request` 触发时本步消息尚未进入 Session。pre-step 的 payload 带本步消息，
-   历史由 `session.deriveMessages()` 补齐 —— 这同时天然覆盖「同 turn 后续步骤」与「后续 turn 引用旧图」，
-   且 compaction 清理图片后自动回落主模型。
-3. **UI 落点是加法槽**：`conversation.input.right`（`replaceRisk: none`），位置正是「提交按钮之前」；0.1.5-rc.1 该槽不变。
-4. **准入用可选服务探测**：未装插件时本体走原生分支（零退化），装插件才改变准入。见设计文档 §3.4。
-
-## 与其他线的关系
-
-- 与 `dsh-miasaki-desktop/plugins/dsh-free-model-pool` 的能力画像（含**视觉**判定）存在复用可能。
-- 官方 `subagentModelSelection` 是「第二模型」配置的现成模板。
-- 六条线代码零耦合，仅共享 `../dsh-miasaki-shared-docs/`。
+设计决策与逐条变更见 [`design/`](design/)。

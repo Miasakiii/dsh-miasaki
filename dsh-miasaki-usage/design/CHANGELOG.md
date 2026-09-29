@@ -7,6 +7,42 @@
 
 ---
 
+## 2026-09-29（续）· 包名加 scope：`dsh-token-monitor` → `@miasaki/dsh-token-monitor`
+
+**为什么**：仓库进入插件分发阶段，包名要发到 npm。而 npm 上 `dsh-token-monitor`
+**已被第三方占用**（作者 `licyer`，2026-08-25 起已发到 1.0.11）—— 陌生人执行
+`dsh plugin add dsh-token-monitor` 装到的是**别人的包**。改名到自己的 scope 是分发的前提。
+
+**改了什么（4 处，必须与包名逐字一致）**：
+
+| 位置 | 值 |
+|---|---|
+| `package.json` 的 `name` | `@miasaki/dsh-token-monitor` |
+| `cordis.patch.yml` 的 loader `name` | 同上 |
+| `lib/index.js` 的 `export const name` | 同上 |
+| `lib/client.js` 的 ModuleLoader `id` | 同上（**id 必须等于包名**，否则 client 半挂不上） |
+
+**刻意不改的两处**（内部标识，改了只有风险没有收益）：
+
+- **HTTP 路由前缀** `/dsh-token-monitor/*` —— host 注册与 client 调用成对，与包名无关；
+- **账本目录名** `~/.dsh/plugins-data/dsh-token-monitor/`。
+
+**顺带修掉一个真缺陷**：`resolveDataDir()` 原本用 `path.join(…, name)` **从插件名派生目录** ——
+改名后账本会落到 `plugins-data/@miasaki/dsh-token-monitor/`（含 `/`，被 `path.join` 当成两级子目录），
+**历史账本等于「搬家」**：用户会看到统计凭空清零（改动时账本实况 desktop 1.8MB / miasaki 4.1MB / web 25KB）。
+修法：引入 `LEDGER_DIR_NAME = 'dsh-token-monitor'` 常量，**把数据身份与包身份解耦**，四处派生点全部改用它。
+
+**用户环境同步**（三个 profile）：`miasaki` / `web` / `desktop` 的 `dependencies` 键与
+`dsh.profile.bundles` 项同步改名并重装。其中 **`desktop` 不能用 `dsh plugin`**（被 Electron 应用独占，
+CLI 直接报 `profile "desktop" is managed exclusively by the Electron application`），
+改为在该 profile 目录手动 `pnpm install`。两个孤儿 Junction（旧名 `node_modules/dsh-token-monitor`）
+用 `rmdir` 清除 —— **pnpm 不清理已从 manifest 移除的链接**，留着会让 `message-sources` 闸门多扫一份。
+
+**验证**：`node scripts/verify-all.mjs usage` ✅ 3/3（语法 ×2 + client bundle 装载契约）；
+四处的包名逐字一致（脚本核对）。**待用户确认**：重启 DSH 后插件正常加载、历史统计连续（不清零）。
+
+---
+
 ## 2026-09-29 · 全局浮窗「打开慢」：负缓存 + 首屏不再为折叠排队（v0.6.0 → v0.6.1）
 
 **触发**（用户原话）：「用量统计页面打开加载有点慢，查查原因」。

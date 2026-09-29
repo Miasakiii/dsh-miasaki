@@ -1,226 +1,90 @@
-# @miasaki/dsh-sidebar
+# @miasaki/dsh-sidebar — 右侧边栏增强
 
-DSH（DeepSeek Harness）web 插件：**接入官方右侧 Sidebar**（`@deepseek-ai/dsh-client-ui-sidebar-right`），贡献**「审查」「辅助对话」两个右栏 tab 类型**（辅助对话 M2.1 已落地，见 [design/2026-09-27-sidebar-m2-sidechat-design.md](design/2026-09-27-sidebar-m2-sidechat-design.md) §7.2）；内嵌终端自 **2026-09-25（v0.10.0-miasaki.0）起收敛为底部面板单形态**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建右栏终端，决策记录见 [design/CHANGELOG.md](design/CHANGELOG.md) 当日条。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码已删除，不再留死代码）。
+> DSH（DeepSeek Harness）插件：给**官方右侧边栏**加两个 tab ——「审查」与「辅助对话」，
+> 再给主界面加一个**底部内嵌终端**（Ctrl+`）。
 
-- 路线 D（2026-09-06 拍板）：不安装 `dsh-better-sidebar` 基座，完全自研；与 canvas 线同构技术栈，零代码耦合；
-- 产品理念参考：Codex `/side` 侧边对话、GitHub Copilot 右栏范式、CHI'25 常显侧面板研究（详见设计文档 §2 调研来源）；
-- 红线沿用 canvas：不改系统提示/模型请求/工具 schema；DSH 原生会话是唯一事实来源；插件不直接调模型。
-- **当前待办（2026-09-25）：右栏终端退役（v0.10.0-miasaki.0），待重启 `dsh web` 实机验证** ——
-  右栏 tab 类型只保留「审查」（终端类型 `@miasaki/dsh-sidebar/terminal` / kind `miasaki-terminal` 注销）；
-  内嵌终端（多标签、Ctrl+`、标题栏按钮）全部收敛底部面板，host 半（TerminalHub / WS / 路由）**零改动**。
-  另有两笔历史待验项随本次重启一并复验：v0.8.1 两形态实机反馈修复（已并入底部面板）、v0.9.0 多标签行为。
-- **上一轮待办：停止遮蔽官方终端（2026-09-25，v0.9.0-miasaki.0 之后的同日决策）** —— 见
-  [design/CHANGELOG.md](design/CHANGELOG.md)；该决策已被本次「直接退役右栏终端」取代（官方终端即右栏终端的归宿）。
-- **更早待办：P0/P1 + P2 内嵌终端已落地（2026-09-12，待重启 `dsh web` 实机验证）** —— 审查 tab 数据一致性
-  修复 + diff 阅读器重做（v0.7.0）；内嵌终端两形态（v0.8.0：底部面板 + 右栏 tab 共享同一 pty 会话，
-  node-pty 路线 B 已过 T2 spike）；点名交互重排待实机确认。
-  见 [优化规划](design/2026-09-12-rightbar-optimization-plan.md) §6 拍板记录 与
-   [界面示意](design/2026-09-12-rightbar-mockup.html)。
+不安装任何重型侧边栏基座，全部自研；右栏的开合、宽度、分栏、全屏**由官方框架负责**，本插件不介入。
 
-## 状态
+## 它做什么
 
-**当前形态：官方右栏的「审查」一个 tab 类型 + 底部面板内嵌终端**（2026-09-25 右栏终端退役后）
+### 审查（右栏 tab）
 
-| 维度 | 事实 |
+在右栏里完成「改了什么 → 该不该提交 → 漏了什么」这条链。
+
+- **四种视图**：未暂存 / 已暂存 / 全部分支更改 / 上一轮更改——切换即切换 diff 基线；
+- **改动清单**：按目录分组、增删行统计、二进制文件如实标注（不冒充数字）；
+- **diff 阅读器**：自研 unified diff 解析——hunk 头、行列号、新增/删除/上下文着色，
+  二进制与超长文件带 `truncated` 标记而不是静默截断；
+- **审查清单**：按目录记 notes，附 `docsSynced` / `finalMentioned` 开关，
+  并按仓库约定检测「改了代码却没改文档」。
+
+### 辅助对话（右栏 tab）
+
+**不打断主线**：从当前会话 fork 一条侧线，在右栏里继续问。
+
+- 主会话**运行中也能开**——侧线不携带 `atSeq`，是独立的 fork；
+- 嵌入式官方会话，**零自研聊天 UI**（复用 DSH 自己的界面）；
+- 侧线在右栏有登记表：刷新后仍能找回，重复登记有幂等对账。
+
+### 底部内嵌终端（Ctrl+`）
+
+- **多标签、多会话**：每个标签一条独立 pty，输出/输入/resize 互不串台；
+- **node-pty 路线**：真实终端（不是命令回显），支持 Windows PowerShell / pwsh / cmd / wt；
+- **一次性 token 闸门**：WebSocket 升级与 HTTP 路由走同一套信任围栏；
+- **回放环 + 背压淘汰**：慢 viewer 丢自己会话的帧，不阻塞别人；
+- 标题栏按钮也可唤起，随主题明暗自动换色。
+
+## 安装
+
+```bash
+dsh plugin add @miasaki/dsh-sidebar
+```
+
+装完**重启 DSH**并刷新页面。
+
+**要求 DSH 0.1.7 及以上**（接入的官方右侧边栏自 0.1.5-rc.1 起内置；0.1.7 起设置与服务契约有变更，
+本插件已按新契约适配）。
+
+> 本插件依赖原生模块 `node-pty`（终端功能）。装完若终端打不开，先确认 `node-pty` 已随包构建。
+
+## 用法
+
+| 想做的事 | 怎么做 |
 |---|---|
-| 接入方式 | `ctx.sidebarRightTabs.register`（类型声明 + `guide` 入口胶囊 + **显式 `priority: 'extension'`**）+ `ctx.slots.register({ name: 'sidebar.right.pane.tab', key })`（正文）。<br>2026-09-25 起只注册「审查」一个类型（kind `review`，与官方改动审阅的 `changes-review` 不撞）：终端类型 `@miasaki/dsh-sidebar/terminal`（kind `miasaki-terminal`）已注销——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建，右栏终端形态（含 `＋` 右键「在右栏显示此终端」/ 状态条「在底部打开 ↧」/ 标签栏最右 × 等右栏专属交互）全部删除；内嵌终端收敛为底部面板单形态（Ctrl+` / 标题栏按钮），host 半（TerminalHub / WS / 路由）零改动。`priority: 'extension'` 仍显式写出（2026-09-21 起）—— 保留显式声明的可读性 |
-| 打开入口 | 官方 tab 条的「添加控件」→ 引导页 → 本插件注册的入口胶囊（审查） |
-| 状态归属 | 面板开合 / 宽度 / 分栏 / 全屏 / 标签栏**全部由官方框架负责**，本线不介入 |
-| 自研持久化 | 只剩一处：审查视图（`miasaki-sidebar:review-view`，全局单值）。官方不持久化 tab 状态，且 `tabActions` 只有 openResource / openTab / close，**没有**「更新当前 tab 参数」通道，故视图选择自管 |
-| 窗口可见性 | 官方 `tab.visible` 与本插件记录的窗口可见性**相与**，隐藏时跳过 60s TTL 轮询 |
+| 打开右栏 | 官方 tab 条的「添加控件」→ 引导页 → 选「审查」或「辅助对话」 |
+| 看未提交的改动 | 审查 tab → 视图选「未暂存」 |
+| 换成"上一轮改了什么" | 审查 tab → 视图选「上一轮更改」 |
+| 记一条审查笔记 | 审查清单里按目录填写，自动落盘（原子写） |
+| 不打断主线问一句 | 辅助对话 tab → 直接问（会自动 fork 一条侧线） |
+| 开终端 | `Ctrl+`` 或标题栏终端按钮 |
 
-### 迁移与清理时间线
+## 与官方框架的边界
 
-- **2026-09-10 迁移**：DSH `0.1.5-rc.1` 内置官方右侧 Sidebar（分栏 / 全屏 / 浮窗 / 文件树 / 文档预览 / 模型交付文件），
-  用户拍板「官方做了侧边栏就用官方的」。壳层（推挤 / `shell.overlay` 挂载 / 自研 tab 栏 / 空态选择页 /
-  抽屉手势与遮罩 / 两处自研开关 / 按会话持久化）全部停用。同批停用的还有**壳的侧栏入口按钮**
-  （`syncTitlebarButton` / `.tb-sidebar`，注入对象恰好也在 `#miasaki-titlebar`）——**注意标题栏这个落点
-  2026-09-12 已随内嵌终端重建**：今天仍是活代码的「标题栏终端按钮」就插在 `.tb-group` 首位
-  （`client.js` 的 `titlebarButton`，见 [design/CHANGELOG.md](design/CHANGELOG.md) 2026-09-12 条）。
-  设计见 [design/2026-09-10-migrate-to-official-rightbar.md](design/2026-09-10-migrate-to-official-rightbar.md)。
-- **2026-09-10 实机修复**：首次打开官方右栏是**一片空白**，引导页没有任何入口胶囊。根因不是注册失败
-  （两个 `sidebar.right.pane.tab` 正文都在册），而是 `sidebarRightTabs.register` 的 `guide` 条目把
-  `title` / `description` 当**字符串**传了 —— 官方 GuideBody 按**函数**读取（`entry.title()` /
-  `entry.description?.()`），渲染时抛 TypeError，React 随即放弃整棵引导页子树。
-  已修复为函数形态（模块级 `rightBarGuideEntry`），由 `test/rightbar-guide.test.js` 锁死契约；
-  同期把 `/sidebar/api/health` 的 `version` 改为直接读 `package.json`（手抄值会让陈旧 host 看起来是新的）。
-- **2026-09-11 第二阶段清理**：删除全部壳代码（`Shell` / `EmptyState` / `TABS` 等 237 行组件，以及推挤、抽屉、
-  壳常量与壳样式），退役 `test/drawer-gesture.test.js`（9 项）与 `test/client-tabs.test.js` 的持久化部分（7 项），
-  并把审查视图从「壳的 tabs 数组」迁到自管存储 —— 这**修复了一个迁移遗留缺陷**：
-  修复前 `setTabView` 写的是壳的 tabs 数组，而该数组在官方右栏下恒为空，**视图下拉点了没有反应**。
-- **2026-09-25 右栏终端退役（v0.10.0-miasaki.0）**：官方右栏已内置终端（0.1.7-rc 线具备多标签 /
-  Shell 选择 / 刷新恢复），用户拍板「沿用官方策略，本项目不再做右侧边栏终端」。注销终端 tab 类型
-  （`@miasaki/dsh-sidebar/terminal`，kind `miasaki-terminal`），删除 `TerminalTab` 组件、右栏专属样式
-  （`.dsh-sidebar-term*`）、跨容器移位菜单（`showInRight` / 「在底部打开 ↧」）与右栏 `×`；内嵌终端
-  （多标签 / Ctrl+` / 标题栏按钮）全部收敛底部面板，**host 半零改动**（TerminalHub / WS / 路由与容器无关）。
-  当日先行的「停止遮蔽官方终端」（kind 改独占命名空间）随之被本决策取代。决策记录见
-  [design/CHANGELOG.md](design/CHANGELOG.md) 2026-09-25 条。
+| 维度 | 归属 |
+|---|---|
+| 右栏开合 / 宽度 / 分栏 / 全屏 / 标签栏 | **官方框架** |
+| tab 类型注册与正文 | 本插件（`sidebarRightTabs.register` + `slots.register`） |
+| 审查视图选择 | 本插件自管（官方不持久化 tab 参数，且没有「更新当前 tab 参数」通道） |
+| 终端 pty 生命周期 | 本插件 host 半（与容器无关） |
 
-### 历史（M1，2026-09-09，v0.5.1-miasaki.1）
+**红线**（沿用本仓一致约定）：不改系统提示、不改模型请求、不改工具 schema；
+DSH 原生会话是唯一事实来源；插件不直接调模型。
 
-审查改版与设计语言统一均已完成实机复验，内容层沿用至今：
+## 设计取向
 
-- **审查改版**（v0.5.0）：视图下拉（**切换即拉取**）+ 目录分组列表（组头默认折叠、组内 `+N -M` 合计）
-  + 类型图标 + 行级 diff 展开；点名交互、未点名红描边、60s TTL、可见性门全部保留。
-- **设计语言统一**（v0.5.1）：字体与几何对齐 DSH 原生 —— 字体走 `--dsw-font-*` shorthand 令牌
-  （家族 `--dsw-font-family`、字重 500、等宽 `--ds-font-family-code`），圆角 / 控件高度 / 内边距归入 DSH 阶梯，
-  列表行采用官方行范式（32px + 8px 圆角 + `6px 8px` 内边距），语义色与滚动条走令牌，
-  面板边框改官方详情列同款 `.5px + border-l3`。详见 [CHANGELOG](design/CHANGELOG.md)。
+- **不装基座**：明确不安装 `dsh-better-sidebar` 之类的重型基座，全部自研；
+- **官方有就不重造**：官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复）后，
+  本项目**退役了自建的右栏终端**（v0.10.0-miasaki.0），内嵌终端只保留底部面板单形态；
+- **让位而非抢占**：自研右栏壳已于 2026-09-10 退役、9-11 完成清理，壳代码已删除。
 
-> 原壳层能力（推挤锚点 / 抽屉右滑关闭 / 持久化 v2→v3）的完整设计记录保留在
-> [CHANGELOG](design/CHANGELOG.md) 与 `design/2026-09-06-sidebar-roadmap-design.md` 中，**已被官方右栏取代**，
-> 仅作历史存档，不再描述当前行为。
->
-> **例外（2026-09-27 订正，「桌面壳让位」不是历史）**：**标题栏终端按钮仍在**——桌面壳里它会被插进
-> `#miasaki-titlebar .tb-group` 首位，是活代码（`client.js` 的 `titlebarButton`）；**让位量由桌面壳自动
-> 计算**（壳用 `ResizeObserver` 观测 `.tb-group` 实宽写壳内变量），**本线不写**。
-> **同日订正（实机重叠事件）**：迁移的两半生效速度不同——本线删写入**刷新即生效**，壳接写入要**重编
-> exe**（`include_str!` 内嵌），空档期里变量无人写、回落到照「无终端键」定的静态兜底 `128px`，官方
-> 「打开右侧边栏」ExpandButton 因此压住终端键（用户报障）。现改为**能力门控兜底**：`chrome.bounds`
-> 能力在位（新壳）本线不写；缺席（旧壳 / 浏览器直开）才按**同源公式**（组实宽 + 8 + 12）补位。
+## 开发
 
-## 组件蓝图（M1–M3）
-
-| 组件 | 定位 | 里程碑 | 状态 |
-|---|---|---|---|
-| 审查 tab | 四视图（未暂存 / 已暂存 / 全部分支更改 / 上一轮更改）+ 目录分组列表 + 收尾点名 + 行级 diff（v0.7.0 重做：双行号 / hunk 头 / 换行默认开 / 上下文档位 / 变更跳转 / 分段渲染；详情基线随视图，主点击展开、点名移行首） | M1 / v0.5.0 | **已实机验证**（2026-09-07；v0.5.0 改版 2026-09-09 复验通过）；2026-09-10 迁移为官方右栏 tab 类型；**v0.7.0 P0/P1 重做待实机验证**（2026-09-12） |
-| 终端启动器 | host spawn 系统终端到会话 cwd（wt / pwsh / powershell / cmd） | M1 | **已实机验证**（2026-09-08）；v0.8.0 起收进终端 tab 折叠区，**2026-09-19 起收进底部面板 `＋` 右键菜单**（原右栏终端 tab 的折叠区随「下半部分」一并移除，能力不变；2026-09-25 右栏终端退役后入口即在底部面板） |
-| 内嵌终端（底部面板单形态） | **底部横贯面板**（node-pty 路线 B + WS + xterm；保活 + 重连回放 + restart 语义；标题栏终端按钮 + Ctrl+`）；多标签多会话（上限 8）。右栏 tab 形态（v0.8.0–v0.9.0）已于 **2026-09-25 退役**：官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），本项目沿用官方策略不再自建右栏终端（决策见 [design/CHANGELOG.md](design/CHANGELOG.md) 当日条） | M3 / v0.8.0 → 收敛于 v0.10.0 | **已实机验证**（2026-09-12 拍板两形态并存，见优化规划 §6；T2 spike 通过：预编译命中 + resize 生效）；**单形态收敛待重启后实机确认**（2026-09-25） |
-| 内嵌终端多标签（多会话） | **标签栏多开**：会话集合（上限 8）+ 活动标签记忆 + 最小尺寸仲裁 + 帧协议 v2；`＋`/`×`/中键/双击重命名/右键菜单/`▾` 溢出 + `Ctrl+Shift+`` / `Ctrl+PageUp·Down` / `Alt+1..8`；标签栏最右 `×` = 收起底部面板；**终端是一整块**（标签栏 + xterm，无下半部分），状态条只在报错/退出/工作区变更时出现；`＋` 右键选 shell / 开系统终端 | M3.1 / v0.9.0 | **已实施，待实机验证**（2026-09-19；见[补充设计](design/2026-09-19-terminal-multi-tab-plan.md)与[可视原型](design/2026-09-19-terminal-tabs-mockup.html)——两文中「右栏 tab 容器」的表述以 2026-09-25 退役为准；单测 57 通过 / 5 环境跳过，前端 DOM 桩冒烟 52 断言全过） |
-| 辅助对话 tab | page 型官方右栏 tab（kind `sidechat`：侧线头 + 切换器 + 新建侧线）+ **嵌入式官方会话**（复用 `conversation.content` embedded 工厂，零自研聊天 UI）；侧线 = `ctx.sessions.fork`（不传 `atSeq` ⇒ 宿主取最后一个已完成轮次前缀，主会话运行中可开）；引导页胶囊入口 | **M2.1 已完成** | **已实施并实机验收（2026-09-28，[design/2026-09-27-sidebar-m2-sidechat-design.md](design/2026-09-27-sidebar-m2-sidechat-design.md) §7.2）**：引导页胶囊 → tab → 「新建侧线」→ 官方 embedded 会话渲染出继承的父历史 + 原生 composer；**主会话运行中开侧线不打断主任务**（S3 实测）；fork 成功即写侧线登记表（刷新后唯一的侧线身份来源）；空白父会话给人话引导；审查 tab 回归无恙；单测 **86 通过**、`verify-all sidebar` **13/13**。**待人工复验**：miasaki 桌面端 / 浏览器 GUI 刷新后走一遍。**M2.2/M2.3 未做**：侧线树与 `parentId` 对账、tab 菜单动作、在主区打开、复制兜底、深链接 params。**已知偏差**：侧线在官方会话列表可见（命名含 ` (1)`，且同一父的多条侧线同名）；「说『继续』= 接着做主线未完成的活」已在侧线头提示（S8 实测）；fork 会继承父会话 goal/plan（S9），goal 补偿见设计 §5.2 |
-| 标题栏启动器组 | ~~底部内嵌终端面板（xterm + node-pty + WS 回放）~~ → **已按 2026-09-12 拍板落地为「内嵌终端底部面板」**（见上；2026-09-25 起为唯一形态）；外部程序跳转按钮（explorer / VS Code 菜单）仍为未实现残留 | M3（已部分落地） | 终端部分 = **v0.8.0 已实现**；外部跳转按钮未实现（前提已随壳退役重建，待另立项） |
-| ~~右栏壳~~ | ~~推挤 / overlay 挂载 / 标签栏 / 空态 / 抽屉~~ | 已退役 | **2026-09-10 停用、2026-09-11 代码删除** —— 官方右栏接管（见上方时间线）。~~桌面壳让位~~ **不在退役列**：标题栏终端按钮仍在（壳内插 `.tb-group` 首位），让位量由桌面壳用 `ResizeObserver` 自动计算；本线仅在**旧壳**（无 `chrome.bounds` 能力）时按同源公式补位（2026-09-27 实机重叠事件后订正） |
-
-## 目录结构
-
-```
-dsh-miasaki-sidebar/
-├── README.md
-├── package.json            # @miasaki/dsh-sidebar（dsh.client web 声明；依赖 node-pty / ws / @xterm）
-├── pnpm-workspace.yaml     # pnpm ≥11 构建批准：node-pty 显式免构建（预编译命中，T2 实测）
-├── cordis.patch.yml        # 插件身份（id: sidebar / 数据目录 / trustedHosts）
-├── index.js                # host 半：/sidebar/api 路由族（review + terminal + health）
-│                           #   + /sidebar/ws/terminal（内嵌终端 WS，一次性 token + 三道围栏）
-│                           #   + /sidebar/asset/terminal/*（xterm UMD 静态 serve）
-├── client.js               # client 半：官方右栏 tab 类型注册（审查 / 辅助对话 两个类型）
-│                           #   + 审查 tab 正文 + 辅助对话（侧线：登记表 + fork + 官方 embedded 会话复用）
-│                           #   + 内嵌终端（底部面板 / 标题栏按钮 / Ctrl+`，多标签）
-│                           #   壳层已于 2026-09-11 全部删除；右栏终端（TerminalTab 等）2026-09-25 删除，不再留死代码
-├── test/
-│   ├── review-data.test.js      # diff 解析器（含 hunk header）/ 文档同步检测 / checklists 持久化单测（5 项）
-│   ├── review-view.test.js      # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（10 项）
-│   ├── review-grouping.test.js  # 审查列表目录分组与组内统计求和（源码抽取，3 项）
-│   ├── review-view-store.test.js # 审查视图持久化：默认值 / 非法回退 / 订阅通知 / 私有模式降级（源码抽取，6 项）
-│   ├── sidechat-registry.test.js # M2 侧线登记表：纯函数 7 项（幂等/回退/通知/私有模式）+ 源码契约 6 项（fork 即写盘 / pendingCreations finally 释放 / phase 三值 + hero 必填 / 自名子槽 + slots.inject / 「继续」语义提示 / 空白父会话引导）
-│   ├── rightbar-guide.test.js   # 官方右栏 guide 条目契约：title / description 必须是函数（源码抽取，4 项）
-│   ├── titlebar-button.test.js  # 标题栏终端按钮写域边界：让位量须过 chrome.bounds 能力门控、按 .tb-group 实宽算、清理受 wroteReserve 门控，且注入逻辑仍在（源码静态断言，4 项）
-│   ├── session-cwd.test.js      # 主视图会话取数契约：会话快照无 current 字段 ⇒ 判据为 retainedBy.mainView > 0（官方 ui-session 同款），autoOpen 由 store 订阅驱动（源码抽取 + 静态断言，8 项）
-│   ├── terminal-launcher.test.js # argv 构造 / 枚举校验 / cwd 校验 / 探测 / 启动失败（7 项）
-│   ├── terminal-hub.test.js     # 内嵌终端 host 半：PTY 枚举纪律 / 回放环 / 一次性 token / 围栏 / 多会话隔离与回收（fake pty 注入，15 项）
-│   └── api-routing.test.js       # 真实 HTTP 路由：cwd 守卫 / Host 围栏 / 浏览器信任三道 / 视图白名单 / diff 新契约（12 项）
-└── design/
-    ├── 2026-09-06-sidebar-roadmap-design.md   # 路线 D 总设计（**§3 壳设计 / §3.2 tab 框架已被 2026-09-10 迁移取代**，§1 红线与 §4–§6 内容设计仍有效）
-    ├── 2026-09-08-tavern-sidebar-comparison.md # 对照 dsh-tavern/better-sidebar 的实现调研
-    ├── 2026-09-08-better-sidebar-compat-assessment.md # betterSidebar 兼容层评估（用户拍板项）
-    ├── 2026-09-08-sidebar-review-redesign-implementation.md # 审查改版 + 浏览器式标签页实施方案（v0.5.0；标签栏部分随壳退役）
-    ├── 2026-09-09-sidebar-launcher-design.md # 标题栏启动器组：外部程序跳转 + 终端展开（内嵌终端面板，M3 立项）
-    ├── 2026-09-10-migrate-to-official-rightbar.md # 迁移官方右栏：壳退役映射表 + 官方契约要点 + 丢失能力补偿（当前形态的设计依据）
-    ├── 2026-09-12-rightbar-optimization-plan.md  # **优化规划设计（2026-09-12，P0/P1/P2 均已实现；仅右栏 tab 形态于 2026-09-25 退役）**：审查基线不一致缺陷 + diff 阅读器重做 + 终端改判右栏内嵌 + 宿主自带 PTY 栈核查 + spike T1–T6
-    ├── 2026-09-12-rightbar-mockup.html           # 上述设计的界面示意（现状 vs 建议，浏览器打开）
-    ├── 2026-09-19-terminal-multi-tab-plan.md     # **内嵌终端「标签栏多开」补充设计（2026-09-19，已实施）**：协议 v2 加维 / 单集合纪律 / 每容器独立活动标签 / 最小尺寸仲裁 / 上限 8 / 孤儿会话收口 + 9 项待拍板（已按推荐项实施）
-    ├── 2026-09-19-terminal-tabs-mockup.html      # 上述设计的可交互原型（标签栏复刻参考图 + 两形态 + 三主题 + 决策卡，浏览器直接打开）
-    ├── 2026-09-27-sidebar-m2-sidechat-design.md  # **M2 辅助对话设计定稿（2026-09-27）**：page 型官方右栏 tab + fork 侧线（完成轮次边界）+ 官方 conversation.content embedded 工厂复用；对标 ZCode SelectionSideChat 与官方 ui-subagent 先例；含三处偏差声明、M2.1–M2.3 拆分、S1–S6 spike、三项待拍板。**2026-09-28 修订**：核对底本换代（0.1.6 → 0.1.7-rc.2）+ ZCode 源码级对标（新增偏差④与 §5.1）、契约 C14–C18、spike S7–S9、拍板项增至六项；**同日实机取证收官**（§7.1）：S1/S2/S7 全部通过、S8 复现「一句『继续』就让侧线接着做父任务」、S9 证实 goal/plan 继承；**§7.2 = M2.1 已实施并实机验收**（引导页胶囊 → 侧线 → 官方 embedded 会话；运行中开侧线不打断主任务），M2.2/M2.3 后置
-    └── CHANGELOG.md                            # 本线变更记录
+```bash
+pnpm install
+pnpm run build   # node --check 两个入口文件
+pnpm test        # 11 个测试文件
 ```
 
-## 终端启动器的安全边界
+仓库级统一回归：`node ../scripts/verify-all.mjs sidebar`。
 
-启动器只 spawn 系统终端，不代执行任何命令，四条约束都在 host 侧强制：
-
-1. **shell 固定枚举**：客户端只能报 `TERMINAL_SHELLS` 里的 id（`wt` / `pwsh` / `powershell` / `cmd`，
-   另有 darwin/linux 预留项）；任意 executable 路径一律拒绝，不存在"客户端指定二进制"的口子。
-2. **永不拼命令字符串**：`terminalCommand()` 返回 `{ bin, args }` 参数数组交给 `spawn`（无 shell），
-   cwd 只落在独立参数位——带 `& | "` 的恶意路径原样传递，不被任何 shell 解释；
-   `powershell` / `cmd` 甚至不接路径参数，直接继承 spawn 的 cwd。
-3. **cwd 必须是已存在的绝对目录**：非绝对路径 400、目录不存在 404、指向文件 400，不落到 500。
-   > 2026-09-08 修复：原先 `resolveWorkdir()` 先 `resolve()` 再判 `isAbsolute`，resolve 之后恒为真，
-   > 「必须绝对路径」这条约束在真实路由上形同虚设——相对路径被静默解释为「相对 host 进程 cwd」，
-   > 该路径恰好存在时会在 host 自己的目录里真的拉起终端。现在绝对性判断前置（`resolveWorkdir` 导出、
-   > `test/api-routing.test.js` 走真实 HTTP 覆盖，含「存在但相对」的危险用例）。
-4. **探测不执行终端**：可用性用 `where.exe` / `which` 查 PATH，不去跑 `wt.exe -v`（否则会在用户桌面闪窗）；
-   未安装的终端在 UI 里置灰，**不静默回落**到用户没选的终端。
-
-启动进程 `detached + stdio: 'ignore' + unref()`，终端独立于 DSH host 存活，也不会阻塞请求。
-
-## API 路由的浏览器信任围栏
-
-`/sidebar/api` 落在 DSH 自身 `/api` 围栏之外，自带三道（2026-09-08 补齐后两道，对齐 better-sidebar 的
-`trust-fence.ts`）：
-
-1. **Host** 必须命中 `localhost` / `127.0.0.1` 或 `cordis.patch.yml` 的 `trustedHosts`（端口无关）；
-2. **`sec-fetch-site: cross-site`** 一律 403——浏览器自己判定该请求由别的站点发起；
-3. **`Origin`**（存在时）的 hostname 必须等于 Host 的 hostname：比 hostname 而非 `host:port`，因为部分
-   Chromium 版本会省略非默认端口的回环 Origin 端口；`Origin: null`（沙箱 iframe / `file:`）按不透明来源拒绝。
-
-三道都是 DNS-rebinding / 跨站纵深防御，**不是鉴权**；`test/api-routing.test.js` 走真实 HTTP 覆盖
-（跨站标记、外部 Origin、`null` Origin 均 403，同源 Origin 与无 Origin 正常 200）。
-
-## 内嵌终端（v0.8.0）与 WS 安全边界
-
-内嵌终端的形态是**底部横贯面板**（Ctrl+` / 桌面壳标题栏按钮；2026-09-25 右栏 tab 形态退役，见上）：
-node-pty@1.2.0-beta.15（路线 B，T2 实测预编译命中 + resize 生效）→ WS 帧协议
-（attach/input/resize → ready/replay/output/status/error）→ xterm 5 UMD 懒加载（host 路由 serve）。
-host 侧保持容器无关（一会话可绑多个 viewer、定向广播），但产品入口只有底部面板一个。
-多标签纪律沿用 v0.9.0：pty 只在 [重启] / 换 shell / 移动工作区时重启；viewer 全部消失**不杀会话**；
-重连凭 1MB 回放环补齐。spawn 纪律在启动器四条之上再加一条（T2 教训）：**conpty 拒绝裸名，
-spawn 前必须 `where` 解析绝对路径**（`resolvePtyBin`，仍是查 PATH 不执行）。
-
-WS（`/sidebar/ws/terminal`）不享受浏览器同源保护（xterm 官方安全指南），在 HTTP 三道围栏之上
-**再加一道一次性 token**：客户端先 `POST /sidebar/api/terminal/token`（走三道围栏）签发，
-upgrade 时校验并用完即废（60s TTL，`createTokenGate`）。输出洪泛有背压保护：
-socket `bufferedAmount` 超 8MB 丢帧（终端输出有损可接受），不无限占内存。
-`node-pty` / `ws` 均为**惰性加载**——依赖缺失时只降级内嵌终端（资产 404 + 无 WS 注册），
-审查 tab 与外部启动器不受影响。
-
-## 验证
-
-```powershell
-# 本线单测（86 例：解析器与文档同步 5 + 四视图与详情 diff 10 + 目录分组 3 + 视图持久化 6 +
-#            右栏 guide 契约 4 + 标题栏按钮写域 4 + 终端 launcher 7 + 内嵌终端 hub 15 + 路由 12 +
-#            主视图会话取数 7 + 辅助对话登记表 13）
-node test/review-data.test.js
-node test/review-view.test.js        # host 半四视图解析器 + diffForView 基线/重命名/context + 真实临时 git 仓库集成（无子进程输出捕获的环境自动跳过）
-node test/review-grouping.test.js    # 审查列表目录分组与组内统计求和（从 client.js 抽取纯函数求值）
-node test/review-view-store.test.js  # 审查视图持久化（抽取 client.js 的 reviewView，注入 mock localStorage）
-node test/rightbar-guide.test.js     # 官方右栏 guide 条目契约：title / description 必须是函数（从 client.js 抽取求值）
-node test/titlebar-button.test.js    # 标题栏终端按钮写域边界：让位量写入必须过 chrome.bounds 能力门控、公式按 .tb-group 实宽算、清理受 wroteReserve 门控（4 项静态断言）
-node test/session-cwd.test.js        # 主视图会话取数契约：会话快照无 current 字段 ⇒ 判据是 retainedBy.mainView > 0（官方 ui-session publishMain 同款）；含 retainInfo 实时兜底与 autoOpen 由 store 订阅驱动的源码静态断言（8 项）
-node test/terminal-launcher.test.js
-node test/terminal-hub.test.js       # 内嵌终端 host 半（fake pty + fake resolveBin 双注入，不需要真实 shell）：多会话隔离 / 定向广播 / 未知 id 静默丢弃 / 上限 8 / 关闭回收 / 最小尺寸仲裁 / dispose 全杀
-node test/api-routing.test.js        # 真实 HTTP（随机端口），覆盖 cwd 守卫、Host 围栏、浏览器信任三道、视图白名单与 /review/diff 新契约
-
-# 受限沙箱（禁止子进程管道 stdio）里 node --test 的多进程隔离会 spawn EPERM，
-# 改用同进程模式：node --test --test-isolation=none <逐个测试文件>
-# 另注：terminal-hub.test.js 曾经在受限沙箱下全挂——一是 ensureSession 链路里的
-# resolvePtyBin 要捕获 `where.exe` 输出解析 shell 绝对路径，捕获即 EPERM（报「未安装或
-# 找不到 powershell.exe」）。**已修**（2026-09-19）：resolveBin 改为可注入，测试不再碰宿主
-# shell。判据与正确跑法见回归矩阵 §1 的 ※※ 注记。
-
-# 统一静态回归（含本线）
-node ..\scripts\verify-all.mjs sidebar
-```
-
-改完 `index.js` / `client.js` 后**必须重启 `dsh web`**——本线以 `link:` 装入 profile，源码即时落盘，
-但 host 半与 client bundle 都在启动时载入内存，刷新/强刷页面均无效。`GET /sidebar/api/health` 的
-`version` 字段是判断 host 是否已加载新 bundle 的可靠信号——它现在**直接读 `package.json`**（不再手抄，
-2026-09-10 修正），当前应为 `0.10.0-miasaki.0`。
-
-## 规划来源
-
-- [统一回归矩阵（跨线共享文档）](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
-- [路线讨论与调研（跨线共享文档）](../dsh-miasaki-shared-docs/cross/sidebar-plan-2026-09-06.md)
-- [dsh-tavern 右侧边栏实现对比调研](design/2026-09-08-tavern-sidebar-comparison.md)（2026-09-08：tavern 右栏实为
-  `dsh-better-sidebar` 基座 + 7 个注册 tab；本线据其结论落地官方锚点 / 围栏两道 / `visible` 性能门 / 会话级持久化，
-  详见报告 §7 落地状态）
-- 上游参考（仅调研/架构参照，不装、不 fork）：[DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（MIT）、
-  [dsh-tavern](https://github.com/flizzywine/dsh-tavern)（MIT）
+设计决策与逐条变更见 [`design/`](design/)。

@@ -42,7 +42,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const name = 'dsh-token-monitor';
+export const name = '@miasaki/dsh-token-monitor';
 export const inject = ['webServer'];
 
 /** 账本保留窗口（天）：覆盖热力图一年视图 + 余量。 */
@@ -100,22 +100,32 @@ function diffDays(a, b) {
 	return Math.round((Date.UTC(pb[0], pb[1] - 1, pb[2]) - Date.UTC(pa[0], pa[1] - 1, pa[2])) / 86400000);
 }
 
-/** 插件数据目录：优先宿主服务，否则 ~/.dsh/plugins-data/<name>/。 */
+/**
+ * 账本目录名 —— **刻意不跟随插件名**（2026-09-29）。
+ *
+ * 2026-09-29 包名由 `dsh-token-monitor` 改为 `@miasaki/dsh-token-monitor`（对外分发需要 scope），
+ * 但目录名是**数据身份**而非包身份：一旦跟着改，既有账本就等于「搬家」——
+ * 用户会看到统计凭空清零（改动时账本实况：desktop 1.8MB / miasaki 4.1MB / web 25KB）。
+ * 另一层现实原因：`@miasaki/dsh-token-monitor` 含 `/`，直接 path.join 会被当成两级子目录。
+ */
+const LEDGER_DIR_NAME = 'dsh-token-monitor';
+
+/** 插件数据目录：优先宿主服务，否则 `~/.dsh/plugins-data/<LEDGER_DIR_NAME>/`。 */
 function resolveDataDir(ctx) {
 	try {
 		for (const k of ['pluginData', 'dataDir', 'storage']) {
 			const v = ctx.get(k);
-			if (typeof v === 'string' && v) return path.join(v, name);
+			if (typeof v === 'string' && v) return path.join(v, LEDGER_DIR_NAME);
 			if (v && typeof v === 'object') {
 				if (typeof v.resolve === 'function') {
-					const r = v.resolve(name);
+					const r = v.resolve(LEDGER_DIR_NAME);
 					if (typeof r === 'string' && r) return r;
 				}
-				if (typeof v.dir === 'string' && v.dir) return path.join(v.dir, name);
+				if (typeof v.dir === 'string' && v.dir) return path.join(v.dir, LEDGER_DIR_NAME);
 			}
 		}
 	} catch (e) { /* 探测失败走默认 */ }
-	return path.join(os.homedir(), '.dsh', 'plugins-data', name);
+	return path.join(os.homedir(), '.dsh', 'plugins-data', LEDGER_DIR_NAME);
 }
 
 /**

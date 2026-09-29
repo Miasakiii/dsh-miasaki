@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-	id: "dsh-token-monitor",
+	id: "@miasaki/dsh-token-monitor",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
