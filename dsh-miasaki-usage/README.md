@@ -30,7 +30,8 @@
 ## 安装
 
 ```bash
-dsh plugin add @miasaki/dsh-token-monitor
+# 尚未发布到 npm —— 发布后：
+dsh plugin --profile <profile> add @miasaki/dsh-token-monitor
 ```
 
 装完**重启 DSH**并刷新页面。

@@ -8,6 +8,13 @@
 
 [![verify-all](https://github.com/Miasakiii/dsh-miasaki/actions/workflows/verify-all.yml/badge.svg)](https://github.com/Miasakiii/dsh-miasaki/actions/workflows/verify-all.yml)
 
+> ### ⚠️ 尚未发布到 npm —— 当前处于源码阶段
+>
+> 项目正在**逐线完善**：[回归矩阵 §3.0 实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
+> 共 **49 项判据、已验 1 项**（静态回归 164 项全绿，但那不等于"在你机器上能用"）。
+> **质量闭环之前不会发布** —— 因此本页出现的 `dsh plugin add` 命令**暂时用不了**，
+> 想现在试请走[源码安装](#安装)。
+
 ---
 
 ## 会话布 · Canvas
@@ -27,7 +34,8 @@ DSH 原生会话始终是唯一事实来源——画布只是它的视图。
 | **不变本体** | 不改系统提示、不改模型请求、不改工具 schema |
 
 ```bash
-dsh plugin add @miasaki/dsh-canvas
+# 尚未发布到 npm —— 发布后：
+dsh plugin --profile web add @miasaki/dsh-canvas
 ```
 
 ---
@@ -68,19 +76,27 @@ Windows 桌面壳：双击 EXE → 自动拉起 DSH → 自带**三套主题皮�
 
 **前置**：已安装 DSH（`dsh` 在 PATH 中）。
 
+> `dsh plugin` **必须带 `--profile <名字>`** —— 插件是按 profile 装的。
+> 常见取值：`web`（浏览器 GUI）、`desktop`（官方桌面端），或你自建的名字。
+
+### 现在：从源码安装
+
+clone 本仓后，以 `link:` 方式装进 profile（改代码即时生效）：
+
 ```bash
-# 1. 装插件（可一次装多个）
-dsh plugin add @miasaki/dsh-canvas
-
-# 2. 重启 DSH
-
-# 3. 刷新页面 —— 会话头出现「会话布」入口
+dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
+# 换目录名即装其它线；装完重启 DSH，再刷新页面
 ```
 
-卸载用 `dsh plugin remove <包名>`，依赖与插件层一并移除。
+各线 README 写有该线的依赖安装与本体补丁步骤（部分线需要）。
 
-> **当前分发状态**：插件尚未发布到 npm registry。首发包为 `@miasaki/dsh-canvas`，
-> 发布后上表命令即可直接使用；在那之前请从源码目录以 `link:` 方式安装（见各线 README）。
+### 发布后（尚未发生）
+
+```bash
+dsh plugin --profile web add @miasaki/dsh-canvas
+```
+
+卸载：`dsh plugin --profile web remove <包名>` —— 依赖与插件层一并移除。
 
 ### 兼容性
 

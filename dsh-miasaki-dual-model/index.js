@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { messagesHaveImage, deriveAgentMessages } from './lib/content.js'
 import { decideRoute, applyRoute, normalizeRoute } from './lib/routing.js'
+import { decideAdmission, imageContextOnFailure } from './lib/admission.js'
 import { createCapabilityIndex, resolveRouteCapability } from './lib/capability.js'
 import { DualModelStore, DEFAULT_CONFIG } from './lib/store.js'
 import { watchSettingsInvalidation } from './lib/invalidation.js'
@@ -100,15 +101,39 @@ export async function apply(ctx, config) {
   const capability = createCapabilityIndex(ctx)
 
   // ---- 1. 可选服务：本体补丁的准入委托目标 ----------------------------------
+  /**
+   * 已成功建立**图片执行通道**的 agent id 集合。
+   *
+   * 「成功」= `agent/pre-step` 与 `agent/request` 两个监听都已挂上 —— 只有这时，
+   * 准入侧放行的图才**真的**会被路由到辅助模型。集合里没有该 agent 时 `for()` 一律不接管，
+   * 让本体走原生分支给出**可见的**拒绝（`Model "X" does not support image input`），
+   * 而不是放行一张没有任何模型会看的图。
+   *
+   * 这条约束是 2026-09-29 补的：此前 `for()` 只看"是否启用 + 是否配置"，
+   * 与路由侧 `decideRoute` 的 `hasImage` 判据**不同源**，存在静默丢图链（见 lib/admission.js 头注）。
+   */
+  const channelReady = new Set()
+
   ctx.effect(() => ctx.provide(SERVICE_KEY, {
     /**
      * 本会话当前的"图片执行路由"。
-     * @returns {{provider: string, model: string} | undefined} 未启用或未配置时为 undefined，
-     *   本体随即走原生准入分支。
+     *
+     * @param {object} agent - 请求准入的 agent。
+     * @returns {{provider: string, model: string} | undefined} 接管时返回路由；
+     *   不接管（未启用 / 未配置 / 通道未建立）返回 `undefined`，本体随即走原生准入分支。
      */
-    for(_agent) {
-      if (state.enabled !== true) return undefined
-      return normalizeRoute({ provider: state.assistProvider, model: state.assistModel })
+    for(agent) {
+      let id
+      try {
+        id = String(agent?.id)
+      } catch {
+        id = ''
+      }
+      return decideAdmission({
+        enabled: state.enabled,
+        assist: { provider: state.assistProvider, model: state.assistModel },
+        channelReady: channelReady.has(id),
+      })
     },
   }), 'dual-model: vision route service')
 
@@ -120,16 +145,23 @@ export async function apply(ctx, config) {
     let id
     try {
       id = String(agent.id)
-    } catch {
+    } catch (error) {
+      // 留痕而非静默：attach 失败 ⇒ 该会话的图片执行通道不存在 ⇒ 准入侧据此**不接管**
+      // （见 decideAdmission）。静默的话，用户只会看到"配了辅助模型却发不出图"，无从归因。
+      console.warn('[dual-model] agent.id 读取失败，本会话不参与图片路由', error)
       return
     }
     let agentCtx
     try {
       agentCtx = agent.ctx
-    } catch {
+    } catch (error) {
+      console.warn('[dual-model] agent.ctx 读取失败，本会话不参与图片路由', { id, error })
       return
     }
-    if (agentCtx === undefined || agentCtx === null) return
+    if (agentCtx === undefined || agentCtx === null) {
+      console.warn('[dual-model] agent.ctx 不可用，本会话不参与图片路由', { id })
+      return
+    }
 
     // 本步是否处于图片上下文：先看本步进入的消息，再补上完整会话历史
     // （历史里仍有图时，官方会把图投影成占位符——那正是必须继续走辅助模型的情形）。
@@ -139,8 +171,10 @@ export async function apply(ctx, config) {
       try {
         hasImage = messagesHaveImage(decision?.messages)
         if (!hasImage) hasImage = messagesHaveImage(deriveAgentMessages(payload?.agent ?? agent))
-      } catch {
-        hasImage = false
+      } catch (error) {
+        // 判定失败**不能**默认「无图」：准入侧已按"有图"放行，这里判成无图就是静默丢图。
+        // 保守取 true（多切一次辅助模型），并留痕 —— 策略与理由见 lib/admission.js。
+        hasImage = imageContextOnFailure(error)
       }
       imageContext.set(id, hasImage)
       return decision
@@ -158,22 +192,44 @@ export async function apply(ctx, config) {
       if (decision.kind !== 'assist') return requestConfig
       return applyRoute(requestConfig, decision)
     }), 'dual-model: request routing')
+
+    // 两个监听都挂上了 ⇒ 图片执行通道建立 ⇒ 准入侧可以接管控入。
+    // 刻意放在最后一行：上面任一步抛错都不会把该 agent 标成"就绪"，准入就不会放行没人处理的图。
+    channelReady.add(id)
   }
 
   const agents = ctx.get('agents')
   if (agents !== undefined) {
+    let existing = []
     try {
-      for (const agent of agents.list()) attach(agent)
-    } catch {
-      /* 单个 agent 挂载失败不影响其余 */
+      existing = agents.list()
+    } catch (error) {
+      console.warn('[dual-model] agents.list() 读取失败，现有会话不参与图片路由', error)
     }
-    ctx.effect(() => ctx.on('agent/created', (payload) => attach(payload.agent)), 'dual-model: agent/created')
-    ctx.effect(() => ctx.on('agent/disposed', (payload) => {
+    for (const agent of existing) {
+      // 逐 agent 兜底：此前 try 包住了整个循环，一个 agent 抛错会让剩余全部丢掉路由，
+      // 与「单个 agent 挂载失败不影响其余」这句注释承诺不符。
       try {
-        imageContext.delete(String(payload.agent.id))
-      } catch {
-        /* noop */
+        attach(agent)
+      } catch (error) {
+        console.warn('[dual-model] agent 图片路由挂载失败', error)
       }
+    }
+    ctx.effect(() => ctx.on('agent/created', (payload) => {
+      try {
+        attach(payload.agent)
+      } catch (error) {
+        console.warn('[dual-model] 新 agent 图片路由挂载失败', error)
+      }
+    }), 'dual-model: agent/created')
+    ctx.effect(() => ctx.on('agent/disposed', (payload) => {
+      let id = ''
+      try {
+        id = String(payload.agent.id)
+      } catch { /* 取不到 id 时下面的删除是 no-op */ }
+      imageContext.delete(id)
+      // 通道随 agent 一并作废：id 若被复用，残留的"就绪"标记会让准入放行一张没人处理的图。
+      channelReady.delete(id)
     }), 'dual-model: agent/disposed')
   }
 

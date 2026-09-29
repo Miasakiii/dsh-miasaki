@@ -29,8 +29,16 @@ export function sameRoute(a, b) {
  *   2. 本步处于图片上下文且辅助模型已配置 → `assist`
  *   3. 辅助模型与当前路由相同 → `keep`（不做无意义的 config 抖动，避免污染 prompt cache）
  *
- * 注意本函数**不做能力判定**：辅助模型是否真的支持图片由准入侧（补丁读 `for()`）
- * 与路由侧的 `routeNeedsVision` 协同保证，判定真值只有一个来源（`inputModalities`）。
+ * 注意本函数**不做能力判定**：图片能力（`inputModalities`）由 `supportsImage` 读同一真值源，
+ * 分两处使用、各司其职：
+ *   · **准入侧**（本体补丁 `vision-route-admission`）：拿到路由后用 union 语义判
+ *     "主模型或辅助模型任一能看图"，两者都不支持才抛 `MODEL_DOES_NOT_SUPPORT_IMAGES`；
+ *   · **接管时机**由 `./admission.js` 的 `decideAdmission` 决定 —— 图片执行通道未建立时
+ *     不接管控入（否则会放行一张没有任何模型会看的图，见该文件头注的失效链）。
+ * 本函数只回答"本步该用哪个模型"，不重复判能力。
+ *
+ * （2026-09-29 订正：原文写"由准入侧与路由侧的 `routeNeedsVision` 协同保证"，
+ * 而该函数**从未存在** —— 注释描述了一个不存在的保证，正是这条静默丢图链的签名。）
  *
  * @param {object} input - 决策输入。
  * @param {boolean} input.enabled - 双模型是否启用。

@@ -20,7 +20,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "node --check index.js && node --check client.js && node --check lib/content.js && node --check lib/routing.js && node --check lib/capability.js && node --check lib/invalidation.js && node --check lib/store.js && node --check patches/dsh-api-session-controller/patch.mjs",
+    "build": "node --check index.js && node --check client.js && node --check lib/content.js && node --check lib/routing.js && node --check lib/admission.js && node --check lib/capability.js && node --check lib/invalidation.js && node --check lib/store.js && node --check patches/dsh-api-session-controller/patch.mjs",
     "prepare": "npm run build",
     "test": "node --test test/*.test.js",
     "patch:verify": "node patches/dsh-api-session-controller/patch.mjs verify",

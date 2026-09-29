@@ -21,9 +21,19 @@ node scripts/verify-all.mjs            # 九线 + 仓库级治理闸门全量
 node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / free-model / repo）
 ```
 
-**全量基线**（**九线 + 仓库级治理闸门**；**静态全量 2026-09-29 实测 161 项全 PASS**
-—— sidebar 13 / canvas 13 / fleet 17 / desktop 36 / ssh 31 / dual-model 12 / appearance 18 / usage 3 /
-**free-model 15** / repo 3；**内核已升到 DSH `0.2.0-rc.1`**、Node v24.15.0。下表各项标注的是建表时的快照）：
+**全量基线**（**九线 + 仓库级治理闸门**；**静态全量 2026-09-29 实测 164 项全 PASS**
+—— sidebar 13 / canvas 13 / fleet 17 / desktop 36 / ssh 31 / **dual-model 15** / appearance 18 / usage 3 /
+**free-model 15** / repo 3；**内核已升到 DSH `0.2.0-rc.2`**、Node v24.15.0。下表各项标注的是建表时的快照）：
+
+> **2026-09-29（续）dual-model 12 → 15（闸门补漏 + 静默丢图链修复）**：用户判断「先别急着分发，逐线完善」，
+> 本条线是逐线完善的第一条。① **代码审计抓到一条全程零信号的静默丢图链** —— 准入侧只看
+> 「是否启用 + 是否配置」，路由侧还要看 `hasImage`，两段判据不同源 ⇒ `attach` 失败或 pre-step 判错时
+> **图片交给不支持图的主模型而用户以为发出去了**；修法是新增 `lib/admission.js`，
+> **只有图片执行通道确实建立时才接管控入**（通道没建好就让本体给出可见拒绝）。② **闸门补漏**：
+> `verify-all.mjs` 的语法清单只有 6 个文件而 `package.json` 的 build 有 8 个 —— `lib/invalidation.js`
+> 长期没进闸门；新模块 `lib/admission.js` 与 `test/admission.test.js` 同批入册（+2 语法 +1 测试）。
+> ③ **实机前置查明**：本体准入补丁**此前不在位**（`status` 报 `original`）——
+> 「任一支持图片即可发图」这条核心能力**当时是失效的**，这正是 §3.10 第 5 项从未闭环的原因；已应用。
 
 > **2026-09-29 收尾复跑（161 项全 PASS）**：第九线迁出**收尾**时的全量实跑。desktop **40 → 36**
 > 是口径变化而非退化（4 项随插件迁入 `free-model`，该线 **15/15** 首次入账）。

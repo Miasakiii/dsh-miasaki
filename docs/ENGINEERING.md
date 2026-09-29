@@ -279,6 +279,33 @@ canvas **105**、fleet **119**、ssh **310**、dual-model **33**、appearance **
 （2 处 `rebuild-baseline.mjs` 的向上探测 catch 写 `guard-ok` 理由；2 处是 `uniqueDirectory()` 的**目标路径可用性探测**
 被 R1 误判，随目录排除一并消失），命中 64 → 60、新增 0、可回收 0。
 
+**2026-09-29（续）基线（全量 164 项检查，九线 + 仓库级全 PASS）**`[实测]`：sidebar 13/13、canvas 13/13、
+fleet 17/17、desktop 36/36、ssh 31/31、**dual-model 15/15**（12 → 15：+2 语法 +1 测试）、
+appearance 18/18、usage 3/3、free-model 15/15、repo 3/3。**本批只动 dual-model 一条线** ——
+用户判断「先别急着分发，逐线完善」，查 [实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
+得 **1 / 49 项已验**（48 项积压），而 dual-model 的 §3.10 里「纯文本主模型仍可传图」
+是**唯一「功能性可能出错」**的一条，故从它开始。
+
+**① 代码审计抓到一条全程零信号的静默丢图链**：准入侧（本体补丁 `for()`）只看
+「是否启用 + 是否配置了辅助模型」，而路由侧（`decideRoute`）还要看 `hasImage`（`agent/pre-step` 实测）
+—— **两段判据不同源**。于是 `attach()` 失败或 pre-step 判定抛错 ⇒ `hasImage=false` ⇒ 不切辅助模型
+⇒ **图片交给不支持图的主模型，而用户以为发出去了**。四处静默点：`attach` 三条早退、
+`pre-step` 的 `catch` 把失败当成"确实无图"、`agents.list()` 的 try 包住整个循环、`disposed` 不清通道标记。
+**另有一处注释与实现不一致**：`lib/routing.js` 的 JSDoc 引用 `routeNeedsVision` —— 该函数**全仓不存在**。
+**修法**：新增 `lib/admission.js` 的 `decideAdmission()` —— **只有图片执行通道确实建立时才接管控入**
+（`channelReady` 集合，两个监听都挂上才算就绪）；通道没建好时不接管，本体走原生分支给出
+**可见的**拒绝 —— *可见的失败优于静默的错误*。同批把判定失败改为**保守取 true** 并留痕、
+`attach` 三条早退全部 `console.warn`、`agents.list()` 逐 agent 兜底、订正那句 JSDoc。
+
+**② 顺带补两处闸门漏登记**（「清单与实现不一致」这一族，本项目已复发三次）：
+`verify-all.mjs` 的 dual-model 语法清单只有 6 个文件，而 `package.json` 的 `build` 有 8 个 ——
+**`lib/invalidation.js` 长期没进仓库级静态闸门**；新模块 `lib/admission.js` 同批进两处。
+
+**③ 实机验收前置查明**：本体准入补丁**此前不在位**（`patch.mjs status` 报 `original`）——
+即「任一支持图片即可发图」这条核心能力**当时是失效的**（准入走原生分支，主模型不支持图即拒绝），
+这正是 §3.10 第 5 项「纯文本主模型仍可传图」从未闭环的原因。已应用（`status` → `patched`）；
+DSH **0.2.0-rc.2** 的该包与基线版本（rc.1）**逐字节一致**（SHA 相同），锚点未漂移。
+
 **2026-09-29 基线（全量 161 项检查，九线 + 仓库级全 PASS）**`[实测]`：sidebar 13/13、canvas 13/13、fleet 17/17、
 desktop **36/36**（免费模型池迁出后 40 → 36 —— 那 4 项随插件迁入第九线）、ssh 31/31、dual-model 12/12、
 appearance 18/18、usage 3/3、**free-model 15/15**（新线首次入账）、repo 3/3。

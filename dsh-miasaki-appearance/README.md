@@ -49,7 +49,8 @@
 ## 安装
 
 ```bash
-dsh plugin add @miasaki/dsh-appearance
+# 尚未发布到 npm —— 发布后：
+dsh plugin --profile <profile> add @miasaki/dsh-appearance
 ```
 
 装完**重启 DSH**并刷新页面，设置里出现「外观」一栏。

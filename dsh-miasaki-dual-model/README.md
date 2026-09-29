@@ -31,7 +31,8 @@ DSH 里图片能不能发，取决于**当前模型**是否支持视觉。于是
 ## 安装
 
 ```bash
-dsh plugin add @miasaki/dsh-dual-model
+# 尚未发布到 npm —— 发布后：
+dsh plugin --profile <profile> add @miasaki/dsh-dual-model
 ```
 
 装完**重启 DSH**并刷新页面。

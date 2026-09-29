@@ -1,5 +1,65 @@
 # 变更记录 — dsh-miasaki-dual-model
 
+## 2026-09-29 · 堵住「静默丢图」链：准入与路由判据同源
+
+**问题（代码审计发现，非实机复现）**：本线的设计是「准入放行 + 路由切换」两段配合，
+但两段的判据**不同源**：
+
+| 判定 | 位置 | 判据 |
+|---|---|---|
+| 准入（这张图能不能发） | 本体补丁 `vision-route-admission` | `for(agent)` 返回非空即接管（再用 union 语义判能力） |
+| 路由（这一步用哪个模型） | `index.js` 的 `agent/request` | `enabled && hasImage && assist 已配置 && 与当前不同` |
+
+`hasImage` 来自 `agent/pre-step` 实测，于是存在这条**全程零信号**的失效链：
+
+```
+for() 放行（只看"配置了辅助模型"）
+    ↓  但 attach 失败（agent.id / agent.ctx 抛错）或 pre-step 判定抛错
+imageContext 无值 ⇒ hasImage = false
+    ↓
+decideRoute 返回 keep（不切辅助模型）
+    ↓
+图片交给**不支持图的主模型** —— 用户以为发出去了，模型其实没收到
+```
+
+**四处静默点**（正是 `check-silent-guards` 关注的 R1 形态）：
+
+| 位置 | 原行为 |
+|---|---|
+| `attach()` 的三条早退 | `catch { return }` / 裸 `return` —— 通道没建起来，**零信号** |
+| `agent/pre-step` 的 catch | `hasImage = false` —— **判定失败被当成「确实无图」** |
+| `agents.list()` 的 try | 包住了**整个循环** —— 一个 agent 抛错则其余全部丢路由（与注释承诺的"单个失败不影响其余"不符） |
+| `agent/disposed` | 只清 `imageContext` |
+
+**另有一处注释与实现不一致**：`lib/routing.js` 的 JSDoc 写「由准入侧与路由侧的
+`routeNeedsVision` 协同保证」，而该函数**全仓不存在**（`git grep routeNeedsVision` 只命中那两行注释）
+—— 注释描述了一个不存在的保证，正是这条失效链的签名。
+
+**修复**：
+
+1. 新增 `lib/admission.js`：把准入判定抽成纯函数 `decideAdmission()`，
+   **只有图片执行通道确实建立时才接管控入**。通道没建好时不接管，本体走原生分支给出
+   **可见的**拒绝（`Model "X" does not support image input`）—— *可见的失败优于静默的错误*。
+2. `index.js` 维护 `channelReady` 集合：两个监听都挂上才 `add`（刻意放在 `attach` 最后一行，
+   上面任一步抛错都不会标成就绪）；`agent/disposed` 时 `delete`（id 若复用，残留标记会放行一张没人处理的图）。
+3. `pre-step` 判定失败改为 `imageContextOnFailure()` —— **保守取 true** 并留痕：
+   多切一次辅助模型的代价（轻微 prompt cache 影响）远小于丢一张图。
+4. `attach()` 三条早退全部 `console.warn` 留痕；`agents.list()` 的 try 移进循环内，逐 agent 兜底。
+5. 订正 `lib/routing.js` 的 JSDoc：删掉不存在的 `routeNeedsVision`，写明真实分工。
+
+**闸门**：
+
+- 新增 `test/admission.test.js` **6 例**，含两条 ★：**「通道未建立时不接管」**与
+  **「判定失败保守取 true 且必须留痕」**；
+- 补 `lib/invalidation.js` 进 `verify-all` 的语法清单 —— 它此前**只写在 `package.json` 的 `build` 里**，
+  长期没进仓库级静态闸门（两个清单份量不一致，正是「漏登记」的形态）；
+- `lib/admission.js` 同批进 build 与 verify-all 两处。
+
+**验证**：`node scripts/verify-all.mjs dual-model` ⇒ **15/15 PASS**（原 12/12；+2 语法 +1 测试）。
+
+**待实机确认**（本修复堵的是代码路径，真实链路仍须 §3.10 的 B1–B3 判据）：
+配好辅助模型 → 拖入图片 → 状态行显示归属；**纯文本主模型下发送带图消息，模型确实读到了图**。
+
 ## 2026-09-26（深夜）· 死代码清理（2 项；其余 4 项待随 M2 一并处理）
 
 仓库级死代码审计结论：本线文件级零冗余（21 个追踪文件 == 21 个磁盘文件，无备份/空目录/探针/误入库产物），

@@ -32,7 +32,8 @@
 ## 安装
 
 ```bash
-dsh plugin add @miasaki/dsh-free-model
+# 尚未发布到 npm —— 发布后：
+dsh plugin --profile <profile> add @miasaki/dsh-free-model
 ```
 
 装完**重启 DSH**并刷新页面。

@@ -20,12 +20,13 @@
 ## 安装
 
 ```bash
-dsh plugin add @miasaki/dsh-canvas
+# 尚未发布到 npm —— 发布后：
+dsh plugin --profile <profile> add @miasaki/dsh-canvas
 ```
 
 装完**重启 DSH**并刷新页面，会话头第一行的「对话 / 会话布」胶囊里出现入口。
 
-卸载：`dsh plugin remove @miasaki/dsh-canvas`。
+卸载：`dsh plugin --profile <profile> remove @miasaki/dsh-canvas`。
 
 **要求 DSH 0.1.7 及以上** —— 0.1.7 起会话导航统一收敛到 `ctx.uiWorkspace.openSession(target)`，
 本插件自 `v0.5.0-miasaki.7` 起走该契约（旧版本上`ctx.sessions.open` 已被移除）。

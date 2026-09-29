@@ -455,7 +455,9 @@ async function planSsh() {
 
 async function planDualModel() {
   const dir = join(ROOT, 'dsh-miasaki-dual-model')
-  for (const entry of ['index.js', 'client.js', 'lib/content.js', 'lib/routing.js', 'lib/capability.js', 'lib/store.js']) {
+  // 份量与 package.json 的 `build` 保持一字不差：此前这里只有 6 个文件，而 build 有 8 个
+  // ——`lib/invalidation.js` 长期没进静态闸门（2026-09-29 补）。新增模块必须同时进两处。
+  for (const entry of ['index.js', 'client.js', 'lib/content.js', 'lib/routing.js', 'lib/admission.js', 'lib/capability.js', 'lib/invalidation.js', 'lib/store.js']) {
     checks.push({ line: 'dual-model', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
   for (const file of await testFiles(dir)) {
