@@ -2,6 +2,36 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-09-29 · M3.2 设置页动效统一：锚点从 `.mia-panel` 迁到官方设置面板容器
+
+- **起因**：用户「设置页的动效不统一」。诊断：MOTION_CSS 里设置面板那条挂在 `.mia-panel`
+  ——那是**各线各带一份 CSS 复制出来的面板类名**，实际只有 appearance 与 pet-panel 用
+  （usage / free-model 各用自己的类名）⇒ 设置里**只有「外观」「桌宠」两页**整块上浮，
+  其余六页（通用 / 模型 / 插件 / 代理预设 / 免费模型 / 归档会话）瞬切。官方设置外壳
+  （`ui-settings-general` 的 `SettingsRoot.module.css`）本身**零 animation、零 transition**，
+  连 reduced-motion 分支也仍只剩那两页淡入 ⇒ 两种模式下差异都在。
+- **修法（锚点迁到面板容器）**：设置面板那条改用官方**无障碍事实**做锚点 ——
+  `[role="presentation"] > [role="dialog"][aria-modal="true"][aria-labelledby]`
+  （`[role="presentation"]` 是官方弹层遮罩的稳定写法，`aria-modal` + `aria-labelledby`
+  是设置面板的可访问名契约；官方哈希类名一律不碰）。**打开设置时整块面板入场一次**；
+  页签之间切换复用同一 DOM 节点 ⇒ **不重播**，与官方瞬切一致。`.mia-panel` 那条规则
+  整条删除（面板类名退回纯布局用途，跨线不再有隐式耦合）。
+- **排他性取证（按 dsh 0.2.0-rc.2 实际安装包，不按 vendor 源码猜）**：全量 client 包里
+  `role="dialog"` + `aria-modal="true"` + `aria-labelledby` 的组合**全局唯一**，正是
+  `dsh-client-ui-settings-general` 的设置面板 ⇒ 官方 Modal（`ui-primitives`）与图片灯箱
+  虽同为 `[role="presentation"]` 下的 `aria-modal` 对话框，但可访问名走 `aria-label`；
+  usage 浮窗（`aria-label`）与 ssh 面板 sheet（父级不是 `[role="presentation"]`）亦不命中。
+  **取证教训**：vendor 源码（开发版）的 `SettingsRoot.tsx` 与 0.2.0-rc.2 实际产物有差异
+  （实装多一个 `data-shortcut-modal="settings"`），锚点以**运行版**为准。
+- **回归闸门**：M3 合例撤掉对 `.mia-panel` 的隐式依赖，补四条断言——新锚点必须带
+  `aria-labelledby`、必须是 `[role="presentation"]` 的直接子级、`.mia-panel{animation}`
+  不得复活、reduced-motion 分支必须同样覆盖设置面板（否则降级后只剩它瞬切）。
+- **验证**：单测 **120 例全绿**（client 23）；`verify-all appearance` **18/18**。
+  **实机待用户重启 `dsh web` / 桌面端后验收**：打开设置应见面板整块入场一次；在
+  通用 ↔ 外观 ↔ 模型 ↔ 插件 ↔ 桌宠之间连点，切页一律瞬切（不许某一页单独浮起）。
+- 触摸点：`client.js`（MOTION_CSS + 动效行文案）、`test/client.test.js`（M3 合例 +4 断言）、
+  本文件、回归矩阵 §3.5 动效两行 + 台账 D11/D12。
+
 ## 2026-09-27 · M3 竖条形态修正：侧栏 / 右栏换横向滑入 + 轻错峰
 
 - **起因**：用户「侧边栏动效有欠缺需要优化」。诊断（vendor 取证）：M3 给所有容器统一用

@@ -476,6 +476,33 @@ test('M3 动效层 CSS 合规：只动 transform/opacity、禁 linear、reduced-
   assert.match(MOTION_CSS_SOURCE, /\[data-slot="rightbar"\] > \*\{--mia-mo-slide-x:12px;animation:mia-mo-slide [^}]*120ms\}/, '右栏同款横向滑入（+12px）+ 错峰 120ms')
   assert.match(MOTION_CSS_SOURCE, /@keyframes mia-mo-slide\{from\{opacity:0;transform:translateX\(var\(--mia-mo-slide-x,-12px\)\)\}to\{opacity:1;transform:none\}\}/, 'slide 保留横向位移（禁纯淡入）、不缩放')
   assert.match(MOTION_CSS_SOURCE, /\[data-slot="main.conversation"\] > \*\{animation:mia-mo-rise calc\(var\(--mia-mo-d-med\) \* var\(--mia-mo-dur-scale\)\) var\(--mia-mo-ease\) 60ms\}/, '会话大表面错峰 60ms（侧栏 / 会话 / 右栏的加载节奏）')
+  // M3.2（用户反馈「设置页的动效不统一」）：设置面板的动效锚点从各线自带的面板类名
+  // .mia-panel 迁到官方设置面板容器。旧锚点只被 appearance / pet-panel 消费 ⇒ 设置里
+  // 外观与桌宠两页整块上浮、其余六页瞬切。新锚点是官方无障碍事实（实测 dsh 0.2.0-rc.2
+  // 全量 client 包全局唯一）：设置面板 = [role="presentation"] 弹层 > [role="dialog"]
+  // 且 aria-modal="true" + aria-labelledby。挂容器而非内容区 ⇒ 页签切换不重建节点、
+  // 不重播，只有「打开设置」这一次入场 —— 与官方瞬切行为一致。
+  assert.match(
+    MOTION_CSS_SOURCE,
+    /\[role="presentation"\] > \[role="dialog"\]\[aria-modal="true"\]\[aria-labelledby\]\{animation:mia-mo-rise /,
+    '设置面板入场动效挂官方设置面板容器（打开时整块入场，与停在哪一页签无关）',
+  )
+  assert.doesNotMatch(
+    MOTION_CSS_SOURCE,
+    /\.mia-panel\{animation/,
+    '不得再用各线自带的面板类名驱动动效 —— 那个类名只有两线用，只会让部分页签动',
+  )
+  assert.doesNotMatch(
+    MOTION_CSS_SOURCE,
+    /\[role="presentation"\] > \[role="dialog"\]\[aria-modal="true"\]\{/,
+    '锚点须带 aria-labelledby 且限定在 [role="presentation"] 弹层内 —— 放开会把官方 Modal 与图片灯箱一起吃进来',
+  )
+  const reducedMotionBlock = MOTION_CSS_SOURCE.slice(MOTION_CSS_SOURCE.indexOf('@media (prefers-reduced-motion: reduce)'))
+  assert.match(
+    reducedMotionBlock,
+    /\[role="presentation"\] > \[role="dialog"\]\[aria-modal="true"\]\[aria-labelledby\]\{animation:mia-mo-fade 100ms ease\}/,
+    'reduced-motion 降级必须同样覆盖设置面板（否则降级后只剩它瞬切、仍不统一）',
+  )
   assert.match(MOTION_CSS_SOURCE, /@media \(prefers-reduced-motion: reduce\)/, '降级媒体查询')
   assert.match(MOTION_CSS_SOURCE, /animation:mia-mo-fade 100ms ease/, 'reduced-motion 统一 100ms 淡入')
   assert.match(MOTION_CSS_SOURCE, /\.mia-mo-tagged\{animation-delay:calc\(var\(--mia-mo-i, 0\) \* var\(--mia-mo-stagger\)\)\}/, '错峰槽位（M3.1 贴类器消费）')

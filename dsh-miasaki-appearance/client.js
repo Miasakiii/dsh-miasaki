@@ -333,12 +333,13 @@ window.__ModuleLoader__.load({
       document.head.appendChild(tag)
     }
 
-    // ------------------------------------------------------- 动效层（M3）
+    // ------------------------------------------------------- 动效层（M3；M3.2 修设置面板锚点）
     // 设计：M1 规划 §5.5（时长梯 / 缓动 / 位移缩放 / 错峰 / 强度倍率 / reduced-motion 降级）。
     // 形态纪律：**纯 CSS**（@keyframes + CSS 变量），配置改的是变量值而不是重写规则 ⇒
     // 切预设零重建；只动 transform/opacity；禁 linear 缓动与「只有 opacity」的入场。
     // 注入式与 PANEL_CSS 同构（factory 体内按 id 去重）；门控 = 总开关 && motion.enabled，
-    // 关闭即移除整层（「关掉即原生」）。锚点只用 [data-slot] 与自有 .mia-* / .mia-mo-*。
+    // 关闭即移除整层（「关掉即原生」）。锚点只用官方稳定事实：官方 slot 属性 [data-slot]、
+    // 官方弹层的 ARIA 事实，以及自有 .mia-* / .mia-mo-*。
     const MOTION_CSS_ID = '@miasaki/dsh-appearance/motion.css'
     /** 三套预设的变量值（id 与 lib/config.js 的 MOTION_PRESETS 一致，host 白名单最终把关）。 */
     const MOTION_PRESETS = {
@@ -364,12 +365,22 @@ window.__ModuleLoader__.load({
 [data-slot="sidebar"] > *{--mia-mo-slide-x:-12px;animation:mia-mo-slide calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
 [data-slot="rightbar"] > *{--mia-mo-slide-x:12px;animation:mia-mo-slide calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease) 120ms}
 @keyframes mia-mo-slide{from{opacity:0;transform:translateX(var(--mia-mo-slide-x,-12px))}to{opacity:1;transform:none}}
-.mia-panel{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
+/* 设置面板：打开设置时整块面板播一次入场动效，与停在哪一页签无关。
+   锚点 = 官方无障碍事实（不碰哈希类名）：ui-settings-general 的设置面板是
+   [role="presentation"] 弹层里的 [role="dialog"][aria-modal="true"][aria-labelledby]。
+   实测 dsh 0.2.0-rc.2 全量 client 包，该组合全局唯一、正是设置面板——
+   ui-primitives Modal 与图片灯箱同为 [role="presentation"] > [aria-modal] 对话框，
+   但可访问名走 aria-label ⇒ 不命中；usage 浮窗（aria-label）、ssh 面板 sheet
+   （父级不是 [role="presentation"]）⇒ 亦不命中。
+   旧锚点 .mia-panel（挂各线自带的面板类名）在 M3.2 撤除：那个类名只有 appearance
+   与 pet-panel 用 ⇒ 设置里只有两页会动、其余六页瞬切。改挂面板容器后**页签切换复用
+   同一 DOM 节点、不重播**，与官方瞬切行为一致。 */
+[role="presentation"] > [role="dialog"][aria-modal="true"][aria-labelledby]{animation:mia-mo-rise calc(var(--mia-mo-d-std) * var(--mia-mo-dur-scale)) var(--mia-mo-ease)}
 @keyframes mia-mo-rise{from{opacity:0;transform:translateY(var(--mia-mo-move)) scale(var(--mia-mo-scale))}to{opacity:1;transform:none}}
 /* 错峰（M3.1 消息贴类器消费）：tagged 元素按文档序 min(i*stagger, 320ms) */
 .mia-mo-tagged{animation-delay:calc(var(--mia-mo-i, 0) * var(--mia-mo-stagger))}
 @media (prefers-reduced-motion: reduce){
-.mia-mo-rise,[data-slot="main.conversation"] > *,[data-slot="rightbar"] > *,[data-slot="sidebar"] > *,.mia-panel{animation:mia-mo-fade 100ms ease}
+.mia-mo-rise,[data-slot="main.conversation"] > *,[data-slot="rightbar"] > *,[data-slot="sidebar"] > *,[role="presentation"] > [role="dialog"][aria-modal="true"][aria-labelledby]{animation:mia-mo-fade 100ms ease}
 @keyframes mia-mo-fade{from{opacity:0}to{opacity:1}}
 }
 `
@@ -946,8 +957,9 @@ window.__ModuleLoader__.load({
       children.push(group('动效', motion === null ? [hint('配置未加载。')] : [
         row(
           '动效',
-          '会话表面 / 视图切换 / 设置面板的过渡动效：纯 transform + opacity，系统「减少动画效果」时自动降级为 100ms 淡入。' +
-            (motionLive ? '' : '（总开关关闭时本条不生效）'),
+          '会话表面 / 视图切换 / 设置面板的过渡动效：纯 transform + opacity。设置面板在打开时整块入场一次'
+            + '（所有页签一视同仁），页签之间切换不重播——与官方同为瞬切。系统「减少动画效果」时自动降级为 100ms 淡入。'
+            + (motionLive ? '' : '（总开关关闭时本条不生效）'),
           masterSwitch(motion.enabled === true, (next) => {
             save({ motion: { enabled: next } })
           }, !motionLive || busy, '动效', '关闭时本线不注入任何动效层'),
