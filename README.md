@@ -103,11 +103,11 @@ dsh plugin add @miasaki/dsh-canvas
 |---|---|---|
 | 桌面端 | `dsh-miasaki-desktop/` | 0.1.0 |
 | Fleet | `dsh-miasaki-fleet/` | 0.20.0 |
-| Canvas | `dsh-miasaki-canvas/` | 0.5.0-miasaki.7 |
-| Sidebar | `dsh-miasaki-sidebar/` | 0.10.0-miasaki.0 |
-| SSH | `dsh-miasaki-ssh/` | 0.1.0-miasaki.0 |
-| 双模型 | `dsh-miasaki-dual-model/` | 0.1.3-miasaki.0 |
-| 外观 | `dsh-miasaki-appearance/` | 0.1.0-miasaki.0 |
+| Canvas | `dsh-miasaki-canvas/` | 0.5.0 |
+| Sidebar | `dsh-miasaki-sidebar/` | 0.10.0 |
+| SSH | `dsh-miasaki-ssh/` | 0.1.0 |
+| 双模型 | `dsh-miasaki-dual-model/` | 0.1.3 |
+| 外观 | `dsh-miasaki-appearance/` | 0.1.0 |
 | 用量统计 | `dsh-miasaki-usage/` | 0.6.1 |
 | 免费模型 | `dsh-miasaki-free-model/` | 0.4.0 |
 <!-- version-ledger:end -->

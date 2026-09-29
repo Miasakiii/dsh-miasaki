@@ -1,6 +1,6 @@
 {
   "name": "@miasaki/dsh-sidebar",
-  "version": "0.10.0-miasaki.0",
+  "version": "0.10.0",
   "description": "官方右栏的「审查」与「辅助对话」两个 tab；外加底部内嵌多标签终端（Ctrl+`）与系统终端启动器。不安装任何重型侧边栏基座，全部自研。",
   "type": "module",
   "main": "index.js",
@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "node --check index.js && node --check client.js",
-    "prepare": "pnpm run build",
+    "prepare": "npm run build",
     "test": "node --test test/*.test.js"
   },
   "engines": {
@@ -30,6 +30,9 @@
     "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

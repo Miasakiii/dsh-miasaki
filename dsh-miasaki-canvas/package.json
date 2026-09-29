@@ -1,6 +1,6 @@
 {
   "name": "@miasaki/dsh-canvas",
-  "version": "0.5.0-miasaki.7",
+  "version": "0.5.0",
   "description": "会话布：可浏览、可分支、可合并的 DSH 会话画布。把会话从一条时间线变成一张可拖拽的地图，双线汇合产出真实 DSH 会话；不改系统提示、不改模型请求、不改工具 schema。",
   "type": "module",
   "main": "index.js",
@@ -23,7 +23,7 @@
   ],
   "scripts": {
     "build": "node --check index.js && node --check client.js && node --check app.js",
-    "prepare": "pnpm run build",
+    "prepare": "npm run build",
     "test": "node --test test/*.test.js"
   },
   "engines": {
@@ -35,6 +35,9 @@
     "@deepseek-ai/dsh-api-session-controller": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

@@ -304,8 +304,18 @@ node patch.mjs rebuild      # A 类：同步 baseline 原版 + ORIGINAL_SHA256 �
 node patch.mjs seal         # 同上（api-session-controller 的该命令名为 seal）
 ```
 
-> **当前基线：DSH 0.1.7-rc.2（2026-09-25 升级重打，EDITS 零改）**。本机全局 DSH 已实装
-> `0.1.7-rc.2`（`next` 轨；`latest` 仍是 0.1.5-rc.3，勿用）。八个本体补丁当日全部重打，
+> **当前基线：DSH 0.2.0-rc.1（2026-09-28 升级重打，`EDITS` 零改）**。本机全局 DSH 已实装
+> `0.2.0-rc.1`（`next` 轨；`latest` 仍是 `0.1.7-rc.2`，勿用）。八件本体补丁当日全部重打，
+> 逐件原版/产物 SHA 与那次 npm 死锁事故的经过见 desktop `design/CHANGELOG.md`
+> 「2026-09-28（续九）」。
+>
+> **下一版 `0.2.0-rc.2` 的预检已完成（2026-09-29，未执行升级）**：9 件补丁逐件干跑 `apply` ——
+> **7 件零适配**（其中 5 件目标文件逐字节未变）、**`cordis-host-runner` 建议整件退役**
+> （官方在 rc.2 自行实现了同一修复且更完整）、**`sidebar` 删 1 条编辑**（官方移除了品牌区 Tooltip）。
+> 完整证据、常量回填对照表与执行清单见
+> [`dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md)。
+>
+> 历史基线记录（DSH `0.1.7-rc.2`，2026-09-25 升级重打，`EDITS` 零改）。八个本体补丁当日全部重打，
 > **7/7 增量与升级评估文档给出的预期值逐字节一致**，是锚点未漂移的强证据：
 > attachment `45064→45175`（+111）、chat `530699→532563`（+1864）、
 > conversation `712829→712954`（+125）、settings-models `186454→201924`（+15470）、

@@ -4,6 +4,9 @@
   "type": "module",
   "description": "多来源免费模型聚合器：经官方 llm 契约枚举本机全部 provider（含免 Key 车道）与自配 OpenAI 兼容平台，检出免费模型并给出能力画像与适用性决策，可显式写入模型配置、指派子代理后端。",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {

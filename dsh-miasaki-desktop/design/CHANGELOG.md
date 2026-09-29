@@ -2,6 +2,35 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-29（续）· DSH 0.2.0-rc.2 升级预检：七件零适配、一件退役、一件删条目
+
+**背景**：官方 `next` 轨发布 `0.2.0-rc.2`（`2026-09-29T09:42:36Z`，tag `dsh-v0.2.0-rc.2`），
+本机现行 `0.2.0-rc.1`（09-28 升）。本轮**只做升级准备 —— 未升级、未改任何补丁文件、未动本机生产文件**。
+完整证据、常量回填对照表与执行清单见
+[`dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md)。
+
+**预检**（9 件补丁 × rc.2 真实 npm 产物，`--target` 隔离副本干跑）：
+
+| 结论 | 件数 | 补丁 |
+|---|---|---|
+| 零适配，产物 SHA 与现有常量一致（目标文件逐字节未变） | 5 | attachment / brand-official / settings-models / trajectory / api-session-controller |
+| 零适配，需回填常量 | 2 | chat（`C41AC671…`）/ conversation（`A393013F…`） |
+| 删 1 条编辑 | 1 | sidebar：`sidebar-brand-portal` 命中 0 次（官方删掉品牌区 Tooltip 包装）；余 5 条全命中，跳过该条后产物 `0347DB5D…`（32,091 B）、语法闸门 PASS |
+| 整件退役 | 1 | cordis-host-runner：4/4 锚点失效 —— 官方在 rc.2 自行实现了同一修复，且更完整 |
+
+**`cordis-host-runner` 退役判据**（官方 rc.2 实现 vs 本补丁四条编辑）：`pending.failure ??=` 记拒因、
+`clientQueryTimeoutMs` 可配超时、`finally { clearTimeout(timer) }` 清理、外加本补丁没有的
+「无活动页面时立刻失败」守卫 —— 补丁意图**全部被上游吸收**，硬改锚点只会与官方重复记录（`??=` 幂等语义退化）。
+
+**隔离保证** `[实测]`：live 安装目录 9 个目标文件预检前后 SHA **漂移 0**（全部仍等于各自 `PATCHED_SHA256`）。
+
+**另核**（同批，均 `[实测]`）：① 会话格式未变 —— `docs/session-format-status.zh.md` 在两 tag 逐字一致
+（仍 `latestFinalizedVersion: 4` / `latestReleasedVersion: 3`），**升级不会作废会话**；
+② 自制插件 peer 约束 `>=0.1.2-rc.1 <0.3.0` 对 `0.2.0-rc.2` **全部放行**，无需版本豁免；
+③ 全局 dsh 的 20 个原生文件**当前零锁定** ⇒ 升级窗口可行（09-28 的 npm 死锁事故已写入评估文档 §4.2 前置条件）。
+
+**下一步（用户执行）**：退出所有 DSH 进程 → `npm i -g @deepseek-ai/dsh@0.2.0-rc.2` → 按评估文档 §4.2 逐件重打。
+
 ## 2026-09-29 · 插件页右上角叠压修复：顶部安全区让位（`--ms-titlebar-clearance`）
 
 **现象**（用户截图报障「优化 miasaki 插件页右上角，有一点重叠」）：插件页页面标题行右侧的
