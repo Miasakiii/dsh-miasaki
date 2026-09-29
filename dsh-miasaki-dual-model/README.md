@@ -55,12 +55,12 @@ DSH 0.1.5-rc.1 的现状是：**图片能拖进输入框，发送时才被 host 
 ```powershell
 # 1) 注册到 DSH web profile（link 方式，改源码后重启 host 生效）
 #    在 %USERPROFILE%\.dsh\profiles\web\package.json 中：
-#      dependencies 加 "@miasaki/dsh-dual-model": "link:C:/Users/Asakii/Desktop/dsh-miasaki/dsh-miasaki-dual-model"
+#      dependencies 加 "@miasaki/dsh-dual-model": "link:<仓库路径>/dsh-miasaki-dual-model"
 #      dsh.profile.bundles 加 "@miasaki/dsh-dual-model"
 cd $env:USERPROFILE\.dsh\profiles\web ; pnpm install
 
 # 2) 应用图片准入补丁（会备份为 .dsh-bak，可 revert）
-cd C:\Users\Asakii\Desktop\dsh-miasaki\dsh-miasaki-dual-model\patches\dsh-api-session-controller
+cd <仓库路径>\dsh-miasaki-dual-model\patches\dsh-api-session-controller
 node patch.mjs apply
 
 # 3) 重启 dsh web（host 半与补丁都只在启动时加载）
