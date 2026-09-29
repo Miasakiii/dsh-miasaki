@@ -48,6 +48,10 @@ pub(crate) struct PetWin {
     pos: (i32, i32),
     /// 主窗口当前实际显示状态（与 shared.hide 同步；show/hide 切换由 compose 单线程执行）。
     shown: bool,
+    /// 2026-09-29：悬浮球**当前是否可见**（影子状态）。
+    /// 为什么不每次问系统 `IsWindowVisible`：命中轮询每 10ms 一次，而那是个系统调用；
+    /// 这里只在**显隐切换**与**托盘档位变化**两个点上改，读起来与系统状态一致。
+    dot_shown: bool,
     next_quote: std::time::Instant,
     next_wander: std::time::Instant,
     // 持久 GDI 表面:创建一次,终身复用(消除高频 CreateDIBSection,防 gdi32full 崩溃)
@@ -117,16 +121,39 @@ impl PetWin {
             // want_hide=false(显示) 且 shown=true(已显示) → 语义一致，无需切换；
             // want_hide==self.shown(布尔相等) 正是"语义相反需切换"的情形：
             //   (false,false)=想显示但已隐藏 → 显示；(true,true)=想隐藏但已显示 → 隐藏。
+            // 2026-09-29 托盘档位可能在「桌宠已隐藏」时被改（面板切成 `tray`/`dot`）。
+            // 那条路径不经过上面的显隐切换（状态没变），所以要在这里**每帧对齐一次**。
+            // 只在影子状态与设置不符时才调 ShowWindow（该调用不便宜），正常帧零开销。
+            if !self.shown {
+                let want_dot = self.dot_enabled();
+                if want_dot != self.dot_shown {
+                    unsafe {
+                        ShowWindow(self.dot_hwnd, if want_dot { SW_SHOW } else { SW_HIDE });
+                    }
+                    self.dot_shown = want_dot;
+                    pet_log_line(&format!(
+                        "[native-pet] dot visibility -> {} (tray setting)\n",
+                        if want_dot { "shown" } else { "hidden" }
+                    ));
+                }
+            }
             if want_hide == self.shown {
                 unsafe {
                     if want_hide {
                         ShowWindow(self.hwnd, SW_HIDE);
-                        ShowWindow(self.dot_hwnd, SW_SHOW);
+                        // 2026-09-29 托盘设置：`dot` / `both` 显示悬浮球；`tray` 只留托盘。
+                        // `tray=tray` 时的找回入口是系统托盘菜单（`hide_to_tray` 那条路径）。
+                        if self.dot_enabled() {
+                            ShowWindow(self.dot_hwnd, SW_SHOW);
+                        } else {
+                            ShowWindow(self.dot_hwnd, SW_HIDE);
+                        }
                     } else {
                         ShowWindow(self.dot_hwnd, SW_HIDE);
                         ShowWindow(self.hwnd, SW_SHOW);
                     }
                 }
+                self.dot_shown = want_hide && self.dot_enabled();
                 self.shown = !want_hide;
                 // M1.4:显隐切换同步悬浮球(want_hide=true 时 dot 即将可见,必须先定位到当前 pos)
                 self.render_dot();
@@ -211,12 +238,13 @@ impl PetWin {
         // —— 待机随机行为：定时气泡台词 + 定时散步（有行走帧的主题才散步,左右移动贴边吸附） ——
         if now >= self.next_quote && self.alert.is_none() {
             self.next_quote = now + std::time::Duration::from_millis(rand_range(40000, 90000));
-            let idx = {
+            let (idx, bubble_ms) = {
                 let s = self.shared.lock().unwrap();
-                pick_quote(&s.mode)
+                (pick_quote(&s.mode), s.settings.bubble_ms)
             };
             // R4:定时台词是最低优先级限时项——不覆盖任何常驻提醒（状态/审批/告警）
-            self.alert = Some(Alert::timed("quote", idx, ALERT_PRI_QUOTE, QUOTE_MS));
+            // 2026-09-29:驻留时长改由用户设置（`settings.bubble_ms`），默认即原 `QUOTE_MS`。
+            self.alert = Some(Alert::timed("quote", idx, ALERT_PRI_QUOTE, bubble_ms));
             self.alert_shown_at = now;
             self.last_tick = now - std::time::Duration::from_secs(10); // 立即触发重绘
             dirty = true;
@@ -301,9 +329,9 @@ impl PetWin {
             for p in self.buf.iter_mut() {
                 *p = 0;
             }
-            let (mode, intensity, fleet_running) = {
+            let (mode, intensity, fleet_running, motion) = {
                 let s = self.shared.lock().unwrap();
-                (s.mode.clone(), s.intensity.clone(), s.fleet_running)
+                (s.mode.clone(), s.intensity.clone(), s.fleet_running, s.settings.motion)
             };
             // —— L1(v5,2026-09-28)：本帧动效值（design/pet-v5-motion-plan.md §3）——
             // **单值来源**：整帧只算一次，行集分支与三态立绘分支共用同一份 ⇒ 绘制与命中天然一致
@@ -322,7 +350,7 @@ impl PetWin {
                 self.squash_start = None;
             }
             let (sq_sx, sq_sy) = match squash_p {
-                Some(p) => squash_scales(p),
+                Some(p) => squash_scales(p, motion),
                 None => (1.0, 1.0),
             };
             // 挤压期间**必须**关摇摆：`sx = 1.10` 与 ±2° 叠加会让包围盒横向越出 `WIN_W`
@@ -446,12 +474,12 @@ impl PetWin {
                     // 死图，「反转狂三是一张不会动的画」说的正是这条。立绘分支**不看动作槽**：
                     // 动作槽在这条分支上没有任何视觉表达（inverse 不可散步、ambient 行也不被消费），
                     // 看它只会让呼吸莫名其妙地停一拍。
-                    let bob = breath_offset(t_ms, BREATH_PX_STATES);
+                    let bob = breath_offset(t_ms, BREATH_PX_STATES, motion);
                     // L1(v5) M2：摇摆给 idle / work —— inverse 因此第一次真正「活起来」。
                     // deep 档**只呼吸不摇摆**：那是深度推理档，取「凝神」语义，与 whale deep
                     // 保留立绘覆盖同一取舍（强度档优先表达档位，不再叠姿态噪声）。
                     let sway = if can_sway && matches!(key, "idle" | "work") {
-                        sway_angle(t_ms)
+                        sway_angle(t_ms, motion)
                     } else {
                         0.0
                     };
@@ -508,12 +536,12 @@ impl PetWin {
                     // 有动作槽（jump/wave/ambient/wander）时不呼吸：动作本身已经在动，
                     // 且此时的 `bob` 会与帧内位移叠加成抖。
                     let calm = self.action.is_none();
-                    let bob = if calm { breath_offset(t_ms, BREATH_PX_ROW) } else { 0.0 };
+                    let bob = if calm { breath_offset(t_ms, BREATH_PX_ROW, motion) } else { 0.0 };
                     // L1(v5) M2：摇摆给 idle（长静置）与 run（打字时轻微起伏）；
                     // 其余是限时动作/事件帧（jump/wave/failed/wait/runRight/runLeft），
                     // 帧内自带位移，再叠旋转会与动作打架，故不接。
                     let sway = if can_sway && calm && matches!(row.as_str(), "idle" | "run") {
-                        sway_angle(t_ms)
+                        sway_angle(t_ms, motion)
                     } else {
                         0.0
                     };
@@ -715,11 +743,35 @@ impl PetWin {
     /// （`pet-v5-motion-plan.md` §3.3 曾把「命中必须与绘制同批改造」列为 L1 硬约束，
     ///  那是参考实现的前提：它为每元素单独维护 mask，旋转后 mask 与画面脱钩。我方无此问题。）
     fn is_transparent_at(&self, x: i32, y: i32) -> bool {
+        // 2026-09-29：用户选「总是可点」⇒ **恒不穿透**，整个窗口矩形都接住鼠标。
+        // 放在越界判断**之前**是刻意的：这是**策略**层（要不要参与命中），不是几何层
+        // （这点是不是图像）。判据只有一处，主窗与悬浮球共用本函数 ⇒ 两处行为天然一致。
+        if self.through_disabled() {
+            return false;
+        }
         if x < 0 || y < 0 || x >= WIN_W || y >= WIN_H {
             return true;
         }
         let a = (self.buf[(y * WIN_W + x) as usize] >> 24) & 0xFF;
         a < CLICK_THROUGH_ALPHA
+    }
+
+    /// 「总是可点」设置。每 10ms 的命中轮询会读它，故**只取一个 bool、临界区极短**；
+    /// 取不到锁按 `false`（= 保持 R2 的自动穿透）——读不到设置不该让桌宠突然挡住整屏点击。
+    fn through_disabled(&self) -> bool {
+        self.shared
+            .lock()
+            .map(|s| s.settings.through == super::settings::THROUGH_ALWAYS)
+            .unwrap_or(false)
+    }
+
+    /// 隐藏后是否显示悬浮球。`tray=dot|both` → 显示；`tray=tray` → 只留托盘。
+    /// 取不到锁按 `true`（保持既有行为）——读不到设置不该让用户**失去找回桌宠的入口**。
+    fn dot_enabled(&self) -> bool {
+        self.shared
+            .lock()
+            .map(|s| s.settings.tray != super::settings::TRAY_TRAY)
+            .unwrap_or(true)
     }
 
     /// R2:按光标位置切换 `WS_EX_TRANSPARENT`（由 10ms 轮询定时器驱动）。
@@ -949,7 +1001,17 @@ impl PetWin {
             let mut pt = Point { x: self.pos.0, y: self.pos.1 };
             let mut sz = Size { cx: WIN_W, cy: WIN_H };
             let mut src = Point { x: 0, y: 0 };
-            let blend = BlendFn { blend_op: 1, blend_flags: 0, src_alpha: 255, alpha_format: 1 };
+            // 2026-09-29：整窗不透明度由用户设置决定（`settings.alpha`，百分比）。
+            // 用 `SourceConstantAlpha` 而不是逐像素乘 —— 后者要在 33ms 的每帧里多遍历
+            // 一整块 286×390 的缓冲（约 11 万像素），而这个值只影响整体透明度，交给系统合成即可。
+            // 取不到锁时按 100%（不透明）——「读不到设置」不该让桌宠变半透明。
+            let alpha_pct = self.shared.lock().map(|s| s.settings.alpha).unwrap_or(100).min(100);
+            let blend = BlendFn {
+                blend_op: 1,
+                blend_flags: 0,
+                src_alpha: ((alpha_pct * 255) / 100) as u8,
+                alpha_format: 1,
+            };
             let ok = UpdateLayeredWindow(self.hwnd, 0, &mut pt, &mut sz, self.present_dc, &mut src, 0, &blend, ULW_ALPHA);
             if ok == 0 {
                 self.ulw_fail_streak += 1;
@@ -984,13 +1046,13 @@ impl PetWin {
         });
         self.frame_idx = 0;
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
-        let idx = {
+        let (idx, bubble_ms) = {
             let s = self.shared.lock().unwrap();
-            pick_quote(&s.mode)
+            (pick_quote(&s.mode), s.settings.bubble_ms)
         };
         // R4:单击「撸一下」是**用户主动**交互——其台词按告警档(1)展示，可短暂压过状态气泡，
         // 但**压不过审批**(0)：审批气泡必须常驻到 resolved（v3 M3 的硬约束）。
-        self.alert = Some(Alert::timed("quote:click", idx, ALERT_PRI_ALERT, QUOTE_MS));
+        self.alert = Some(Alert::timed("quote:click", idx, ALERT_PRI_ALERT, bubble_ms));
         self.alert_shown_at = std::time::Instant::now();
     }
 
@@ -1419,6 +1481,11 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             dragged: false,
             pos: (x, y),
             shown: !restore_hide,
+        // 冷启动即恢复隐藏态时，悬浮球是否可见取决于托盘档位。
+        // 这里独立读一次设置（启动期一次，不在热路径）：`PetShared` 还没被构造完，
+        // 拿不到 `self.shared`——而读失败会回默认（`dot`），不会把桌宠弄丢。
+        dot_shown: restore_hide
+            && super::settings::load_settings().tray != super::settings::TRAY_TRAY,
             next_quote: std::time::Instant::now() + std::time::Duration::from_secs(12),
             next_wander: std::time::Instant::now() + std::time::Duration::from_secs(8),
             present_dc: 0,

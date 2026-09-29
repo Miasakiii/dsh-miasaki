@@ -275,7 +275,7 @@ light 的完整命令行与 stderr。
 
 ## DSH 运行时补丁（本体例外）
 
-`patches/` 存放**八处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
+`patches/` 存放**七处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
 **DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件均已入库，可重建/可校验/可回退。
 
 | 补丁 | 目标包 | 做什么 |
@@ -285,14 +285,17 @@ light 的完整命令行与 stderr。
 | [`dsh-client-ui-trajectory`](patches/dsh-client-ui-trajectory/README.md) | 官方轨迹页 | 首 token 计时可恢复：实时 chunk 缺位时从 `assistant/message` 紧凑流恢复，修掉「首 token 时间不可用」 |
 | [`dsh-client-ui-chat`](patches/dsh-client-ui-chat/README.md) | 官方聊天区 | 同上，作用于消息气泡的「首 token 用时（TTFT）」与窗口口径兜底统计 |
 | [`dsh-client-ui-attachment`](patches/dsh-client-ui-attachment/README.md) | 官方消息图片画廊 | 多图 tile 宽高比保持：64×64 定宽 cover 方块改为按原始比例自适应（44–220）+ contain 完整显示，修「截图被裁成方块」 |
-| [`dsh-client-ui-sidebar`](patches/dsh-client-ui-sidebar/README.md) | 官方侧边栏 | 头部悬浮提示 portal 化：6 处 Tooltip 加 `portal: true`，气泡改挂 body（z 1100），修左上角悬停提示被中栏盖住/裁掉 |
+| [`dsh-client-ui-sidebar`](patches/dsh-client-ui-sidebar/README.md) | 官方侧边栏 | 头部悬浮提示 portal 化：**5 处** Tooltip 加 `portal: true`（2026-09-29 随 rc.2 退役品牌区那条 —— 官方删掉了那个 Tooltip），气泡改挂 body（z 1100），修左上角悬停提示被中栏盖住/裁掉 |
 | [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 miasaki 化：`sidebar.brand.name` occupant 换成部署实现，deepseek 字标 8 path 逐字节保留、胶囊几何不变，徽标 HARNESS → MIASAKI |
-| [`dsh-cordis-host-runner`](patches/dsh-cordis-host-runner/README.md) | 官方 host 侧 Cordis runner | `cordis_inspect_query`(client) 永久挂起修复：记下页面的拒绝原因 + 15s 兜底超时，把「无限挂起」变成「带原因的报错」 |
 
-> 前七个作用于浏览器 bundle，改完**刷新页面**即生效；第八个作用于 **host 侧 Node 包**
-> （`lib/index.js`），改完必须**重启 DSH host 进程**才生效（Node 已加载的模块不会热更新）。
-> 另有一件作用于 host 侧的图片准入补丁属 dual-model 线（`../dsh-miasaki-dual-model/patches/`），
-> 同样需重启 dsh 后端才生效。
+> **七件全部作用于浏览器 bundle**，改完**刷新页面**即生效。
+> 原第八件 [`dsh-cordis-host-runner`](patches/dsh-cordis-host-runner/README.md)（本线唯一的 host 侧补丁）
+> **已于 2026-09-29 退役**：官方 `0.2.0-rc.2` 自行实现了同一修复且更完整（`pending.failure ??=`
+> 记录拒绝原因、`clientQueryTimeoutMs` 可配超时、无活动页面时立刻失败），本补丁 4 条锚点在 rc.2 上
+> 全部命中 0 次。目录与设计记录保留为历史，不再 apply ——
+> 判据见 [升级评估](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md) §3.1。
+> 另有一件作用于 **host 侧**的图片准入补丁属 dual-model 线（`../dsh-miasaki-dual-model/patches/`），
+> 改完需**重启 dsh 后端**才生效（Node 已加载的模块不会热更新）。
 
 ```powershell
 cd patches/<补丁目录>
@@ -304,16 +307,18 @@ node patch.mjs rebuild      # A 类：同步 baseline 原版 + ORIGINAL_SHA256 �
 node patch.mjs seal         # 同上（api-session-controller 的该命令名为 seal）
 ```
 
-> **当前基线：DSH 0.2.0-rc.1（2026-09-28 升级重打，`EDITS` 零改）**。本机全局 DSH 已实装
-> `0.2.0-rc.1`（`next` 轨；`latest` 仍是 `0.1.7-rc.2`，勿用）。八件本体补丁当日全部重打，
-> 逐件原版/产物 SHA 与那次 npm 死锁事故的经过见 desktop `design/CHANGELOG.md`
-> 「2026-09-28（续九）」。
->
-> **下一版 `0.2.0-rc.2` 的预检已完成（2026-09-29，未执行升级）**：9 件补丁逐件干跑 `apply` ——
-> **7 件零适配**（其中 5 件目标文件逐字节未变）、**`cordis-host-runner` 建议整件退役**
-> （官方在 rc.2 自行实现了同一修复且更完整）、**`sidebar` 删 1 条编辑**（官方移除了品牌区 Tooltip）。
-> 完整证据、常量回填对照表与执行清单见
+> **当前基线：DSH `0.2.0-rc.2`（2026-09-29 升级重打）**。本机全局 DSH 已实装
+> `0.2.0-rc.2`（`next` 轨；`latest` 仍是 `0.1.7-rc.2`，勿用）。七件本体补丁当日全部重打：
+> **5 件**目标文件逐字节未变（常量零改）、**chat / conversation** 换基线并回填常量、
+> **sidebar** 删 1 条编辑（官方移除了品牌区那个 Tooltip）；**`cordis-host-runner` 整件退役**
+> （官方 rc.2 自行实现了同一修复且更完整）。逐件处置、回归结果与「预检值被重建逐字节复现」的
+> 二次印证见 desktop `design/CHANGELOG.md`「2026-09-29（续二）」；完整证据（预检方法、
+> 常量回填对照表、两处失效的根因）见
 > [`dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md)。
+>
+> 历史基线记录（DSH `0.2.0-rc.1`，2026-09-28 升级重打，`EDITS` 零改）。八件本体补丁当日
+> 全部重打，逐件原版/产物 SHA 与那次 npm 死锁事故的经过见 desktop `design/CHANGELOG.md`
+> 「2026-09-28（续九）」。
 >
 > 历史基线记录（DSH `0.1.7-rc.2`，2026-09-25 升级重打，`EDITS` 零改）。八个本体补丁当日全部重打，
 > **7/7 增量与升级评估文档给出的预期值逐字节一致**，是锚点未漂移的强证据：
@@ -427,6 +432,16 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
   **注意：行号是生成模板的约定、不是跨主题语义**——kurumi `r7` 是坐姿打字，whale `r7` 是站姿待机，
   连 r0 帧数都不同（6 vs 7）；故切片脚本改用**每主题行名表**（`cut-frames.mjs` 的 `ATLAS_SPECS`），
   详见 [design/pet-v5-motion-plan.md](design/pet-v5-motion-plan.md) §2.3
+- **设置面板（2026-09-29 扩为 12 项）**：DSH「设置 → 桌宠」，**与官方「通用设置」页同一套设计语言**
+  （复用官方 UI 原语 `Switch` / `SegmentedControl` / `Button` + 官方行式规格：0.5px 分隔线 / 16px 行距 /
+  14·22 标题 / 12·18 说明；配色只走 `--dsw-*` 令牌，跟着皮肤与明暗自动解析）。四组：
+  · **显示与位置** —— 显示/隐藏、重置位置（也可直接拖动，位置**比例化**记忆，跨分辨率还原）；
+  · **外观与行为** —— 动效强度（0.5–1.6×，统一作用于呼吸/摇摆/挤压）、气泡时长（1–10 秒）、
+    不透明度（30–100%）、宠物角色（跟随主题 或 钉死某只）、鼠标穿透（自动 / 总是可点）、隐藏后（悬浮球 / 托盘 / 两者）；
+  · **状态呈现** —— 六态里哪些要显示（关掉只是不呈现，桌宠停待机；心跳照常，不影响 DSH 运行）；
+  · **主题联动** —— 是否随主题换角色并自动建人格会话（关掉**不删**已建会话）。
+  壳侧六项存 `%APPDATA%\com.miasaki.desktop\pet-settings.json`（与 `pet.json` **刻意分开**——
+  后者在拖动时高频重写，混在一起会互相覆盖）；面板改动经 hash `ps*` 字段实时传给壳。
 - 交互（v3 M1，2026-09-12 重排；**R1/R2 于 2026-09-16 补窗口层**）：**拖动**移动 / **单击**「撸一下」
   跳跃+气泡（**不抢焦点**——窗口已带 `WS_EX_NOACTIVATE`，点击不会夺走前台与键盘焦点，
   在被遮挡的应用里 Ctrl+C/V 照常可用；等待审批或主窗口最小化/隐藏时单击为**唤起主窗口**）/

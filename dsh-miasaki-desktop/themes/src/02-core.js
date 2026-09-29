@@ -199,6 +199,24 @@
               '&petts=' + pp.ts + '&petkey=' + encodeURIComponent(pp.key || '')
           }
         } catch (e) { /* ignore */ }
+        // 2026-09-29 桌宠**壳侧设置**（`ps*`）：**刻意不放进上面那段** —— 那段以
+        // 「5s 内有官方心跳」为前提，而设置与「六态通道活不活着」是两件事。
+        // 若跟着 petPart 一起被静默掉，壳侧会按增量语义把它读成「用户把设置清空了」。
+        // 来源同 petPart（pet-panel 把设置挂在上报对象上），本函数仍是 hash 唯一写者。
+        var psPart = ''
+        try {
+          var ppSet = window.__miasakiPetPanel && window.__miasakiPetPanel.settings
+          if (ppSet && typeof ppSet === 'object') {
+            var psSegs = []
+            if (ppSet.motion != null) psSegs.push('psmo=' + encodeURIComponent(String(ppSet.motion)))
+            if (ppSet.bubbleMs != null) psSegs.push('psbubble=' + encodeURIComponent(String(ppSet.bubbleMs)))
+            if (ppSet.alpha != null) psSegs.push('psalpha=' + encodeURIComponent(String(ppSet.alpha)))
+            if (ppSet.pet != null) psSegs.push('pspet=' + encodeURIComponent(String(ppSet.pet)))
+            if (ppSet.through != null) psSegs.push('psthrough=' + encodeURIComponent(String(ppSet.through)))
+            if (ppSet.tray != null) psSegs.push('pstray=' + encodeURIComponent(String(ppSet.tray)))
+            if (psSegs.length > 0) psPart = '&' + psSegs.join('&')
+          }
+        } catch (e) { /* ignore */ }
         // W4.3：窗口底色（6 位十六进制，不带 `#`——`#` 会截断 fragment）。空串即不上报。
         var bgPart = CUR_BG === '' ? '' : '&bg=' + CUR_BG
         // 2026-09-26「无限刷新」修复 P4：**保留本函数不管辖的字段**（首要是 `cmd=`/`seq=`）。
@@ -226,13 +244,15 @@
               // —— 宁可多留一个不认识的值，也不替别的通道做主删掉它。
               if (key === 'miasaki-theme' || key === 'int' || key === 'act' || key === 'wait' ||
                   key === 'pet' || key === 'pettool' || key === 'petts' || key === 'petkey' ||
+                  key === 'psmo' || key === 'psbubble' || key === 'psalpha' ||
+                  key === 'pspet' || key === 'psthrough' || key === 'pstray' ||
                   key === 'bg' || key === 'diag') continue
               keep.push(seg)
             }
             if (keep.length > 0) keepPart = '&' + keep.join('&')
           }
         } catch (e) { /* ignore */ }
-        var target = '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + petPart + bgPart + '&diag=' + DIAG_CACHE + keepPart
+        var target = '#miasaki-theme=' + current + '&int=' + CUR_INT + actPart + waitPart + petPart + psPart + bgPart + '&diag=' + DIAG_CACHE + keepPart
         // 2026-09-26「一直在刷新」修复 P3（P4 起判等改为顺序无关，见 sameFragment）：
         // 目标 hash 与当前 hash **字段集合相同**时不写。
         // 本函数由 05-sensors 的状态扫描每 1.5s 触发一次，而 `petts`（pet-panel 心跳

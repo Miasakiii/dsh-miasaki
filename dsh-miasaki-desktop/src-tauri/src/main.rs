@@ -1679,6 +1679,15 @@ struct FragmentParts {
     /// **只在 Mica 不可用（回退实色底）时消费**——Mica 生效时窗口底必须保持透明，
     /// 否则会把系统材质整个盖掉（见 `apply_window_bg`）。
     bg: Option<String>,
+    /// 2026-09-29 桌宠用户设置（`ps*` 前缀，与既有的 `pet`/`pettool`/`petkey`/`petts` 不冲突）。
+    /// 全部是**原样字符串**：解析成数字这一步交给 `PetSettings::normalize()`，
+    /// 这样「非法值」的处置只有一处（夹取），不会在解析层和结构层各写一套。
+    ps_motion: Option<String>,
+    ps_alpha: Option<String>,
+    ps_bubble: Option<String>,
+    ps_pet: Option<String>,
+    ps_through: Option<String>,
+    ps_tray: Option<String>,
 }
 
 /// percent-decode（encodeURIComponent 产物；'+' 不转空格——encode 不产生 '+'）。
@@ -1717,6 +1726,12 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         move_reset: false,
         seq: -1,
         bg: None,
+        ps_motion: None,
+        ps_alpha: None,
+        ps_bubble: None,
+        ps_pet: None,
+        ps_through: None,
+        ps_tray: None,
     };
     for part in fragment.split('&') {
         if let Some(v) = part.strip_prefix("miasaki-theme=") {
@@ -1768,6 +1783,16 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
                 }
             }
         }
+        // 2026-09-29 桌宠用户设置：`ps*` 前缀（与既有 pet / pettool / petkey / petts 不冲突——
+        // 那些都以 `pet` 开头，这里是 `ps`）。
+        // 本段**只做搬运**：数值合法性与范围一律交给 `PetSettings::normalize()`，
+        // 于是「非法值怎么办」只有一个答案（夹取/回默认），解析层不重复实现一遍。
+        if let Some(v) = part.strip_prefix("psmo=") { p.ps_motion = Some(v.to_string()); }
+        if let Some(v) = part.strip_prefix("psalpha=") { p.ps_alpha = Some(v.to_string()); }
+        if let Some(v) = part.strip_prefix("psbubble=") { p.ps_bubble = Some(v.to_string()); }
+        if let Some(v) = part.strip_prefix("pspet=") { p.ps_pet = Some(v.to_string()); }
+        if let Some(v) = part.strip_prefix("psthrough=") { p.ps_through = Some(v.to_string()); }
+        if let Some(v) = part.strip_prefix("pstray=") { p.ps_tray = Some(v.to_string()); }
     }
     p
 }
@@ -1816,11 +1841,17 @@ fn pet_mode_for(theme: &str) -> &'static str {
 
 /// 推送桌宠状态到 DSH 页面：设置面板监听 `miasaki-pet-state` CustomEvent（detail.hidden）。
 /// 与主题推送同理：Rust 侧 eval 单向下发，面板经 hash cmd=pet-state 主动请求。
+///
+/// 2026-09-29：**同时回推壳侧设置**（动效/气泡/透明度/宠物/穿透/托盘）—— 面板初始化
+/// 需要它才能显示当前值；否则面板只能显示默认值，用户一改就把真实设置覆盖掉。
+/// 字段名与 hash 的 `ps*` 一一对应（`psmo` ↔ `motion` …），改一处要同改两处。
 fn push_pet_state(app: &AppHandle) {
     let pet = app.state::<pet_native::NativePet>();
     let hidden = pet.is_hidden();
+    let s = pet.settings_snapshot();
     let js = format!(
-        "window.dispatchEvent && window.dispatchEvent(new CustomEvent('miasaki-pet-state',{{detail:{{hidden:{hidden}}}}}))"
+        "window.dispatchEvent && window.dispatchEvent(new CustomEvent('miasaki-pet-state',{{detail:{{hidden:{hidden},settings:{{motion:{},bubbleMs:{},alpha:{},pet:\"{}\",through:\"{}\",tray:\"{}\"}}}}}}))",
+        s.motion, s.bubble_ms, s.alpha, s.pet_override, s.through, s.tray
     );
     eval_status(app, &js);
 }
@@ -2123,8 +2154,15 @@ fn start_hash_watchdog(app: &AppHandle) {
             }
             let pet = app.state::<pet_native::NativePet>();
             if let Some(t) = parts.theme {
-                let mode = pet_mode_for(&t);
-                pet.set_mode(mode);
+                // 2026-09-29：用户钉死某只宠物时，主题只影响隐藏态悬浮球的配色，
+                // **不再改写 mode** —— 面板里的「切换宠物」优先于「跟随主题」。
+                let pinned = pet.settings_snapshot().pet_override;
+                let mode: String = if pinned.is_empty() {
+                    pet_mode_for(&t).to_string()
+                } else {
+                    pinned
+                };
+                pet.set_mode(&mode);
                 // 2026-09-24:隐藏态悬浮球的球面（主题头像 + 主题色环）跟随主题切换；
                 // 白名单校验在 set_theme 内部（hash 字段不可信），窗口线程变化才重绘。
                 pet.set_theme(&t);
@@ -2139,6 +2177,45 @@ fn start_hash_watchdog(app: &AppHandle) {
             }
             if let Some(i) = parts.int {
                 pet.set_intensity(&i);
+            }
+            // 2026-09-29 桌宠用户设置（`ps*`）：面板改动后由注入运行时写进 hash。
+            //
+            // **以「当前设置」为底再覆盖出现的字段**，不是从默认值构造一份新的 ——
+            // hash 是**增量上报**（页面只在某项变化时带那一个字段），以默认值为底会把
+            // 用户没在这次上报里提到的项全部重置掉（典型的「改 A 结果 B 也回到默认」）。
+            //
+            // 数值解析失败的项**保持原值**（不回落默认）：解析失败说明上报有 bug，
+            // 此时把用户已存的值抹掉是更坏的选择；`update_settings` 里的 normalize 兜底夹取。
+            let ps_seen = parts.ps_motion.is_some() || parts.ps_alpha.is_some()
+                || parts.ps_bubble.is_some() || parts.ps_pet.is_some()
+                || parts.ps_through.is_some() || parts.ps_tray.is_some();
+            if ps_seen {
+                let mut next = pet.settings_snapshot();
+                if let Some(v) = parts.ps_motion.as_deref() {
+                    if let Ok(n) = v.parse::<f32>() { next.motion = n }
+                }
+                if let Some(v) = parts.ps_alpha.as_deref() {
+                    if let Ok(n) = v.parse::<u32>() { next.alpha = n }
+                }
+                if let Some(v) = parts.ps_bubble.as_deref() {
+                    if let Ok(n) = v.parse::<u64>() { next.bubble_ms = n }
+                }
+                if let Some(v) = parts.ps_pet.as_deref() { next.pet_override = v.to_string() }
+                if let Some(v) = parts.ps_through.as_deref() { next.through = v.to_string() }
+                if let Some(v) = parts.ps_tray.as_deref() { next.tray = v.to_string() }
+                if pet.update_settings(next) {
+                    // 宠物钉选可能刚变了 ⇒ **立即**重算 mode，不等下一次主题上报。
+                    // 主题取 `LAST_THEME`（页面每次 syncHash 都带，这里读最近一次即可）：
+                    // 若用户此刻把钉选清空（回「跟随主题」），也应当场换回主题对应的角色。
+                    let theme_now = LAST_THEME.lock().map(|t| t.clone()).unwrap_or_default();
+                    let pinned = pet.settings_snapshot().pet_override;
+                    let mode = if pinned.is_empty() {
+                        pet_mode_for(&theme_now).to_string()
+                    } else {
+                        pinned
+                    };
+                    pet.set_mode(&mode);
+                }
             }
             // v2026-08-30:总指挥活动状态/审批等待（M2 后为 DOM 兜底源,官方通道静默时生效）
             if let Some(a) = parts.act {

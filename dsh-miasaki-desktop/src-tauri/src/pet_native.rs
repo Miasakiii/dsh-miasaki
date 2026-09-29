@@ -15,6 +15,8 @@ pub(crate) mod image;
 pub(crate) mod model;
 #[path = "pet_native/persist.rs"]
 pub(crate) mod persist;
+#[path = "pet_native/settings.rs"]
+pub(crate) mod settings;
 #[path = "pet_native/window.rs"]
 pub(crate) mod window;
 #[path = "pet_native/xform.rs"]
@@ -61,6 +63,11 @@ pub struct PetShared {
     pub official_ts: i64,
     /// M2:最后一次官方心跳到达时刻（compose 内 5s 新鲜度判定）
     pub official_at: Option<std::time::Instant>,
+    /// 2026-09-29 用户设置（`pet-settings.json`）。与 `pet.json` 分开存的理由见 `settings.rs`
+    /// 顶部注释（拖动会高频重写 `pet.json`，混在一起会互相覆盖）。
+    /// **写入一律走 `NativePet::update_settings`** —— 它负责 normalize + 落盘 + 去重，
+    /// 绕开它直接赋值会让面板改的值永远存不下（或存下脏值）。
+    pub settings: settings::PetSettings,
 }
 
 pub struct NativePet {
@@ -89,6 +96,9 @@ impl NativePet {
             official_key: String::new(),
             official_ts: 0,
             official_at: None,
+            // 冷启动即读用户设置：透明度/动效强度这类值必须在**第一帧**就生效，
+            // 否则会先按默认值画一帧再跳变（与 `theme` 走同一个理由）。
+            settings: settings::load_settings(),
         }));
         let frames = image::load_frames();
         let s2 = shared.clone();
@@ -142,6 +152,37 @@ impl NativePet {
                 s.intensity = int.to_string();
             }
         }
+    }
+
+    /// 2026-09-29：写入用户设置 —— **面板与 hash 字段的唯一入口**。
+    ///
+    /// 三步一步都不能省：
+    ///   ① `normalize()`：外部来源不可信（hash 可被篡改、文件可被手改）；
+    ///   ② 与原值比对：同值**不写盘**（否则面板每渲染一次就写一次，白烧 IO 还磨损 SSD）；
+    ///   ③ 落盘（`save_settings` 内部对失败**留痕**，不静默）。
+    ///
+    /// @returns 是否真的改了 —— 调用方据此决定要不要重绘那一帧。
+    pub fn update_settings(&self, next: settings::PetSettings) -> bool {
+        let Ok(mut s) = self.shared.lock() else { return false };
+        let mut candidate = next;
+        candidate.normalize();
+        if s.settings == candidate {
+            return false;
+        }
+        window::pet_log_line(&format!(
+            "[native-pet] settings motion={} bubble={}ms alpha={} pet={:?} through={} tray={}\n",
+            candidate.motion, candidate.bubble_ms, candidate.alpha,
+            candidate.pet_override, candidate.through, candidate.tray
+        ));
+        s.settings = candidate.clone();
+        settings::save_settings(&candidate);
+        true
+    }
+
+    /// 取一份设置快照（窗口线程绘制时用）。**不要长期持锁**：compose 每 33ms 跑一次，
+    /// 在锁内做绘制准备会让面板的命令延迟可见。
+    pub fn settings_snapshot(&self) -> settings::PetSettings {
+        self.shared.lock().map(|s| s.settings.clone()).unwrap_or_default()
     }
 
     /// v2026-08-30:总指挥活动状态(busy/idle)由 runtime.js 扫描 DSH 页面 DOM 上报

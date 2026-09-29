@@ -112,8 +112,13 @@ impl DrawXform {
 ///
 /// 方向：布局侧把 pivot **上移**该量，保证摇摆全程不越出窗口下沿
 /// （`WIN_H - 2` 是 `blit_center_bottom` 的底部留白，不可再被旋转吃掉）。
+///
+/// 2026-09-29：按 `MOTION_MAX`（用户可设的**最大**强度）算，而不是当前 motion ——
+/// 理由与「取最大角而非当前角」同一条：layout 余量必须覆盖整个可设范围，
+/// 否则用户把强度拉满时底边会被旋转吃掉，而这个 bug 只在极端档位出现、很难复现。
 pub(crate) fn sway_layout_margin(w: f32) -> f32 {
-    (w * 0.5) * sway_max_rad().sin()
+    let max_rad = (SWAY_MAX_DEG * crate::pet_native::settings::MOTION_MAX).to_radians();
+    (w * 0.5) * max_rad.sin()
 }
 
 /* ---------------- 动效相位（纯函数，参数见 config.rs） ---------------- */
@@ -130,28 +135,34 @@ fn wave(t_ms: u64, period_ms: u64, shift_ms: u64) -> f32 {
 
 /// M1 呼吸：正弦垂直位移（px），周期 `BREATH_PERIOD_MS`。
 /// `amp` 由调用方按姿态给（图集行 / 三态立绘沿用各自既有幅度，见 config.rs）。
-pub(crate) fn breath_offset(t_ms: u64, amp: f32) -> f32 {
-    wave(t_ms, BREATH_PERIOD_MS, 0) * amp
+/// `scale` = 用户设的动效强度倍率（`settings.motion`）；`1.0` 即改造前的手感。
+pub(crate) fn breath_offset(t_ms: u64, amp: f32, scale: f32) -> f32 {
+    wave(t_ms, BREATH_PERIOD_MS, 0) * amp * scale
 }
 
 /// M2 摇摆：绕底部 pivot 的旋转角（弧度）。
 /// 周期与呼吸不同、并叠加 `SWAY_PHASE_SHIFT_MS` 相位偏移 ⇒ 两者**错相**，
 /// 避免「呼吸到顶点时恰好也摆到极值」造成的机械同步感（motion-plan §3.4 M2 要求）。
-pub(crate) fn sway_angle(t_ms: u64) -> f32 {
-    wave(t_ms, SWAY_PERIOD_MS, SWAY_PHASE_SHIFT_MS) * sway_max_rad()
+/// `scale` 同 `breath_offset`。
+pub(crate) fn sway_angle(t_ms: u64, scale: f32) -> f32 {
+    wave(t_ms, SWAY_PERIOD_MS, SWAY_PHASE_SHIFT_MS) * sway_max_rad() * scale
 }
 
 /// M3 挤压拉伸：脉冲进度 `p ∈ [0, 1]` → `(sx, sy)`。
 /// `sin(πp)` 在两端为 0 ⇒ **到期即回中性**（与 `ActionSlot` 的「到期即清」同哲学，
 /// 不残留形变）；中段最大。参考实现实测参数见 `pet-reference-benchmark.md` §2.10。
-pub(crate) fn squash_scales(p: f32) -> (f32, f32) {
-    let k = (std::f32::consts::PI * p.clamp(0.0, 1.0)).sin();
+/// `scale` 同 `breath_offset`——**不含位移的形变也要受强度影响**，否则「强度调低」时
+/// 挤压仍是满幅，观感不一致。
+pub(crate) fn squash_scales(p: f32, scale: f32) -> (f32, f32) {
+    let k = (std::f32::consts::PI * p.clamp(0.0, 1.0)).sin() * scale;
     (1.0 + SQUASH_DX * k, 1.0 - SQUASH_DY * k)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 动效强度的上限（`sway_layout_margin` 按它算余量，见下方那条测试）。
+    use crate::pet_native::settings::MOTION_MAX;
 
     /// 最宽帧：kurumi / whale 图集帧统一 192×208（实测，`frames.json` 全部行），
     /// 等比缩放到 `CELL_H` 高后的宽度。包围盒与摇摆余量都以它为最坏情况。
@@ -334,20 +345,22 @@ mod tests {
     }
 
     /// M1 呼吸：幅度受 `amp` 约束、周期为 `BREATH_PERIOD_MS`、半周期反相。
+    /// 2026-09-29：三个相位函数都多了 `scale`（用户动效强度），此处一律传 `1.0` 保持原判据，
+    /// 强度本身另有一组测试（`motion_scale_*`）。
     #[test]
     fn breath_is_bounded_and_periodic() {
         let amp = BREATH_PX_ROW;
         for t in (0..(BREATH_PERIOD_MS * 2)).step_by(37) {
-            assert!(breath_offset(t, amp).abs() <= amp + 1e-4);
+            assert!(breath_offset(t, amp, 1.0).abs() <= amp + 1e-4);
         }
-        assert!(breath_offset(0, amp).abs() < 1e-4, "起点应在中性");
+        assert!(breath_offset(0, amp, 1.0).abs() < 1e-4, "起点应在中性");
         // 半周期后相位相反
-        let a = breath_offset(BREATH_PERIOD_MS / 4, amp);
-        let b = breath_offset(BREATH_PERIOD_MS / 4 + BREATH_PERIOD_MS / 2, amp);
+        let a = breath_offset(BREATH_PERIOD_MS / 4, amp, 1.0);
+        let b = breath_offset(BREATH_PERIOD_MS / 4 + BREATH_PERIOD_MS / 2, amp, 1.0);
         assert!((a + b).abs() < 1e-3, "半周期应反相: {a} vs {b}");
         // 整周期回到同值
-        let c = breath_offset(BREATH_PERIOD_MS / 3, amp);
-        let d = breath_offset(BREATH_PERIOD_MS / 3 + BREATH_PERIOD_MS, amp);
+        let c = breath_offset(BREATH_PERIOD_MS / 3, amp, 1.0);
+        let d = breath_offset(BREATH_PERIOD_MS / 3 + BREATH_PERIOD_MS, amp, 1.0);
         assert!((c - d).abs() < 1e-3);
     }
 
@@ -355,11 +368,11 @@ mod tests {
     #[test]
     fn sway_is_bounded_and_out_of_phase_with_breath() {
         for t in (0..(SWAY_PERIOD_MS * 2)).step_by(53) {
-            assert!(sway_angle(t).abs() <= sway_max_rad() + 1e-4);
+            assert!(sway_angle(t, 1.0).abs() <= sway_max_rad() + 1e-4);
         }
         // 错相判据：不存在固定的正比例关系 —— 在呼吸的某个峰值处，摇摆不应同时是极值
         let peak_t = BREATH_PERIOD_MS / 4;
-        let s = sway_angle(peak_t).abs();
+        let s = sway_angle(peak_t, 1.0).abs();
         assert!(s < sway_max_rad() * 0.98, "呼吸峰值处摇摆不应同时到极值（错相失效）: {s}");
         // 两周期互不整除同样能防同步：断言各自周期长度不同
         assert_ne!(BREATH_PERIOD_MS, SWAY_PERIOD_MS);
@@ -368,16 +381,50 @@ mod tests {
     /// M3 挤压：两端回中性（到期即清、不残留形变）、中段最大、方向正确（横拉伸纵压缩）。
     #[test]
     fn squash_returns_neutral_at_both_ends() {
-        let (sx0, sy0) = squash_scales(0.0);
-        let (sx1, sy1) = squash_scales(1.0);
+        let (sx0, sy0) = squash_scales(0.0, 1.0);
+        let (sx1, sy1) = squash_scales(1.0, 1.0);
         assert!((sx0 - 1.0).abs() < 1e-4 && (sy0 - 1.0).abs() < 1e-4, "起点须中性");
         assert!((sx1 - 1.0).abs() < 1e-4 && (sy1 - 1.0).abs() < 1e-4, "终点须中性");
-        let (sxm, sym) = squash_scales(0.5);
+        let (sxm, sym) = squash_scales(0.5, 1.0);
         assert!((sxm - (1.0 + SQUASH_DX)).abs() < 1e-4, "峰值 sx 应到上限");
         assert!((sym - (1.0 - SQUASH_DY)).abs() < 1e-4, "峰值 sy 应到下限");
         assert!(sxm > 1.0 && sym < 1.0, "挤压 = 横向拉伸 + 纵向压缩");
         // 越界进度被夹取，不产生越界形变
-        assert_eq!(squash_scales(-0.5), squash_scales(0.0));
-        assert_eq!(squash_scales(2.0), squash_scales(1.0));
+        assert_eq!(squash_scales(-0.5, 1.0), squash_scales(0.0, 1.0));
+        assert_eq!(squash_scales(2.0, 1.0), squash_scales(1.0, 1.0));
+    }
+
+    /// 动效强度（`settings.motion`）：三条动效都**线性**受它约束，且 1.0 即改造前的手感。
+    #[test]
+    fn motion_scale_is_linear_and_neutral_at_one() {
+        let amp = BREATH_PX_ROW;
+        for t in (0..BREATH_PERIOD_MS).step_by(97) {
+            let base = breath_offset(t, amp, 1.0);
+            assert!((breath_offset(t, amp, 0.5) - base * 0.5).abs() < 1e-4, "呼吸应线性缩放");
+            assert!((breath_offset(t, amp, 1.5) - base * 1.5).abs() < 1e-4);
+            let sbase = sway_angle(t, 1.0);
+            assert!((sway_angle(t, 0.5) - sbase * 0.5).abs() < 1e-4, "摇摆应线性缩放");
+        }
+        // 挤压：峰值随强度缩放
+        let (sx_lo, _) = squash_scales(0.5, 0.5);
+        assert!((sx_lo - (1.0 + SQUASH_DX * 0.5)).abs() < 1e-4, "挤压峰值应随强度减半");
+        // 两端回中性与强度无关（任何强度下都不得残留形变）
+        for k in [0.0, 0.5, 1.0, MOTION_MAX] {
+            let (x, y) = squash_scales(0.0, k);
+            assert!((x - 1.0).abs() < 1e-4 && (y - 1.0).abs() < 1e-4, "强度 {k} 下起点仍须中性");
+        }
+    }
+
+    /// 布局余量必须按**最大**可设强度算：用户把强度拉满时底边不能被旋转吃掉。
+    /// 这条钉住 `sway_layout_margin` 与 `MOTION_MAX` 的关系（改任一个都要重新对齐）。
+    #[test]
+    fn sway_layout_margin_covers_max_motion() {
+        let w = 192.0_f32;
+        let max_rad = (SWAY_MAX_DEG * MOTION_MAX).to_radians();
+        let need = (w * 0.5) * max_rad.sin();
+        assert!((sway_layout_margin(w) - need).abs() < 1e-4,
+            "余量应按最大强度算：{} vs {}", sway_layout_margin(w), need);
+        assert!(sway_layout_margin(w) > (w * 0.5) * sway_max_rad().sin(),
+            "最大强度大于 1 ⇒ 余量必须比原值大，否则满强度时越界");
     }
 }

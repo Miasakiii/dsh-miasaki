@@ -2,6 +2,196 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-29（续五）· 桌宠设置页视觉重做：对齐官方「通用设置」页设计语言
+
+**用户原话**：「桌宠设置页太丑了，与其他设置页设计语言要统一，搞美观点，**不要功能没问题了就好了**」。
+
+**根因**：第一批做设置页时用的是**裸 `div` + 内联样式**（自己编了 `sectionTitle` / `rowStyle` / `dim` / `checkLabel`
+四个内联对象），字号/行距/边距/控件形态全都与官方设置页对不上 —— 功能全对，但一眼看去不属于这个家族。
+**这类问题功能测试一条都抓不到**，所以本轮除改代码外，把「必须复用官方原语 + 官方行式规格」写成了闸门。
+
+### 改为：官方原语 + 官方行式规格
+
+**① 交互控件全部换用官方 primitives**（`@deepseek-ai/dsh-client-ui-primitives`，与前端壳 seed 模块同源）：
+
+| 场景 | 之前 | 现在 |
+|---|---|---|
+| 布尔开关（显示桌宠 / 六态 / 主题跟随） | 原生 `<input type=checkbox>` | 官方 **`Switch`** |
+| 多选一（宠物角色 / 鼠标穿透 / 隐藏后） | 原生 `<select>` | 官方 **`SegmentedControl`** |
+| 数值（动效强度 / 气泡时长 / 不透明度） | 原生 `<input type=range>`（滑块） | 官方**步进器**规格（悬停露出上下箭头，同「通用设置」页的 FontSizeRow.stepper） |
+| 动作（重置位置） | 原生 `<button>` | 官方 **`Button`** |
+
+取值出处逐条对照：行 = `FontSizeRow.row`（**0.5px 分隔线 + 16px 行距**）、标题/说明 = `row.title` / `row.desc`、
+组 = 官方组标题（14px/22/500）。**token 全部走 `--dsw-*`**，跟着皮肤与明暗自动解析，不自己维护配色。
+
+**② 排版改为 `.mia-*` 行式 CSS**（与 `dsh-miasaki-appearance` 同一套规格，两线代码零耦合、各带一份 CSS，
+但**类名与取值刻意保持一致** —— 视觉上必须是同一个设置页家族）。面板结构变成四组：
+
+```
+显示与位置   显示桌宠 · 重置位置
+外观与行为   动效强度 · 气泡时长 · 不透明度 · 宠物角色 · 鼠标穿透 · 隐藏后
+状态呈现     思考中 · 等待审批 · 出错了 · 完成了
+主题联动     跟随主题切换角色
+```
+
+**③ 原语缺席时降级但留痕**：`require` 失败 ⇒ `console.warn` + 回原生元素。
+面板是设置入口，不能因为原语缺席整页白屏；但也**绝不静默**降级（与 `check-silent-guards` 同口径）。
+
+**④ 顺带修掉两处界面文案问题**：先前文案里写了 `**不显示**` / `**已经建好的会话不会删除**`，
+而设置页是**纯文本渲染** ⇒ 用户看到的是字面星号。已全部改为普通文字（并加了闸门防复发）。
+
+### 新增闸门：风格契约 5 条
+
+写在 `plugins/dsh-pet-panel/test/panel-settings.test.js`（照 `dsh-miasaki-appearance/test/client.test.js` 的
+「风格契约」口径）：① 必须 require 官方 primitives 且名字与 seed 导出表一致（2026-09-23 事故教训）、
+② 行式排版必须走 `.mia-*` 且分隔线/行距/字号对齐官方取值、③ **配色只走 `--dsw-*`**（禁硬编码 hex 与 rgba，
+词法级检查）、④ 样式按 `data-plugin-css` 去重注入、⑤ 界面文案不得漏出 `**`（**先剥注释再查** —— 首版没剥，
+被 JSDoc 的 `/**` 误报了一次，测试自身的假阳性比漏报更耗时间）。
+
+**测试**：面板 9 → **14 例**。
+
+**本轮不需要重编 exe**：`lib/client.js` 是运行时加载的 client bundle（`link:` 装的），重启壳即生效；
+只有 `themes/src/02-core.js`（`include_str!` 编进 exe）才需要重编 —— 那个在续四已经编过了。
+
+## 2026-09-29（续四）· 桌宠设置第二批：壳侧六项落地（含设置持久化与 hash 协议扩展）
+
+承接续三（当时只做了「不需要改 Rust」的两项，并在结尾列了后续批次）。本批把**壳侧六项**做完：
+**动效强度 / 气泡时长 / 不透明度 / 宠物钉选 / 鼠标穿透 / 隐藏后形态**。
+
+### 新增 `pet_native/settings.rs`（独立文件，刻意不塞进 `pet.json`）
+
+**为什么独立**：`pet.json` 由 `persist::save_pet_pos()` 在**拖动时高频重写**。设置混进去有两个真实后果：
+① 拖动路径写的是内存里的整份结构 ⇒ **刚在面板改的值被旧快照盖掉**；
+② `PetStateV2` 是严格反序列化的，加字段漏一个默认值 ⇒ 旧文件解析失败 ⇒ **位置静默回默认**。
+
+**兼容策略**：结构体带 `#[serde(default)]` ⇒ 「旧文件 + 新字段」与「新文件缺字段」都能读，**不需要迁移代码**；
+版本不认识（0/99）按损坏处理：回默认 + **留痕**（`pet.log`），不猜、不静默。
+**值的可信度**：两个来源（面板 / hash 字段）都不可信，一律过 `normalize()` 夹取 —— 与既有
+`set_theme` 白名单、`set_activity` 归一化同一口径（**hash 是输入，不是真相**）。
+`motion` 额外先判 `is_finite`：`f32::clamp` 遇 NaN 会原样返回 NaN，会一路传到绘制。
+
+### hash 协议扩展：`ps*` 六字段
+
+`parse_fragment` 加 `psmo` / `psalpha` / `psbubble` / `pspet` / `psthrough` / `pstray`
+（`ps` 前缀与既有 `pet`/`pettool`/`petkey`/`petts` 不冲突）。解析层**只搬运**，合法性全交给 `normalize()`。
+
+**一个容易写错的地方**：消费时**以「当前设置」为底再覆盖出现的字段**，不是从默认值构造新对象。
+hash 是**增量上报**（页面只带变化的那一项），以默认值为底会把用户没提到的项全部重置
+（典型症状「改 A 结果 B 也回到默认」）。
+
+### 六项的接线点
+
+| 项 | 接线 | 说明 |
+|---|---|---|
+| **动效强度** | `xform.rs` 三个相位函数加 `scale` 参数 | `sway_layout_margin` **按 `MOTION_MAX` 算**而不是当前值 —— 与「取最大角而非当前角」同一条理由：布局余量必须覆盖整个可设范围，否则满强度时底边被旋转吃掉，而这种 bug 只在极端档位出现、极难复现 |
+| **气泡时长** | `window.rs` 两处 `Alert::timed(..., QUOTE_MS)` → `settings.bubble_ms` | 顺手在既有 `lock()` 作用域里取，不多加一次加锁 |
+| **不透明度** | `present()` 的 `BlendFn.src_alpha` | 用 `SourceConstantAlpha` 让系统合成，**不逐像素乘**（后者要在每帧遍历 11 万像素）；取不到锁按 100%——读不到设置不该让桌宠变半透明 |
+| **宠物钉选** | `pet_mode_for` 之上加覆盖 | **优先级：手动钉选 > 跟随主题**；设置变更时**立即重算 mode**（不等下一次主题上报），清空钉选则当场换回主题角色 |
+| **鼠标穿透** | `is_transparent_at` 首行的策略判断 | 放在几何判断**之前**（策略层先于几何层）；主窗与悬浮球共用本函数 ⇒ 两处行为天然一致 |
+| **隐藏后形态** | 显隐切换 + **每帧对齐** | `tray=dot|both` 显示悬浮球、`tray=tray` 只留托盘。**每帧对齐是必需的**：档位可能在「桌宠已隐藏」时被改，那条路径不经过显隐切换；用影子字段 `dot_shown` 避免每帧调 `IsWindowVisible` |
+
+**共同的失败口径**：每个 setter 的「读不到锁」都有明确兜底，且**兜底方向一律选「保持既有行为」**——
+读不到设置不该让桌宠变半透明、突然挡住整屏点击、或让用户**失去找回桌宠的入口**。
+
+### 面板
+
+`PetPanel` 从 6 项扩到 **12 项**，分四区：显示与位置 / **外观与行为**（本批新增六项）/ 状态呈现 / 主题联动。
+**两套设置的权威来源刻意分开**：客户端两项（六态/主题跟随）权威在 localStorage；壳侧六项权威在
+`pet-settings.json`，面板经 `pet-state` 回推拿到、**不回存**（两边都存会漂移，而壳才是真正生效的那一边）。
+`push_pet_state` 相应扩展为同时回推 `settings`（字段名与 hash 的 `ps*` 一一对应，**改一处要同改两处**）。
+
+### 测试
+
+`cargo test` **100 → 109**：设置模块 7 例（默认值在区间 / 缺字段回默认 / 越界夹取 / 未知枚举回默认 /
+幂等 / **NaN 回落** / 往返）+ 动效强度 2 例（三函数线性缩放 / **布局余量覆盖最大强度**）。
+面板侧 9 例（续三新增）不变。
+
+### 验证
+
+`verify-all desktop` **38/38**（含 `cargo test` 109/109）；`client.js` 与 `02-core.js` 语法自检通过。
+**必须重编 exe**：`themes/src/02-core.js` 是 `include_str!` 编进 exe 的注入脚本，改它不重编 = 零效果且零报错。
+
+### 已知未做
+
+**大小 / 缩放**：`WIN_W`/`WIN_H`/`CELL_H` 是编译常量，被 `character_local_rect()`、`pos_visible()`、
+命中测试、气泡锚点同时依赖，缩放要连带重算位置比例化与 clamp。按计划**单列一批**。
+
+## 2026-09-29（续三）· 桌宠设置扩起（第一批：客户端两项）+ 补一道漏掉的闸门
+
+**用户原话**：「桌宠设置里面太简单太空了」。核实属实 —— `plugins/dsh-pet-panel/lib/client.js`
+的 `PetPanel()` **只有两个控件**（显示/隐藏、位置重置）。
+
+**这一批先做「不需要改 Rust、不需要重编 exe」的两项**，把面板从 2 项扩到 6 项：
+
+| 项 | 归属 | 说明 |
+|---|---|---|
+| **六态开关**（思考中 / 等待审批 / 出错了 / 完成庆祝） | **纯客户端** | 关掉的态对外降级为 `idle`，`idle` 恒开 |
+| **主题跟随开关** | **纯客户端** | 关掉后不建人格会话、不随主题换角色 |
+| 显示/隐藏、位置重置 | 既有 | 面板重排为「显示与位置」区 |
+| 拖动 + 位置记忆、位置重置 | 既有 | 文案补上「跨分辨率按比例还原」（`persist.rs` 早就是比例化持久化） |
+
+**关键设计（三条都不许走捷径）**：
+
+1. **心跳过滤放在最后一步**：`petPanel.state` 才做过滤，`lastRunning` / `doneHoldUntil`
+   已在上面更新完 —— 否则关掉某态再打开会卡在旧值上。同时保留 `petPanel.rawState`（真态），
+   面板据此显示「当前真态 X（被你隐藏）」。
+2. **心跳照常发**：过滤只改**对外呈现**。若连心跳一起停，注入运行时 5s 判官方通道静默、
+   回落 DOM 兜底扫描 —— 那是功能回归，不是「少显示一个态」。
+3. **写盘失败如实说**：私密模式下 `writePanelSettings` 返回 `false`，面板明写
+   「设置已生效，但没能保存」——**不假装保存成功**（与 appearance 线 `500 + changed:false` 同口径）。
+
+**存储位置刻意分开**：这两项存 `localStorage`（`miasaki.petPanel.settings.v1`），
+**不塞进 `pet.json`**。理由：`pet.json` 由 `save_pet_pos()` 在**拖动时高频重写**，
+混在一起会有「拖动覆盖刚改的设置」的窗口；而壳侧绘制参数（大小/透明度/穿透/动效/气泡）
+将来存独立的 `pet-settings.json`，同样不走这里。
+
+**顺带补一道漏掉的闸门（本次的真实发现）**：`plugins/dsh-pet-panel/lib/client.js`
+**此前不在任何闸门里** —— 而它承载三条真实链路（六态上报 / 人格联动 / R5 内联审批回写），
+且是「设置 → 桌宠」的唯一实现。形态与 `dsh-model-probe` 当年一模一样：
+**只靠 `package.json` 的 build 脚本检查，回归里看不见**（AGENTS.md 记的复发形态）。
+已补进 `verify-all`：2 项语法 + 1 项测试。
+
+**测试**：新增 `plugins/dsh-pet-panel/test/panel-settings.test.js` **9 例** ——
+覆盖「无存储全默认 / 坏 JSON 不抛 / 逐字段合并 / 非布尔不当 false / 写失败如实返回 false /
+reload 刷新缓存」六条数据路径，加三条**源码契约**（心跳过滤存在、真态保留、
+`followTheme` 门只在创建路径、apply 初始化而非心跳读盘）。
+
+**验证**：`verify-all desktop` **35 → 38/38 PASS**（+2 语法 +1 测试；`cargo test` 100/100）。
+
+**本批未做（需改 Rust + 重编 exe，按计划属后续批次）**：大小/缩放、透明度、动效速度/强度、
+气泡时长与位置、切换宠物、鼠标穿透开关、隐藏时托盘行为。其中**缩放影响面最大**
+（`WIN_W`/`WIN_H`/`CELL_H` 是编译常量，被 `character_local_rect()`、`pos_visible()`、
+命中测试、气泡锚点同时依赖），计划里单列一批。
+
+## 2026-09-29（续二）· DSH 本体升到 0.2.0-rc.2：七件重打 + cordis 退役 + 全量回归 163/163
+
+**执行**（承接同日预检，见下方续条）：本机全局 DSH `0.2.0-rc.1` → **`0.2.0-rc.2`**
+（`npm i -g @deepseek-ai/dsh@0.2.0-rc.2`，**耗时 606.8s、无死锁** —— 升级前实测 20 个原生文件零锁定；
+09-28 的死锁是因为宿主进程加载了 `libvips-42.dll`）。升级后复检：287 个子包、
+`@img/sharp-win32-x64` 真调用出图 OK（libvips 8.18.7）、`libreoffice-kit-win32-x64` 为 `built`。
+
+| 补丁 | 处置 | 结果 |
+|---|---|---|
+| attachment / brand-official / settings-models / trajectory | 常量不变（rc.2 原版逐字节相同） | verify PASS + apply |
+| api-session-controller（dual-model 线） | 同上 | verify PASS + apply |
+| chat | 换 baseline + 回填三常量 | verify PASS（含 8 条行为断言 + ESM 语法）+ apply |
+| conversation | 换 baseline + 回填三常量 | verify PASS + apply |
+| sidebar | **删 1 条编辑**（品牌区 Tooltip 已被官方移除；幂等标记同步换到 6 制表符那条） | verify PASS（5 条）+ apply |
+| cordis-host-runner | **整件退役**（官方 rc.2 自行实现同一修复且更完整） | 从回归清单与 README 补丁表移除；新增 `RETIRED` 标记供 live 审计跳过 |
+
+**预检方法得到二次验证** `[实测]`：预检算出的回填值在升级后被 `rebuild-baseline.mjs`
+**逐字节复现** —— chat `575DE080…`/`C41AC671…`、conversation `8D5C8223…`/`A393013F…`、
+sidebar `88D7E6D2…`/`0347DB5D…`。
+
+**回归**：`verify-all` **163 项全 PASS**（desktop **35/35**，较上次 36 少 1 项 = cordis 退役的
+**口径变化、不是退化**）；`patch-live-audit`：**10 个目标 patched / 未生效 0**。
+
+**下一步（用户执行）**：重启 miasaki 桌面壳 / `dsh web` 使 client 侧生效（本轮无 host 侧补丁）；
+按 [`smoke-test-matrix.md`](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 走查 ——
+① 侧边栏悬浮提示（5 处）② 品牌字标 ③ 消息气泡/轨迹页 TTFT 计时 ④ 多图比例
+⑤ 模型设置页「思考强度 + 测试连通性」（官方本轮给模型选择器**加了搜索**，注意叠压）
+⑥ **pi-ai 0.87.1 模型 ID 变更**（部分旧 ID 被移除，已保存的模型选择可能需要重选）。
+
 ## 2026-09-29（续）· DSH 0.2.0-rc.2 升级预检：七件零适配、一件退役、一件删条目
 
 **背景**：官方 `next` 轨发布 `0.2.0-rc.2`（`2026-09-29T09:42:36Z`，tag `dsh-v0.2.0-rc.2`），
@@ -1200,7 +1390,7 @@ web boot: 1 entry did not activate
 
 **为什么它可以例外**：接入侧它不碰主题、不碰本线 `patches/`、不 import 任何 miasaki 包，用的全是官方
 契约与官方 `--dsw-alias-*` 令牌；统计侧分区后官方与自制各记各的账，官方口径不再被污染。
-细节见该线 `README.md` 与 [`../dsh-miasaki-usage/design/CHANGELOG.md`](../dsh-miasaki-usage/design/CHANGELOG.md)。
+细节见该线 `README.md` 与 [`../dsh-miasaki-usage/design/CHANGELOG.md`](../../dsh-miasaki-usage/design/CHANGELOG.md)。
 
 ## 2026-09-26 · 隔离：自制壳改用专属 profile `miasaki`，官方 dsh 恢复纯净
 
@@ -1472,7 +1662,7 @@ Harness」，点「检查 dsh」返回 `未找到 dsh（不在 PATH）` + `（ds
 
 ## 2026-09-25（晚）· W2 取证与可靠性 + W3 关闭语义 + W4 表现层（官方桌面端借鉴第二批）
 
-**背景**：同 [`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) 的 W2–W4。
+**背景**：同 [`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) 的 W2–W4。
 Rust 侧（W2）由子代理实施、Lead 复核并修正两处判据；全部经 `cargo test` 与七线回归验证。
 
 ### W2 · 取证与可靠性（对症 P0「偶发全黑无响应」）
@@ -1603,7 +1793,7 @@ parentNode 判空重建）不变。
 ## 2026-09-25 · W0 顺手修复 + W1 桌面契约 v1（官方桌面端借鉴第一批）
 
 **背景**：官方桌面端（Electron，0.1.7-rc.2）实测分析 → 跨线落地规划，见
-[`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md)。
+[`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md)。
 本轮落地 **W0（既有缺陷修复）** 与 **W1（契约层）**；Rust 侧 W2/W3 另行。
 
 ### W0 · 四处既有缺陷修复（零风险，先做）
@@ -1671,8 +1861,8 @@ parentNode 判空重建）不变。
 **回归**：`plugins/dsh-model-probe` 单测 **12 例全过**，其中含 `probeModel resolves the stored profile on ≤0.1.6 (get world)`
 与 `… on 0.1.7 (describe world)` 两条 —— 正是 0.1.7 设置机制重写后的双轨用例。
 
-**依据**：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §3（W2）
-与 [`dsh-official-repo-review-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §4。
+**依据**：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §3（W2）
+与 [`dsh-official-repo-review-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §4。
 
 ## 2026-09-24（三轮复审）· 文档基线归位 + 两处 P3 断言修复 + live 审计补第八件
 
