@@ -130,7 +130,7 @@ U3 跳板/本地转发 + A1 工具面（2026-09-26，A1 已实机验收）；T4 
 2. 静态闸门：`node scripts/verify-all.mjs ssh` 项 PASS（当前基线 31/31）。
 3. 真协议探针归档 `_refs/scripts-archive/ssh-g1-g2-probe/`：G1 的「关子系统后自动重开」
    与 G2 的「慢 consumer 下 shell 被 pause 而非连接被断」各一例（真 `ssh2.Server`）。
-4. 实机验收项补进[回归矩阵 §3.6](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)：
+4. 实机验收项补进[回归矩阵 §3.6](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)：
    弱网/大数据量滚动时终端不掉线、文件面板遇服务端关子系统后自愈。
 5. **生效条件**：改 `lib/runtime.js`/`lib/sftp.js`/`session.js`/`app.js` ⇒ 必须重启 `dsh web`
    （`index.js` 的 `cachedAsset` 是进程内缓存，浏览器强刷不够）。

@@ -48,7 +48,7 @@ ref 句柄，unref 是为了「别让一个工具的超时拖住进程退出」�
 ## 2026-09-28 · G1/G2 实机验收（真路由 × 真协议 sshd，23/23）
 
 **背景**：[2026-09-27 引擎加固](2026-09-27-ssh-dshweb-engine-gap-plan.md)落地后，用户定向「做实机验收」。
-基座与 [ssh-a1-live](../../_refs/scripts-archive/ssh-a1-live/) 同一隔离纪律（不碰用户真实连接库、不动
+基座在 `_refs/scripts-archive/ssh-a1-live/`（本地归档，不入库）同一隔离纪律（不碰用户真实连接库、不动
 profile 文件）：隔离 dataDir + `dsh --profile web --patch … --port 3099` 独立实例 + 真 `ssh2.Server`
 （带最小 SFTP 子系统 / 关子系统控制 / 洪水 shell），探针**纯 HTTP + WS 走真实路由**驱动（fence、票据、
 `withSftp`、背压全是产品代码路径）。基座与证据归档 `_refs/scripts-archive/ssh-g1g2-live/`。
@@ -1024,7 +1024,7 @@ keyboard-interactive 回填密码 → 开首个 shell → connected」全链路�
     - **复制粘贴**：Ctrl+Shift+C 写选区、Ctrl+Shift+V 读剪贴板（捕获阶段拦截，不污染 shell 的 Ctrl+C/V）；多行或含控制字符（含 ESC）粘贴先 sheet 预览确认、不自动加回车（plan §6）；
     - 布局偏好（字号/收起/专注）进 `localStorage`（非敏感，plan §8 允许）；秘密/终端输出仍不落盘。
   - **store.js**：`favorite` 字段归一化（布尔强转）+ 默认分组 `default`→`未分组` + **username 不再默认 root**（空串，表单必填）——迁移安全（normalizeConnection 补默认值），`sanitizeConnection` 暴露 `favorite`。
-  - **测试（48 → 59 例）**：`test/app.test.js`（新 6 例）vm 加载 app.js 直取纯函数（分组过滤排序、粘贴守卫、rgba 合成、令牌回退、xterm 主题组合）；`test/session.test.js` 11 → 16 例（主题下发、字号夹紧+重 fit、缓冲查找导航换行、本地清屏、直写输入、onResize）；`test/store.test.js` 补 favorite/group/username 断言。跨 realm 教训再 +1：vm 返回对象 deepEqual 前必须浅拷贝。`node scripts/verify-all.mjs ssh` → **12/12**（语法 6 项 + 测试 6 文件 59 例）。七线全量：**ssh 12/12**；sidebar 9/10 的失败项（`terminal-hub.test.js` 两条）当时记为「并行会话中间态」，**2026-09-12 收官复核改判为受限沙箱环境假阴性**——`resolvePtyBin` 要捕获 `where.exe` 输出解析 shell 绝对路径，受限沙箱禁止管道捕获（`EPERM spawnSync where.exe`），用例在到达被测分支前即失败；判据与正确跑法见[回归矩阵 §1 的 ※※ 注记](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
+  - **测试（48 → 59 例）**：`test/app.test.js`（新 6 例）vm 加载 app.js 直取纯函数（分组过滤排序、粘贴守卫、rgba 合成、令牌回退、xterm 主题组合）；`test/session.test.js` 11 → 16 例（主题下发、字号夹紧+重 fit、缓冲查找导航换行、本地清屏、直写输入、onResize）；`test/store.test.js` 补 favorite/group/username 断言。跨 realm 教训再 +1：vm 返回对象 deepEqual 前必须浅拷贝。`node scripts/verify-all.mjs ssh` → **12/12**（语法 6 项 + 测试 6 文件 59 例）。七线全量：**ssh 12/12**；sidebar 9/10 的失败项（`terminal-hub.test.js` 两条）当时记为「并行会话中间态」，**2026-09-12 收官复核改判为受限沙箱环境假阴性**——`resolvePtyBin` 要捕获 `where.exe` 输出解析 shell 绝对路径，受限沙箱禁止管道捕获（`EPERM spawnSync where.exe`），用例在到达被测分支前即失败；判据与正确跑法见[回归矩阵 §1 的 ※※ 注记](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
   - **误删回滚（同日）**：处理窗控/悬浮球反馈时曾把 `#miasaki-titlebar .tb-group`（titlebar v4 窗控）与 `#miasaki-switcher`（主题球）误判为"重复元素"做 SSH 作用域隐藏——二者正是用户在用的正主（壳为 `decorations(false)` 无边框，tb-group 即唯一窗控），已回滚并在 `test/client.test.js` 加 `doesNotMatch` 防回归断言。**真正根因在 desktop 线**：Tauri initialization_script 注入所有 frame，`themes/src/08-ready.js` 在 SSH/画布等 iframe 里重建了标题栏与主题球（页面右上的假窗控 + 右下角上面的假主题球）——已在 08-ready 加 `IS_TOP` 守卫（chrome 只在顶层 frame 构建，含 1s 自愈巡检），`gen-init` 重出产物，desktop 回归 8/8；壳为 `include_str!` 编译期打入，**需 MSVC 环境重编壳并重启**后生效。
   - **待实机验收**（U0+U1 合并，验收矩阵 §10）：重启 `dsh web` —— ①三主题（pure 亮/暗、刻刻帝、狂狂帝）下页面与 xterm 同步换肤、无闪底；②主机导航/标签/抽屉/状态栏布局成立、窄容器（右栏展开）降级抽屉；③真实连接 → 输出、多主机切换 attach、关闭查看再恢复；④指纹确认/mismatch 忘记/重信闭环；⑤Ctrl+Shift+C/V、查找、字号、粘贴确认；⑥对比度抽验狂狂帝浅底。
 

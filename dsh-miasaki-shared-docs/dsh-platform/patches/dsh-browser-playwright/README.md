@@ -161,5 +161,5 @@ node patch.mjs rebuild-baseline  # 升级专用：以当前安装原版重建 ba
 
 ## 相关
 
-- 升级评估（本补丁的决策背景）：[`../dsh-0.1.7-upgrade-assessment-2026-09-23.md`](../dsh-0.1.7-upgrade-assessment-2026-09-23.md)
+- 升级评估（本补丁的决策背景）：[`../../dsh-0.1.7-upgrade-assessment-2026-09-23.md`](../../dsh-0.1.7-upgrade-assessment-2026-09-23.md)
 - 作者发兼容版后：删本目录、`revert`、pnpm 升级该插件即可。

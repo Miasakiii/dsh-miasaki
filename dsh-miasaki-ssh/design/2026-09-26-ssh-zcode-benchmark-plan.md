@@ -224,7 +224,7 @@ node-pty 真 spawn / 生命周期 status→stop」全链真协议验收。`--kee
 
 ### P0-2 U2.2 SFTP 注入 zcode 降级链（预计 1 天，风险中）
 
-在既有 [U2 规划 §4.2](../2026-09-15-ssh-u2-plan.md) 的 REST 流式 + host 零本机 IO 大框架**不变**的前提下补：
+在既有 [U2 规划 §4.2](./2026-09-15-ssh-u2-plan.md) 的 REST 流式 + host 零本机 IO 大框架**不变**的前提下补：
 
 1. **协议层降级**：`lib/sftp.js` 的 `session`/`write` 失败带 `kind` 标记（`sftp-session`/`sftp-write`），
    连接级记忆 `execOnly`，后续传输走 `exec('mkdir -p … && cat > file')` pipe（复用 zcode 判据：

@@ -42,12 +42,12 @@
 
 | 线 | 版本 | 测试文件 | 当前状态（登记口径） |
 |---|---|---|---|
-| **desktop** | `v0.1.0` + 5 插件 | 7 | 6 个本体补丁在本机 alpha.2 **实装目录已全部 `patched`**（[patch-live-audit.mjs](scripts/patch-live-audit.mjs)，09-24：9 目标/8 件）；`verify-all desktop` **23 项**、`cargo test` **35 例**。**欠账**：偶发「全黑无响应」根因**未定位**（[TODO:15-30](dsh-miasaki-desktop/design/TODO.md#L15-L30)）、后端断连自愈 / 拖拽上传十项 / 启动加载 S4a **待实机**、启动加载 S1–S3 未动、桌宠 v3 多项未竟 |
+| **desktop** | `v0.1.0` + 5 插件 | 7 | 6 个本体补丁在本机 alpha.2 **实装目录已全部 `patched`**（[patch-live-audit.mjs](../../scripts/patch-live-audit.mjs)，09-24：9 目标/8 件）；`verify-all desktop` **23 项**、`cargo test` **35 例**。**欠账**：偶发「全黑无响应」根因**未定位**（[TODO:15-30](../../dsh-miasaki-desktop/design/TODO.md#L15-L30)）、后端断连自愈 / 拖拽上传十项 / 启动加载 S4a **待实机**、启动加载 S1–S3 未动、桌宠 v3 多项未竟 |
 | **fleet** | `v0.20.0` | 7 | **与 DSH 本体解耦**（零 `@deepseek-ai/dsh*` 依赖、零 peerDependencies）；`verify-all fleet` **15 项**（108 例）。**唯一耦合点** = dsh worker 档案（`agents/dsh/manifest.json` 的 `dsh --profile headless {prompt}`，**headless profile 尚未建**、档案 version 停在 `0.1.1-rc.1`）⇒ 正是 rc.1 Headless 新能力的落点 |
-| **canvas** | `v0.5.0-miasaki.6` | 8 | MVP M1–M4 已实机验收；V1–V4 视觉已实施（单测 **89 例**）。**欠账**：⚠️ **0.1.2 起历史会话存量投影不回填**（启动 replay 空 ⇒ 旧会话多为无内容骨架卡，[CHANGELOG:195](dsh-miasaki-canvas/design/CHANGELOG.md#L195)，**本次升级最该复核的一条**）；V1–V4 视觉走查（18 张截图清单）未做；字重 720→600 待对比图 |
+| **canvas** | `v0.5.0-miasaki.6` | 8 | MVP M1–M4 已实机验收；V1–V4 视觉已实施（单测 **89 例**）。**欠账**：⚠️ **0.1.2 起历史会话存量投影不回填**（启动 replay 空 ⇒ 旧会话多为无内容骨架卡，[CHANGELOG:195](../../dsh-miasaki-canvas/design/CHANGELOG.md#L195)，**本次升级最该复核的一条**）；V1–V4 视觉走查（18 张截图清单）未做；字重 720→600 待对比图 |
 | **sidebar** | `v0.9.0-miasaki.0` | 8 | 终端两形态已实机验证（单测 **62 例** / `verify-all` **10 项**）。**欠账**：v0.9.0 多标签**整体待重启实机验证**（不串台 / 两容器同看一会话不错行 / 刷新恢复 / 8 上限 / 三主题）；辅助对话 tab（M2）设计完成**未实现**；WS `list` 帧未实现（与设计偏差） |
-| **ssh** | `v0.1.0-miasaki.0` | 6 | D2/D3/D4 + U2 已跑过一轮（单测 **113 例** / `verify-all` **12 项**）。**欠账**：全量合并复验待重启；**U2.4 上一轮实际未上线**（`hasSerializeAddon` 只在 apply 判一次，重启即解，非代码缺陷）；U2.2 SFTP / U3 未动；**README:99 关于 `conversation.view` 的记载已过期**（该注册在 D3 清理中已整体删除，[client.js:9-11](dsh-miasaki-ssh/client.js#L9-L11)） |
-| **dual-model** | `v0.1.3-miasaki.0` | 5 | M1 完成（单测 33 例 / `verify-all` 12 项）。**欠账**：① 带图发送放行（union 语义）**补丁已打但须重启 `dsh web` 才生效、尚未验证**；② 设置事件为**双轨并监**（`settings/updated` + `settings/document-updated`，[lib/invalidation.js:19](dsh-miasaki-dual-model/lib/invalidation.js#L19)），rc.2 上只有新名生效 ⇒ 无需改 |
+| **ssh** | `v0.1.0-miasaki.0` | 6 | D2/D3/D4 + U2 已跑过一轮（单测 **113 例** / `verify-all` **12 项**）。**欠账**：全量合并复验待重启；**U2.4 上一轮实际未上线**（`hasSerializeAddon` 只在 apply 判一次，重启即解，非代码缺陷）；U2.2 SFTP / U3 未动；**README:99 关于 `conversation.view` 的记载已过期**（该注册在 D3 清理中已整体删除，[client.js:9-11](../../dsh-miasaki-ssh/client.js#L9-L11)） |
+| **dual-model** | `v0.1.3-miasaki.0` | 5 | M1 完成（单测 33 例 / `verify-all` 12 项）。**欠账**：① 带图发送放行（union 语义）**补丁已打但须重启 `dsh web` 才生效、尚未验证**；② 设置事件为**双轨并监**（`settings/updated` + `settings/document-updated`，[lib/invalidation.js:19](../../dsh-miasaki-dual-model/lib/invalidation.js#L19)），rc.2 上只有新名生效 ⇒ 无需改 |
 | **appearance** | `v0.1.0-miasaki.0` | 8 | M2 已落地（单测 95 例 / `verify-all` 16 项），**无本体补丁**。**欠账**：M2 视觉矩阵 + 帧率基线 + 让位协议 4 项、M2.5 头像链路、M2.6 面板视觉、M2.7 四款预设图标**均待实机**；2026-09-23 修的「外观栏整栏空白」**待用户硬刷新（Ctrl+F5）验收** |
 
 > **关键判读**：七条线里 **6 条都卡在「已实施、待实机验证」**。所以「全量适配」的实质 =
@@ -58,7 +58,7 @@
 
 | 线 | 依赖的 DSH 面 | 脆性 |
 |---|---|---|
-| **canvas** | `conversation.session.header.actions`（id `canvas-view-switch`，order 25）；**官方 CSS Module 类名子串** `[class*="_headerActions"]`（[client.js:80](dsh-miasaki-canvas/client.js#L80)）；`[data-sidebar-right-panel="push"][data-sidebar-right-open]` + 官方 **28px** padding 逐字绑定（[:90](dsh-miasaki-canvas/client.js#L90)）；Session API **三路兼容**（`snapshotEvents` / `isSeeded`+`inheritedEventCount` / `seedLength`） | 中高（选择器 + Session API 双绑） |
+| **canvas** | `conversation.session.header.actions`（id `canvas-view-switch`，order 25）；**官方 CSS Module 类名子串** `[class*="_headerActions"]`（[client.js:80](../../dsh-miasaki-canvas/client.js#L80)）；`[data-sidebar-right-panel="push"][data-sidebar-right-open]` + 官方 **28px** padding 逐字绑定（[:90](../../dsh-miasaki-canvas/client.js#L90)）；Session API **三路兼容**（`snapshotEvents` / `isSeeded`+`inheritedEventCount` / `seedLength`） | 中高（选择器 + Session API 双绑） |
 | **sidebar** | `sidebarRightTabs.register`（kind 裁决 + priority band）；`sidebar.right.pane.tab` + `useTabInfo()`；`ctx.layout.closeDetails()`；`ctx.get('sidebarRight')` | **高**（`kind:'terminal'` 与官方 builtin 撞 kind ⇒ 撞则抛错、插件加载失败）→ **W3 正是拆这颗雷** |
 | **ssh** | `conversation.session.header.actions`（id `ssh-view-switch`，order **26**）、`shell.overlay`（id `ssh-launcher`，order 40）、**`registerUpgrade` 签名**、**canvas 的 DOM 类名/结构** | 中高（跨线 DOM + 双槽，见 R10） |
 
@@ -133,10 +133,10 @@ node patch.mjs apply --yes
 
 | 文件 | 行 | 现值 | 改为 |
 |---|---|---|---|
-| [dsh-pet-panel/package.json](dsh-miasaki-desktop/plugins/dsh-pet-panel/package.json#L26) | 26 | `"@deepseek-ai/dsh-settings": "^0.1.2-rc.1"` | `">=0.1.2-rc.1 <0.3.0"` |
-| [dsh-model-probe/package.json](dsh-miasaki-desktop/plugins/dsh-model-probe/package.json#L28-L29) | 28 | `"@deepseek-ai/dsh-settings": "^0.1.2-rc.1"` | 同上 |
+| [dsh-pet-panel/package.json](../../dsh-miasaki-desktop/plugins/dsh-pet-panel/package.json#L26) | 26 | `"@deepseek-ai/dsh-settings": "^0.1.2-rc.1"` | `">=0.1.2-rc.1 <0.3.0"` |
+| [dsh-model-probe/package.json](../../dsh-miasaki-desktop/plugins/dsh-model-probe/package.json#L28-L29) | 28 | `"@deepseek-ai/dsh-settings": "^0.1.2-rc.1"` | 同上 |
 | 〃 | 29 | `"@deepseek-ai/dsh-host-webserver": "^0.1.2-rc.1"` | 同上 |
-| [dsh-free-model-pool/package.json](dsh-miasaki-desktop/plugins/dsh-free-model-pool/package.json#L26-L27) | 26 | `"@deepseek-ai/dsh-settings": "^0.1.2-rc.1"` | 同上 |
+| `dsh-miasaki-desktop/plugins/dsh-free-model-pool/package.json`（2026-09-28 已迁出为 `dsh-miasaki-free-model/`） | 26 | `"@deepseek-ai/dsh-settings": "^0.1.2-rc.1"` | 同上 |
 | 〃 | 27 | `"@deepseek-ai/dsh-host-webserver": "^0.1.2-rc.1"` | 同上 |
 
 共 **5 处**。
@@ -190,13 +190,13 @@ extension 压过 builtin**。我们的终端注册 `kind: 'terminal'`（extensio
 
 | 文件 | 行 | 现值 | 改为 | 说明 |
 |---|---|---|---|---|
-| [dsh-miasaki-sidebar/client.js](dsh-miasaki-sidebar/client.js#L2256) | 2256 | `kind: 'terminal',` | `kind: 'miasaki-terminal',` | 改用独占命名空间，**不再与任何方撞车** |
-| [dsh-miasaki-sidebar/client.js](dsh-miasaki-sidebar/client.js#L1073) | 1073 | `service.openTab('terminal')` | `service.openTab('miasaki-terminal')` | **必须同步改**，否则「底部面板 → 右栏」会打开**官方终端**（另起 pty），破坏「同一 pty 两个 viewer」的核心设计 |
-| [dsh-miasaki-sidebar/client.js](dsh-miasaki-sidebar/client.js#L2269-L2274) | 2269–2274 | 「我们恰好遮蔽官方终端」注释 | 重写为「**不再遮蔽**：改用独占 kind，与官方终端并存」 | 注释必须跟着事实走 |
+| [dsh-miasaki-sidebar/client.js](../../dsh-miasaki-sidebar/client.js#L2256) | 2256 | `kind: 'terminal',` | `kind: 'miasaki-terminal',` | 改用独占命名空间，**不再与任何方撞车** |
+| [dsh-miasaki-sidebar/client.js](../../dsh-miasaki-sidebar/client.js#L1073) | 1073 | `service.openTab('terminal')` | `service.openTab('miasaki-terminal')` | **必须同步改**，否则「底部面板 → 右栏」会打开**官方终端**（另起 pty），破坏「同一 pty 两个 viewer」的核心设计 |
+| [dsh-miasaki-sidebar/client.js](../../dsh-miasaki-sidebar/client.js#L2269-L2274) | 2269–2274 | 「我们恰好遮蔽官方终端」注释 | 重写为「**不再遮蔽**：改用独占 kind，与官方终端并存」 | 注释必须跟着事实走 |
 
 **不需要改的**（已核实）`[实测]`：
 - 正文派发：`ctx.slots.register({ name: 'sidebar.right.pane.tab', key: tab.id }, ...)` 的 key 是**类型 id**（`@miasaki/dsh-sidebar/terminal`），与 kind 无关 ⇒ **换 kind 不影响渲染**；
-- [test/rightbar-guide.test.js](dsh-miasaki-sidebar/test/rightbar-guide.test.js)：测试自己传 title/description 调用工厂，**不依赖注册处的 kind** ⇒ 无需改；
+- [test/rightbar-guide.test.js](../../dsh-miasaki-sidebar/test/rightbar-guide.test.js)：测试自己传 title/description 调用工厂，**不依赖注册处的 kind** ⇒ 无需改；
 - `priority: 'extension'` 保留（已显式声明）。
 
 ### 4.3 连带影响与处置
@@ -259,14 +259,14 @@ extension 压过 builtin**。我们的终端注册 `kind: 'terminal'`（extensio
 4. **sidebar**：终端快捷键接入官方 `shortcuts` 服务（用户可自定义键位；顺带消掉自研 capture 拦截的维护面）
 5. **sidebar**：审查 tab 接 `bindCommands({ refresh })`
 6. **desktop**：rc.2 的 Windows 修复项（目录 junction / Markdown 图片预览 / 文件菜单图标）逐项实测并记录
-7. **desktop**：rc.2 契约面零必改，但**两个插件的 settings 读取双轨**（`lib/settings-read.js`：`typeof get` 探针 → 0.1.7+ 走 `describe()`）是**升级后必回归的实机点**（[README:382-388](dsh-miasaki-desktop/README.md#L382-L388)）
+7. **desktop**：rc.2 契约面零必改，但**两个插件的 settings 读取双轨**（`lib/settings-read.js`：`typeof get` 探针 → 0.1.7+ 走 `describe()`）是**升级后必回归的实机点**（[README:382-388](../../dsh-miasaki-desktop/README.md#L382-L388)）
 8. **fleet**：dsh worker 档案校准 + 新建 headless profile，接 rc.1 的 `--session-id` / `--json`（补上"dsh 仍为非活动 worker"这条欠账）
 
 **P2（可延后，登记即可）**
 9. canvas / ssh：注册官方快捷键；canvas 三主题 × 明暗 × 三档缩放视觉走查
 10. 各线：MCP 资源暴露（需先定信息架构）
-11. **desktop·`dsh-session-log-move`**：与官方 `dsh-session-log-export` **同 slot id 永久冲突**（主界面隐藏行为永久失败，已降级保留官方按钮，[README:422-427](dsh-miasaki-desktop/README.md#L422-L427)）—— 与 W3 属**同一类撞车问题**，建议本次只登记、不扩大改动面
-12. **ssh · 文档债**：`README.md:99` 仍写「页面由 `conversation.view`（id `ssh`，order 20）托管」，而该注册**已在 D3 清理中整体删除**（[client.js:9-11](dsh-miasaki-ssh/client.js#L9-L11)，测试断言"必须已删除"）⇒ 按项目纪律**本次一并订正**，否则后人按错记载排查
+11. **desktop·`dsh-session-log-move`**：与官方 `dsh-session-log-export` **同 slot id 永久冲突**（主界面隐藏行为永久失败，已降级保留官方按钮，[README:422-427](../../dsh-miasaki-desktop/README.md#L422-L427)）—— 与 W3 属**同一类撞车问题**，建议本次只登记、不扩大改动面
+12. **ssh · 文档债**：`README.md:99` 仍写「页面由 `conversation.view`（id `ssh`，order 20）托管」，而该注册**已在 D3 清理中整体删除**（[client.js:9-11](../../dsh-miasaki-ssh/client.js#L9-L11)，测试断言"必须已删除"）⇒ 按项目纪律**本次一并订正**，否则后人按错记载排查
 13. **canvas · 视觉走查**：V1–V4 的 18 张截图清单（三主题 × 明暗 × 三档缩放）—— 与升级后的 rc.2 一并做，避免验两轮
 
 ---
@@ -306,10 +306,10 @@ extension 压过 builtin**。我们的终端注册 `kind: 'terminal'`（extensio
 | R5 | 停止遮蔽后用户困惑 | 引导页两个终端入口 | 标题区分 + 首帧引导文案 |
 | R6 | 快捷键接管冲突 | 接入官方 shortcuts 后与本机/浏览器键冲突 | 逐个键位实测；官方支持用户自定义，冲突可由用户改 |
 | R7 | `cargo test` 环境假阴性 | Git Bash 的 `link.exe` 遮蔽 MSVC | **必须在 MSVC 环境跑**（既有教训） |
-| R8 | **appearance 配置版本号撞车** | `CONFIG_VERSION = 3` 已被 `avatar` 板块占用（[lib/config.js:160-170](dsh-miasaki-appearance/lib/config.js#L160-L170)），而 Boot Splash 设计文档写的迁移是「v2→v3 仅加默认字段」（[CHANGELOG.md:115](dsh-miasaki-appearance/design/CHANGELOG.md#L115)） | 实施 Boot Splash 前**先定新版本号**（v4），否则迁移逻辑会与 avatar 互踩 |
-| R9 | appearance 依赖前端壳内部导出名 | primitives 图标名漂移曾致「外观栏整栏空白」（[CHANGELOG.md:19-54](dsh-miasaki-appearance/design/CHANGELOG.md#L19-L54)） | rc.2 升级后**首帧就走查一次外观栏**；该线已有回归闸门 |
-| R10 | **跨线 DOM 硬依赖**：ssh 依赖 canvas 的类名与结构 | ssh 的会话头锚点与回退按钮都找 `.dsh-canvas-switch` / `.dsh-canvas-overlay`，合体胶囊圆角靠 `:has(+ .dsh-ssh-switch)`（[ssh/client.js:60-64](dsh-miasaki-ssh/client.js#L60-L64)）⇒ **canvas 一改类名，SSH 入口即失效** | 本次两线**不得同时改这些锚点**；若须改，先写跨线约定（建议提升为 `cross/` 文档） |
-| R11 | canvas 历史会话投影不回填 | 0.1.2 起启动 replay 为空，旧会话成骨架卡（[canvas CHANGELOG:180](dsh-miasaki-canvas/design/CHANGELOG.md#L180)、[:195](dsh-miasaki-canvas/design/CHANGELOG.md#L195)） | **升级后专项复核**：0.1.7 的 Session API 是否已提供 persistence 读接口；有则立项修，无则继续挂账 |
+| R8 | **appearance 配置版本号撞车** | `CONFIG_VERSION = 3` 已被 `avatar` 板块占用（[lib/config.js:160-170](../../dsh-miasaki-appearance/lib/config.js#L160-L170)），而 Boot Splash 设计文档写的迁移是「v2→v3 仅加默认字段」（[CHANGELOG.md:115](../../dsh-miasaki-appearance/design/CHANGELOG.md#L115)） | 实施 Boot Splash 前**先定新版本号**（v4），否则迁移逻辑会与 avatar 互踩 |
+| R9 | appearance 依赖前端壳内部导出名 | primitives 图标名漂移曾致「外观栏整栏空白」（[CHANGELOG.md:19-54](../../dsh-miasaki-appearance/design/CHANGELOG.md#L19-L54)） | rc.2 升级后**首帧就走查一次外观栏**；该线已有回归闸门 |
+| R10 | **跨线 DOM 硬依赖**：ssh 依赖 canvas 的类名与结构 | ssh 的会话头锚点与回退按钮都找 `.dsh-canvas-switch` / `.dsh-canvas-overlay`，合体胶囊圆角靠 `:has(+ .dsh-ssh-switch)`（[ssh/client.js:60-64](../../dsh-miasaki-ssh/client.js#L60-L64)）⇒ **canvas 一改类名，SSH 入口即失效** | 本次两线**不得同时改这些锚点**；若须改，先写跨线约定（建议提升为 `cross/` 文档） |
+| R11 | canvas 历史会话投影不回填 | 0.1.2 起启动 replay 为空，旧会话成骨架卡（[canvas CHANGELOG:180](../../dsh-miasaki-canvas/design/CHANGELOG.md#L180)、[:195](../../dsh-miasaki-canvas/design/CHANGELOG.md#L195)） | **升级后专项复核**：0.1.7 的 Session API 是否已提供 persistence 读接口；有则立项修，无则继续挂账 |
 | R12 | 改完只刷浏览器不生效 | canvas / sidebar 的 client bundle 与 ssh 的 `cachedAsset` 都是**进程内缓存** | **必须重启 `dsh web`**；这条对 W3（sidebar 改动）与所有 host 侧补丁都成立 |
 
 ---
@@ -506,7 +506,7 @@ node scripts/verify-all.mjs
 | Q3 | 是否本次就接官方 `shortcuts` 服务（终端快捷键）？ | 建议做（P1）——它同时消掉自研 capture 拦截的维护面 |
 | Q4 | fleet 线是否纳入本次全量适配？ | 它与 DSH web 契约零耦合，建议只做**回归确认**，不投新能力 |
 | Q5 | 升级时间点 | 升级会重启 `dsh web`、**断开当前会话**，建议本会话收尾后执行 |
-| Q6 | 是否把各线「待实机验收清单」**并入统一回归矩阵**（[cross/smoke-test-matrix.md](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)）作为升级前置？ | 建议**并入**——各线欠账已经积压 1–2 周，散在各线 README 里容易被漏掉 |
+| Q6 | 是否把各线「待实机验收清单」**并入统一回归矩阵**（[cross/smoke-test-matrix.md](../cross/smoke-test-matrix.md)）作为升级前置？ | 建议**并入**——各线欠账已经积压 1–2 周，散在各线 README 里容易被漏掉 |
 | Q7 | desktop 偶发「全黑无响应」根因未定位，是否作为升级的前置阻塞？ | 建议**不阻塞**（它是既有问题、与 rc.2 无关），但升级后若复现需保留现场取证 |
 
 ---

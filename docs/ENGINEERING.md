@@ -282,7 +282,7 @@ canvas **105**、fleet **119**、ssh **310**、dual-model **33**、appearance **
 **2026-09-29（续）基线（全量 164 项检查，九线 + 仓库级全 PASS）**`[实测]`：sidebar 13/13、canvas 13/13、
 fleet 17/17、desktop 36/36、ssh 31/31、**dual-model 15/15**（12 → 15：+2 语法 +1 测试）、
 appearance 18/18、usage 3/3、free-model 15/15、repo 3/3。**本批只动 dual-model 一条线** ——
-用户判断「先别急着分发，逐线完善」，查 [实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
+用户判断「先别急着分发，逐线完善」，查 [实机验收台账](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
 得 **1 / 49 项已验**（48 项积压），而 dual-model 的 §3.10 里「纯文本主模型仍可传图」
 是**唯一「功能性可能出错」**的一条，故从它开始。
 

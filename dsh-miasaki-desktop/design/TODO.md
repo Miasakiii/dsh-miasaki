@@ -36,11 +36,11 @@
   **2026-09-25 已实施（规划 W2）**：`src-tauri/src/diag.rs`（诊断报告 + 进程内看门狗）+ 
   `src-tauri/src/recovery.rs`（原生三按钮恢复 + sanitizeProfile + 分级停机）+ Job Object 孤儿回收，
   `cargo test` 69 例含真机 Job 回收；设计见
-  [`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §4 W2。
+  [`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §4 W2。
   **剩余 = 待实机验收**（不是待实现）：① 人为阻塞消息泵是否真落 `crash-*-watchdog.log`；
   ② **隐藏/最小化到托盘时 `wv.url()` 是否被 WebView2 节流**（若节流会假报挂起 —— 需回来改判据）；
   ③ release（`panic="abort"`）下 panic hook 是否真落盘。三项清单见
-  [`smoke-test-matrix.md`](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.1。
+  [`smoke-test-matrix.md`](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.1。
   **`Cargo.toml` 是 `panic = "abort"`**：诊断落盘挂在 `std::panic::set_hook`（已落地）。
 - [ ] **「一打开找不到页面」：后端就绪判据 + 残留清理（2026-09-26 下午 / 晚两轮定位）**
   — 实测（证据见 CHANGELOG 同日两条）：壳的 `port_ready()` 只做 `TCP connect 3080`，
@@ -133,7 +133,7 @@
   （`%LOCALAPPDATA%\miasaki\background-close-confirmed`，**删文件即回到首次态**，可重放可测试）；
   真退出只经托盘「退出」/ 桌宠「退出应用」→ 前端确认弹窗 → `cmd=shutdown` → 分级停机停后端。
   同批把「恢复选项」按钮加到 `ui/loading.html` 失败页。待实机验收五项见
-  [`smoke-test-matrix.md`](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.1。
+  [`smoke-test-matrix.md`](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §3.1。
 - [ ] 桌宠「审批等待」状态(主页面 DOM 扫描 → 桌宠 waiting 姿态)— 2026-08-30 接入,见 CHANGELOG;桌宠内一键审批后续阶段
   - **2026-09-12 v3 M2 落地**:主信号已替换为官方契约(`SessionSnapshot.running` +
     `uiSession.pendingInteractions`,dsh-pet-panel 经 hash `pet=` 上报),DOM 扫描降级为
@@ -192,7 +192,7 @@
   协议层（自定义 scheme 取代 3080 origin）经评估列**远期**：真实成本在五处 origin 硬编码
   （`main.rs:1688`/`405`、`00-boot.js:33`/`36`、`loading.html:322`）+ cookie `SameSite=Strict`
   + WS 无法走 Tauri 自定义协议，见
-  [`official-desktop-adoption-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §2.2。
+  [`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §2.2。
 - [ ] verify-themes.mjs 沙箱运行方案(无头 Edge 被命名管道限制;可换 WebView2 实例化)
 - [ ] 测试自动化(单元:parse_fragment 纯函数;集成:smoke-test 扩展)
   - 注 2026-09-04：Rust `Frames::kurumi_row` 单测（harness `cargo test` 通过）、

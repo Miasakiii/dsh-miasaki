@@ -281,7 +281,7 @@ POST 路由用同一个 `MAX_BODY_BYTES = 32 * 1024`。本机 `$DSH_HOME/session
   - **修复（本线）**：`ViewSwitch` 增加运行时自适应。`ResizeObserver` 观察 **`node.closest('header')`**（**不能观察自身**：自身是 `flex:none`，被挤压时宽度不变，观察自身检测不到溢出），判据是「自身左边界到 header 内容区左边的距离 = 留给标题的余量」，余量不足时降级为**图标形态**（≈116px → ≈64px）；图标形态下按钮无可见文字，`aria-label` / `title` 是唯一可访问名，必须保留。
   - **滞回**：进入 120px / 退出 200px。两种形态宽度差 ≈52px，滞回带必须大于它，否则形态切换自身改变的占宽会把判定推回去、来回抖动 —— 这条不变量已写成单测断言（`assert.ok(RELEASE - ENTER > 52)`）。
   - **测试**：新增 `test/header-adaptive.test.js`（4 项）。按本线既有手法从源码锚点截取 `compactDecision` 与两个阈值后 `new Function` 求值，覆盖判定边界、滞回、观察对象与卸载清理、紧凑形态接线与 CSS；另有一条反向断言 `doesNotMatch(/observer\.observe\(node\)/)` 防止改回观察自身。锚点改名或挪位会**响亮失败**。
-  - **平台层兜底（desktop 线，同日）**：新增本体补丁 [`dsh-client-ui-conversation`](../dsh-miasaki-desktop/patches/dsh-client-ui-conversation/README.md) —— 把 `headerActions` 从 `flex:none` 改为 `flex:0 1 auto; min-width:0; overflow-x:auto`（+ 滚动条隐藏），溢出从「压叠」退化为「可横向滚动」。**canvas 侧保住可用性，补丁保证任何插件 / 任何窄窗口都不会再出现不可用状态**；两者独立，任一单独生效都有明显改善。
+  - **平台层兜底（desktop 线，同日）**：新增本体补丁 [`dsh-client-ui-conversation`](../../dsh-miasaki-desktop/patches/dsh-client-ui-conversation/README.md) —— 把 `headerActions` 从 `flex:none` 改为 `flex:0 1 auto; min-width:0; overflow-x:auto`（+ 滚动条隐藏），溢出从「压叠」退化为「可横向滚动」。**canvas 侧保住可用性，补丁保证任何插件 / 任何窄窗口都不会再出现不可用状态**；两者独立，任一单独生效都有明显改善。
   - **验证**：`node --check client.js` 通过；canvas 单测 4 项全绿；`verify-all.mjs canvas` 与 `desktop`（含新补丁 verify）全绿。**实机复验点**：右栏展开时切换器收成图标、标题至少可见；拉宽后自动恢复完整形态。
   - 触摸点：`client.js`（本线为 link 安装，client bundle 在 host 启动时载入内存 —— **重启 `dsh web` 生效**）、`test/header-adaptive.test.js`（新）、本文件、README。
 

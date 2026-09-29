@@ -320,7 +320,7 @@ inline 变量，谁最后落笔不确定）。
 
 - **v0.10.0-miasaki.0：右栏终端退役——沿用官方策略，右栏只留「审查」一个 tab 类型（用户拍板）** ——
   触发点是 0.1.7-rc 线官方右栏**已内置终端**（`multiple: true` 多标签 + Shell 选择 + 刷新后恢复，见
-  [`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §5）。
+  [`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §5）。
   同日先行决策「停止遮蔽官方终端」（kind 改独占 `miasaki-terminal`、与官方并存）让官方终端重新可见后，
   用户进一步拍板：**右栏终端直接用官方的，本项目不再做右侧边栏终端**；内嵌终端价值收敛到底部面板
   （Ctrl+` / 标题栏按钮唤起，跟随会话 cwd、多标签多会话），与官方右栏终端形成互补而非重复。
@@ -343,7 +343,7 @@ inline 变量，谁最后落笔不确定）。
   - **触摸点**：`client.js`、`package.json`（0.10.0-miasaki.0 + description 订正）、`README.md`
     （导语 / 待办 / 状态表 / 组件蓝图 / 时间线 / 内嵌终端段 / 版本信号）、本文件、
     `design/2026-09-19-terminal-multi-tab-plan.md`（补退役注记）、
-    [`../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md)
+    [`../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md)
     §4 W3（补「已被取代」注记）、根 `README.md` 与 `AGENTS.md` 的 sidebar 线描述。
   - **回归**：`node --check index.js` / `client.js` 均通过；单测 **57 pass / 5 skip / 0 fail**（62 项总数不变，
     skip 的 5 项是**既有**的 `canCaptureGit()` 环境跳过——受限沙箱无法捕获 git 子进程输出，与本改动无关）。
@@ -355,7 +355,7 @@ inline 变量，谁最后落笔不确定）。
 
 - **停止遮蔽官方终端：终端 tab 的 `kind` 由 `'terminal'` 改为 `'miasaki-terminal'`（用户拍板）** ——
   接续 09-21 那条「未做（押后）」的决策。触发点是官方仓库 09-25 复查
-  （[`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §5）：
+  （[`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §5）：
   rc 线的官方终端已具备 **`multiple: true`（多标签）+ Shell 选择 + 刷新后恢复** ——
   遮蔽它 = 主动放弃官方这些能力；且**脆性照旧**（第三方再注册一个 `terminal` 的 extension 会当场抛错、插件加载失败）。
   - **改了什么**：① `RIGHT_BAR_TABS` 里终端类型的 `kind` → `'miasaki-terminal'`（独占命名空间）；
@@ -375,7 +375,7 @@ inline 变量，谁最后落笔不确定）。
     其中 skip 的 5 项是**既有**的 `canCaptureGit()` 环境跳过（受限沙箱无法捕获 git 子进程输出），与本改动无关。
   - **待实机（需重启 `dsh web`）**：① 引导页出现**两个**终端入口，我们的显示为「内嵌终端」；
     ② 底部面板「在右栏打开 ↧」显示的是**同一个 pty**（不是新会话）；③ 官方终端独立可用（多标签 / Shell 选择 / 刷新恢复）。
-  - 规划依据：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §4（W3）。
+  - 规划依据：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §4（W3）。
   - **同日后续（历史注记）**：本条「并存」形态仅存在数小时——用户随即拍板**直接退役右栏终端**
     （见本日第一条），kind `miasaki-terminal` 的类型已注销，官方终端成为右栏终端的唯一提供方。
 
@@ -383,7 +383,7 @@ inline 变量，谁最后落笔不确定）。
 
 - **右栏 tab 类型显式声明 `priority: 'extension'`（零行为变化，把一条隐式依赖变成显式契约）** ——
   起因是官方仓库增量复查
-  （[`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md`](../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md) §5）
+  （[`../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-21.md) §5）
   读到了 `ui-sidebar-right/src/client/tab-registry.ts` 的 kind 裁决规则 —— 这条规则在 alpha.1 → alpha.2 **逐字节未变**，
   但 09-16 那次复查漏掉了它：
   - **规则**：一个 kind 的槽最多容纳 `builtin` + `extension` 各**一条**；`extension` 恒为 in force（生效方），

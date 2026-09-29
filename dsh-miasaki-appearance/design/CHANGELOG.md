@@ -72,7 +72,7 @@
   `verify-all appearance` **18/18**、`repo` **2/2**、`check-doc-versions` 一致。
 - **实机待用户重启 `dsh web` 后验收**（与 M3 / P2 同批）：六行控件、密度收紧、宽度
   接管与交还、字体只改会话、流式光标（含 reduced-motion 不闪）、引用/代码块两档；
-  判据见 [回归矩阵 §3.5](../../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 与
+  判据见 [回归矩阵 §3.5](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 与
   台账 D8。
 - 触摸点：`lib/config.js`（v6 + 三白名单 + DEFAULT/sanitize/migrate）、`client.js`
   （CONV_CSS 层 + 六行面板 + stepper unit + dashed 退场）、`test/{client,config}.test.js`、

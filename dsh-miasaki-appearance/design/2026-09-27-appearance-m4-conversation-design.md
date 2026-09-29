@@ -129,7 +129,7 @@
 
 ## 6. 实机判据（S5，待用户重启 `dsh web` 后执行）
 
-判据已同步进 [回归矩阵 §3.5](../../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
+判据已同步进 [回归矩阵 §3.5](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
 （两行）与 §3.0 台账 **D8**。核心判据：
 
 1. 六行控件在位，总开关关闭时整组禁用；

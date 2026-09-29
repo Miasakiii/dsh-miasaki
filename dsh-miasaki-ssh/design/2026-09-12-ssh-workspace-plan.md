@@ -315,8 +315,8 @@ SSH 状态和浏览器传输状态分开：
 - [`../lib/runtime.js`](../lib/runtime.js)：58–74 重连/超时；136–192 TOFU；194–246 ready/attach；266–293 teardown/shutdown；337–382 回放与 dispose。
 - [`../index.js`](../index.js)：114–177 状态/信任/CRUD/断开；188–244 WS 与来源围栏。
 - [`../../dsh-miasaki-desktop/themes/pure.css`](../../dsh-miasaki-desktop/themes/pure.css)：原生令牌透传。
-- [`../../dsh-miasaki-desktop/themes/zafkiel.css`](../../dsh-miasaki-desktop/themes/zafkiel.css)：6–138 当前色阶；147–154 透明表面。
-- [`../../dsh-miasaki-desktop/themes/kurkuriel.css`](../../dsh-miasaki-desktop/themes/kurkuriel.css)：6–138 当前亮色色阶；147–154 透明表面。
+- `dsh-miasaki-desktop/themes/zafkiel.css`（主题层已重构，现为 `themes/*.skin.css` / `*.deco.css`）：6–138 当前色阶；147–154 透明表面。
+- `dsh-miasaki-desktop/themes/kurkuriel.css`（同上，现为 `themes/kurkuriel.skin.css`）：6–138 当前亮色色阶；147–154 透明表面。
 - [`../../dsh-miasaki-canvas/client.js`](../../dsh-miasaki-canvas/client.js)：172–185 外部视图槽；219–234 当前明暗 + 品牌色桥接（不是完整主题桥）。
 - [`../../dsh-miasaki-appearance/README.md`](../../dsh-miasaki-appearance/README.md)：44–60 已有 M1 与 M2 皮肤边界；74–85 overrideTokens 与让位协议。
 - [`2026-09-09-ssh-design.md`](2026-09-09-ssh-design.md)、[`CHANGELOG.md`](CHANGELOG.md)：既有技术路线、已否决额外上栏、官方入口与 iframe 卸载历史。
