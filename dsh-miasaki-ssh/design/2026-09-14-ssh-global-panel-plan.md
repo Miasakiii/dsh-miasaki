@@ -4,7 +4,7 @@
 - 状态：**设计提案 v0.1，待评审；未实施业务代码**
 - 用户诉求（原话）：「关于 SSH 页面，我希望的是像会话布那样的独立页面，不是切换会话 SSH 就没了，当成一个独立的功能模块」
 - 性质：**只读规划**。本轮完成平台取证与方案设计，未改动任何业务代码，也未实测浏览器行为（本次会话浏览器通道无法访问 `127.0.0.1` / `localhost`）。
-- 取证对象：本机 `@deepseek-ai/dsh@0.1.5-rc.1` 安装产物源码（`C:\Users\Asakii\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\`）。下文引用 `dsh-client-ui-*/lib/client.js` 均指该目录下的 `node_modules/@deepseek-ai/` 内对应包，行号为实测位置。
+- 取证对象：本机 `@deepseek-ai/dsh@0.1.5-rc.1` 安装产物源码（`%USERPROFILE%\AppData\Roaming\npm\node_modules\@deepseek-ai\dsh\`）。下文引用 `dsh-client-ui-*/lib/client.js` 均指该目录下的 `node_modules/@deepseek-ai/` 内对应包，行号为实测位置。
 
 ---
 

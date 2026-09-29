@@ -12,7 +12,7 @@
 - M3 首选评估 @deepseek-ai/dsh-subagent-dsh-sdk（完整 DSH runtime 子进程）；协议层候选 dsh-subagent-acp；自研薄壳兜底。
 
 ## 运维踩坑（2026-08-16）
-- vendor/deepseek-harness 下重跑带脚本的 `pnpm install` 时，lefthook postinstall 会再次把转发钩子写进全局 git hooks 目录（C:\Users\Asakii\.git-hooks）。规避：安装前设 `$env:LEFTHOOK='0'`，或装完后清理。
+- vendor/deepseek-harness 下重跑带脚本的 `pnpm install` 时，lefthook postinstall 会再次把转发钩子写进全局 git hooks 目录（%USERPROFILE%\.git-hooks）。规避：安装前设 `$env:LEFTHOOK='0'`，或装完后清理。
 - 该仓库的安装（koffi/node-pty 原生构建）与测试（vitest spawn 子进程）都会被沙箱拦截，需要 full-access 授权。
 - 官方快照测试在 Windows 需本地热补丁（反斜杠 JSON 转义），已反馈上游 Discussions #2477。
 
@@ -26,6 +26,6 @@
 
 ## 新方向：扫描编排本机 agent CLI（2026-08-17）
 - 扫描器：`workers/discovery/scan-agents.ps1` → 探测 PATH 上的已知 agent CLI，生成 `agents/<id>/manifest.json`（runtime:'cli'，含 cli.invoke 派单模板）+ `agents/registry.json`；只刷新 cli 元数据、不覆盖 Operator 编辑。
-- 已发现 8 个：bl（bl text chat --message，bailian-cli 技能权威语法）、claude（claude -p --output-format json，json 含成本）、gemini（沙箱下自重启失败，派单需 full-access）、opencode（opencode run）、dsh（需 headless profile）、pi（pi -p；写 C:\Users\Asakii\.pi 需 full-access）、mimo、agent-browser。
+- 已发现 8 个：bl（bl text chat --message，bailian-cli 技能权威语法）、claude（claude -p --output-format json，json 含成本）、gemini（沙箱下自重启失败，派单需 full-access）、opencode（opencode run）、dsh（需 headless profile）、pi（pi -p；写 %USERPROFILE%\.pi 需 full-access）、mimo、agent-browser。
 - 派单模型：Commander 按任务匹配 CLI 特性 → spawn CLI 进程执行 prompt → stdout 存 transcript → usage 按 CLI 各自来源解析（claude json / bl console / 其他 unknown）。
 - 面板自动列出 agents/ 下所有档案（无需改动），开关启用后由 Commander 或托管器派发真实 CLI 任务。

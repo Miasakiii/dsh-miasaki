@@ -13,7 +13,7 @@ import {
 } from '../index.js'
 
 test('terminalCommand: every shell yields an argv array, never a command string', () => {
-  const cwd = 'C:\\Users\\Asakii\\Desktop\\dsh-miasaki'
+  const cwd = 'C:\\workspace\\demo'
   for (const shell of TERMINAL_SHELLS) {
     const { bin, args } = terminalCommand(shell.id, cwd)
     assert.equal(bin, shell.bin, `${shell.id}: bin comes from the registry, not the client`)

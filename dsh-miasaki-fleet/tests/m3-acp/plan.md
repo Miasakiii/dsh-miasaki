@@ -31,6 +31,6 @@
 
 ## 运维备注
 
-- 在 vendor/deepseek-harness 下重跑带脚本的 `pnpm install` 前，先设 `$env:LEFTHOOK='0'`，避免 lefthook postinstall 再次污染全局 git hooks 目录（C:\Users\Asakii\.git-hooks）；
+- 在 vendor/deepseek-harness 下重跑带脚本的 `pnpm install` 前，先设 `$env:LEFTHOOK='0'`，避免 lefthook postinstall 再次污染全局 git hooks 目录（%USERPROFILE%\.git-hooks）；
 - 安装（原生构建）与测试（子进程 spawn）命令需要 full-access 授权；
 - 官方 sdk.snapshot 测试在 Windows 需要本地热补丁（反斜杠 JSON 转义），上游反馈见 Discussions #2477。

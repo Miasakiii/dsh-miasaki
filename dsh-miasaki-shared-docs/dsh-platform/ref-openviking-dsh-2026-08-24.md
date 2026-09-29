@@ -177,7 +177,7 @@ dsh --profile web --dump-config   # 应出现 openviking-memory 插件组
   `ov find` 换表述中文查询命中 top1（score 0.52，L2 详情）
 - **t-0009 真实派单验证（2026-08-24 晚间）**：派单器注入 `OPENVIKING_RECALL_PEER_SCOPE=actor`
   后派单 claude（哨兵任务）→ worker 会话自动捕获 → 提取为
-  `peers/C--Users-Asakii-Desktop-dsh-miasaki-dsh-miasaki-fleet/memories/events/.../OpenViking记忆链路哨兵验证.md`
+  `peers/C--Users-<用户名>-Desktop-dsh-miasaki-dsh-miasaki-fleet/memories/events/.../OpenViking记忆链路哨兵验证.md`
   （**peer 隔离生效**：worker 记忆落 peers/ 而非 user/）→ `ov find` 哨兵词命中 top1（score 0.360）；
   提取的 OpenViking 实体记忆已在本会话（DSH 插件）的自动 recall 注入中可见
 - **DSH 插件已随重启生效**（profile 注入 + `openviking-memory` skill + 自动 recall 注入均已出现）

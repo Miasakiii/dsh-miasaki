@@ -96,7 +96,7 @@ M3.5 worker mock response OK
 100%（keyless 验证轮次：子运行时按 mock 脚本应答，交付物由 worker 包装层落盘）
 
 ## 数据来源 / 依据
-- 子运行时会话日志：C:\Users\Asakii\Desktop\dsh-miasaki\agents\coder\sessions\t-0003
+- 子运行时会话日志：%USERPROFILE%\Desktop\dsh-miasaki\agents\coder\sessions\t-0003
 
 ## 遇到的问题
 无

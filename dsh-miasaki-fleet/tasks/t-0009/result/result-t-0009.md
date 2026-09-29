@@ -14,7 +14,7 @@
 |---|---|
 | claude CLI 真实执行（json 含成本字段） | exit 0，total_cost_usd=0.1457，1 turn |
 | stdout 含原样哨兵 OV-PEER-SENTINEL-0924 | 通过 |
-| ov find 可检索到任务内容 | top1：peers/C--Users-Asakii-Desktop-dsh-miasaki-dsh-miasaki-fleet/memories/events/2026/08/24/OpenViking记忆链路哨兵验证.md（score 0.360） |
+| ov find 可检索到任务内容 | top1：peers/C--Users-<用户名>-Desktop-dsh-miasaki-dsh-miasaki-fleet/memories/events/2026/08/24/OpenViking记忆链路哨兵验证.md（score 0.360） |
 
 ## 数据来源 / 依据
 

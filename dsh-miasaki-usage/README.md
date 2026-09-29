@@ -340,7 +340,7 @@ profile 的账本完全隔离」，`GET /dsh-token-monitor/global` 响应也带 
 
 ```json
 "dependencies": {
-  "dsh-token-monitor": "link:C:/Users/Asakii/Desktop/dsh-miasaki/dsh-miasaki-usage"
+  "dsh-token-monitor": "link:%USERPROFILE%/Desktop/dsh-miasaki/dsh-miasaki-usage"
 },
 "dsh": { "profile": { "bundles": [ "@deepseek-ai/dsh-base", "…", "dsh-token-monitor" ] } }
 ```

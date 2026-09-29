@@ -200,11 +200,11 @@ fleet-monitor 是**唯一裸奔的 HTTP 面**。修复成本极低（照抄现�
 
 | 位置 | 内容 |
 |---|---|
-| `dsh-miasaki-appearance/README.md:19` | `"link:C:/Users/Asakii/Desktop/dsh-miasaki/dsh-miasaki-appearance"` |
-| `dsh-miasaki-canvas/README.md:32` | `dsh plugin --profile web add link:C:\Users\Asakii\Desktop\...` |
+| `dsh-miasaki-appearance/README.md:19` | `"link:%USERPROFILE%/Desktop/dsh-miasaki/dsh-miasaki-appearance"` |
+| `dsh-miasaki-canvas/README.md:32` | `dsh plugin --profile web add link:%USERPROFILE%\Desktop\...` |
 | `dsh-miasaki-dual-model/README.md:38`、`:43` | 同上 |
 
-14 个入库文件含 `Users.Asakii`，其中 11 个是**历史记录**（task result / design / 调研），
+14 个入库文件含 `Users.<用户名>`，其中 11 个是**历史记录**（task result / design / 调研），
 记录本机路径是合理的；**上面 4 处是「用户照着敲」的操作指令**，换机器或移动目录即失效。
 建议改为 `link:./dsh-miasaki-canvas`（相对当前工作目录）或 `<仓库根>` 占位符。
 

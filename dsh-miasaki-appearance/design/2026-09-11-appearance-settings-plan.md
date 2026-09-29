@@ -69,7 +69,7 @@
 | ✅ 层按 `seq` 叠加、**同 source 再调 = 替换整层并重新置顶**（旧 disposer 变 no-op）；停用即整层回收 | skin / params **双 source 设计成立** |
 | ✅ 客户端 `settingsScope.bind({namespace})` 可用，读接口 **`getSnapshot()`** → `{status:'ready', revision, writable:true, mode:'host'}` | 配置通道走官方，**零补丁** |
 | ✅ `settings.describe()` 枚举全部命名空间（实测 15 个，第三方与官方并列） | 不需要 `WEB_SETTINGS_NAMESPACES` 式白名单 |
-| ✅ 用户设置文档 = `C:\Users\Asakii\.dsh\settings.yaml` | 配置可手改、可版本化 |
+| ✅ 用户设置文档 = `%USERPROFILE%\.dsh\settings.yaml` | 配置可手改、可版本化 |
 | ✅ `index-inject` 支持 `style`(head) / `script` / `html` 等 6 种行 | 首帧防闪烁有正解 |
 | ✅ `ConversationRoot` 直读 `--dsw-alias-bg-base`（无中间层） | D8 的补丁代价确认；「会话最大宽度」**无需补丁** |
 | ⏳ 动效重放（§9-6）、性能基线（§9-7） | 动态插件**无 DOM 能力**（§9.1），留 M1 实施期用正式插件 + Playwright |
@@ -618,7 +618,7 @@ settings 文档 ──▶ host index.js (ctx.settings.register) ──┬─▶ 
 | 6 | R3 动效重放：`data-slot` 锚点下"去类→重排→加类"是否有效 | 决定动效可用性 | ⏳ 社区实践可行（§3.1），需在我们的锚点上复现 |
 | 7 | R4 性能基线：壁纸 + 毛玻璃下长会话滚动帧时长 | 决定默认参数 | ⏳ 先测原生基线 |
 | 8 | `index-inject` 注入行的字段与 placement | 决定防闪烁实现 | ✅ **源码已确证**（`dsh-host-webserver/lib/index.js` 的 `renderRow`/`renderIndexInjections`）：支持 6 种行 —— `global`(head) / `script`(按 `row.placement`) / `script-src` / `script-preload`(head) / **`style`(head)** / `html`(按 placement)；head 行紧跟开 head 标签、body 行紧跟开 body 标签，各组按表顺序，最后追加 `__DSH_BOOT_READY__` 尾巴。→ 我们**可用 `style` 注入首帧 CSS**（壁纸层 + 皮肤色阶，无需 JS）、用 `script` 注入门控属性 |
-| 9 | 用户设置文档路径与手改后的热更新 | 决定"手改配置"体验 | ✅ **路径已实测**：`settings.prepareDocument()` → `C:\Users\Asakii\.dsh\settings.yaml`；⏳ 手改后的热更新行为待验证 |
+| 9 | 用户设置文档路径与手改后的热更新 | 决定"手改配置"体验 | ✅ **路径已实测**：`settings.prepareDocument()` → `%USERPROFILE%\.dsh\settings.yaml`；⏳ 手改后的热更新行为待验证 |
 | 10 | 官方 `ConversationRoot` 是否已有可用的表面 token 读取点 | 决定 D8 是否需要补丁 | ✅ **已确证**（`dsh-client-ui-conversation/lib/client.js:14652`）：`.wSkVaW_root{background:var(--dsw-alias-bg-base)}` —— **直读基底 token，没有中间层** → 「聊天列独立不透明度」**必须打补丁**（D8 代价确认）。**附带收获**：会话区已有官方可调变量 `--dsh-chat-content-width`（可由 `--dsh-chat-user-width` 派生）/ `--dsh-composer-card-max-width` / `--dsh-conversation-column-width` —— 「会话效果 · 最大宽度」**无需补丁**即可实现 |
 
 ### 9.1 动态探针的能力边界（本次 spike 的副产物，将来复用请先读）

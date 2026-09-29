@@ -43,7 +43,7 @@ const result = await session.prompt([{ type: 'text', text }], 'queue')
 ## SPIKE-3：link 安装闭环 ✅（实跑通过，踩了两个坑）
 
 ```powershell
-dsh plugin --profile web add link:C:\Users\Asakii\Desktop\dsh-miasaki\dsh-miasaki-canvas
+dsh plugin --profile web add link:%USERPROFILE%\Desktop\dsh-miasaki\dsh-miasaki-canvas
 dsh web   # link 模式改代码后重启 dsh web + 刷新页面
 ```
 

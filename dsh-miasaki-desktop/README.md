@@ -25,7 +25,7 @@
 > ⇒ 被过滤 ⇒ 掉进「未分组」**；又因账本 `initialized:true` 之后不再全量回填，跨 root 登记一旦发生就永久留痕
 > （启动日志形态：`filtered session '<id>' from membership: session header is missing`）。
 > 现把整个 storage root 也覆写为 `profiles/miasaki/storages`：本壳拥有自己的分组账本与会话投影缓存，
-> 新账本从零按 `cwd` 全量回填 —— **实测 242 个会话归位 237 个**（dsh-miasaki 227 / kulumi 7 / Dhow 2 / Asakii 1），
+> 新账本从零按 `cwd` 全量回填 —— **实测 242 个会话归位 237 个**（dsh-miasaki 227 / kulumi 7 / Dhow 2 / <用户主目录> 1），
 > 其余 5 个的 `cwd` 目录已不存在（官方本就不归组）。全局 `~/.dsh/storages/` 归 web 与官方桌面端继续共用，
 > **两侧互不可见的分组各自正确**。回滚 = 删掉 `storage-json` 条目并删 `profiles/miasaki/storages/`。
 >
@@ -37,7 +37,7 @@
 > **30 秒分辨当前窗口用的是哪份库**：
 > - 看右上角有没有壳窗控三键（`－ □ ×`，其左是主题徽章）= **miasaki 壳** → 壳库；
 >   没有 = 浏览器 GUI → 全局库。
-> - 或跑一次两库对照（标题取自投影缓存，`<slug>` 即 `--C-Users-Asakii-Desktop-dsh-miasaki--`）：
+> - 或跑一次两库对照（标题取自投影缓存，`<slug>` 即 `--C-Users-<用户名>-Desktop-dsh-miasaki--`）：
 >   ```powershell
 >   foreach ($r in 'sessions', 'profiles\miasaki\sessions') {
 >     "=== $r ==="

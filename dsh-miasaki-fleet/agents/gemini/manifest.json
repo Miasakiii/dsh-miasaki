@@ -3,7 +3,7 @@
     "name":  "Gemini CLI",
     "updated_at":  "2026-08-22T13:27:28Z",
     "cli":  {
-                "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\gemini.ps1",
+                "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\gemini.ps1",
                 "command":  "gemini",
                 "version":  "0.55.1",
                 "invoke":  "gemini -p {prompt}"

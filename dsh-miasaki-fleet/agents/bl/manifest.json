@@ -4,7 +4,7 @@
     "name":  "Bailian CLI",
     "updated_at":  "2026-08-22T13:27:26Z",
     "cli":  {
-                "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\bl.ps1",
+                "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\bl.ps1",
                 "command":  "bl",
                 "version":  "bl 1.16.0",
                 "invoke":  "bl text chat --message {prompt}"

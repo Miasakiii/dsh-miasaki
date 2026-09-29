@@ -11,7 +11,7 @@
 04 runtime 选型(t-0001) | 审批桥通路 = ACP session/request_permission + dsh-permission-presets；codex/claude-code 无人值守下自动拒绝权限 ⇒ 只派只读任务
 05 runtime 选型(t-0001) | 官方教材入口：docs/cookbook/、docs/capability-seams.md、docs/subsystems/* 为面板插件直接教材
 06 runtime 选型(t-0001) | ⚠️已过期：M3 首选 @deepseek-ai/dsh-subagent-dsh-sdk（完整 DSH runtime 子进程）+ 协议层候选 dsh-subagent-acp + 自研薄壳兜底 —— 该路线 2026-08-17 已整体废弃（设计 §12 v0.11）
-07 运维踩坑 | vendor/deepseek-harness 重跑带脚本的 pnpm install 时 lefthook postinstall 会再次把转发钩子写入全局 git hooks（C:\Users\Asakii\.git-hooks）；规避 = 装前设 $env:LEFTHOOK='0' 或装后清理
+07 运维踩坑 | vendor/deepseek-harness 重跑带脚本的 pnpm install 时 lefthook postinstall 会再次把转发钩子写入全局 git hooks（%USERPROFILE%\.git-hooks）；规避 = 装前设 $env:LEFTHOOK='0' 或装后清理
 08 运维踩坑 | 该仓库的安装（koffi/node-pty 原生构建）与测试（vitest spawn 子进程）都会被沙箱拦截，需 full-access 授权
 09 运维踩坑 | 官方快照测试在 Windows 需本地热补丁（反斜杠 JSON 转义），已反馈上游 Discussions #2477
 10 未决事项 | ①②③ 面板不可见 / 监控形态决策（独立控制台 vs 悬浮窗）/ M2 开关拨动到 control.json 落盘未验证 —— ⚠️三项均以旧 Cordis 悬浮窗形态为语境，与现行 fleet-monitor + pulse 形态疑已脱节，引用前须 Commander 复核
@@ -100,7 +100,7 @@ M3.5 worker mock response OK
 100%（keyless 验证轮次：子运行时按 mock 脚本应答，交付物由 worker 包装层落盘）
 
 ## 数据来源 / 依据
-- 子运行时会话日志：C:\Users\Asakii\Desktop\dsh-miasaki\agents\analyst\sessions\t-0004
+- 子运行时会话日志：%USERPROFILE%\Desktop\dsh-miasaki\agents\analyst\sessions\t-0004
 
 ## 遇到的问题
 无

@@ -11,7 +11,7 @@
 
 ## 0. 摘要：七条结论
 
-1. **★★★ 本会话此刻就跑在官方桌面端里** `[实测]`。当前进程环境为 `DSH_PROFILE=desktop`、`DSH_PROFILE_DIR=C:\Users\Asakii\.dsh\profiles\desktop`、`DSH_WEB_URL=http://127.0.0.1:19387`，而官方宿主默认启动参数正是 `--port 19387`。**官方桌面端不是"另一个产品"，而是本项目 DSH 的另一个前端宿主**——同一份 `~/.dsh`、同一份 `0.1.7-rc.2` 运行时，只是 profile 不同。
+1. **★★★ 本会话此刻就跑在官方桌面端里** `[实测]`。当前进程环境为 `DSH_PROFILE=desktop`、`DSH_PROFILE_DIR=%USERPROFILE%\.dsh\profiles\desktop`、`DSH_WEB_URL=http://127.0.0.1:19387`，而官方宿主默认启动参数正是 `--port 19387`。**官方桌面端不是"另一个产品"，而是本项目 DSH 的另一个前端宿主**——同一份 `~/.dsh`、同一份 `0.1.7-rc.2` 运行时，只是 profile 不同。
 
 2. **架构主干 = Electron 壳进程 + DSH Host 子进程** `[实测]`。Electron 只做进程编排、窗口、自定义协议、原生能力与更新；真正的 DSH 应用由 `spawn(Electron 可执行文件, ["--expose-internals", "@deepseek-ai/dsh-desktop-host/lib/index.js", runtimeDir, profileDir, primaryRuntime, pnpmEntry, nodeBin])` 拉起，`stdio` 带 `ipc` 通道握手。宿主内部直接复用 `@deepseek-ai/dsh-app-boot` 的 `loadProfileDirectory` + `@deepseek-ai/dsh/profile-boot` 的 `runProfile`——**与 `dsh web` CLI 是同一条启动路径**。
 

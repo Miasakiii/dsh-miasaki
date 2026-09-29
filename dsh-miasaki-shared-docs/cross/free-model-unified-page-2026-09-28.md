@@ -37,7 +37,7 @@
 | 维度 | 事实 | 依据 |
 |---|---|---|
 | 归属 | 独立仓库 `github.com/zouyuxuan122/dsh-our-free-model`；本机 `~/.dsh/upstream-git` 是 **shallow clone（depth=1，commit `6b181e9`，2026-09-27）**，`_refs/` 被 gitignore | `git -C _refs/upstream-git log/remote -v` |
-| 安装形态 | 发布文件集放在 `~/.dsh/local-plugins/dsh-our-free-model/`；miasaki profile 以 **junction** 挂载（`profiles/miasaki/node_modules/dsh-our-free-model → C:\Users\Asakii\.dsh\local-plugins\dsh-our-free-model`）；**web profile 未装** | `Get-Item` 链接类型；两份 profile 的 `package.json` |
+| 安装形态 | 发布文件集放在 `~/.dsh/local-plugins/dsh-our-free-model/`；miasaki profile 以 **junction** 挂载（`profiles/miasaki/node_modules/dsh-our-free-model → %USERPROFILE%\.dsh\local-plugins\dsh-our-free-model`）；**web profile 未装** | `Get-Item` 链接类型；两份 profile 的 `package.json` |
 | 供给 | 注册 LlmAdapter（provider 路由 `our-free-model`），免 Key 走 OpenCode Zen 网关；选择器出现 `Our Free Model` 与 `Our Free Model · region-limited` 两个分组（后者靠第二条 provider 路由实现） | `README.md` §实现结构；上游清单 11 个 `*-free` 模型 |
 | Host 面 | 60 KB `index.js`：`/api/our-free-model/*` JSON 路由（summary / meta / settings / refresh / reprobe / bench / announcement / stats / events …）、自有 JSON 存储、公告 feed（30 min 轮询）、应用内升级（SHA-256 分级校验 + 备份 + 原子替换 + 回滚）、自热重载、OpenAI 兼容本地转发端口（默认 `127.0.0.1:18899`，当前 `forward.enabled=false`） | `~/.dsh/our-free-model/*.json`、README |
 | 存储 | `DSH_HOME/our-free-model/{settings,catalog,availability,feed}.json` —— **不进 settings 系统**（作者刻意选择：settings 注册 API 两版内核不一致） | 同上 |

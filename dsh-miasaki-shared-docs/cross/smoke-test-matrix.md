@@ -487,7 +487,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 |---|---|---|
 | 配置生效 | `profiles/miasaki/cordis.patch.yml` 新增 `storage-json` 条目，`config.root = dshHomePath('profiles','miasaki','storages')` | ✅ |
 | 账本落位 | 新 root 生成自己的 `workspace.json` | ✅ 2026-09-27 **21:43:47**（改配置 21:43:44，运行中的实例热重载即建） |
-| 全量回填 | 新账本按会话 `cwd` 自动归组 | ✅ 242 个会话归位 **237**：dsh-miasaki 227 / kulumi 7 / Dhow 2 / Asakii 1 |
+| 全量回填 | 新账本按会话 `cwd` 自动归组 | ✅ 242 个会话归位 **237**：dsh-miasaki 227 / kulumi 7 / Dhow 2 / <用户主目录> 1 |
 | 余 5 个未归组的解释 | 其 `cwd` 目录是否存在 | ✅ 全部已不存在（Prism / 新建文件夹 / 正大 / 临时目录）——官方按 `realpath(cwd)` 归组，目录没了本就不归组 |
 | 归档意图不丢 | 全局账本 11 条 `archivedSessionIds` 合并进新账本 | ✅ 合并后 `archived=11`，`initialized` 与 4 个工作区原样保留（幂等去重） |
 | 对侧不被写 | 全局 `~/.dsh/storages/workspace.json` 的 mtime | ✅ 停在 21:26:24（本壳新 root 建立后零改动） |

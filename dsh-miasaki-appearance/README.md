@@ -109,7 +109,7 @@ DSH Web 的**外观线**：在「设置」里新增一栏 **外观**，集中管
 新线以 `link:` 方式挂进 web profile，与其余四条线同构：
 
 1. `~/.dsh/profiles/web/package.json` 的 `dependencies` 增加
-   `"@miasaki/dsh-appearance": "link:C:/Users/Asakii/Desktop/dsh-miasaki/dsh-miasaki-appearance"`；
+   `"@miasaki/dsh-appearance": "link:%USERPROFILE%/Desktop/dsh-miasaki/dsh-miasaki-appearance"`；
 2. 同文件 `dsh.profile.bundles` 数组末尾增加 `"@miasaki/dsh-appearance"`；
 3. 在 `~/.dsh/profiles/web/node_modules/@miasaki/` 下建同名的目录联接（junction）指向本目录
    （与 `dsh-canvas` / `dsh-sidebar` / `dsh-ssh` / `dsh-dual-model` 一致）；

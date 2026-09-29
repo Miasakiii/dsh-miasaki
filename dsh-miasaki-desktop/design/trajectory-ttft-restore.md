@@ -55,7 +55,7 @@ baseline 重建（1381–1398 行）。因此：
 
 ## 三、实测证据（本机 2026-09-10）
 
-会话日志（`~/.dsh/sessions/--C-Users-Asakii-Desktop-dsh-miasaki--/session-0c660801-…/session.v3.jsonl.zstd`，
+会话日志（`~/.dsh/sessions/--C-Users-<用户名>-Desktop-dsh-miasaki--/session-0c660801-…/session.v3.jsonl.zstd`，
 多帧 zstd，需按帧扫描解压）逐帧解出后：
 
 - 事件总数 155，其中 **`assistant/live-chunk` = 0 条** —— 印证第 3 层：它不落盘；

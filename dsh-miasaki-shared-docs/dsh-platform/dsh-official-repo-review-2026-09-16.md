@@ -60,7 +60,7 @@
 
 | 类别 | 数量 | 判定证据 | 处置 |
 |---|---|---|---|
-| **A. 官方 rc.7 内容** | ~483 | 抽样 blob 哈希与官方 tag **逐字节一致**（`packages/acp/acp/src/index.ts` = `7be2a2bd…417f`，与 `contents?ref=dsh-v0.1.0-rc.7` 返回的 sha 相同）；全量 diff 对本仓/本机标识（`miasaki`/`Asakii`）**零命中** | **可丢**，官方随时可再取 |
+| **A. 官方 rc.7 内容** | ~483 | 抽样 blob 哈希与官方 tag **逐字节一致**（`packages/acp/acp/src/index.ts` = `7be2a2bd…417f`，与 `contents?ref=dsh-v0.1.0-rc.7` 返回的 sha 相同）；全量 diff 对本仓/本机标识（`miasaki`/`<本机用户名>`）**零命中** | **可丢**，官方随时可再取 |
 | **B. 模型设置补丁的源码草稿** | 4 | mtime 09-07，全在 `packages/client/ui-settings-models/`；成果已于 09-08 固化进 `dsh-miasaki-desktop/patches/dsh-client-ui-settings-models/`（该补丁 README 自述"**此前只存在于 `vendor/`，不入库**"，7 条 EDITS 与 vendor diff 逐条对应） | **可丢**，成果已入库并有 `verify` 自证 |
 | **C. 孤儿修复** | 1 | `examples/jsonrpc-agent/tests/sdk.snapshot.ts`：把 `replaceAll('{{cwd}}', cwd)` 改成 `JSON.stringify(cwd).slice(1, -1)`（修 Windows 反斜杠进 JSON fixture 的转义）。blob 哈希与官方 rc.7 **不符**（`8fe3d45b` vs `9b45292d`），且 `scripts/` + desktop + shared-docs **全仓零固化**，官方到 `0.1.1-rc.1` 仍未修 | ✅ **已归档**：`_refs/scripts-archive/orphan-cwd-escape-fix/`（README + 可 `git apply` 的 patch） |
 

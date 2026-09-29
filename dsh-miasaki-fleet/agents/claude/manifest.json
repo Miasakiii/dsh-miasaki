@@ -3,7 +3,7 @@
     "name":  "Claude Code",
     "updated_at":  "2026-08-22T13:27:26Z",
     "cli":  {
-                "binPath":  "C:\\Users\\Asakii\\.local\\bin\\claude.exe",
+                "binPath":  "%USERPROFILE%\\.local\\bin\\claude.exe",
                 "command":  "claude",
                 "version":  "2.1.238 (Claude Code)",
                 "invoke":  "claude -p {prompt} --output-format json"

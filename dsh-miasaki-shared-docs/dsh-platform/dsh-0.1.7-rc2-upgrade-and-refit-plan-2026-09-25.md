@@ -453,7 +453,7 @@ cd "$env:USERPROFILE\.dsh\profiles\web"
 pnpm install
 
 # ④ 7 个本体补丁逐个重打（在仓库里跑）
-$repo = 'C:\Users\Asakii\Desktop\dsh-miasaki'
+$repo = '%USERPROFILE%\Desktop\dsh-miasaki'
 $patches = @(
   "$repo\dsh-miasaki-desktop\patches\dsh-client-ui-attachment",
   "$repo\dsh-miasaki-desktop\patches\dsh-client-ui-chat",

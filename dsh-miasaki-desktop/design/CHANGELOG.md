@@ -603,7 +603,7 @@ whale idle 6 帧 + frames.json 共 66 个文件逐字节一致**（幂等）⇒ 
 | 项 | 判据 | 实测 |
 |---|---|---|
 | 配置生效 | 新 root 是否生成自己的账本 | ✅ 改配置 **21:43:44** → 账本 **21:43:47** 出现（运行中的壳热重载该配置，3 秒内生效） |
-| 全量回填 | 242 个会话按 cwd 归组 | ✅ 归位 **237**：dsh-miasaki **227** / kulumi 7 / Dhow 2 / Asakii 1 |
+| 全量回填 | 242 个会话按 cwd 归组 | ✅ 归位 **237**：dsh-miasaki **227** / kulumi 7 / Dhow 2 / <用户主目录> 1 |
 | 余 5 个未归组 | 其 `cwd` 目录是否还在 | ✅ **全部已不存在**（Prism / 新建文件夹 / 正大 / 临时目录）——官方按 `realpath(cwd)` 归组，目录没了本就不归组 |
 | 归档迁移 | 合并后账本字段 | ✅ `archived 0 → 11`，`initialized=true` 与 4 个工作区原样保留；脚本写后读回、schema 校验 PASS |
 | 隔离对侧 | 全局账本是否还被本壳写 | ✅ mtime 停在 **21:26:24**（本壳新 root 建立后零改动） |
@@ -642,7 +642,7 @@ whale idle 6 帧 + frames.json 共 66 个文件逐字节一致**（幂等）⇒ 
 ⚠ **这一半要等 web host 重启才生效**：storage-json 的内存态是权威，运行中的实例下次写账本会把重置
 覆盖回去 ⇒ **重启前不要在浏览器 GUI 的侧边栏做新建 / 拖拽 / 归档 / 置顶**。
 **生效判据（已离线推演，重启后照此对照）**：重启后全局账本 `workspaceIds` 由 `0` 变回 `2`、
-`initialized` 回到 `true`，分组变为 **dsh-miasaki 257 / kulumi 7 / Dhow 2 / Asakii 1**
+`initialized` 回到 `true`，分组变为 **dsh-miasaki 257 / kulumi 7 / Dhow 2 / <用户主目录> 1**
 （另 5 个会话的 `cwd` 目录已不存在，官方同样归不了组）。**这套推演判据可信**：同一脚本算 miasaki
 root 得 227/7/2/1，与自制壳侧账本的**实测值逐条吻合**。报告：
 `_refs/audit-2026-09-27/global-regroup-preview.md`（对照 `miasaki-regroup-preview.md`）。
@@ -651,7 +651,7 @@ root 得 227/7/2/1，与自制壳侧账本的**实测值逐条吻合**。报告�
 ```powershell
 $tmp = "$env:USERPROFILE\.dsh\profiles\_migrate-tmp"
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
-Copy-Item 'C:\Users\Asakii\Desktop\dsh-miasaki\_refs\scripts-archive\migrate-storages.mjs' $tmp
+Copy-Item '%USERPROFILE%\Desktop\dsh-miasaki\_refs\scripts-archive\migrate-storages.mjs' $tmp
 node "$tmp\migrate-storages.mjs" "$env:USERPROFILE\.dsh\storages\workspace.json" "$env:USERPROFILE\.dsh\storages" --check
 Remove-Item $tmp -Recurse -Force
 ```
@@ -837,8 +837,8 @@ startup with 404 until its owner registers*）⇒ WebView2 直接显示那个 40
 未检测到 dsh，请安装 DeepSeek Harness …    未找到 dsh（不在 PATH）(dsh --version 执行失败)
 —— 环境自证 ——
 cmd.exe：无法启动（请求的操作需要提升。(os error 740)；os error Some(740)）
-PATH 含 C:\Users\Asakii\AppData\Roaming\npm：是
-C:\Users\Asakii\AppData\Roaming\npm\dsh.cmd：存在
+PATH 含 %USERPROFILE%\AppData\Roaming\npm：是
+%USERPROFILE%\AppData\Roaming\npm\dsh.cmd：存在
 当前目录：C:\ProgramData\MiasakiApp
 ```
 
@@ -954,7 +954,7 @@ release 构建零 warning。
 
 **为什么「分类」做不到**（实测量）：会话文件 `session.v4.jsonl.zstd` 的 header 只有
 `type/version/id/createdAt/cwd/isSeeded/delegationDepth/agentPreset` —— **没有任何「哪个 profile 跑的」标记**。
-`~/.dsh/sessions/` 下 231 个会话（`--C-Users-Asakii-Desktop-dsh-miasaki--` 占 216 个）物理上无从判别来源，
+`~/.dsh/sessions/` 下 231 个会话（`--C-Users-<用户名>-Desktop-dsh-miasaki--` 占 216 个）物理上无从判别来源，
 把历史分回各自 profile 没有可实现的路径；能做的只有**从现在开始隔离**。
 
 **隔离点**：官方 `dsh-base/cordis.patch.yml` 写着 `root: !!js dshHomePath('sessions')` ——
@@ -1305,7 +1305,7 @@ pet-panel 心跳一起重启，环立刻重建；这正是「停不下来」的�
 **现象**：从桌面快捷方式（`C:\ProgramData\MiasakiApp\Miasaki.exe`，Medium IL —— WebView2 正常、
 `pet.log` 有 `mica backdrop applied`）启动，主界面停在唤醒页提示「未检测到 dsh，请安装 DeepSeek
 Harness」，点「检查 dsh」返回 `未找到 dsh（不在 PATH）` + `（dsh --version 执行失败）`。
-而**实测 dsh 装得好好的**：`C:\Users\Asakii\AppData\Roaming\npm\dsh.cmd` 存在、
+而**实测 dsh 装得好好的**：`%USERPROFILE%\AppData\Roaming\npm\dsh.cmd` 存在、
 `dsh --version` = `0.1.7-rc.2`、`where dsh` 在正常会话里能找到 —— 失败页把用户引向了
 「去重装 DSH」这个**错误方向**。
 
@@ -1346,7 +1346,7 @@ Harness」，点「检查 dsh」返回 `未找到 dsh（不在 PATH）` + `（ds
 
 **随之排除的候选**：explorer 环境的 PATH 陈旧（`dshAvailable: true` 证明该环境下 `where dsh` 可用；
 本机 `HKCU\Environment` 最后写入 2026-09-23 23:03:51 亦无冲突）、以及父进程工作目录失效
-（快捷方式 `WorkingDirectory` = `C:\ProgramData\MiasakiApp`，有效）。旁证一条：本机存在 `ASAKII\CodexSandboxUsers` 组
+（快捷方式 `WorkingDirectory` = `C:\ProgramData\MiasakiApp`，有效）。旁证一条：本机存在 `<本机用户组>\CodexSandboxUsers` 组
 （注释 `Codex sandbox internal group (managed)`，成员 `CodexSandboxOffline` / `CodexSandboxOnline`），
 `%LOCALAPPDATA%\miasaki\*` 已被打上该组 `ReadAndExecute` 的 ACL ⇒ 本机确有沙箱机制在介入进程/权限；
 但**尚无证据**表明它拦截了 Miasaki 的 `cmd.exe`（`server.log` 里那条

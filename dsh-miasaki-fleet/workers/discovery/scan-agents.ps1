@@ -32,6 +32,14 @@ foreach ($a in $catalog) {
   }
   if (-not $bin) { Write-Host ("absent  {0,-14}" -f $a.id); continue }
 
+  # binPath 是机器相关路径（Get-Command 的 Source），直接入库会把维护者用户名带进公开仓库。
+  # 写盘前脱敏成 %USERPROFILE% 占位：它只被 schemas/*.json 与 validate-bus.mjs 校验
+  # 「是非空字符串」，而派单走的是 cli.invoke 模板（按命令名走 PATH，见 dispatch-task.ps1），
+  # 从不读 binPath ⇒ 脱敏零功能影响。控制台输出仍打真实路径，排查不受影响。
+  $binPathStored = if ($binPath -and $env:USERPROFILE) {
+    $binPath -replace [regex]::Escape($env:USERPROFILE), '%USERPROFILE%'
+  } else { $binPath }
+
   $ver = (& $bin --version 2>&1 | Select-Object -First 1) -join ' '
   $manifestPath = Join-Path $agentsDir ($a.id + '\manifest.json')
   $entry = @{
@@ -43,7 +51,7 @@ foreach ($a in $catalog) {
     metering    = $false
     metering_source = $a.metering
     skills      = @()
-    cli         = @{ command = $bin; binPath = $binPath; version = $ver.Trim(); invoke = $a.invoke }
+    cli         = @{ command = $bin; binPath = $binPathStored; version = $ver.Trim(); invoke = $a.invoke }
     persona_prompt = "你是本机 agent CLI「$($a.name)」的档案。总指挥通过你的可执行文件派发任务。"
     limits      = @{ max_tokens_per_task = 50000; max_concurrent_tasks = 1; budget_per_day = 2.0; timeout_ms = 900000; heartbeat_ms = 30000 }
     updated_at  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -63,7 +71,7 @@ foreach ($a in $catalog) {
     $entry | ConvertTo-Json -Depth 8 | Set-Content $manifestPath -Encoding UTF8
     Write-Host ("created {0,-14} -> {1} {2}" -f $a.id, $binPath, $ver.Trim())
   }
-  $registry += @{ id = $a.id; name = $a.name; bin = $bin; binPath = $binPath; version = $ver.Trim(); invoke = $a.invoke; metering = $a.metering }
+  $registry += @{ id = $a.id; name = $a.name; bin = $bin; binPath = $binPathStored; version = $ver.Trim(); invoke = $a.invoke; metering = $a.metering }
 }
 
 $registry | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $agentsDir 'registry.json') -Encoding UTF8

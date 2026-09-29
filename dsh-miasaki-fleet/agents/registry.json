@@ -5,7 +5,7 @@
         "invoke":  "bl text chat --message {prompt}",
         "metering":  "console-usage",
         "bin":  "bl",
-        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\bl.ps1",
+        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\bl.ps1",
         "version":  "bl 1.16.0"
     },
     {
@@ -14,7 +14,7 @@
         "invoke":  "claude -p {prompt} --output-format json",
         "metering":  "json-cost-usd",
         "bin":  "claude",
-        "binPath":  "C:\\Users\\Asakii\\.local\\bin\\claude.exe",
+        "binPath":  "%USERPROFILE%\\.local\\bin\\claude.exe",
         "version":  "2.1.238 (Claude Code)"
     },
     {
@@ -23,7 +23,7 @@
         "invoke":  "gemini -p {prompt}",
         "metering":  "unknown",
         "bin":  "gemini",
-        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\gemini.ps1",
+        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\gemini.ps1",
         "version":  "0.55.1"
     },
     {
@@ -32,7 +32,7 @@
         "invoke":  "opencode run {prompt}",
         "metering":  "unknown",
         "bin":  "opencode",
-        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\opencode.ps1",
+        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\opencode.ps1",
         "version":  "1.18.18"
     },
     {
@@ -41,7 +41,7 @@
         "invoke":  "dsh --profile headless {prompt}",
         "metering":  "session",
         "bin":  "dsh",
-        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\dsh.ps1",
+        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\dsh.ps1",
         "version":  "0.1.1-rc.1"
     },
     {
@@ -50,7 +50,7 @@
         "invoke":  "pi -p {prompt}",
         "metering":  "unknown",
         "bin":  "pi",
-        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\pi.ps1",
+        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\pi.ps1",
         "version":  "0.84.1"
     },
     {
@@ -59,7 +59,7 @@
         "invoke":  "mimo {prompt}",
         "metering":  "unknown",
         "bin":  "mimo",
-        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\mimo.ps1",
+        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\mimo.ps1",
         "version":  "0.1.12"
     },
     {
@@ -68,7 +68,7 @@
         "invoke":  "agent-browser {prompt}",
         "metering":  "unknown",
         "bin":  "agent-browser",
-        "binPath":  "C:\\Users\\Asakii\\AppData\\Roaming\\npm\\agent-browser.ps1",
+        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\agent-browser.ps1",
         "version":  "agent-browser 0.34.0"
     }
 ]
