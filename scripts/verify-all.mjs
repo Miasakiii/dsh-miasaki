@@ -11,7 +11,7 @@
 // 用法：
 //   node scripts/verify-all.mjs                      # 全部九线 + 仓库级
 //   node scripts/verify-all.mjs dual-model           # 只跑指定线
-//                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / repo）
+//                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / free-model / repo）
 //
 // 实现注记：子进程一律 stdio: 'inherit'，不做管道捕获——受限沙箱下捕获另一个
 // 程序的 stdio 会以 EPERM 失败，而 inherit 不会。因此本脚本以退出码判定成败，
@@ -571,7 +571,7 @@ function planFreeModel() {
 /**
  * 仓库级治理闸门（跨九线生效，不属于任何单线）。
  *
- * 这三项补的是「逐例修不解决问题」的那类漏洞 —— 同类 bug 反复出现时，缺的不再是修法，
+ * 这五项补的是「逐例修不解决问题」的那类漏洞 —— 同类 bug 反复出现时，缺的不再是修法，
  * 而是让第 N 例无法悄悄进来的闸门（评审报告 §五.P2.10）：
  *   · silent-guards：守卫必须显式失败。四类形态（静默跳过 / 静默吞错 / 静默回退读取 /
  *     声明清单缺口），存量冻结在 scripts/silent-guard-baseline.json，**新增即失败**；
@@ -580,7 +580,15 @@ function planFreeModel() {
  *   · message-sources：会话消息的 `source.kind` 不得用 DSH 0.1.7 起已退役的 v3 写法
  *     （`{ kind: "plugin", plugin: … }` ⇒ v4 准入硬拒 ⇒ 整轮运行失败）。除仓库内源码外，
  *     顺带体检本机 `~/.dsh/profiles/<profile>/node_modules` 的非官方插件；CI 无该目录时显式跳过。
- * 三项都零依赖、纯离线，受限沙箱与 CI 同样可跑。
+ *   · md-links：入库文档的相对链接必须解析到**已入库**目标（184 个文档里曾有 49 处
+ *     在 GitHub 上必然 404，形态是「路径视角不统一」）；
+ *   · lock-sync：锁文件与 package.json 的直接依赖 specifier 必须一致 —— 否则 CI 会红在
+ *     「安装 XX 线依赖」那一步（ERR_PNPM_OUTDATED_LOCKFILE），后续步骤全部 skipped，
+ *     **看起来像测试挂了，其实一个测试都没跑**（2026-09-29 实测连续 11 次）。
+ * 五项都零依赖、纯离线，受限沙箱与 CI 同样可跑。
+ *
+ * 注：本段此前写「这三项」而实际已有四项 —— 加 md-links 时**漏改这段注释**，
+ * 正是 AGENTS.md 记的「注释与实现不一致＝漏登记的签名」。加闸门时请连本段一并订正。
  */
 function planRepo() {
   checks.push({
@@ -619,6 +627,19 @@ function planRepo() {
     name: 'md-links (入库文档的相对链接必须解析到已入库目标)',
     cmd: process.execPath,
     args: [join(ROOT, 'scripts', 'check-md-links.mjs')],
+    cwd: ROOT,
+  })
+  // 2026-09-30：锁文件同步。补的是「CI 红在装依赖、而回归根本没跑」这个盲区 ——
+  // 2026-09-29 20:44 的 `8181b89`（七个插件补 peerDependencies）只改了 package.json、
+  // 没同步锁文件，此后 **11 次推送全红**，每次都在第 7 步 ERR_PNPM_OUTDATED_LOCKFILE 退出、
+  // 第 8/9/10 步（含**九线统一回归**）全部 skipped：3 小时里没有任何改动被 CI 验证过。
+  // 本项在推送前复现同一判定（已用 f610ef3 的历史文件实测：报出的两条与 CI 日志逐字相同）。
+  // 判据、边界与内置自证见 scripts/check-lock-sync.mjs 头部。
+  checks.push({
+    line: 'repo',
+    name: 'lock-sync (锁文件与 package.json 同步)',
+    cmd: process.execPath,
+    args: [join(ROOT, 'scripts', 'check-lock-sync.mjs')],
     cwd: ROOT,
   })
 }

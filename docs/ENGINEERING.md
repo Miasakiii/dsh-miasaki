@@ -15,7 +15,7 @@
 | 桌面端 | [`dsh-miasaki-desktop/`](../dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH profile 插件：桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）、Computer Use GUI 工具（dsh-computer-use，桌宠 v4 能力底座）——**用量监控已于 2026-09-26 迁出本线（见第八线），免费模型池已于 2026-09-28 迁出并升级为多来源聚合器（见第九线）**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**2026-09-27/28 桌宠 v4–v5**：whale 图集接入（`cut-frames.mjs` 按主题行名表切 7 行，行号语义不跨主题共享）、反转狂三白军装重画（`inverse-states.mjs` 背景色四角采样，蓝底白底通吃）、`pet_native/xform.rs` 绘制变换层（逆向映射采样 + M1 呼吸 / M2 摇摆 / M3 挤压，cargo 100 例单测）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的**八个**运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。 |
 | Fleet | [`dsh-miasaki-fleet/`](../dsh-miasaki-fleet/) | 多 Agent CLI 编排（`package.json` 0.20.0）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）/ G0–G4 图工程判定层（契约、图与就绪度、能力图、异构验证者选取）。 |
 | Canvas | [`dsh-miasaki-canvas/`](../dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.7，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
-| Sidebar | [`dsh-miasaki-sidebar/`](../dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.10.0-miasaki.0）：**接入官方右侧 Sidebar**，只注册「审查」一个 tab 类型（辅助对话归 M2）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除）；**2026-09-25 右栏终端退役**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），沿用官方策略不再自建，内嵌终端收敛为**底部面板单形态**（Ctrl+` / 标题栏按钮唤起，多标签多会话、node-pty 路线 B、一次性 token 闸门、回放环 + 背压淘汰，host 半与容器无关零改动）。单测 **86 例**（81 通过 / 5 环境跳过）、静态回归 **13/13**（11 个测试文件）；**M2.1 辅助对话已落地（2026-09-28）**——右栏第二个 tab（侧线 = `ctx.sessions.fork` 不传 `atSeq`，主会话运行中可开；嵌入式官方会话，零自研聊天 UI），实机验收 7/7，M2.2/M2.3 未做。 |
+| Sidebar | [`dsh-miasaki-sidebar/`](../dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.10.0-miasaki.0）：**接入官方右侧 Sidebar**，注册**两个** tab 类型（「审查」+「辅助对话」，后者 2026-09-28 落地）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除）；**2026-09-25 右栏终端退役**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），沿用官方策略不再自建，内嵌终端收敛为**底部面板单形态**（Ctrl+` / 标题栏按钮唤起，多标签多会话、node-pty 路线 B、一次性 token 闸门、回放环 + 背压淘汰，host 半与容器无关零改动）。单测 **86 例**（81 通过 / 5 环境跳过）、静态回归 **13/13**（11 个测试文件）；**M2.1 辅助对话已落地（2026-09-28）**——右栏第二个 tab（侧线 = `ctx.sessions.fork` 不传 `atSeq`，主会话运行中可开；嵌入式官方会话，零自研聊天 UI），实机验收 7/7，M2.2/M2.3 未做。**2026-09-30 回退「只带最近 3 轮」**：09-29 曾传 `atSeq` 截到倒数第 3 个 `turn/start`，但把方向读反了 —— `atSeq` 是**保留 `0..atSeq` 的头部前缀上界**（`dsh-session/lib/types/fork.js:19` 的 `events.slice(0, boundary + 1)`），**只能截尾、不能截头** ⇒ 「只带最近 N 轮」用 `fork` 做不到，真触发时反而丢最近的轮次、留更早的历史；侧线已回到官方默认的全文前缀（`client.js` 与测试 `git restore` 回 09-29 之前，单测 18 → **13** 例）。契约事实见该线设计文档 **C1b**、原因与 ZCode 官方复核见 `design/CHANGELOG.md` 2026-09-30 条。 |
 | SSH | [`dsh-miasaki-ssh/`](../dsh-miasaki-ssh/) | DSH web SSH 插件 `@miasaki/dsh-ssh`（全新自研，2026-09-09 立项）：**会话头第一行**「SSH」段（与「对话 / 会话布」同一个胶囊，三段一体）+ **画布页面内部**那组按钮旁的「SSH」（走 canvas 的外部视图槽）+ 页面内交互式连接云服务器。**M1 代码完成，已 link 安装**；U0 可靠性闭环 + U1 统一工作区（2026-09-12）、A0 上下文桥（2026-09-14）、D1–D4 全屏浮层改造与**四轮真机验收**（2026-09-15）、**U2 主体落地**（2026-09-16：U2.1 多 shell / U2.3 工作区记忆 / U2.4 精确恢复）、**主页入口判据与落点收敛**（2026-09-25 B1/B2：只在主页 + 与会话头胶囊结构性互斥；2026-09-26 B3/B4：同排官方 chrome 实测让位 + 让位量的取数时机（过渡期逐帧跟随、安全线变化的同步重测），修与官方「▭」的按钮盒叠压）均已实施。**2026-09-26 对标 zcode（zai-org/ZCode）方案落地**（[对标调研与方案](../dsh-miasaki-ssh/design/2026-09-26-ssh-zcode-benchmark-plan.md)）：P0 三件套（keepalive 15s×3 + `buildConnectConfig()` 纯函数 + ssh2 `level` 错误词汇与私钥口令两码；`lib/exec.js` exec 前置；U2.2 SFTP 注入 zcode 降级链——sftp 视图无目录或会话打不开 ⇒ 零字节消耗直降 `mkdir -p && cat >`，mid-stream 失败记 `execOnlyUpload` 下次直走命令通道）+ P1-1 `~/.ssh/config` 别名导入（`ssh -G` 优先 + 自研解析回退，只导直连 alias）。单测 **310 例**、静态回归 **31/31**；**U3（跳板 / 本地转发）与 A1 工具面已于 2026-09-26 实施**（真协议探针 8/8，A1 工具面已实机验收）；**G1 SFTP 会话自愈 + G2 慢 viewer 背压暂停/恢复 2026-09-28 实机验收 23/23**（真 DSH 实例 × 真协议 sshd × 真实路由/票据/围栏，隔离 dataDir）。**仍待验**：真跳板建连 / 本地转发实机、真实云主机 SFTP 往返。 |
 | 双模型 | [`dsh-miasaki-dual-model/`](../dsh-miasaki-dual-model/) | DSH web 双模型插件 `@miasaki/dsh-dual-model`（2026-09-10 立项）：会话级「主模型 + 辅助模型」，只要其一支持图片即可上传图片，输入框右下角（`conversation.input.right`）快速配置。**M1 实现完成，待实机验证**——M0 六项技术假设实测全部成立；准入走一行本体补丁（可选服务探测，未装插件零退化，规则 + 双基线入库并可离线自证）；单测 33 例、`verify-all dual-model` 12/12。设计文档与变更记录见其 `design/`。 |
 | 外观 | [`dsh-miasaki-appearance/`](../dsh-miasaki-appearance/) | DSH web 外观插件 `@miasaki/dsh-appearance`（2026-09-11 立项）：设置里新增一栏**「外观」**，集中管理主题皮肤 / 壁纸 / 动效 / 会话效果。**M2 已收官（2026-09-12）**——M1 底座（设置栏 + 首帧注入 + 契约自检）实机六项全过后，S1–S6 依次落地 **皮肤层**（`derive-skins.mjs` 编译 105 token 表 + 首帧防闪色 boot style）、**壁纸与玻璃档位**（配置 v2、内置程序化渐变 + 本地图源、`color-mix` 表面透明度自动跟皮肤跟明暗）、**桌面壳让位协议**（`data-miasaki-theme-yield` 免刷新翻转、冲突自检）。走官方 `settings.section` 插槽 + `ctx.theme` 服务 + `webserver/index-inject`，**零 shell 改动、零第三方依赖**（配置自管 `~/.dsh/miasaki-appearance/config.json`）；总开关默认关闭、「关掉即原生」是硬契约。**2026-09-26 与官方「通用」设置页对照去重**：明暗偏好与正文字号是通用页 `AppearanceRow` / `FontSizeRow` 自己的行，外观页**不再做第二入口**，「主题」组只留官方没有的「皮肤」；`config.theme` 的 scheme / accent / fontSize 三个镜像字段同批删除（配置 v4），并立下「上新设项先过通用页对照」纪律（去重决策与 M3 → Boot Splash → M4 推进路线见该线 `design/2026-09-26-appearance-page-dedup-and-roadmap.md`）；同日 **V1 视觉统一**——单选控件全线换成官方「选择丸 + 下拉菜单」（`LanguageRow` 规格 + 官方 `Menu`），九宫格/表面旋钮/占位卡/运行信息同步对齐官方卡片与空态语言（见该线 `design/2026-09-26-appearance-visual-unification-and-roadmap.md`）；**2026-09-27 P1+P2 连续落地**——P2 Boot Splash 首帧启动画（`lib/splash.js` + `index-inject` 三行，首次启用官方 `html` 行 kind；配置 v5 `motion.bootSplash`；退场双信号 + 2.5s 兜底）、P1 M3 动效（纯 CSS 变量驱动层 + 三预设 + 强度倍率 + reduced-motion 降级），并加了「无可见效果」面板提示。单测 **120 例**、静态回归 **18/18**；M4 会话效果与恢复默认/导入导出待推。**2026-09-22 Boot Splash 首帧启动画设计定稿**（跨线新增项）：3080 首帧全屏启动画（三主题纹章动效 + 退场双信号 + 2.5s 超时兜底不挡错误页），与 desktop「Loading 2.0」契约见 `cross/boot-loading-2026-09-22.md`。 |
@@ -61,12 +61,14 @@ desktop 用 `npm ci --omit=dev`；canvas / fleet / dual-model / appearance / usa
 
 ```bash
 node scripts/verify-all.mjs               # 九线 + 仓库级治理闸门（L0 静态检查 + L1 单线单测）
-node scripts/verify-all.mjs usage         # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / repo）
+node scripts/verify-all.mjs usage         # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / free-model / repo）
 ```
 
-仓库级治理闸门也可单独跑：`check-silent-guards.mjs`（守卫必须显式失败）、`check-doc-versions.mjs`
-（版本台账）、**`check-message-sources.mjs`**（会话消息来源 —— DSH 0.1.7 起 v4 要求 producer-owned kind，
-禁止退役的 `{ kind: "plugin", … }`；同时体检本机已装插件）。
+仓库级治理闸门**五项**（`node scripts/verify-all.mjs repo` 一把跑）也可单独跑：`check-silent-guards.mjs`
+（守卫必须显式失败）、`check-doc-versions.mjs`（版本台账）、**`check-message-sources.mjs`**（会话消息来源
+—— DSH 0.1.7 起 v4 要求 producer-owned kind，禁止退役的 `{ kind: "plugin", … }`；同时体检本机已装插件）、
+**`check-md-links.mjs`**（入库文档的相对链接必须解析到**已入库**目标）、**`check-lock-sync.mjs`**
+（锁文件与 `package.json` 的直接依赖 specifier 必须一致 —— 把「CI 红在装依赖那一步」提前到推送前）。
 会话日志取证用 **`inspect-session-sources.mjs`**（按帧解压多帧 zstd，报告每条 durable 消息的 `source.kind`；
 会话日志逐帧追加，整文件解压只能读出第一帧）。
 
@@ -360,6 +362,14 @@ rc.2 上**全部命中 0 次**、在 rc.1 baseline 上 4/4）⇒ desktop **−1*
 （侧线头显示「完整历史」vs「最近 3 轮」），不猜、不静默。单测 13 → **18 例**，并改掉两条与新语义
 直接冲突的旧硬断言。
 
+> **2026-09-30 订正 —— 本条已回退，勿当现状引用。** `atSeq` 被读反了：它是**保留 `0..atSeq` 的头部前缀上界**
+> （`dsh-session/lib/types/fork.js:19` = `events.slice(0, boundary + 1)`），**只能截尾、不能截头** ⇒
+> 「只带最近 N 轮」用 `fork` 实现不了；真触发时反而会把**最近的轮次丢掉、留下更早的历史**。
+> `client.js` 与 `test/sidechat-registry.test.js` 已 `git restore` 回 `b064720^`（单测 18 → **13** 例），
+> 侧线回到官方默认的全文前缀。契约事实见 `dsh-miasaki-sidebar/design/2026-09-27-sidebar-m2-sidechat-design.md` 的 **C1b**，
+> 回退原因与实机证据见该线 `design/CHANGELOG.md` 2026-09-30 条；同日 ZCode 官方复核（该文 §5.1(D)）另行证明
+> 「干净」靠**可见性**（模型可见 / UI 不画）而非少带上下文 —— DSH 侧三者（消息级可见性 / fork 边界注入 / child 不入列表）全部缺席。
+
 ④ **appearance M3.2 设置页动效统一**：动效层里设置面板那条挂在 `.mia-panel` —— 一个**各线各带一份
 CSS 复制出来的面板类名**，实际只有 appearance 与 pet-panel 用 ⇒ 设置里**只有「外观」「桌宠」两页**
 整块上浮、其余六页瞬切；而官方设置外壳本身零 `animation` / 零 `transition`，连 `reduced-motion`
@@ -376,11 +386,13 @@ CSS 复制出来的面板类名**，实际只有 appearance 与 pet-panel 用 �
 **运行版**（本机实际安装产物）取证 —— vendor 开发版的 `SettingsRoot.tsx` 与 rc.2 实装产物有差异
 （实装多一个 `data-shortcut-modal="settings"`），照源码猜会选错锚点。
 
-**CI 自 09-29 20:59 起红已修（「本机绿 ≠ CI 绿」的第二个实例）**：`8181b89` / `2ef10fa` 给各 web 插件
-补 `peerDependencies`（`@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`）时只改了
+**CI 自 09-29 20:44 起红已修（「本机绿 ≠ CI 绿」的第二个实例）**：`8181b89`（其后 `2ef10fa` 又动过同一批文件）
+给各 web 插件补 `peerDependencies`（`@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`）时只改了
 `package.json`、没同步 `pnpm-lock.yaml` ⇒ CI 的 `pnpm install --frozen-lockfile` 以
-`ERR_PNPM_OUTDATED_LOCKFILE` 失败，**后续步骤（安装 ssh 线依赖 / 运行 verify-all）全部被 skip**
-⇒ 连续四次 push 都红，而本机每次都全绿（本地 `pnpm install` 不带 `--frozen-lockfile`，会**自动把 lock 补齐**
+`ERR_PNPM_OUTDATED_LOCKFILE` 失败（日志原文：`* 2 dependencies were added: @deepseek-ai/cordis@^4.0.2,
+@deepseek-ai/dsh-host-webserver@>=0.1.2-rc.1 <0.3.0`），**后续步骤（安装 ssh 线依赖 / desktop 线依赖 /
+运行 verify-all）全部被 skip —— 那 3 小时里一个测试都没跑**；连续 **11 次** push（`8181b89` … `f610ef3`）
+都红，而本机每次都全绿（本地 `pnpm install` 不带 `--frozen-lockfile`，会**自动把 lock 补齐**
 —— 越是顺手跑过 install 越看不见）。已用 `pnpm install --lockfile-only` 同步 sidebar / ssh 两条线
 （pnpm 默认 `auto-install-peers`，故 peer 依赖记入 `dependencies` 并展开依赖树，与本仓 canvas 线既有
 lock **逐字同格式**）；两条线 `pnpm install --frozen-lockfile` 各自 exit=0，推送后
@@ -388,6 +400,29 @@ lock **逐字同格式**）；两条线 `pnpm install --frozen-lockfile` 各自 
 **纪律**：CI 红的判据**先看红在哪一步**（`gh run view <id>` 直接给步骤名与注释）——
 本次失败步骤是「安装 sidebar 线依赖」，一眼排除「Node 版本 / 测试挂起」那类成因；
 另附一条认知纠正：`gh run view --log-failed` **本机可读**，此前记录的「Actions 日志 API 需 admin」不成立。
+
+**2026-09-30 基线（全量 168 项，十类全 PASS）**`[实测]`：sidebar 13/13、canvas 13/13、fleet 17/17、
+desktop **38/38**（含 `cargo test` 109 例）、ssh 31/31、dual-model 15/15、appearance 18/18、usage 3/3、
+free-model 15/15、**repo 5/5**。口径变化：repo 4 → 5 = 新增 `lock-sync` 闸门（见下）；`repo/md-links`
+在本轮 file policy（`danger-full-access`）下不再被沙箱阻塞 ⇒ 本机首次**无阻塞项**（受限沙箱下它仍会
+因 `execFileSync('git')` 走管道 stdio 而 EPERM，那是沙箱边界不是缺陷）。
+
+**同一基线的受限沙箱口径（提交前复核复跑）**`[实测]`：file policy = `workspace-write` 下全量
+**167 PASS + 1 阻塞**（唯一阻塞仍是 `repo/md-links`，同上 EPERM），其余九类与 `repo` 其余四项全 PASS
+—— **与 168/168 是同一棵树、同一判据，差异只来自沙箱能否 spawn `git`**。复核 sidebar 回退 +
+`lock-sync` 接线这批改动时以此口径为准，别把沙箱边界误读成回归失败。
+
+**新增闸门 `repo/lock-sync`（把上面那类红拦在推送前）**`[实测]`：判据是锁文件（`pnpm-lock.yaml` 的
+`importers['.']` / `package-lock.json` 的 `packages['']`）里四个依赖段与 `package.json` 的直接依赖
+specifier 逐项一致。**pnpm 侧刻意跨字段合并比对** —— `autoInstallPeers: true` 时 `package.json` 的
+peerDependencies 在锁文件里登记进的是 `dependencies` 段（sidebar 实测：2 个 peer 落在 dependencies，
+其余 4 个普通依赖也在同一段），按字段名逐段对齐会立刻误报。闸门**自带 fixture 正反例 + specifier 漂移
++ npm 侧共四项自证**并随每次运行执行 —— 防的是「解析器坏掉 ⇒ 永远绿」这个闸门最坏的失效形态
+（首版 fixture 少写一个依赖，正是被自证当场抓出的）。**验证两条**：① 拿 `f610ef3` 的历史
+`package.json` + `pnpm-lock.yaml` 放进临时目录用 `--root` 复现，报出的两条缺登记与 CI 日志**逐字相同**
+（`@deepseek-ai/cordis@^4.0.2`、`@deepseek-ai/dsh-host-webserver@>=0.1.2-rc.1 <0.3.0`）；
+② 当前树 4 个锁文件 / 19 条直接依赖登记全 PASS。**动态枚举的收益**：闸门扫 `dsh-miasaki-*` 下全部锁文件，
+首次运行即发现 `dsh-miasaki-canvas/pnpm-lock.yaml` 同样在管 —— 照 CI 那三条线硬编码会漏掉它。
 
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
