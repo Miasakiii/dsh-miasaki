@@ -128,6 +128,7 @@ async function main() {
   const liveVersion = await liveDshVersion()
   const patches = await discoverPatches()
   const rows = []
+  const retired = []
 
   for (const entry of patches) {
     let mod
@@ -136,6 +137,12 @@ async function main() {
       mod = await import(pathToFileURL(entry.file).href)
     } catch (error) {
       rows.push({ ...entry, state: 'missing', detail: `import 失败：${error.message}` })
+      continue
+    }
+    // 已退役的补丁（其意图被官方上游吸收）：不参与 live 审计 —— 否则「未重打」
+    // 会被误报成待办。标记与理由见各补丁 patch.mjs 的 RETIRED 注释。
+    if (mod.RETIRED === true) {
+      retired.push({ ...entry, reason: mod.RETIRED_REASON ?? null })
       continue
     }
     const pkg = mod.TARGET_PACKAGE
@@ -198,7 +205,10 @@ async function main() {
     const bad = rows.filter(row => row.regression)
     const drift = rows.filter(row => row.drift)
     console.log('')
-    console.log(`合计 ${rows.length} 个目标 / ${patches.length} 件补丁：patched ${rows.filter(r => r.state === 'patched').length} / 未生效 ${rows.filter(r => r.state !== 'patched' && r.state !== 'missing').length} / 未安装 ${rows.filter(r => r.state === 'missing').length}`)
+    const retiredNote = retired.length > 0
+      ? `（另有 ${retired.length} 件已退役、不计入：${retired.map(r => r.dir).join('、')}）`
+      : ''
+    console.log(`合计 ${rows.length} 个目标 / ${patches.length - retired.length} 件在册补丁：patched ${rows.filter(r => r.state === 'patched').length} / 未生效 ${rows.filter(r => r.state !== 'patched' && r.state !== 'missing').length} / 未安装 ${rows.filter(r => r.state === 'missing').length}${retiredNote}`)
     if (bad.length > 0) {
       console.log(`🔴 ${bad.length} 个补丁在基线版本匹配的 live 安装上未生效——按各补丁 README 重打（先 node <patch.mjs> status 核对）`)
     } else if (drift.length > 0) {

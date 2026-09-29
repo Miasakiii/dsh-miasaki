@@ -1,5 +1,24 @@
 # dsh-cordis-host-runner 补丁 — `cordis_inspect_query`(client) 永久挂起修复
 
+> ## ⚠️ 本补丁已于 2026-09-29 退役（意图被官方上游吸收），不再应用
+>
+> **退役原因**：官方 `@deepseek-ai/dsh@0.2.0-rc.2` **自行实现了本补丁的全部四条编辑意图**，
+> 且实现更完整 —— `resolveClientQuery` 里 `pending.failure ??=` 记录「客户端拒绝」与
+> 「输出校验失败」两类原因；`queryClient` 里 `clientQueryTimeoutMs` 可配超时（本补丁是硬编码
+> 15 s）、`finally { clearTimeout(timer) }` 清理，并额外加了本补丁没有的
+> 「无活动页面时立刻失败」守卫。
+>
+> **判据**：本补丁 4 条编辑在 `0.2.0-rc.2` 产物上**全部命中 0 次**，
+> 而在 `0.2.0-rc.1` baseline 上仍是 **4/4 命中** —— 规则本身没坏，是上游把代码改成了等效形态。
+>
+> **处置**：已从 `scripts/verify-all.mjs` 的 desktop 清单与 desktop 线 README 补丁表中移除，
+> **不再 apply**；本目录与 `../design/` 的记录**保留为历史**（完整的症状 / 根因 / 取证链仍是
+> 理解该 bug 的好材料）。
+> **不要**为了保住补丁去硬改锚点 —— 那会与官方实现重复记录失败原因，
+> 把 `??=` 的幂等语义退化成双写，收益为负。
+>
+> **证据**：[dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md](../../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md) §3.1。
+
 **目标包**：`@deepseek-ai/dsh-cordis-host-runner`（基线 `0.1.7-alpha.2`；2026-09-23 由 `0.1.5-rc.1` 升级重打——原版 `AC73F866…` / 产物 `D3126110…`，4 条锚点唯一命中，`EDITS` 零改）
 **目标文件**：`lib/index.js`（该包 `package.json` 的 `main`/`exports` 唯一入口）
 **生效条件**：应用后必须**重启 DSH host 进程** —— Node 已加载的模块不会热更新。

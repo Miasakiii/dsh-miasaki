@@ -5,7 +5,21 @@
   （npm `next` 轨，GitHub Release tag `dsh-v0.2.0-rc.2`，published `2026-09-29T09:42:36Z`）
 - 上一份同类：[`dsh-0.2.0-rc1-upgrade-assessment-2026-09-28.md`](dsh-0.2.0-rc1-upgrade-assessment-2026-09-28.md)（09-28，升到 0.2.0-rc.1）
 - 口径：`[实测]` = 本次下载真实产物或本地跑命令核到；`[推断]` = 基于证据的判断，未做隔离实例实测
-- **本文只做「准备」，未改动本机任何生产文件、未升级、未改任何补丁文件。**
+- **本文起草于「升级准备」阶段；同日已按 §4 执行完毕** —— 执行状态见下方绿块。
+
+> ## ✅ 执行状态：已于 2026-09-29 当日执行
+>
+> - 全局 DSH：`0.2.0-rc.1` → **`0.2.0-rc.2`**（`npm i -g`，606.8 s，**无死锁**）
+> - 补丁：**7 件重打**（5 件常量不变 + chat / conversation 换基线 + sidebar 删 1 条编辑）
+> - `dsh-cordis-host-runner`：**整件退役**（上游吸收），已从 `verify-all` 清单与 desktop README 补丁表移除，
+>   并新增 `RETIRED` 标记供 `patch-live-audit` 跳过
+> - 回归：`verify-all` **163 项全 PASS**（desktop **35/35**，较前少 1 项 = cordis 退役的**口径变化**）
+> - 复核：`patch-live-audit` → **10 个目标 patched / 未生效 0 / 未安装 0**
+> - **预检回填值被 `rebuild-baseline.mjs` 逐字节复现**（chat / conversation / sidebar 三件）——
+>   本文的离线预检方法由此得到二次验证
+>
+> 执行过程见 `dsh-miasaki-desktop/design/CHANGELOG.md`「2026-09-29（续二）」。
+> **以下正文保留为执行前的预检原始结论**（方法、判据、回填对照表），是复核与复盘的依据。
 
 ---
 
@@ -405,11 +419,13 @@ dsh --version                              # 应输出 0.2.0-rc.2
 
 | 路径 | 内容 |
 |---|---|
-| `tgz\` | 9 个 `@deepseek-ai/*@0.2.0-rc.2` 原始 tarball |
-| `unpacked\` | 解包后的产物（比对与回填的权威输入） |
-| `work\` | 干跑副本（`*.dsh-bak` 为 rc.2 原版） |
 | `dump.cjs` / `dumpRange.cjs` | 按 needle / 按偏移区间打印产物片段（比对 tab 缩进用） |
 | `adapt-check.cjs` | 从 `patch.mjs` 提取 `EDITS`，逐条报命中数；可跳过指定编辑后重建产物并过语法闸门 |
+| `sharp-check.cjs` | 复测全局 dsh 自带 sharp 能否真出图（09-28 事故点复检） |
 
-> 这三个探针脚本随升级执行完成一并清理（属项目纪律「探针即用即弃」）；
-> 若需长期保留，转入 `_refs/scripts-archive/`。
+> **升级执行完成后（2026-09-29 当日）**：`tgz\` / `unpacked\` / `work\` / `npm-cache\` 共 10.7 MB
+> 下载产物已按「探针即用即弃」纪律删除；**4 个探针脚本保留在此**，供下次升级复用
+> （下次重跑 §1.1 重新拉产物即可）。
+>
+> **升级前的 `~/.dsh` 备份**（274.4 MB，含 sessions / storages 与 profile 配置）在
+> `<仓库根>\_refs\pre-upgrade-020rc1-20260929\`，**保留至实机验收完成**再决定去留。

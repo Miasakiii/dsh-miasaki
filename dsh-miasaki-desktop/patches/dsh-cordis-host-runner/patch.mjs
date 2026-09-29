@@ -52,6 +52,17 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const BASELINE = join(HERE, 'baseline')
 const ORIGINAL_FILE = join(BASELINE, 'index.original.js')
 
+/**
+ * **本补丁已于 2026-09-29 退役**，不再应用：官方 `@deepseek-ai/dsh@0.2.0-rc.2` 自行实现了
+ * 本补丁的全部四条编辑意图（`pending.failure ??=` 记拒因 + `clientQueryTimeoutMs` 可配超时 +
+ * `finally { clearTimeout(timer) }` 清理 + 无活动页面时立刻失败），且实现更完整。
+ * 本补丁 4 条锚点在 rc.2 上**全部命中 0 次**（在 rc.1 baseline 上仍是 4/4，证明规则本身未坏）。
+ *
+ * 该标记供 `scripts/patch-live-audit.mjs` 识别：退役补丁不参与 live 审计，
+ * 免得把「未重打」误报成待办。判据与证据见本目录 README 顶部与
+ * `dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md` §3.1。
+ */
+export const RETIRED = true
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-cordis-host-runner'
 /** 该包 package.json 的 main/exports 唯一入口。 */
 export const TARGET_RELATIVE = join('lib', 'index.js')

@@ -7,9 +7,15 @@
 > 绘制**，中间列顶部的叠加上下文（会话头 titleRow 的 `container-type: inline-size`
 > 布局遏制、tabs 行 `z-index:1`、窄窗口下侧边栏覆盖被挤压的中栏）会把气泡
 > **盖住 / 裁掉** —— 鼠标悬浮左上角 logo 想读「新建会话」提示，只看到气泡被切掉的
-> 一丝（2026-09-28 实机截图：深色气泡只剩左端 3px）。本补丁给这个包全部 6 处
+> 一丝（2026-09-28 实机截图：深色气泡只剩左端 3px）。本补丁给这个包**现存** 5 处
 > Tooltip 加 `portal: true`（官方 primitives 自带的逃生通道：气泡改挂
 > `document.body`、z-index 升 1100），几何与内容零变化。
+>
+> **2026-09-29（`0.2.0-rc.2` 升级适配）**：原 6 处中的**品牌区 logo 那条（即用户报告点）已退役**
+> —— 官方 rc.2 把那个 Tooltip 包装整个删掉、改为直接渲染带 `aria-label` 的 button
+> （该包 −215 B），遮挡问题随之消失，锚点命中 0 次。其余 5 条在新版上仍全部唯一命中。
+> 因原幂等标记恰好取自已退役的那条（8 制表符缩进），标记一并换成了
+> 「展开态新会话 pill」处的 6 制表符组合（见 `patch.mjs` 的 `PATCH_MARKER` 注释）。
 
 ## 为什么是「运行时补丁」而不是插件
 
@@ -44,9 +50,9 @@ so an ancestor's clipping or its stacking context ... cannot hide it"，z-index 
 
 | 文件 | 作用 |
 |---|---|
-| `patch.mjs` | **补丁规范**：6 条锚点编辑（tooltip 加 `portal: true`）+ CLI（verify / status / apply / revert） |
+| `patch.mjs` | **补丁规范**：5 条锚点编辑（tooltip 加 `portal: true`）+ CLI（verify / status / apply / revert） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
-| `baseline/client.original.js` | DSH **0.1.7-rc.2** 官方原版 client.js（32,052 B，SHA-256 `40E651B9…`） |
+| `baseline/client.original.js` | DSH **0.2.0-rc.2** 官方原版 client.js（31,997 B，SHA-256 `88D7E6D2…`） |
 
 > 与其他补丁的差别：**不存 patched 全文**。产物以 `PATCHED_SHA256` 常量记录，
 > `verify` 用「由原始 baseline 重建出的 SHA 是否等于该常量」自证 —— SHA 相等即
@@ -55,7 +61,7 @@ so an ancestor's clipping or its stacking context ... cannot hide it"，z-index 
 
 ## 补丁做了什么
 
-6 条编辑，各按「锚点唯一」定位（不唯一或缺失即报错，宁可失败也不瞎改）：
+**5 条**编辑（2026-09-29 起；原 6 条，品牌区那条随 rc.2 退役），各按「锚点唯一」定位（不唯一或缺失即报错，宁可失败也不瞎改）：
 
 | # | 调用点 | 锚点（前 2 行示意） |
 |---|---|---|
@@ -63,8 +69,11 @@ so an ancestor's clipping or its stacking context ... cannot hide it"，z-index 
 | 2 | `shell.leading` 窗槽 · 新建会话 | `label: t("session.new.label"),` … `HeaderLeadingControls…iconButton,` |
 | 3 | 折叠轨道态全局面板行 | `Tooltip, {` `label,` `delayMs: 500,` `disabled: wide,` |
 | 4 | 侧边栏开关按钮 | `label: toggleLabel,` … `side: captionTooltipSide,` |
-| 5 | **用户报告点：左上角 logo「新建会话」** | 7 制表符缩进的 `label: t("session.new.label"),` … `children: …"button", {` |
-| 6 | 展开态「新会话」pill | 6 制表符缩进的 `label: t("session.new.label"),` … `disabled: wide,` |
+| 5 | 展开态「新会话」pill | 6 制表符缩进的 `label: t("session.new.label"),` … `disabled: wide,` |
+
+> **已退役（rc.2）**：原第 5 条「左上角 logo『新建会话』（用户报告点）」（7 制表符缩进）——
+> 官方在 `0.2.0-rc.2` 把那个 Tooltip 整个删掉、改为直接渲染带 `aria-label` 的 button，
+> 该处已无 Tooltip 可 portal 化，遮挡问题随之消失。
 
 每条即在 `delayMs: 500,` 后插入 `portal: true,`（保持原缩进）：
 
@@ -108,7 +117,7 @@ node ..\..\..\scripts\verify-all.mjs desktop
 ## DSH 升级后怎么办
 
 1. `node patch.mjs status` —— 若显示 `unknown`，说明安装的是新版本，补丁已被覆盖；
-2. 用 `baseline/client.original.js` ↔ 新版 client.js 做 diff，核对 6 处锚点是否仍在
+2. 用 `baseline/client.original.js` ↔ 新版 client.js 做 diff，核对 5 处锚点是否仍在
    （`patch.mjs` 会在锚点缺失或多重命中时明确报错，不会静默改错）；
 3. 锚点漂移则更新 `EDITS` 与 baseline，再跑 `node rebuild-baseline.mjs` 取新常量、`node patch.mjs verify` 自证；
 4. `node patch.mjs apply` 重新应用，刷新页面生效。

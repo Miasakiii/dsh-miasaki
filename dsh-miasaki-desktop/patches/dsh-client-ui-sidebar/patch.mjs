@@ -12,7 +12,8 @@
 //  logo 想读「新建会话」提示，只看到气泡被切掉的一丝或整块不见
 //  （2026-09-28 实机截图：深色气泡只剩左端 3px）。
 //
-// 本补丁只做一件事：给这个包的全部 6 处 Tooltip 加 `portal: true` ——
+// 本补丁只做一件事：给这个包**现存**的 5 处 Tooltip 加 `portal: true` ——
+//   （原为 6 处；2026-09-29 官方 `0.2.0-rc.2` 删掉了品牌区 logo 那个 Tooltip，见下方 EDITS 注释）
 // 官方 primitives 为此提供的逃生通道：气泡改挂 document.body，
 // z-index 升到 1100（`.bubble[data-portal]`），祖先的裁剪容器与叠加上下文
 // 再也盖不住它。几何（side/align/fit 钳制）与内容完全不变，纯 DOM 挂点 +
@@ -47,22 +48,34 @@ const ORIGINAL_FILE = join(BASELINE, 'client.original.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-sidebar'
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
+export const BASELINE_DSH_VERSION = '0.2.0-rc.2'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '57C5C6AC6B74E7757CB545110D5C2C9881EFE4F6D2C5265944BF417EB27C690F'
+export const ORIGINAL_SHA256 = '88D7E6D2F65350A62F1D97D0CE9BE34643C73E9825243AE9307DAE55094896A2'
 /**
  * 应用本补丁后的 SHA-256。
  *
- * 与 conversation 补丁同：**不存 patched 全文**（6 处插入、产物靠重建自证），
+ * 与 conversation 补丁同：**不存 patched 全文**（5 处插入、产物靠重建自证），
  * verify 用「由原始 baseline 重建后的 SHA 是否等于本常量」自证。
  */
-export const PATCHED_SHA256 = 'CE314B9691C23F53B94B3D665CE8F2D37BE4F7FB2DA665A7F3314D4BBDC2A6F6'
-/** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
-const PATCH_MARKER = '\t\t\t\t\t\t\t\tdelayMs: 500,\n\t\t\t\t\t\t\t\tportal: true,'
+export const PATCHED_SHA256 = '0347DB5D73EFDDE20FC9F6AD32645E67FD318A0097A1F74615C77F939352F4C4'
+/**
+ * 补丁特征串：出现即视为已应用（用于幂等与状态判定）。
+ *
+ * **2026-09-29 换标记**：原标记取自已退役的 `sidebar-brand-portal`（8 制表符缩进）。
+ * 官方在 0.2.0-rc.2 删掉了侧边栏品牌区那个 Tooltip，该编辑随之退役（见下方 EDITS 注释），
+ * 留着旧标记会让幂等判定永久失真。现取「展开态新会话 pill」处 6 制表符组合 ——
+ * 它是本包 5 条编辑里唯一的 6 制表符写法。
+ */
+const PATCH_MARKER = '\t\t\t\t\t\tportal: true,\n\t\t\t\t\t\tside: captionTooltipSide,'
 
 // ---------------------------------------------------------------------------
 // 编辑规则。锚点是编译产物里的 JS 片段原文；锚点必须全文件唯一。
-// 6 处 Tooltip 逐一加 `portal: true,`（保持原有缩进）。
+// 5 处 Tooltip 逐一加 `portal: true,`（保持原有缩进）。
+//
+// **2026-09-29（0.2.0-rc.2 升级适配）**：原第 5 条 `sidebar-brand-portal`
+// （8 制表符缩进的品牌区「新建会话」Tooltip，即用户报告点）**已退役** ——
+// 官方 rc.2 把这个 Tooltip 包装整个删掉了（改为直接渲染带 `aria-label` 的 button，
+// 该包 −215 B），遮挡问题随之消失，锚点命中 0 次。其余 5 条在 rc.2 上仍全部唯一命中。
 // ---------------------------------------------------------------------------
 const EDITS = [
   {
@@ -135,23 +148,6 @@ const EDITS = [
       '\t\t\t\tdelayMs: 500,',
       '\t\t\t\tportal: true,',
       '\t\t\t\tside: captionTooltipSide,',
-    ].join('\n'),
-  },
-  {
-    // **用户报告点**：左上角 logo 的「新建会话」tooltip（side 默认 right）
-    id: 'sidebar-brand-portal',
-    anchor: [
-      'label: t("session.new.label"),',
-      '\t\t\t\t\t\t\t\tshortcutKeys: newShortcut?.keys,',
-      '\t\t\t\t\t\t\t\tdelayMs: 500,',
-      '\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)("button", {',
-    ].join('\n'),
-    replacement: [
-      'label: t("session.new.label"),',
-      '\t\t\t\t\t\t\t\tshortcutKeys: newShortcut?.keys,',
-      '\t\t\t\t\t\t\t\tdelayMs: 500,',
-      '\t\t\t\t\t\t\t\tportal: true,',
-      '\t\t\t\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)("button", {',
     ].join('\n'),
   },
   {
