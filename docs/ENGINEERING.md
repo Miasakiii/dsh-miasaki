@@ -333,6 +333,49 @@ Node **22.19.0** 与 **24.15.0** 各自 `tools.test.js` **31/31**、全量 **161
 **纪律**：CI 固定 Node **22.19.0** 而本机常是 24.x ——「**本机全绿 ≠ CI 绿**」，
 改动后用 `npx -y node@22.19.0 scripts/verify-all.mjs` 复跑一次。
 
+**2026-09-29（深夜）基线（全量 167 项检查，九线 + 仓库级；本机 166 PASS + 1 项沙箱阻塞）**`[实测]`：
+sidebar 13/13、canvas 13/13、fleet 17/17、desktop **38/38**（含 `cargo test` **109 例**）、ssh 31/31、
+dual-model 15/15、appearance 18/18、usage 3/3、free-model 15/15、**repo 4/4**。
+唯一未执行项是 `repo/md-links`：它内部 `execFileSync('git')` 走默认管道 stdio，在本机 DSH 沙箱下
+`EPERM`（沙箱边界，非缺陷）—— 已用**等价快照数据源喂真脚本**复核 **PASS**（184 个入库文档 / 426 个
+相对链接全部解析到已入库目标），CI 侧可正常执行。**本批四线工作 + 两处闸门接线一并入账**：
+
+① **DSH 0.2.0-rc.2 适配**（desktop）：七件补丁重打 —— attachment / brand-official / settings-models /
+trajectory / api-session-controller 五件常量不变（rc.2 原版逐字节相同）、chat 与 conversation 换
+baseline + 回填三常量、sidebar 删 1 条编辑（品牌区 Tooltip 已被官方移除，幂等标记同步换锚）；
+`dsh-cordis-host-runner` **整件退役**（官方 rc.2 自行实现同一修复且更完整，本补丁 4 条编辑的锚点在
+rc.2 上**全部命中 0 次**、在 rc.1 baseline 上 4/4）⇒ desktop **−1**，同时新增 `RETIRED` 标记供
+`patch-live-audit` 跳过（否则「未重打」会被误报成待办）。
+
+② **桌宠设置扩起 + 设置页视觉重做**（desktop）：设置项 2 → **12**（新增壳侧六项：动效强度 / 气泡时长 /
+不透明度 / 宠物钉选 / 鼠标穿透 / 隐藏后形态；新增 `pet_native/settings.rs` 独立持久化 —— 刻意不塞进
+`pet.json`，后者被拖动路径高频重写），`cargo test` 100 → **109**；设置页从裸 `div` + 内联样式改为
+**官方 primitives + `.mia-*` 行式规格**（对齐官方「通用设置」页），并落 **风格契约 5 条闸门**。
+**顺带补上一道漏掉的闸门**：`plugins/dsh-pet-panel/lib/client.js` 此前**不在任何闸门里**（只靠
+`package.json` 的 build 脚本检查，回归里看不见）⇒ desktop **+3**。
+
+③ **sidebar 侧线改为只带最近 3 轮**：原先 `fork` 不传 `atSeq`，而官方对「省略」的语义是
+**继承主会话全部已完成轮次** ⇒ 用户看到的是「把主会话又复制一遍」。改为传 `atSeq` 截到倒数第 3 个
+`turn/start`（`atSeq` 是 inclusive 前缀边界）；拿不到绑定或不足 3 轮时**退回全文 fork 并如实标注**
+（侧线头显示「完整历史」vs「最近 3 轮」），不猜、不静默。单测 13 → **18 例**，并改掉两条与新语义
+直接冲突的旧硬断言。
+
+④ **appearance M3.2 设置页动效统一**：动效层里设置面板那条挂在 `.mia-panel` —— 一个**各线各带一份
+CSS 复制出来的面板类名**，实际只有 appearance 与 pet-panel 用 ⇒ 设置里**只有「外观」「桌宠」两页**
+整块上浮、其余六页瞬切；而官方设置外壳本身零 `animation` / 零 `transition`，连 `reduced-motion`
+分支也仍只剩那两页淡入。改为挂**官方设置面板容器**（`[role="presentation"] > [role="dialog"]
+[aria-modal="true"][aria-labelledby]`，按 dsh 0.2.0-rc.2 **实际安装产物**取证：该组合在全量 client 包中
+**全局唯一**，官方 Modal / 图片灯箱走 `aria-label`、usage 浮窗走 `aria-label`、ssh 面板 sheet 父级不是
+`[role="presentation"]`，均不命中）⇒ 打开设置时整块入场一次，页签之间切换复用同一 DOM 节点**不重播**、
+与官方瞬切一致。
+
+**两处闸门接线（本批的真实发现）**：`md-links` 的脚本 `scripts/check-md-links.mjs` 已于 `5a1e91d`
+入库、但 `verify-all.mjs` 里**没有挂载** —— 闸门存在却从不执行，正是本仓反复出现的
+「**注释/说明声称覆盖、实现没覆盖**」形态（与第九线迁移时两道闸门漏登记同族）；
+`dsh-pet-panel` 同理（见 ②）。两者本批都已接线。**取证纪律补一条**：锚点类改动必须按
+**运行版**（本机实际安装产物）取证 —— vendor 开发版的 `SettingsRoot.tsx` 与 rc.2 实装产物有差异
+（实装多一个 `data-shortcut-modal="settings"`），照源码猜会选错锚点。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

@@ -333,18 +333,13 @@ function planDesktop() {
     args: [join(dir, 'patches/dsh-client-ui-chat/patch.mjs'), 'verify'],
     cwd: dir,
   })
-  // `cordis_inspect_query`(client) 永久挂起修复补丁的自证。同一契约之外，它还做两组
-  // **行为断言**：把重建产物里真实的 resolveClientQuery 与注入的超时块抠出来跑
-  // （拒绝必须被记录且不抢答；无人应答必须结算成带原因的 timeout），并对 baseline 原版
-  // 跑反例以证明断言有区分力；外加 node --check 的 ESM 语法校验。
-  // 与前几项同理——纯离线、不碰安装目录，DSH 升级覆盖补丁后仍应 PASS。
-  checks.push({
-    line: 'desktop',
-    name: 'patch verify (cordis client 查询挂起修复补丁可重建)',
-    cmd: process.execPath,
-    args: [join(dir, 'patches/dsh-cordis-host-runner/patch.mjs'), 'verify'],
-    cwd: dir,
-  })
+  // `cordis_inspect_query`(client) 永久挂起修复补丁**已于 2026-09-29 退役**：
+  // 官方 `0.2.0-rc.2` 自行实现了同一修复 —— `pending.failure ??=` 记录拒绝原因与输出校验失败、
+  // `clientQueryTimeoutMs` 可配超时、`finally { clearTimeout(timer) }` 清理，外加一条
+  // 本补丁没有的「无活动页面时立刻失败」守卫。本补丁 4 条编辑的锚点在 rc.2 上
+  // **全部命中 0 次**（在 rc.1 baseline 上为 4/4，证明规则本身未坏）——意图被上游完整吸收。
+  // 故不再入册；`patches/dsh-cordis-host-runner/` 目录与设计记录保留为历史。
+  // 判据与证据见 dsh-miasaki-shared-docs/dsh-platform/dsh-0.2.0-rc2-upgrade-assessment-2026-09-29.md §3.1。
   // 消息图片画廊多图 tile 宽高比补丁（2026-09-23 新建，基线即 0.1.7-alpha.2）的自证。
   // 纯 CSS 两条替换，没有行为断言可跑，契约就是「由 baseline 重建 == 记录 SHA」+
   // 两侧语法闸门。同样纯离线。
@@ -399,6 +394,21 @@ function planDesktop() {
     cmd: process.execPath,
     args: [join(dir, 'plugins/dsh-model-probe/test/settings-read.test.js')],
     cwd: join(dir, 'plugins/dsh-model-probe'),
+  })
+  // 桌宠面板（plugins/dsh-pet-panel）：2026-09-29 **补闸门**。
+  // 该插件的 lib/client.js 此前**不在任何闸门里** —— 而它承载三条真实链路
+  // （六态上报 / 主题人格联动 / R5 内联审批回写），且是「设置 → 桌宠」的唯一实现。
+  // 形态与 dsh-model-probe 当年相同：**只靠 package.json 的 build 脚本检查，回归里看不见**
+  // （2026-09-29 加「六态开关 + 主题跟随」时才发现的，见 AGENTS.md「漏登记是复发形态」）。
+  for (const entry of ['lib/index.js', 'lib/client.js']) {
+    checks.push({ line: 'desktop', name: `syntax plugins/dsh-pet-panel/${entry}`, cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-pet-panel', entry)], cwd: dir })
+  }
+  checks.push({
+    line: 'desktop',
+    name: 'test pet-panel (客户端设置层)',
+    cmd: process.execPath,
+    args: [join(dir, 'plugins/dsh-pet-panel/test/panel-settings.test.js')],
+    cwd: join(dir, 'plugins/dsh-pet-panel'),
   })
   // 免费模型池已于 2026-09-28 迁出本线 → 独立第九线 dsh-miasaki-free-model
   // （更名 @miasaki/dsh-free-model）。原先挂在这里的三项闸门随迁，见 planFreeModel()。
@@ -596,6 +606,19 @@ function planRepo() {
     name: 'message-sources (会话消息来源不得用退役 v3 写法)',
     cmd: process.execPath,
     args: [join(ROOT, 'scripts', 'check-message-sources.mjs')],
+    cwd: ROOT,
+  })
+  // 2026-09-29 一次性扫描发现：184 个入库文档里有 **49 处相对链接在 GitHub 上必然 404**，
+  // 形态是「路径视角不统一」（少一层 / 多一层 / 根视角）。此前**没有任何闸门守链接** ——
+  // `check-doc-versions.mjs` 头部写着「断链见 check-silent-guards 的 R4」，但 R4 是
+  // 「声明清单缺口」，**并不覆盖文件系统层面的断链**，那 49 处就是这么逃过去的。
+  // 判据两条：目标必须存在，且**必须已入库**（后者挡住「引用 _refs/」这类本机正常、
+  // clone 必断的写法）。
+  checks.push({
+    line: 'repo',
+    name: 'md-links (入库文档的相对链接必须解析到已入库目标)',
+    cmd: process.execPath,
+    args: [join(ROOT, 'scripts', 'check-md-links.mjs')],
     cwd: ROOT,
   })
 }
