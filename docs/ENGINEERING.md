@@ -376,6 +376,19 @@ CSS 复制出来的面板类名**，实际只有 appearance 与 pet-panel 用 �
 **运行版**（本机实际安装产物）取证 —— vendor 开发版的 `SettingsRoot.tsx` 与 rc.2 实装产物有差异
 （实装多一个 `data-shortcut-modal="settings"`），照源码猜会选错锚点。
 
+**CI 自 09-29 20:59 起红已修（「本机绿 ≠ CI 绿」的第二个实例）**：`8181b89` / `2ef10fa` 给各 web 插件
+补 `peerDependencies`（`@deepseek-ai/cordis`、`@deepseek-ai/dsh-host-webserver`）时只改了
+`package.json`、没同步 `pnpm-lock.yaml` ⇒ CI 的 `pnpm install --frozen-lockfile` 以
+`ERR_PNPM_OUTDATED_LOCKFILE` 失败，**后续步骤（安装 ssh 线依赖 / 运行 verify-all）全部被 skip**
+⇒ 连续四次 push 都红，而本机每次都全绿（本地 `pnpm install` 不带 `--frozen-lockfile`，会**自动把 lock 补齐**
+—— 越是顺手跑过 install 越看不见）。已用 `pnpm install --lockfile-only` 同步 sidebar / ssh 两条线
+（pnpm 默认 `auto-install-peers`，故 peer 依赖记入 `dependencies` 并展开依赖树，与本仓 canvas 线既有
+lock **逐字同格式**）；两条线 `pnpm install --frozen-lockfile` 各自 exit=0，推送后
+**CI 转绿（3m27s，167 项全绿，desktop 38/38 含 `cargo test` 109 例）**。
+**纪律**：CI 红的判据**先看红在哪一步**（`gh run view <id>` 直接给步骤名与注释）——
+本次失败步骤是「安装 sidebar 线依赖」，一眼排除「Node 版本 / 测试挂起」那类成因；
+另附一条认知纠正：`gh run view --log-failed` **本机可读**，此前记录的「Actions 日志 API 需 admin」不成立。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
