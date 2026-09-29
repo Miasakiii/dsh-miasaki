@@ -2,7 +2,7 @@
 
 - 日期：2026-09-25
 - 调研者：Miasaki 会话（Lead 主导 + 4 名并行调查员分主题精读）
-- 对象：`F:\sud\dsh-desk` 官方 Windows x64 安装（注册表 `DeepSeek Harness 0.1.7-rc.2`，更新通道 `nightly`）
+- 对象：`<官方桌面端安装目录>` 官方 Windows x64 安装（注册表 `DeepSeek Harness 0.1.7-rc.2`，更新通道 `nightly`）
 - 证据基础：从 `resources/app.asar` 解包出的桌面壳源码（`lib/main.js` 11,695 行 / 57 个模块分区、3 个 preload、`renderer/` 壳内页面）、`@deepseek-ai/dsh-desktop-host` 宿主包、内置 runtime 清单、本机 profile 与用户数据目录、正在运行的宿主环境变量
 - 口径：`[实测]` = 本次解包源码 / 读代码 / 跑命令 / 读运行环境核到；`[推断]` = 基于证据的判断，未做隔离实例验证
 - 配套：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md)、[`dsh-official-repo-review-2026-09-25.md`](dsh-official-repo-review-2026-09-25.md)
@@ -32,7 +32,7 @@
 ### 1.1 顶层结构 `[实测]`
 
 ```
-F:\sud\dsh-desk\                    总计 9,767 文件 / 1,009.81 MiB（1,058,859,729 B，字节精确核对）
+<官方桌面端安装目录>\                    总计 9,767 文件 / 1,009.81 MiB（1,058,859,729 B，字节精确核对）
 ├─ 根目录启动文件                   297.40 MiB   DeepSeek Harness.exe 233.16 + Chromium 运行时
 │                                                （dxcompiler.dll 24.56 / LICENSES.chromium 19.52 /
 │                                                  resources.pak 11.86 / icudtl.dat 10.37 …）
@@ -397,13 +397,13 @@ F:\sud\dsh-desk\                    总计 9,767 文件 / 1,009.81 MiB（1,058,8
 
 | 证据 | 位置 |
 |---|---|
-| 桌面壳主进程 bundle（11,695 行 / 57 region） | `F:\sud\dsh-desk\resources\app.asar!lib/main.js` |
+| 桌面壳主进程 bundle（11,695 行 / 57 region） | `<官方桌面端安装目录>\resources\app.asar!lib/main.js` |
 | 渲染层 preload 契约 | `...!lib/preload-app.cjs`（775 行附近为 `createProductApi`） |
 | Host 宿主包 | `...!dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js`（367 行） |
 | profile/bundles 机制权威文档 | `...!dsh/node_modules/@deepseek-ai/dsh-app-boot/README.zh.md` |
-| 更新配置 | `F:\sud\dsh-desk\resources\app-update.yml` |
-| 内置运行时身份 | `F:\sud\dsh-desk\resources\runtime\primary-runtime\runtime.json`、`runtime\versions.json` |
-| Node 转接脚本 | `F:\sud\dsh-desk\resources\runtime\bin\node.cmd` |
+| 更新配置 | `<官方桌面端安装目录>\resources\app-update.yml` |
+| 内置运行时身份 | `<官方桌面端安装目录>\resources\runtime\primary-runtime\runtime.json`、`runtime\versions.json` |
+| Node 转接脚本 | `<官方桌面端安装目录>\resources\runtime\bin\node.cmd` |
 | 运行环境变量（本会话） | `DSH_PROFILE=desktop`、`DSH_PROFILE_DIR=~/.dsh/profiles/desktop`、`DSH_WEB_URL=http://127.0.0.1:19387` |
 | 两个 profile 的装配 | `~/.dsh/profiles/{desktop,web}/package.json`、各自 `cordis.patch.yml` |
 

@@ -49,7 +49,7 @@
 | master HEAD | `4878cda` = `release(dsh): 0.2.0-rc.1 (#5387)`（`2026-09-28T11:48:10Z`） | 09-25 停在 rc.2 release merge |
 | npm dist-tags | `latest = 0.1.7-rc.2`；**`next = 0.2.0-rc.1`**；`alpha = 0.1.7-alpha.2` | **`next` 由 `0.1.7-rc.2` → `0.2.0-rc.1`** ★ |
 | 本机运行版本 | `0.1.7-rc.2`（全局 npm `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`，`package.json` 实测） | 未变 |
-| 官方桌面端 | `F:\sud\dsh-desk` = **`0.1.7-rc.2`**（`resources/runtime/primary-runtime/runtime.json`、注册表 `DeepSeek Harness 0.1.7-rc.2`）；更新源 `download.deepseek.com/dsh-desk/feeds/win-x64/`，**通道 `nightly`，无 `latest.yml`（404）** | 未跟随 |
+| 官方桌面端 | `<官方桌面端安装目录>` = **`0.1.7-rc.2`**（`resources/runtime/primary-runtime/runtime.json`、注册表 `DeepSeek Harness 0.1.7-rc.2`）；更新源 `download.deepseek.com/dsh-desk/feeds/win-x64/`，**通道 `nightly`，无 `latest.yml`（404）** | 未跟随 |
 
 > **发布节奏**：09-23 `rc.1` → 09-24 `rc.2` → 09-28 **`0.2.0-rc.1`**。
 > 0.1.7 系列到 rc.2 后直接换次版本号，说明官方把这一批（261 commit）整体定性为 0.2 代的开端。

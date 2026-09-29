@@ -129,7 +129,7 @@ sets it」）。Windows 侧官方只有两条路：**原生边框**（官方 dsh
 
 ### 四、影响边界（澄清一个易误判的点）
 
-官方桌面端 `F:\sud\dsh-desk` **自带独立运行时**：`resources/app.asar` 内 `dsh/package.json` =
+官方桌面端 `<官方桌面端安装目录>` **自带独立运行时**：`resources/app.asar` 内 `dsh/package.json` =
 `@deepseek-ai/dsh-desktop-runtime`，且 `dsh/node_modules/` 有 14,999 个文件。
 **它不经过全局 npm**，因此本次升级不影响官方桌面端，也不影响当时正在运行的会话。
 另注：官方桌面端自身在同期经 `nightly` 通道自动更新到了 `0.2.0-rc.1`
@@ -584,9 +584,9 @@ whale idle 6 帧 + frames.json 共 66 个文件逐字节一致**（幂等）⇒ 
 | 事实 | 数值 |
 |---|---|
 | `profiles/miasaki/sessions` / `~/.dsh/sessions` | 242 / 272 个会话（交集 231、仅 profile 11、仅全局 41） |
-| 全局账本实际登记 | **仅 6 条**（dsh-miasaki 5 + kulumi 1） |
+| 全局账本实际登记 | **仅 6 条**（dsh-miasaki 5 + <工作区-1> 1） |
 | 其中只在全局 root 的 | `session-97e73994…`（21:26 正在写）、`session-b689020a…` —— 在本壳里必然 header missing |
-| ⇒ 本壳修复前的可见分组 | dsh-miasaki 仅 3 条、kulumi 1 条，**其余 238 条全落「未分组」** |
+| ⇒ 本壳修复前的可见分组 | dsh-miasaki 仅 3 条、<工作区-1> 1 条，**其余 238 条全落「未分组」** |
 
 **实施**（只加一处配置；官方 `desktop` profile 与 `web` profile 零改动）：
 
@@ -603,7 +603,7 @@ whale idle 6 帧 + frames.json 共 66 个文件逐字节一致**（幂等）⇒ 
 | 项 | 判据 | 实测 |
 |---|---|---|
 | 配置生效 | 新 root 是否生成自己的账本 | ✅ 改配置 **21:43:44** → 账本 **21:43:47** 出现（运行中的壳热重载该配置，3 秒内生效） |
-| 全量回填 | 242 个会话按 cwd 归组 | ✅ 归位 **237**：dsh-miasaki **227** / kulumi 7 / Dhow 2 / <用户主目录> 1 |
+| 全量回填 | 242 个会话按 cwd 归组 | ✅ 归位 **237**：dsh-miasaki **227** / <工作区-1> 7 / <工作区-2> 2 / <用户主目录> 1 |
 | 余 5 个未归组 | 其 `cwd` 目录是否还在 | ✅ **全部已不存在**（Prism / 新建文件夹 / 正大 / 临时目录）——官方按 `realpath(cwd)` 归组，目录没了本就不归组 |
 | 归档迁移 | 合并后账本字段 | ✅ `archived 0 → 11`，`initialized=true` 与 4 个工作区原样保留；脚本写后读回、schema 校验 PASS |
 | 隔离对侧 | 全局账本是否还被本壳写 | ✅ mtime 停在 **21:26:24**（本壳新 root 建立后零改动） |
@@ -642,7 +642,7 @@ whale idle 6 帧 + frames.json 共 66 个文件逐字节一致**（幂等）⇒ 
 ⚠ **这一半要等 web host 重启才生效**：storage-json 的内存态是权威，运行中的实例下次写账本会把重置
 覆盖回去 ⇒ **重启前不要在浏览器 GUI 的侧边栏做新建 / 拖拽 / 归档 / 置顶**。
 **生效判据（已离线推演，重启后照此对照）**：重启后全局账本 `workspaceIds` 由 `0` 变回 `2`、
-`initialized` 回到 `true`，分组变为 **dsh-miasaki 257 / kulumi 7 / Dhow 2 / <用户主目录> 1**
+`initialized` 回到 `true`，分组变为 **dsh-miasaki 257 / <工作区-1> 7 / <工作区-2> 2 / <用户主目录> 1**
 （另 5 个会话的 `cwd` 目录已不存在，官方同样归不了组）。**这套推演判据可信**：同一脚本算 miasaki
 root 得 227/7/2/1，与自制壳侧账本的**实测值逐条吻合**。报告：
 `_refs/audit-2026-09-27/global-regroup-preview.md`（对照 `miasaki-regroup-preview.md`）。

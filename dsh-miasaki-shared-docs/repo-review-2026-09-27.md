@@ -38,7 +38,7 @@
 |---|---|---|---|
 | **自研壳**（`dsh-miasaki-desktop`，Tauri 2） | 全局 npm `@deepseek-ai/dsh@0.1.7-rc.2`（`%APPDATA%\npm\node_modules\…`） | `miasaki` | **全部 7 线 + desktop 自研 4 插件** |
 | **浏览器 GUI**（`dsh web`） | 同上（同一份安装） | `web` | 与 `miasaki` 几乎相同（bundles 少一个官方实验包） |
-| **官方桌面端**（Electron，`F:\sud\dsh-desk`） | **自带**：`resources/app.asar` 内含 `dsh/` | `desktop` | **只有 `dsh-token-monitor`（usage 线）** |
+| **官方桌面端**（Electron，`<官方桌面端安装目录>`） | **自带**：`resources/app.asar` 内含 `dsh/` | `desktop` | **只有 `dsh-token-monitor`（usage 线）** |
 
 **关键推论**：前两个运行面**共用同一份全局 DSH 安装**，因此 desktop 的 6 个补丁 + dual-model 的 1 个补丁
 **对自研壳与浏览器 GUI 同时生效**；官方桌面端因为读 asar 内自带的 DSH 副本，**补丁影响不到它**——

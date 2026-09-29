@@ -460,7 +460,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 |---|---|---|
 | 读取侧 | 无头 Edge 实载 `dsh --profile miasaki --no-open --port 31877`，捕获全部会话载荷 | ✅ 180 个会话 id 中 **179 个属新 root**；唯一属全局 root 的经上下文核对出自 canvas 工作区数据（`sessionIds`），非会话列表 |
 | 写入侧 | 后端运行期间新建会话落哪个 root | ✅ 落**新 root**（11:27:16 `session-0cfe7de0…`）；同一时段全局 root **零新增**（最新会话仍停在 11:17:28） |
-| 差分标记 | 复制时**刻意排除** kulumi 项目（7 个会话）：若列表来自全局 root，这 7 个 id 必然出现 | ✅ 6 个出现 0 次；第 7 个仅出现在 canvas 的工作区引用里 |
+| 差分标记 | 复制时**刻意排除** <工作区-1> 项目（7 个会话）：若列表来自全局 root，这 7 个 id 必然出现 | ✅ 6 个出现 0 次；第 7 个仅出现在 canvas 的工作区引用里 |
 | 启动 | 插件树无 `did not activate` / `pending`、无启动屏报错、console 错误 0 | ✅ |
 | 官方侧边界 | `profiles/desktop` 的 `cordis.patch.yml` / `package.json` 哈希前后一致 | ✅ `8948F53D…` / `963CB662…` |
 | 语法闸门 | 补丁层改动过 `dsh --profile miasaki --dump-config`（DSH 自身解析器） | ✅ exit 0，覆盖条目在场 |
@@ -487,7 +487,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 |---|---|---|
 | 配置生效 | `profiles/miasaki/cordis.patch.yml` 新增 `storage-json` 条目，`config.root = dshHomePath('profiles','miasaki','storages')` | ✅ |
 | 账本落位 | 新 root 生成自己的 `workspace.json` | ✅ 2026-09-27 **21:43:47**（改配置 21:43:44，运行中的实例热重载即建） |
-| 全量回填 | 新账本按会话 `cwd` 自动归组 | ✅ 242 个会话归位 **237**：dsh-miasaki 227 / kulumi 7 / Dhow 2 / <用户主目录> 1 |
+| 全量回填 | 新账本按会话 `cwd` 自动归组 | ✅ 242 个会话归位 **237**：dsh-miasaki 227 / <工作区-1> 7 / <工作区-2> 2 / <用户主目录> 1 |
 | 余 5 个未归组的解释 | 其 `cwd` 目录是否存在 | ✅ 全部已不存在（Prism / 新建文件夹 / 正大 / 临时目录）——官方按 `realpath(cwd)` 归组，目录没了本就不归组 |
 | 归档意图不丢 | 全局账本 11 条 `archivedSessionIds` 合并进新账本 | ✅ 合并后 `archived=11`，`initialized` 与 4 个工作区原样保留（幂等去重） |
 | 对侧不被写 | 全局 `~/.dsh/storages/workspace.json` 的 mtime | ✅ 停在 21:26:24（本壳新 root 建立后零改动） |
