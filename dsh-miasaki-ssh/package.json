@@ -1,7 +1,7 @@
 {
   "name": "@miasaki/dsh-ssh",
   "version": "0.1.0-miasaki.0",
-  "description": "DSH web SSH plugin: conversation-view tab entry + in-page interactive terminal for cloud servers.",
+  "description": "会话头第一行入口 + 页面内交互式 SSH：多 shell、SFTP 文件传输、跳板与本地转发。不用切外部终端，在 DSH 里直接连服务器。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -30,6 +30,10 @@
   },
   "engines": {
     "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
   "dependencies": {

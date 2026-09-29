@@ -1,7 +1,7 @@
 {
   "name": "@miasaki/dsh-appearance",
   "version": "0.1.0-miasaki.0",
-  "description": "DSH web appearance plugin: a Settings → Appearance section for skins, wallpaper, motion and conversation effects, with zero shell edits.",
+  "description": "设置里新增一栏「外观」：主题皮肤 / 壁纸 / 动效 / 会话效果，零 shell 改动、关掉即原生。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -30,6 +30,10 @@
   },
   "engines": {
     "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
   "dsh": {
