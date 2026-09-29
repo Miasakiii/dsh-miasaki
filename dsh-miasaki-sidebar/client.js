@@ -58,46 +58,6 @@ window.__ModuleLoader__.load({
     //   { [parentSessionId]: { activeChildId, lines: [{ childSessionId, createdAt }] } }
     const SIDECHAT_REGISTRY_KEY = 'miasaki-sidebar:sidechat:v1'
 
-    /**
-     * 侧线继承的**轮数**上限（2026-09-29 起）。
-     *
-     * 取 3 的理由：侧线的价值是「带着正在聊的上下文问一句」，不是「把主会话整份搬过去」。
-     * 用户实测反馈「把主会话又复制一遍」——那就是不传 `atSeq` 时宿主给的
-     * latest-completed-turn-prefix（**全文**）。3 轮足够回答「刚才那个报错怎么办」这类
-     * 追问，又不至于把几个月的历史一起带走。
-     */
-    const SIDECHAT_TURNS = 3
-
-    /**
-     * 取「最近 `turns` 轮的切点 seq」，即倒数第 `turns` 个 `turn/start` 的 seq。
-     *
-     * 契约依据（`dsh-api-session-controller` 的 `contract/sessions.d.ts`）：
-     * `fork({ atSeq })` 的 `atSeq` 是 **exact inclusive prefix boundary** —— 传它即
-     * 「fork 出包含该 seq 的前缀」，所以传**最后 N 轮中第一轮的 `turn/start` seq**
-     * 正好得到「最近 N 轮」。同一份 JSDoc 还写明「a cut inside an open turn is
-     * balanced Host-side with synthetic closers」，故切点落在进行中的轮次也不会坏
-     * （这一条解掉了设计文档 §5.1 当时记的契约冲突）。
-     *
-     * 输入是 `SessionBinding.eventSource` 的窗口 `entries`（`SessionEventLikeEntry[]`）：
-     * 只认 `{ type: 'event', event }`，跳过 `{ type: 'transient' }`（live chunk 不是轮次）。
-     *
-     * **不足 `turns` 轮 / 结构不认识 ⇒ 返回 `undefined`**：让调用方退回「不传 atSeq」的
-     * 全文 fork，**而不是**猜一个切点——猜错会让侧线莫名丢掉上下文，比多带历史更糟。
-     */
-    const lastTurnsForkSeq = (entries, turns) => {
-      if (!Array.isArray(entries) || !(turns > 0)) return undefined
-      let seen = 0
-      for (let i = entries.length - 1; i >= 0; i -= 1) {
-        const entry = entries[i]
-        if (!entry || entry.type !== 'event') continue
-        const event = entry.event
-        if (!event || event.type !== 'turn/start') continue
-        seen += 1
-        if (seen >= turns) return typeof event.seq === 'number' ? event.seq : undefined
-      }
-      return undefined
-    }
-
     /** Read the registry, degrading to empty on absent/corrupt/private-mode storage. */
     const readSideChatRegistry = () => {
       try {
@@ -139,15 +99,13 @@ window.__ModuleLoader__.load({
       return entry && typeof entry.activeChildId === 'string' ? entry.activeChildId : null
     }
     /** Register a freshly forked child and make it active. */
-    const sideChatAddLine = (registry, parentSessionId, childSessionId, createdAt, forkMode) => {
+    const sideChatAddLine = (registry, parentSessionId, childSessionId, createdAt) => {
       const lines = sideChatLinesFor(registry, parentSessionId).filter(line => line.childSessionId !== childSessionId)
       return {
         ...registry,
         [parentSessionId]: {
           activeChildId: childSessionId,
-          // `forkMode` 只在有值时落盘：旧记录没有这个字段是**合法**的（读出来是 undefined ⇒
-          // UI 按「未知」处理），不给它编一个默认值假装知道当时怎么切的。
-          lines: [...lines, { childSessionId, createdAt, ...(forkMode === undefined ? {} : { forkMode }) }],
+          lines: [...lines, { childSessionId, createdAt }],
         },
       }
     }
@@ -2357,47 +2315,12 @@ window.__ModuleLoader__.load({
       // 这样「新建侧线」的下一次点击能开出新侧线，而不是退化回单例
       //（ZCode selectionSideChatRuntime.ts 的同款语义）。
       const pendingSideChatCreations = new Map()
-      // 本次 fork 的切点模式（按父会话 id 索引；`createSideChat` 写、`createLine` 的 then 读）。
-      // 只为把「最近 N 轮」与「退回全文」在 UI 上区分开，不参与去重逻辑。
-      const lastSideChatForkMode = new Map()
-
-      /**
-       * 解析该父会话的 fork 切点。两种结局都要**显式**区分，不许含糊：
-       *   · `{ atSeq, mode: 'turns' }` —— 取到最近 `SIDECHAT_TURNS` 轮的切点（理想路径）
-       *   · `{ mode: 'full' }`         —— 拿不到事件窗口 / 不足 N 轮 ⇒ 退回全文 fork
-       * 退回不是错误（新会话、窗口未开都会这样），但**必须让 UI 说出来**：否则
-       * 「侧线这次怎么又带全文了」会变成一个查不出原因的现象。
-       */
-      const sideChatForkSeq = parentSessionId => {
-        try {
-          const binding = typeof ctx.sessions.binding === 'function' ? ctx.sessions.binding(parentSessionId) : undefined
-          const eventSource = binding === undefined || binding === null ? undefined : binding.eventSource
-          const entries = eventSource !== undefined && eventSource !== null && typeof eventSource.getSnapshot === 'function'
-            ? eventSource.getSnapshot().entries
-            : undefined
-          const atSeq = lastTurnsForkSeq(entries, SIDECHAT_TURNS)
-          return atSeq === undefined ? { mode: 'full' } : { atSeq, mode: 'turns' }
-        } catch (e) {
-          // 留痕：读窗口失败就退回全文，但绝不静默——静默降级会让「侧线突然带满历史」
-          // 在日志里零线索（与本仓 check-silent-guards 的一贯口径一致）。
-          console.warn('[dsh-sidebar] sidechat: 读会话事件窗口失败，退回全文 fork', e)
-          return { mode: 'full' }
-        }
-      }
 
       /** Fork one side line off `parentSessionId`, deduplicating concurrent gestures. */
       const createSideChat = parentSessionId => {
         const inflight = pendingSideChatCreations.get(parentSessionId)
         if (inflight) return inflight
-        const forkPlan = sideChatForkSeq(parentSessionId)
-        // 把本次的切点模式留给登记处（`createLine` 的 then 里读），**不改 createSideChat 的
-        // 返回类型**——既有调用方与源码契约测试都按 `Promise<SessionId>` 断言。
-        lastSideChatForkMode.set(parentSessionId, forkPlan.mode)
-        const pending = ctx.sessions.fork({
-          sessionId: parentSessionId,
-          ...(forkPlan.atSeq === undefined ? {} : { atSeq: forkPlan.atSeq }),
-          increaseTitle: true,
-        })
+        const pending = ctx.sessions.fork({ sessionId: parentSessionId, increaseTitle: true })
           .finally(() => {
             if (pendingSideChatCreations.get(parentSessionId) === pending) pendingSideChatCreations.delete(parentSessionId)
           })
@@ -2486,7 +2409,7 @@ window.__ModuleLoader__.load({
             .then(childId => {
               // 登记与新侧线落盘必须同步发生：官方右栏不持久化 params，刷新后
               // 只有这张表能说明「这条 tab 该显示哪条侧线」（契约事实 C14）。
-              sideChatRegistry.update(reg => sideChatAddLine(reg, parentSessionId, childId, Date.now(), lastSideChatForkMode.get(parentSessionId)))
+              sideChatRegistry.update(reg => sideChatAddLine(reg, parentSessionId, childId, Date.now()))
             })
             .catch(err => setFailure(sideChatForkErrorText(String((err && err.message) || err))))
             .finally(() => setCreating(false))
@@ -2497,19 +2420,9 @@ window.__ModuleLoader__.load({
           sideChatRegistry.update(reg => sideChatSetActive(reg, parentSessionId, childId))
         }
 
-        // 当前侧线的切点模式：旧登记表没有 `forkMode` 字段 ⇒ undefined ⇒ **不显示**，
-        // 不给历史记录编一个默认值（那等于假装知道当时是怎么切的）。
-        const activeLine = lines.find(line => line.childSessionId === activeChildId)
-        const activeForkMode = activeLine === undefined ? undefined : activeLine.forkMode
         const head = react.createElement('div', { className: 'dsh-sidebar-sidechat-head' },
           react.createElement('span', { className: 'dsh-sidebar-sidechat-parent', title: parentTitle || '' },
             parentTitle ? `主会话：${parentTitle}` : '主会话'),
-          activeForkMode === undefined ? null : react.createElement('span', {
-            className: 'dsh-sidebar-sidechat-mode',
-            title: activeForkMode === 'turns'
-              ? `本侧线只继承主会话最近 ${SIDECHAT_TURNS} 轮，不是全文`
-              : '本侧线未能定位切点（会话刚开 / 事件窗口未就绪），已退回继承完整历史',
-          }, activeForkMode === 'turns' ? `最近 ${SIDECHAT_TURNS} 轮` : '完整历史'),
           lines.length > 1 && react.createElement('select', {
             className: 'dsh-sidebar-sidechat-select',
             value: activeChildId ?? '',
@@ -2525,7 +2438,7 @@ window.__ModuleLoader__.load({
             className: 'dsh-sidebar-sidechat-new',
             onClick: createLine,
             disabled: creating || parentSessionId === null,
-            title: `从主会话最近 ${SIDECHAT_TURNS} 轮切出一条新侧线`,
+            title: '从主会话最后一个已完成轮次切出一条新侧线',
           }, creating ? '创建中…' : '新建侧线'))
 
         let body
@@ -2537,7 +2450,7 @@ window.__ModuleLoader__.load({
         } else {
           body = react.createElement('div', { className: 'dsh-sidebar-sidechat-empty' },
             react.createElement('div', null, lines.length === 0 ? '还没有侧线' : '侧线已隐藏'),
-            react.createElement('div', null, `侧线只继承主会话最近 ${SIDECHAT_TURNS} 轮（不是全文），提问不会打断主任务。`),
+            react.createElement('div', null, '侧线会继承主会话「已完成的轮次」，提问不会打断主任务。'),
             react.createElement('button', {
               type: 'button',
               className: 'dsh-sidebar-sidechat-new',

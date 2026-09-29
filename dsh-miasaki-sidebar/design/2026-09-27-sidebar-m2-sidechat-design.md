@@ -61,6 +61,7 @@
 | # | 事实 | 依据 |
 |---|---|---|
 | C1 | `sessions.fork({ sessionId, atSeq?, increaseTitle? })`：不传 `atSeq` ⇒ 边界 = **最新一个已完成轮次前缀**（本设计的核心赌注，**0.1.7 措辞已复验**）；传 `atSeq` 且落在开放轮次 ⇒ 宿主侧**补合成收尾**（`balanced Host-side with synthetic closers`，**0.1.6 的「unavailable」措辞已作废**）；完成后 child 已入 catalog 可 retain；**`increaseTitle` 改名失败会在 child 已创建之后抛错**（孤儿风险见 §4.7）；**`increaseTitle` 的产物已在 rc.2 打包产物里实读确认**：无尾号的标题从 ` (1)` 起、已有尾号则自增（`foo(3)` → `foo(4)`），半角/全角括号各自保持 | **rc.2**：`lib/types/client/contract/sessions.d.ts:113-128`；**alpha.2**：`contract/sessions.ts:122-132`；`SessionForkError` 由 `client/index.ts:7` 导出 |
+| **C1b** | **（2026-09-30 订正）`atSeq` 不是「起点」，是「头部前缀上界」**：fork **从源会话第 0 个事件起**复制到 `atSeq`（含）⇒ **只能截尾、不能截头**，「只带最近 N 轮」用 `fork` **做不到**；传「倒数第 N 个 `turn/start` 的 seq」得到的是**倒数第 N 轮之前**的历史（把最近的轮次丢掉，比不改还糟）。省略 `atSeq` = 复制到**最后一个 `turn/end`（含其后独立事件）**，长会话里即全文——这就是用户看到的「把主会话复制一遍」 | **rc.2 实读**：`dsh-api-session-controller/lib/index.js:797`（`boundary = atSeq ?? latestCompletedPrefixBoundary(source.events)`；该函数在 `:656-665`）、`dsh-session/lib/types/fork.js:19`（`events.slice(0, boundary + 1)`）、契约 JSDoc `contract/sessions.d.ts:113-129`（"exact inclusive prefix"）。**实机佐证**：侧线 `session-3bac833a…` 的登记行 `forkMode:"full"`（其父会话仅 2 个 `turn/start`，走的是降级分支） |
 | C2 | fork 出的 child 是**真会话**：`SessionSummary` 带 `parentId / title / displayTitle / running / blank / updatedAt`，host 列表 store 承载每一行 | `api/session-controller/src/client/sessions/service.ts:27-50` |
 | C3 | 官方右栏 `sidebar.right.pane.tab` 是 **keyed + session 作用域**席位：正文经 `useTabInfo()` 读 `{ sidebar, panel, tab }`；`tab.visible / navigation / signal / actions`；session 作用域意味着正文直接拿到**所在（主）会话**的标准 props | `ui-sidebar-right/src/client/index.ts:162`；`README.zh.md` §类型/正文；**rc.2 订正三条**：① 席位按**类型定义的 `id`** 键控（**不是 `kind`**——同一 kind 可被别的扩展顶替），故注册 `key` 必须用 id；② `tab.visible` = 「只有**前台会话**可见；停靠正文需面板展开且本 tab 被选中，展开态下非活动 tab 也在内；浮窗不随折叠消失」；③ `tab.signal` **只在记录消失或本插件卸载时 abort——隐藏、切会话都不 abort**，⇒ `visible` 性能门（tavern 对比 §3.6）**不是可选项，是必需品**；**rc.2 依据**：`contract/slots.d.ts:6-8`、`:53-58`、`:169-191`（`visible` 原文 `:181-185`、`signal` 原文 `:187-188`）；`tab-registry.d.ts:76-83` |
 | C4 | **page 型 tab（按 kind 开）在同一停靠格内天然去重**——重复点火引导胶囊聚焦已有 tab；资源型 tab（带地址）按 (kind, contentId) 去重 | `ui-sidebar-right/src/client/service.ts:123-126` |
@@ -287,7 +288,41 @@ Modify the workspace only when the user explicitly asks you to do so in this sid
 - **阻塞态**：ZCode 在父会话有待处理交互时禁用「带选区开侧聊」（tooltip：请先处理主任务或辅助对话中的待处理请求），固定入口仍可用。我们**没有**等价的三态注册表（拿不到官方 focused pane 权威），退化为 §4.7 的「fork 失败才置灰」；
 - **关闭链**：ZCode 关 tab = 清运行时 + 清引用 scope + `closeSession`；我们只能 release retain（DSH 无 closeSession 对等物，且 archive 会连带停活动，见 §4.6）——**child 会留在官方列表**，这正是偏差①必须用户点头的原因。
 
+**(D) 2026-09-30 复核补充：「干净」靠可见性，不靠少带上下文。** 用户点名「参考 ZCode 官方仓库看辅助对话怎么做」后逐层复核
+（底本仍是 `_refs/zcode` @ `29628c9` = v3.14.3，**实测与上游 HEAD 一致，结论为当前官方实现**）。四条新事实，**其中 D2/D3 是本节初版没写的机制**：
 
+**D1｜上下文整份继承、没有「最近 N 轮」这回事。** 取历史的是 `selectionSideChatHistoryMessages(activeMessages, activeTurn?.turnId)`
+（`apps/zcode-cli/packages/core/src/runtime/methods/session-fork.ts:833-849`）：只做「切到当前轮的稳定边界」——正在生成时保留已提交的本轮
+real-user 输入、排除其后的 assistant/tool 增量；**没有任何轮数上限**。创建入口 `:818` 拿它当 history，`:822` `goalBoundary: { kind: "none" }`。
+⇒ 与本仓 2026-09-30 的回退相互印证：**「只带最近 3 轮」既不是 ZCode 的做法，在 DSH 里也做不到**（`fork` 只能截尾不能截头，见 C1b）。
+
+**D2｜继承内容对 UI 隐藏、对模型可见（本节初版只记了「边界声明」，没记这条隐藏机制）。** 复制过去的每条消息被改写成
+`visibility: "model-only"` + `semantics: { uiVisibility: "hidden", providerVisibility: "visible", transcriptVisibility: "hidden" }`
+（`session-fork.ts:677-694`，注释原文「副屏继承历史仅供模型参考；UI 从空白副屏开始，避免把它误认成普通 fork」）。
+判定不是散落的 if，而收敛在**一份投影策略**：`selection_side_chat` 属于 `PROVIDER_CONTEXT_SYNTHETIC_SOURCES` ⇒ 投影为
+`providerContextOnly`（模型可见、transcript 不画）——`packages/shared/src/conversation-message-projection-policy.ts:49-67`、`:110-111`；
+冷恢复也必须服从同一判据，否则「副屏首次打开和冷恢复都泄漏父时间线」（`apps/zcode-cli/packages/bootstrap/src/zcode-protocol-v4/transcript-hydration.ts:1378-1386`）。
+
+**D3｜辅助对话的 child 不进任务列表。** 它是独立的 `taskType: selection_side_chat`
+（`apps/zcode-cli/packages/contracts/src/interfaces/session-store.port.ts:33-42`），而任务列表只收
+`TASK_LIST_SESSION_TYPES = ["interactive", "fork", "workflow_parent"]`，辅助对话／subagent／workflow child「由各自专用投影承载」——
+`apps/zcode-cli/packages/bootstrap/src/zcode-protocol-v4/task-list-session-membership.ts:10-24`，并附注释「列表可见性不能用 `parent_id is null` 的层级查询代替……可见性必须由 taskType 决定」。
+⇒ **这正是偏差①（child 会留在官方列表）在 ZCode 侧被彻底解决的地方**：不是「不建会话」，而是「建了但按 taskType 不入列表」。
+
+**D4｜DSH 侧对等能力逐项核查（2026-09-30 实读 0.2.0-rc.2）**：
+
+| ZCode 能力 | DSH 对等物 | 核查依据 |
+|---|---|---|
+| 消息级可见性（模型可见 / transcript 不画） | ❌ **无** | `inheritedEventCount` / `ownEvents()` **只在 `dsh-session` 定义，没有任何 `dsh-client-ui-*` 包消费**；官方 `conversation.content` 的 props 只有 `{ variant, phase, hero }`，**没有 seq/范围过滤位**（`dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts:510-512`） |
+| 尾部注入 synthetic 边界消息 | ❌ 无（同 (A)：插件不能写日志 / 改请求，fork 无注入位） | §5.1(A) + `contract/sessions.d.ts` 的 fork 签名 |
+| child 不进会话列表 | ❌ 无（偏差①） | `sessions.d.ts` 没有隐藏 / 过滤官方列表的入口 |
+| 不继承 goal / queue / 阻塞态 | ❌ fork 全带（§5.2 / S9 已取证） | `buildForkSeed` 是零类型过滤的前缀拷贝 |
+| 「边界语义」讲给用户 | ✅ **已做** | 侧线头常驻文案（`client.js` `:2467`）：说「继续」= 接着做主线未完成的活 |
+| 继承范围 | ✅ 官方默认全文前缀（与 ZCode 同） | C1 / C1b |
+
+**D5｜对本设计的净影响。** (A) 的应对表**不变**（保底 UI 提示 a + 上游需求 d），但 d 从此**有具体参照物**：向上游要「消息级可见性 + fork 边界声明位 + taskType 不入列表」时，
+可直接引用 ZCode 的 `providerContextOnly` 投影、`selectionSideChatHistoryMessages` 的稳定边界、以及 `TASK_LIST_SESSION_TYPES` 三个官方机制。
+**同时明确排除 (c) 的「少带上下文」变体**（D1：与 ZCode 相反，且在 DSH 里不可实现）。
 
 ### 5.2 fork 会连「任务态」一起继承（S9 取证，2026-09-28）
 

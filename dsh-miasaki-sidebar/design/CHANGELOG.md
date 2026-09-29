@@ -2,6 +2,60 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-30 · **回退「侧线只带最近 3 轮」——把 `atSeq` 的方向读反了**
+
+**触发**：用户实测反馈「辅助对话改了没有，怎么没变化」。查证分三层：**改动确实生效了**，
+但它在这个场景里必然看不出变化，而且前提本身是错的。
+
+**① 改动已生效**（先排除「没重启 / 没刷新 / 装的是旧快照」）：侧线登记表（WebView2 localStorage
+`miasaki-sidebar:sidechat:v1`）里，00:33:58 新建的 `session-3bac833a…` 那行写着
+`{"childSessionId":"session-3bac833a…","createdAt":1790699639037,"forkMode":"full"}` ——
+**`forkMode` 只有 09-29 那版新代码才会写**；壳 00:33:45 冷启动，插件是 `link:` 直链源码
+⇒ 加载的就是新 `client.js`。
+
+**② 为什么看着没变化**：其父会话 `session-5d28b28d…`（主会话 `session-5973b963…` 同）**只有 2 个
+`turn/start`**，`lastTurnsForkSeq(entries, 3)` 返回 `undefined` ⇒ 按 09-29 自己定的降级规则
+**退回全文 fork**（即登记表里的 `forkMode:"full"`）。2 轮会话的「最近 3 轮」本来就等于全文
+⇒ 视觉上与改之前**完全一致**。
+
+**③ 更根本：方向反了（硬事实）**。宿主实现里 `atSeq` 是**保留 `0..atSeq` 的头部前缀上界**：
+
+- `dsh-api-session-controller/lib/index.js:797` —— `const boundary = atSeq ?? latestCompletedPrefixBoundary(source.events)`
+- `dsh-session/lib/types/fork.js:19` —— `const prefix = events.slice(0, boundary + 1)`
+
+⇒ 传「倒数第 N 个 `turn/start` 的 seq」，拿到的是**倒数第 N 轮之前**那段历史：主会话一旦 ≥3 轮，
+侧线会把**最近的轮次丢掉、留下更早的内容**，比不改还糟。**「只带最近 N 轮」用 `fork` 实现不了
+（只能截尾，不能截头）。** 09-29 那条改法从前提上不成立 —— 上方条目里「`atSeq` 是 inclusive
+前缀边界 ⇒ 传最后 N 轮中第一轮的 `turn/start` seq 正好得到最近 N 轮」这句是**错的**，
+原文保留作为留痕。
+
+**回退（用户拍板「先回退」）**：`client.js` 与 `test/sidechat-registry.test.js` 用
+`git restore --source=b064720^ --worktree -- …` 还原到 09-29 之前 —— 去掉 `SIDECHAT_TURNS`、
+`lastTurnsForkSeq`、`sideChatForkSeq`、`lastSideChatForkMode`、登记表 `forkMode` 字段与侧线头模式标签；
+`createSideChat` 回到 `ctx.sessions.fork({ sessionId, increaseTitle: true })`（官方默认）。
+侧线语义**回到 09-29 之前**：继承主会话到「最后一个已完成轮次」为止的完整前缀。
+
+**保留的知识**：契约事实写进设计文档 **C1b** 行（两个宿主源码位置 + 本次实机佐证），
+下次再想「只带最近几轮」不必重新踩一遍。
+
+**后续可选（未做，待拍板）**：真要「只带最近 N 轮」只能换机制 —— `sessions.create()` 新建会话，
+把最近 N 轮以**交接文本**注入首条消息（`binding.session.prompt`，契约 C10）；代价是那 N 轮不再有
+官方工具卡渲染，且要新增 retain/prompt 管线。本次不动。
+
+**同日追加 · ZCode 官方复核（用户点名「参考 zcode 官方仓库看辅助对话怎么做」）**：复核底本 = 本地 `_refs/zcode`
+（官方 `zai-org/ZCode`，`29628c9` = v3.14.3，实测**与上游 HEAD 一致**）。结论写进设计文档 **§5.1(D)**，四条要点：
+① 辅助对话**整份继承上下文、不截断**（`selectionSideChatHistoryMessages` 只切到当前轮的稳定边界）；② 干净感来自
+**继承内容标 `model-only` / 投影为 `providerContextOnly`**（模型可见、transcript 不画，副屏空白起步）；
+③ 尾部插一条 model-only 边界声明；④ `selection_side_chat` 这个 **taskType 不在任务列表类型集合**里 ⇒ 不占列表。
+**DSH 侧这三条对等物全部缺席**（逐项核查表见 §5.1(D)）⇒ 今天的回退得到外部印证：**「干净」不能靠少带上下文实现**，
+「只带最近 N 轮」既不是 ZCode 的做法、在 DSH 里也不可实现；向上游提需求时可直接引用 ZCode 这三个官方机制。
+
+**验证**：`verify-all sidebar` **13/13**（`sidechat-registry.test.js` 18 → **13** 例，断言回到
+「fork 不传 `atSeq`」）；单测合计 **86 例（81 通过 / 5 环境跳过）**，**全量 167/168 PASS**。
+`verify-all repo` **4/5** —— 第 5 项是同日接线、随本批一并提交的 `lock-sync`（PASS），唯一失败项仍是
+已知的沙箱阻塞 `md-links`（内部 `execFileSync('git')` 走管道 stdio，在本机受限沙箱下 EPERM ——
+与本次改动无关，本次改动只加反引号路径、未新增任何 markdown 链接）。
+
 ## 2026-09-29 · **侧线改为「只带最近 3 轮」**（用户反馈：把主会话又复制一遍）
 
 **用户原话**：「辅助对话应该是干净的带上下文的辅助对话，而不是把主会话又复制一遍还占个会话记录」。
