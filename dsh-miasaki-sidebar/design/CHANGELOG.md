@@ -2,6 +2,44 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-29 · **侧线改为「只带最近 3 轮」**（用户反馈：把主会话又复制一遍）
+
+**用户原话**：「辅助对话应该是干净的带上下文的辅助对话，而不是把主会话又复制一遍还占个会话记录」。
+
+**根因**：`createSideChat` 调 `ctx.sessions.fork({ sessionId, increaseTitle: true })` —— **不传 `atSeq`**。
+官方契约（`dsh-api-session-controller/lib/types/client/contract/sessions.d.ts`）对这个省略的语义是
+**"omission selects the latest completed-turn prefix"** ⇒ **继承主会话全部已完成轮次**，即用户看到的「复制一遍」。
+
+**改法**：传 `atSeq` 把继承范围截断到**最近 `SIDECHAT_TURNS`（=3）轮**。
+
+新增纯函数 `lastTurnsForkSeq(entries, turns)`：从 `SessionBinding.eventSource` 的窗口
+（`SessionEventLikeEntry[]`）**尾部往前**数 `turn/start`，取倒数第 `turns` 个的 `seq`。
+契约依据：`atSeq` 是 **"exact inclusive prefix boundary"**，所以「最后 N 轮中第一轮的 `turn/start` seq」
+正好切出最近 N 轮。
+
+**顺带解掉设计文档 §5.1 当时记的两个缺口**（rc.2 契约已改）：
+
+| 当时的判断（2026-09-27） | rc.2 契约实际措辞 | 结论 |
+|---|---|---|
+| `atSeq` 落在开放轮次有契约冲突 | **"a cut inside an open turn is balanced Host-side with synthetic closers"** | **风险消失**，切点落在进行中的轮次也不会坏 |
+| `increaseTitle` 改名失败会让 child 孤儿 | 新增 **`onCreated?: (childId) => void`**（rename **之前**触发） | 有了对账位，后续可补孤儿登记 |
+
+**降级语义（硬要求，不许静默）**：拿不到 binding / 不足 N 轮 ⇒ **退回不传 `atSeq`（全文 fork）**，
+并把模式记为 `'full'` 写进登记表 `lines[].forkMode`，侧线头显示「**完整历史**」；
+理想路径显示「**最近 3 轮**」。旧登记记录没有该字段 ⇒ **不显示**（不给历史编默认值）。
+读事件窗口抛错时 `console.warn` 留痕（`silent-guards` 实测**新增 0**，口径合规）。
+
+**明确不做（能力边界）**：「不占会话记录」**做不到** —— `fork` 出的 child 与 `create()` 新建会话
+**都会进官方 catalog**，`sessions.d.ts` 没有隐藏/过滤官方列表的入口。侧线头已注明这是独立会话。
+
+**测试**：`test/sidechat-registry.test.js` **13 → 18 例** —— 新增 4 例切点解析（含「不足 N 轮不猜」
+「跳过 transient 与非轮次事件」「seq 非数字不返回假切点」）+ 1 例 forkMode 落盘；
+**改掉两条旧硬断言**（原断言「不传 `atSeq`」，与新语义直接冲突）。
+
+**验证**：`verify-all sidebar` **13/13**、`verify-all repo` **4/4**（含 `md-links` 与 `silent-guards`）。
+
+**未实机验收**：真实 UI 里开侧线、看子会话消息数是否≈3 轮（待重启 `dsh web`）。
+
 ## 2026-09-28（续二）· **M2.1 辅助对话最小闭环落地** + 实机验收
 
 **用户拍板**：设计 §8 六项全部按建议通过（原话「按建议的来」），进 M2.1。
