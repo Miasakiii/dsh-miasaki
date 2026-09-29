@@ -2,6 +2,32 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-29 · 分发就绪：补 `peerDependencies`、README 改为面向用户
+
+**背景（仓库分发策略变更）**：根 README 由工程记录改为面向用户的插件目录页，本线是**首发分发**的插件。
+对 npm 分发路径做核查时发现两处缺口，均属「陌生人装上就会踩」的类型：
+
+**① 缺版本护栏（缺陷）** —— 本线自 M1 起跟 DSH 从 0.1.2 一路适配到 0.2.0-rc.1，但这条耦合
+**在包元数据里完全没有声明**：陌生人装到不匹配的 DSH 上只会看到整包加载失败或白屏，
+而不会去翻仓库里的适配记录。补 `peerDependencies`，三条都对应**实际被 `inject` 的官方契约面**：
+
+| 声明 | 对应注入点 |
+|---|---|
+| `@deepseek-ai/cordis` `^4.0.2` | 插件宿主运行时（与 usage / free-model 同口径） |
+| `@deepseek-ai/dsh-host-webserver` `>=0.1.2-rc.1 <0.3.0` | `index.js` 的 `inject: ['webServer', …]` |
+| `@deepseek-ai/dsh-api-session-controller` `>=0.1.2-rc.1 <0.3.0` | `inject` 的 `sessions` / `workspaces` / `uiWorkspace` |
+
+**② README 是工程文档，且含本机路径（缺陷）** —— 原 README 通篇是线级状态与变更流水（读者是维护者），
+安装节写的还是 `link:C:\Users\<本机用户名>\…` 这种绝对路径（分发后即为噪音，且暴露维护者目录结构）。改写为面向用户：定位 → 红线 → 安装 → 用法
+（分支 / 合并四步）→ 界面 → 存储与体量 → 给其它插件的外部视图入口 → 来源与许可 → 开发。
+工程细节不进 README，留在 `design/`。
+
+**同批**：`description` 由英文改为中文（与仓库其它包一致），并写入「不改系统提示 / 模型请求 / 工具 schema」的红线。
+
+**验证**：`node scripts/verify-all.mjs canvas` ⇒ **13/13 PASS**；README 的 4 个相对链接全部有效；
+`package.json` 可解析。**注意口径**：`peerDependencies` 是新增声明，装到既有 profile 时
+pnpm 默认 `strict-peer-dependencies=false` ⇒ **只警告不阻断**，不会把已装环境弄坏。
+
 ## 2026-09-27（续）· currentSession 死取数订正：会话快照没有 `current` 字段
 
 **症状（缺陷）**：`canvas:current-session` 消息恒发 `session: null` —— 画布 iframe 永远

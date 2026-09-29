@@ -1,7 +1,7 @@
 {
   "name": "@miasaki/dsh-canvas",
   "version": "0.5.0-miasaki.7",
-  "description": "A visual, non-linear conversation workspace plugin for DeepSeek Harness, forked from dsh-synapse (session merge lands on top of it in later milestones).",
+  "description": "会话布：可浏览、可分支、可合并的 DSH 会话画布。把会话从一条时间线变成一张可拖拽的地图，双线汇合产出真实 DSH 会话；不改系统提示、不改模型请求、不改工具 schema。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -28,6 +28,11 @@
   },
   "engines": {
     "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0",
+    "@deepseek-ai/dsh-api-session-controller": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
   "dsh": {
