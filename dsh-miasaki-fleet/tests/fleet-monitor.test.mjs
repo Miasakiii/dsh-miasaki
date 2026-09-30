@@ -183,3 +183,70 @@ test('handler：过围栏才进业务分支 —— 不可写 agentId 落到 500 
   const probeDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'agents', '__fence_probe_never_exists__')
   assert.equal(existsSync(probeDir), false, '这条用例不得往 agents/ 留下任何目录或文件')
 })
+
+/* ---------- ⑤ 判定层只读端点（2026-09-30，P1：面板消费判定层） ---------- */
+//
+// 这一组用**注入的 runner** 替代真实子进程：受限沙箱下 execFileSync 捕获子进程管道会 EPERM，
+// 而端点的价值在于「口径与派单器同源 + 失败不崩 + 同样过围栏」，与子进程无关。
+
+/** 注入一次判定层返回，跑完自动恢复默认（否则用例之间互相污染）。 */
+async function withJudgement(fn, run) {
+  serverModule.__setJudgementRunner(fn)
+  try { return await run() } finally { serverModule.__setJudgementRunner(null) }
+}
+
+test('P1：/api/dispatchable 消费判定层 CLI，且**带出不可派原因**', async () => {
+  const calls = []
+  const res = await withJudgement(
+    (script, args) => {
+      calls.push([script, args.join(' ')])
+      return JSON.stringify({ ready: ['t-9001'], blocked: [{ taskId: 't-9002', reasons: ['依赖未满足'] }], finished: [] })
+    },
+    () => call(fakeReq({ url: '/api/dispatchable', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, true)
+  assert.deepEqual(body.ready, ['t-9001'])
+  assert.equal(body.blocked[0].reasons[0], '依赖未满足', '面板要能看到「为什么不可派」，而不只是计数')
+  assert.deepEqual(calls[0], ['workers/graph/task-ready.mjs', '--dispatchable --json'], '口径必须走判定层 CLI，不重复实现')
+})
+
+test('P1：判定层非零退出但 stdout 有合法 JSON → 照常返回（exit 1 是正常语义）', async () => {
+  const res = await withJudgement(
+    () => { const e = new Error('exit 1'); e.stdout = '{"ready":[],"blocked":[],"finished":["t-0001"]}'; throw e },
+    () => call(fakeReq({ url: '/api/dispatchable', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200)
+  assert.equal(JSON.parse(res.body).ok, true, '「无可派任务」不是故障，面板不该显示错误')
+})
+
+test('P1：判定层不可用 → ok:false 且**不崩不 500**', async () => {
+  const res = await withJudgement(
+    () => { throw new Error('boom') },
+    () => call(fakeReq({ url: '/api/gaps', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200, '判定层挂了不该让面板整页 500')
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, false)
+  assert.match(body.error, /boom/)
+})
+
+test('P1：/api/events 返回机器事件流尾部（只读，limit 生效）', async () => {
+  const res = await call(fakeReq({ url: '/api/events?limit=3', headers: LOOPBACK }))
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, true)
+  assert.ok(Array.isArray(body.events))
+  assert.ok(body.events.length <= 3)
+  assert.ok(body.total >= body.events.length, 'total 是总条数，与截断后的 events 区分开')
+})
+
+test('P1：新增的只读端点同样过围栏 —— 跨站请求 403 且不带 CORS 头', async () => {
+  const res = await call(fakeReq({
+    url: '/api/dispatchable',
+    headers: { host: '127.0.0.1:39801', 'sec-fetch-site': 'cross-site' },
+  }))
+  assert.equal(res.statusCode, 403, '只读端点也不能绕过围栏')
+  assert.equal(res.headers['Access-Control-Allow-Origin'], undefined)
+})

@@ -135,7 +135,9 @@ function assessHeterogeneity(producerId, verifierId, ctx) {
  * 为某个产出者挑选验证者。
  *
  * @param {string} producerId
- * @param {object} ctx { agents: Map, vendors?, getAgent?(id) → {enabled, alive, archived, confidence} }
+ * @param {object} ctx { agents: Map, vendors?, getAgent?(id) → {enabled, alive, archived, confidence, firstRun?} }
+ *   `firstRun`（该 agent 从未运行过）来自 `liveness.cjs` 的 `isFirstRun`，用于**首跑豁免**（见下）；
+ *   字段缺席按「非首跑」处理（保守：不豁免）。
  * @param {object} [opts] { minLevel='agent', includeUnavailable?, requireAvailable? }
  */
 function selectVerifiers(producerId, ctx, opts) {
@@ -151,7 +153,14 @@ function selectVerifiers(producerId, ctx, opts) {
     if (!levelAtLeast(het.level, minLevel)) continue
 
     const meta = typeof ctx.getAgent === 'function' ? ctx.getAgent(id) : null
-    const available = meta ? (meta.enabled === true && meta.alive !== false && meta.archived !== true) : true
+    // 可用性判据。**首跑豁免**（2026-09-30 统一口径）：从未运行过的 agent（无 `status.json`）
+    // 在判活里给 `alive=false`，但那是「没跑过」不是「僵尸」—— 不加豁免的话它**永远当不了验证者**，
+    // 与派单闸门那侧「新 agent 永远派不出去」是**同族形态**（两侧此前各自实现，结论相反）。
+    // 口径单点在 `liveness.cjs` 的 `isFirstRun`，经 `ctx.getAgent` 的 `firstRun` 传入。
+    const firstRunOk = meta !== null && meta.firstRun === true
+    const available = meta
+      ? (meta.enabled === true && (meta.alive !== false || firstRunOk) && meta.archived !== true)
+      : true
     if (o.requireAvailable !== false && !available && !o.includeUnavailable) continue
 
     candidates.push({

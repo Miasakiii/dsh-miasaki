@@ -4,3 +4,49 @@
 {"ts":"2026-09-11T11:05:13.989Z","event":"superstep.committed","author":"applier","bus_version":3,"reason":"提交 3 个补丁","patch_count":3,"paths":["state/graph-events.jsonl","state/tasks.jsonl"],"bytes":1154}
 {"ts":"2026-09-11T11:12:59.997Z","event":"task.completed","author":"commander","bus_version":4,"reason":"t-0004 派单交付并验收通过（解积压两任务全部清空）","task_id":"t-0004"}
 {"ts":"2026-09-11T11:12:59.999Z","event":"superstep.committed","author":"applier","bus_version":4,"reason":"提交 3 个补丁","patch_count":3,"paths":["state/graph-events.jsonl","state/tasks.jsonl"],"bytes":1388}
+{"ts":"2026-09-30T14:21:51.525Z","event":"superstep.committed","author":"applier","bus_version":5,"reason":"提交 2 个补丁","patch_count":2,"paths":["state/tasks.jsonl"],"bytes":360}
+{"ts":"2026-09-30T14:37:32.400Z","event":"task.started","author":"dispatcher","bus_version":6,"reason":"派单给 claude","task_id":"t-0010"}
+{"ts":"2026-09-30T14:37:32.401Z","event":"superstep.committed","author":"applier","bus_version":6,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":142}
+{"ts":"2026-09-30T14:37:35.721Z","event":"failure.detected","author":"dispatcher","bus_version":7,"reason":"CLI exit 1","task_id":"t-0010"}
+{"ts":"2026-09-30T14:37:35.722Z","event":"superstep.committed","author":"applier","bus_version":7,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":140}
+{"ts":"2026-09-30T14:41:42.630Z","event":"superstep.committed","author":"applier","bus_version":8,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/tasks.jsonl"],"bytes":497}
+{"ts":"2026-09-30T14:42:21.365Z","event":"task.started","author":"dispatcher","bus_version":9,"reason":"派单给 pi","task_id":"t-0010"}
+{"ts":"2026-09-30T14:42:21.366Z","event":"superstep.committed","author":"applier","bus_version":9,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":138}
+{"ts":"2026-09-30T14:48:11.942Z","event":"task.completed","author":"dispatcher","bus_version":10,"reason":"exit 0","task_id":"t-0010"}
+{"ts":"2026-09-30T14:48:11.944Z","event":"superstep.committed","author":"applier","bus_version":10,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":135}
+{"ts":"2026-09-30T14:51:15.628Z","event":"superstep.committed","author":"applier","bus_version":11,"reason":"提交 3 个补丁","patch_count":3,"paths":["state/tasks.jsonl","tasks/t-0010/result.json"],"bytes":5904}
+{"ts":"2026-09-30T15:15:54.682Z","event":"superstep.committed","author":"applier","bus_version":12,"reason":"提交 1 个补丁","patch_count":1,"paths":["tasks/t-0010/result.json"],"bytes":5130}
+{"ts":"2026-09-30T15:29:58.428Z","event":"superstep.committed","author":"applier","bus_version":13,"reason":"提交 1 个补丁","patch_count":1,"paths":["tasks/t-0010/result.json"],"bytes":5130}
+{"ts":"2026-09-30T16:17:56.727Z","event":"superstep.committed","author":"applier","bus_version":14,"reason":"提交 2 个补丁","patch_count":2,"paths":["state/tasks.jsonl"],"bytes":343}
+{"ts":"2026-09-30T16:19:01.933Z","event":"task.started","author":"dispatcher","bus_version":15,"reason":"派单给 pi","task_id":"t-0011"}
+{"ts":"2026-09-30T16:19:01.934Z","event":"superstep.committed","author":"applier","bus_version":15,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":139}
+{"ts":"2026-09-30T16:19:02.293Z","event":"failure.detected","author":"dispatcher","bus_version":16,"reason":"CLI exit 1","task_id":"t-0011"}
+{"ts":"2026-09-30T16:19:02.296Z","event":"superstep.committed","author":"applier","bus_version":16,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":141}
+{"ts":"2026-09-30T16:21:41.282Z","event":"task.started","author":"dispatcher","bus_version":17,"reason":"派单给 pi","task_id":"t-0011"}
+{"ts":"2026-09-30T16:21:41.283Z","event":"superstep.committed","author":"applier","bus_version":17,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":139}
+{"ts":"2026-09-30T16:24:21.895Z","event":"task.completed","author":"dispatcher","bus_version":18,"reason":"exit 0","task_id":"t-0011"}
+{"ts":"2026-09-30T16:24:21.896Z","event":"superstep.committed","author":"applier","bus_version":18,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":135}
+{"ts":"2026-09-30T16:26:08.588Z","event":"task.started","author":"dispatcher","bus_version":19,"reason":"派单给 pi","task_id":"t-0011"}
+{"ts":"2026-09-30T16:26:08.589Z","event":"superstep.committed","author":"applier","bus_version":19,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":139}
+{"ts":"2026-09-30T16:29:09.627Z","event":"superstep.committed","author":"applier","bus_version":20,"reason":"提交 1 个补丁","patch_count":1,"paths":["agents/pi/usage.jsonl"],"bytes":298}
+{"ts":"2026-09-30T16:29:09.712Z","event":"task.completed","author":"dispatcher","bus_version":21,"reason":"exit 0","task_id":"t-0011"}
+{"ts":"2026-09-30T16:29:09.713Z","event":"superstep.committed","author":"applier","bus_version":21,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":135}
+{"ts":"2026-09-30T16:31:08.253Z","event":"agent.status.reset","author":"dispatcher","bus_version":22,"reason":"clear stale status.json: state=running 但心跳过龄（判活已降级为 unknown ⇒ alive=false）（原 current_task=）"}
+{"ts":"2026-09-30T16:31:08.255Z","event":"superstep.committed","author":"applier","bus_version":22,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":239}
+{"ts":"2026-09-30T16:31:34.031Z","event":"superstep.committed","author":"applier","bus_version":23,"reason":"提交 2 个补丁","patch_count":2,"paths":["state/tasks.jsonl"],"bytes":346}
+{"ts":"2026-09-30T16:31:34.613Z","event":"task.started","author":"dispatcher","bus_version":24,"reason":"派单给 pi","task_id":"t-0012"}
+{"ts":"2026-09-30T16:31:34.614Z","event":"superstep.committed","author":"applier","bus_version":24,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":139}
+{"ts":"2026-09-30T16:31:34.763Z","event":"superstep.committed","author":"applier","bus_version":25,"reason":"提交 1 个补丁","patch_count":1,"paths":["agents/pi/usage.jsonl"],"bytes":298}
+{"ts":"2026-09-30T16:31:34.837Z","event":"task.completed","author":"dispatcher","bus_version":26,"reason":"exit 0","task_id":"t-0012"}
+{"ts":"2026-09-30T16:31:34.838Z","event":"superstep.committed","author":"applier","bus_version":26,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":135}
+{"ts":"2026-09-30T16:32:16.591Z","event":"task.started","author":"dispatcher","bus_version":27,"reason":"派单给 pi","task_id":"t-0012"}
+{"ts":"2026-09-30T16:32:16.593Z","event":"superstep.committed","author":"applier","bus_version":27,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":139}
+{"ts":"2026-09-30T16:32:16.748Z","event":"superstep.committed","author":"applier","bus_version":28,"reason":"提交 1 个补丁","patch_count":1,"paths":["agents/pi/usage.jsonl"],"bytes":298}
+{"ts":"2026-09-30T16:32:16.821Z","event":"failure.detected","author":"dispatcher","bus_version":29,"reason":"CLI exit 3","task_id":"t-0012"}
+{"ts":"2026-09-30T16:32:16.822Z","event":"superstep.committed","author":"applier","bus_version":29,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":141}
+{"ts":"2026-09-30T16:33:33.591Z","event":"task.started","author":"dispatcher","bus_version":30,"reason":"派单给 pi","task_id":"t-0012"}
+{"ts":"2026-09-30T16:33:33.592Z","event":"superstep.committed","author":"applier","bus_version":30,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":139}
+{"ts":"2026-09-30T16:33:33.736Z","event":"superstep.committed","author":"applier","bus_version":31,"reason":"提交 1 个补丁","patch_count":1,"paths":["agents/pi/usage.jsonl"],"bytes":298}
+{"ts":"2026-09-30T16:33:33.812Z","event":"failure.detected","author":"dispatcher","bus_version":32,"reason":"CLI exit 3","task_id":"t-0012","state":"error"}
+{"ts":"2026-09-30T16:33:33.813Z","event":"superstep.committed","author":"applier","bus_version":32,"reason":"提交 1 个补丁","patch_count":1,"paths":["state/graph-events.jsonl"],"bytes":157}
+{"ts":"2026-09-30T16:34:15.036Z","event":"superstep.committed","author":"applier","bus_version":33,"reason":"提交 6 个补丁","patch_count":6,"paths":["state/tasks.jsonl","tasks/t-0011/result.json","tasks/t-0012/result.json"],"bytes":6494}

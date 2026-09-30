@@ -1,0 +1,10 @@
+- 2026-09-30 t-0010 独立复核（判定层 G1/G0 → 派单器接线）：未发现阻断；4 建议 + 2 观察。
+- 复核已证伪的风险：判定器失败一律 fail-closed（含 reasons 缺失，@($null).Count==1）；-CheckOnly 不写总线；BUS_ROOT 对齐覆盖判定器与 applier；冷启动降级实测生效。
+- 新增风险 A：status.json 只有派单器写（:381-382/:462），崩溃残留 = 闸门永久硬拒 + 无重置入口；派单中 >90s 即被判僵尸（本任务 198s 实测）。
+- 新增风险 B：CLI 起不来时 $LASTEXITCODE 不变 ⇒ exit 0 + idle + task.completed（pwsh 7.6.6 实测）。
+- 覆盖缺口：dispatch-task.ps1:335 主路径调用点无任何断言，删除后全绿（行为断言只跑 -CheckOnly）。
+- 文档失真：README:239-242 / design:43 说「不靠 reasons 字符串匹配」，实现 :128/:130 正是文案匹配。
+- 漂移检测缺口：口径分歧只比 enabled；预算双实现（Get-DayCost ↔ dayCost）无比对（未找到实际漂移）。
+- 判据输入缺口：bus-apply-core.cjs:53 坏行静默跳过 + 派单器 2>$null ⇒ 残缺台账可被放行（巡检会报但不在派单路径）。
+- 已确认闭环：reassign 补丁路径可行（t-0010 行 497B = superstep bytes:497），唯「带 reason」无机器强制。
+- 复核命令：node workers/graph/task-ready.mjs --explain t-0010 --json；pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0010 -Agent pi -CheckOnly。

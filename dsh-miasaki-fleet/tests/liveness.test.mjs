@@ -4,8 +4,10 @@ import { test } from 'node:test'
 
 import {
   DEFAULT_HEARTBEAT_MS,
+  FIRST_RUN_STATE,
   STALE_FACTOR,
   evaluateLiveness,
+  isFirstRun,
   parseTimestamp,
 } from '../workers/lib/liveness.mjs'
 
@@ -113,4 +115,36 @@ test('无 status / 无 manifest 心跳周期的兜底', () => {
     const live = evaluateLiveness({ state: 'running', heartbeat_at: at(budget + 1_000) }, { limits: { heartbeat_ms: bad } }, NOW)
     assert.equal(live.stale, true, `heartbeat_ms=${String(bad)} 应回落默认预算`)
   }
+})
+
+// ---------------------------------------------------------------------------
+// isFirstRun —— 「首跑豁免」的口径单点（2026-09-30）
+//
+// 修的是什么：判活对「从未运行过」给 alive=false，而**两个消费方各自实现**这条口径，
+// 于是同一个 agent 在两层里结论相反 —— 派单闸门降级放行、验证者选取判不可用 ⇒
+// 从未运行过的 agent 永远当不了验证者。现在两边都引用本函数。
+// ---------------------------------------------------------------------------
+
+test('isFirstRun：只有 no-status 算首跑（unknown 是僵尸，不是首跑）', () => {
+  assert.equal(FIRST_RUN_STATE, 'no-status', '字面量单点：消费方引用它，不各自拼字符串')
+
+  // 无 status.json ⇒ 首跑
+  assert.equal(isFirstRun(evaluateLiveness(null, manifest, NOW)), true)
+  assert.equal(isFirstRun(evaluateLiveness({}, manifest, NOW)), true)
+
+  // running 但心跳过龄 ⇒ unknown ⇒ 僵尸，**不得**被当成首跑豁免
+  const stale = evaluateLiveness({ state: 'running', heartbeat_at: at(BUDGET_MS + 1_000) }, manifest, NOW)
+  assert.equal(stale.state, 'unknown')
+  assert.equal(isFirstRun(stale), false)
+
+  // 健康与终态都不是首跑
+  assert.equal(isFirstRun(evaluateLiveness({ state: 'idle' }, manifest, NOW)), false)
+  assert.equal(isFirstRun(evaluateLiveness({ state: 'stopped' }, manifest, NOW)), false)
+})
+
+test('isFirstRun：坏输入保守返回 false（豁免必须是显式事实，不能靠默认）', () => {
+  assert.equal(isFirstRun(null), false)
+  assert.equal(isFirstRun(undefined), false)
+  assert.equal(isFirstRun({}), false)
+  assert.equal(isFirstRun({ state: null }), false)
 })

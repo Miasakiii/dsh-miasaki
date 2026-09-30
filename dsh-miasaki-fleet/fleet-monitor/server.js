@@ -29,6 +29,32 @@ const { evaluateLiveness } = require('../workers/lib/liveness.cjs');
 // 2026-09-26 审计 P1.5：本服务原为「CORS 通配 + 写接口零鉴权」。补三道信任围栏，
 // 与 appearance / ssh / sidebar 三条线同构（同判据、同 reason 词表，各自独立实现）。
 const { fenceCheck, buildTrustedHosts, corsHeadersFor } = require('./fence.cjs');
+const { execFileSync } = require('child_process');
+
+// ── 判定层查询（2026-09-30，P1：面板消费判定层）────────────────────────────
+// 设计要点：**spawn 现成 CLI，不重复实现判定** —— 派单器、Commander 与面板必须消费同一份口径
+//（本仓纪律：判定单点；各写一份必然漂移）。此前面板只有「在线数/任务数/成本」，
+// 而判定层（可派集、能力断层、验证者候选、机器事件）**一条都没上屏**。
+// 可注入：`__setJudgementRunner` 供测试替换 —— 受限沙箱下 execFileSync 捕获子进程管道会 EPERM。
+const FLEET_ROOT = path.join(__dirname, '..');
+const defaultJudgementRunner = (script, args) =>
+  execFileSync(process.execPath, [path.join(FLEET_ROOT, script), ...args], {
+    encoding: 'utf8', timeout: 8000, stdio: ['ignore', 'pipe', 'ignore'],
+  });
+let judgementRunner = defaultJudgementRunner;
+/** 测试注入；传 `null` **恢复默认**（否则测试之间会互相污染）。 */
+function __setJudgementRunner(fn) { judgementRunner = fn || defaultJudgementRunner; }
+
+/** 跑一个判定 CLI 并解析 JSON。**非零退出是正常语义**（如无可派任务时 exit 1），故优先取 stdout。 */
+function runJudgement(script, args) {
+  let out = '';
+  try { out = judgementRunner(script, args) || ''; } catch (e) {
+    if (e && e.stdout) out = String(e.stdout); else throw e;
+  }
+  const text = stripBom(out).trim();
+  if (!text) throw new Error(script + ' 无输出');
+  return JSON.parse(text);
+}
 
 /* ---------- 配置 ---------- */
 const WORKSPACE = process.argv[2] || path.resolve(__dirname, '..');
@@ -404,6 +430,38 @@ async function handleRequest(req, res) {
     return sendJSON(res, aggregateReport(days));
   }
 
+  // ── 判定层只读端点（2026-09-30，P1）────────────────────────────────────
+  // 全部**只读**：不写盘、不调写接口。判据与派单器同源（都走判定层 CLI），故面板显示什么、
+  // 派单器就按什么判定 —— 不会出现「面板说可派、派单器说不可派」。
+
+  // GET /api/dispatchable → 可派集 + 不可派原因（G1，派单闸门的同一口径）
+  if (req.method === 'GET' && pathname === '/api/dispatchable') {
+    try {
+      return sendJSON(res, Object.assign({ ok: true }, runJudgement('workers/graph/task-ready.mjs', ['--dispatchable', '--json'])));
+    } catch (e) {
+      return sendJSON(res, { ok: false, error: String((e && e.message) || e) });
+    }
+  }
+
+  // GET /api/gaps → 能力断层诊断（G2：哪些能力没有任何活动提供者）
+  if (req.method === 'GET' && pathname === '/api/gaps') {
+    try {
+      return sendJSON(res, Object.assign({ ok: true }, runJudgement('workers/graph/agent-pick.mjs', ['--gaps', '--json'])));
+    } catch (e) {
+      return sendJSON(res, { ok: false, error: String((e && e.message) || e) });
+    }
+  }
+
+  // GET /api/events?limit=N → 机器事件流尾部（G0：唯一真相的最近若干条）
+  if (req.method === 'GET' && pathname === '/api/events') {
+    const n = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 200);
+    // 事件流文件不存在 ⇒ 返回空列表是**正确语义**（该工作区尚未产生任何事件），
+    // 且响应里带 total=0，可与「读取失败」区分 —— 不是被吞掉的失败。
+    // guard-ok: 上面两行即理由（缺席≠失败，且有 total 可分辨）
+    const rows = safeReadJSONL(path.join(FLEET_ROOT, 'state', 'graph-events.jsonl'));
+    return sendJSON(res, { ok: true, total: rows.length, events: rows.slice(-n) });
+  }
+
   // POST /api/toggle/:agentId → 切换开关
   if (req.method === 'POST' && pathname.startsWith('/api/toggle/')) {
     const agentId = pathname.split('/')[3];
@@ -453,4 +511,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { handleRequest, server, TRUSTED_HOSTS };
+module.exports = { handleRequest, server, TRUSTED_HOSTS, __setJudgementRunner };

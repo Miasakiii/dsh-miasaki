@@ -267,6 +267,39 @@ test('patch：路径白名单是硬闸 —— 未登记路径一律拒绝', () =
   }
 })
 
+// ---------------------------------------------------------------------------
+// B5 写入收敛（2026-09-30）：真相类文件进总线，**派生态明确豁免**
+// ---------------------------------------------------------------------------
+
+test('B5：计量原始来源（usage.jsonl）可 append —— 它是真相，不是派生态', () => {
+  const r = check((f) => validatePatch({
+    op: 'append', path: 'agents/claude/usage.jsonl', value: { cost: 0.1 }, author: 'dispatcher', expected_version: 0,
+  }, 'p', f))
+  assert.equal(r.pass, true, `usage.jsonl 是主协议 §9 的「成本唯一原始来源」，应经唯一入口: ${r.text}`)
+})
+
+test('B5：usage 只允许 append —— 计量是只增不改的流水', () => {
+  const r = check((f) => validatePatch({
+    op: 'set', path: 'agents/claude/usage.jsonl', value: {}, author: 'dispatcher', expected_version: 0, reason: 'x',
+  }, 'p', f))
+  assert.equal(r.pass, false, '改写历史计量行会让成本账失真')
+  assert.match(r.text, /不接受 op=set/)
+})
+
+test('B5：派生态缓存（status.json）**刻意不在**白名单 —— 这是设计，不是漏登记', () => {
+  for (const op of ['set', 'append']) {
+    const r = check((f) => validatePatch({
+      op, path: 'agents/claude/status.json', value: { state: 'running' }, author: 'dispatcher',
+      expected_version: 0, reason: 'x',
+    }, 'p', f))
+    assert.equal(
+      r.pass, false,
+      `${op} status.json 应被拒：它是派生态缓存（真相在事件流，且心跳是高频字段，进总线会引发事件风暴）`,
+    )
+    assert.match(r.text, /不在可写白名单内/)
+  }
+})
+
 test('patch：op 必须与路径允许的操作匹配', () => {
   const r = check((f) => validatePatch({
     op: 'set', path: 'state/tasks.jsonl', value: {}, author: 'commander', expected_version: 0, reason: 'x',

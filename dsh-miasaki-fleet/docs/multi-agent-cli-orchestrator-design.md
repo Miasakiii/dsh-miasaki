@@ -1,6 +1,6 @@
 # 多 Agent CLI 协作模式 — 设计文档
 
-- 版本：v0.24
+- 版本：v0.25
 - 日期：2026-09-30
 - 状态：Draft
 - 作者：总指挥（Miasaki 会话）
@@ -36,6 +36,28 @@
 >   **② K4 自述受阻必须如实落账**：`workers/dispatch/dispatch-task.ps1` 过去 `$state = if ($exitCode -eq 0) { 'idle' } else { 'error' }` ⇒ CLI exit 0 但**自述受阻**的 worker 被记成「健康空闲」，fleet-monitor 面板与桌宠照常显示正常。判据刻意不引入新约定：受阻的载体就是**交付契约本身**（`tasks/<id>/result.json` 的 `status = blocked | failed`）。新增 `workers/dispatch/final-state.ps1`（判定**单点**、纯函数式、支持 `-OutFile` 回读以便在受限沙箱下测试）+ `tests/dispatch-state.test.mjs` **9 例**（exit code 三分支 / blockers 带出 / blocked 但 blockers 为空仍如实标注 / 坏 JSON 回退不抛错 / **两个 ps1 的语法闸门** —— PowerShell 侧此前没有任何自动化检查）。故障注入自证：注入语法错误 ⇒ 闸门 exit 1 并点名 `dispatch-task.ps1:357`，还原后复跑通过。退出码语义（§7.0 的 0/3/4）不动，只改 `status.json` 的落账。
 >   **③ K5 厂商表不再是空宣称**：`workers/graph/verifier-pick.mjs` 的 `loadVendors()` 读 `shared/agent-vendors.json`，而那个文件**从不存在**（v0.23 附注登记在案），读不到就静默回退内置表，而文档仍宣称「可由该文件覆盖」⇒ 默认表与实际厂商归属不符时会给出**假异构**结论（「验证者独立」是虚的）且全程无提示。处置选「**真读 + 显式告知**」而非「删宣称」——覆盖能力本身是设计意图：新增真实文件 `shared/agent-vendors.json`（内置表的镜像，改它即可覆盖），加载逻辑抽到 `workers/lib/vendors.mjs`，**文件缺失 / 结构非法两条回退路径都留痕**（`notice` + `console.error`）。测试 **+5 例**，含「仓库里那份真实表存在、合法，且覆盖内置表登记的全部 agent」。
 >   `verify-all fleet` **17 → 18 项**（+K4 测试项）。**边界与诚实注记**：K3 的存量补记是**契约补记**（结论摘自原始交付物，不是当时 worker 亲写），如与原意有出入，以 `evidence` 指向的原始材料为准；`task_id` 与目录一致性、evidence 形态、artifact 指纹均由 `bus-contract.validateResult` 实际校验。
+> - v0.25 派单器接线（2026-09-30，G1/G0 → 在役执行路径）：把判定层里「已落地但停在**可查询**」的两层接进 `workers/dispatch/dispatch-task.ps1`，使「派单」这个动作**可判定、可拒绝、可留痕**。
+>   **① G1 可派闸门**：新增 `Test-DispatchableGate`，复用 `workers/graph/task-ready.mjs --explain <id> --json`（**不重复实现**，与 G2 能力闸门同纪律）；`ready=false` → 打印**全部** reasons → **拒绝派单 exit 2**；并纳入 `-CheckOnly`。**动机（真实形态）**：派单器此前只判「档案 / 开关 / 预算 / 能力」，**不判任务本身该不该派** —— 状态不是 queued、依赖未满足，两种情况都能一路派下去，且全程无提示。
+>   **② assignee 一致性**：`-Agent` ≠ 台账 `assignee` → 拒绝并提示「改派走 `reassign` 补丁（带 reason）」。依据是 t-0003 / t-0004 的历史改派做法（`state/tasks.jsonl` 两条 reassign），把既有实践变成**强制** —— G1 判的是台账 assignee 而 `-Agent` 是另一个独立输入，二者不等会「闸门通过、却派给了另一个人」。
+>   **③ G0 事件留痕**：新增 `Write-BusEvent`，写 `task.started`（CLI 启动**前** —— 进程崩了也留痕）与终态 `task.completed` / `failure.detected`（判据与 `final-state.ps1` 同源，不另立口径），经 `bus-apply` 唯一入口。**事件是审计不是闸门**：applier 报错（如并发超步冲突 exit 3）只告警、不阻断派单。这根治了「`state/events.jsonl` 长期只有人工里程碑」的一端。
+>   **④ 冷启动降级（实测暴露的边界）**：`agents/<id>/status.json` 是**运行时产物**（已 ignore），从未运行过的 agent 必然没有它 ⇒ `evaluateLiveness(null, …)` 给 `no-status` / `alive=false` ⇒ 照判会**硬拒首跑**（新 agent 永远派不出去）。故派单器把 `no-status` **降级为告警放行**，而 `running` 但心跳过龄仍是僵尸、照旧硬拒。两者靠 `--explain --json` 新增的结构化字段 `agent`（`{id, enabled, alive, budgetOk, state}`）区分，**不靠 reasons 的字符串匹配** —— 否则改一个字的文案就会静默换语义。
+>   **⑤ 工作区对齐**：派单器新增 `$env:BUS_ROOT = $Workspace`。判定器与 applier 默认按自身文件位置推导 fleet 根，与 `-Workspace` 不一致时会出现「派单器读 A 工作区、判定器读 B 工作区」的**静默错位**；该对齐同时让夹具测试成为可能（`-Workspace` 指向临时目录即可完全隔离）。
+>   **⑥ 闸门顺序**：固定为「档案 → 开关 → 预算 → G1 → G2」（先廉价后昂贵，前者拒了不跑后者）；退出码语义 **0/2/3/4 不变**，新闸门一律用 2 = 拒绝派单、原因靠打印文案区分。
+>   回归：新增 `tests/dispatch-gate.test.mjs` **10 例**夹具 + `verify-all` 纯文本断言 **12 项**，`verify-all fleet` **18 → 20 项**。**为什么必须用夹具**：真实台账 9 个任务**全终态**（可派 0 个）⇒ 真实数据只能覆盖「拒绝」分支，「放行」必须靠夹具 —— 否则「闸门把该派的也拒了」这类缺陷要等下次真派单才暴露。§7.0 的派单步骤序列已同步回写（新增 0.6 / 0.7 两个闸门与事件时点）。
+>   **同日第二批（复核 findings 收口）**：接线落地后由**异构 agent 独立复核**（派发的真实任务 `t-0010`，其内容就是「复核本次接线」），6 条 findings 全部处置 —— 第一批修 CLI 存在性预检（防「起不来」被记成成功并写进事件流）、`verify-all` 补**两处调用点**断言（此前删掉派单主路径那处调用全仓不变红）、如实描述冷启动降级的 v1 边界并把两侧文案成对钉住；第二批修 `-ResetStatus`（崩溃残留无恢复入口）、预算纳入口径分歧比对、`bus_bad_lines` 有坏行即拒绝、`final-state.ps1` 调用失败不再静默回退成 `idle`（会把 `status=blocked` 记成「健康空闲 + `task.completed`」）。夹具 **10 → 17 例**、接线断言 **12 → 20 项**。
+>   **未做（分档判断已更新）**：~~`result.json` 交付期校验~~ —— **该硬校验在派单器侧不成立**：worker 在 headless 下不落盘、交付契约由 Commander / 派单器**事后代写**，「派单刚结束时没有 `result.json`」是**正常形态**；K3 的台账驱动巡检已是正确落点。其余未做项：G4 验证器挂载、写入收敛（P0-5）、worker 生命周期 —— 分档依据见规划文档 `_refs/fleet-dispatch-wiring-plan-2026-09-30.md`（规划类，按仓库纪律不入库）。
+> - v0.26 写入收敛（2026-09-30，B5 + 复核收口）：**收敛口径改为「真相类文件进总线，派生态明确豁免」** —— 原先笼统的「所有文件经唯一入口」既做不到、也没必要。
+>   **① 计量（`usage.jsonl`）经唯一入口**：白名单登记 `append`，派单器经 applier 落盘（`superstep.committed` 的 `paths` 里可查）。**失败语义「数据不丢优先」**：applier 失败回退直写并告警（行内标 `[BUS_BYPASS]` + 落 `agents/<id>/logs/dispatch.log`）；但 **partial 失败不回退** —— partial 意味着「补丁可能已落盘」，再写一遍就是**成本双计**（由独立复核指出，属阻断级）。
+>   **② `status.json` 明确豁免**，理由写进契约：真值在 `result.json` + 事件流；写频低（**2 次/派单，全仓无周期性心跳写者**）；归因收益低。原「心跳风暴」论据经复核证伪后**已撤回**并如实标注「事件流覆盖是有条件的（事件发射 best-effort）」。
+>   **③ 台账写者归属统一**：§4.5 的权责表为**唯一定义**，消除 §2 / §5 / §7.0 的四说。
+>   **④ 复核驱动的修复**：失败轮零计量（**阻断**：usage 此前只在 `exitCode=0` 时解析 ⇒ 失败轮跑过却不记账）现已无论退出码都留痕；终态事件补 `state`（否则 blocked 与 error 不可分）；`-ResetStatus` 补 `agent.status.reset` 事件（**新增事件类型**，同步扩 `EVENT_TYPES` 与 schema enum）。
+>   **⑤ 命令构造修复（两个同族缺陷）**：派单器不再把 prompt 拼进命令行再切分 —— 实测 prompt 里的引号会被当成参数边界，CLI 收到泄漏的 `-A`/`20` 直接报错；改为按占位符切模板、prompt 作**单个 argv 元素**。`cmd:` 行的**成对引号**也补了剥离（缺它会把 `"process.exit(3)"` 字面量传给 node，JS 视其为合法字符串表达式 ⇒ 命令静默 exit 0 被记成成功）。新增 `-ShowCommand` 调试入口，与真实执行**共用** `Resolve-Argv`（各写一份必然漂移）。
+>   **已知未收敛（登记在册，勿当成已完成）**：`agents/<id>/control.json`（fleet-monitor 的 `POST /api/toggle` 直写 —— 派单许可，是输入不是派生态）、`agents/<id>/manifest.json` 与 `agents/registry.json`（`scan-agents.ps1` 直写 —— 能力闸门的**实际输入**）；另 `capability.json` 虽在白名单内但**全仓零写者**。前两项属独立批次（需改 fleet-monitor 写接口与扫描器）。
+>   回归：`verify-all fleet` 20/20（当日续十二收工口径 **21/21**，全量 **179 项**）；`bus-contract` 23 → **26 例**、`dispatch-gate` 23 → **26 例**。真实派单验证：t-0011（usage 首次经唯一入口，superstep v20 的 paths 命中）、t-0012（**零成本**失败轮，验失败轮留痕与 `state` 字段，可随时重跑）。
+> - v0.27 判定层上屏（2026-09-30，P1）：总控制面板（`fleet-monitor/`）此前只有「在线数 / 任务数 / 成本」，而**派单器判定所依据的事实一条都没上屏** ⇒ 新增三个**只读**端点 `GET /api/dispatchable` / `/api/gaps` / `/api/events?limit=N` 与页面一块（可派集 + **不可派原因** / 能力断层 / 机器事件尾部）。
+>   **形态决策（本批定死）**：**spawn 现成 CLI，不重复实现判定** —— 端点分别调 `task-ready.mjs --dispatchable --json`、`agent-pick.mjs --gaps --json`、读 `state/graph-events.jsonl` 尾部；面板显示什么，派单器就按什么判定（口径同源；面板是第三份消费者，另写一份判定必然漂移）。**保留独立 server 作数据层**：将来若要进 DSH GUI，加一个 thin 插件壳复用同一份 `/api/*`，不重写数据层。
+>   **两处判据细节**：① 判定层 CLI 的**非零退出是正常语义**（无可派任务时 exit 1，stdout 仍是合法 JSON）⇒ 必须先取 stdout 再解析，不能拿退出码当失败；② 判定层不可用 ⇒ 端点返回 `ok:false`，**不让面板整页 500**。端点全部只读、同样过三道信任围栏。闸门：`verify-all fleet` 新增 `fleet-monitor 判定层区块 (P1)` **7 项断言**（区块 + 三个端点 + `runJudgement` 口径同源），fleet **20 → 21 项**。
+>   **尚未做（P2 候选）**：`/api/verifiers`（验证者候选）与 §8.4 的四条告警规则（心跳丢失 / 预算 ≥80% / 任务硬超时 / 开关与进程不一致）—— **面板不告警就只是图表页**。K1 的实机判据同日补立（回归矩阵 §3 K1）。
 
 ---
 
@@ -128,7 +150,8 @@
 3. Worker 原子领取，写 status.json(state=running)
 4. Worker 执行，期间：每次模型调用后追加 usage.jsonl；
    周期性更新 status.json（心跳 + 进度）
-5. Worker 写 result/ 交付物，追加 tasks.jsonl(done) —— worker 发起，Commander 复核
+5. Worker 在 stdout 给出交付物；Commander 代写 result/ 并**经 applier** 追加 tasks.jsonl(done)
+   —— headless 下 worker 无法落盘（§11.2），台账的**每一次**写入统一由 Commander 经唯一入口提交
 6. Commander 验收：通过 → done 确认；不通过 → reopen（带修改意见重新投递 inbox）
 ```
 
@@ -286,7 +309,19 @@ workspace/                          # 本项目根目录
 - **强制义务**：一次模型调用完成后 10 秒内必须落盘。缺失上报 = 故障（见 §9）；
 - 该文件是成本数据的唯一原始来源。
 
-### 4.5 `state/tasks.jsonl` — 任务台账（Commander 唯一写者，追加写）
+### 4.5 `state/tasks.jsonl` — 任务台账（**Commander 唯一写者，经 applier 提交**）
+
+> **写者归属（2026-09-30 收敛，此处为唯一定义）**：此前本文件 §2 流程 / 本节 / §5 状态机表 / §7.0
+> 对「谁写台账」有**四说**且互相矛盾。现统一为：
+>
+> | 角色 | 可写的 op | 说明 |
+> |---|---|---|
+> | **Commander** | `create` / `assign` / `reassign` / `update(accepted)` | 任务的生命周期决策归总指挥 |
+> | **Commander** | `update(status = queued/running/done/blocked/failed)` | **现状如此**：派单器**不写台账**，它代写的是 `status.json` / `usage.jsonl` / 机器事件 |
+> | **worker** | ❌ 不写 | headless 下无法落盘（§11.2），且补丁 `author` 枚举不含 worker |
+>
+> **一切写入经 `workers/bus/bus-apply.mjs`**（G0 起）：补丁 + `expected_version` 乐观并发 + 事件代写，
+> 不再直接改文件。直接写盘会在 `git status` 与事件流之间留下「文件变了，但没人记录是谁、为什么改」的缺口。
 
 每条一行 JSON，`op` 取值 `create | assign | reassign | update | reopen | cancel`：
 
@@ -531,18 +566,36 @@ Commander 派单（派单器 workers/dispatch/dispatch-task.ps1）：
   0. 派单许可：control.json.enabled=true 才可派；preflight 提示（档案字段，如 bl 的 console 会话检查）
   0.5 预算预检：当日 cost（usage.jsonl 按 ts 聚合）vs limits.budget_per_day
       —— ≥80% 预警放行；≥100% 熔断拒绝（exit 4）
+  0.6 可派闸门（G1，2026-09-30 接线）：task-ready --explain <id> --json（复用 task-graph 判定，不重复实现）
+      —— 状态非 queued / 依赖未满足 / 台账 assignee 与 -Agent 不一致 → 拒绝派单（exit 2）并打印全部原因；
+         改派必须走 reassign 补丁（带 reason），不允许命令行硬塞；
+         冷启动降级：agent 无 status.json（从未运行）判为「首跑」放行；running 但心跳过龄仍按僵尸硬拒
+  0.7 能力闸门（G2，2026-09-11 接线）：brief 的 requires: 行（或 -Requires）→ agent-pick --need
+      —— 目标 agent 不在候选内 / 无活动提供者 → 拒绝派单（exit 2）；未声明即跳过（零行为变更）
+      ※ 闸门顺序固定为「档案 → 开关 → 预算 → G1 → G2」：先廉价后昂贵，前者拒了就不跑后者
   1. 读 agents/<id>/manifest.json 的 cli.invoke 模板
   2. prompt = brief.md + context.md（§4.6；上下文隔离 §7.6）；
      命令构造：brief 中 `cmd:` 行优先（命令型任务），否则 invoke 模板替换 {prompt}
   3. spawn CLI（cwd=workspace），捕获 stdout/stderr → logs/<task>-stdout.log
+     ※ spawn 前先写机器事件 task.started（G0，2026-09-30 接线）——进程崩了也留痕
   4. 期间：status.json 置 running + 心跳（进程存活即新鲜）
   5. 结束：usage 自动解析按 metering_source（§9.1；json-cost-usd 已实现）
      写入 usage.jsonl + status tokens 累计；stdout 追加 transcript.md；
-     status 置 idle（exit 0）或 error（last_error=CLI exit N）；
+     status 由 final-state.ps1 判定：idle（exit 0 且契约非 blocked/failed）/ blocked / error；
+     终态机器事件 task.completed（健康）或 failure.detected（失败**或自述受阻**），判据与 status 同源；
      交付物由派单器代写 result/（§4.7 结构；异构 CLI 无人值守权限自动拒绝，实测见 t-0006）
-  6. 退出码语义：0 成功 / 2 拒绝派单（开关未开、无模板）/ 3 CLI 执行失败 / 4 预算熔断；
-     免执行验证：-CheckOnly（只跑预算预检）/ -ParseOnly（只跑 usage 解析，打印将写入的行）
+  6. 退出码语义：0 成功 / 2 拒绝派单（开关未开、无模板、**任务不可派、无能力候选**）/ 3 CLI 执行失败 / 4 预算熔断；
+     免执行验证：-CheckOnly（跑完整预检：预算 + G1 + G2，不派单也不写总线）/ -ParseOnly（只跑 usage 解析，打印将写入的行）
+     运维入口：-ResetStatus —— 清除**崩溃残留**的 status.json（该文件的唯一写者就是本脚本，
+     被 Ctrl-C / 断电打断会永停 running ⇒ 心跳过龄 ⇒ 判活失败 ⇒ G1 闸门**永久硬拒**该 agent）。
+     刻意**删除**而非写 `stopped`（判活对 `stopped` 同样给 alive=false）；**心跳新鲜时拒绝执行**，
+     以免误删可能正在跑的档案。台账坏行（`bus_bad_lines > 0`）同样拒绝派单并指向 validate-bus。
 ```
+
+> **写入归属（G0 起，2026-09-30 复核）**：机器事件一律经 `workers/bus/bus-apply.mjs` 唯一入口写入
+> `state/graph-events.jsonl`；**事件是审计不是闸门** —— applier 报错（如并发超步冲突 exit 3）只告警，
+> 不阻断派单。`status.json` / `usage.jsonl` 仍是直写（派单器为唯一写者），
+> 是否收敛到总线见 §4.8 的 P0-5 待办。
 
 - **开关 = 派单许可**：`control.json.enabled=false` 的 CLI 不派新单；正在执行的进程允许跑完（= 排空语义）；force_kill 则终止进程；
 - **status.json 由派单器代理写**（CLI 进程自身不感知协议）；"进程存活"告警（§8.4）直接以派单期间进程状态为准；

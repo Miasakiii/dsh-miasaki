@@ -44,7 +44,18 @@ function eventsPath(root) {
   return path.join(root, 'state', 'graph-events.jsonl')
 }
 
-function readJsonl(p) {
+/**
+ * 读 JSONL。
+ *
+ * @param {string} p
+ * @param {{badLines?: number}} [stats] 可选出参：坏行数写回 `stats.badLines`。
+ *
+ * 为什么需要这个出参：坏行此前**静默跳过**，而 `validate-bus` 的巡检**不在派单路径上** ——
+ * 一条被截断的 `update status=done` 会让任务在判定器眼里仍是 `queued` ⇒ **放行派单**，
+ * 而派单器侧看不到任何信号（2026-09-30 由 t-0010 独立复核 F6 指出）。
+ * 计数交给判定器（`task-ready`）显式拒绝，静默跳过的语义不变（巡检仍会报错）。
+ */
+function readJsonl(p, stats) {
   if (!fs.existsSync(p)) return []
   const raw = stripBom(fs.readFileSync(p, 'utf8'))
   const out = []
@@ -52,6 +63,10 @@ function readJsonl(p) {
     if (!ln.trim()) continue
     try { out.push(JSON.parse(ln)) } catch { /* 坏行由巡检报错，这里跳过 */ }
   }
+  // 坏行计数用「非空行数 − 成功解析数」**推导**，刻意不改上面那一行 ——
+  // 它是 `scripts/silent-guard-baseline.json` 冻结的存量静默降级（R2），改文本会让基线报
+  // 「可回收」而语义其实没变（仍是跳过 + 由巡检报错）。计数只是把同一事实**显式**交给判定器。
+  if (stats) stats.badLines = raw.split(/\r?\n/).filter((l) => l.trim()).length - out.length
   return out
 }
 

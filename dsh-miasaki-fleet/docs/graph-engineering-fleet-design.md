@@ -704,13 +704,13 @@ locate_first_invalid(failed_task) :=
 > **G0 未做的部分（有意为之）**：只落实"能写、写得可审计、坏数据进不来"，**不改变任何现有调度行为**——
 > `depends_on` 语义、派单流程、状态机均未动。图结构的引入从 G1 开始。
 
-### G1：任务图 —— 🔶 算法与查询已落地（2026-09-10），派单器改造待做
+### G1：任务图 —— ✅ 判定层已落地（2026-09-10），派单器接线已落地（2026-09-30）
 
 - ✅ **`workers/lib/task-graph.cjs`（就绪度判定的唯一实现）**：台账重放（`foldTasks`）、图模型（`buildGraph` / `groupSummary`）、依赖的两种语义（`effectiveDeps`）、图就绪（`evaluateReadiness`）、可派判定（`evaluateDispatchable`）、就绪集与可派集（`readySet` / `dispatchableSet`）；
-- ✅ **`workers/graph/task-ready.mjs`（CLI）**：`--dispatchable` / `--explain <id>` / `--groups` / `--check` / `--json`；
+- ✅ **`workers/graph/task-ready.mjs`（CLI）**：`--dispatchable` / `--explain <id>` / `--groups` / `--check` / `--json`；2026-09-30 增补：`--explain --json` 输出结构化字段 `agent`（`{id, enabled, alive, budgetOk, state}`），供派单器区分「首跑」与「僵尸」；
 - ✅ `result.json` 契约 + 校验（已在 G0 完成）；
-- ⏳ 派单器支持"按图就绪度调度"、并行扇出——**尚未改动 `dispatch-task.ps1`**；
-- ⏳ `result.json` 交付期校验与失败重试一次——**尚未接入派单器**。
+- ✅ **派单器已按可派判定强制闸门**（2026-09-30）：`workers/dispatch/dispatch-task.ps1` 的 `Test-DispatchableGate` 复用 `task-ready.mjs --explain --json`，`ready=false` 即拒绝派单（exit 2）并打印全部 reasons；**并行扇出仍未做**（无真实钻石图样本）；
+- ⏳ `result.json` **交付期**校验与失败重试一次——**尚未接入派单器**（现仍靠 `validate-bus` 事后巡检兜；派单当场校验的档位待 Operator 裁决）；
 
 **G1 的关键实现决策（与 §3.4 略有修正，以实际落地为准）**
 
@@ -730,9 +730,9 @@ locate_first_invalid(failed_task) :=
 | 就绪度算法与两种依赖语义 | ✅ 13 项单测（`tests/task-graph.test.mjs`） |
 | **零行为变更证明** | ✅ 两层验证：① 手工穷举 6×2×6 种状态组合，新判定与旧规则逐字一致；② **真实台账**（`state/tasks.jsonl`）上逐任务比对一致 |
 | CLI 可用性 | ✅ 真实总线上跑通，并当场暴露历史问题（`t-0003`/`t-0004` 已排队但派给了已归档的 agent） |
-| 仓库级回归 | ✅ `verify-all fleet` **10/10 PASS** |
+| 仓库级回归 | ✅ `verify-all fleet` **21/21 PASS**（2026-09-30 收工口径；G1 接线前为 10/10） |
 | ⏳ 真实 3 路 fan-out → reduce → verify 钻石图 | **待做**（需真实多任务派单） |
-| ⏳ 派单器按图调度 | **待做** |
+| ✅ 派单器按图调度 | **已接线（2026-09-30）**：`Test-DispatchableGate` 强制闸门 + `tests/dispatch-gate.test.mjs` **26 例**夹具（真实台账全终态、可派 0 个 ⇒「放行」分支只能靠夹具）。并行扇出仍待做 |
 
 > **为什么先做算法而不动派单器**：派单器是正在服役的组件，改它会立刻影响现有 worker 的派单流程。
 > 先在库里落判定并用真实台账证明等价，再改派单器，是代价最低的顺序——而且判定逻辑独立成库后，
@@ -795,12 +795,12 @@ locate_first_invalid(failed_task) :=
 
 **验收**：人为破坏中间产物，系统正确定位 `first_invalid` 并只重跑受影响子图（上游 `accepted` 任务不重跑）。
 
-### G4：验证器 —— 🔶 判定层已落地（2026-09-10），派单挂载待做
+### G4：验证器 —— ✅ 判定层已落地（2026-09-10），派单挂载已落地（2026-09-30）
 
 - ✅ **`workers/lib/verifier.cjs`（异构验证的唯一实现）**：异构性判定、验证者选取、验证任务书生成、结论汇总；
 - ✅ **`workers/graph/verifier-pick.mjs`（CLI）**：`--for` / `--brief` / `--status` / `--check` / `--min-level` / `--json`；
 - ✅ **`verdict.json` 契约**（`bus-contract.validateVerdict`）已接入 applier 写入校验与巡检；
-- ⏳ 派单流程按风险等级自动挂载验证器（当前是 Commander 可查询，非强制）。
+- ⏳ 派单流程按风险等级自动挂载验证器 —— ✅ **已于 2026-09-30 接线**（见下方验收进度表；**自动派发**验证任务仍未做，属独立议题）。
 
 **异构等级**（本方案的判定口径）
 
@@ -839,7 +839,7 @@ $ node workers/graph/verifier-pick.mjs --for coder --all
 | 写入与巡检接入 | ✅ applier 校验 + `validate-bus` 巡检 |
 | 真实数据可用性 | ✅ 活动 agent 两两之间均可判定为 `vendor` 级异构 |
 | ⏳ 「自测通过但实际失败」的产物被 reject | **待做**——需要真实挂载一次验证任务 |
-| ⏳ 派单流程按风险自动挂载验证器 | **待做** |
+| ✅ 派单流程按风险自动挂载验证器 | **已接线（2026-09-30）**：`Test-VerifierGate` —— brief 的 `risk:` / `需要验证：` 行（或 `-Risk`）**声明了风险**即要求**可用**的异构验证者，无可用候选则**拒绝派单**；值非法即拒绝（**不猜**，`none` 按非法处理）。**未声明即跳过**（零行为变更）。派单结束后生成 `tasks/<id>/verify-brief.md`，**不自动派发**验证任务（那会引入新的任务生命周期，属独立议题）。夹具 6 态。**已知不一致（已于同日第四批统一）**：G4 的可用性判据把 `alive=false` 判不可用，而「无 `status.json`」正是 `alive=false` ⇒ 从未运行过的 agent 不能被选为验证者；G1 派单闸门对同一形态是**降级放行**的。现口径**单点在 `liveness.cjs` 的 `isFirstRun`**，`verifier-pick.mjs` 提供 `firstRun` 标记、`verifier.cjs` 的可用性判据显式含首跑豁免、派单器以 `state -eq 'no-status'` 消费同一字面量；**豁免不外溢**（真僵尸 / 开关未开 / 字段缺席照旧不可用）。实测修前 2 个 vendor 候选 → 修后 **3 个** |
 
 ### 依赖关系
 
@@ -900,3 +900,7 @@ G0（契约 + 事件流 + applier）── 地基，无它则后续皆不可验�
 | 2026-09-10 | v0.1 初稿：定位（叠加不替换）、四张图架构与写者表、G1 任务图（字段/就绪度算法/动态扇出/结果契约）、G2 能力图（边类型/confidence 回填/选型算法）、G3 状态图（机器事件流/归因/恢复边界）、G4 验证器（异构约束）、边界、五期规划与验收、风险、待合并清单 |
 | 2026-09-10 | v0.2 学术前沿修订：写者机制改为"补丁 + 单一 applier"（PatchBoard）；新增"事件流为唯一真相"（The Log is the Agent）；立"不建 LLM 归因器"纪律并引入 MAST 14 类作可判定维度表（Who&When 反面证据）；优先级改为"契约先于拓扑"（2502.02533）；边界新增"不为能力加 Agent"（两篇反证）；风险表补三项 |
 | 2026-09-10 | v0.3 框架横向对比补入：确认"缺的不是图抽象而是四样机制"；新增超步提交边界（确定性重放）、稳定逻辑 ID 硬约束、checkpoint 分层、可落盘中断点（interrupt）、事件的 trace/span 字段；§1.2 补三条明确不吸收项 |
+| 2026-09-30 | v0.4 **派单器接线落地**（判定层 → 在役执行路径）：G1 可派判定与 G0 事件留痕接入 `workers/dispatch/dispatch-task.ps1` —— ①`Test-DispatchableGate` 强制闸门（`ready=false` → exit 2 并打印全部 reasons）；②`-Agent` 与台账 `assignee` 一致性检查（改派必须走 `reassign` 补丁带 reason）；③`Write-BusEvent` 留痕 `task.started`（CLI 启动前）/ 终态 `task.completed`·`failure.detected`，写失败只告警不阻断。**冷启动降级**：`status.json` 缺失时 F3 的 `no-status` 判为首跑（告警放行）而非僵尸（仍硬拒），靠 `--explain --json` 新增的结构化字段 `agent` 区分而非字符串匹配。新增 `tests/dispatch-gate.test.mjs` **10 例**夹具 + `verify-all` 纯文本断言，fleet 回归 17 → **20 项**。**未做**（有意分档）：`result.json` 交付期校验、G4 验证器挂载、写入收敛（P0-5）与 worker 生命周期——分档依据见规划文档 `_refs/fleet-dispatch-wiring-plan-2026-09-30.md`（规划类，按仓库纪律不入库） |
+| 2026-09-30 | v0.4.1 **接线后独立复核与 findings 收口**（同日第二批，同一交付物 `t-0010` 承载）：真实派单给异构 agent，任务内容即「复核本次接线」，产出 6 条 findings（无阻断）。**当批修 3 条**：CLI 存在性预检（`Get-Command $exe`，防「起不来」被记成成功并写进事件流）/ `verify-all` 补**两处调用点**断言（此前删掉派单主路径那处调用全仓不变红）/ 如实描述冷启动降级的 v1 边界并把两侧文案成对钉住。**同日第二批再修 4 条**：`-ResetStatus`（崩溃残留 `status.json` ⇒ 闸门永久硬拒且无恢复入口；该开关删除残留，**写 `stopped` 无效**——判活对它同样给 `alive=false`；心跳新鲜时拒绝执行以免误删在跑的档案）；预算纳入口径分歧比对；`bus_bad_lines`（台账坏行此前静默跳过 ⇒ 判定可能建立在残缺台账上）**有坏行即拒绝**；`final-state.ps1` 调用失败不再静默回退成 `idle`（会把 `status=blocked` 记成「健康空闲 + `task.completed`」）而是保守记 `error`。夹具 **10 → 17 例**、接线断言 **12 → 20 项**。**顺带暴露一处空文**：`tasks/<id>/result.json` 虽在 applier 白名单内，但历史超步的 `paths` 里从未出现过它（t-0003/t-0004 的契约都是直接写盘），t-0010 首次让它经唯一入口落盘 |
+| 2026-09-30 | v0.5 **G4 派单挂载落地**（第三批）：`Test-VerifierGate` 把「异构验证者选取」接进派单路径 —— brief 的 `risk:` / `需要验证：` 行（或 `-Risk`）**声明了风险**即要求**可用**的异构验证者（`verifier-pick --for --min-level --json`），**无可用候选即拒绝派单**；值非法即拒绝（**不猜**，`none` 按非法处理）；**未声明即跳过**（零行为变更）。派单后生成 `tasks/<id>/verify-brief.md`（**不自动派发**验证任务）。**判据是可用候选数而非退出码**（`--all` 语义下候选可能全不可用）。夹具 17 → **23 例**、接线断言 20 → **26 项**。**发现并如实记录一处判定层不一致（本批刻意不修）**：G4 把 `alive=false` 判不可用，而「无 `status.json`」正是 `alive=false` ⇒ **从未运行过的 agent 不能被选为验证者**；G1 对同一形态是降级放行的 —— 两层判活口径待统一（下一批候选） |
+| 2026-09-30 | v0.6 **两层判活口径统一（第四批）**：「首跑豁免」此前是**两侧各自实现**且结论相反 —— 派单闸门对「无 `status.json`」降级放行，验证者选取却把 `alive=false` 判不可用 ⇒ **从未运行过的 agent 永远当不了验证者**（与「新 agent 永远派不出去」**同族**，同日在 G4 接线的用例里实测发现）。现在口径**单点**在 `liveness.cjs` 新增的 `FIRST_RUN_STATE` + `isFirstRun`：`verifier-pick.mjs` 的 agent meta 增 `firstRun` / `livenessState`（**刻意不把 `alive` 折算成可用** —— 那会让字段名说谎），`verifier.cjs` 的可用性判据显式含 `firstRun` 豁免，派单器以 `state -eq 'no-status'` 消费同一状态字面量。**豁免不外溢**：`unknown`（真僵尸）/ 开关未开启 / `firstRun` 字段缺席（保守按非首跑）照旧不可用。测试 `liveness.test.mjs` 7 → **9 例**、`verifier.test.mjs` 25 → **29 例**（+4 覆盖豁免与其三条边界），`verify-all` 加 5 项口径断言（含单点函数、状态字面量、两个消费方、派单器同口径）。**实测**：`--for pi --min-level vendor` 由 2 个候选 → **3 个**（`claude` 因首跑标记被正确纳入） |

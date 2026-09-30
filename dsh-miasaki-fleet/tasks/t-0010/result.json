@@ -1,0 +1,70 @@
+{
+  "task_id": "t-0010",
+  "status": "completed",
+  "conclusion": "派单器接线（G1 可派判定 + G0 事件留痕）经独立复核**未发现阻断级问题**，四条复核问题全部作答：Q1「该派却被拒」存在两条形态（崩溃残留 status.json 导致永久硬拒且无重置入口；派单中 >90s 心跳被判僵尸），Q2 reassign 补丁路径闭环成立且有真实先例（t-0010 的 497B reassign 行 = 对应 superstep 事件的 bytes），Q3 事件留痕覆盖非零退出与自述受阻、但漏「CLI 根本起不来」这一孪生形态，Q4 退出码与既有约定一致且当前无机器消费者误判。findings 6 条（4 建议 + 2 观察，无阻断）。**finding 已全部处置**：F2（CLI 起不来 ⇒ 假成功入事件流）/ F3（主路径调用点零覆盖）/ F4（文案匹配与文档表述矛盾）第一批修复；F1（崩溃残留无重置入口）/ F5（口径分歧只比 enabled）/ F6（台账坏行静默跳过）与 Q3 附带的 F7（final-state.ps1 调用失败静默回退成 idle）第二批收口。F6 的「判定器 stderr 被 2>$null 吞」**有意保留** —— 输出不可解析本身已判拒绝，吞掉的只是噪声。",
+  "completeness": {
+    "done": [
+      "四份复核对象全文读完：dispatch-task.ps1(489) / task-ready.mjs(281) / final-state.ps1(58) / liveness.cjs(89)，另追读 task-graph.cjs、bus-apply-core.cjs、bus-contract.cjs、bus-apply.mjs、validate-bus.mjs、verify-all.mjs 与两个测试文件",
+      "Q1–Q4 逐条作答（每条带文件:行号证据）",
+      "findings 6 条按严重度排序：F1–F4 建议 / F5–F6 观察，无阻断级",
+      "4 条自查命令全部执行；dispatch-gate 夹具 10/10 通过；真实工作区跑过一次 -CheckOnly（只读）",
+      "额外 4 组 PowerShell 语义探针（@($null).Count / ConvertFrom-Json 时间戳 Kind / 缺命令时 $LASTEXITCODE / 解析器语法检查）",
+      "明确列出「未发现问题」的四处（含查了但没证据的说明），未凑数编造"
+    ],
+    "missing": [
+      "主派单路径端到端实跑（会 spawn 真 CLI 并写总线，超出一轮只读复核的边界）——终态事件映射与「CLI 起不来」两条结论由代码路径 + 隔离层语义实测推出，非端到端观测",
+      "verify-all 全量未跑（复核范围的边界，非缺陷）"
+    ]
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "agents/pi/logs/t-0010-stdout.log",
+      "note": "本轮 worker stdout 原始证据（pi -p，exit 0；交付物由派单器代写，正文逐字取自此处）"
+    },
+    {
+      "type": "file",
+      "ref": "dsh-miasaki-fleet/tasks/t-0010/result/result-t-0010.md",
+      "note": "§4.7 六段结构交付物（结论 / 完成度 / 数据来源·依据 / 遇到的问题 / 广播建议 / 下一步建议）+ 文末「复核后处置」表"
+    },
+    {
+      "type": "file",
+      "ref": "agents/pi/notes.md",
+      "note": "共享滚动产物（非任务专属）：t-0010 首建即 pi 给出的 10 行。按 t-0004 撞出的契约边界，共享追加文件列 evidence 而非 artifacts —— 不可变指纹不适用于会持续滚动的文件"
+    },
+    {
+      "type": "file",
+      "ref": "workers/dispatch/dispatch-task.ps1",
+      "note": "被测对象：Test-DispatchableGate（G1 闸门）/ Write-BusEvent（G0 事件）/ CLI 存在性预检（复核后修复）/ 冷启动降级"
+    },
+    {
+      "type": "file",
+      "ref": "workers/graph/task-ready.mjs",
+      "note": "闸门判定来源；--explain --json 的结构化字段 agent 为冷启动降级的依据"
+    },
+    {
+      "type": "file",
+      "ref": "state/graph-events.jsonl",
+      "note": "实测事件证据：14:37:35 failure.detected（claude 首次派单 exit 1）/ 14:42:21 task.started（pi 派单）/ 终态 task.completed"
+    },
+    {
+      "type": "file",
+      "ref": "state/tasks.jsonl",
+      "note": "改派先例实物：t-0010 的 reassign 行 497 字节 = 对应 superstep 事件的 bytes:497"
+    },
+    {
+      "type": "task",
+      "ref": "t-0003",
+      "note": "派单器代写协议先例（headless 下 worker 无法落盘）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0010/result/result-t-0010.md",
+      "bytes": 17753,
+      "sha256": "df17e1dae991f7c54f316e3eb733b0a3f5fb4cb32c16add387b2fd2a3d2dceea"
+    }
+  ],
+  "broadcast": "① 接线模式的可复用纪律（来自 F3 实测）：每接一个闸门必须同时钉住「主路径调用点」与「拒绝分支」两条断言 —— 只钉函数定义会让「接线悄悄退化」保持全绿，本次实测「删掉派单主路径那处调用，全仓不会变红」。② status.json 的 running-stale 从本轮起不只是显示问题，而是**派单硬闸门的输入**（F1）：某能力的唯一 agent 一旦留下崩溃残留即永久派不出去，面板/桌宠画僵尸时应一并给出恢复方式。③ 任何把 worker 执行改成「非派单器触发」（如并行扇出）的方案，必须同时接管 status.json 心跳刷新，否则新路径必然自锁。"
+}

@@ -382,6 +382,45 @@ body {
     <span id="errorText"></span>
   </div>
 
+  <!-- ==================== 判定层（2026-09-30，P1）====================
+       面板此前只有「在线数 / 任务数 / 成本」—— 判定层的事实（可派集与**不可派原因**、能力断层、
+       机器事件流）一条都没上屏，尽管派单器早已按这些口径在判定。本块把它们直接呈现，
+       且与派单器**同源**（都走判定层 CLI，见 server.js 的 runJudgement）。 -->
+  <style>
+    .judgement-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 8px 0 4px; }
+    .jcard { background: #17191c; border: 1px solid #2a2d31; border-radius: 8px; padding: 12px 14px; }
+    .jcard h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; opacity: .9; }
+    .jrow { font-size: 12px; line-height: 1.7; opacity: .85; word-break: break-all; }
+    .jmeta { font-size: 12px; opacity: .7; }
+  </style>
+  <div class="section-title">判定层</div>
+  <div class="judgement-grid" id="judgement">
+    <div class="jcard"><h3>可派集</h3><div id="jDispatchable" class="jmeta">加载中…</div></div>
+    <div class="jcard"><h3>能力断层</h3><div id="jGaps" class="jmeta">加载中…</div></div>
+    <div class="jcard"><h3>最近机器事件</h3><div id="jEvents" class="jmeta">加载中…</div></div>
+  </div>
+  <script>
+  (async function () {
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    async function j(url) {
+      try { return await (await fetch(url)).json(); } catch (e) { return { ok: false, error: String(e) }; }
+    }
+    const d = await j('/api/dispatchable');
+    $('jDispatchable').innerHTML = !d.ok ? '不可用：' + esc(d.error)
+      : '<div>可派 <b>' + d.ready.length + '</b> · 终态 ' + d.finished.length + '</div>'
+        + d.blocked.map((b) => '<div class="jrow">✗ ' + esc(b.taskId) + '：' + esc((b.reasons || []).join('；')) + '</div>').join('');
+    const g = await j('/api/gaps');
+    $('jGaps').innerHTML = !g.ok ? '不可用：' + esc(g.error)
+      : (g.gaps.archivedOnly.length === 0 ? '<div>无断层</div>'
+        : g.gaps.archivedOnly.map((x) => '<div class="jrow">' + esc(x.capability) + '（仅归档：' + esc(x.archivedAgents.join(', ')) + '）</div>').join(''));
+    const e = await j('/api/events?limit=8');
+    $('jEvents').innerHTML = !e.ok ? '不可用：' + esc(e.error)
+      : '<div>共 ' + e.total + ' 条</div>' + e.events.slice().reverse()
+        .map((x) => '<div class="jrow">' + esc(x.event) + (x.task_id ? ' · ' + esc(x.task_id) : '') + '</div>').join('');
+  })();
+  </script>
+
   <div class="section-title">Agent Fleet</div>
 
   <div class="toolbar">

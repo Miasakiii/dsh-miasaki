@@ -18,6 +18,7 @@
         "task.reopened",
         "failure.detected",
         "checkpoint.written",
+        "agent.status.reset",
         "interrupt.raised",
         "interrupt.resumed",
         "superstep.committed"

@@ -115,7 +115,11 @@ function artifactExists(taskId, artifact) {
 }
 
 function buildContext() {
-  const rows = core.readJsonl(path.join(ROOT, 'state', 'tasks.jsonl'))
+  // 坏行计数（2026-09-30，t-0010 独立复核 F6）：台账里的坏行此前被**静默跳过** ⇒ 判定可能建立在
+  // 残缺台账上（一条被截断的 `update status=done` 会让任务在判定器眼里仍是 queued ⇒ 放行派单），
+  // 而 `validate-bus` 的巡检不在派单路径上跑。计数交由闸门消费并显式拒绝。
+  const stats = {}
+  const rows = core.readJsonl(path.join(ROOT, 'state', 'tasks.jsonl'), stats)
   const tasks = foldTasks(rows)
   const agents = loadAgentStates()
   return {
@@ -123,6 +127,7 @@ function buildContext() {
     agents,
     artifactExists,
     agentState: (id) => (agents.has(id) ? agents.get(id) : null),
+    badLines: stats.badLines || 0,
   }
 }
 
@@ -205,10 +210,21 @@ function main() {
     }
     const r = evaluateDispatchable(id, ctx)
     const deps = effectiveDeps(t)
+    // agent 结构化诊断（2026-09-30 加，供派单器闸门消费）：
+    // `reasons` 是给人看的字符串，而派单器需要**可判定**地区分两种判活失败 ——
+    // 「从未运行过」（state=no-status，首跑应放行）与「running 但心跳过龄」
+    // （state=unknown，僵尸必须拒）。两者文案相同，靠字符串匹配区分会把判定
+    // 绑死在文案上（改一个字的措辞就静默换语义）。故把 ctx.agentState 原样带出。
+    const agentInfo = t.assignee && typeof ctx.agentState === 'function'
+      ? ctx.agentState(t.assignee)
+      : null
     if (opts.json) {
       console.log(JSON.stringify({
         task_id: id, status: t.status, assignee: t.assignee,
         ready: r.ready, graph_ready: r.graphReady, reasons: r.reasons, deps,
+        agent: agentInfo ? { id: t.assignee, ...agentInfo } : null,
+        // 台账坏行数（F6）：>0 表示判定建立在残缺台账上，派单器据此拒绝
+        bus_bad_lines: ctx.badLines,
       }))
     } else {
       console.log(`[task-ready] ${id}（${t.status}）assignee=${t.assignee ?? '未指定'}`)

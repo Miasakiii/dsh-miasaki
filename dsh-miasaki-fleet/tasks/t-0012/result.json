@@ -1,0 +1,39 @@
+{
+  "task_id": "t-0012",
+  "status": "completed",
+  "conclusion": "失败轮计量留痕的**验收载体**：以 `cmd: node -e \"process.exit(3)\"` 刻意造一次零成本失败轮，实测三件事同时成立 —— 派单器退出码 3、usage.jsonl **新增显式未计量行**（修复前失败轮零痕迹）、事件 `failure.detected` 带 `state=error`（修复前后不可分）。本任务无 worker 产出（不调用任何模型），交付物即本契约与 brief。",
+  "completeness": {
+    "done": [
+      "失败轮 usage 留痕实测（行数 4 → 5，note 注明未计量原因）",
+      "终态事件带 state 实测（{\"event\":\"failure.detected\",...,\"state\":\"error\"}）",
+      "退出码语义实测（cmd 失败 ⇒ exit 3，且被如实记入 EXIT 行）"
+    ],
+    "missing": []
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "tasks/t-0012/brief.md",
+      "note": "本任务的验收判据（四条）与刻意失败的命令行"
+    },
+    {
+      "type": "file",
+      "ref": "agents/pi/usage.jsonl",
+      "note": "失败轮新增的显式未计量行（实测 4 → 5 行）"
+    },
+    {
+      "type": "task",
+      "ref": "t-0011",
+      "note": "该缺陷由 t-0011 的独立复核指出（Q3-④，阻断级）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0012/brief.md",
+      "bytes": 1395,
+      "sha256": "0b0f80354e9703c4d115e7f49838ace92b7487cf9d159ab0df391b987cf5d65a"
+    }
+  ],
+  "broadcast": "「跑过但没记账」是一种不会自曝的缺口：它只在需要成本归因时才暴露。因此本轮把它做成可随时重跑的零成本验收载体（`cmd:` 直接跑一条必失败的命令），而不是依赖某次真实失败。"
+}

@@ -304,6 +304,10 @@ const EVENT_TYPES = Object.freeze({
   'task.reopened': { task: true, reason: true },
   'failure.detected': { task: true, reason: true },
   'checkpoint.written': { task: false, reason: true },
+  // 运维入口 `-ResetStatus` 的记录（2026-09-30 补）：清掉崩溃残留的 status.json **是一次状态迁移**，
+  // 此前**零事件** ⇒ 「事件流完整覆盖状态迁移」这条口径存在反例（由 t-0011 独立复核指出）。
+  // 挂在 agent 而非 task 上（它不针对某个任务），故 `task: false`。
+  'agent.status.reset': { task: false, reason: true },
   'interrupt.raised': { task: true, reason: true },
   'interrupt.resumed': { task: true, reason: true },
   'superstep.committed': { task: false, reason: false },
@@ -423,6 +427,27 @@ const PATCH_PATH_RULES = [
   { re: /^state\/graph-events\.jsonl$/, ops: ['append'] },
   { re: /^state\/ledger\.jsonl$/, ops: ['append'] },
   { re: /^agents\/[a-z0-9-]+\/capability\.json$/, ops: ['set', 'merge'] },
+  // 计量原始来源（主协议 §9 明示「成本唯一原始来源」）：worker 不写、派单器唯一写者，故经唯一入口
+  // （2026-09-30，B5 写入收敛）。
+  // ⚠️ 刻意**不含** `agents/<id>/status.json` —— 它是**派生态缓存**不是真相。
+  // 豁免理由（2026-09-30 由 t-0011 独立复核订正：原先三条里有**两条与实现不符**）：
+  //   ① **真值在别处**：状态迁移的真值在 `tasks/<id>/result.json` + 事件流，status.json 只是派生态视图；
+  //   ② 写频低（当前每次派单 2 次：置 running / 置终态），**全仓没有任何周期性心跳写者** ⇒
+  //      原先写的「事件风暴」是对**未来引入心跳后**的推断，**不是当前事实**（复核实测指出）；
+  //   ③ 归因收益低：每次迁移都能由事件 + 契约推导，单独记一笔补丁不增加信息
+  //      （原先写的「会产生畸形补丁」也不成立 —— applier 成功路径**总**会补 `superstep.committed`，
+  //       该现象只在 partial 失败窗口出现）。
+  // **② 是有条件的、不是绝对的**：事件发射是 best-effort（`Write-BusEvent` 失败只告警）。
+  // 已知两处反例**已收口**：`-ResetStatus` 补了 `agent.status.reset` 事件；终态事件补了 `state` 字段
+  //（否则 `blocked` 与 `error` 在事件流里不可分）。
+  // 收敛口径是「**真相类文件进总线，派生态明确豁免**」，不是「所有文件都进总线」。
+  // ⚠️ **已知未收敛**（同属真相/输入类，仍由程序直写 —— 属独立批次，勿当成已完成）：
+  //   · `agents/<id>/control.json`：fleet-monitor 的 `POST /api/toggle` 直写。它是**派单许可（输入）**，
+  //     不是派生态 —— 与 usage.jsonl 同构，理应经唯一入口；
+  //   · `agents/<id>/manifest.json` 与 `agents/registry.json`：`scan-agents.ps1` 直写。
+  //     它们是**能力闸门的实际输入**（agent-pick 读 skills、派单器读 metering_source）。
+  //   另：本表登记的 `capability.json` 是设计中的**派生视图**，**当前全仓零写者**（保留登记以便未来实现）。
+  { re: /^agents\/[a-z0-9-]+\/usage\.jsonl$/, ops: ['append'] },
   { re: /^tasks\/t-\d{4}\/result\.json$/, ops: ['set'] },
   { re: /^tasks\/t-\d{4}\/verdict\.json$/, ops: ['set'] },
 ]

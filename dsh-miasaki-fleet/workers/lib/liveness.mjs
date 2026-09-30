@@ -8,4 +8,4 @@
 
 import module from './liveness.cjs'
 
-export const { STALE_FACTOR, DEFAULT_HEARTBEAT_MS, parseTimestamp, evaluateLiveness } = module
+export const { STALE_FACTOR, DEFAULT_HEARTBEAT_MS, FIRST_RUN_STATE, parseTimestamp, evaluateLiveness, isFirstRun } = module

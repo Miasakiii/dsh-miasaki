@@ -385,3 +385,62 @@ test('K5：仓库里那份真实厂商表存在、合法，且覆盖内置表登
     assert.ok(r.vendors[id], `内置表登记的 ${id} 也应在外置表里（否则两处漂移会给假异构结论）`)
   }
 })
+
+// ---------------------------------------------------------------------------
+// 首跑豁免（2026-09-30 统一两层判活口径）
+//
+// 修的是什么：判活对「从未运行过」（无 status.json）给 `alive=false`，而验证者选取把
+// `alive=false` 直接判**不可用** ⇒ **从未运行过的 agent 永远当不了验证者**。
+// 派单闸门那侧对同一形态是**降级放行**的（冷启动降级）—— 两侧口径相反，属同族形态复发。
+// 口径单点：liveness.cjs 的 `isFirstRun`，经 ctx 的 `firstRun` 传入。
+// ---------------------------------------------------------------------------
+
+test('首跑豁免：从未运行过（alive=false + firstRun）的 agent 仍可作验证者', () => {
+  const agents = new Map([
+    ['prod', { model: 'cli-default', enabled: true, alive: true }],
+    ['fresh', { model: 'cli-default', enabled: true, alive: false, firstRun: true }],
+  ])
+  const r = selectVerifiers('prod', ctxOf(agents), { minLevel: 'agent' })
+  const c = r.candidates.find((x) => x.agentId === 'fresh')
+  assert.ok(c, '「没跑过」不是「僵尸」—— 不得把首跑 agent 当不可用排除')
+  assert.equal(c.available, true)
+})
+
+test('首跑豁免不外溢：alive=false 且**非**首跑（真僵尸）仍不可用', () => {
+  const agents = new Map([
+    ['prod', { model: 'cli-default', enabled: true, alive: true }],
+    ['zombie', { model: 'cli-default', enabled: true, alive: false, firstRun: false }],
+  ])
+  const r = selectVerifiers('prod', ctxOf(agents), { minLevel: 'agent' })
+  assert.equal(
+    r.candidates.find((x) => x.agentId === 'zombie'),
+    undefined,
+    '真僵尸不得被首跑豁免放过（豁免只认 firstRun 标记，不认 alive=false 本身）',
+  )
+})
+
+test('首跑豁免不覆盖开关：enabled=false 的首跑 agent 照旧不可用', () => {
+  const agents = new Map([
+    ['prod', { model: 'cli-default', enabled: true, alive: true }],
+    ['fresh-off', { model: 'cli-default', enabled: false, alive: false, firstRun: true }],
+  ])
+  const r = selectVerifiers('prod', ctxOf(agents), { minLevel: 'agent' })
+  assert.equal(
+    r.candidates.find((x) => x.agentId === 'fresh-off'),
+    undefined,
+    '首跑豁免只放宽判活那一维，不放宽派单许可',
+  )
+})
+
+test('firstRun 字段缺席时按「非首跑」处理（保守，不豁免）', () => {
+  const agents = new Map([
+    ['prod', { model: 'cli-default', enabled: true, alive: true }],
+    ['unknown', { model: 'cli-default', enabled: true, alive: false }],
+  ])
+  const r = selectVerifiers('prod', ctxOf(agents), { minLevel: 'agent' })
+  assert.equal(
+    r.candidates.find((x) => x.agentId === 'unknown'),
+    undefined,
+    '老 ctx 不提供 firstRun 时应保守判不可用 —— 豁免必须是显式事实，不能靠默认',
+  )
+})

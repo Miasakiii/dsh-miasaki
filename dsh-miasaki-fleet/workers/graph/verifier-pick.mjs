@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 
 import core from '../lib/bus-apply-core.cjs'
 import { validateVerdict } from '../lib/bus-contract.mjs'
-import { evaluateLiveness } from '../lib/liveness.mjs'
+import { evaluateLiveness, isFirstRun } from '../lib/liveness.mjs'
 import { HETERO_LEVELS, buildVerifierBrief, selectVerifiers, summarizeVerdicts } from '../lib/verifier.mjs'
 // K5（2026-09-30）：厂商表加载移出本文件 —— 「缺文件/结构非法」两条回退路径要能测、
 // 且必须显式告知（此前是静默断链：读一个从不存在的文件，读不到就悄悄用内置表）。
@@ -62,6 +62,11 @@ function loadAgents() {
         enabled: archived ? false : (control ? control.enabled === true : false),
         alive: live.alive,
         state: status ? status.state : null,
+        // 首跑标记（2026-09-30 统一口径）：口径单点在 liveness.cjs 的 isFirstRun。
+        // **不能在 meta 里把 alive 折算成可用** —— `alive` 的语义是「真的活着」，
+        // 折算会让这个字段名说谎；由消费方（verifier.cjs 的可用性判据）显式看本字段。
+        firstRun: !archived && isFirstRun(live),
+        livenessState: live.state ?? null,
       })
     }
   }

@@ -86,4 +86,25 @@ function evaluateLiveness(status, manifest, nowMs) {
   return { state: rawState, alive: true, stale: false, ageMs, reason: null }
 }
 
-module.exports = { STALE_FACTOR, DEFAULT_HEARTBEAT_MS, parseTimestamp, evaluateLiveness }
+/** 「从未运行过」的判活状态值。**字面量单点在此** —— 两个消费方都引用它，不各自拼字符串。 */
+const FIRST_RUN_STATE = 'no-status'
+
+/**
+ * 「首跑」判定：从未运行过（`status.json` 不存在）时判活给 `alive=false`，
+ * 但那是「没跑过」，不是「僵尸」—— 判活的本意是**防僵尸**（见本文件头部问题陈述），
+ * **不是防首跑**。
+ *
+ * 为什么必须收敛成单点：这条口径有两个消费方，它们此前**各自实现**，于是同一个 agent
+ * 在两层里得到**相反**结论 ——
+ *   · 派单闸门（`dispatch-task.ps1` 的冷启动降级）对 `no-status` **降级放行**；
+ *   · 验证者选取（`verifier-pick.mjs` → `verifier.cjs`）把 `alive=false` 判**不可用**。
+ * 后果：**从未运行过的 agent 永远当不了验证者** —— 与「新 agent 永远派不出去」是
+ * **同族形态**，只是换了判定层（2026-09-30 由 G4 接线的用例实测发现）。
+ *
+ * @param {{state?: string}|null} live `evaluateLiveness` 的返回值
+ */
+function isFirstRun(live) {
+  return !!live && live.state === FIRST_RUN_STATE
+}
+
+module.exports = { STALE_FACTOR, DEFAULT_HEARTBEAT_MS, FIRST_RUN_STATE, parseTimestamp, evaluateLiveness, isFirstRun }

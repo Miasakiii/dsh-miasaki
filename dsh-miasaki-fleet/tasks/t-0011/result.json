@@ -1,0 +1,53 @@
+{
+  "task_id": "t-0011",
+  "status": "completed",
+  "conclusion": "写入收敛口径（真相进总线 / 派生态豁免）经独立复核：口径本身站得住，但复核时它在产物层尚未生效，并指出两处漏网真相类文件（control.json 由 fleet-monitor 直写、manifest.json/registry.json 由扫描器直写）与一处误登记（capability.json 全仓零写者）。同时给出 2 条阻断级发现：① applier partial 失败会触发回退再写一遍 ⇒ 重复计量、成本双计；② usage 只在 exitCode=0 时解析 ⇒ 失败轮零计量。两条阻断与三条建议（blocked/error 事件不可分、-ResetStatus 零事件、回退告警不持久）已当批修复并实测；两条漏网与一处误登记登记为「已知未收敛」，属独立批次（需改 fleet-monitor 写接口与 scan-agents.ps1）。",
+  "completeness": {
+    "done": [
+      "Q1–Q3 逐条作答，每条带 文件:行号 证据",
+      "findings：2 阻断 + 4 建议 + 1 观察，另列 4 处「已查未见问题」",
+      "两条阻断级发现被当批修复并实测（partial 不回退 / 失败轮显式未计量行）",
+      "给出「经唯一入口」的产物级证据判据（superstep 的 paths 是否出现该路径）"
+    ],
+    "missing": [
+      "control.json / manifest.json / registry.json 的写入收敛（需改 fleet-monitor 与扫描器，属独立批次）",
+      "回退前查重（partial 不回退已消掉最主要的重计路径，查重留作加强）"
+    ]
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "agents/pi/logs/t-0011-stdout.log",
+      "note": "worker stdout 原始证据（该路径 gitignore，关键段已内联进本任务交付物）"
+    },
+    {
+      "type": "file",
+      "ref": "workers/lib/bus-contract.cjs",
+      "note": "PATCH_PATH_RULES 白名单；本轮新增 usage.jsonl（append）并刻意排除 status.json"
+    },
+    {
+      "type": "file",
+      "ref": "workers/dispatch/dispatch-task.ps1",
+      "note": "Write-UsageRow / Write-BusEvent / -ResetStatus：复核指出的四条缺陷的落点"
+    },
+    {
+      "type": "file",
+      "ref": "state/graph-events.jsonl",
+      "note": "产物级证据：bus_version 20 的 paths 含 agents/pi/usage.jsonl（B5 首次实证经唯一入口）"
+    },
+    {
+      "type": "task",
+      "ref": "t-0010",
+      "note": "上一轮接线与复核先例（同族：静默失效优先收口）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0011/result/result-t-0011.md",
+      "bytes": 8995,
+      "sha256": "f71be21262f6146124202a50fa5cb38dcae4660f885d257c2d9ca5b7a2fe3e21"
+    }
+  ],
+  "broadcast": "① 「经唯一入口」这类主张必须配产物级证据（superstep.paths 里出现过该路径），否则收敛会长期停在声明层 ——本轮 B5 正是先被复核判定为「零实证」，补上证据后才算闭环。② 「刻意豁免」的理由必须与实现同步：本轮三条豁免理由中有两条与现状不符（无心跳写者、applier 总会补事件），已订正 —— 理由写错比没有理由更危险，它会让下次决策基于假前提。③ 回退/旁路路径必须自带可检索标记与持久记录，否则「可追认」是空头承诺。④ 已知未收敛项（control.json / manifest.json / registry.json）已登记，勿当成已完成。"
+}
