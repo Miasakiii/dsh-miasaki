@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod asset_source;
 mod assets;
 mod diag;
 mod launcher_icon;
@@ -2733,6 +2734,15 @@ fn start_asset_server() {
             return;
         };
         app_log_line(&format!("[{}] asset-server listening :{ASSET_PORT}\n", chrono_now()));
+        // 素材来源摘要（静默失效 #20，2026-09-30）：磁盘 ui/ 覆盖层与内嵌素材分裂时**留一行**。
+        // 没有分裂就不写（避免日志噪声）；`MIASAKI_ASSETS_SOURCE=embedded` 生效时也留痕。
+        if let Some(line) = asset_source::shadow_summary(
+            assets::ASSETS.len(),
+            &assets::disk_shadow_report(),
+            asset_source::prefer_embedded_from_env(),
+        ) {
+            app_log_line(&format!("[{}] {line}\n", chrono_now()));
+        }
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { continue };
             std::thread::spawn(move || {
