@@ -58,6 +58,50 @@ window.__ModuleLoader__.load({
     //   { [parentSessionId]: { activeChildId, lines: [{ childSessionId, createdAt }] } }
     const SIDECHAT_REGISTRY_KEY = 'miasaki-sidebar:sidechat:v1'
 
+    /**
+     * 决策⑥（M2 设计 §8）/ S9 的最小补偿：侧线创建后清掉从父会话**继承来的 goal**。
+     *
+     * 为什么要补偿：`fork` 是**零类型过滤**的日志前缀拷贝（官方 `buildForkSeed`），
+     * goal / plan / todo / preset 全部带进 child（S9 实测，官方测试逐字断言
+     * `inherits the completed-turn goal prefix through SessionStore.fork`）。
+     * 不补偿有两个后果：
+     *   ① 侧线会**显示并携带父会话的目标** —— 用户以为侧线是干净的新线，
+     *      模型也可能因此「接着主任务的活」（与偏差④叠加，S8 复现的温床）；
+     *   ② 在侧线里 `create_goal` 会因 `GOAL_ALREADY_EXISTS` 失败。
+     * **代价**：child 日志里留一条 `goal/change{operation:'clear'}` tombstone ——
+     * 留痕好过背着父目标。
+     * **plan / todo 没有客户端 API**，只能接受（已写进设计文档的已知限制）。
+     *
+     * 为什么是模块级、且 ctx 由参数传入：补偿判据要被单测覆盖（本仓的「不可单测」
+     * 就是成长的土壤）。放进 apply 闭包就只能靠源码正则，那抓不到参数传错这类回归。
+     *
+     * 失败边界：服务缺席（旧宿主没有 `ctx.remote.goals`）⇒ 静默返回，那是**正常的**；
+     * 服务在场而调用失败 ⇒ **留痕但不外抛** —— 补偿是附带动作，绝不能让本来
+     * 已经建好的侧线因为补偿失败而被判死。
+     *
+     * @param ctx 宿主上下文（只用 `ctx.remote.goals`）
+     * @param childSessionId 侧线会话 id
+     */
+    function clearInheritedGoal(ctx, childSessionId) {
+      let goals
+      try {
+        goals = ctx && ctx.remote ? ctx.remote.goals : undefined
+      } catch (e) {
+        return // ctx.remote 本身不可访问：无从补偿（这不是缺陷，是宿主没这个面）
+      }
+      if (!goals || typeof goals.get !== 'function' || typeof goals.clear !== 'function') return
+      Promise.resolve()
+        .then(() => goals.get(childSessionId))
+        .then(goal => {
+          if (!goal || !goal.id) return // child 上没有 goal ⇒ 无需补偿
+          return goals.clear(childSessionId, { id: goal.id, revision: goal.revision })
+        })
+        .catch(err => {
+          console.warn('[miasaki-sidebar] 侧线 goal 补偿失败（不影响侧线本身）:',
+            String((err && err.message) || err))
+        })
+    }
+
     /** Read the registry, degrading to empty on absent/corrupt/private-mode storage. */
     const readSideChatRegistry = () => {
       try {
@@ -2320,7 +2364,15 @@ window.__ModuleLoader__.load({
       const createSideChat = parentSessionId => {
         const inflight = pendingSideChatCreations.get(parentSessionId)
         if (inflight) return inflight
+        // 决策⑥ / S9 的最小补偿：fork 会零类型过滤拷贝日志前缀 ⇒ child 继承父会话的
+        // goal / plan / todo。goal 用官方 `goals.clear` 补偿（plan 无 API，见其注释）。
+        // **刻意不 await**：补偿是附带动作，既不拖慢也不拖死「新建侧线」；
+        // 它的失败同样不外抛（只留痕），侧线本身才是主产物。
         const pending = ctx.sessions.fork({ sessionId: parentSessionId, increaseTitle: true })
+          .then(childId => {
+            clearInheritedGoal(ctx, childId)
+            return childId
+          })
           .finally(() => {
             if (pendingSideChatCreations.get(parentSessionId) === pending) pendingSideChatCreations.delete(parentSessionId)
           })

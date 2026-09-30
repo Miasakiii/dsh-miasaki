@@ -27,7 +27,7 @@ function loadSideChatRegistry(localStorage) {
   assert.notStrictEqual(end, -1, 'client.js 里找不到模块级 store 锚点')
   const factory = new Function('localStorage',
     `${source.slice(start, end)}
-     return { sideChatRegistry, sideChatLinesFor, sideChatActiveFor, sideChatAddLine, sideChatSetActive, sideChatDropLine, SIDECHAT_REGISTRY_KEY }`)
+     return { sideChatRegistry, sideChatLinesFor, sideChatActiveFor, sideChatAddLine, sideChatSetActive, sideChatDropLine, SIDECHAT_REGISTRY_KEY, clearInheritedGoal }`)
   return factory(localStorage)
 }
 
@@ -173,4 +173,120 @@ test('源码契约：空白父会话的 fork 失败要翻译成人话', () => {
   const body = source.slice(at, source.indexOf('function SideChatFixedChatView', at))
   assert.match(body, /no completed turn/i, '必须识别宿主的 fork-unavailable 文案')
   assert.match(body, /先让主会话跑完一轮/, '必须给可执行的引导，而不是甩宿主错误串')
+})
+
+// ---------------------------------------------------------------------------
+// 决策⑥ / S9 的最小补偿（2026-09-30）：侧线创建后清掉继承来的 goal
+//
+// fork 是**零类型过滤**的日志前缀拷贝 ⇒ child 继承父会话的 goal / plan / todo。
+// goal 有官方补偿 API（`ctx.remote.goals.get` → `goals.clear`，代价是 child 日志留一条
+// `goal/change{operation:'clear'}` tombstone）；plan / todo **没有**客户端 API。
+// 本组钉住四件事：补偿真的调、参数对、失败不外抛、服务缺席不打扰。
+// ---------------------------------------------------------------------------
+
+/** 造一个假 `ctx.remote.goals`，记录调用。 */
+function fakeGoals({ goal, failGet = false, failClear = false } = {}) {
+  const calls = { get: [], clear: [] }
+  return {
+    calls,
+    remote: {
+      goals: {
+        get: (sessionId) => {
+          calls.get.push(sessionId)
+          if (failGet) return Promise.reject(new Error('boom-get'))
+          return Promise.resolve(goal)
+        },
+        clear: (sessionId, patch) => {
+          calls.clear.push([sessionId, patch])
+          if (failClear) return Promise.reject(new Error('boom-clear'))
+          return Promise.resolve()
+        },
+      },
+    },
+  }
+}
+
+/** 抽一个 microtask tick：补偿是异步的，断言前要让它的 Promise 链跑完。 */
+const tick = () => new Promise(resolve => setTimeout(resolve, 0))
+
+/** 在断言期间收集 console.warn（补偿失败必须留痕，但不外抛）。 */
+async function withWarnings(fn) {
+  const warnings = []
+  const original = console.warn
+  console.warn = (...args) => warnings.push(args.join(' '))
+  try {
+    await fn()
+  } finally {
+    console.warn = original
+  }
+  return warnings
+}
+
+test('决策⑥：child 上有 goal ⇒ 调 goals.clear，且带上 id 与 revision', async () => {
+  const { clearInheritedGoal } = loadSideChatRegistry(makeStorage())
+  const goals = fakeGoals({ goal: { id: 'goal-42', revision: 7 } })
+  clearInheritedGoal({ remote: goals.remote }, 'session-child')
+  await tick()
+  assert.deepEqual(goals.calls.get, ['session-child'], '必须先按 childId 取 goal')
+  assert.deepEqual(goals.calls.clear, [['session-child', { id: 'goal-42', revision: 7 }]],
+    'clear 必须带 id + revision（官方 UI 同款调用形态）')
+})
+
+test('决策⑥：child 上没有 goal ⇒ 不调 clear（无谓的 tombstone 也是噪声）', async () => {
+  const { clearInheritedGoal } = loadSideChatRegistry(makeStorage())
+  const goals = fakeGoals({ goal: null })
+  clearInheritedGoal({ remote: goals.remote }, 'session-child')
+  await tick()
+  assert.equal(goals.calls.clear.length, 0)
+  const goals2 = fakeGoals({ goal: { revision: 1 } }) // 有 revision 没有 id：不是合法 goal
+  clearInheritedGoal({ remote: goals2.remote }, 'session-child')
+  await tick()
+  assert.equal(goals2.calls.clear.length, 0, '没有 id 的 goal 不构成可清对象')
+})
+
+test('决策⑥：补偿失败只留痕、不外抛（侧线本身才是主产物）', async () => {
+  const { clearInheritedGoal } = loadSideChatRegistry(makeStorage())
+  for (const bad of [{ goal: { id: 'g', revision: 1 }, failGet: true },
+    { goal: { id: 'g', revision: 1 }, failClear: true }]) {
+    const goals = fakeGoals(bad)
+    let thrown = null
+    const warnings = await withWarnings(async () => {
+      try { clearInheritedGoal({ remote: goals.remote }, 'session-child') } catch (e) { thrown = e }
+      await tick() // warn 发生在 Promise 链里 —— 收集必须覆盖它，否则 stub 已被还原
+    })
+    assert.equal(thrown, null, '补偿失败必须被自己吞掉，不能把已建好的侧线拖死')
+    assert.equal(warnings.length, 1, '失败必须留痕 —— 静默吞错正是本仓明令禁止的形态')
+    assert.match(warnings[0], /goal 补偿失败（不影响侧线本身）/)
+  }
+})
+
+test('决策⑥：服务缺席（旧宿主没有 ctx.remote.goals）⇒ 静默返回，不报错', async () => {
+  const { clearInheritedGoal } = loadSideChatRegistry(makeStorage())
+  const warnings = await withWarnings(async () => {
+    assert.doesNotThrow(() => clearInheritedGoal({}, 'session-child'))
+    assert.doesNotThrow(() => clearInheritedGoal(undefined, 'session-child'))
+    assert.doesNotThrow(() => clearInheritedGoal({ remote: {} }, 'session-child'))
+    assert.doesNotThrow(() => clearInheritedGoal({ remote: { goals: {} } }, 'session-child'))
+  })
+  await tick()
+  assert.deepEqual(warnings, [], '服务缺席是正常形态，不该产生告警噪声')
+})
+
+test('源码契约：补偿不阻塞、不污染「新建侧线」的返回链路', () => {
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  const at = source.indexOf('const createSideChat = ')
+  assert.notStrictEqual(at, -1, 'client.js 里找不到 createSideChat')
+  const body = source.slice(at, source.indexOf('const sideChatForkErrorText = ', at))
+  assert.match(body, /clearInheritedGoal\(ctx, childId\)/, 'fork 成功后必须触发补偿')
+  assert.match(body, /return childId/, '补偿不得改变 fork 的 resolve 值（childId 要照原样往下传）')
+  assert.doesNotMatch(body, /await clearInheritedGoal/, '补偿绝不能 await —— 侧线创建不等它')
+  // 调用的必须是同一个模块级函数（防止在闭包里另写一份实现 ⇒ 口径漂移）
+  assert.match(source, /^ {4}function clearInheritedGoal\(ctx, childSessionId\)/m,
+    'clearInheritedGoal 必须是模块级函数（否则单测覆盖不到）')
+})
+
+test('源码契约：已知限制如实写明 —— plan / todo 无客户端 API', () => {
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(source, /plan \/ todo \*\*没有\*\*客户端 API|plan \/ todo 没有客户端 API/,
+    '做不到的事要写清楚，而不是让用户以为「继承」是被设计成这样')
 })

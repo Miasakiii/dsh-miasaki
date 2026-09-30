@@ -2,6 +2,42 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-30（续）· 决策⑥ 落地：侧线创建后清掉继承来的 goal（最小补偿）
+
+**触发**：M2 设计文档 §8 决策⑥ / S9 取证结论早在 2026-09-28 就写明了「建议做最小补偿」，
+但 `client.js` 里 `goal` 零命中 —— **拍板未落地**。本批把它做成机器判据看得见的实现。
+
+**为什么要补偿**：`fork` 是**零类型过滤**的日志前缀拷贝（官方 `buildForkSeed`），
+goal / plan / todo / preset 全部带进 child（S9 实测；官方测试逐字断言
+`inherits the completed-turn goal prefix through SessionStore.fork`）。不补偿有两个后果：
+
+1. 侧线会**显示并携带父会话的目标** —— 用户以为侧线是干净的新线，模型也可能因此
+   「接着主任务的活」（与偏差④叠加，正是 S8 复现「一句继续就让侧线接着做父任务」的温床）；
+2. 在侧线里 `create_goal` 会因 `GOAL_ALREADY_EXISTS` 失败。
+
+**实现**（`clearInheritedGoal(ctx, childSessionId)`，模块级函数）：
+
+- 官方 API 同款调用：`ctx.remote.goals.get(childId)` → `goals.clear(childId, { id, revision })`；
+- **代价如实记账**：child 日志里留一条 `goal/change{operation:'clear'}` tombstone ——
+  留痕好过背着父目标；
+- **不阻塞、不污染**：`createSideChat` 里 fork 成功后**不 await** 它，`childId` 照原样往下传
+  （补偿是附带动作，绝不让「新建侧线」等它、更不必因它失败而判死）；
+- **失败边界分两档**：服务缺席（旧宿主没有 `ctx.remote.goals`）⇒ 静默返回，这是**正常形态**；
+  服务在场而调用失败 ⇒ `console.warn` 留痕但**不外抛**（静默吞错是本仓明令禁止的形态）；
+- **做不到的如实写明**：`plan` / `todo` **没有客户端 API**，只能接受 —— 已写进注释与已知限制，
+  而不是让用户以为「继承」是被设计成这样。
+
+**为什么写成模块级函数**（而非 apply 闭包里的局部）：补偿判据要被单测覆盖。
+放进闭包就只能靠源码正则断言，那抓不到「参数传错 / 忘了 return childId」这类回归。
+
+**闸门**：`test/sidechat-registry.test.js` **13 → 19 例**（+6）：调 clear 且参数含 id+revision /
+child 无 goal 时不调 clear（连「有 revision 无 id」这种残缺也算无）/ 两种失败只留痕不外抛 /
+服务缺席零告警 / 源码契约「不 await、不污染返回链路、必须是模块级函数」/ plan·todo 限制如实写明。
+`verify-all sidebar` 仍 **13/13**。
+
+**实机待验**：重启 `dsh web` → 主会话跑完一轮 → 「新建侧线」⇒ 侧线头**不再显示父会话目标**；
+侧线里再建 goal 不报 `GOAL_ALREADY_EXISTS`；侧线日志（会话记录）里能看到一条 `goal/change{operation:'clear'}`。
+
 ## 2026-09-30 · **回退「侧线只带最近 3 轮」——把 `atSeq` 的方向读反了**
 
 **触发**：用户实测反馈「辅助对话改了没有，怎么没变化」。查证分三层：**改动确实生效了**，
