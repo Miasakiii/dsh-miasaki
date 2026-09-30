@@ -64,11 +64,14 @@ node scripts/verify-all.mjs               # 九线 + 仓库级治理闸门（L0 
 node scripts/verify-all.mjs usage         # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / free-model / repo）
 ```
 
-仓库级治理闸门**五项**（`node scripts/verify-all.mjs repo` 一把跑）也可单独跑：`check-silent-guards.mjs`
+仓库级治理闸门**六项**（`node scripts/verify-all.mjs repo` 一把跑）也可单独跑：`check-silent-guards.mjs`
 （守卫必须显式失败）、`check-doc-versions.mjs`（版本台账）、**`check-message-sources.mjs`**（会话消息来源
 —— DSH 0.1.7 起 v4 要求 producer-owned kind，禁止退役的 `{ kind: "plugin", … }`；同时体检本机已装插件）、
 **`check-md-links.mjs`**（入库文档的相对链接必须解析到**已入库**目标）、**`check-lock-sync.mjs`**
-（锁文件与 `package.json` 的直接依赖 specifier 必须一致 —— 把「CI 红在装依赖那一步」提前到推送前）。
+（锁文件与 `package.json` 的直接依赖 specifier 必须一致 —— 把「CI 红在装依赖那一步」提前到推送前）、
+**`check-style.mjs`**（**2026-09-30 新增**：入库文本的**文件形态**（LF / 无 BOM / 末行换行）与
+**公开仓库脱敏**（`C:\Users\<真名>\…` 绝对路径）—— 这两条都是成文但此前无闸门的纪律；
+存量 54 处冻结在 `scripts/style-baseline.json`，**脱敏类刻意无基线**（新增即失败）。
 会话日志取证用 **`inspect-session-sources.mjs`**（按帧解压多帧 zstd，报告每条 durable 消息的 `source.kind`；
 会话日志逐帧追加，整文件解压只能读出第一帧）。
 
@@ -423,6 +426,269 @@ peerDependencies 在锁文件里登记进的是 `dependencies` 段（sidebar 实
 （`@deepseek-ai/cordis@^4.0.2`、`@deepseek-ai/dsh-host-webserver@>=0.1.2-rc.1 <0.3.0`）；
 ② 当前树 4 个锁文件 / 19 条直接依赖登记全 PASS。**动态枚举的收益**：闸门扫 `dsh-miasaki-*` 下全部锁文件，
 首次运行即发现 `dsh-miasaki-canvas/pnpm-lock.yaml` 同样在管 —— 照 CI 那三条线硬编码会漏掉它。
+
+**2026-09-30（本轮）· 三处静默缺口收口 + 一道缺席围栏（K3/K4/K5/I5）**`[实测]`：触发是用户
+「规划设计修复方案并开始修复」。方案（规划类，按入库边界落 `_refs/internal-plans/fix-plan-2026-09-30.md`，不推送）
+**不新增判据**，只落地既有台账 —— 其中 K3 的判据来自**仓库自己的历史交付物**：
+`tasks/t-0003/result.json` 早在 2026-09-11 就点名了 `validate-bus.mjs` L231 的静默放行，并给出不变式
+「任何被标记为终态的对象都必须有一条反向存在性检查（done ⇒ result.json；accepted ⇒ verdict.json；
+running ⇒ 心跳新鲜）」。**本批即该结论的落地**。
+
+- **K3（fleet）终态必须有交付物**：`validate-bus.mjs` 对缺失 `result.json` 由 `continue` 改为
+  **反向存在性检查**，且**驱动源是台账而非 `tasks/` 目录** —— 这是被测试用例驱动出的修正：
+  原写法以目录为入口，「已验收、但连 `tasks/<id>/` 目录都不存在」这一同族形态仍会静默通过。
+  **首跑即抓到存量 7/9 任务**（9 个任务全部 done+accepted，只有 t-0003 / t-0004 真有交付契约），
+  「验收通过」当时确实是空的。7 份 `result.json` 按契约**补记**：evidence 指向原始 `result-*.md`
+  或派单器代写的 `transcript.md`（t-0007 / t-0008 的交付形态就是 stdout），artifacts 带真实 sha256，
+  conclusion 逐字摘自已交付材料并标注「契约补记 2026-09-30」。同批把 `tasks.jsonl` 的折叠口径
+  **改为复用 `foldTasks`**（此前是本文件里的第二份重放实现）。闸门：`tests/bus-integration.test.mjs`
+  **+4 例**（终态缺交付物必失败 / 有交付物通过 / 在途不报错 / done 未验收不越界）；实盘 33 文件 0 错误。
+- **K4（fleet）自述受阻必须如实落账**：`dispatch-task.ps1` 过去把 `exit 0` 一律当「健康空闲」
+  ⇒ 自述受阻的 worker 在面板与桌宠上照常显示正常。判据不引入新约定：受阻的载体就是**交付契约本身**
+  （`tasks/<id>/result.json` 的 `status = blocked | failed`）。新增 `workers/dispatch/final-state.ps1`
+  （判定**单点**、纯函数、`-OutFile` 可回读），派单器经它落终态，**退出码语义（§7.0 的 0/3/4）不动**；
+  `tests/dispatch-state.test.mjs` **9 例**，含**两个 ps1 的语法闸门** —— PowerShell 侧此前没有任何
+  自动化检查。**故障注入自证**：注入语法错误 ⇒ 闸门 exit 1 并点名 `dispatch-task.ps1:357`，还原后复跑通过。
+  测试里记下一个环境事实（否则下次还会踩）：本机 `pwsh` 常不在 `PATH`、且默认执行策略会拒绝未签名脚本
+  （`SecurityError`），故探测顺序为「PS7 已知路径 → PATH 的 pwsh → 5.1」并统一带 `-ExecutionPolicy Bypass`。
+- **K5（fleet）厂商表不再是空宣称**：`verifier-pick.mjs` 的 `loadVendors()` 读 `shared/agent-vendors.json`，
+  而该文件**从不存在**（v0.23 附注登记在案），读不到就静默回退内置表 —— 默认表与实际厂商归属不符时
+  会给出**假异构**结论且无提示。处置选「**真读 + 显式告知**」而非「删宣称」（覆盖能力本身是设计意图）：
+  新增真实文件 + `workers/lib/vendors.mjs`（缺失 / 结构非法两条回退路径都留痕）；测试 **+5 例**。
+- **I5（usage）同源围栏**：本线此前是九线里**唯一没有围栏**的一条（2026-09-29 实测非环回 Host /
+  跨站两轴均 **200**，而同批四线均 403，且 `POST /reset` 是清空账本的写操作）。新增 `lib/fence.js`
+  （`structuralFence` + `trustFence` + `fenceHandler`），在 **register 一处**统一包装五条路由
+  ⇒ 新增路由不会漏挂；`inject` 仍只有 `webServer`、`connection` 逐请求求值，**零 miasaki 耦合不变**。
+  `test/fence.test.mjs` **13 例**，含「围栏先于业务」的顺序断言（跨站 POST 得 403 而非 405、handler 零调用）。
+- **口径与收尾**：全量 **168 → 171**（fleet 17→18、usage 3→5），十类全 PASS；`silent-guards` 基线
+  **核销 2 类（57 → 55）**、新增 0 —— 两条正是本批主动修掉的静默断链，核销前逐条复核
+  「是修掉了，不是扫不到」（本仓曾把「没去扫」误读成「已干净」）。台账勾选 **4 → 6 / 102**；
+  **未勾的实机项如实保留**：K4 端到端待一次真实派单、I5 待重启 `dsh web` 复验两轴 403。
+
+**2026-09-30（续）·「只有注释、没有闸门」再收两处（I1 / J5）**`[实测]`：用户「继续」⇒ 按
+「**静默失效优先于视觉确认**、可独立验证」的纪律继续推进。两项都不新增判据，只把矩阵里**已经写着**
+的纪律变成机器判定 —— 它们的共同形态是「规则写在文档与注释里，但没有任何东西会拦下违反」。
+
+- **I1 账本目录名（usage）**：矩阵原话「2026-09-29 已用 `LEDGER_DIR_NAME` 解耦但**无闸门**」。
+  失效形态是「一次顺手统一命名 ⇒ 三个 profile 的历史账本全部失联」，而界面照常、数字归零、不报错。
+  把目录名与解析抽成单点 `lib/ledger-dir.js`（`LEDGER_DIR_NAME` + `resolveDataDir`），
+  `test/ledger-dir.test.mjs` **5 例**：目录名**冻结为历史值**（写死字面量断言）/ **目录身份与包身份无派生关系**
+  （源码不得读 `package.json`、不得把插件名拼进路径；反向佐证：包名带 scope 而目录名不带）/
+  宿主服务三形态（字符串 / `{resolve}` / `{dir}`）与优先级 / 异常回退不丢账本。`verify-all usage` **5 → 7 项**。
+- **J5 上游补丁 live 审计（free-model）**：矩阵写着「常驻闸门」，但它**只在你记得手跑
+  `patch.mjs status` 时才存在**；而上游的应用内升级**必覆盖**清单内文件 ⇒ 那栏悄悄退化成上游原样
+  （公告中心与首启弹窗回来了），而本线不崩不报错、`verify-all` 照常全绿（离线 `verify` 只证「规则与基线自洽」）。
+  三处接线：① 补丁导出 live 契约（`TARGET_PACKAGE` / `TARGET_RELATIVE` / `classify`，**刻意不导出
+  `BASELINE_DSH_VERSION`** —— 它的基线是上游插件版本而非 DSH 版本）；② `patch-live-audit.mjs` 的
+  `PATCH_ROOTS` 补该补丁目录、布局候选补 `~/.dsh/local-plugins`（不补这条，即使入册也会误报 `missing`）；
+  ③ **drift 判定加「须有 DSH 基线」前提** —— 无基线者「未打上」判**真回归**而不是「升级待重打」
+  （playwright 补丁当初的审计盲区正是此形态）。
+  **故障注入自证**（用真实的上游原版备份 `client.js.ofm-patchbak` 造一个假 `local-plugins` 根）：
+  上游原版 ⇒ `original` + exit 1；垃圾文本（锚点漂移）⇒ `unknown` + exit 1；真实安装 ⇒ `patched` + exit 0。
+  **自证顺带抓到一处真缺陷**：审计侧原先 `const { state } = await target.classify(...)` ——
+  **只取 `state`、丢掉 `detail`**，于是「上游原版」与「锚点漂移」在输出上完全一样，而两者的处置方式不同
+  （**重打** vs **重新对齐锚点**）；已改为解构 `detail` 并显示。**该缺陷只在故障注入下暴露**（正常路径恒 `patched`）。
+- **口径**：全量 **171 → 173**（usage 5 → 7）；live 审计 **10 → 11 个目标 / 10 件在册补丁**；
+  台账勾选 **6 → 7 / 102**（J5 的判据「5/5 applied」已实测满足且已自动化；I1 的运行时部分仍待三 profile 重启）。
+
+**2026-09-30（续二）· 静默失效 #18：拿不到 profile 名时不再假装隔离**`[实测]`：用户第二次「继续」⇒
+按上一轮给出的排序取下一条（同域、成本低、可独立验证）。问题在 `resolveProfileName` 的**兜底档**：
+三档（宿主 `profileContext` → 环境 `DSH_PROFILE` → 兜底）全空时它返回裸字符串 `'default'`，
+账本落 `…/default/`，而页面照常宣称「本页只统计当前 profile（default）· 与其它 profile 的账本
+**完全隔离**」—— 那句话是假的：这个桶是**共享兜底区**，宿主既没给 profileContext、环境也没有
+DSH_PROFILE 时，**多个不同环境会写进同一个桶**。失效形态正是本仓最警惕的那类：
+**不报错、界面正常、账在混**。
+
+**修法（不假装，而不是换桶）**：目录名仍为 `default` —— 既有账本不能丢（换桶等于「搬家」，
+与 I1 那条纪律同一个道理）；改的是**口径的如实性**：`resolveProfileKey(ctx, env)` 返回
+`{ name, source }`（`source ∈ profileContext | env | unknown`），`unknown` 档随 `/global` 下发
+`profileSource`，浮窗顶部口径与底部那段长说明**双双按 `source` 分支**
+（unknown ⇒ 明确写「未识别当前 profile … 可能与其它环境混账，并非真隔离」）。
+`resolveProfileName` / `safeProfileDir` 一并移入 `lib/ledger-dir.js`（与账本根目录名同属「账本身份」，
+抽在一起才测得到）。
+
+**闸门**：`test/ledger-dir.test.mjs` **5 → 9 例**（+4）：`profileContext` 优先且 trim / 环境变量档 /
+**三档全空 ⇒ `unknown`**（四种输入形态，含服务抛错与非字符串 name）/
+`safeProfileDir` 是**安全边界**（`@miasaki/dsh-x` ⇒ `_miasaki_dsh-x`、`../../etc` ⇒ `.._.._etc`）。
+
+**台账补立 I6** —— 这条债务此前**在文档里没有编号**（无编号 = 不可见，与 09-29 补账的教训同源），
+分母 **102 → 103**；勾选仍 **7 / 103**（I6 待实机看文案）。
+**测试自身踩的一坑已写进注释**：`resolveProfileKey(ctx, undefined)` 会回落到 `process.env`
+（这是生产路径的正确行为），而本机环境恰好带 `DSH_PROFILE` ⇒ 用例拿到 `'desktop'` 而失败；
+测试里 env 一律**显式传表**。
+
+**2026-09-30（续三）· 素材遮蔽链变成机器判据（静默失效 #20）**`[实测]`：用户第三次「继续」⇒
+按建议排序取下一条。选它是因为**它有真实用户影响面** —— 2026-09-27/28 whale 图集与白军装反转狂三
+**在实机上失效了一整天**，而代码、单测、资产闸门**全绿**，只有 `pet.log` 里一行 `whale_rows=7`
+能戳破；根因是素材两层解析（EXE 旁磁盘 `ui/` 覆盖层优先、编译期内嵌兜底）下，
+**磁盘上的旧素材静默遮蔽内嵌的新素材**。
+
+**为什么此前加不了闸门**：判定逻辑写在 `build.rs` **生成的** `assets.rs` 里 —— 生成物不可单测，
+于是它只以矩阵 §3.2.1 的**三行人工走查**存在（部署 SHA 一致 / exe 晚于素材 mtime / `whale_rows=7`）。
+
+**改法**（判据搬到能跑测试的地方，生成物只留薄封装）：
+
+- **手写** `src-tauri/src/asset_source.rs`：`Asset` / `Source` / `Resolved` / `Shadow` 类型 +
+  `resolve()`（来源判定）+ `shadow_report()`（遮蔽报告）+ `shadow_summary()`（一行摘要）+ 逃生门
+  `MIASAKI_ASSETS_SOURCE=embedded`（`OnceLock` 缓存 —— `read()` 会被每个素材各调一次）。
+  **遮蔽的口径**：磁盘有 ∧ 内嵌有 ∧ **内容不同**；内容相同不算（同份副本），磁盘独有不算（那是新增）。
+- **生成物** `src/assets.rs`：`pub use crate::asset_source::Asset;` + `read()`（**签名不变**，
+  5 处调用点零改动）/ `read_with_source()` / `ui_dir()` / `disk_shadow_report()`。
+- **`main.rs`**：asset-server 监听成功后打一行摘要；**无分裂则不写**（本仓有过 `pet.log` 1.32 行/秒
+  持续 5 小时的教训，日志噪声本身就是问题）。
+- **测试**：`cargo test` **109 → 117 例**（+8）。**测试自身踩的一坑已写进注释**：临时目录原用
+  `std::env::temp_dir()`，**5 个用例一起挂在 `Os { code: 5, PermissionDenied }`**（该目录在本机
+  cargo test 的运行环境里不可写）⇒ 改用在测试可执行文件所在目录（`target/**/deps/`，cargo 刚往那写产物）。
+
+**当前实况（机器核对）**：部署目录 `C:\ProgramData\MiasakiApp\ui` 的 **139 个素材与仓库逐字节一致**
+⇒ 新判据此刻应保持安静。矩阵 §3.2.1 新增第四行判据（「**有分裂必有行**」+ 反例验法），台账 E13 同步。
+
+**2026-09-30（续四）· M4 锚点失配提示（静默失效 #10，appearance）**`[实测]`：用户第四次「继续」⇒
+按建议排序取下一条。M4 的密度 / 最大宽度落在**官方内部 DOM 与 CSS 变量**上
+（`[data-chat-flow]` / `--dsh-chat-content-width` / `--dsh-chat-flow-gap`）—— 官方升级改了锚点名时，
+本插件**不报错、面板照常可点、保存也成功，但设置毫无效果**：用户只能说「开了没用」，
+而面板看起来一切正常。
+
+**判据只在能确定时说话**（把「会话还没有消息」误判成失配，是这类自检最常见的翻车方式）：
+未开启依赖该锚点的项 ⇒ `idle`；会话页或 `[data-chat-flow]` 不在 ⇒ `unknown`；
+锚点在、但**读不到我们写进去的覆盖值** ⇒ `mismatch` ⇒ 面板显式提示并点名。
+
+**实现**：`probeConversationAnchors()` 纯读 DOM、**不引入 state**（面板 state 数不变，既有
+「队列长度 = 8」的断言不受影响）；「会话效果」组的行数组提取为 `convRows` 后条件追加提示行，并
+**保留 `conversation === null` 的短路语义** —— 这一点是刻意的：改成无条件数组字面量后，配置未加载时
+会去读 `conversation.density` 而抛错、整面板空白（与 2026-09-12 那次空白面板事故同型）。
+流式光标（`[data-streaming]` 仅生成中存在）与引用 / 代码块（原生标签）**不做静态自检**，文案里已说明。
+
+**闸门**：`test/client.test.js` **23 → 27 例**（+4 覆盖三态）；夹具 `capture()` 增加**可选**的
+`querySelector` / `getComputedStyle` 注入，默认行为不变（既有一律 `null` / 空串）⇒ 既有用例零改动。
+`appearance` 仍 **18/18**。台账 D8 补「锚点失配提示」判据，§3.5 新增一行判据。
+
+**2026-09-30（续五）·「无可见效果」补全为全量判定（静默失效 #8，appearance）**`[实测]`：
+用户第五次「继续」⇒ 按建议排序取下一条。2026-09-27 那条提示只覆盖**一种**形状
+（纯净皮 + 壁纸 + 表面全不透明 ⇒ 三层互相抵消），而有一条更常见的形态当时没覆盖：
+**总开关开着、所有项都停在原生档** —— 页面上同样是零变化，却没有提示，用户只能以为功能坏了。
+
+**判据从「某几项开着」换成「本线会不会产生任何可见变化」**：皮肤非纯净 / 壁纸源非空**且**至少一处
+表面不透明度 < 100（否则被不透光表面盖住）/ 动效开着 / 会话效果有非默认档，任一成立即有变化；
+否则按成因分两种文案（`native` 什么都没配 / `covered` 配了壁纸却看不见）。**玻璃档位不再参与判定** ——
+它只改变壁纸的模糊观感，而壁纸不可见时它本身也不可见；首版把它算进去是把*解释性细节*与*判据*混在了一起，
+同批移除对 `data-mia-native-mica` 广播的依赖。
+
+**顺带修掉一处旧 host 白屏隐患（本次用例照出）**：会话效果组原本只判 `conversation === null`，
+而旧 host（v5 前配置没有这个板块）给的是 `undefined` ⇒ 走进渲染后读 `conversation.density`
+⇒ 整面板空白 —— 与 2026-09-12 空白面板事故**同族**，此前没有任何用例覆盖 undefined 形态。
+现改为「**非对象即不在场**」（null / undefined / 坏值一律走提示分支），提示文案同时说明
+「或宿主版本较旧（本板块需要 v6 配置）——重启宿主后重试」。
+
+**闸门**：`test/client.test.js` **27 → 32 例**（+5），`appearance` 仍 **18/18**；
+§3.05 的「遗留产品改进」注记同批核销，§3.5 新增判据行、台账 D2 / D8 补记。
+
+**2026-09-30（续六）· 决策⑥落地：侧线创建后清掉继承来的 goal（sidebar，S9）**`[实测]`：用户第六次
+「继续」⇒ 取下一条。这条在 M2 设计文档 §8 / S9 取证里早写了「建议做最小补偿」，**但一直没落地**
+（内部计划的说法是「已拍板未落地」）。`fork` 是**零类型过滤**的日志前缀拷贝（官方 `buildForkSeed`），
+goal / plan / todo / preset 全部带进 child（官方测试逐字断言
+`inherits the completed-turn goal prefix through SessionStore.fork`）；不补偿的后果一是
+**侧线显示并携带父目标**（用户以为侧线是干净新线，模型也可能接着做父任务的活 —— 正是 S8 复现的温床），
+二是侧线内 `create_goal` 会因 `GOAL_ALREADY_EXISTS` 失败。
+
+**实现**（`clearInheritedGoal(ctx, childId)`，决策放在**模块级**而非 apply 闭包 —— 判据必须可测）：官方 API
+同款调用 `ctx.remote.goals.get(childId)` → `goals.clear(childId, { id, revision })`；**不 await**（补偿是附带
+动作，绝不拖慢/拖死「新建侧线」，`childId` 原样返回）；**失败两档**：服务缺席 = 正常形态，静默返回；
+服务在场而调用失败 ⇒ `console.warn` 留痕但**不外抛**。代价如实记账：child 日志留一条
+`goal/change{operation:'clear'}` tombstone。**做不到的如实写明**：`plan` / `todo` 没有客户端 API
+（内部计划原文即如此），写进注释与已知限制，不做假承诺。
+
+**闸门**：`test/sidechat-registry.test.js` **13 → 19 例**（+6：调 clear 且参数含 id+revision /
+child 无 goal 不调（含「有 revision 无 id」的残缺形态）/ 两种失败只留痕不外抛 / 服务缺席零告警 /
+源码契约「不 await、不污染返回链路、必须是模块级函数」/ plan·todo 限制写明）。
+`verify-all sidebar` 仍 **13/13**，**11 个测试文件合计 92 例全绿**（§1 表同步更新）。
+台账补立 **C10**（此前「goals.clear 该调没调」在台账里没有编号）⇒ 分母 **103 → 104**。
+
+**2026-09-30（续七）· P4 每板块「恢复默认」（appearance）**`[实测]`：用户第七次「继续」⇒ 取下一条。
+路线里 P4 早就定形（官方 models `.linkButton` 形态、按板块重置），代码零命中。此前配置改乱了
+只能手动逐项改回。
+
+**默认值只有 host 一份**：`/state` 响应新增 `defaults`（= `lib/config.js` 的 `DEFAULT_CONFIG`）。
+客户端**不另存一份** —— 两份默认值必然漂移，而漂移的后果恰恰是「恢复默认」把配置恢复成**旧版**默认值，
+比不提供恢复更糟（用户以为回到了出厂态）。反向闸门直接钉在源码上：client.js 不得出现自造的
+`DEFAULT_CONFIG` 形态，且必须读 `state.defaults`。
+
+**三条路径**：板块已是默认 ⇒ 不渲染按钮；旧 host 不下发 defaults ⇒ 渲染「重启宿主后即可用」提示
+（与 M2.7「host 未下发 avatar 字段给重启提示」同一处理，而不是静默失效）；其余 ⇒ 官方 `Button`
+（ghost 次操作变体）走**既有 save 路径**（`POST /config` + `expectedRevision`）。语义上等价于
+**整板块重置**：host 侧 `mergeConfig` 是板块级浅合并 + `sanitizeConfig` 收窄 ⇒ 旧版本残留字段被丢弃。
+
+**过程中的两处自纠**（都写进注释，都是这类改动的典型坑）：
+① `masterLive` / `resetRow` 首版定义在各组**之后**，而「主题」组先用到 ⇒ **TDZ 崩溃**（`node --check`
+照出 `Identifier 'masterLive' has already been declared` —— 我移动定义时忘了删旧的那份）；
+② 测试夹具 `nativeConfig` 的 `bootSplash: 'off'` 与出厂值 `'auto'` 不一致 ⇒「全原生档」被 P4 判成
+非默认，**两个夹具就此不自洽**。
+
+**闸门**：`test/client.test.js` **32 → 36 例**（+4：非默认必给入口且点击发出的是 host 下发的默认值 /
+全默认时零按钮 / 旧 host 给提示 / 客户端不得硬编码默认值）。`appearance` 仍 **18/18**（host 测试
+未被 `/state` 新字段破坏）。台账补立 **D15** ⇒ 分母 **104 → 105**，§1 用例数 132 → **136**。
+
+**2026-09-30（续八）· P5 配置导入 / 导出（appearance）**`[实测]`：用户第八次「继续」⇒ 取下一条。
+路线原文：「一段 JSON 下载/上传，sanitize 全量收窄后**整体替换**，导入前**二次确认**」。
+
+**关键设计**：导入是**整体替换**而不是合并 —— 文件里没写的板块回到出厂默认。用 merge 的话，
+「导入一份只写了主题的 JSON」会变成「只改主题」，与「导入配置」这个词的预期不符。host 侧
+`POST /config` 新增 `replace: true` ⇒ `sanitizeConfig(raw)`；**非对象一律 400 显式拒绝**，
+而不是让 sanitize 把它当空对象 ⇒ 静默清空配置。
+
+**其余四条**：① 导出带自描述包装（`kind` / `version` / `exportedAt` / `config`，文件名带版本）；
+② **二次确认**写明「没写的板块会回出厂默认」，**无法弹确认框时取消导入**（不静默继续）；
+③ 四类坏输入（非 JSON / 顶层非对象 / 找不到配置对象 / 无法确认）一律**人话错误 + 零写入**；
+④ 兼容**裸配置对象**（手写 JSON 可用）。导入复用既有 `save()`（只多一个 `replace: true` 报文位），
+所以属性同步 / override 重算 / 三层应用等后处理完全共用，乐观并发同样生效。
+
+**闸门**：`host.test.js` **18 → 24 例**（`defaults` 与 `config` 同源下发 / 整体替换确实打回出厂 /
+非对象 400 且配置不动 / 409 冲突不写盘 / 内容等价 ⇒ `changed:false` / 越界与未知字段被收窄），
+`client.test.js` **36 → 41 例**（导出报文与文件名 / 导入走 `replace:true` / **取消·无法确认·坏文件
+三种零写入** / 四类人话错误 / 裸配置对象兼容）。`appearance` 仍 **18/18**。
+台账补立 **D16** ⇒ 分母 **105 → 106**，§1 用例数 136 → **143**。
+
+**过程中的一处自纠（值得记）**：我用 PowerShell 的 `Set-Content -Encoding UTF8` 改了两处文本，
+**Windows PowerShell 5.1 会写 BOM** —— 立刻按字节复验才发现（`EF BB BF`），已用
+`UTF8Encoding($false)` 写回。**结论**：改入库文本一律走编辑工具；非要用 shell，必须按字节验 BOM 与行尾。
+
+**2026-09-30（续九）· 仓库级第 6 道闸门 `check-style.mjs`（文件形态 + 公开仓库脱敏）**`[实测]`：
+用户第九次「继续」⇒ 治理层的最后一个大口子（`lint`/`format` 工具链缺失）。
+
+**为什么不是 ESLint / Prettier**：本仓的硬约束是**零第三方依赖** + 插件零 shell 改动，引入格式化器
+既加依赖、又会产生**巨量零语义 diff**（本仓明确记着「存量 17 处 CRLF 不批量转换，以免零语义 diff
+淹没真实改动」）。所以落点是**一个仓库级闸门**，判据只取**能客观判定、且假阳性可控**的几条。
+
+**判据四类**：① 无 BOM；② 只有 LF（无 CRLF）；③ 末行有换行；④ **脱敏** —— 两种形态：
+**路径形态** `C:\Users\<段>\…`（含正斜杠）里必须是占位写法（`<…>` / `%…%` / `...` / `…`），
+以及**裸词形态**（词表来自 `_refs/identity-terms.txt`，**本地、不入库**，`#` 注释；CI 没有该文件时
+**显式打印「跳过裸词检查」**而不是静默）。**刻意不把维护者名字写进脚本本身** —— 那本身就违反脱敏纪律。
+1–3 类**存量冻结**（BOM 10 / CRLF 17 / 无末行换行 27，共 54 条进 `scripts/style-baseline.json`，
+条目消失报「可回收」）；**脱敏类刻意没有基线** —— 用户名泄漏不该有「存量」这一说，上线即零命中、
+新增即失败。
+
+**上线过程本身值两笔记录**：
+
+- **闸门自身的假阳性**：首跑把桌面端 README 里的 `C:\Users\…\` 报成泄漏 —— 那是**合法占位**
+  （Unicode 省略号 U+2026 表示「某个用户」），是我的占位判据只认 ASCII 的 `...`。已补齐四种占位形态。
+  **闸门的假阳性比漏报更危险**：它让人把闸门关掉。
+- **我先前的一个错误判断被自证纠正**：`grep` 扫到 fleet 归档 transcript 里 3 处 `C:\Users\<用户名>\…`，
+  我一度判断为「脱敏那轮漏掉的入库文件」。**故障注入反而暴露了真相** —— 注入到那两个文件后闸门毫无反应，
+  查 `.gitignore:98` 才知道它们**根本没入库**（是运行时产物），`grep` 扫的是工作区、不是入库集。
+  所以：**入库文件零违规**；那 3 处与派单器的落盘脱敏仍做了（工作区产物顺手清理 + 生成器补口子，
+  防的是「哪天有人把它们 un-ignore 或提交」）。
+
+**故障注入自证**：往**入库**文件 `dispatch-task.ps1` 注入一行 `C:\Users\<探针名>\…` ⇒ 闸门 `exit 1`
+并点名该文件；还原后复跑 PASS。另有脚本内的四类 fixture 自证 + 占位反例（不许误报）。
+
+> **同日第三次自纠（这一笔最能说明闸门为什么值得有）**：写上面这段说明时，我**把真实用户名与探针名
+> 原样写进了 `docs/ENGINEERING.md` 与回归矩阵** —— 闸门随即在**全量回归**里把这两处报了出来。
+> 也就是说：**我在给「不许泄漏用户名」写文档时泄漏了用户名**，而机器在我提交前抓住了它。
+> 教训两条：① 写「脱敏」相关说明时，示例一律用占位；② 这类检查必须**扫文档**，不能只扫代码。
+
+**接线与基线**：`verify-all repo` **5 → 6 项**，全量 **173 → 174**。同批补上派单器的 transcript
+脱敏（worker stdout 常带本机绝对路径，落盘前统一换 `%USERPROFILE%`）——否则下次派单就会写回来
+（与 `scan-agents.ps1` 的 binPath 脱敏同一教训）。
 
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
