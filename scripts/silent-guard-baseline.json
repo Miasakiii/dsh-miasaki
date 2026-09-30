@@ -6,7 +6,7 @@
       "key": "dsh-miasaki-appearance/index.js|R1|if (!existsSync(full)) return null",
       "rule": "R1",
       "file": "dsh-miasaki-appearance/index.js",
-      "line": 184,
+      "line": 198,
       "snippet": "if (!existsSync(full)) return null",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -69,7 +69,7 @@
       "key": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs|R1|if (!existsSync(dir)) continue",
       "rule": "R1",
       "file": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs",
-      "line": 101,
+      "line": 118,
       "snippet": "if (!existsSync(dir)) continue",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -78,7 +78,7 @@
       "key": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs|R1|if (!existsSync(abs)) continue",
       "rule": "R1",
       "file": "dsh-miasaki-desktop/scripts/check-pet-assets.mjs",
-      "line": 151,
+      "line": 172,
       "snippet": "if (!existsSync(abs)) continue",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -87,7 +87,7 @@
       "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|} catch {}",
       "rule": "R2",
       "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
-      "line": 61,
+      "line": 68,
       "snippet": "} catch {}",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -96,7 +96,7 @@
       "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|}).catch(function () {})",
       "rule": "R2",
       "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
-      "line": 138,
+      "line": 145,
       "snippet": "}).catch(function () {})",
       "count": 2,
       "reason": "（待补：触碰该文件时补理由）"
@@ -105,7 +105,7 @@
       "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|} catch (e) {}",
       "rule": "R2",
       "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
-      "line": 139,
+      "line": 146,
       "snippet": "} catch (e) {}",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -114,7 +114,7 @@
       "key": "dsh-miasaki-desktop/scripts/verify-themes.mjs|R2|try { ws && ws.close() } catch {}",
       "rule": "R2",
       "file": "dsh-miasaki-desktop/scripts/verify-themes.mjs",
-      "line": 292,
+      "line": 404,
       "snippet": "try { ws && ws.close() } catch {}",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -294,7 +294,7 @@
       "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R1|if (!fs.existsSync(dir)) return",
       "rule": "R1",
       "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
-      "line": 45,
+      "line": 48,
       "snippet": "if (!fs.existsSync(dir)) return",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -303,7 +303,7 @@
       "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const manifest = core.readJsonOrNull(path.join(agentDir, 'manifest.json'))",
       "rule": "R3",
       "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
-      "line": 50,
+      "line": 53,
       "snippet": "const manifest = core.readJsonOrNull(path.join(agentDir, 'manifest.json'))",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -312,7 +312,7 @@
       "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const control = core.readJsonOrNull(path.join(agentDir, 'control.json'))",
       "rule": "R3",
       "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
-      "line": 52,
+      "line": 55,
       "snippet": "const control = core.readJsonOrNull(path.join(agentDir, 'control.json'))",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -321,17 +321,8 @@
       "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const status = core.readJsonOrNull(path.join(agentDir, 'status.json'))",
       "rule": "R3",
       "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
-      "line": 53,
+      "line": 56,
       "snippet": "const status = core.readJsonOrNull(path.join(agentDir, 'status.json'))",
-      "count": 1,
-      "reason": "（待补：触碰该文件时补理由）"
-    },
-    {
-      "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const v = core.readJsonOrNull(path.join(ROOT, 'shared', 'agent-vendors.json'))",
-      "rule": "R3",
-      "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
-      "line": 73,
-      "snippet": "const v = core.readJsonOrNull(path.join(ROOT, 'shared', 'agent-vendors.json'))",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
     },
@@ -339,7 +330,7 @@
       "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R1|if (!fs.existsSync(tasksDir)) return out",
       "rule": "R1",
       "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
-      "line": 81,
+      "line": 78,
       "snippet": "if (!fs.existsSync(tasksDir)) return out",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -348,7 +339,7 @@
       "key": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs|R3|const v = core.readJsonOrNull(path.join(tasksDir, id, 'verdict.json'))",
       "rule": "R3",
       "file": "dsh-miasaki-fleet/workers/graph/verifier-pick.mjs",
-      "line": 84,
+      "line": 81,
       "snippet": "const v = core.readJsonOrNull(path.join(tasksDir, id, 'verdict.json'))",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -399,19 +390,10 @@
       "reason": "ignore"
     },
     {
-      "key": "dsh-miasaki-fleet/workers/validate-bus.mjs|R1|if (!existsSync(rp)) continue // 未交付的任务没有 result.json 是正常的",
-      "rule": "R1",
-      "file": "dsh-miasaki-fleet/workers/validate-bus.mjs",
-      "line": 231,
-      "snippet": "if (!existsSync(rp)) continue // 未交付的任务没有 result.json 是正常的",
-      "count": 1,
-      "reason": "未交付的任务没有 result.json 是正常的"
-    },
-    {
       "key": "dsh-miasaki-fleet/workers/validate-bus.mjs|R1|if (!existsSync(vp)) continue // 未挂验证器的任务没有 verdict.json 是正常的",
       "rule": "R1",
       "file": "dsh-miasaki-fleet/workers/validate-bus.mjs",
-      "line": 248,
+      "line": 275,
       "snippet": "if (!existsSync(vp)) continue // 未挂验证器的任务没有 verdict.json 是正常的",
       "count": 1,
       "reason": "未挂验证器的任务没有 verdict.json 是正常的"
@@ -456,7 +438,7 @@
       "key": "dsh-miasaki-usage/lib/index.js|R1|if (!fs.existsSync(legacyLedger)) return;",
       "rule": "R1",
       "file": "dsh-miasaki-usage/lib/index.js",
-      "line": 1009,
+      "line": 1054,
       "snippet": "if (!fs.existsSync(legacyLedger)) return;",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"
@@ -510,7 +492,7 @@
       "key": "scripts/verify-all.mjs|R1|if (!existsSync(testDir)) return []",
       "rule": "R1",
       "file": "scripts/verify-all.mjs",
-      "line": 42,
+      "line": 44,
       "snippet": "if (!existsSync(testDir)) return []",
       "count": 1,
       "reason": "（待补：触碰该文件时补理由）"

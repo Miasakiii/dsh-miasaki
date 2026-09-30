@@ -1,0 +1,32 @@
+{
+  "task_id": "t-0009",
+  "status": "completed",
+  "conclusion": "[契约补记 2026-09-30：本任务交付于 G0 交付契约落地之前，结论逐字摘自 result-t-0009.md] OpenViking 记忆链路哨兵验证全链路通过：派单 → worker 执行 → OpenViking 自动捕获 → commit 提取 → 语义检索；claude 真实执行 exit 0（total_cost_usd=0.1457，1 turn）、stdout 含原样哨兵 OV-PEER-SENTINEL-0924、ov find 可检索到任务内容（top1 score 0.360）。",
+  "completeness": {
+    "done": [
+      "三项验收标准全通过（CLI 真实执行 / 哨兵原样输出 / 语义检索命中）",
+      "计量落账：usage.jsonl（in 47603 / out 82 / cache-read 5376 / cost $0.1457）"
+    ],
+    "missing": []
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "tasks/t-0009/result/result-t-0009.md",
+      "note": "原始交付物：结论 + 验收标准对照表 + 数据来源"
+    },
+    {
+      "type": "file",
+      "ref": "agents/claude/logs/t-0009-stdout.log",
+      "note": "worker 原始 stdout（原文自陈出处）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0009/result/result-t-0009.md",
+      "bytes": 2144,
+      "sha256": "e9ed4dc9497e3f56c81c7891c9bdc5822477057aa6ae400afd45687d6fb63d9e"
+    }
+  ]
+}

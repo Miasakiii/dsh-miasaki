@@ -1,0 +1,28 @@
+{
+  "task_id": "t-0002",
+  "status": "completed",
+  "conclusion": "[契约补记 2026-09-30：本任务交付于 G0 交付契约落地之前，结论逐字摘自 result-t-0002.md] M3.5 worker mock response OK —— keyless 验证轮次通过（子运行时按 mock 脚本应答，交付物由 worker 包装层落盘），完成度 100%，无阻塞；真实模型轮次待 DEEPSEEK_API_KEY 注入。",
+  "completeness": {
+    "done": [
+      "M3.5 worker 自动化 keyless 验证轮次（mock 应答链路打通）"
+    ],
+    "missing": [
+      "真实模型轮次（依赖 DEEPSEEK_API_KEY 注入，非本任务范围）"
+    ]
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "tasks/t-0002/result/result-t-0002.md",
+      "note": "原始交付物：结论 / 完成度 100% / 依据（子运行时会话日志路径）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0002/result/result-t-0002.md",
+      "bytes": 459,
+      "sha256": "a8df316f6e7c5e9c5a764297a7d82ce0d404fefd5f7d88b8e1e1376458b2891a"
+    }
+  ]
+}

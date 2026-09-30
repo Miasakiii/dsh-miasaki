@@ -15,6 +15,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { validateEvent, validateGraph, validateResult, validateVerdict } from './lib/bus-contract.mjs'
+// 任务终态折叠口径**单点**：与 task-ready / agent-pick 共用 foldTasks，
+// 不在此处再写第二份「重放 tasks.jsonl」的实现（口径漂移是本仓复发形态）。
+import { foldTasks } from './lib/task-graph.mjs'
 
 // 工作区根默认由本文件位置推导（workers/ → fleet/）。BUS_ROOT 可覆盖，
 // 与 workers/bus/bus-apply.mjs 同一约定：既便于集成测试，也便于校验其他布局的工作区。
@@ -124,17 +127,18 @@ function readJsonl(p) {
 // ---- tasks.jsonl（重放意见领袖：op 枚举 + 终态分布统计 + G0 任务图）----
 const taskIds = new Set()
 const graphNodes = []
+/** 任务终态（foldTasks 产物），供下方 result.json 的**反向存在性检查**复用。 */
+let foldedTasks = new Map()
 {
   const p = join(root, 'state', 'tasks.jsonl')
-  const state = new Map()
-  for (const { row, n } of readJsonl(p)) {
+  const rows = readJsonl(p)
+  for (const { row, n } of rows) {
     const w = `${p}:${n}`
     if (!['create', 'assign', 'update', 'reopen', 'reassign', 'cancel'].includes(row.op)) { fail(w, `op 非法: ${row.op}`); continue }
     if (row.op === 'create') {
       const t = row.task || {}
       if (!isStr(t.id)) fail(w, 'create.task.id 缺失')
       else {
-        state.set(t.id, t.status || 'queued')
         taskIds.add(t.id)
         // G0 任务图：字段缺失即「不入图」，等同现状，不算错误（增量式采用）
         if (t.graph !== undefined) {
@@ -148,7 +152,8 @@ const graphNodes = []
       if (row.op === 'update' && row.status && !['queued', 'running', 'blocked', 'failed', 'done', 'cancelled'].includes(row.status)) fail(w, `status 非法: ${row.status}`)
     }
   }
-  ok(`${p} (${state.size} tasks)`)
+  foldedTasks = foldTasks(rows.map(({ row }) => row))
+  ok(`${p} (${foldedTasks.size} tasks)`)
 }
 
 // ---- 任务图引用完整性（G0 §3.7）----
@@ -221,14 +226,36 @@ const graphNodes = []
   }
 }
 
-// ---- tasks/<id>/result.json（G0 节点交付契约）----
+// ---- tasks/<id>/result.json（G0 节点交付契约 + 终态反向存在性）----
+//
+// 不变式（2026-09-30 落地）：**任何被标记为终态的对象都必须有一条反向存在性检查**。
+// 对本处即「台账 done+accepted ⇒ result.json 必须存在」。
+// 此前这行是 `if (!existsSync(rp)) continue // 未交付的任务没有 result.json 是正常的`
+// ⇒ 静默放行：首跑实测 9 个任务**全部** done+accepted，而 7 个从未产出契约交付物 ——
+// 「验收通过」可以是空的（该结论最初由 tasks/t-0003 的交付物给出，本轮落地）。
+// 缺失一律 FAIL 并点名，**不留豁免清单**（存量已按契约补记，见 tasks/*/result.json）。
+//
+// 驱动源是**台账**而非 tasks/ 目录（2026-09-30 用例驱动出的修正）：先前的写法以
+// `readdirSync(tasksDir)` 为入口，于是「已验收、但连 tasks/<id>/ 目录都不存在」这一
+// 同族形态仍然静默通过 —— 目录不存在同样是「交付物从未产出」。
 {
   const tasksDir = join(root, 'tasks')
+
+  // ① 反向存在性：终态（done + accepted）必须有 result.json
+  for (const [id, t] of foldedTasks) {
+    if (!(t.status === 'done' && t.accepted === true)) continue
+    const rp = join(tasksDir, id, 'result.json')
+    if (!existsSync(rp)) {
+      fail(rp, '终态缺交付物：台账已 done+accepted，但 result.json 不存在（反向存在性检查；契约见 schemas/result.schema.json）')
+    }
+  }
+
+  // ② 已存在的 result.json 逐个过契约（非终态任务没有它是正常的：在途）
   if (existsSync(tasksDir)) {
     for (const id of readdirSync(tasksDir)) {
       if (!/^t-\d{4}$/.test(id)) continue
       const rp = join(tasksDir, id, 'result.json')
-      if (!existsSync(rp)) continue // 未交付的任务没有 result.json 是正常的
+      if (!existsSync(rp)) continue // guard-ok: 终态缺失已由上面 ① 显式 FAIL 覆盖；本行只是「无文件即无契约可校」，不是被略过的校验
       const r = readJson(rp)
       if (r) {
         validateResult(r, rp, fail, id)

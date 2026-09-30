@@ -1,0 +1,22 @@
+{
+  "task_id": "t-0007",
+  "status": "completed",
+  "conclusion": "[契约补记 2026-09-30：本任务交付形态为 stdout（brief §交付物明写「答案直接输出在 stdout」），交付于 G0 交付契约落地之前。证据取自派单器代写的 agents/opencode/transcript.md（含 exit 0 与 PONG-A 原文）] 并发派单验证-甲通过：opencode 真实执行且 exit 0，stdout 输出「PONG-A：本进程为甲队（opencode），并发派单验证通过，进程隔离正常」，并报回 manifest 模型配置（model=cli-default，opencode v1.18.18）；与 t-0008（pi）并行运行互不干扰。",
+  "completeness": {
+    "done": [
+      "验收标准 1：opencode 进程真实执行且 exit 0",
+      "验收标准 2：输出含 PONG-A",
+      "验收标准 3：与 t-0008 并行互不干扰"
+    ],
+    "missing": []
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "agents/opencode/transcript.md",
+      "note": "派单器代写的任务记录：完整 prompt 回显 + PONG-A 输出原文 + EXIT:0"
+    }
+  ],
+  "blockers": [],
+  "artifacts": []
+}

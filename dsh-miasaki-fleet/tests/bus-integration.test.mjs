@@ -288,3 +288,50 @@ test('闭环：applier 拒绝的补丁不会污染总线（巡检仍通过）', 
   assert.equal(r.ok, true, r.error)
   assert.equal(validate(root), 1, '写入时放行的悬空引用，必须由巡检拦下')
 })
+
+// ---------------------------------------------------------------------------
+// 终态反向存在性（2026-09-30）
+//
+// 不变式：**任何被标记为终态的对象都必须有一条反向存在性检查** ——
+// 对本处即「台账 done+accepted ⇒ result.json 必须存在」。
+// 此前该处是 `if (!existsSync(rp)) continue`（注释「未交付的任务没有 result.json 是正常的」）
+// ⇒ 静默放行：首跑实测 9 个任务**全部** done+accepted，而 7 个从未产出契约交付物 ——
+// 「验收通过」可以是空的。该结论最初由 tasks/t-0003 的交付物给出，2026-09-30 落地。
+// 断言只看退出码：受限沙箱下管道捕获子进程输出会 EPERM（与既有用例同一口径）。
+// ---------------------------------------------------------------------------
+
+/** 造一条把任务推到终态的 update 事件。 */
+function toDone(id, accepted) {
+  return { op: 'update', task_id: id, status: 'done', ...(accepted ? { accepted: true } : {}) }
+}
+
+test('终态缺交付物 → 校验失败（已验收就不能是空的）', (t) => {
+  const root = makeBus(t, { tasks: [task('t-0001'), toDone('t-0001', true)] })
+  assert.equal(validate(root), 1, '台账已 done+accepted 但从未产出 result.json，必须显式失败而不是静默放行')
+})
+
+test('终态有交付物 → 通过（判据不误伤合规任务）', (t) => {
+  const root = makeBus(t, {
+    tasks: [task('t-0001'), toDone('t-0001', true)],
+    results: {
+      't-0001': {
+        task_id: 't-0001',
+        status: 'completed',
+        conclusion: '完成',
+        evidence: [{ type: 'file', ref: 'tasks/t-0001/result/result-t-0001.md' }],
+        artifacts: [{ path: 'tasks/t-0001/result/result-t-0001.md', bytes: 2, sha256: sha }],
+      },
+    },
+  })
+  assert.equal(validate(root), 0)
+})
+
+test('在途任务缺交付物 → 不报错（判据只约束终态）', (t) => {
+  const root = makeBus(t, { tasks: [task('t-0001')] })
+  assert.equal(validate(root), 0, 'queued 任务没有 result.json 是正常的')
+})
+
+test('done 但未验收 → 不要求交付物（不变式的边界是 accepted，不是 done）', (t) => {
+  const root = makeBus(t, { tasks: [task('t-0001'), toDone('t-0001', false)] })
+  assert.equal(validate(root), 0, '未验收的 done 不构成「验收通过」，判据不应越界')
+})

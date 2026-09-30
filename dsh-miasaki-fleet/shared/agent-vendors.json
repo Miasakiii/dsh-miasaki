@@ -1,0 +1,11 @@
+{
+  "$comment": "agent → 厂商映射（G4 异构验证的『vendor』级依据）。本文件**此前只被文档宣称存在、实际从不曾存在** —— workers/graph/verifier-pick.mjs 的 loadVendors() 读它、读不到就静默回退内置表，于是『可由该文件覆盖』是一句空话（回归矩阵台账 K5 / 静默失效 #25）。2026-09-30 落为真实文件：新增 agent 或纠正归属时改这里即可，不必动代码。键必须与 workers/lib/verifier.cjs 的 DEFAULT_VENDORS 一致 —— 不一致由 tests/verifier.test.mjs 的一致性闸门拦下（防止两处漂移）。",
+  "claude": "anthropic",
+  "gemini": "google",
+  "opencode": "sst",
+  "pi": "earendil-works",
+  "dsh": "deepseek",
+  "mimo": "xiaomi",
+  "bl": "alibaba",
+  "agent-browser": "independent"
+}

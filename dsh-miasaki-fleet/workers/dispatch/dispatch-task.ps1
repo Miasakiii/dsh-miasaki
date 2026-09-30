@@ -322,10 +322,24 @@ if ($exitCode -eq 0) {
   }
 }
 
-# status 终态
-$state = if ($exitCode -eq 0) { 'idle' } else { 'error' }
-$status.state = $state; $status.current_task = $null; $status.progress = 1.0; $status.step = "派单完成（exit $exitCode）"; $status.heartbeat_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-if ($state -eq 'error') { $status.last_error = "CLI exit $exitCode" }
+# status 终态（K4，2026-09-30）：判据单点在 workers/dispatch/final-state.ps1 ——
+# 「CLI exit 0」不等于「健康空闲」：worker 自述受阻的载体是交付契约
+# tasks/<id>/result.json 的 status（blocked/failed），过去被一律记成 idle，
+# 于是受阻的 worker 在面板与桌宠上照常显示正常（静默失效 #24）。
+# 退出码语义不动（§7.0 的 0/3/4），此处只改 status.json 的落账。
+$taskResultPath = Join-Path $Workspace "tasks\$TaskId\result.json"
+$final = $null
+try {
+  $final = (& (Join-Path $PSScriptRoot 'final-state.ps1') -ExitCode $exitCode -ResultPath $taskResultPath) | ConvertFrom-Json
+} catch {
+  Write-Host "[state] final-state.ps1 调用失败（$($_.Exception.Message)），回退 exit code 判定"
+}
+$state = if ($final -and $final.state) { $final.state } elseif ($exitCode -eq 0) { 'idle' } else { 'error' }
+$stepText = if ($final -and $final.reason) { "派单完成（exit $exitCode，$($final.source)）：$($final.reason)" } else { "派单完成（exit $exitCode）" }
+$status.state = $state; $status.current_task = $null; $status.progress = 1.0; $status.step = $stepText; $status.heartbeat_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+if ($state -ne 'idle') {
+  $status.last_error = if ($final -and $final.reason) { $final.reason } elseif ($state -eq 'blocked') { 'worker 自述受阻（result.json status=blocked）' } else { "CLI exit $exitCode" }
+}
 if ($usageRow) {
   $taskTokens = [int]$usageRow.input_tokens + [int]$usageRow.output_tokens
   $prev = Read-JsonFile (Join-Path $agentDir 'status.json')
@@ -335,7 +349,19 @@ if ($usageRow) {
 $status | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $agentDir 'status.json') -Encoding UTF8
 
 "`n## 任务 $TaskId（$Agent 派单，exit $exitCode）" | Add-Content (Join-Path $agentDir 'transcript.md')
-Get-Content $outFile | Add-Content (Join-Path $agentDir 'transcript.md')
+# 脱敏（公开仓库纪律，2026-09-29 起；2026-09-30 补上这道口子）：
+# worker stdout 里**经常**带本机绝对路径（例如它自报的 `child session: C:\Users\<名>\…\sessions\<id>`），
+# 直接追加就把维护者目录结构写进了**入库文件** —— 归档 transcript 里实测漏了 3 处。
+# 在**落盘前**统一把 $env:USERPROFILE 换成 %USERPROFILE% 占位（正反斜杠两种形态都收），
+# 否则下次派单一跑就会把真实路径写回来（与 scan-agents.ps1 的 binPath 脱敏同一教训）。
+$userHome = $env:USERPROFILE
+$scrub = {
+  param($line)
+  if ([string]::IsNullOrEmpty($userHome)) { return $line }
+  $out = $line -replace [regex]::Escape($userHome), '%USERPROFILE%'
+  return $out -replace [regex]::Escape($userHome.Replace('\', '/')), '%USERPROFILE%'
+}
+Get-Content $outFile | ForEach-Object { & $scrub $_ } | Add-Content (Join-Path $agentDir 'transcript.md')
 
 Write-Host "[dispatch] $TaskId -> $Agent 完成，exit $exitCode，输出：$outFile"
 exit $exitCode

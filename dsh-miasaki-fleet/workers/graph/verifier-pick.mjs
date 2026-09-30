@@ -27,6 +27,9 @@ import core from '../lib/bus-apply-core.cjs'
 import { validateVerdict } from '../lib/bus-contract.mjs'
 import { evaluateLiveness } from '../lib/liveness.mjs'
 import { HETERO_LEVELS, buildVerifierBrief, selectVerifiers, summarizeVerdicts } from '../lib/verifier.mjs'
+// K5（2026-09-30）：厂商表加载移出本文件 —— 「缺文件/结构非法」两条回退路径要能测、
+// 且必须显式告知（此前是静默断链：读一个从不存在的文件，读不到就悄悄用内置表）。
+import { loadVendors } from '../lib/vendors.mjs'
 
 const ROOT = process.env.BUS_ROOT
   ? path.resolve(process.env.BUS_ROOT)
@@ -66,12 +69,6 @@ function loadAgents() {
   scan(path.join(ROOT, 'agents'), false)
   scan(path.join(ROOT, 'agents', 'archive'), true)
   return { agents, meta }
-}
-
-/** 可选的外部厂商表：shared/agent-vendors.json。 */
-function loadVendors() {
-  const v = core.readJsonOrNull(path.join(ROOT, 'shared', 'agent-vendors.json'))
-  return v && typeof v === 'object' && !Array.isArray(v) ? v : undefined
 }
 
 /** 读全部 verdict.json（供 --status 与汇总）。 */
@@ -156,7 +153,7 @@ function main() {
 
   const ctx = {
     agents: loaded.agents,
-    vendors: loadVendors(),
+    vendors: loadVendors(ROOT, (m) => console.error(m)).vendors,
     getAgent: (id) => loaded.meta.get(id) || null,
   }
 

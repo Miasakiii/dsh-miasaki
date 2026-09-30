@@ -1,0 +1,28 @@
+{
+  "task_id": "t-0001",
+  "status": "completed",
+  "conclusion": "[契约补记 2026-09-30：本任务交付于 G0 交付契约落地之前，结论逐字摘自 result-t-0001.md 首段，未改判] 官方已发布的 ACP（Agent Client Protocol，JSON-RPC over stdio）+ 进程外 subagent 四件套，已实现设计文档中「自研薄壳 CLI + 文件总线 + 进程托管器」工程的大半，且协议更标准、生命周期更稳；M3 首选评估对象为 @deepseek-ai/dsh-subagent-dsh-sdk，dsh-subagent-acp 为协议层候选，自研薄壳降级为兜底（仅在官方包实测不满足协议需求时启用）。",
+  "completeness": {
+    "done": [
+      "总评矩阵（6 个候选 + 2 个参考 runtime 的定位判定）",
+      "七维对照矩阵（评分与依据，含「版本线风险」反置说明）",
+      "一句话总判与 M3 选型建议"
+    ],
+    "missing": []
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "tasks/t-0001/result/result-t-0001.md",
+      "note": "原始交付物（138 行）：结论 / 总评矩阵 / 七维对照矩阵；评分基于文档证据推断，原文自陈「未实测，M3 实测后应回写修正」"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0001/result/result-t-0001.md",
+      "bytes": 13621,
+      "sha256": "7319b1fcfafcf2fe9370ee64968cce96510d254c5a90a2263698143a667e55a8"
+    }
+  ]
+}

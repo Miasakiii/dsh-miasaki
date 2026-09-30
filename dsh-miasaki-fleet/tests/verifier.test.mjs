@@ -8,7 +8,11 @@
 // 8 个活动 agent 的 model 全是 cli-default → 「不同模型」这一级无法判定，
 // 厂商级异构是当前唯一可达的强异构依据。测试把这个行为固定下来。
 import assert from 'node:assert/strict'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { validateVerdict } from '../workers/lib/bus-contract.mjs'
 import {
@@ -19,6 +23,23 @@ import {
   summarizeVerdicts,
   vendorOf,
 } from '../workers/lib/verifier.mjs'
+// K5（2026-09-30）：厂商表加载 —— 此前是「读一个从不存在的文件并静默回退」。
+import { VENDORS_REL, loadVendors } from '../workers/lib/vendors.mjs'
+
+const FLEET_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+
+/** 造一个只含 shared/ 的临时工作区根。 */
+function makeRoot(t) {
+  const root = mkdtempSync(join(tmpdir(), 'fleet-vendors-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'shared'), { recursive: true })
+  return root
+}
+
+/** 往临时根写厂商表。 */
+function writeVendors(root, table) {
+  writeFileSync(join(root, VENDORS_REL), JSON.stringify(table, null, 2), 'utf8')
+}
 
 function check(fn) {
   const errs = []
@@ -297,4 +318,70 @@ test('verdict 契约：verdict 枚举、confidence 区间、task_id 与目录一
   assert.match(check((f) => validateVerdict(goodVerdict({ verdict: 'maybe' }), 'v', f)).text, /verdict 非法/)
   assert.match(check((f) => validateVerdict(goodVerdict({ confidence: 1.5 }), 'v', f)).text, /confidence 应为 0\.\.1/)
   assert.match(check((f) => validateVerdict(goodVerdict(), 'v', f, 't-0099')).text, /与所在任务目录不一致/)
+})
+
+// ---------------------------------------------------------------------------
+// K5（2026-09-30）：厂商表加载不再静默
+//
+// 修的是「读一个**从不存在**的文件、读不到就悄悄回退内置表，而文档仍宣称可由它覆盖」——
+// 失效形态是给出**假异构**结论（「验证者独立」是虚的）且全程无提示。
+// 处置选「真读 + 显式告知」：覆盖能力保留，两条回退路径都必须留痕。
+// ---------------------------------------------------------------------------
+
+test('K5：提供了合法厂商表 → 真读生效，且无告警噪声', (t) => {
+  const root = makeRoot(t)
+  writeVendors(root, { claude: 'anthropic', pi: 'earendil-works' })
+  const notices = []
+  const r = loadVendors(root, (m) => notices.push(m))
+  assert.equal(r.notice, null)
+  assert.equal(r.source, VENDORS_REL)
+  assert.equal(r.vendors.pi, 'earendil-works')
+  assert.equal(notices.length, 0)
+})
+
+test('K5：文件缺失 → 回退内置表但**显式告知**（静默回退即缺陷）', (t) => {
+  const root = makeRoot(t)
+  const notices = []
+  const r = loadVendors(root, (m) => notices.push(m))
+  assert.equal(r.vendors, undefined)
+  assert.equal(r.notice, 'missing')
+  assert.equal(r.source, 'default')
+  assert.equal(notices.length, 1, '回退必须留痕')
+  assert.match(notices[0], /回退内置表/)
+})
+
+test('K5：结构非法（数组 / 坏 JSON）→ 报错并回退，不静默', (t) => {
+  const arr = makeRoot(t)
+  writeVendors(arr, ['claude'])
+  const n1 = []
+  assert.equal(loadVendors(arr, (m) => n1.push(m)).notice, 'invalid-shape')
+  assert.match(n1[0], /结构非法/)
+
+  const bad = makeRoot(t)
+  writeFileSync(join(bad, VENDORS_REL), '{ 这不是 JSON', 'utf8')
+  const n2 = []
+  assert.equal(loadVendors(bad, (m) => n2.push(m)).notice, 'invalid-json')
+  assert.match(n2[0], /解析失败/)
+
+  const empty = makeRoot(t)
+  writeVendors(empty, { claude: '' })
+  const n3 = []
+  assert.equal(loadVendors(empty, (m) => n3.push(m)).notice, 'invalid-shape', '空字符串不是合法厂商')
+  assert.match(n3[0], /非空字符串/)
+})
+
+test('K5：$ 开头的元数据键不进查表（$comment 不该被当成 agent）', (t) => {
+  const root = makeRoot(t)
+  writeVendors(root, { $comment: '说明', claude: 'anthropic' })
+  const r = loadVendors(root, () => {})
+  assert.equal(r.vendors.claude, 'anthropic')
+  assert.equal('$comment' in r.vendors, false)
+})
+
+test('K5：仓库里那份真实厂商表存在、合法，且覆盖内置表登记的全部 agent', () => {
+  const r = loadVendors(FLEET_DIR, () => {})
+  assert.equal(r.notice, null, 'shared/agent-vendors.json 必须真实存在且合法 —— 它曾是一句空宣称')
+  for (const id of ['claude', 'gemini', 'opencode', 'pi', 'dsh', 'mimo', 'bl', 'agent-browser']) {
+    assert.ok(r.vendors[id], `内置表登记的 ${id} 也应在外置表里（否则两处漂移会给假异构结论）`)
+  }
 })

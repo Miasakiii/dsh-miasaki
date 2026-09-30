@@ -1,0 +1,38 @@
+{
+  "task_id": "t-0005",
+  "status": "completed",
+  "conclusion": "[契约补记 2026-09-30：本任务交付于 G0 交付契约落地之前，结论摘自 result-t-0005.md] 百炼账户免费额度与用量查询成功（Operator 完成 console 登录后重跑）：免费额度共 89 个模型，用量窗口 2026-08-10~08-17 内调用 6 个模型 / 成功 50 次 / 图像 26 张 / 合计 96,226 tokens；CLI 真实执行、stdout 完整捕获，全程只读无副作用。",
+  "completeness": {
+    "done": [
+      "免费额度查询（bl usage free，89 个模型，按紧急度取前 15）",
+      "用量摘要（bl usage stats，7 天窗口：6 模型 / 50 次成功 / 26 张图 / 96,226 tokens）",
+      "stdout 完整捕获留档（logs/t-0005-stdout-3.log）"
+    ],
+    "missing": []
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "tasks/t-0005/result/result-t-0005.md",
+      "note": "原始交付物：结论 + 额度明细 + 用量摘要"
+    },
+    {
+      "type": "file",
+      "ref": "agents/bl/logs/t-0005-stdout-3.log",
+      "note": "本轮 CLI 完整输出（2913 字节）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0005/result/result-t-0005.md",
+      "bytes": 1602,
+      "sha256": "1b84e65a8e9573b30fda83ef875b20399e7f949f8b2623358ecfc78061914f9c"
+    },
+    {
+      "path": "agents/bl/logs/t-0005-stdout-3.log",
+      "bytes": 2913,
+      "sha256": "41b182a91a8b7b0c38c0786927c41478063c0de0638e8e637caf2c569ec2ca98"
+    }
+  ]
+}

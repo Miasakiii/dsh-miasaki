@@ -1,0 +1,34 @@
+{
+  "task_id": "t-0006",
+  "status": "completed",
+  "conclusion": "[契约补记 2026-09-30：本任务交付于 G0 交付契约落地之前，结论摘自 result-t-0006.md（其原文标注为「结论摘自 claude stdout」）] 本机部署了由 8 个 agent CLI 组成的多模型编排阵容（通用编码 / 平台 API 对话 / 浏览器自动化三类，统一经 M3.5 派单器按模板 invoke 接入）；其中 claude 是唯一支持结构化 JSON 输出且按 token 计价（json-cost-usd）的 runner，成本核算以它为主锚，其余多为 unknown/session/console-usage 计费。",
+  "completeness": {
+    "done": [
+      "8 个 CLI 的阵容表（id / 名称 / 版本 / 计费 / 主打用途）",
+      "任务类型 → 首选 CLI 建议"
+    ],
+    "missing": [
+      "gemini 当前不可用（启动错误，需修复）—— 已在阵容表内如实登记"
+    ]
+  },
+  "evidence": [
+    {
+      "type": "file",
+      "ref": "tasks/t-0006/result/result-t-0006.md",
+      "note": "原始交付物：阵容表 + 首选建议（其结论摘自 claude 2.1.233 headless stdout，21 回合 exit 0）"
+    },
+    {
+      "type": "file",
+      "ref": "agents/claude/logs/t-0006-stdout.log",
+      "note": "worker 原始 stdout（原文自陈出处）"
+    }
+  ],
+  "blockers": [],
+  "artifacts": [
+    {
+      "path": "tasks/t-0006/result/result-t-0006.md",
+      "bytes": 3154,
+      "sha256": "a73ce2ba96eb8421bedf4753e4a85aa6a1934cb26e889ef028963184c57e3cd5"
+    }
+  ]
+}

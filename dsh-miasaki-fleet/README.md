@@ -15,6 +15,7 @@
 | `workers/` | 扫描器（discovery）、派单器（dispatch）、总线校验（validate-bus.mjs）、脉冲发布（pulse/publish-pulse.mjs） |
 | `fleet-monitor/` | 监控面板（panel.html + server.js + **fence.cjs 三道信任围栏**，本地 HTTP；2026-09-26 起所有路由先过围栏，跨站请求 403 且不带 CORS 头） |
 | `schemas/` | 文件总线 JSON Schema（F1 契约） |
+| `shared/` | 跨文件共享参考：`collective-memory.md`（经验沉淀）、**`agent-vendors.json`（厂商归属表 —— G4 异构验证的 vendor 级依据；缺省回退内置表并**显式告知**）** |
 | `docs/` | 设计文档与调研/校准报告 |
 | `tests/` | 回归冒烟与样本 |
 
@@ -42,6 +43,26 @@ npm run validate / validate:strict / pulse
   [`../dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`](../dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md)）。
 - **BOM/CRLF 容错**：`fleet-monitor/server.js` 与脉冲发布器读取 JSON/JSONL
   均剥离 BOM、按 `\r?\n` 分行，兼容本机 PowerShell 产物。
+
+## 终态契约与自述受阻（2026-09-30，K3/K4/K5）
+
+三个「**失效时不报错、界面看起来正常**」的缺口收口，判据都落在可测的闸门上：
+
+- **终态必须有交付物（K3）**：台账判 `done + accepted` 的任务必须有 `tasks/<id>/result.json`。
+  此前 `validate-bus.mjs` 对缺失文件 `continue`（注释还写着「是正常的」）⇒ 静默放行；
+  首跑实测 **9 个任务全部已验收、其中 7 个从未产出交付契约** ——「验收通过」当时可以是空的。
+  检查的**驱动源是台账**而非 `tasks/` 目录（目录不存在属同族形态，同样要拦）。
+  存量 7 份按契约**补记**（evidence 指向原始 `result-*.md` 或派单器代写的 `transcript.md`）。
+- **自述受阻必须如实落账（K4）**：派单器不再把 `exit 0` 一律当「健康空闲」——
+  worker 自述受阻的载体就是**交付契约本身**（`result.json` 的 `status = blocked | failed`）。
+  判定单点在 `workers/dispatch/final-state.ps1`：`status.json` 落 `blocked`（此前恒为 `idle`），
+  `last_error` 记 blockers 摘要；退出码语义（0/2/3/4）不变。
+- **厂商表真读（K5）**：`shared/agent-vendors.json` 此前**只被文档宣称存在、实际从不曾存在**
+  （读不到就静默回退内置表 ⇒ 默认表与实际厂商归属不符时会给出**假异构**结论）。
+  现为真实文件，加载逻辑在 `workers/lib/vendors.mjs`，缺失 / 结构非法两条回退路径都留痕。
+
+回归：`tests/bus-integration.test.mjs`（+4 例）、`tests/dispatch-state.test.mjs`（**9 例**，
+含两个 PowerShell 脚本的**语法闸门** —— 该侧此前没有任何自动化检查）、`tests/verifier.test.mjs`（+5 例）。
 
 ## Graph Engineering（G 系列，**G0–G2、G4 判定层已落地；调度层与 G3 设计中**）
 
