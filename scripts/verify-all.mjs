@@ -173,6 +173,10 @@ function planFleet() {
         "['风险声明解析','function Resolve-VerifyLevel','s'],",
         "['等级映射不猜','function ConvertTo-MinLevel','s'],",
         "['验证任务书生成','function Write-VerifyBrief','s'],",
+        // 形态契约（2026-09-30 由 `repo/style` 在**提交后**当场抓到）：verify-brief.md 是**入库**文本，
+        // 必须 LF + 无 BOM。原先 `($parsed.brief + \"`n\") | Set-Content -Encoding UTF8` 会被 PowerShell
+        // 给它写出的那一行补平台换行 `\r\n` ⇒ 产物成「47 LF + 1 CRLF」的混合行尾。改为按字节写。
+        "['验证任务书按字节写（不依赖 cmdlet 隐式换行）','[System.IO.File]::WriteAllText','s'],",
         "['未声明即跳过','跳过验证闸门','s'],",
         // 首跑豁免（2026-09-30 统一两层判活口径）：判据单点在 liveness.cjs，
         // 两个消费方各自**引用**它。此前两侧各自实现同一口径、结论相反 ——

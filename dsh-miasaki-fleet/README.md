@@ -337,7 +337,17 @@ node workers/graph/verifier-pick.mjs --for pi --min-level vendor   # 判定层�
 
 **回归**：`dispatch-gate` 夹具 **17 → 23 例**（G4 六态：未声明跳过 / 有异构 agent 放行 /
 候选都不可用拒绝 / vendor 级无候选拒绝 / 非法值拒绝 / `none` 拒绝）；接线断言 **20 → 26 项**
-（B5 批次后为 **36 项 / 26 例** —— 见下节「写入收敛」）。
+（B5 批次后为 **37 项 / 26 例** —— 见下节「写入收敛」）。
+
+> **验证任务书的形态契约（2026-09-30）**：`tasks/<id>/verify-brief.md` 是**入库**文本 ⇒ 必须
+> **LF + 无 BOM + 末行换行**。此前用 `($parsed.brief + "`n") | Set-Content -Encoding UTF8` 写盘 ——
+> `-Encoding UTF8` 在 PS7 是 no-BOM（这点没问题），但 **PowerShell 会为它写出的那一行补 `\r\n`**，
+> 而内容里其余换行是 `verifier-pick` 给的 LF ⇒ 产物成了「47 个 LF + **1 个 CRLF**」的混合行尾。
+> 现改为**按字节写**（`[System.IO.File]::WriteAllText` + `UTF8Encoding($false)` + 显式补末行 `\n`），
+> **不依赖任何 cmdlet 的隐式行为**；该实现被接线断言钉住（可派闸门断言 **37 项**）。
+> **这条是提交之后才被 `repo/style` 抓到的** —— 因为该闸门当时的扫描集只含「已 `git add` 的文件」，
+> 而新写的文件恰是形态问题高发处；同日已把它的口径改为「索引 + 未跟踪未忽略」，
+> 使这类问题在**提交前**暴露（详见 `../docs/ENGINEERING.md` 当日「第九件」）。
 
 ### 总控制面板：判定层已上屏（P1，2026-09-30）
 
@@ -445,7 +455,7 @@ node ../scripts/verify-all.mjs fleet
 #  7) tests/capability-graph.test.mjs     G2 能力图（17 项，含真实档案替代查找）
 #  8) agent-pick --check                  G2 能力图结构完整性
 #  9) dispatch 能力闸门接线               G2→派单器 纯文本断言（7 项）
-# 10) dispatch 可派闸门接线               G1/G0/G4→派单器 纯文本断言（36 项，2026-09-30 新增）
+# 10) dispatch 可派闸门接线               G1/G0/G4→派单器 纯文本断言（37 项，2026-09-30 新增）
 # 11) tests/verifier.test.mjs             G4 异构验证（29 项，含 verdict 契约三条硬约束 + 首跑豁免及其三条边界）
 # 12) verifier-pick --check               G4 验证结论契约校验
 # 13) node --check fleet-monitor/server.js
@@ -461,7 +471,7 @@ node ../scripts/verify-all.mjs fleet
 
 > **口径**：`fleet` 类别 2026-09-30 由 17 项升至 **21 项**（+ dispatch 可派闸门文本断言、+ dispatch-gate 夹具测试、
 > + P1 面板判定层区块断言；全量 **179 项**）。真实台账 9 个任务全终态 ⇒ 第 17 项是「放行」分支的唯一覆盖者，不可省。
-> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（现 36），夹具例数就是 `node --test` 的 pass 数。
+> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（现 37），夹具例数就是 `node --test` 的 pass 数。
 
 实机联动项（pulse → 桌宠状态映射、pulse 缺失/损坏时静默降级）见
 [四线统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §4。

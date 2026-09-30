@@ -46,7 +46,9 @@
 //     词表不存在时**显式打印跳过**（CI 没有这个文件，属常态），不静默。
 //     **刻意不把维护者名字写进本脚本** —— 那本身就违反脱敏纪律。
 //   · 仍然抓不到：改名换姓的间接指代、图片/二进制里的痕迹、git 历史里的旧提交。
-//   · 入库边界由 `git ls-files` 决定；git 不可用（受限沙箱下 spawn 走管道会 EPERM）时
+//   · 入库边界由 `git ls-files --cached --others --exclude-standard` 决定 —— **索引 + 未跟踪未忽略**
+//     （= 将要入库的全集；只看索引会让「尚未 git add 的新文件」逃过检查，2026-09-30 实测漏网后改口径）；
+//     git 不可用（受限沙箱下 spawn 走管道会 EPERM）时
 //     回退**文件系统遍历**并**显式打印**回退原因 —— 不静默换口径。
 //
 // ## 用法
@@ -94,8 +96,14 @@ const IDENTITY_TERMS_PATH = join(ROOT, '_refs', 'identity-terms.txt')
 /** 运行期载入的词表（main 赋值；见 IDENTITY_TERMS_PATH 的说明）。 */
 let IDENTITY_TERMS = []
 
-function listTrackedFiles() {
-  const r = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' })
+function listCandidateFiles() {
+  // `--cached --others --exclude-standard` = **索引 + 未跟踪但未被忽略** ⇒ 即「将要入库的全集」。
+  // 2026-09-30 由一次真实漏网改口径：此前只用 `git ls-files`（= 索引），于是**尚未 `git add` 的新文件
+  // 不在扫描集里** —— 提交后闸门才报「新增 CRLF」（`tasks/<id>/verify-brief.md`，由 PowerShell 的
+  // `Set-Content` 写入时补了 `\r\n`）。形态问题的正确发现时机是**提交前**，而「新写的文件」恰恰
+  // 是形态问题的高发处 ⇒ 把未跟踪未忽略的文件一并纳入。CI 是干净 checkout、全部文件已追踪，
+  // 故 CI 口径不变；本地因此更严（工作区里形态不合规的散落文件会当场报出来，这正是本仓纪律要的）。
+  const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: ROOT, encoding: 'utf8' })
   if (r.error || r.status !== 0) return null
   return r.stdout.split('\0').filter(Boolean)
 }
@@ -226,7 +234,7 @@ try {
   termsNote = ' 本地身份词表 _refs/identity-terms.txt 不存在 ⇒ **跳过裸词检查**（CI 常态；路径形态检查不受影响）'
 }
 
-const tracked = listTrackedFiles()
+const tracked = listCandidateFiles()
 let files
 let fallbackNote = ''
 if (tracked === null) {

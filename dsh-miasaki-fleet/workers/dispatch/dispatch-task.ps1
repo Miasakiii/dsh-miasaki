@@ -427,7 +427,16 @@ function Write-VerifyBrief([string]$TaskId, [string]$Producer, [string]$MinLevel
     return
   }
   $vf = Join-Path $Workspace "tasks\$TaskId\verify-brief.md"
-  ($parsed.brief + "`n") | Set-Content -Path $vf -Encoding UTF8
+  # 形态契约（2026-09-30 由仓库级 `repo/style` 闸门在**提交后**当场抓到，见下）：
+  # `tasks/<id>/verify-brief.md` 是**入库**文本 ⇒ 必须 LF + 无 BOM + 末行换行。
+  # 此前用 `($parsed.brief + "`n") | Set-Content -Encoding UTF8`：`-Encoding UTF8` 在 PS7 是 no-BOM
+  # （这点没问题），但 **PowerShell 会为它写出的那一行补平台换行 `\r\n`**，而内容里其余换行是
+  # `verifier-pick` 给的 LF ⇒ 产物成了「47 个 LF + 1 个 CRLF」的混合行尾（实测即此形态）。
+  # 改为按字节写：换行只用 LF，并显式补末行换行（不依赖任何 cmdlet 的隐式行为）。
+  # 注：`usage.jsonl` 的回退直写仍走 `Add-Content`（同为 CRLF）—— 那是**运行时产物**（`.gitignore` 挡在
+  # 入库之外、JSONL 解析容忍行尾 `\r`），不在本形态契约范围内。
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($vf, ($parsed.brief.TrimEnd("`r", "`n") + "`n"), $utf8NoBom)
   Write-Host "[verifier] 验证任务书已生成：$vf"
   Write-Host '[verifier] ⚠ 未自动派发 —— 交付契约落盘后可用 verifier-pick --brief 重新生成（那时的产物引用才完整）'
   Write-Host "[verifier] 派发方式：把该任务书作为新任务的 brief，投给上面选出的验证者（最低异构 $MinLevel）"
