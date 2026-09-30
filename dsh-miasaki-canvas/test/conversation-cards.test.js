@@ -3,13 +3,31 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import vm from 'node:vm'
 
-async function loadConversationCards() {
+async function loadConversationCards({ sideChatIds } = {}) {
   const source = await readFile(new URL('../app.js', import.meta.url), 'utf8')
   const start = source.indexOf('function overlapsCard')
   const end = source.indexOf('function canvasConnectors')
-  const context = { globalThis: {}, CARD_WIDTH: 310, CARD_HEIGHT: 276, CARD_GAP_Y: 42, CAMERA_INSET_X: 56, CAMERA_INSET_Y: 56, messagesFor: thread => thread.messages, state: { branchAnchors: new Map(), cardPositions: new Map(), liveReplies: new Map(), collapsedCardIds: new Set() } }
+  // 侧线标注（2026-09-30）：`conversationCards` 会给卡片打 `sideChat` 标，判据函数在文件更上面
+  // —— 切片必须把那段一起求值，否则整段调用栈 ReferenceError（本文件因此改过一次切片范围）。
+  const sideChatStart = source.indexOf('// --- 辅助对话（侧线）标注')
+  const sideChatEnd = source.indexOf('// Sidebar thread list:')
+  assert.notStrictEqual(sideChatStart, -1, 'app.js 里找不到辅助对话标注段')
+  assert.notStrictEqual(sideChatEnd, -1, 'app.js 里找不到侧栏线程列表锚点')
+  const stored = sideChatIds === undefined ? null : JSON.stringify(sideChatIds)
+  const context = {
+    globalThis: {},
+    CARD_WIDTH: 310,
+    CARD_HEIGHT: 276,
+    CARD_GAP_Y: 42,
+    CAMERA_INSET_X: 56,
+    CAMERA_INSET_Y: 56,
+    localStorage: { getItem: () => stored },
+    console: { warn: () => {} },
+    messagesFor: thread => thread.messages,
+    state: { branchAnchors: new Map(), cardPositions: new Map(), liveReplies: new Map(), collapsedCardIds: new Set() },
+  }
   vm.createContext(context)
-  vm.runInContext(`${source.slice(start, end)};globalThis.conversationCards = conversationCards;globalThis.conversationGraphView = conversationGraphView;globalThis.initialCanvasCamera = initialCanvasCamera`, context)
+  vm.runInContext(`${source.slice(sideChatStart, sideChatEnd)}\n${source.slice(start, end)};globalThis.conversationCards = conversationCards;globalThis.conversationGraphView = conversationGraphView;globalThis.initialCanvasCamera = initialCanvasCamera`, context)
   return { conversationCards: context.globalThis.conversationCards, conversationGraphView: context.globalThis.conversationGraphView, initialCanvasCamera: context.globalThis.initialCanvasCamera, state: context.state }
 }
 
@@ -370,4 +388,29 @@ test('cyclic collapsed roots stay visible and count unique descendants', async (
   assert.deepEqual(Array.from(graph.cards, card => card.id), ['a', 'b'])
   assert.equal(graph.descendantCounts.get('a'), 1)
   assert.equal(graph.descendantCounts.get('b'), 1)
+})
+
+// 辅助对话（侧线）标注（2026-09-30）：侧线在官方列表里被隐藏，但在画布上照旧显示 ——
+// 这里钉住「显示 + 可辨识」的数据面：声明的 child 打 `sideChat` 标，其余线一个都不受影响。
+test('marks every card of a declared side-chat line, and nothing else', async () => {
+  const { conversationCards } = await loadConversationCards({ sideChatIds: ['session-side'] })
+  const cards = conversationCards([
+    { id: 'thread-side', dshSessionId: 'session-side', parentId: 'thread-parent', position: { x: 486, y: 82 }, messages: [{ kind: 'user', text: '侧线提问', sourceSeq: 1 }, { kind: 'assistant', text: '侧线回答', sourceSeq: 2 }] },
+    { id: 'thread-plain', dshSessionId: 'session-plain', parentId: 'thread-parent', position: { x: 486, y: 400 }, messages: [{ kind: 'user', text: '普通分支', sourceSeq: 1 }, { kind: 'assistant', text: '普通回答', sourceSeq: 2 }] },
+  ])
+  const side = cards.filter(card => card.dshThreadId === 'thread-side')
+  const plain = cards.filter(card => card.dshThreadId === 'thread-plain')
+  assert.ok(side.length > 0 && plain.length > 0, '两条线都要出卡（画布不隐藏任何一条）')
+  assert.ok(side.every(card => card.sideChat === true), '声明的侧线每张卡都带 sideChat 标（渲染层据此决定线头卡徽标）')
+  assert.ok(plain.every(card => card.sideChat === false), '用户自己 fork 的分支不受影响')
+})
+
+test('without the declaration the canvas behaves exactly as before', async () => {
+  const { conversationCards } = await loadConversationCards()
+  const cards = conversationCards([{
+    id: 'thread-side', dshSessionId: 'session-side', parentId: null, position: { x: 86, y: 82 },
+    messages: [{ kind: 'user', text: '提问', sourceSeq: 1 }],
+  }])
+  assert.ok(cards.length > 0, '声明缺席时线照旧在画布上')
+  assert.ok(cards.every(card => card.sideChat === false), '只是没有标注')
 })

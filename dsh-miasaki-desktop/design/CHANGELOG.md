@@ -2,6 +2,43 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-09-30 · 新增本体补丁 `dsh-client-ui-workspace`：会话浏览器「侧线会话不占列表」
+
+**触发**：`@miasaki/dsh-sidebar` 的「辅助对话」是官方 `sessions.fork` 出的**真会话** —— 继承上下文、
+可继续对话，但因此以普通会话身份出现在左侧列表与会话搜索里。用户原话：「辅助对话怎么还是有记录，
+会上会话记录，我要干净的侧边会话页，有一定的上下文但是不显示」。
+
+**为什么只能改壳（三条源码级事实）**：
+
+1. **唯一生效的过滤点**在客户端壳里 —— `dsh-client-ui-workspace/lib/client.js` 的 `sessionVisible()`。
+   Host 侧（`dsh-session-query` 的 `listSessions`、会话目录投影）**完全不过滤** origin，
+   只跳过「冷会话且无 cwd」。
+2. **官方已经会隐藏一类会话**：`if (session.origin === "subagent") return false;` —— 但 `origin`
+   是宿主写入的持久 header 字段（合法取值只有 `'subagent'`，写入者只有 `dsh-subagent` 的
+   `childSessionMeta`，其注释写明 `Navigation classification only`），而 `sessions.create` /
+   `sessions.fork` 的入参**都没有** origin；`fork` 实现里 meta 是硬编码字面量（官方注释：
+   「A fork shares the lineage field **without** the origin」）。
+3. **归档（archive）不可用**：`ArchivedSessionGate` 无条件装载 ⇒ 归档会话执行任何模型步都被
+   `agent/pre-step` 拒绝 —— **藏得住，聊不了**。插槽层同样无解：与会话行相关的 5 个插槽里，
+   `list` 类只能**加**装饰/菜单/按钮，`single` 类要替换**整块**（分组 + 搜索 + 拖拽）。
+
+**补丁内容**（1 条编辑，锚点唯一）：在 `sessionVisible()` 的 origin 判定之后追加一条「插件声明的
+侧线不显示」，判据是一份**跨包声明** —— `localStorage` 键 `miasaki-sidebar:sidechat:hidden:v1`
+（JSON 字符串数组，由 sidebar 插件在登记表每次变更后全量重写）。`sessionVisible()` 是分组列表、
+扁平列表、会话搜索**共用的唯一判据**，一处判定覆盖三条路径。
+
+**失败语义（关键）**：声明缺失、键不存在、JSON 坏、元素不是字符串 —— 一律按「没有侧线」处理，
+官方列表行为一字不变 ⇒ **插件没装时本补丁等于空操作**，不可能把任何会话挡在列表外。
+
+**为什么不是插件侧**：插件既没有「不进列表」的官方接口，也写不了会话元数据；这条能力是官方
+**留给自己的**（subagent 会话就是「建了但不进列表」）。补丁把同一个开口借给声明方，
+代价与其余补丁同：DSH 升级覆盖、需重打（规则 + 基线 + CLI 已入库）。
+
+**验证** `[实测]`：`node patch.mjs verify` PASS（由 baseline 重建 == 记录 SHA `511E7A12…` +
+`vm.Script` 语法闸门）；`apply` 已落到运行环境（`status: patched`，`.dsh-bak` 备份在场）；
+`verify-all desktop` **38 → 39**（新增该补丁的离线自证项）；`verify-all repo` 6/6。
+**实机待验**：刷新 miasaki 桌面端 → 左侧列表与会话搜索里不再出现侧线（含此前的历史侧线）。
+
 ## 2026-09-30 · 素材遮蔽链：让「旧素材静默遮蔽新素材」变得可见
 
 **问题（静默失效 #20）**：素材解析有两层 —— EXE 旁的磁盘 `ui/`（覆盖层）与编译期内嵌（兜底），

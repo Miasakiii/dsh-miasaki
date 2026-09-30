@@ -275,7 +275,7 @@ light 的完整命令行与 stderr。
 
 ## DSH 运行时补丁（本体例外）
 
-`patches/` 存放**七处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
+`patches/` 存放**八处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
 **DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件均已入库，可重建/可校验/可回退。
 
 | 补丁 | 目标包 | 做什么 |
@@ -287,8 +287,9 @@ light 的完整命令行与 stderr。
 | [`dsh-client-ui-attachment`](patches/dsh-client-ui-attachment/README.md) | 官方消息图片画廊 | 多图 tile 宽高比保持：64×64 定宽 cover 方块改为按原始比例自适应（44–220）+ contain 完整显示，修「截图被裁成方块」 |
 | [`dsh-client-ui-sidebar`](patches/dsh-client-ui-sidebar/README.md) | 官方侧边栏 | 头部悬浮提示 portal 化：**5 处** Tooltip 加 `portal: true`（2026-09-29 随 rc.2 退役品牌区那条 —— 官方删掉了那个 Tooltip），气泡改挂 body（z 1100），修左上角悬停提示被中栏盖住/裁掉 |
 | [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 miasaki 化：`sidebar.brand.name` occupant 换成部署实现，deepseek 字标 8 path 逐字节保留、胶囊几何不变，徽标 HARNESS → MIASAKI |
+| [`dsh-client-ui-workspace`](patches/dsh-client-ui-workspace/README.md) | 官方会话浏览器 | **侧线会话不占列表**：`sessionVisible()` 的 origin 判定后追加一条「插件声明的侧线不显示」，判据是跨包声明（localStorage `miasaki-sidebar:sidechat:hidden:v1`，由 sidebar 插件写）。官方**已有**「建了但不进列表」形态（`origin === 'subagent'`）却没向插件开口，本补丁把同一个开口借给声明方；**声明缺席即官方原状**（fail-safe，2026-09-30） |
 
-> **七件全部作用于浏览器 bundle**，改完**刷新页面**即生效。
+> **八件全部作用于浏览器 bundle**，改完**刷新页面**即生效。
 > 原第八件 [`dsh-cordis-host-runner`](patches/dsh-cordis-host-runner/README.md)（本线唯一的 host 侧补丁）
 > **已于 2026-09-29 退役**：官方 `0.2.0-rc.2` 自行实现了同一修复且更完整（`pending.failure ??=`
 > 记录拒绝原因、`clientQueryTimeoutMs` 可配超时、无活动页面时立刻失败），本补丁 4 条锚点在 rc.2 上

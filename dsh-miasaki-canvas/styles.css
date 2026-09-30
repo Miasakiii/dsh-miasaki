@@ -70,6 +70,8 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .tree-row i { margin-left: auto; flex: none; color: #94a3b8; font-size: 11px; font-style: normal; }
 .tree-row i.tree-live { color: #059669; }
 .tree-row i.tree-merge { color: #7c3aed; font-size: 11px; }
+/* 辅助对话（侧线）：青色刻意与合并（紫）、回复中（绿）、分支（灰）分开。 */
+.tree-row i.tree-sidechat { color: #0d9488; }
 .tree-row.is-live .tree-dot { --tree-pulse: rgba(16,185,129,.45); background: #10b981; animation: tree-live-pulse 1.4s ease-in-out infinite; }
 .tree-row.is-absorbed { opacity: .55; }
 @keyframes tree-live-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--tree-pulse, rgba(16,185,129,.45)); } 50% { opacity: .55; box-shadow: 0 0 0 3px transparent; } }
@@ -409,6 +411,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .tree-row i { color: #737a83; }
 [data-theme="dark"] .tree-row i.tree-live { color: #34d399; }
 [data-theme="dark"] .tree-row i.tree-merge { color: #a78bfa; }
+[data-theme="dark"] .tree-row i.tree-sidechat { color: #5eead4; }
 [data-theme="dark"] .tree-row.is-live .tree-dot { --tree-pulse: rgba(52,211,153,.4); background: #34d399; }
 [data-theme="dark"] .tree-empty { color: #737a83; }
 [data-theme="dark"] .brand::after { background: #e6e8eb; color: #111317; }
@@ -482,6 +485,9 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .thread-card.is-merge-node { border-color: #a78bfa; box-shadow: 0 3px 11px rgba(124,58,237,.14); }
 .thread-card.is-merge-node .topic-dot { background: #7c3aed; }
 .thread-card .merge-badge { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border-radius: 999px; background: #f5f3ff; padding: 0 7px; color: #7c3aed; font-size: 11px; font-weight: 650; white-space: nowrap; }
+/* 辅助对话（侧线）标注：这条线从主会话 fork 出来、不占官方会话列表，但画布照旧显示它 ——
+   徽标只挂在线头卡（turnIndex 0），LOD 收到 mini 档也还在。 */
+.thread-card .sidechat-badge { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border-radius: 999px; background: #f0fdfa; padding: 0 7px; color: #0d9488; font-size: 11px; font-weight: 650; white-space: nowrap; }
 .thread-card.merge-draft-card { border: 1px dashed #a78bfa; background: #fdfcff; }
 .thread-card.merge-draft-card .merge-diamond { width: 11px; height: 11px; flex: none; background: #7c3aed; transform: rotate(45deg); border-radius: 2px; }
 .merge-plan { margin: 10px 14px; overflow-y: auto; border: 1px solid #ede9fe; border-radius: 6px; background: #faf8ff; padding: 8px 10px; font-size: 11px; line-height: 1.6; color: #4c1d95; }
@@ -520,6 +526,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .connectors .merge-connector-draft { stroke: #a78bfa; }
 [data-theme="dark"] .thread-card.is-merge-node { border-color: #6d28d9; }
 [data-theme="dark"] .thread-card .merge-badge { background: #2e1065; color: #c4b5fd; }
+[data-theme="dark"] .thread-card .sidechat-badge { background: #042f2e; color: #5eead4; }
 [data-theme="dark"] .thread-card.merge-draft-card { border-color: #6d28d9; background: #221a33; }
 [data-theme="dark"] .thread-card .merge-state-badge { background: #2e1065; color: #c4b5fd; }
 [data-theme="dark"] .thread-card .merge-state-badge.is-busy { background: #4c1d95; color: #ddd6fe; }
@@ -552,6 +559,8 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .thread-card .absorbed-badge:hover { color: #7c3aed; background: #f5f3ff; }
 .thread-card .absorbed-badge:focus-visible { outline: 2px solid #7c3aed; outline-offset: 2px; }
 .thread-card:has(.absorbed-badge) .merge-badge { margin-left: 0; }
+/* 侧线卡同时又是合并节点时，让先出现的徽标占住 auto 边距（照上一条的写法）。 */
+.thread-card:has(.merge-badge) .sidechat-badge { margin-left: 0; }
 .detail-lineage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; }
 .detail-lineage-label { color: #94a3b8; font-weight: 650; }
 .detail-lineage button { min-height: 24px; border-color: #ddd6fe; border-radius: 999px; background: #faf8ff; padding: 0 9px; color: #6d28d9; font-size: 11px; font-weight: 650; }

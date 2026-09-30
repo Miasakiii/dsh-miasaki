@@ -2,6 +2,50 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-09-30 · 辅助对话（侧线）在会话布上照旧显示，并加「辅助对话」标注
+
+**触发**：用户「辅助对话虽然不在主会话列表显示，在会话布里要显示并且标注」。
+
+**先说清一件事：画布本来就显示它**（这不是新做的）—— 画布的线来自宿主 `ctx.sessions.list()`
+（`index.js` 的启动 replay + `session/created` / `session/event` 订阅），与**官方列表的可见性判据
+无关**。sidebar 线「不占会话记录」的落点（补丁改 `dsh-client-ui-workspace` 的 `sessionVisible()`）
+只影响**官方列表与搜索**，碰不到画布。本轮实测复核了这条链，把它写成**契约**（见 §「解耦」）。
+
+**真正缺的是可辨识性**：官方 fork 出的 child 与用户自己拉的分支，在会话 header 上**完全一样**
+（都是 `parentSession` + `isSeeded`；画布早已据此记下 `sourceSeedLength` / `sourceParentSessionId`）
+⇒ **宿主侧区分不了**。唯一判据是 sidebar 写下的那份跨包声明。
+
+**实现**（`app.js` + `styles.css`，无 host 半改动）：
+
+| 处 | 做法 |
+|---|---|
+| 数据面 | `sideChatSessionIds()` 读 localStorage 键 `miasaki-sidebar:sidechat:hidden:v1`（JSON 字符串数组），**按上一次原始串缓存**（渲染每帧都要问，不能每帧 parse）；`conversationCards` 里给每张卡打 `sideChat` 标 —— 渲染层零查找 |
+| 线头卡 | `<span class="sidechat-badge">辅助对话</span>`，**只挂 `turnIndex === 0`**（每轮都挂会糊成一片；LOD 收到 mini 档仍在） |
+| 血缘树行 | `<i class="tree-sidechat">辅助对话</i>`，**优先于「分支」**（它确实是分支，但用户要一眼看出是侧线） |
+| 详情页 | `detail-badge` 同样优先显示「辅助对话」 |
+| 样式 | 青色（`#0d9488` / dark `#5eead4`）—— 与合并（紫）、回复中（绿）、分支（灰）一眼分开；照 `merge-badge` 的家族规格（inline-flex / 999px / 11px），并补 `:has(.merge-badge)` 的边距协调 |
+| 即时性 | `window.addEventListener('storage')`：**跨文档**事件（sidebar 在主页面写、画布在 iframe 里读，同源不同文档 ⇒ 事件会到）；命中即丢缓存并 `render()`。**刻意不轮询** |
+
+**解耦与降级（写死为契约）**：
+
+- 只读**这一个** localStorage 键（源码级只允许一处 `getItem`）；**不 import 别线包**、不复制官方
+  可见性判据、不判对方插件是否在场；
+- 声明读不到 / 坏掉（非数组、混入非字符串、JSON 坏）⇒ **只是没有标注**，画布其余行为一字不变；
+  坏 JSON 留痕一次（缓存挡住重复告警），存储不可用静默降级（与同文件既有 localStorage 降级同形，
+  就地写 `guard-ok`）。
+
+**测试**：新增 `test/sidechat-badge.test.js` **9 例**（声明缺失/命中/坏 JSON 留痕/形态容错/缓存失效/
+三处标注源码契约/storage 而非轮询/样式两套/解耦契约）；`test/conversation-cards.test.js` **+2 例**
+（声明命中时整条线打标、无声明时行为与改前一致）。**顺带修一处测试基建**：该文件的源码切片必须
+把侧线判据那段一起求值 —— 否则 `conversationCards` 里调用它直接 ReferenceError（18 例齐挂），
+这正是「切片式测试」的既有代价，已在加载器注释里写明。
+
+**闸门**：`verify-all canvas` **13 → 14**（新增测试文件自动进册，该项是动态枚举）；
+`node test/sidechat-badge.test.js` 9/9、`conversation-cards.test.js` 20/20。
+
+**实机待验**：开一条辅助对话 → 会话布里**照旧出现**该线、线头卡带青色「辅助对话」徽标、
+血缘树行显示「辅助对话」；点进详情页 badge 同样是「辅助对话」；主会话与其他分支**零变化**。
+
 ## 2026-09-29 · 分发就绪：补 `peerDependencies`、README 改为面向用户
 
 **背景（仓库分发策略变更）**：根 README 由工程记录改为面向用户的插件目录页，本线是**首发分发**的插件。

@@ -58,6 +58,101 @@ window.__ModuleLoader__.load({
     //   { [parentSessionId]: { activeChildId, lines: [{ childSessionId, createdAt }] } }
     const SIDECHAT_REGISTRY_KEY = 'miasaki-sidebar:sidechat:v1'
 
+    // --- 侧线「不占官方会话列表」的跨包声明（2026-09-30，用户诉求落地）---------
+    // **为什么要跨包**：官方把「会话列表显示什么」的投影留在壳里 —— 过滤发生在
+    // `dsh-client-ui-workspace` 的 `sessionVisible()`，而它认的 `origin` 是宿主写入的
+    // 持久 header 字段（只有 `'subagent'` 一个取值，且 `sessions.fork` 明写不带它）。
+    // 插件既没有「不进列表」的接口，也写不了会话元数据 ⇒ 唯一落点是**声明 + 壳侧读取**。
+    //
+    // **职责划分（刻意如此）**：插件只声明「哪些会话是我的侧线」这件**插件独占的知识**
+    // （localStorage 字符串数组，无其他字段）；至于「继承段从哪开始」那种**从会话数据
+    // 算得出来**的东西，留给壳侧补丁自己算 —— 不让插件跨进程搬运可推导的事实。
+    //
+    // **失败语义**：写不进去（隐私模式/配额）只留痕 —— 后果是侧线回到官方列表里可见，
+    // 也就是**本功能之前的行为**，绝不是数据损坏。官方侧读不到声明时同样按「没有侧线」处理。
+    const SIDECHAT_HIDDEN_KEY = 'miasaki-sidebar:sidechat:hidden:v1'
+
+    /**
+     * Every registered side line's child id, deduped and sorted.
+     * 纯函数：判据要被单测钉住（放进闭包就只能靠源码正则，那抓不到字段读错这类回归）。
+     * 容忍登记表里任何一层的残缺形态 —— 声明少一条只是「那条侧线在列表里可见」，
+     * 绝不能让一次读取失败把整份声明写坏。
+     */
+    const sideChatHiddenIds = registry => {
+      const ids = []
+      for (const entry of Object.values(registry || {})) {
+        if (!entry || !Array.isArray(entry.lines)) continue
+        for (const line of entry.lines) {
+          if (line && typeof line.childSessionId === 'string' && line.childSessionId !== '') ids.push(line.childSessionId)
+        }
+      }
+      return [...new Set(ids)].sort()
+    }
+
+    /**
+     * Publish the declaration the official-list patch reads.
+     * 每次登记表变更后**全量重写**（不是增量）—— 声明是可推导的投影，全量写让它
+     * 永远等于当前登记表，不需要对账历史遗留。
+     */
+    const publishSideChatHidden = registry => {
+      try {
+        localStorage.setItem(SIDECHAT_HIDDEN_KEY, JSON.stringify(sideChatHiddenIds(registry)))
+      } catch (err) {
+        console.warn('[miasaki-sidebar] 侧线列表隐藏声明写入失败 —— 侧线会出现在官方会话列表里:',
+          String((err && err.message) || err))
+      }
+    }
+
+    // --- 侧线「继承段不显示」（2026-09-30，用户诉求「有一定的上下文但是不显示」）-----
+    // 官方没有消息级过滤位（`conversation.content` 的 props 只有 variant/phase/hero），
+    // 所以「模型看得见、界面不画」只能在**显示层**按继承边界裁。边界不用猜，官方 fork
+    // 时就把答案写进了 child 自己的日志（S9 / 官方 `buildForkSeed` 实测结论）：
+    //   · 继承前缀的末尾插一条 `session/end-seed{inherited:true}` 标记，其 seq = 边界；
+    //   · 标记之前的轮次就是继承段，标记之后才是侧线自己的。
+    // 两条互补判据（与官方窗口分页语义对齐，缺一不可）：
+    //   ① 窗口里**看得到标记** ⇒ 继承段轮数 = 标记之前的最大轮号（精确）；
+    //   ② 窗口里**看不到标记**（分页只加载了尾部）⇒ 首轮号 > 1 就说明前面还有继承段，
+    //      轮数 = 首轮号 - 1；首轮号是 1 则说明窗口从头开始，没有继承段。
+    // 刻意**不**在这里做任何隐藏动作：只算出「第几轮之前属于继承段」，怎么用交给渲染层
+    // （当前是侧线容器内的 CSS 折叠），这样判据能被单测逐条钉住。
+    const sideChatInheritedTurns = eventSource => {
+      if (!eventSource || typeof eventSource.getSnapshot !== 'function') return 0
+      const window = eventSource.getSnapshot()
+      const entries = window && Array.isArray(window.entries) ? window.entries : null
+      if (entries === null) return 0
+      let minTurn = null
+      let lastTurnBeforeMarker = null
+      for (const entry of entries) {
+        // transient（流式增量）不是持久事件，不参与轮次判定。
+        if (!entry || entry.type !== 'event' || !entry.event) continue
+        const event = entry.event
+        if (event.type === 'session/end-seed') {
+          if (event.data && event.data.inherited === true) return lastTurnBeforeMarker === null ? 0 : lastTurnBeforeMarker
+          continue
+        }
+        const turn = event.data && typeof event.data.turn === 'number' ? event.data.turn : null
+        if (turn === null) continue
+        if (minTurn === null || turn < minTurn) minTurn = turn
+        if (lastTurnBeforeMarker === null || turn > lastTurnBeforeMarker) lastTurnBeforeMarker = turn
+      }
+      if (minTurn !== null && minTurn > 1) return minTurn - 1
+      return 0
+    }
+
+    /**
+     * 折叠继承段的 CSS：官方每一行都带 `data-chat-turn`（轮号），而 CSS 没有数值比较
+     * 选择器 ⇒ 逐轮枚举。轮数异常大时**放弃折叠**（宁可不折叠，也不生成上千条选择器）。
+     */
+    const SIDECHAT_FOLD_MAX_TURNS = 200
+    const sideChatInheritedCss = turns => {
+      if (!Number.isInteger(turns) || turns <= 0 || turns > SIDECHAT_FOLD_MAX_TURNS) return ''
+      const selectors = []
+      for (let turn = 1; turn <= turns; turn += 1) {
+        selectors.push(`.dsh-sidebar-sidechat-body [data-chat-turn="${turn}"]`)
+      }
+      return `${selectors.join(',')}{display:none}`
+    }
+
     /**
      * 决策⑥（M2 设计 §8）/ S9 的最小补偿：侧线创建后清掉从父会话**继承来的 goal**。
      *
@@ -128,9 +223,14 @@ window.__ModuleLoader__.load({
         if (next === sideChatRegistry.value) return
         sideChatRegistry.value = next
         try { localStorage.setItem(SIDECHAT_REGISTRY_KEY, JSON.stringify(next)) } catch { /* 私有模式：仅内存生效 */ }
+        publishSideChatHidden(next)
         for (const listener of sideChatRegistry.listeners) listener()
       },
     }
+
+    // 启动即对账：声明是**持久化**的，官方列表补丁在首屏就按它过滤 —— 刷新后
+    // 侧线不会「先闪进列表、再消失」。已有侧线（本次改动之前建的）也在此一次性收编。
+    publishSideChatHidden(sideChatRegistry.value)
 
     /** The registered side lines of one parent, newest last; never undefined. */
     const sideChatLinesFor = (registry, parentSessionId) => {
@@ -1814,6 +1914,29 @@ window.__ModuleLoader__.load({
       function useSideChatRegistry() {
         return react.useSyncExternalStore(sideChatRegistry.subscribe, sideChatRegistry.get)
       }
+
+      /**
+       * 侧线继承段的轮数（0 = 没有继承段 / 还没算出来）。
+       *
+       * **为什么订阅而不是只在挂载时算一次**：事件窗口是分页加载的 ——
+       * 标记（`session/end-seed{inherited:true}`）可能晚于首帧到达，
+       * 只在挂载时算会让「先打开侧线、后加载到标记」这条路径永远不折叠。
+       */
+      function useSideChatInheritedTurns(reference) {
+        const [turns, setTurns] = react.useState(0)
+        react.useEffect(() => {
+          if (reference === null) {
+            setTurns(0)
+            return undefined
+          }
+          const source = reference.binding && reference.binding.eventSource
+          const compute = () => setTurns(sideChatInheritedTurns(source))
+          compute()
+          if (!source || typeof source.subscribe !== 'function') return undefined
+          return source.subscribe(compute)
+        }, [reference])
+        return turns
+      }
       /**
        * 主视图会话 id。判据与官方 ui-session 的 publishMain 同款：
        * `retainedBy.mainView > 0`（retain 源 `'mainView'` 由官方 ui-workspace
@@ -2441,6 +2564,9 @@ window.__ModuleLoader__.load({
           }
         }, [activeChildId, visible])
 
+        // 继承段轮数：模型照旧看得见父历史（那是 fork 的语义），界面只画侧线自己的轮次。
+        const inheritedTurns = useSideChatInheritedTurns(reference)
+
         react.useEffect(() => {
           if (reference === null) return undefined
           let live = true
@@ -2515,8 +2641,15 @@ window.__ModuleLoader__.load({
           head,
           // 决策②：把「继续」的真实行为写在脸上（S8 实测：一句「继续」会让侧线接着做
           // 父任务）。泛泛的「这是侧线」没用，要写具体行为。
+          // 折叠生效时补一句「上文折叠了几轮」—— 用户看不到继承段，但必须知道它还在
+          // （模型仍然带着它），否则会把「侧线不知道我刚才干了什么」当成 bug。
           react.createElement('div', { className: 'dsh-sidebar-sidechat-note' },
-            '侧线继承主会话的历史：说「继续」等于接着做主线未完成的活；只想问问题就直接问。'),
+            inheritedTurns > 0
+              ? `侧线继承主会话的历史（上文已折叠 ${inheritedTurns} 轮，模型仍然看得见）：说「继续」等于接着做主线未完成的活；只想问问题就直接问。`
+              : '侧线继承主会话的历史：说「继续」等于接着做主线未完成的活；只想问问题就直接问。'),
+          // 折叠继承段：作用域限定在侧线面板内（`.dsh-sidebar-sidechat-body`），
+          // 主会话与官方 subagent 会话一行都不受影响。
+          inheritedTurns > 0 && react.createElement('style', null, sideChatInheritedCss(inheritedTurns)),
           react.createElement('div', { className: 'dsh-sidebar-sidechat-body' }, body))
       }
 

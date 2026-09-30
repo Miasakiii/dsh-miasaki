@@ -73,6 +73,47 @@ const formatTime = value => new Date(value).toLocaleString('zh-CN', { month: 'nu
 const currentThread = () => state.workspace?.threads.find(thread => thread.id === state.activeId) ?? state.workspace?.threads[0] ?? null
 const threadListTitle = thread => thread.dshSessionTitle ?? thread.title ?? questionFor(thread)
 
+// --- 辅助对话（侧线）标注：消费 @miasaki/dsh-sidebar 的跨包声明 ----------------
+// 侧线**不在官方会话列表**里出现（本仓「不占会话记录」的落点），但**画布必须照旧显示它** ——
+// 画布走宿主 `ctx.sessions.list()`，与官方列表的可见性判据无关，这条线从来不归列表管。
+// 这里补的是**可辨识性**：官方 fork 出的 child 与用户手动拉的分支，在 header 上完全一样
+// （都是 `parentSession` + `isSeeded`）⇒ **宿主侧区分不了**，唯一判据就是 sidebar 写下的声明。
+//
+// 契约（跨包、**可选**依赖，与 desktop 线 `patches/dsh-client-ui-workspace` 读的是同一份）：
+//   localStorage 键 `miasaki-sidebar:sidechat:hidden:v1` = JSON 字符串数组（侧线 child 会话 id）。
+// 读不到 / 坏掉 ⇒ 画布只是没有标注，其余行为一字不变 —— 本线的显示权从不依赖别人的线。
+const SIDECHAT_HIDDEN_KEY = 'miasaki-sidebar:sidechat:hidden:v1'
+let sideChatRaw = null
+let sideChatIdSet = new Set()
+
+/**
+ * 侧线 child 会话 id 集合。
+ * 带「上一次读到的原始串」缓存：渲染每帧都会问一次，不能每帧 JSON.parse。
+ */
+function sideChatSessionIds() {
+  let raw = null
+  try {
+    raw = localStorage.getItem(SIDECHAT_HIDDEN_KEY)
+  } catch { /* 存储被禁用：按「没有声明」继续 */ } // guard-ok: 与同文件既有 localStorage 降级同形（rememberBranchAnchor / persistCardPositions），标注是可选项，画布显示权不依赖别线
+  if (raw !== sideChatRaw) {
+    sideChatRaw = raw
+    const next = new Set()
+    if (raw !== null) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) for (const id of parsed) if (typeof id === 'string' && id !== '') next.add(id)
+      } catch (error) {
+        console.warn('[canvas] 辅助对话声明不是合法 JSON，按无标注继续：', error)
+      }
+    }
+    sideChatIdSet = next
+  }
+  return sideChatIdSet
+}
+
+/** 这条线是不是辅助对话（侧线）。声明缺席时恒为 false。 */
+const isSideChatThread = thread => thread?.dshSessionId != null && sideChatSessionIds().has(thread.dshSessionId)
+
 // Sidebar thread list: root lines ordered by recent activity, each branch
 // nested under its parent so the canvas lineage stays readable off-canvas.
 // Orphaned branches (parent already archived) surface as roots.
@@ -109,7 +150,13 @@ function threadTreeHtml(threads) {
     const isMerge = thread.mergeState != null
     const isBranch = thread.parentId !== null
     const absorbed = (thread.absorbedBy?.length ?? 0) > 0
-    const badge = live ? '<i class="tree-live">回复中</i>' : isMerge ? '<i class="tree-merge" title="合并节点">◆</i>' : isBranch ? '<i>分支</i>' : ''
+    const isSideChat = isSideChatThread(thread)
+    // 辅助对话优先于「分支」：它确实是分支，但用户要一眼看出这是侧线。
+    const badge = live
+      ? '<i class="tree-live">回复中</i>'
+      : isSideChat
+        ? '<i class="tree-sidechat" title="辅助对话：从主会话 fork 出的侧线 —— 不占官方会话列表，但在这里照常可见">辅助对话</i>'
+        : isMerge ? '<i class="tree-merge" title="合并节点">◆</i>' : isBranch ? '<i>分支</i>' : ''
     const classes = ['tree-row']
     if (thread.id === state.activeId) classes.push('active')
     if (depth > 0) classes.push('is-branch')
@@ -894,6 +941,8 @@ function conversationCards(threads) {
         processCount,
         merge,
         topicColor: thread.color ?? '#3478f6',
+        // 辅助对话（侧线）标注：判据来自 sidebar 的跨包声明（见 sideChatSessionIds）。
+        sideChat: isSideChatThread(thread),
       })
     }
     const liveReply = state.liveReplies.get(thread.dshSessionId)
@@ -1114,7 +1163,7 @@ function conversationCard(card, graph) {
   return `<article class="thread-card ${selected}${multiSelected}${isMergeNode ? ' is-merge-node' : ''}" data-card-id="${escapeHtml(card.id)}" data-position-key="${escapeHtml(card.positionKey)}" data-thread="${card.dshThreadId}" style="left:${card.position.x}px;top:${card.position.y}px;--thread-color:${escapeHtml(card.topicColor ?? '#3478f6')}">
     <button class="node-handle" data-drag-card="${card.id}" aria-label="拖动 ${escapeHtml(card.question)}" title="拖动卡片"></button>
     ${continueButton}${foldButton}${branchButton}${mergeButton}
-    <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}${absorbedBadge}</div>
+    <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${card.turnIndex === 0 && card.sideChat === true ? '<span class="sidechat-badge" title="辅助对话：从主会话 fork 出的侧线 —— 不占官方会话列表，但在这里照常可见">辅助对话</span>' : ''}${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}${absorbedBadge}</div>
     <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}${retrySendButton}</div>
     <div class="thread-answer">${card.answer === null ? (card.error === null ? '<p class="thread-answer-empty">等待助手回复</p>' : '') : card.answer.pending && card.answer.text === '' ? '<p class="thread-answer-pending">正在回复</p>' : `${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="thread-answer-pending">正在回复</p>' : ''}`}${card.error === null ? '' : `<p class="thread-answer-error" title="${escapeHtml(card.error.text)}">本轮失败：${escapeHtml(card.error.text)}</p>`}</div>
     <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="open-dsh" data-thread="${card.dshThreadId}" data-seq="${Number.isInteger(card.sourceSeq) ? card.sourceSeq : ''}" title="在 DSH 中打开" aria-label="在 DSH 中打开"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v6.5A1.5 1.5 0 0 0 4.5 13H11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M9.5 3.5h3v3M12.4 3.6 7.5 8.5"/></svg>DSH</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
@@ -1500,7 +1549,8 @@ function renderThread() {
     ? `<div class="detail-lineage"><span class="detail-lineage-label">合并来源</span>${directSources.map(source => `<button type="button" data-action="reveal-merge" data-thread="${source.id}" title="跳转到 ${escapeHtml(source.title)}">${escapeHtml(source.title)}${source.mergeState ? ' ◆' : ''}</button>`).join('')}<button type="button" class="detail-lineage-expand" data-action="toggle-lineage" aria-expanded="${state.expandLineage === true ? 'true' : 'false'}">${state.expandLineage === true ? '收起传递血缘' : `传递血缘${transitive.length > 0 ? ` (${transitive.length})` : '…'}`}</button></div>${transitive.length > 0 ? `<div class="detail-lineage-transitive">${transitive.map(item => `<button type="button" data-action="reveal-merge" data-thread="${item.id}" title="跳转到 ${escapeHtml(item.title)}">${'· '.repeat(Math.min(item.depth, 4))}${escapeHtml(item.title)}${item.mergeState ? ' ◆' : ''}</button>`).join('')}</div>` : ''}`
     : absorbedByLine.length > 0 ? `<div class="detail-lineage"><span class="detail-lineage-label">已被合并吸收</span>${absorbedByLine.map(item => `<button type="button" data-action="reveal-merge" data-thread="${item.id}" title="跳转到合并节点 ${escapeHtml(item.title)}">◆ ${escapeHtml(item.title)}</button>`).join('')}</div>`
     : ''
-  const badge = isMerge ? '合并' : thread.parentId === null ? '会话' : '分支'
+  // 辅助对话优先于「分支」：详情页也要一眼看出这是侧线。
+  const badge = isMerge ? '合并' : isSideChatThread(thread) ? '辅助对话' : thread.parentId === null ? '会话' : '分支'
   return `<section class="detail-view"><header class="detail-head"><div class="detail-head-title"><div class="detail-head-meta"><span class="detail-badge">${badge}</span>${thread.dshSessionTitle ?? thread.title ? `<span class="detail-subtitle">${escapeHtml(thread.dshSessionTitle ?? thread.title)}</span>` : ''}</div><h1>${escapeHtml(questionFor(thread))}</h1>${lineage}</div><div class="detail-head-actions"><button data-action="open-dsh" data-thread="${thread.id}" data-seq="${Number.isInteger(latestAssistantSeq) ? latestAssistantSeq : ''}" title="在原生对话中打开此会话">在 DSH 中打开</button><button data-action="open-branch" data-thread="${thread.id}" title="基于最新回答创建分支">创建分支</button><button class="primary" data-action="show-canvas">返回画布</button></div></header><div class="detail-scroll">${messages.map(message => threadMessage(thread, message)).join('') || '<div class="note-empty">等待这条会话的第一条消息。</div>'}</div><form class="message-composer" data-compose="${thread.id}"><textarea maxlength="4000" placeholder="继续当前会话…" ${waiting ? 'disabled' : ''}></textarea><button class="primary" type="submit" ${waiting ? 'disabled' : ''}>${waiting ? '等待回复' : '发送'}</button></form></section>`
 }
 
@@ -2240,6 +2290,15 @@ app.addEventListener('submit', event => {
   const text = input.value.trim()
   input.value = ''
   void sendMessage(thread, text).catch(setError)
+})
+
+// 跨文档声明同步：sidebar 在**主页面**（父文档）写声明，本页是 iframe ——
+// 同源不同文档，所以 storage 事件会到达这里（同文档写自己是收不到的）。
+// 收到就重渲染：新建/删除侧线后画布标注立即跟上，不必等下一次数据帧。
+window.addEventListener('storage', event => {
+  if (event.key !== null && event.key !== SIDECHAT_HIDDEN_KEY) return
+  sideChatRaw = null // 丢缓存，强制下次读取重算
+  render()
 })
 
 window.addEventListener('message', event => {

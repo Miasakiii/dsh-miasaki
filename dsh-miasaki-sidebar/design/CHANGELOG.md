@@ -2,6 +2,95 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-09-30（续二）· **辅助对话终于是「干净的侧边会话页」：不占会话记录 + 继承段不显示**
+
+**用户原话**：「辅助对话怎么还是有记录，会上会话记录，我要干净的侧边会话页，有一定的上下文但是不显示。
+不是要你参考 zcode 的官方仓库了吗」。
+
+**先说清上一轮错在哪**：2026-09-30 那次「参考 ZCode 官方仓库」的复核**只产出了文档** —— §5.1(D) 把 ZCode 的三条机制
+（taskType 不入列表 / providerContextOnly 投影 / 尾部边界声明）逐条对账成「DSH 侧全部缺席」，然后把它们写成
+「向上游提需求时的参照物」。**结论写在纸上、功能没落地** —— 用户看到的现象自然一模一样。本轮把两条都做成实现。
+
+### 一、不占会话记录：壳侧补丁 + 跨包声明（不是插件能单独做到的事）
+
+**唯一生效的过滤点**在官方客户端壳里（全仓 Host 侧不过滤 origin，只跳过「冷会话且无 cwd」）：
+
+```js
+// dsh-client-ui-workspace/lib/client.js
+function sessionVisible(session, current, archived, archivedFilter) {
+    if (session.origin === "subagent") return false;   // ← 官方自己的「建了但不进列表」
+```
+
+官方**已经**为「建了会话但不进列表」留了形态，只是没向插件开放：`origin` 是宿主写入的持久 header 字段
+（合法取值只有 `'subagent'`，写入者只有 `dsh-subagent` 的 `childSessionMeta`，其注释写明
+`Navigation classification only`），而 `sessions.create` / `sessions.fork` 的入参里**都没有** origin
+（官方源码注释也写死：「A fork shares the lineage field **without** the origin」）。归档（archive）看似可行，
+但 `ArchivedSessionGate` 无条件装载 ⇒ 归档会话执行任何模型步都被 `agent/pre-step` 拒绝 —— **藏得住，聊不了**。
+插槽层同样无解：与会话行相关的 5 个插槽里 `list` 类只能**加**装饰/菜单/按钮，`single` 类要替换**整块**
+（分组 + 搜索 + 拖拽）。
+
+⇒ 落点：**desktop 线新增运行时补丁**
+[`patches/dsh-client-ui-workspace`](../../dsh-miasaki-desktop/patches/dsh-client-ui-workspace/README.md)
+（1 条编辑：`sessionVisible()` 的 origin 判定之后追加一条判定）+ 本插件写一份**跨包声明**。
+`sessionVisible()` 是分组列表、扁平列表、会话搜索**共用的唯一判据**，所以一处判定覆盖三条路径。
+
+**职责划分（刻意如此）**：插件只声明「哪些会话是我的侧线」这件**插件独占的知识**
+（localStorage 键 `miasaki-sidebar:sidechat:hidden:v1`，JSON 字符串数组；登记表每次变更后**全量重写**，
+插件加载时发布一次保证首屏正确 —— 已有侧线一并收编）；「继承段从哪开始」那种**从会话数据算得出来**的
+东西留给壳侧，不让插件跨进程搬运可推导的事实。**声明缺席即官方原状**：读不到、键不存在、JSON 坏、
+元素不是字符串 —— 一律按「没有侧线」处理，补丁不可能把任何人挡在列表外。
+
+> **同一份声明的第二个消费方（2026-09-30 当日追加）**：canvas 线的**会话布**用它做**反向**的事 ——
+> 侧线在画布上**照旧显示**（画布走宿主 `ctx.sessions.list()`，与列表可见性无关），只是据此打上
+> 「辅助对话」标注。**隐藏的只有官方列表与搜索**，画布不受影响；契约与判据见
+> [`dsh-miasaki-canvas/README.md`](../../dsh-miasaki-canvas/README.md) 与 `test/sidechat-badge.test.js`。
+
+### 二、继承段不显示：官方没有过滤位，所以边界要自己算准
+
+官方**没有**消息级过滤能力：`conversation.content` 的 props 只有 `{ variant, phase, hero }`，
+官方自己的隐藏判据 `isVisibleChatNode(node)` 也不在导出面上（且只认 `visibility`，插件无注入点）。
+`conversation.chat.node` 是 keyed 槽可以遮蔽，但**遮蔽即接管渲染，而官方组件同样不在导出面** ⇒ 接管等于自研整套消息/工具卡 UI。
+
+**边界不用猜**——官方 fork 时就把答案写进了 child 自己的日志（`buildForkSeed`）：继承前缀末尾插一条
+`session/end-seed{inherited:true}` 标记，其 seq 就是边界。插件能同步读到它（`reference.binding.eventSource`
+是 `ObservableSnapshot`）。`sideChatInheritedTurns(eventSource)` 用两条互补判据：
+
+| 窗口情况 | 判据 | 结果 |
+|---|---|---|
+| 看得到标记 | 标记之前的**最大轮号** | 精确（分页加载到标记后自动收敛） |
+| 看不到标记（只加载了尾部） | 首轮号 > 1 ⇒ 前面还有继承段 | 轮数 = 首轮号 − 1 |
+| 首轮号 = 1 / 空窗口 | 窗口从头开始或不是 fork 会话 | 0（**宁可不折叠，也绝不折掉用户自己的轮次**） |
+
+**折叠方式**：侧线容器内注入 CSS，按官方行自带的 `data-chat-turn`（= `turnOf(node) → location.turn.turn`，
+**已源码核实是会话轮号**）逐轮隐藏 1..N。作用域限定 `.dsh-sidebar-sidechat-body` ⇒ 主会话与官方 subagent
+会话一行都不动；不用 `!important`、不做 DOM 扫描（`MutationObserver`/`querySelector` 全库禁用于本功能），
+所以官方样式演进时会**失效**而不是「打赢官方」。轮数超 200 直接放弃折叠（不生成上千条选择器）。
+侧线头同时写明「上文已折叠 N 轮，**模型仍然看得见**」—— 用户看不到继承段，但必须知道它还在，
+否则会把「侧线不知道我刚才干了什么」当成 bug（S8 的越界路径也仍是真风险，文案保留）。
+
+### 三、为什么不改用官方 subagent（本轮源码级复核过，明确排除）
+
+官方确实有一条「不占列表」的原生路径：`ctx.subagents.startContinuable({ provider: 'fork' })` +
+`ctx.sidebarRight.openResource('dsh-resource://subagentchat/...')`（`origin:'subagent'` 硬过滤 + 官方
+右栏聊天 tab，agent-team 的成员就是它）。**不采用的三条理由**：
+
+1. **创建即需首条 prompt**（`SubagentStartRequest.prompt` 必填）⇒ 空侧线开不出来，用户点「新建侧线」
+   时还没有问题；要么逼用户先写一句，要么塞一条会显示出来、还会白跑一轮模型的占位。
+2. **权限 / preset / 工具作用域不继承**（子 agent 是全新作用域，`startContinuable` 要 host 半 + live `Agent`），
+   而 `sessions.fork` 是官方**自动继承**（S9 已证：preset / 权限 / 模型选择随 fork 带过去，**这正是侧线的核心价值**）。
+3. 它**同样不隐藏继承段**（官方 subagent 聊天面板渲染的是 child 完整时间线）—— 换过去并没有多解决问题，
+   反而把「同一条线」的语义换成「另一个人」。
+
+### 四、验证
+
+- 单测：`test/sidechat-registry.test.js` **19 → 31 例**（+12：声明 5 例 + 继承段判据 5 例 + 折叠 CSS 2 例，
+  含「残缺形态被容忍」「残缺事件不误判」「轮数异常放弃折叠」等反例）；`verify-all sidebar` **13/13**；
+- `verify-all desktop` **38 → 39**（新增 `patches/dsh-client-ui-workspace` 的离线自证项：由 baseline 重建 == 记录 SHA + `vm.Script` 语法闸门）；
+- `verify-all repo` **6/6**；补丁已在**运行环境**应用（`node patch.mjs apply` → `patched`，备份 `.dsh-bak` 在场）；
+- **实机待验（需用户刷新 miasaki 桌面端）**：① 左侧会话列表与会话搜索里**不再出现侧线**（含本次改动之前
+  建的那些）；② 侧线面板打开即只有本侧线的问答，继承段被折叠，侧线头显示「上文已折叠 N 轮」；
+  ③ 主会话列表本身**零变化**（插件没装时补丁是空操作）。
+
 ## 2026-09-30（续）· 决策⑥ 落地：侧线创建后清掉继承来的 goal（最小补偿）
 
 **触发**：M2 设计文档 §8 决策⑥ / S9 取证结论早在 2026-09-28 就写明了「建议做最小补偿」，

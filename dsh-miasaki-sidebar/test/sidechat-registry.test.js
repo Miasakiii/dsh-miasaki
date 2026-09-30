@@ -27,7 +27,7 @@ function loadSideChatRegistry(localStorage) {
   assert.notStrictEqual(end, -1, 'client.js 里找不到模块级 store 锚点')
   const factory = new Function('localStorage',
     `${source.slice(start, end)}
-     return { sideChatRegistry, sideChatLinesFor, sideChatActiveFor, sideChatAddLine, sideChatSetActive, sideChatDropLine, SIDECHAT_REGISTRY_KEY, clearInheritedGoal }`)
+     return { sideChatRegistry, sideChatLinesFor, sideChatActiveFor, sideChatAddLine, sideChatSetActive, sideChatDropLine, SIDECHAT_REGISTRY_KEY, SIDECHAT_HIDDEN_KEY, sideChatHiddenIds, publishSideChatHidden, sideChatInheritedTurns, sideChatInheritedCss, clearInheritedGoal }`)
   return factory(localStorage)
 }
 
@@ -290,3 +290,165 @@ test('源码契约：已知限制如实写明 —— plan / todo 无客户端 AP
   assert.match(source, /plan \/ todo \*\*没有\*\*客户端 API|plan \/ todo 没有客户端 API/,
     '做不到的事要写清楚，而不是让用户以为「继承」是被设计成这样')
 })
+
+// --- 侧线「不占官方会话列表」声明（2026-09-30）--------------------------------
+// 官方把列表投影留在壳里（`dsh-client-ui-workspace` 的 `sessionVisible()`），插件没有
+// 「不进列表」的接口 ⇒ 约定一份 localStorage 声明：插件写 child id，壳侧补丁读它。
+// 这里钉住的是**插件到底声明了什么** —— 声明写错的症状是「侧线又出现在列表里」，
+// 不是崩溃，所以只靠肉眼验收抓不住。
+
+test('隐藏声明：登记表 → 去重排序的 child id 数组', () => {
+  const { sideChatHiddenIds, sideChatAddLine, sideChatSetActive, sideChatDropLine } = loadSideChatRegistry(makeStorage())
+  assert.deepStrictEqual(sideChatHiddenIds({}), [], '空表声明空数组')
+  let registry = sideChatAddLine({}, PARENT, CHILD_B, 2)
+  registry = sideChatAddLine(registry, PARENT, CHILD_A, 1)
+  registry = sideChatAddLine(registry, 'session-other-parent', CHILD_B, 3) // 跨父会话 + 重复 id
+  assert.deepStrictEqual(sideChatHiddenIds(registry), [CHILD_A, CHILD_B].sort(), '跨父会话取并集、去重、排序稳定')
+  registry = sideChatSetActive(registry, PARENT, CHILD_A)
+  assert.deepStrictEqual(sideChatHiddenIds(registry), [CHILD_A, CHILD_B].sort(), '切 active 不改变声明')
+  registry = sideChatDropLine(registry, PARENT, CHILD_A)
+  assert.deepStrictEqual(sideChatHiddenIds(registry), [CHILD_B], '删掉的侧线不再被声明')
+})
+
+test('隐藏声明：残缺登记形态被容忍 —— 一条坏数据不得丢整份声明', () => {
+  const { sideChatHiddenIds } = loadSideChatRegistry(makeStorage())
+  assert.deepStrictEqual(sideChatHiddenIds({
+    brokenNull: null,
+    brokenLines: { lines: 'not-an-array' },
+    mixed: { lines: [null, {}, { childSessionId: '' }, { childSessionId: 42 }, { childSessionId: 'session-keep' }] },
+  }), ['session-keep'])
+})
+
+test('隐藏声明：登记表每次变更后全量重写（不是增量）', () => {
+  const storage = makeStorage()
+  const { sideChatRegistry, sideChatAddLine, sideChatDropLine, SIDECHAT_HIDDEN_KEY } = loadSideChatRegistry(storage)
+  assert.deepStrictEqual(JSON.parse(storage.getItem(SIDECHAT_HIDDEN_KEY)), [], '加载即发布一次（空表 → 空数组）')
+  sideChatRegistry.update(reg => sideChatAddLine(reg, PARENT, CHILD_A, 1))
+  assert.deepStrictEqual(JSON.parse(storage.getItem(SIDECHAT_HIDDEN_KEY)), [CHILD_A], '新建侧线后声明跟上')
+  sideChatRegistry.update(reg => sideChatAddLine(reg, PARENT, CHILD_B, 2))
+  assert.deepStrictEqual(JSON.parse(storage.getItem(SIDECHAT_HIDDEN_KEY)), [CHILD_A, CHILD_B].sort())
+  sideChatRegistry.update(reg => sideChatDropLine(reg, PARENT, CHILD_A))
+  assert.deepStrictEqual(JSON.parse(storage.getItem(SIDECHAT_HIDDEN_KEY)), [CHILD_B],
+    '全量重写：删掉的侧线不残留在声明里（否则它会在列表里永久隐身）')
+})
+
+test('隐藏声明：已有侧线在插件加载时被一次性收编（含本次改动之前建的）', () => {
+  const storage = makeStorage({
+    'miasaki-sidebar:sidechat:v1': JSON.stringify({
+      [PARENT]: { activeChildId: CHILD_A, lines: [{ childSessionId: CHILD_A, createdAt: 1 }] },
+    }),
+  })
+  const { SIDECHAT_HIDDEN_KEY } = loadSideChatRegistry(storage)
+  assert.deepStrictEqual(JSON.parse(storage.getItem(SIDECHAT_HIDDEN_KEY)), [CHILD_A],
+    '老侧线必须在首屏就被收编 —— 否则刷新后它会先闪进列表再消失')
+})
+
+test('隐藏声明：写盘失败只留痕（后果是回到「侧线可见」的旧行为，不是数据损坏）', async () => {
+  const warnings = await withWarnings(async () => {
+    loadSideChatRegistry(makeStorage({}, { failWrite: true }))
+  })
+  assert.equal(warnings.length, 1, '写失败必须留痕 —— 静默吞错正是本仓明令禁止的形态')
+  assert.match(warnings[0], /侧线列表隐藏声明写入失败/)
+})
+
+test('源码契约：声明与登记表同源，且壳侧契约（键名/形态）写在源码里', () => {
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(source, /const SIDECHAT_HIDDEN_KEY = 'miasaki-sidebar:sidechat:hidden:v1'/,
+    '键名是跨包契约，必须与 desktop 线补丁逐字一致')
+  assert.match(source, /publishSideChatHidden\(next\)/, '登记表变更必须触发声明重写')
+  assert.match(source, /^ {4}publishSideChatHidden\(sideChatRegistry\.value\)$/m,
+    '插件加载时必须发布一次（首屏正确性靠它）')
+  assert.doesNotMatch(source, /sideChatHiddenIds[\s\S]{0,400}?console\.log/,
+    '声明是机器读的，不该往控制台刷日志')
+})
+
+// --- 侧线「继承段不显示」的判据（2026-09-30）-----------------------------------
+// 官方没有消息级过滤位，界面折叠只能在显示层做；而「从第几轮开始是继承段」必须算准，
+// 否则要么折掉用户自己的问题，要么一条都没折掉（后者是静默失效，肉眼极难发现）。
+
+/** 造一个最小事件窗口源（形态对齐 SessionEventSource 契约）。 */
+function makeEventSource(entries, hasMore = false) {
+  return {
+    getSnapshot: () => ({ entries, hasMore, revision: 1, change: { kind: 'replace', entries } }),
+  }
+}
+const durable = (type, data) => ({ type: 'event', event: { type, seq: 0, time: 0, data } })
+const turnStart = turn => durable('turn/start', { turn })
+const turnEnd = turn => durable('turn/end', { turn, reason: { kind: 'completed' } })
+const seedMarker = () => durable('session/end-seed', { inherited: true })
+
+test('继承段判据①：窗口里看得到 fork 标记 ⇒ 标记之前的最大轮号', () => {
+  const { sideChatInheritedTurns } = loadSideChatRegistry(makeStorage())
+  const source = makeEventSource([
+    turnStart(1), turnEnd(1),
+    turnStart(2), turnEnd(2),
+    seedMarker(),
+    turnStart(3), turnEnd(3),
+  ])
+  assert.equal(sideChatInheritedTurns(source), 2, '继承了两轮；标记之后的第 3 轮是侧线自己的')
+})
+
+test('继承段判据②：窗口看不到标记（只加载了尾部）⇒ 首轮号减一', () => {
+  const { sideChatInheritedTurns } = loadSideChatRegistry(makeStorage())
+  assert.equal(sideChatInheritedTurns(makeEventSource([turnStart(5), turnEnd(5)], true)), 4,
+    '分页只到第 5 轮 ⇒ 前面 1..4 轮属于继承段')
+})
+
+test('非 fork 会话 / 空窗口一律 0（宁可不折叠，也绝不折掉用户自己的轮次）', () => {
+  const { sideChatInheritedTurns } = loadSideChatRegistry(makeStorage())
+  assert.equal(sideChatInheritedTurns(makeEventSource([turnStart(1), turnEnd(1)])), 0, '从第 1 轮开始的窗口没有继承段')
+  assert.equal(sideChatInheritedTurns(makeEventSource([])), 0)
+  assert.equal(sideChatInheritedTurns(makeEventSource([seedMarker(), turnStart(1)])), 0, '标记在最前面 ⇒ 没有可折叠的前缀')
+})
+
+test('继承段判据：残缺事件形态被容忍，不抛也不乱折', () => {
+  const { sideChatInheritedTurns } = loadSideChatRegistry(makeStorage())
+  assert.equal(sideChatInheritedTurns(null), 0)
+  assert.equal(sideChatInheritedTurns({}), 0)
+  assert.equal(sideChatInheritedTurns({ getSnapshot: () => ({}) }), 0)
+  assert.equal(sideChatInheritedTurns({ getSnapshot: () => ({ entries: 'nope' }) }), 0)
+  assert.equal(sideChatInheritedTurns(makeEventSource([
+    null,
+    { type: 'transient', event: { type: 'assistant/live-chunk', data: { turn: 9 } } }, // 流式增量不参与判定
+    { type: 'event' },
+    durable('turn/start', {}), // 缺 turn 字段
+    durable('goal/change', { turn: 99 }), // 非轮次事件不参与
+    turnStart(7),
+  ])), 6, '只认持久事件的数字 turn')
+})
+
+test('折叠 CSS：逐轮枚举、限定侧线容器、轮数异常时放弃折叠', () => {
+  const { sideChatInheritedCss } = loadSideChatRegistry(makeStorage())
+  assert.equal(sideChatInheritedCss(0), '', '没有继承段就不产生样式')
+  assert.equal(sideChatInheritedCss(2),
+    '.dsh-sidebar-sidechat-body [data-chat-turn="1"],.dsh-sidebar-sidechat-body [data-chat-turn="2"]{display:none}')
+  assert.equal(sideChatInheritedCss(201), '', '超过上限宁可完全不折叠，也不生成上千条选择器')
+  assert.equal(sideChatInheritedCss(-1), '')
+  assert.equal(sideChatInheritedCss(1.5), '')
+  assert.doesNotMatch(sideChatInheritedCss(1), /:not\(/, '选择器要简单到不会牵连同容器内的其他行')
+})
+
+test('源码契约：折叠作用域只限侧线面板，且头注写明「模型仍看得见」', () => {
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(source, /className: 'dsh-sidebar-sidechat-body'/, '侧线正文容器必须仍在（CSS 作用域锚点）')
+  assert.match(source, /useSideChatInheritedTurns\(reference\)/, 'SideChatTab 必须按 reference 算继承段轮数')
+  assert.match(source, /上文已折叠 \$\{inheritedTurns\} 轮，模型仍然看得见/,
+    '用户看不到继承段，但必须被告知模型仍然带着它')
+  // 只查侧线自己的两段源码：本文件别处（终端 popover 等）本来就在用 DOM 观察，
+  // 断言整个文件会把别人的实现算到侧线头上。
+  const sideChatSection = source.slice(
+    source.indexOf('const SIDECHAT_HIDDEN_KEY'),
+    source.indexOf('// Module-level store for the content layer.'))
+  const tabSection = source.slice(
+    source.indexOf('function SideChatTab'),
+    source.indexOf('// --- 官方右栏 tab 类型注册'))
+  assert.notEqual(sideChatSection, '', '切片锚点失效（client.js 结构变了）')
+  assert.notEqual(tabSection, '', '切片锚点失效（SideChatTab 不见了）')
+  assert.doesNotMatch(sideChatSection + tabSection, /document\.querySelector|MutationObserver/,
+    '折叠走容器内 CSS，不做 DOM 扫描（否则会动到主会话与官方 subagent 会话）')
+  assert.doesNotMatch(sideChatSection, /!important/,
+    '不用 !important 硬压官方样式 —— 要能随官方样式演进而失效，而不是打赢它')
+})
+
+
+

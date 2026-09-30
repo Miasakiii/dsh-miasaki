@@ -324,6 +324,22 @@ real-user 输入、排除其后的 assistant/tool 增量；**没有任何轮数�
 可直接引用 ZCode 的 `providerContextOnly` 投影、`selectionSideChatHistoryMessages` 的稳定边界、以及 `TASK_LIST_SESSION_TYPES` 三个官方机制。
 **同时明确排除 (c) 的「少带上下文」变体**（D1：与 ZCode 相反，且在 DSH 里不可实现）。
 
+**(E) 2026-09-30 实施记录：两条用户诉求各自落地（本节的「全部缺席」不再是终局）。**
+用户第二轮反馈（「辅助对话怎么还是有记录，会上会话记录，我要干净的侧边会话页，有一定的上下文但是不显示」）
+把 (D) 的结论从「对账表」推进到「实现」——**(D) 的对账没错，错在只写到文档为止**。
+
+| 诉求 | 落点 | 关键事实（本轮源码级复核） |
+|---|---|---|
+| **不占会话记录** | desktop 线新增补丁 `patches/dsh-client-ui-workspace`（1 条编辑）+ 本插件写跨包声明 `miasaki-sidebar:sidechat:hidden:v1` | 唯一过滤点是壳侧 `sessionVisible()`；官方**已有**「建了但不进列表」形态（`origin === 'subagent'` 直接 false），但 `origin` 由宿主写入、`fork`/`create` 入参都没有它；归档能藏**但禁步**（`ArchivedSessionGate`）；5 个会话行插槽无「过滤一行」能力 ⇒ 官方不开口，插件只能借壳侧补丁开。**声明缺席即官方原状**（fail-safe） |
+| **继承段不显示** | 插件侧：`sideChatInheritedTurns()` 算边界 + 侧线容器内 CSS 按 `data-chat-turn` 折叠 | 官方**无**消息级过滤位（`conversation.content` props 只有 variant/phase/hero）；`conversation.chat.node` 可遮蔽但**遮蔽即接管渲染**，官方组件不在导出面 ⇒ 自研成本不可接受。边界自描述：`buildForkSeed` 在继承前缀末尾插 `session/end-seed{inherited:true}`，插件从 `binding.eventSource` 同步读到；`data-chat-turn` 经 `turnOf(node) → location.turn.turn` 核实为**会话轮号** |
+
+**净影响**：`(D) D4` 表的「❌ 无」两行有了**本仓自有的对等物**（壳侧补丁 = 我们自己的可见性判据入口；
+容器内 CSS 折叠 = 我们自己的投影策略）；向上游提需求（(A) 方案 d）时参照物不变，但现在**不必等上游**。
+
+**明确排除的替代**（详见 CHANGELOG 同日条目）：官方 continuable subagent 路径（`origin:'subagent'` 原生不占列表 +
+官方右栏聊天 tab）**不采用** —— 它①创建即需首条 prompt（空侧线开不出来）②权限/preset/工具作用域**不继承**
+（而 fork 是官方自动继承，这是侧线核心价值）③**同样不隐藏继承段**。
+
 ### 5.2 fork 会连「任务态」一起继承（S9 取证，2026-09-28）
 
 **结论先行：`fork` ≠「干净子会话」。** 宿主侧实现是 `buildForkSeed` = **整段事件日志前缀的物理拷贝、零类型过滤**（rc.2 `dsh-session/lib/types/fork.js:18-27`），

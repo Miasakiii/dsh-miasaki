@@ -41,6 +41,7 @@
     "dsh-miasaki-desktop/patches/dsh-client-ui-settings-models/baseline/client.patched.js",
     "dsh-miasaki-desktop/patches/dsh-client-ui-sidebar/baseline/client.original.js",
     "dsh-miasaki-desktop/patches/dsh-client-ui-trajectory/baseline/client.original.js",
+    "dsh-miasaki-desktop/patches/dsh-client-ui-workspace/baseline/client.original.js",
     "dsh-miasaki-desktop/plugins/dsh-session-log-move/README.md",
     "dsh-miasaki-desktop/plugins/dsh-session-log-move/cordis.patch.yml",
     "dsh-miasaki-desktop/plugins/dsh-session-log-move/lib/client.js",
