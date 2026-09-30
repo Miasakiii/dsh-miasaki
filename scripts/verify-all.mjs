@@ -125,6 +125,11 @@ function planFleet() {
   // handler，不起监听、不碰网络，故受限沙箱同样可跑；判据三条见测试文件头。
   checks.push({ line: 'fleet', name: 'syntax fleet-monitor/fence.cjs', cmd: process.execPath, args: ['--check', join(dir, 'fleet-monitor/fence.cjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'test fleet-monitor (信任围栏)', cmd: process.execPath, args: [join(dir, 'tests/fleet-monitor.test.mjs')], cwd: dir })
+  // K4（2026-09-30）：派单终态判定 —— 「CLI exit 0」不等于「健康空闲」：
+  // worker 自述受阻写在交付契约 tasks/<id>/result.json 的 status 里，过去被一律记成 idle，
+  // 面板与桌宠照常显示正常。同一文件顺带覆盖 workers/dispatch/{final-state,dispatch-task}.ps1
+  // 的语法（PowerShell 侧此前没有任何自动化检查）。
+  checks.push({ line: 'fleet', name: 'test dispatch-state (K4 派单终态)', cmd: process.execPath, args: [join(dir, 'tests/dispatch-state.test.mjs')], cwd: dir })
   // Bus validation is the fleet line's regression suite (F1 contract + G0 graph/event/result).
   checks.push({ line: 'fleet', name: 'validate-bus', cmd: process.execPath, args: [join(dir, 'workers/validate-bus.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'publish-pulse', cmd: process.execPath, args: [join(dir, 'workers/pulse/publish-pulse.mjs')], cwd: dir })
@@ -510,6 +515,15 @@ function planUsage() {
   // （2026-09-10 事故：报错落在 CSS 注释行、裸标识符看不懂）。都不碰 DSH 运行时，
   // 任意机器可复现；实机项（用量 Tab / 侧栏入口 / 账本续写）见 smoke-test-matrix.md。
   checks.push({ line: 'usage', name: 'syntax lib/index.js', cmd: process.execPath, args: ['--check', join(dir, 'lib/index.js')], cwd: dir })
+  // I5（2026-09-30）：本线此前是九线里**唯一没有同源围栏**的一条 —— exact 路由不经过
+  // 内核 `/api` 准入链，实测非环回 Host / 跨站两轴均返回 200，而 `POST /reset` 是
+  // 清空账本的写操作。围栏包装收在 register 一处（新增路由不会漏挂）。
+  checks.push({ line: 'usage', name: 'syntax lib/fence.js', cmd: process.execPath, args: ['--check', join(dir, 'lib/fence.js')], cwd: dir })
+  checks.push({ line: 'usage', name: 'test fence (I5 同源围栏)', cmd: process.execPath, args: [join(dir, 'test/fence.test.mjs')], cwd: dir })
+  // I1（2026-09-30）：账本目录名此前只有注释、没有闸门 —— 一次「顺手统一命名」就会让
+  // 全量历史统计清零且不报错（静默失效第 17 位）。抽成 lib/ledger-dir.js 后由测试钉住。
+  checks.push({ line: 'usage', name: 'syntax lib/ledger-dir.js', cmd: process.execPath, args: ['--check', join(dir, 'lib/ledger-dir.js')], cwd: dir })
+  checks.push({ line: 'usage', name: 'test ledger-dir (I1 账本身份)', cmd: process.execPath, args: [join(dir, 'test/ledger-dir.test.mjs')], cwd: dir })
   checks.push({ line: 'usage', name: 'syntax scripts/dedupe-usage-ledger.mjs', cmd: process.execPath, args: ['--check', join(dir, 'scripts/dedupe-usage-ledger.mjs')], cwd: dir })
   checks.push({ line: 'usage', name: 'verify-client-bundle (client 半装载契约)', cmd: process.execPath, args: [join(dir, 'scripts/verify-client-bundle.mjs'), join(dir, 'lib/client.js')], cwd: dir })
 }
@@ -640,6 +654,18 @@ function planRepo() {
     name: 'lock-sync (锁文件与 package.json 同步)',
     cmd: process.execPath,
     args: [join(ROOT, 'scripts', 'check-lock-sync.mjs')],
+    cwd: ROOT,
+  })
+  // 2026-09-30：文件形态（LF / 无 BOM / 末行换行）与**公开仓库脱敏**（`C:\Users\<真名>\…`）。
+  // 两者都是**成文但无闸门**的纪律：`.editorconfig` / `.gitattributes` 写着形态约定
+  // （ENGINEERING.md 还记着 CI 首跑因 CRLF 一次失败 8 项的旧账），脱敏则是 2026-09-29 起的
+  // 公开仓库要求、审计口径「人名零命中」此前全靠人记。存量 54 处（BOM/CRLF/无末行换行）
+  // 冻结在 scripts/style-baseline.json；脱敏类**刻意无基线**（新增即失败）。
+  checks.push({
+    line: 'repo',
+    name: 'style (文件形态 + 脱敏)',
+    cmd: process.execPath,
+    args: [join(ROOT, 'scripts', 'check-style.mjs')],
     cwd: ROOT,
   })
 }
