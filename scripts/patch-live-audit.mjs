@@ -51,6 +51,11 @@ const PATCH_ROOTS = [
   // 2026-09-24 三轮复审补入：`@yeesy369/dsh-browser-playwright` 双半补丁原在审计之外，
   // 而它被打回原版会让 web UI 连启动屏都过不去——离线全绿 + live 全 unknown 的盲区重现。
   { dir: join(ROOT, 'dsh-miasaki-shared-docs', 'dsh-platform', 'patches'), label: 'shared-docs' },
+  // 2026-09-30 补入：free-model 的**上游插件补丁**（`dsh-our-free-model`）原本完全在审计之外 ——
+  // 它改的是本机安装副本，而上游的**应用内升级必覆盖**清单内文件 ⇒ 那栏悄悄退化成上游原样
+  // （公告中心与首启弹窗回来了），本线却不崩不报错、离线自证照常全绿（静默失效第 6 位；
+  // 矩阵台账 J5 一直写着「常驻闸门」，但此前只在人记得手跑 `status` 时才存在）。
+  { dir: join(ROOT, 'dsh-miasaki-free-model', 'patches'), label: 'free-model' },
 ]
 
 /** CLI 布局安装根候选（npm 全局 / 显式覆盖）：<root>/@deepseek-ai/dsh/node_modules/<pkg>/<rel> */
@@ -70,6 +75,12 @@ function profileRoots() {
   if (process.env.MIASAKI_DSH_PROFILE_MODULES) roots.push(process.env.MIASAKI_DSH_PROFILE_MODULES)
   const profiles = join(homedir(), '.dsh', 'profiles')
   roots.push(join(profiles, 'node_modules'))
+  // 2026-09-30：`~/.dsh/local-plugins`（上游插件 `dsh-our-free-model` 装在这里，
+  // 与 profile 同为平坦布局 `<root>/<pkg>/<rel>`）。不补这一条，free-model 的上游补丁
+  // 即使接进清单也会被误报成 `missing`（「live 安装里找不到目标文件」）。
+  // 显式覆盖优先（自证脚本靠它把一个**假 local-plugins 根**排在真实根之前）。
+  if (process.env.MIASAKI_LOCAL_PLUGINS) roots.push(process.env.MIASAKI_LOCAL_PLUGINS)
+  roots.push(join(homedir(), '.dsh', 'local-plugins'))
   try {
     for (const name of readdirSync(profiles).sort()) roots.push(join(profiles, name, 'node_modules'))
   } catch { /* profiles 目录不存在：只保留上面的候选 */ }
@@ -168,9 +179,14 @@ async function main() {
         rows.push({ ...entry, pkg, baseline, label, rel, state: 'missing', detail: 'live 安装里找不到目标文件' })
         continue
       }
-      const { state } = await target.classify(await readFile(located.path, 'utf8'))
+      // `detail` 一并取用：它是区分「上游原版（重打即可）」与「锚点漂移（需重新对齐）」
+      // 的唯一信息 —— 两者都是「未生效」，处置方式却不同（2026-09-30 自证时发现此处只取了 state）。
+      const { state, detail } = await target.classify(await readFile(located.path, 'utf8'))
       // 基线对得上却没打上 = 真回归；版本漂移导致的未打 = 升级后需重打（告警）。
-      const drift = state !== 'patched' && liveVersion !== null && baseline !== liveVersion
+      // 只有**声明了 DSH 基线**的补丁才谈得上 drift（DSH 升级 ⇒ 需按新基线重打）。
+      // 上游插件补丁（free-model 的 dsh-our-free-model）没有 DSH 基线 —— 它的基线是上游自身
+      // 版本，硬塞 DSH 版本会把「真回归」误判成「升级待重打」（playwright 补丁当初的盲区正是此形态）。
+      const drift = state !== 'patched' && liveVersion !== null && typeof baseline === 'string' && baseline !== liveVersion
       rows.push({
         ...entry,
         pkg,
@@ -178,6 +194,7 @@ async function main() {
         label,
         rel,
         state,
+        detail,
         layout: located.layout,
         path: located.path,
         regression: state !== 'patched' && !drift && state !== 'missing',
@@ -194,11 +211,16 @@ async function main() {
     for (const row of rows) {
       const name = row.label ? `${row.pkg} (${row.label})` : (row.pkg ?? row.dir)
       const head = `${STATE_MARK[row.state] ?? '?'} ${row.state.padEnd(8)} ${name}`
+      // 无 DSH 基线的补丁不显版本，改标「无 DSH 基线」—— 免得读者以为 baseline 字段漏了。
+      const baselineNote = typeof row.baseline === 'string' ? `baseline ${row.baseline}，` : ''
       const tail = row.state === 'patched'
-        ? `（baseline ${row.baseline}，${row.layout} 布局）`
+        ? `（${baselineNote}${row.layout} 布局${typeof row.baseline === 'string' ? '' : '，无 DSH 基线'}）`
         : row.state === 'missing'
           ? `—— ${row.detail ?? ''}`
-          : `（baseline ${row.baseline}${row.regression ? '，与 live 版本一致却未生效——回归！' : row.drift ? `，live 已升级，需重打` : ''}）`
+          : `（${baselineNote}${row.regression
+            ? (typeof row.baseline === 'string' ? '与 live 版本一致却未生效——回归！' : '未生效——回归！')
+              + (row.detail ? `（${row.detail}）` : '（上游升级会冲掉它）')
+            : row.drift ? 'live 已升级，需重打' : (row.detail ?? '')}）`
       console.log(`${head} ${tail}`)
       if (row.path && row.state !== 'patched') console.log(`           ${row.path}`)
     }

@@ -134,6 +134,38 @@ export function applyTo(text) {
   return { text: out, done };
 }
 
+// ── live 审计契约（`scripts/patch-live-audit.mjs` 消费，2026-09-30 接入）────────
+//
+// 为什么必须接进来：本补丁改的是**上游插件的本机安装副本**，而上游的**应用内升级会覆盖
+// 清单内文件**（见文件头 §为什么是补丁）⇒ 那栏会悄悄退化成上游原样（公告中心与首启
+// 弹窗回来了），而本线**不崩不报错、离线自证照常全绿**（`verify` 只证「规则与基线自洽」，
+// 不查 live 安装）。这是静默失效第 6 位 —— 矩阵台账 J5 一直写着「常驻闸门」，
+// 但**此前只在人记得手跑 `status` 时才存在**。契约与 desktop / dual-model / shared-docs
+// 的补丁同款（见 patch-live-audit.mjs 头部「目标契约」）。
+//
+// 注意：本补丁**没有 DSH 基线** —— 它的基线是上游插件自身的版本，不是 DSH 版本。
+// 因此不导出 `BASELINE_DSH_VERSION`，审计侧据此把「未打上」判为**真回归**而非
+// 「升级待重打」（playwright 补丁当初的审计盲区正是这个形态）。
+
+/** live 目标目录名（`~/.dsh/local-plugins/<TARGET_PACKAGE>/<TARGET_RELATIVE>`）。 */
+export const TARGET_PACKAGE = 'dsh-our-free-model';
+
+/** live 目标文件（相对上面那个目录）。 */
+export const TARGET_RELATIVE = 'client.js';
+
+/**
+ * 把五处锚点的状态汇总成 live 审计要的三态。
+ * @returns `{ state: 'patched' | 'original' | 'unknown', detail? }`
+ */
+export function classify(text) {
+  const rows = plan(text);
+  if (rows.some(row => row.state === 'drift')) {
+    return { state: 'unknown', detail: '锚点漂移，上游可能已升级，需重新对齐' };
+  }
+  if (rows.every(row => row.state === 'applied')) return { state: 'patched' };
+  return { state: 'original', detail: '上游原版，补丁未打上' };
+}
+
 // ── CLI ────────────────────────────────────────────────────────────────────
 
 const isCli = process.argv[1] !== undefined

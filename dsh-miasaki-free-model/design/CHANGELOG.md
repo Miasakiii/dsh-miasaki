@@ -6,6 +6,39 @@
 
 ---
 
+## 2026-09-30 · J5 闭环：上游补丁终于进了 live 审计
+
+**触发**：矩阵台账 J5 早就写着「本项是**常驻闸门**（上游每次自升级都要重跑）」，但**没有任何自动化** ——
+它只在你记得手跑 `node patches/dsh-our-free-model/patch.mjs status` 时才存在。失效形态极隐蔽：
+上游的应用内升级（`src/updater.js` 的 `installStaged`）**必覆盖清单内文件** ⇒ 那栏悄悄退化成上游原样
+（公告中心与首启弹窗回来了），而本线**不崩不报错、`verify-all` 照常 15/15** —— 离线 `verify` 只证
+「规则与基线自洽」，**不查 live 安装**。这是静默失效第 6 位。
+
+**改了什么**（三处，都在既有工具上接线，不新建机制）：
+
+| 位置 | 改动 |
+|---|---|
+| `patches/dsh-our-free-model/patch.mjs` | 导出 live 审计契约：`TARGET_PACKAGE` / `TARGET_RELATIVE` / `classify(text)`（复用既有 `plan()`：有漂移 ⇒ `unknown`；全 applied ⇒ `patched`；其余 ⇒ `original`）。**刻意不导出 `BASELINE_DSH_VERSION`** —— 本补丁的基线是上游插件版本，不是 DSH 版本 |
+| `scripts/patch-live-audit.mjs` | ① `PATCH_ROOTS` 补 `dsh-miasaki-free-model/patches`（此前该目录**完全在审计之外**）；② `profileRoots()` 补 `~/.dsh/local-plugins`（上游插件装在这里，同 profile 平坦布局；不补这条，即使接进清单也会误报 `missing`），并支持 `MIASAKI_LOCAL_PLUGINS` 显式覆盖（供自证注入）；③ **drift 判定加 `typeof baseline === 'string'` 前提** —— 无 DSH 基线的补丁，「未打上」应判**真回归**而不是「升级待重打」（playwright 补丁当初的审计盲区正是此形态） |
+
+**故障注入自证**（用真实的上游原版备份 `client.js.ofm-patchbak` 造一个假 `local-plugins` 根）：
+
+| 注入 | 结果 |
+|---|---|
+| 上游原版 | `⚪ original` +「未生效——回归！（上游原版，补丁未打上）」+ **exit 1** ✅ |
+| 垃圾文本（锚点漂移） | `🟡 unknown` +「未生效——回归！（锚点漂移，上游可能已升级，需重新对齐）」+ **exit 1** ✅ |
+| 去掉假根（真实安装） | `✅ patched`，**11 目标 / 10 件在册补丁全 patched** + exit 0 ✅ |
+
+> **自证顺带抓到一处真缺陷**：审计侧原本是 `const { state } = await target.classify(...)` ——
+> **只取 `state`、丢掉 `detail`**，于是「上游原版」与「锚点漂移」在输出上完全一样（都只显示「未生效」），
+> 而两者的处置方式不同（**重打** vs **重新对齐锚点**）。已改为解构 `detail` 并显示 ——
+> 这一处只有跑故障注入才会暴露（正常路径下两者都是 `patched`，`detail` 恒为 `undefined`）。
+
+**现在的口径**：`node scripts/patch-live-audit.mjs` 一次覆盖 **11 个目标 / 10 件在册补丁**；
+本补丁那行显示为「`profile 布局，无 DSH 基线`」。**上游每次自升级后跑一次即可** —— 这才是 J5 说的「常驻闸门」。
+
+---
+
 ## 2026-09-29 · 迁出收尾：全量 161 项 PASS + 核销一条守卫基线欠账
 
 > 第九线迁出（09-28）之后的**收尾轮**：仓库级闸门复跑 + 文档归一。本线代码只动了一行注释。
