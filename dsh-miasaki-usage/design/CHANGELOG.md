@@ -7,6 +7,103 @@
 
 ---
 
+## 2026-09-30（续二）· 静默失效 #18：拿不到 profile 名时不再假装隔离
+
+**问题**：`resolveProfileName` 三档（宿主 `profileContext` → 环境变量 `DSH_PROFILE` → 兜底）都拿不到时
+返回裸字符串 `'default'`，账本落 `…/default/`，而页面照常显示
+「口径：本页只统计当前 profile（default）的消耗 · **与其它 profile 的账本完全隔离**」。
+
+**这句话是假的**：那个桶不是隔离区，而是**共享兜底区** —— 宿主既没提供 `profileContext`、
+环境也没有 `DSH_PROFILE` 时，**多个不同环境会写进同一个桶**。失效形态正是本仓最警惕的那一类：
+**不报错、界面正常、账在混**。
+
+**修法（不假装，而不是换桶）**：目录名仍是 `default` —— 既有账本不能丢（换桶就是「搬家」，
+与 I1 那条纪律同一个道理）。改的是**口径的如实性**：
+
+- `resolveProfileKey(ctx, env)` 返回 `{ name, source }`，`source ∈ profileContext | env | unknown`；
+- `unknown` 档目录照旧落 `default`，但**来源如实标注**，随 `/global` 下发 `profileSource`；
+- 页面据此分支：`unknown` ⇒「口径：未能识别当前 profile（宿主未提供 profileContext、环境亦无
+  DSH_PROFILE）—— 当前落在兜底桶 default，注意这可能与其它环境混账，并非真隔离」；其余 ⇒ 原有文案。
+  底部那段长说明同批同样分支，避免第二处继续宣称隔离。
+
+**顺带**：`resolveProfileName` / `safeProfileDir` 一并移入 `lib/ledger-dir.js`（与账本根目录名同属
+「账本身份」—— 抽在一起才测得到）。
+
+**闸门** `test/ledger-dir.test.mjs` **5 → 9 例**（+4）：`profileContext` 优先且 trim / 环境变量档 /
+**三档都拿不到 ⇒ `unknown`**（四种输入形态）/ `safeProfileDir` 是**安全边界**
+（`@miasaki/dsh-x` ⇒ `_miasaki_dsh-x`、`../../etc` ⇒ `.._.._etc`、空 ⇒ `default`）。
+
+> **测试自身踩的一坑（已写进注释）**：首版用例有一条 `resolveProfileKey(ctx, undefined)` 想验兜底，
+> 但**省略 env 会用 `process.env`**（这是生产路径的正确行为）—— 本机恰好跑在桌面端里、
+> 环境带 `DSH_PROFILE`，于是用例拿到 `'desktop'` 而失败。测试里 env 一律显式传表。
+
+**实机待验**：台账新增 **I6** —— 在未识别 profile 的宿主上打开浮窗，顶部口径应显示「未识别 /
+可能混账」，而不是「完全隔离」。
+
+---
+
+## 2026-09-30（续）· I1 闸门：账本目录名「只有注释、没有闸门」补上
+
+**触发**：矩阵台账 I1 的原话 —— 「账本目录名仍为 `dsh-token-monitor`、不得跟随包名 / scope 变
+（变了 = 全量历史统计清零，静默失效第 17 位 —— 2026-09-29 已用 `LEDGER_DIR_NAME` 解耦但**无闸门**）」。
+纪律写着、注释写着，**但没有任何机器判定**：一次「顺手统一命名」就会让三个 profile 的历史账本全部失联，
+且不报任何错。
+
+**改了什么**：把目录名与解析逻辑抽成单点 `lib/ledger-dir.js`（`LEDGER_DIR_NAME` + `resolveDataDir`），
+`lib/index.js` 改为 import（顺带清掉因此变成未使用的 `node:os` import）。
+
+**为什么抽出来**：判据必须**可测**。此前 `resolveDataDir` 是 `lib/index.js` 的内部函数，
+而 host 半带着模块级副作用，单测无法直接调用 —— 这正是「纪律只能靠人记」的结构性原因。
+
+**闸门** `test/ledger-dir.test.mjs` **5 例**：
+
+1. 目录名**冻结为历史值**（写死字面量断言：有人想改就会被拦下；同时断言不含 `/`、不带 scope）；
+2. **目录身份与包身份无派生关系**：源码不得读 `package.json`、不得把插件名拼进路径；
+   反向佐证 —— 当前包名带 scope，与目录名形态上不可能相等；
+3. 宿主服务三形态（字符串 / `{resolve(name)}` / `{dir}`）都落到同一个目录名；
+4. 优先级 `pluginData` > `dataDir` > `storage`；
+5. 服务缺失 / 取服务抛错 / 空值 ⇒ 回退默认路径（不因宿主服务异常而丢账本）。
+
+`verify-all usage` **5 → 7 项**。**实机待验**：I1 的运行时部分（三 profile 各重启一次，路由带 scope 仍通、
+账本目录名不变、历史统计连续）—— 闸门只保证「代码不会改名」，重启后的连续性仍需人眼确认。
+
+---
+
+## 2026-09-30 · I5 同源围栏：九线里唯一缺席的那一道补上了
+
+**触发**：2026-09-29 补账时把「可代跑项」实测了一遍，发现本线的 exact 路由**两轴都返回 200** ——
+非环回 `Host`、跨站（`sec-fetch-site: cross-site`）打 `/dsh-token-monitor/*` 均畅通；而同批实测
+appearance / ssh / dual-model / free-model 四线同两轴都是 **403**。本线是九线里**唯一没有同源围栏**的一条。
+
+**为什么必须补**：exact 分发的优先级高于内核 `/api` 的处理链 ⇒ 这些路由**不经过** composition 自己的
+准入检查。五条路由里 `POST /reset` 是**清空账本**的写操作，`POST /config` 改写限额配置。
+
+**定级（不夸大）**：响应不带任何 CORS 头 ⇒ 浏览器页面读不到响应体，实际暴露面限于本机进程，
+而本机进程本就能直接读账本文件 ⇒ **纵深防御缺失，非当场可利用漏洞**。但「谁都没决定过」这个状态
+必须收口 —— 当时的处境是既不补围栏、也不登记「本线不做围栏」的决策。
+
+**补法**（与四线同构；九线代码零耦合，各带一份实现，口径一致）：
+
+- 新增 `lib/fence.js` 三个导出：`structuralFence`（只认回环 Host / 拒跨站 fetch / Origin·Referer 须与
+  Host 同名 / **Host 缺失 fail closed**）、`trustFence`（composition 的 `connection.requestRejection`
+  优先且**逐请求读取**，缺席时回落到结构层）、`fenceHandler`（把业务 handler 包成「先过围栏」）。
+- `lib/index.js` 在 **register 一处**统一包装（`fenced(handler)`）覆盖五条路由 ——
+  **新增路由不会漏挂围栏**，而「五条路由全部裸奔」正是本线此前的形态。
+- **围栏先于业务**：跨站 POST 得到 **403** 而不是 405/400，账本一个字节都不会被碰。
+- **零 miasaki 耦合不变**：只用官方 `ctx.get('connection')` 与请求头，`inject` 仍只有 `webServer`
+  （与 free-model 同款做法：不把 connection 写进 inject，逐请求求值）。
+
+**闸门**：`test/fence.test.mjs` **13 例** —— 结构层五条边界（含 `Origin: null` opaque origin 必须拒）、
+connection 两层语义（401/403 透传、undefined 放行、服务抛错回落结构层而不是 500）、
+**逐请求读取**（晚 provide 的服务当次即接管，快照即退化）、**围栏先于业务**（被拦请求的 handler
+调用次数为 0）、拒绝响应不带任何 `access-control-*` 头。
+`verify-all usage` **3 → 5 项**（+`syntax lib/fence.js` +围栏测试）。
+
+**实机待验**：台账 **I5** —— 重启 `dsh web` 后，非环回 `Host` / 跨站两轴应得 **403**（此前 200）。
+HTTP 层可代跑，判据见回归矩阵 §3.0 / §3.8。
+
+---
+
 ## 2026-09-29（续）· 包名加 scope：`dsh-token-monitor` → `@miasaki/dsh-token-monitor`
 
 **为什么**：仓库进入插件分发阶段，包名要发到 npm。而 npm 上 `dsh-token-monitor`

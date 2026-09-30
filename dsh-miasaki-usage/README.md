@@ -49,6 +49,11 @@ dsh plugin --profile <profile> add @miasaki/dsh-token-monitor
 
 所以它可以单独装进**任意官方 DSH profile**（官方桌面端隔离成纯净版之后，挂的就是这一条）。
 
+**安全面同样是纯官方契约**：五条 `exact` 路由（含 `POST /reset` 清空账本）统一过**同源围栏**
+（`lib/fence.js`：只认回环 Host / 拒跨站 fetch / `Origin`·`Referer` 须与 Host 同名 / **Host 缺失 fail closed**；
+composition 提供 `connection` 服务时优先用它的准入判定，且**逐请求读取**）。
+围栏在 `register` 一处包装 —— 新增路由不会漏挂；被拦请求返回 **403 且不带任何 CORS 头**。
+
 ## 账本
 
 数据落在 `~/.dsh/plugins-data/dsh-token-monitor/`，**按 profile 分区**：
@@ -70,7 +75,8 @@ dsh-token-monitor/
 
 - 不改系统提示、不改模型请求、不改工具 schema；
 - 插件不直接调模型：数字全部来自官方投影与事件；
-- 账本只记计数与归属，不记对话内容。
+- 账本只记计数与归属，不记对话内容；
+- 只接受**同机浏览器**的请求：非环回 `Host` 或跨站来源一律 **403**（同源围栏）。
 
 ## 开发
 
@@ -78,6 +84,6 @@ dsh-token-monitor/
 pnpm test  # 无第三方依赖；闸门见下方
 ```
 
-仓库级统一回归：`node ../scripts/verify-all.mjs usage`（语法 + client bundle 装载契约自检）。
+仓库级统一回归：`node ../scripts/verify-all.mjs usage`（**5 项**：三处入口语法 + client bundle 装载契约自检 + 同源围栏 **13 例**）。
 
 设计决策与逐条变更见 [`design/`](design/)。

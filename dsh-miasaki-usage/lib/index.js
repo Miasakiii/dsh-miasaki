@@ -39,8 +39,15 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+
+// I5（2026-09-30）：exact 路由不过内核 `/api` 准入链，围栏是唯一口子 ——
+// 本线此前是九线里唯一没有围栏的一条（实测两轴 200）。
+import { fenceHandler } from './fence.js';
+// I1（2026-09-30）：账本目录名与解析抽成单点 —— 那条纪律此前只有注释、没有闸门，
+// 一次「顺手统一命名」就会让全量历史统计清零且不报错。闸门见 test/ledger-dir.test.mjs。
+// profile 分区键同属「账本身份」，一并放这里（静默失效 #18：拿不到 profile 名时不再假装隔离）。
+import { resolveDataDir, resolveProfileKey, safeProfileDir } from './ledger-dir.js';
 
 export const name = '@miasaki/dsh-token-monitor';
 export const inject = ['webServer'];
@@ -100,55 +107,11 @@ function diffDays(a, b) {
 	return Math.round((Date.UTC(pb[0], pb[1] - 1, pb[2]) - Date.UTC(pa[0], pa[1] - 1, pa[2])) / 86400000);
 }
 
-/**
- * 账本目录名 —— **刻意不跟随插件名**（2026-09-29）。
- *
- * 2026-09-29 包名由 `dsh-token-monitor` 改为 `@miasaki/dsh-token-monitor`（对外分发需要 scope），
- * 但目录名是**数据身份**而非包身份：一旦跟着改，既有账本就等于「搬家」——
- * 用户会看到统计凭空清零（改动时账本实况：desktop 1.8MB / miasaki 4.1MB / web 25KB）。
- * 另一层现实原因：`@miasaki/dsh-token-monitor` 含 `/`，直接 path.join 会被当成两级子目录。
- */
-const LEDGER_DIR_NAME = 'dsh-token-monitor';
+// 账本目录名与解析逻辑见 lib/ledger-dir.js（2026-09-30 抽出，理由见文件头 import 处）：
+// 目录名是**数据身份**、冻结为历史值；resolveDataDir 只认 LEDGER_DIR_NAME，不读包名。
 
-/** 插件数据目录：优先宿主服务，否则 `~/.dsh/plugins-data/<LEDGER_DIR_NAME>/`。 */
-function resolveDataDir(ctx) {
-	try {
-		for (const k of ['pluginData', 'dataDir', 'storage']) {
-			const v = ctx.get(k);
-			if (typeof v === 'string' && v) return path.join(v, LEDGER_DIR_NAME);
-			if (v && typeof v === 'object') {
-				if (typeof v.resolve === 'function') {
-					const r = v.resolve(LEDGER_DIR_NAME);
-					if (typeof r === 'string' && r) return r;
-				}
-				if (typeof v.dir === 'string' && v.dir) return path.join(v.dir, LEDGER_DIR_NAME);
-			}
-		}
-	} catch (e) { /* 探测失败走默认 */ }
-	return path.join(os.homedir(), '.dsh', 'plugins-data', LEDGER_DIR_NAME);
-}
-
-/**
- * 当前 profile 名 —— **账本口径的隔离键**（2026-09-26「统计要干净」）：
- * 官方桌面端（`desktop`）、自制壳（`miasaki`）、浏览器 GUI（`web`）各记各的账，
- * 官方桌面端的统计里不会再混进自制壳的消耗。来源优先宿主 `profileContext` 服务
- * （`profile-boot` 提供，字段 `name`），其次进程环境变量 `DSH_PROFILE`（launcher 注入），
- * 最后回落 `default`——三档都拿不到时退化为旧的「全局单账本」语义，不会丢数据。
- */
-function resolveProfileName(ctx) {
-	try {
-		const pc = ctx.get('profileContext');
-		if (pc && typeof pc.name === 'string' && pc.name.trim()) return pc.name.trim();
-	} catch (e) { /* 服务缺席：走环境变量 */ }
-	const env = process.env.DSH_PROFILE;
-	if (typeof env === 'string' && env.trim()) return env.trim();
-	return 'default';
-}
-
-/** profile 名净化成目录名：只留字母数字与 `._-`，其余换 `_`，空则 `default`。 */
-function safeProfileDir(profile) {
-	return String(profile || '').replace(/[^A-Za-z0-9._-]+/g, '_') || 'default';
-}
+// profile 分区键（resolveProfileKey）与目录名净化（safeProfileDir）见 lib/ledger-dir.js：
+// 它们与账本根目录名同属「账本身份」，抽在一起才测得到（且那条口径纪律此前只有注释）。
 
 export function apply(ctx) {
 	const live = { calls: {}, tools: {} };
@@ -290,7 +253,15 @@ export function apply(ctx) {
 	 * 官方桌面端只记载官方自己这个实例的消耗，自制壳 / 浏览器 GUI 各记各的。
 	 * 分区前是全局单文件，历史归位见 migrateLegacyLedger()。
 	 */
-	const profileName = resolveProfileName(ctx);
+	const profileKey = resolveProfileKey(ctx);
+	const profileName = profileKey.name;
+	/**
+	 * `unknown` = 宿主没给 `profileContext`、环境也没有 `DSH_PROFILE` ⇒ 落在**共享兜底桶**上。
+	 * 目录名仍是 `default`（既有账本不能丢），但口径必须如实告知页面 ——
+	 * 此前这里返回裸字符串，页面照常宣称「与其它 profile 的账本完全隔离」，
+	 * 而那个桶其实会被**多个环境共用**（静默失效 #18：不报错、界面正常、账在混）。
+	 */
+	const profileSource = profileKey.source;
 	const profileDir = path.join(dataDir, safeProfileDir(profileName));
 	const ledgerFile = path.join(profileDir, 'usage-log.jsonl');
 	const configFile = path.join(profileDir, 'config.json');
@@ -893,8 +864,9 @@ export function apply(ctx) {
 			config: { dailyTokenLimit: config.dailyTokenLimit },
 			error: ledgerError,
 			profile: profileName,
+			profileSource,
 			sampledAt: now(),
-			note: '全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；账本按 profile 分区 —— 本页只统计当前 profile（' + profileName + '）的消耗，官方桌面端与自制壳 / 浏览器 GUI 各记各的账、互不混入；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按所选行自身峰值分档（按会话看时间跨度天生短，按工作目录看才是同一项目的叠加形态），标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，冷读约 0.3s/会话，命中缓存后零成本；取不到时降级显示截断 ID，不参与目录聚合）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口），同样按 profile 分区。'
+			note: '全局统计来自跨会话账本（usage-log.jsonl，保留 380 天），自插件首次部署起累计、跨 host 重启持久，部署前的历史会话不在其中；账本按 profile 分区 —— ' + (profileSource === 'unknown' ? '注意：未能识别当前 profile（宿主未提供 profileContext、环境亦无 DSH_PROFILE），当前落在共享兜底桶 default，可能与其它环境混账，并非真隔离' : '本页只统计当前 profile（' + profileName + '）的消耗，官方桌面端与自制壳 / 浏览器 GUI 各记各的账、互不混入') + '；会话活跃分布基于账本 sessionId 按近 30 日聚合、逐日格点按所选行自身峰值分档（按会话看时间跨度天生短，按工作目录看才是同一项目的叠加形态），标题与工作目录由 sessionQuery 折叠会话日志得出（已归档会话同样可得，冷读约 0.3s/会话，命中缓存后零成本；取不到时降级显示截断 ID，不参与目录聚合）；占比分母为窗口内全部会话合计（含未列出的长尾会话）。日限额为本地自定义配置（DSH 无配额接口），同样按 profile 分区。'
 		};
 	}
 
@@ -903,6 +875,18 @@ export function apply(ctx) {
 		res.setHeader('Content-Type', 'application/json; charset=utf-8');
 		res.setHeader('Cache-Control', 'no-store');
 		res.end(JSON.stringify(obj));
+	}
+
+	/**
+	 * 围栏包装（I5，2026-09-30）：**所有** exact 路由统一「先过围栏，再进业务」。
+	 * 包装收在 register 一处，避免「新增路由忘记挂围栏」—— 本线此前正是这个形态：
+	 * 五条路由全部裸奔，其中 `POST /reset` 是清空账本的写操作。
+	 * connection 逐请求读取（它可能比本插件晚 provide；快照会让围栏整轮退化成结构层）。
+	 */
+	function fenced(handler) {
+		return fenceHandler(handler, () => {
+			try { return ctx.get('connection'); } catch (e) { return undefined; }
+		});
 	}
 
 	function sessionHandler(req, res) {
@@ -998,27 +982,27 @@ export function apply(ctx) {
 	ctx.webServer.register({
 		kind: 'exact',
 		path: '/dsh-token-monitor/session',
-		handler: sessionHandler
+		handler: fenced(sessionHandler)
 	});
 	ctx.webServer.register({
 		kind: 'exact',
 		path: '/dsh-token-monitor/global',
-		handler: globalHandler
+		handler: fenced(globalHandler)
 	});
 	ctx.webServer.register({
 		kind: 'exact',
 		path: '/dsh-token-monitor/heatmap',
-		handler: heatmapHandler
+		handler: fenced(heatmapHandler)
 	});
 	ctx.webServer.register({
 		kind: 'exact',
 		path: '/dsh-token-monitor/config',
-		handler: configHandler
+		handler: fenced(configHandler)
 	});
 	ctx.webServer.register({
 		kind: 'exact',
 		path: '/dsh-token-monitor/reset',
-		handler: resetHandler
+		handler: fenced(resetHandler)
 	});
 
 	/**

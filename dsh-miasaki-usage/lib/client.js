@@ -1067,9 +1067,14 @@ window.__ModuleLoader__.load({
 				// 口径隔离标记（2026-09-26「统计要干净」）：账本按 profile 分区，本页只统计
 				// 当前 profile 的消耗 —— 官方桌面端与自制壳 / 浏览器 GUI 各记各的账。
 				// 分区后首次打开本来会是空的（没有历史可混），这行让"空"是预期而不是故障。
+				// 2026-09-30（静默失效 #18）：host 三档都拿不到 profile 名时**不再假装隔离** ——
+				// 那种情况落在共享兜底桶 default 上，不同环境会写进同一个桶，必须如实说明。
 				react.createElement("p", { className: "tokmn-meta", style: { margin: "0 0 10px" } },
-					"口径：本页只统计当前 profile" + (data && data.profile ? "（" + data.profile + "）" : "") +
-					"的消耗 · 与其它 profile 的账本完全隔离"),
+					data && data.profileSource === "unknown"
+						? "口径：未能识别当前 profile（宿主未提供 profileContext、环境亦无 DSH_PROFILE）—— "
+							+ "当前落在兜底桶 default，注意这可能与其它环境混账，并非真隔离"
+						: "口径：本页只统计当前 profile" + (data && data.profile ? "（" + data.profile + "）" : "") +
+							"的消耗 · 与其它 profile 的账本完全隔离"),
 
 				// 总览六卡
 				react.createElement("div", { className: "tokmn-stats6" },
