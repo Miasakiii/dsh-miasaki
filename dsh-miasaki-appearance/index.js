@@ -290,7 +290,10 @@ export function apply(ctx, config) {
     }
 
     if (path === `${API_PREFIX}state` && req.method === 'GET') {
-      return sendJson(res, 200, { config: current, revision, persistent: store.persistent })
+      // `defaults` 与 `config` 同源下发（P4 每板块恢复默认的输入）：
+      // 默认值只有 host 这一份（lib/config.js 的 DEFAULT_CONFIG），客户端**不另存一份** ——
+      // 两份默认值必然漂移，而漂移的后果是「恢复默认」把配置恢复成旧默认。
+      return sendJson(res, 200, { config: current, defaults: DEFAULT_CONFIG, revision, persistent: store.persistent })
     }
 
     // M2 S4：当前配置皮肤的 token 表（client 半 overrideTokens 与 boot style 消费同一份）。
@@ -373,7 +376,24 @@ export function apply(ctx, config) {
         return sendJson(res, 409, { error: 'revision-conflict', revision, config: current })
       }
       const patch = body?.patch !== undefined ? body.patch : body?.config
-      const next = mergeConfig(current, patch)
+      // P5（2026-09-30）：`replace: true` = **整体替换**语义（导入配置用）。
+      // 与 merge 的区别是实质性的：merge 下「导入一份只写了主题的 JSON」只会改主题、
+      // 其余板块保持现状 —— 那不是导入，是「导入文件里写了什么就只改什么」的错觉。
+      // 整体替换时缺的字段回到出厂默认（sanitizeConfig 负责收窄与补全）。
+      // 非对象一律 **400 显式拒绝**，而不是让 sanitize 把它当成空对象 ⇒ 静默清空配置。
+      let next
+      if (body?.replace === true) {
+        const raw = patch
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+          return sendJson(res, 400, {
+            error: 'invalid-config',
+            message: '导入内容不是一个配置对象（应为包含 theme / wallpaper / motion 等板块的 JSON 对象）',
+          })
+        }
+        next = sanitizeConfig(raw)
+      } else {
+        next = mergeConfig(current, patch)
+      }
       if (configEquals(next, current)) {
         // 无实质变化：不写盘、不递增修订，但仍回答最新状态（面板的重复提交是常态）。
         return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: false })

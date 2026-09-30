@@ -272,6 +272,24 @@ window.__ModuleLoader__.load({
       input.click()
     }
 
+    /**
+     * 弹出文件选择框读一段 JSON 文本（P5 导入配置）。
+     * 与 `pickImageFile` 同款：不依赖 React ref（未挂载到文档的 input 同样能 click）。
+     */
+    function pickJsonFile(onPick, onError) {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = 'application/json,.json'
+      input.onchange = () => {
+        const file = input.files !== null && input.files !== undefined && input.files.length > 0 ? input.files[0] : null
+        if (file === null || file === undefined) return
+        Promise.resolve(onPick(file)).catch(error => {
+          onError(String(error !== null && error !== undefined && error.message ? error.message : error))
+        })
+      }
+      input.click()
+    }
+
     // ------------------------------------------------------- 面板样式（M2.6 → V1）
     // 取值逐条对照官方「通用设置」页：行 = FontSizeRow.row（0.5px 分隔线 + 16px 行距）、
     // 标题/说明 = row.title / row.desc、步进器 = FontSizeRow.stepper（悬停露出上下箭头）、
@@ -311,6 +329,8 @@ window.__ModuleLoader__.load({
 .mia-noticeOk{color:var(--dsw-alias-state-success-primary)}
 .mia-error{color:var(--dsw-alias-state-error-primary);margin:0;padding:0 0 12px;font-size:12px;line-height:18px}
 .mia-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:18px}
+/* P4「恢复默认」行：与行内说明同边距、官方 linkButton 观感（次操作，h28/r14/12px tertiary）。 */
+.mia-resetRow{display:flex;justify-content:flex-end;padding:4px 0 8px}
 /* 应用图标九宫格：官方卡片语言（models rowCard：border-l4 / r16 / pad 12 14 收敛为图标格） */
 .mia-iconGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;padding:16px 0 4px;display:grid}
 .mia-iconCell{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:0 0;border-radius:16px;flex-direction:column;align-items:center;gap:8px;padding:12px 6px 10px;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;display:flex}
@@ -504,6 +524,24 @@ window.__ModuleLoader__.load({
     /** 会话最大宽度边界（px；与 lib/config.js 的 MAX_WIDTH_MIN/MAX 一致，host 最终把关）。 */
     const CONV_WIDTH_MAX = 1600
 
+    /**
+     * P4「恢复默认」按钮的板块措辞（与各组标题逐字一致）。
+     * 只影响文案，不参与判定 —— 真的默认值来自 host 下发的 `state.defaults`。
+     */
+    const SECTION_LABELS = Object.freeze({
+      theme: '主题',
+      wallpaper: '壁纸',
+      avatar: '应用图标',
+      motion: '动效',
+      conversation: '会话效果',
+    })
+
+    /**
+     * P5（2026-09-30）导出文件的自描述标记。导入侧据此认出「这是本线的配置文件」，
+     * 而不是让用户把任意 JSON 拖进来当成配置（识别不出时仍兼容裸配置对象，见 importConfig）。
+     */
+    const CONFIG_EXPORT_KIND = 'miasaki-appearance-config'
+
     /** 取（按 id 去重）会话效果层 style 节点；不存在则创建。 */
     function convStyleTag() {
       if (typeof document === 'undefined') return null
@@ -580,6 +618,90 @@ window.__ModuleLoader__.load({
         const state = await requestJson('/state', { method: 'GET' })
         applyConversation(state.config)
       } catch { /* 会话效果层应用失败保持原生观感 */ }
+    }
+
+    /**
+     * M4 锚点自检（静默失效 #10，2026-09-30）。
+     *
+     * 为什么需要：M4 的每一项都落在**官方内部 DOM 与 CSS 变量**上（`[data-chat-flow]` /
+     * `--dsh-chat-content-width` / `--dsh-chat-flow-gap` / `[data-streaming]`）。官方升级改了
+     * 锚点名或变量名时，本插件**不报错、面板照常可点、保存也成功，但设置毫无效果** ——
+     * 这是最难发现的一类失效（用户只能说「开了没用」，而面板看起来一切正常）。
+     *
+     * 判据**只在能确定的时候说话**，避免误报：
+     *   · 没开依赖该锚点的项（密度=紧凑 / 宽度>0）⇒ `idle`，不提示；
+     *   · 会话页不在、或 `[data-chat-flow]` 不在 ⇒ `unknown`（会话可能还没有消息），不提示；
+     *   · 锚点在、但我们写进去的覆盖值**读不出来** ⇒ `mismatch`（确定性失配），提示。
+     *
+     * **不做静态自检的项**（文案里说明，免得读者以为漏了）：流式光标（`[data-streaming]`
+     * 只在生成中存在，静态不可判定）；引用与代码块（用原生 `blockquote` / `pre`，没有官方锚点）。
+     */
+    function probeConversationAnchors() {
+      try {
+        const doc = document
+        const widthOn = doc.documentElement.getAttribute('data-mia-cv-width') === 'on'
+        const compactOn = doc.documentElement.getAttribute('data-mia-cv-density') === 'compact'
+        if (!widthOn && !compactOn) return { state: 'idle', broken: [] }
+        if (!doc.querySelector('[data-slot="main.conversation"]')) return { state: 'unknown', broken: [] }
+        const flow = doc.querySelector('[data-chat-flow]')
+        if (!flow) return { state: 'unknown', broken: [] }
+        const cs = getComputedStyle(flow)
+        const broken = []
+        if (widthOn) {
+          const want = (getComputedStyle(doc.documentElement).getPropertyValue('--mia-cv-width') || '').trim()
+          const got = (cs.getPropertyValue('--dsh-chat-content-width') || '').trim()
+          if (want && got !== want) broken.push('会话最大宽度')
+        }
+        if (compactOn) {
+          const gap = (cs.getPropertyValue('--dsh-chat-flow-gap') || '').trim()
+          if (gap !== '8px') broken.push('消息密度')
+        }
+        return broken.length > 0 ? { state: 'mismatch', broken } : { state: 'ok', broken: [] }
+      } catch (e) {
+        return { state: 'unknown', broken: [] }
+      }
+    }
+
+    /**
+     * 本线在当前配置下**会不会产生任何可见变化**（静默失效 #8，2026-09-30 补全）。
+     *
+     * 首版判定只覆盖一种形状：pure + 壁纸 + 表面全不透明 + glass off/mica(Win11) ⇒ 三层互相抵消。
+     * 于是漏掉了**更常见**的一种：总开关开着、所有项都停在原生档 —— 页面上同样是零变化，
+     * 却没有提示，用户只能以为功能坏了。
+     *
+     * 判定口径（「有没有变化」，不是「某几项开着」）：皮肤非纯净 / 壁纸源非空且至少一处表面
+     * 不透明度 < 100（否则壁纸被完全不透光的表面盖住）/ 动效开着 / 会话效果有非默认档 —— 任一成立
+     * 即有可见变化。
+     *
+     * 玻璃档位（glass）**不参与**判定：它只改变壁纸的模糊观感，而壁纸不可见时它本身也不可见
+     * ⇒ 不会让「零变化」变成「有变化」。（首版把 mica/Win11 也算进去，是因为那会让*本就不可见*的
+     * 壁纸再多一层隐形，属于解释性细节而非判据。）
+     *
+     * @returns `{ visible: boolean, reason: 'native' | 'covered' | null }`
+     *   · `native`  —— 什么都没配（全原生档）
+     *   · `covered` —— 配了壁纸，但被不透明表面完全抵消
+     *   · `null`    —— 有可见变化
+     */
+    function effectVisibility(config) {
+      const skin = config.theme && typeof config.theme.skin === 'string' ? config.theme.skin : 'pure'
+      const wallpaper = config.wallpaper || {}
+      const source = typeof wallpaper.source === 'string' ? wallpaper.source : ''
+      const surface = wallpaper.surface || {}
+      const opacity = [surface.sidebar, surface.conversation, surface.composer, surface.overlay]
+        .map(v => (typeof v === 'number' ? v : 100))
+      const wallpaperUsable = source !== '' && opacity.some(v => v < 100)
+      const motionOn = config.motion && config.motion.enabled === true
+      const conv = config.conversation || {}
+      const convCustom = (conv.density !== undefined && conv.density !== 'comfortable')
+        || Number(conv.maxWidth) > 0
+        || (conv.font !== undefined && conv.font !== 'system')
+        || (conv.cursor !== undefined && conv.cursor !== 'off')
+        || (conv.quoteCode !== undefined && conv.quoteCode !== 'default')
+      if (skin !== 'pure' || wallpaperUsable || motionOn || convCustom) {
+        return { visible: true, reason: null }
+      }
+      if (source !== '') return { visible: false, reason: 'covered' }
+      return { visible: false, reason: 'native' }
     }
 
     // ------------------------------------------------------------- 行构造
@@ -750,13 +872,17 @@ window.__ModuleLoader__.load({
       }, [])
 
       /** 写配置：带 expectedRevision，冲突时拉取服务端状态并提示重试。 */
-      const save = async (patch) => {
+      const save = async (patch, options = {}) => {
         if (state === null) return
         setBusy(true)
         try {
+          // P5（2026-09-30）：`options.replace === true` ⇒ 交给 host 做**整体替换**（缺的字段回出厂默认）。
+          // 除这一处报文差异外，后续所有后处理（属性同步 / override 重算 / 三层应用）完全共用。
           const next = await requestJson('/config', {
             method: 'POST',
-            body: { patch, expectedRevision: state.revision },
+            body: options.replace === true
+              ? { patch, replace: true, expectedRevision: state.revision }
+              : { patch, expectedRevision: state.revision },
           })
           setState(next)
           // 与 lib/config.js 的 buildBootScript 同源：配置写入成功后即时同步
@@ -829,19 +955,25 @@ window.__ModuleLoader__.load({
       // 总开关开了但皮肤=纯净（原生配色）+ 壁纸被不透明确表面挡住 + 玻璃档位在当前环境
       // 不出效果（off，或 mica 走系统云母时页面侧模糊被 W4.2 关掉）⇒ 三层叠加后界面零变化。
       // 提醒用户改哪里，而不是让用户以为功能坏了。
-      const noVisible = state !== null && state.config.enabled === true
-        && state.config.theme.skin === 'pure'
-        && state.config.wallpaper.source !== ''
-        && [state.config.wallpaper.surface.sidebar, state.config.wallpaper.surface.conversation,
-          state.config.wallpaper.surface.composer, state.config.wallpaper.surface.overlay].every(v => v >= 100)
-        && (state.config.wallpaper.glass === 'off'
-          || (state.config.wallpaper.glass === 'mica' && document.documentElement.getAttribute('data-mia-native-mica') === 'on'))
-      if (noVisible) {
+      // ---- 「无可见效果」提示（2026-09-27 首版；2026-09-30 补全为**全量判定**，静默失效 #8）
+      //
+      // 首版只认一种形状：pure + 壁纸 + 表面全不透明 + glass off/mica(Win11) ⇒ 三层互相抵消。
+      // 更常见的一种当时没覆盖：**总开关开着、所有项都停在原生档** —— 页面上同样是零变化，
+      // 却没有提示，用户只能以为功能坏了。现在判据统一走 effectVisibility()，并按成因分文案。
+      const effect = state !== null && state.config.enabled === true
+        ? effectVisibility(state.config)
+        : { visible: true, reason: null }
+      if (effect.visible === false) {
+        const guide = effect.reason === 'native'
+          ? '外观总开关已开，但所有项都停在原生档——皮肤是「纯净」（= 官方原生配色）、没有设置壁纸、'
+            + '动效与会话效果也全是默认档，因此页面与未装本线时逐像素一致。任选其一即可看到效果：'
+            + '皮肤换「刻刻帝 / 狂狂帝」、设一张壁纸（并把「表面不透明度」降到 80 以下）、'
+            + '打开「动效」总开关、或把「消息密度」改成「紧凑」。'
+          : '皮肤是「纯净」（= 原生配色）、壁纸被 100% 不透明的表面挡住、'
+            + '「云母」档在 Win11 桌面壳下走系统材质（页面侧不模糊）。任选其一即可看到效果——皮肤换「刻刻帝 / 狂狂帝」、'
+            + '玻璃换「磨砂 / 轻」、或把「表面不透明度」的会话 / 侧栏 / 输入框降到 60–80。'
         children.push(react.createElement('div', { key: 'novisible', className: 'mia-notice' },
-          '当前配置下外观没有可见变化：皮肤是「纯净」（= 原生配色）、壁纸被 100% 不透明的表面挡住、' +
-          '「云母」档在 Win11 桌面壳下走系统材质（页面侧不模糊）。任选其一即可看到效果——皮肤换「刻刻帝 / 狂狂帝」、' +
-          '玻璃换「磨砂 / 轻」、或把「表面不透明度」的会话 / 侧栏 / 输入框降到 60–80。',
-        ))
+          '当前配置下外观没有可见变化：' + guide))
       }
 
       // ---- 启用（总开关）
@@ -857,6 +989,39 @@ window.__ModuleLoader__.load({
 
       // ---- 主题皮肤（2026-09-26 去重：明暗偏好与正文字号归官方「通用」设置页，
       // 本页不再提供第二入口；这里只留官方 AppearanceRow 没有的「皮肤」）
+
+      // P4（2026-09-30）的公共输入：总开关门控与「恢复默认」行。**必须定义在所有组之前** ——
+      // 各组的行数组里都会调 resetRow(...)，定义在后面就是 TDZ（首跑即被用例照出）。
+      const masterLive = state !== null && state.config.enabled === true
+
+      /**
+       * P4（2026-09-30）：每板块「恢复默认」一行。
+       *
+       * 出厂默认值**只来自 host 下发的 `state.defaults`**（lib/config.js 的 DEFAULT_CONFIG
+       * 是唯一来源），客户端**不另存一份** —— 两份默认值必然漂移，而漂移的后果恰恰是
+       * 「恢复默认」把配置恢复成**旧版**默认值，比不提供恢复更糟（用户以为回到了出厂态）。
+       *
+       * 三条路径，各有理由：
+       *   ① 板块与默认**相同** ⇒ 不渲染（省一次无谓点击，也省一行噪声）；
+       *   ② 宿主**没下发** defaults（旧 host）⇒ 渲染一行提示而不是静默失效 ——
+       *      与 M2.7「host 未下发 avatar 字段时给重启提示」同一处理；
+       *   ③ 其余 ⇒ 官方 Button（ghost，次操作变体），走既有 save 深合并路径 ——
+       *      host 侧 mergeConfig 做板块级浅合并 + sanitize ⇒ 旧字段被收窄掉，
+       *      效果等价于「整板块换成出厂值」。
+       */
+      const resetRow = section => {
+        const defaults = state === null ? null : state.defaults
+        const d = defaults ? defaults[section] : undefined
+        if (d === undefined || d === null) {
+          return react.createElement('div', { key: `reset-${section}`, className: 'mia-hint' },
+            '「恢复默认」暂不可用：宿主未提供出厂默认值（旧版宿主的形态），重启宿主后即可用。')
+        }
+        if (JSON.stringify(state.config[section]) === JSON.stringify(d)) return null
+        return react.createElement('div', { key: `reset-${section}`, className: 'mia-resetRow' },
+          ghostButton(`恢复「${SECTION_LABELS[section] ?? section}」的默认设置`,
+            () => save({ [section]: d }), !masterLive || busy))
+      }
+
       children.push(group('主题', [
         row(
           '皮肤',
@@ -870,6 +1035,7 @@ window.__ModuleLoader__.load({
             state === null || busy,
           ),
         ),
+        resetRow('theme'),
       ]))
 
       // ---- 壁纸（M2 S5；V1 起图源/玻璃换官方选择丸）
@@ -915,6 +1081,7 @@ window.__ModuleLoader__.load({
           '100 = 不透明。会话旋钮同时是全局基底（官方会话列直读 --dsw-alias-bg-base，无独立层，M2 §5.4 粒度说明）。',
           reactElementSurfaceKnobs(wallpaper.surface, busy, save),
         ),
+        resetRow('wallpaper'),
       ]))
 
       // ---- 应用图标（M2.5 自定义 + M2.7 预设；V1 起「我的上传」换选择丸）
@@ -949,6 +1116,7 @@ window.__ModuleLoader__.load({
           '点选即用：桌面端（Miasaki.exe）读同一份配置，约 1–2 秒内窗口 / 任务栏 / 托盘图标跟着变；' +
           '「清除」回退出厂图标。注意：EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标属于构建期资源，不随此处变化。',
         ),
+        resetRow('avatar'),
       ]))
 
       // ---- 动效（M3：总开关 + 预设 + 强度倍率；prefers-reduced-motion 强制降级在 CSS 侧）
@@ -981,6 +1149,7 @@ window.__ModuleLoader__.load({
           '0.5×–1.5×，作用于所有动效时长（改的是时长倍率，不改位移与缓动）。',
           stepper(motion.scale, 0.5, 1.5, 0.1, v => save({ motion: { scale: Math.round(v * 10) / 10 } }), !motionLive || busy || motion.enabled !== true, '强度倍率', '×'),
         ),
+        resetRow('motion'),
       ]))
 
       // ---- 会话效果（M4：密度 / 最大宽度 / 正文字体 / 流式光标 / 引用与代码块；
@@ -988,9 +1157,12 @@ window.__ModuleLoader__.load({
       // 「工具卡折叠」未纳入本轮——官方工具卡的展开是受控 React state
       // （ui-tool ToolRow 的 expanded prop，非原生 details），默认折叠属产品行为
       // 决策而非外观参数，留待单独取证拍板。）
-      const masterLive = state !== null && state.config.enabled === true
-      const conversation = state === null ? null : state.config.conversation
-      children.push(group('会话效果', conversation === null ? [hint('配置未加载。')] : [
+      // 「不在场」= null **或 undefined**：后者是**旧 host**（v5 前配置没有 conversation 板块）的
+      // 真实形态。只判 `=== null` 会让 undefined 走进下面的渲染并读 `conversation.density`
+      // ⇒ 整面板空白（2026-09-30 由 #8 用例照出，与 2026-09-12 空白面板事故同族）。
+      const conversationRaw = state === null ? undefined : state.config.conversation
+      const conversation = conversationRaw && typeof conversationRaw === 'object' ? conversationRaw : null
+      const convRows = conversation === null ? null : [
         row(
           '消息密度',
           '舒适 = 官方默认（消息间距 16px）；紧凑 = 8px，同屏容纳更多轮次。与官方「会话视图」的普通 / 紧凑不是一回事——那是已完成回合的呈现模式，这里是消息流间距。',
@@ -1058,6 +1230,85 @@ window.__ModuleLoader__.load({
             openMenu, setOpenMenu,
             !masterLive || busy,
           ),
+        ),
+      ]
+
+      // M4 锚点失配提示（静默失效 #10，2026-09-30）：官方升级改了会话内部 DOM / CSS 变量名时，
+      // 设置项会**静默失效**（面板可点、保存成功、界面零变化）。判据见 probeConversationAnchors。
+      if (convRows !== null) {
+        const cvProbe = probeConversationAnchors()
+        if (cvProbe.state === 'mismatch') {
+          convRows.push(react.createElement('div', { key: 'cv-mismatch', className: 'mia-notice' },
+            `注意：${cvProbe.broken.join(' / ')}的设置未生效 —— 官方会话结构的锚点（[data-chat-flow]）` +
+            '在当前 DSH 版本上没命中，官方升级可能改动了它。流式光标与引用样式不走该锚点，不受影响。'))
+        }
+        // P4（2026-09-30）：本板块的「恢复默认」行；板块已是默认值时 resetRow 返回 null。
+        const conversationReset = resetRow('conversation')
+        if (conversationReset !== null) convRows.push(conversationReset)
+      }
+
+      children.push(group('会话效果', convRows === null ? [hint('配置未加载，或宿主版本较旧（本板块需要 v6 配置）——重启宿主后重试。')] : convRows))
+
+      // ---- 配置导入 / 导出（P5，2026-09-30；路线见 2026-09-26 视觉统一与路线的 P5）
+      //
+      // 设计要点三条：
+      //   ① 导出的是**当前已归一化配置**（state.config）——写盘的就是它，备份与还原同形；
+      //   ② 导入是**整体替换**（host 侧 `replace: true`），不是 merge：文件里没写的板块
+      //      回到出厂默认。用 merge 的话，「导入一份只写了主题的 JSON」就变成「只改主题」，
+      //      与「导入配置」这个词给人的预期不符；
+      //   ③ **导入前二次确认**（路线硬要求）：整体替换会连带打回没写的板块，必须先说清楚。
+      //      无法弹确认框时**取消导入**，而不是静默继续。
+      const exportConfig = () => {
+        if (state === null) return
+        const payload = JSON.stringify({
+          kind: CONFIG_EXPORT_KIND,
+          version: state.config.version,
+          exportedAt: new Date().toISOString(),
+          config: state.config,
+        }, null, 2)
+        const blob = new Blob([payload], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = `miasaki-appearance-config-v${state.config.version}.json`
+        anchor.click()
+        URL.revokeObjectURL(url)
+      }
+
+      /** 解析导入文本 → 二次确认 → 整体替换。失败一律抛人话错误（面板顶部显示）。 */
+      const importConfig = async file => {
+        const text = typeof file.text === 'function' ? await file.text() : String(file)
+        let parsed = null
+        try {
+          parsed = JSON.parse(text)
+        } catch (e) {
+          throw new Error('这个文件不是有效的 JSON')
+        }
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('配置文件的顶层应该是一个对象')
+        }
+        // 兼容两种形态：本线导出的 { kind, version, config } 包装，以及裸配置对象
+        const candidate = parsed.kind === CONFIG_EXPORT_KIND || parsed.config !== undefined ? parsed.config : parsed
+        if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
+          throw new Error('文件里没有找到配置对象（既不是本线导出的格式，也不是裸配置）')
+        }
+        if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+          throw new Error('当前环境无法弹出确认框，已取消导入（整体替换需要你确认一次）')
+        }
+        const ok = window.confirm(
+          '导入将用文件内容整体替换当前外观配置：文件里没有写的板块会回到出厂默认设置。确定继续？')
+        if (ok !== true) return
+        await save(candidate, { replace: true })
+      }
+
+      children.push(group('配置', [
+        row(
+          '导入 / 导出',
+          '导出一段 JSON 备份当前全部外观配置；导入会用它**整体替换**（文件里没写的板块回到出厂默认），导入前再确认一次。',
+          [
+            outlineButton('导出配置…', exportConfig, busy),
+            ghostButton('导入配置…', () => pickJsonFile(importConfig, setError), busy),
+          ],
         ),
       ]))
 

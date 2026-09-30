@@ -41,9 +41,17 @@ const MOTION_CSS_SOURCE = (() => {
 /** 在 VM 里执行 client.js，捕获装载器收到的描述符。上下文刻意不提供 `module`。
  *  documentElement.getAttribute 对 data-mia-native-mica 返回 'on'——桌面壳 Win11 的
  *  真实广播形态（「无可见效果」提示的 mica 分支据此判定；其它属性仍返回 null）。 */
-function capture() {
+function capture(opts = {}) {
   let descriptor = null
-  const window = { __ModuleLoader__: { load(d) { descriptor = d } } }
+  // P5（2026-09-30）：导入/导出需要被真正驱动 —— 记录创建的元素（文件 input / 下载 anchor）、
+  // 造出的 Blob 与 objectURL，以及可注入的 window.confirm（二次确认门）。
+  const created = []
+  const blobs = []
+  const objectUrls = []
+  const window = {
+    __ModuleLoader__: { load(d) { descriptor = d } },
+    confirm: opts.confirm,
+  }
   // elementCalls 记录 setAttribute / removeAttribute / style 写变量（M4 行为闸门用）。
   const elementCalls = { set: [], removed: [], props: {} }
   const documentElement = {
@@ -61,25 +69,56 @@ function capture() {
   const document = {
     body: { append() {} },
     // dataset 供面板 CSS 注入打 data-plugin-css 标记（官方 client 插件同一注入式）。
-    createElement: () => ({ style: {}, dataset: {}, append() {}, remove() {}, setAttribute() {} }),
+    // P5 起同时记录每个被创建的元素（导入的文件 input / 导出的 anchor 都要能取回驱动）。
+    createElement: (tag) => {
+      const el = {
+        tagName: String(tag ?? 'div').toUpperCase(),
+        style: {}, dataset: {}, files: null, clicked: false,
+        append() {}, appendChild() {}, remove() {},
+        setAttribute(name, value) { el[name] = value },
+        removeAttribute() {},
+        click() { el.clicked = true },
+      }
+      created.push(el)
+      return el
+    },
     head: { append() {}, appendChild() {} },
     documentElement,
-    querySelector: () => null,
+    // M4 锚点自检（静默失效 #10）要按选择器给出不同结果；**默认仍一律 null**（既有用例行为不变）。
+    querySelector: sel => (typeof opts.querySelector === 'function' ? opts.querySelector(sel) : null),
     querySelectorAll: () => [],
   }
   // fetch stub：/state 与 /skin 由 CONV_FETCH_CONFIG / skin 夹具应答——apply 时
   // syncSkin / syncMotion / syncConversation 三个协程都会打 /state。
-  const fetchStub = (url) => Promise.resolve({
-    ok: true,
-    status: 200,
-    json: async () => String(url).endsWith('/skin')
-      ? { id: 'pure', tokens: null, wallpaperActive: false, surface: null, meta: { preferredScheme: 'dark' } }
-      : { config: CONV_FETCH_CONFIG, revision: 1, persistent: true },
+  // `fetches` 记录每次调用（P4 恢复默认要点验「发出去的是 host 下发的默认值」）。
+  const fetches = []
+  const fetchStub = (url, init) => {
+    fetches.push({ url: String(url), method: (init && init.method) || 'GET', body: init && init.body })
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => String(url).endsWith('/skin')
+        ? { id: 'pure', tokens: null, wallpaperActive: false, surface: null, meta: { preferredScheme: 'dark' } }
+        : { config: CONV_FETCH_CONFIG, defaults: opts.defaults ?? CONV_DEFAULTS, revision: 1, persistent: true },
+    })
+  }
+  // getComputedStyle：M4 锚点自检读锚点上官方变量的计算值。默认一律空串（= 什么都读不出来），
+  // 既有用例不开密度 / 宽度档位，probe 走 idle 分支 ⇒ 行为不变。
+  const getComputedStyle = typeof opts.getComputedStyle === 'function'
+    ? opts.getComputedStyle
+    : () => ({ getPropertyValue: () => '' })
+  const context = vm.createContext({
+    window, document, console, fetch: fetchStub, getComputedStyle,
+    // P5：导出走 Blob + objectURL（浏览器 API），VM 里给可记录的替身。
+    Blob: class { constructor(parts, options) { this.parts = parts; this.type = options && options.type; blobs.push(this) } },
+    URL: {
+      createObjectURL(blob) { objectUrls.push(blob); return `blob:mock-${objectUrls.length}` },
+      revokeObjectURL() {},
+    },
   })
-  const context = vm.createContext({ window, document, console, fetch: fetchStub })
   vm.runInContext(source, context, { filename: 'client.js' })
   assert.notEqual(descriptor, null, 'client.js 必须调用 window.__ModuleLoader__.load()')
-  return { descriptor, window, context, document, elementCalls }
+  return { descriptor, window, context, document, elementCalls, fetches, created, blobs, objectUrls }
 }
 
 /** apply 时各 sync* 协程（经 fetch stub）消费的配置夹具；行为测试可整体替换。 */
@@ -96,6 +135,25 @@ const CONV_FETCH_CONFIG = {
   conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
 }
 
+/**
+ * P4「恢复默认」的下发夹具（host 侧 DEFAULT_CONFIG 的镜像）。
+ * `theme.skin` 刻意与 CONV_FETCH_CONFIG 相同（该板块=默认 ⇒ 不显示恢复按钮），
+ * 其余板块也取默认值 ⇒ **只有被行为测试改过的板块才会冒出恢复按钮**。
+ */
+const CONV_DEFAULTS = {
+  version: 6,
+  enabled: false,
+  theme: { skin: 'pure' },
+  wallpaper: {
+    source: '', light: '', dark: '', blur: 0, scrim: 0,
+    fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+    surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+  },
+  avatar: { source: '' },
+  motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+  conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+}
+
 /** 等 sync* 协程落定（stub 全部同步 resolve，一个宏任务 tick 即排空 microtask 队列）。 */
 function flushAsync() {
   return new Promise(resolve => { setTimeout(resolve, 0) })
@@ -106,10 +164,13 @@ function flushAsync() {
 // 的完整渲染路径——实机空白面板事故发生在该路径，state=null 路径走不到）。
 const react = {
   stateQueue: null,
+  /** P5：记录所有 setState 调用值（断言「失败必须显式显示」用）。 */
+  setCalls: [],
   createElement: (type, props, ...children) => ({ type, props, children }),
   useState(initial) {
-    if (this.stateQueue !== null && this.stateQueue.length > 0) return [this.stateQueue.shift(), () => {}]
-    return [typeof initial === 'function' ? initial() : initial, () => {}]
+    const record = (value) => { react.setCalls.push(value) }
+    if (this.stateQueue !== null && this.stateQueue.length > 0) return [this.stateQueue.shift(), record]
+    return [typeof initial === 'function' ? initial() : initial, record]
   },
   useEffect: () => {},
 }
@@ -1022,4 +1083,388 @@ test('渲染树无 undefined/null 元素类型（空白色事故的直接签名�
   } finally {
     react.stateQueue = null
   }
+})
+
+// ---------------------------------------------------------------------------
+// 静默失效 #10（2026-09-30）：M4 锚点失配必须**说出来**
+//
+// M4 的密度 / 最大宽度落在官方内部 DOM（`[data-chat-flow]`）与官方 CSS 变量上。官方升级改了
+// 锚点名时，设置项会**静默失效**：面板可点、保存成功、界面零变化 —— 用户只能说「开了没用」。
+// 本组钉住三态：只在**能确定**失配时提示，其余一律不打扰。
+// ---------------------------------------------------------------------------
+
+const ANCHOR_OK_SELECTOR = sel =>
+  ((sel === '[data-slot="main.conversation"]' || sel === '[data-chat-flow]') ? {} : null)
+
+/** 驱动到「配置已加载 + 指定锚点探测形态」的面板渲染，返回渲染树全文。 */
+function renderWithAnchorProbe(opts) {
+  const cap = capture(opts)
+  const ctx = fakeCtx()
+  cap.descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  if (opts.widthOn !== false) cap.document.documentElement.setAttribute('data-mia-cv-width', 'on')
+  if (opts.compactOn === true) cap.document.documentElement.setAttribute('data-mia-cv-density', 'compact')
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true,
+        theme: { skin: 'pure' },
+        wallpaper: {
+          source: '', light: '', dark: '', blur: 0, scrim: 0,
+          fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+          surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+        },
+        avatar: { source: '' },
+        motion: { enabled: false, preset: 'fluid', scale: 1 },
+        conversation: {
+          density: opts.compactOn === true ? 'compact' : 'comfortable',
+          maxWidth: opts.maxWidth ?? 920,
+          font: 'system', cursor: 'off', quoteCode: 'default',
+        },
+      },
+      revision: 1,
+      persistent: true,
+    },
+    null, null, false, null, null, null, null,
+  ]
+  try {
+    return collectText(view()).join('\n')
+  } finally {
+    react.stateQueue = null
+  }
+}
+
+test('#10：锚点失配（读不到我们写的覆盖值）⇒ 面板显式提示，不再静默失效', () => {
+  const text = renderWithAnchorProbe({
+    querySelector: ANCHOR_OK_SELECTOR,
+    getComputedStyle: () => ({
+      getPropertyValue: name => (name === '--mia-cv-width' ? '920px'
+        : name === '--dsh-chat-content-width' ? '760px' // 官方锚点没吃到我们的值
+          : name === '--dsh-chat-flow-gap' ? '16px'
+            : ''),
+    }),
+  })
+  assert.match(text, /的设置未生效/, '失配必须说出来（这正是「开了没用」的根因形态）')
+  assert.match(text, /会话最大宽度/, '要点名是哪一项')
+  assert.match(text, /data-chat-flow/, '要给出锚点名，便于对照官方升级说明')
+})
+
+test('#10：锚点正常（读到的就是我们的值）⇒ 不提示', () => {
+  const text = renderWithAnchorProbe({
+    querySelector: ANCHOR_OK_SELECTOR,
+    getComputedStyle: () => ({
+      getPropertyValue: name => (name === '--mia-cv-width' ? '920px'
+        : name === '--dsh-chat-content-width' ? '920px'
+          : name === '--dsh-chat-flow-gap' ? '8px'
+            : ''),
+    }),
+  })
+  assert.doesNotMatch(text, /的设置未生效/, '正常路径不得产生噪声')
+})
+
+test('#10：无法判定（消息列还没渲染）⇒ 不提示（避免误报）', () => {
+  const text = renderWithAnchorProbe({
+    // 只有会话槽位、没有 [data-chat-flow]：会话可能还没有消息，不能据此断言失配
+    querySelector: sel => (sel === '[data-slot="main.conversation"]' ? {} : null),
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+  })
+  assert.doesNotMatch(text, /的设置未生效/)
+})
+
+test('#10：没开依赖该锚点的项 ⇒ 不提示', () => {
+  const text = renderWithAnchorProbe({
+    widthOn: false,
+    compactOn: false,
+    maxWidth: 0,
+    querySelector: ANCHOR_OK_SELECTOR,
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+  })
+  assert.doesNotMatch(text, /的设置未生效/)
+})
+
+// ---------------------------------------------------------------------------
+// 静默失效 #8（2026-09-30 补全）：「无可见效果」提示的**全量判定**
+//
+// 首版只覆盖一种形状（pure + 壁纸 + 表面全不透明 ⇒ 三层互相抵消），漏了更常见的一种：
+// **总开关开着、所有项都停在原生档** —— 页面同样是零变化，却没有提示，用户只能以为功能坏了。
+// 本组把判据扩成「本线会不会产生任何可见变化」，并按成因给不同指引。
+// ---------------------------------------------------------------------------
+
+/** 以给定配置渲染面板，返回渲染树文本（state 队列长度 = 8）。 */
+function renderPanelReturningText(config) {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [{ config, revision: 1, persistent: true }, null, null, false, null, null, null, null]
+  try {
+    return collectText(view()).join('\n')
+  } finally {
+    react.stateQueue = null
+  }
+}
+
+/** 原生档基线：总开关开着，但每一项都停在官方默认。 */
+function nativeConfig(over) {
+  return {
+    // host 下发的配置**一定**带 version（sanitizeConfig 补的）；夹具照抄，否则导出名/迁移判据失真
+    version: 6,
+    enabled: true,
+    theme: { skin: 'pure' },
+    wallpaper: {
+      source: '', light: '', dark: '', blur: 0, scrim: 0,
+      fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+      surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+    },
+    avatar: { source: '' },
+    // bootSplash 必须与 CONV_DEFAULTS 的出厂值一致（'auto'）—— 否则「全原生档」会被
+    // P4 的恢复按钮判定当成「非默认」，两个夹具就此不自洽（首版即踩：写成了 'off'）。
+    motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+    conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+    ...over,
+  }
+}
+
+test('#8：总开关开着但全原生档 ⇒ 提示出现，且说清「不是 bug，是没配」', () => {
+  const text = renderPanelReturningText(nativeConfig())
+  assert.match(text, /当前配置下外观没有可见变化/, '零变化必须给指引')
+  assert.match(text, /所有项都停在原生档/, '要说明成因（而非只说「三层抵消」）')
+  assert.match(text, /皮肤换「刻刻帝/, '要给可操作的第一步')
+})
+
+test('#8：壁纸被 100% 不透明表面完全挡住 ⇒ 提示改用「三层抵消」文案', () => {
+  const text = renderPanelReturningText(nativeConfig({
+    wallpaper: {
+      source: 'builtin:aurora', light: '', dark: '', blur: 0, scrim: 10,
+      fit: 'cover', focus: 'center', glass: 'mica', vignette: 10,
+      surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+    },
+  }))
+  assert.match(text, /当前配置下外观没有可见变化/)
+  assert.match(text, /壁纸被 100% 不透明的表面挡住/, '配了壁纸却看不见 ⇒ 另一种成因')
+  assert.doesNotMatch(text, /所有项都停在原生档/, '成因不能张冠李戴')
+})
+
+test('#8：任一项有可见效果 ⇒ 不提示（皮肤 / 壁纸可见 / 动效 / 会话效果）', () => {
+  const wallVisible = {
+    source: 'builtin:aurora', light: '', dark: '', blur: 0, scrim: 10,
+    fit: 'cover', focus: 'center', glass: 'off', vignette: 10,
+    surface: { sidebar: 80, conversation: 100, composer: 100, overlay: 100 },
+  }
+  const conv = (over) => ({ density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default', ...over })
+  const cases = {
+    '皮肤非纯净': nativeConfig({ theme: { skin: 'zafkiel' } }),
+    '壁纸可见（表面降到 80）': nativeConfig({ wallpaper: wallVisible }),
+    '动效开着': nativeConfig({ motion: { enabled: true, preset: 'fluid', scale: 1, bootSplash: 'off' } }),
+    '密度紧凑': nativeConfig({ conversation: conv({ density: 'compact' }) }),
+    '宽度非 0': nativeConfig({ conversation: conv({ maxWidth: 800 }) }),
+    '字体非默认': nativeConfig({ conversation: conv({ font: 'serif' }) }),
+    '光标开启': nativeConfig({ conversation: conv({ cursor: 'bar' }) }),
+    '引用样式非默认': nativeConfig({ conversation: conv({ quoteCode: 'plain' }) }),
+  }
+  for (const [name, config] of Object.entries(cases)) {
+    assert.doesNotMatch(renderPanelReturningText(config), /没有可见变化/, `${name} 是可见变化，不该提示`)
+  }
+})
+
+test('#8：总开关关闭 ⇒ 不提示（「关掉即原生」，此刻本就没有外观层）', () => {
+  assert.doesNotMatch(renderPanelReturningText(nativeConfig({ enabled: false })), /没有可见变化/)
+})
+
+test('#8：旧 host 缺 conversation 板块（v5 前配置）⇒ 不崩，且其余判据照常', () => {
+  const withSkin = nativeConfig({ theme: { skin: 'kurkuriel' } })
+  delete withSkin.conversation
+  assert.doesNotMatch(renderPanelReturningText(withSkin), /没有可见变化/, '皮肤非纯净 ⇒ 有可见变化')
+
+  const pureSkin = nativeConfig()
+  delete pureSkin.conversation
+  assert.match(renderPanelReturningText(pureSkin), /所有项都停在原生档/, '缺板块不得抛错，其余判据照常工作')
+})
+
+// ---------------------------------------------------------------------------
+// P4 每板块「恢复默认」（2026-09-30，路线见 2026-09-26-visual-unification-and-roadmap 的 P4）
+//
+// 三条要钉住的事：
+//   ① 默认值**只能来自 host 下发的 `state.defaults`** —— 客户端另行硬编码一份必然漂移，
+//      而漂移的后果是「恢复默认」把配置恢复成**旧版**默认值（比没有恢复更糟）；
+//   ② 板块与默认相同 ⇒ **不渲染**按钮（省噪声）；不同 ⇒ 渲染，且点击走既有 save 路径；
+//   ③ 旧 host 不下发 defaults ⇒ 给提示而不是静默失效（本线既有处理方式）。
+// ---------------------------------------------------------------------------
+
+/** 渲染面板并返回 { text, nodes, cap }（state 队列长度 = 8；cap 含 fetch 调用记录）。 */
+function renderPanel(config, defaults) {
+  const cap = capture(defaults === undefined ? {} : { defaults })
+  const ctx = fakeCtx()
+  cap.descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [{
+    config,
+    // host 的 /state 会把 DEFAULT_CONFIG 一并下发；这里同步注入（传 null = 模拟旧 host 不下发）
+    defaults: defaults === undefined ? CONV_DEFAULTS : defaults,
+    revision: 1,
+    persistent: true,
+  }, null, null, false, null, null, null, null]
+  try {
+    const tree = view()
+    return { text: collectText(tree).join('\n'), nodes: collectNodes(tree, () => true), cap }
+  } finally {
+    react.stateQueue = null
+  }
+}
+
+test('P4：板块非默认 ⇒ 出现「恢复默认」按钮，点击后把**host 下发的**出厂值发出去', async () => {
+  const { text, nodes, cap } = renderPanel(nativeConfig({ theme: { skin: 'zafkiel' } }))
+  assert.match(text, /恢复「主题」的默认设置/, '非默认板块必须给出恢复入口')
+  assert.doesNotMatch(text, /恢复「壁纸」的默认设置/, '与默认相同的板块不该有按钮')
+
+  const button = nodes.find(n => Array.isArray(n.children)
+    && n.children.some(c => c === '恢复「主题」的默认设置'))
+  assert.notEqual(button, undefined, '按钮必须在渲染树上')
+  button.props.onClick()
+  await flushAsync()
+
+  // 恢复默认走的是**既有保存路径**（POST /config，带 expectedRevision 的乐观并发），
+  // 且带的是 host 下发的默认值 —— 这正是「客户端不另存一份默认值」的可观测证据。
+  const posts = cap.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/config'))
+  assert.equal(posts.length, 1, '点击应触发一次保存')
+  const body = JSON.parse(posts[0].body)
+  assert.deepEqual(body.patch.theme, CONV_DEFAULTS.theme, '必须恢复成 host 下发的出厂皮肤')
+  assert.deepEqual(body.patch.theme, { skin: 'pure' })
+})
+
+test('P4：全部板块都等于默认 ⇒ 一个恢复按钮都不出现', () => {
+  const { text } = renderPanel(nativeConfig())
+  assert.doesNotMatch(text, /恢复「.*」的默认设置/)
+})
+
+test('P4：旧 host 不下发 defaults ⇒ 给「重启宿主」提示，而不是静默失效', () => {
+  const { text } = renderPanel(nativeConfig({ theme: { skin: 'zafkiel' } }), null)
+  assert.match(text, /宿主未提供出厂默认值（旧版宿主的形态），重启宿主后即可用/)
+  assert.doesNotMatch(text, /恢复「主题」的默认设置/, '没有默认值就不该给按钮（点了也不知恢复成什么）')
+})
+
+test('P4：默认值不得在客户端硬编码（防「恢复成旧版默认」这种漂移）', () => {
+  assert.doesNotMatch(source, /skin: 'pure'[\s\S]{0,120}version: CONFIG_VERSION/, '客户端不得自造一份 DEFAULT_CONFIG')
+  // 默认值的唯一来源：host 的 /state 下发的 state.defaults
+  assert.match(source, /state\.defaults/, '恢复默认必须读 host 下发的默认值')
+  assert.match(source, /SECTION_LABELS/, '按钮措辞与组标题一致（集中一份字典，不散落）')
+})
+
+// ---------------------------------------------------------------------------
+// P5 配置导入 / 导出（2026-09-30）
+//
+// 路线要求：一段 JSON 下载/上传，**sanitize 全量收窄后整体替换**，**导入前二次确认**。
+// 本组钉住四件事：① 导出的是当前配置且带自描述标记；② 导入必须走 replace:true（不是 merge）；
+// ③ 二次确认说「取消」/ 无法确认 ⇒ **一个字节都不写**；④ 坏文件给**人话错误**而不是静默失败。
+// ---------------------------------------------------------------------------
+
+/** 渲染面板 → 点某个按钮 → 返回夹具（供继续驱动 created 里的元素）。 */
+function clickPanelButton(label, opts = {}) {
+  const cap = capture(opts)
+  const ctx = fakeCtx()
+  cap.descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [{
+    config: nativeConfig({ theme: { skin: 'zafkiel' } }),
+    defaults: CONV_DEFAULTS,
+    revision: 7,
+    persistent: true,
+  }, null, null, false, null, null, null, null]
+  react.setCalls = []
+  try {
+    const tree = view()
+    const button = collectNodes(tree, n => Array.isArray(n.children) && n.children.some(c => c === label))[0]
+    assert.notEqual(button, undefined, `面板上应能找到「${label}」`)
+    button.props.onClick()
+    return cap
+  } finally {
+    react.stateQueue = null
+  }
+}
+
+test('P5：导出 —— 下发的 JSON 带自描述标记、版本与当前配置', async () => {
+  const cap = clickPanelButton('导出配置…')
+  assert.equal(cap.blobs.length, 1, '导出应造出一份 Blob')
+  const payload = JSON.parse(cap.blobs[0].parts[0])
+  assert.equal(payload.kind, 'miasaki-appearance-config', '自描述标记：导入侧据此识别本线配置')
+  assert.equal(payload.version, 6, '带配置版本，便于将来迁移')
+  assert.equal(payload.config.theme.skin, 'zafkiel', '导出的是**当前**配置')
+  assert.deepEqual(Object.keys(payload.config).sort(), Object.keys(CONV_DEFAULTS).sort(), '导出的是归一化后的完整配置')
+
+  const anchor = cap.created.find(el => el.tagName === 'A')
+  assert.notEqual(anchor, undefined, '导出应创建下载锚点')
+  assert.match(anchor.download, /^miasaki-appearance-config-v6\.json$/, '文件名带版本，便于区分备份')
+  assert.equal(anchor.clicked, true, '必须真的触发下载')
+  assert.equal(cap.objectUrls.length, 1, 'objectURL 应被回收（不泄漏）')
+})
+
+test('P5：导入 —— 走整体替换（replace:true），不是合并', async () => {
+  const cap = clickPanelButton('导入配置…', { confirm: () => true })
+  const input = cap.created.find(el => el.type === 'file')
+  assert.notEqual(input, undefined, '导入应创建文件选择框')
+  assert.match(input.accept, /json/, '文件类型应限定 JSON')
+  assert.equal(input.clicked, true, '必须真的弹出选择框')
+
+  const imported = { theme: { skin: 'kurkuriel' } }
+  input.files = [{ text: async () => JSON.stringify({ kind: 'miasaki-appearance-config', version: 6, config: imported }) }]
+  input.onchange()
+  await flushAsync()
+
+  const posts = cap.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/config'))
+  assert.equal(posts.length, 1, '确认后应发出一次保存')
+  const body = JSON.parse(posts[0].body)
+  assert.equal(body.replace, true, '导入必须是整体替换语义（缺的板块回出厂默认）')
+  assert.deepEqual(body.patch, imported, '发出的是文件里的配置对象')
+  assert.equal(body.expectedRevision, 7, '沿用乐观并发')
+})
+
+test('P5：导入的二次确认说「取消」⇒ 一个字节都不写', async () => {
+  const cap = clickPanelButton('导入配置…', { confirm: () => false })
+  const input = cap.created.find(el => el.type === 'file')
+  input.files = [{ text: async () => JSON.stringify({ config: { theme: { skin: 'kurkuriel' } } }) }]
+  input.onchange()
+  await flushAsync()
+  assert.equal(cap.fetches.filter(f => f.method === 'POST').length, 0, '取消导入不得写配置')
+})
+
+test('P5：导入坏文件 ⇒ 人话错误且不写；无法弹确认框时同样取消', async () => {
+  // ① 不是 JSON
+  const bad1 = clickPanelButton('导入配置…', { confirm: () => true })
+  const in1 = bad1.created.find(el => el.type === 'file')
+  in1.files = [{ text: async () => '{ 这不是 JSON' }]
+  in1.onchange()
+  await flushAsync()
+  assert.equal(bad1.fetches.filter(f => f.method === 'POST').length, 0)
+  assert.ok(react.setCalls.some(v => typeof v === 'string' && /不是有效的 JSON/.test(v)), '要给可读错误')
+
+  // ② 顶层不是对象
+  const bad2 = clickPanelButton('导入配置…', { confirm: () => true })
+  const in2 = bad2.created.find(el => el.type === 'file')
+  in2.files = [{ text: async () => '[1,2,3]' }]
+  in2.onchange()
+  await flushAsync()
+  assert.equal(bad2.fetches.filter(f => f.method === 'POST').length, 0)
+  assert.ok(react.setCalls.some(v => typeof v === 'string' && /顶层应该是一个对象/.test(v)))
+
+  // ③ 环境无法弹确认框（window.confirm 缺席）⇒ **取消**，而不是静默继续
+  const noConfirm = clickPanelButton('导入配置…', { confirm: undefined })
+  const in3 = noConfirm.created.find(el => el.type === 'file')
+  in3.files = [{ text: async () => JSON.stringify({ theme: { skin: 'kurkuriel' } }) }]
+  in3.onchange()
+  await flushAsync()
+  assert.equal(noConfirm.fetches.filter(f => f.method === 'POST').length, 0, '无法确认时不得继续替换')
+  assert.ok(react.setCalls.some(v => typeof v === 'string' && /无法弹出确认框/.test(v)))
+})
+
+test('P5：导入兼容裸配置对象（自己手写的 JSON 也能用）', async () => {
+  const cap = clickPanelButton('导入配置…', { confirm: () => true })
+  const input = cap.created.find(el => el.type === 'file')
+  const bare = { wallpaper: { source: 'builtin:aurora', surface: { sidebar: 80 } } }
+  input.files = [{ text: async () => JSON.stringify(bare) }]
+  input.onchange()
+  await flushAsync()
+  const posts = cap.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/config'))
+  assert.equal(posts.length, 1)
+  assert.equal(JSON.parse(posts[0].body).replace, true)
+  assert.deepEqual(JSON.parse(posts[0].body).patch, bare)
 })

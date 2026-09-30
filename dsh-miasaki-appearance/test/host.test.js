@@ -450,3 +450,104 @@ test('POST /config：落盘失败必须如实失败（500 + changed:false，内�
   assert.equal(again.status, 500, '一次失败不得让后续写入卡死或假成功')
   assert.equal(again.body.changed, false)
 })
+
+// ---------------------------------------------------------------------------
+// P4 / P5（2026-09-30）：恢复默认的默认值下发 + 导入配置的整体替换语义
+// ---------------------------------------------------------------------------
+
+test('P4：GET /state 下发 defaults —— 出厂默认值的唯一来源', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const res = await callApi(ctx, '/appearance/api/state')
+  assert.equal(res.status, 200)
+  assert.equal(typeof res.body.defaults, 'object', '面板的「恢复默认」需要它，不下发就只能禁用')
+  assert.equal(res.body.defaults.enabled, false, '出厂总开关必须关闭（「关掉即原生」硬契约）')
+  assert.deepEqual(res.body.defaults.theme, { skin: 'pure' })
+  // 与 config 同源：两者键集一致（否则面板的按板块比对会错位）
+  assert.deepEqual(Object.keys(res.body.defaults).sort(), Object.keys(res.body.config).sort())
+})
+
+test('P5：replace:true = 整体替换 —— 文件里没写的板块回到出厂默认', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const seeded = await callApi(ctx, '/appearance/api/config', 'POST', {
+    patch: { enabled: true, theme: { skin: 'zafkiel' }, conversation: { density: 'compact' } },
+  })
+  assert.equal(seeded.body.config.conversation.density, 'compact')
+
+  // 只导入 theme：merge 语义下 conversation 会保留 compact；整体替换下它必须回默认。
+  const res = await callApi(ctx, '/appearance/api/config', 'POST', {
+    patch: { theme: { skin: 'kurkuriel' } },
+    replace: true,
+  })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.changed, true)
+  assert.equal(res.body.config.theme.skin, 'kurkuriel')
+  assert.equal(res.body.config.conversation.density, 'comfortable', '整体替换：没写的板块回出厂默认')
+  assert.equal(res.body.config.enabled, false, '总开关同样回出厂（false）—— 这是替换不是合并')
+})
+
+test('P5：replace:true 收到非对象 ⇒ 400 显式拒绝，且一个字段都不动', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  await callApi(ctx, '/appearance/api/config', 'POST', { patch: { theme: { skin: 'zafkiel' } } })
+
+  for (const bad of [null, 42, 'x', [1, 2], true]) {
+    const res = await callApi(ctx, '/appearance/api/config', 'POST', { patch: bad, replace: true })
+    assert.equal(res.status, 400, `replace + ${JSON.stringify(bad)} 必须 400`)
+    assert.equal(res.body.error, 'invalid-config')
+    assert.match(res.body.message, /不是一个配置对象/)
+  }
+
+  const after = await callApi(ctx, '/appearance/api/state')
+  assert.equal(after.body.config.theme.skin, 'zafkiel', '被拒绝的导入不得改动任何字段（更不得静默清空）')
+})
+
+test('P5：replace:true 同样受乐观并发保护（旧修订 → 409，不写盘）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const first = await callApi(ctx, '/appearance/api/config', 'POST', { patch: { theme: { skin: 'zafkiel' } } })
+  const res = await callApi(ctx, '/appearance/api/config', 'POST', {
+    patch: { theme: { skin: 'pure' } },
+    replace: true,
+    expectedRevision: 0,
+  })
+  assert.equal(res.status, 409)
+  assert.equal(res.body.error, 'revision-conflict')
+  const after = await callApi(ctx, '/appearance/api/state')
+  assert.equal(after.body.config.theme.skin, 'zafkiel', '冲突拒绝后配置不动')
+  assert.equal(after.body.revision, first.body.revision)
+})
+
+test('P5：replace:true 内容与当前等价 ⇒ changed:false（不写盘、不涨修订）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const first = await callApi(ctx, '/appearance/api/config', 'POST', { patch: { theme: { skin: 'zafkiel' } } })
+  assert.equal(first.body.changed, true)
+
+  const same = await callApi(ctx, '/appearance/api/config', 'POST', {
+    patch: { theme: { skin: 'zafkiel' } },
+    replace: true,
+  })
+  assert.equal(same.status, 200)
+  assert.equal(same.body.changed, false, '导入同一份配置不该产生写盘与修订跳动')
+  assert.equal(same.body.revision, first.body.revision)
+})
+
+test('P5：replace:true 会收窄越界与未知字段（导入内容一律当不可信输入）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const res = await callApi(ctx, '/appearance/api/config', 'POST', {
+    replace: true,
+    patch: {
+      theme: { skin: 'zafkiel', scheme: 'dark' }, // scheme 是 v3 遗留字段
+      conversation: { density: 'compact', maxWidth: 999999 },
+      nonsense: { whatever: true },
+      enabled: 'yes',
+    },
+  })
+  assert.equal(res.status, 200)
+  assert.deepEqual(res.body.config.theme, { skin: 'zafkiel' }, '未知字段不得进入配置')
+  assert.equal(res.body.config.conversation.maxWidth, 1600, '越界值被收窄到上界')
+  assert.equal(res.body.config.enabled, false, '非布尔值回落到出厂值，而不是被当成真')
+})
