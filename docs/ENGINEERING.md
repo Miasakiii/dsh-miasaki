@@ -12,7 +12,7 @@
 
 | 线 | 目录 | 定位与现状 |
 |---|---|---|
-| 桌面端 | [`dsh-miasaki-desktop/`](../dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH profile 插件：桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）、Computer Use GUI 工具（dsh-computer-use，桌宠 v4 能力底座）——**用量监控已于 2026-09-26 迁出本线（见第八线），免费模型池已于 2026-09-28 迁出并升级为多来源聚合器（见第九线）**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**2026-09-27/28 桌宠 v4–v5**：whale 图集接入（`cut-frames.mjs` 按主题行名表切 7 行，行号语义不跨主题共享）、反转狂三白军装重画（`inverse-states.mjs` 背景色四角采样，蓝底白底通吃）、`pet_native/xform.rs` 绘制变换层（逆向映射采样 + M1 呼吸 / M2 摇摆 / M3 挤压，cargo 100 例单测）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的**八个**运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。 |
+| 桌面端 | [`dsh-miasaki-desktop/`](../dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH profile 插件：桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）、Computer Use GUI 工具（dsh-computer-use，桌宠 v4 能力底座）——**用量监控已于 2026-09-26 迁出本线（见第八线），免费模型池已于 2026-09-28 迁出并升级为多来源聚合器（见第九线）**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**2026-09-27/28 桌宠 v4–v5**：whale 图集接入（`cut-frames.mjs` 按主题行名表切 7 行，行号语义不跨主题共享）、反转狂三白军装重画（`inverse-states.mjs` 背景色四角采样，蓝底白底通吃）、`pet_native/xform.rs` 绘制变换层（逆向映射采样 + M1 呼吸 / M2 摇摆 / M3 挤压，cargo 100 例单测）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的**九个**运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）——最新一件是 **2026-09-30 的 `dsh-client-ui-workspace`**（会话浏览器「侧线会话不占列表」，让 `@miasaki/dsh-sidebar` 的辅助对话不进官方列表；判据是跨包 localStorage 声明，声明缺席即官方原状）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。 |
 | Fleet | [`dsh-miasaki-fleet/`](../dsh-miasaki-fleet/) | 多 Agent CLI 编排（`package.json` 0.20.0）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）/ G0–G4 图工程判定层（契约、图与就绪度、能力图、异构验证者选取）。 |
 | Canvas | [`dsh-miasaki-canvas/`](../dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.7，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
 | Sidebar | [`dsh-miasaki-sidebar/`](../dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.10.0-miasaki.0）：**接入官方右侧 Sidebar**，注册**两个** tab 类型（「审查」+「辅助对话」，后者 2026-09-28 落地）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除）；**2026-09-25 右栏终端退役**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），沿用官方策略不再自建，内嵌终端收敛为**底部面板单形态**（Ctrl+` / 标题栏按钮唤起，多标签多会话、node-pty 路线 B、一次性 token 闸门、回放环 + 背压淘汰，host 半与容器无关零改动）。单测 **86 例**（81 通过 / 5 环境跳过）、静态回归 **13/13**（11 个测试文件）；**M2.1 辅助对话已落地（2026-09-28）**——右栏第二个 tab（侧线 = `ctx.sessions.fork` 不传 `atSeq`，主会话运行中可开；嵌入式官方会话，零自研聊天 UI），实机验收 7/7，M2.2/M2.3 未做。**2026-09-30 回退「只带最近 3 轮」**：09-29 曾传 `atSeq` 截到倒数第 3 个 `turn/start`，但把方向读反了 —— `atSeq` 是**保留 `0..atSeq` 的头部前缀上界**（`dsh-session/lib/types/fork.js:19` 的 `events.slice(0, boundary + 1)`），**只能截尾、不能截头** ⇒ 「只带最近 N 轮」用 `fork` 做不到，真触发时反而丢最近的轮次、留更早的历史；侧线已回到官方默认的全文前缀（`client.js` 与测试 `git restore` 回 09-29 之前，单测 18 → **13** 例）。契约事实见该线设计文档 **C1b**、原因与 ZCode 官方复核见 `design/CHANGELOG.md` 2026-09-30 条。 |
@@ -689,6 +689,167 @@ child 无 goal 不调（含「有 revision 无 id」的残缺形态）/ 两种�
 **接线与基线**：`verify-all repo` **5 → 6 项**，全量 **173 → 174**。同批补上派单器的 transcript
 脱敏（worker stdout 常带本机绝对路径，落盘前统一换 `%USERPROFILE%`）——否则下次派单就会写回来
 （与 `scan-agents.ps1` 的 binPath 脱敏同一教训）。
+
+**2026-09-30（fleet）· 派单器接线：把「已落地但停在可查询」的判定层接进在役执行路径**`[实测]`：
+fleet 的四层判定里**只有 G2 能力闸门**（2026-09-11）真正接在 `dispatch-task.ps1` 上 ——
+G0 写入入口、G1 任务图、G4 验证器都停在「Commander 可手工查询」。本轮接 G1 与 G0：
+
+- **G1 可派闸门**：新增 `Test-DispatchableGate`，复用 `workers/graph/task-ready.mjs --explain <id> --json`
+  （不重复实现）；`ready=false` → 打印**全部** reasons → 拒绝派单 exit 2；纳入 `-CheckOnly`。
+  派单器此前**只判「档案 / 开关 / 预算 / 能力」，不判任务本身该不该派** —— 状态不是 queued、
+  依赖未满足，两种情况都能一路派下去，且全程无提示。
+- **assignee 一致性**：`-Agent` ≠ 台账 `assignee` → 拒绝并指向 `reassign` 补丁。G1 判的是**台账**里的
+  assignee，而 `-Agent` 是另一个独立输入 —— 二者不等会「闸门通过、却派给了另一个人」。
+- **G0 事件留痕**：`task.started`（CLI 启动**前** —— 进程崩了也留痕）+ 终态 `task.completed` /
+  `failure.detected`（判据与 `final-state.ps1` 同源），经 `bus-apply` 唯一入口。
+  **事件是审计不是闸门**（applier 报错只告警）。根治 `events.jsonl` 长期只有人工里程碑的一端。
+- **冷启动降级**：`status.json` 是运行时产物（已 ignore），从未跑过的 agent 必然没有它
+  ⇒ F3 判活给 `no-status` / `alive=false` ⇒ 照判会**硬拒首跑**（新 agent 永远派不出去）。
+  故降级为告警放行；`running` 但心跳过龄仍是僵尸、照旧硬拒。两者靠 `--explain --json` 新增的
+  结构化字段 `agent` 区分，**不靠 reasons 的字符串匹配**（v1 丢弃哪条仍按文案，已如实标注并成对钉住）。
+- **`$env:BUS_ROOT = $Workspace`**：判定器与 applier 默认按自身文件位置推导根，与 `-Workspace`
+  不一致时会出现「派单器读 A 工作区、判定器读 B 工作区」的静默错位；该对齐同时让夹具测试成为可能。
+
+**真实闭环与独立复核（一个交付物同时承载两件事）**：派了真实任务 `t-0010`，任务内容**就是**
+「由一个异构 agent 复核本次接线」（对抗立场 / 只读 / 每条结论必须带 `文件:行号`）。
+首派 `claude` 失败 —— **不是 fleet 侧问题**：该 CLI 经 **ccswitch** 做模型路由，当时 ccswitch 未启动 ⇒
+默认模型解析成不可用的 `step-5-preview[1m]`，接口返 404（`unrecognized_model`）；ccswitch 启动后**已实测恢复**
+（`claude-sonnet-5[1M]`、exit 0）。这轮失败**恰好实证了失败分支**：
+事件流 `task.started` → `failure.detected`、`status.json` 如实落 `error`；经 `reassign` 补丁改派 `pi` 后
+exit 0 → `task.completed`，交付契约与台账终态**同一超步**（总线 v11）。`pi` 产出 **6 条 findings、无阻断级**：
+
+| finding | 处置 |
+|---|---|
+| F2 CLI 起不来时 `$LASTEXITCODE` 滞留 0 ⇒ **假成功写进事件流** | ✅ 当批修复：spawn 前 `Get-Command $exe` 预检（记 127） |
+| F3 只钉函数定义 ⇒ 删掉派单**主路径**调用点，全仓不会变红 | ✅ 当批修复：断言补**两处调用点**，并改为按文件精确匹配 |
+| F4 注释/文档写「不靠字符串匹配」而实现按文案丢弃 | ✅ 当批修复：如实描述 v1 边界 + 两侧文案**成对**钉进闸门 |
+| F1 崩溃残留 `status.json` ⇒ 永久硬拒该 agent 且无重置入口 | ⏸️ 待 Operator 裁决（既有缺口，本轮把它从显示问题升级为派单闸门输入） |
+| F5 口径分歧只比 `enabled` / F6 台账坏行静默跳过 + stderr 被吞 | ⏸️ 下一批 |
+
+**顺带暴露一处空文**：`tasks/<id>/result.json` 虽在 applier 白名单内，但**历史超步的 `paths` 里从未出现过它**
+（t-0003 / t-0004 的契约都是直接写盘）⇒ 该路径的「唯一入口」纪律一直没被真跑过；t-0010 首次让它经唯一入口落盘。
+
+**同日第二批 · 复核 findings 全部收口**：上面那次独立复核给出的 6 条 findings + 1 条附带发现（F7）已全部处置 ——
+F2 / F3 / F4 第一批修复；第二批修的是 F1（新增 `-ResetStatus`：崩溃残留的 `status.json` 此前会让闸门**永久硬拒**
+该 agent，而全仓没有任何恢复入口 —— 该开关**删除**残留而非写 `stopped`（判活对 `stopped` 同样给 `alive=false`），
+且**心跳新鲜时拒绝执行**以免误删可能正在跑的档案，并在拒绝文案里给出可复制的命令）、
+F5（预算那对双实现 `Get-DayCost` ↔ `dayCost` 此前完全没有纳入分歧比对）、
+F6（台账坏行此前**静默跳过** ⇒ 判定可能建立在残缺台账上；现 `--explain --json` 带出 `bus_bad_lines`，
+**有坏行即拒绝**并指向 `validate-bus`；判定器 stderr 仍被 `2>$null` 吞是**有意保留**——输出不可解析本身已判拒绝）、
+F7（`final-state.ps1` 调用失败时此前回退成 `exitCode==0→idle`，会把一份 `status=blocked` 的契约记成
+「健康空闲 + `task.completed`」；现保守记 `error`，且不复制判定逻辑以保持单点）。
+夹具 **10 → 17 例**（含 `-ResetStatus` 六态：空操作 / 清残留 / 清除后闭环放行 / 心跳新鲜拒绝 / **`error` 不影响派单故拒绝清除** / `stopped` 允许清除）、接线断言 **12 → 20 项**。
+**一处实现陷阱值得记**：判定「心跳新鲜」时，PS7 的 `ConvertFrom-Json` 会把 ISO-8601 字符串**自动转成 `[datetime]`**，
+再 `[string]` 转换后 `[datetime]::Parse` 会按当前文化解析该字符串表示（本机 zh-CN 下实测把新鲜心跳判成「不新鲜」，
+于是**误删了正在用的档案**）；修法是两条分支各取正确口径（已是 `DateTime` 直接转 UTC；字符串用
+`DateTimeStyles::RoundtripKind` 按 ISO 解析）。
+**对 B3 的重新判断**：`result.json` 的交付期**硬校验在派单器侧不成立** —— worker 在 headless 下不落盘、
+交付契约由 Commander / 派单器**事后代写**，故「派单刚结束时没有 `result.json`」是**正常形态**；
+K3 的台账驱动巡检已经是正确落点，派单器侧至多适合做提示 ⇒ **B3 建议降级或取消**。
+
+**同日第三批 · G4 验证器挂载（判定层 → 派单路径）**：G4 的异构验证者选取此前只是 Commander「可查询」，
+**高风险任务应挂而未挂时没有任何告警**（判定层落地时自陈的边界）。本批把它接进派单路径：
+brief 声明 `risk:` / `需要验证：`（或 `-Risk`）即要求**可用**的异构验证者
+（`verifier-pick --for --min-level --json`），**无可用候选直接拒绝派单**（比原计划的「告警」更强 ——
+派单前判定本就是闸门位）；值非法即拒绝（**不猜**，`none` 自验属禁止项）；**未声明即跳过**（零行为变更）。
+派单后生成 `tasks/<id>/verify-brief.md`（**不自动派发**验证任务 —— 那会引入新的任务生命周期，属独立议题）。
+**两处判据细节值得记**：① 闸门判据是**可用候选数**而不是 `--for` 的退出码（`--all` 语义下候选可能全不可用）；
+② **写用例时发现一处判定层不一致** —— G4 的可用性判据把 `alive=false` 判**不可用**，而「无 `status.json`」
+在 `liveness.cjs` 里正是 `alive=false` ⇒ **从未运行过的 agent 不能被选为验证者**（与 G1 那次
+「新 agent 永远派不出去」**同族**，只是换了判定层；G1 对同一形态是**降级放行**的）。本批边界是
+「只接线、不动判定层」，故夹具里给同侪 agent 补心跳隔离它。
+实测 `--for pi --min-level vendor` → bl / opencode 两个 vendor 级可用候选。夹具 17 → **23 例**（G4 六态）、
+接线断言 20 → **26 项**。
+
+**同日第四批 · 两层判活口径统一（「首跑豁免」收敛为单点）**：上一批写用例时实测发现一处
+**同族形态复发** —— 「从未运行过（无 `status.json`）不算僵尸」这条口径，两个消费方**各自实现**且结论相反：
+派单闸门（`dispatch-task.ps1` 冷启动降级）**放行**，验证者选取（`verifier.cjs` 的 `available` 看 `alive`）
+**判不可用** ⇒ **从未运行过的 agent 永远当不了验证者**（与「新 agent 永远派不出去」同族，换了判定层）。
+收敛方式：口径单点落在 `liveness.cjs` 的 `FIRST_RUN_STATE` + `isFirstRun`；
+`verifier-pick.mjs` 的 agent meta 增 `firstRun` / `livenessState` —— **刻意不把 `alive` 折算成可用**
+（那会让「alive」这个字段名说谎），由消费方显式看标记；`verifier.cjs` 的可用性判据加首跑豁免；
+派单器以 `state -eq 'no-status'` 消费**同一状态字面量**。
+**豁免刻意不外溢**：`unknown`（真僵尸）、开关未开启、`firstRun` 字段缺席（保守按非首跑）照旧不可用 ——
+豁免必须是**显式事实**，不能靠默认。测试 `liveness` 7 → **9 例**、`verifier` 25 → **29 例**（+4 覆盖豁免与三条边界），
+`verify-all` 加 **5 项口径断言**（单点函数 / 状态字面量 / 两个消费方 / 派单器同口径）。
+**实测**：`--for pi --min-level vendor` 的候选由 2 个 → **3 个**（`claude` 因首跑标记被正确纳入）。
+
+**接线与基线（第四批结束时）**：`verify-all fleet` **18 → 20 项**（+`dispatch 可派闸门接线` 纯文本断言
+**26 项**、+`tests/dispatch-gate.test.mjs` 夹具 **23 例**）；全量 **178 项、十类全 PASS**。
+用法与设计决策见 fleet README 与 `dsh-miasaki-fleet/docs/multi-agent-cli-orchestrator-design.md`（v0.25）；
+规划与分档依据在 `_refs/fleet-dispatch-wiring-plan-2026-09-30.md`（规划类，按仓库纪律不入库）。
+
+**同日第五批 · 判定层上屏（P1）**`[实测]`：总控制面板（`fleet-monitor/`）此前只有「在线数 / 任务数 / 成本」，
+而判定层的事实**一条都没上屏** —— 尽管派单器早已按这些口径在判定。补三个**只读**端点 + 页面一块：
+
+| 端点 | 内容 | 口径来源 |
+|---|---|---|
+| `GET /api/dispatchable` | 可派集 + **不可派原因** + 终态 | `task-ready.mjs --dispatchable --json` |
+| `GET /api/gaps` | 能力断层（哪些能力只有归档 agent 提供） | `agent-pick.mjs --gaps --json` |
+| `GET /api/events?limit=N` | 机器事件流尾部 | `state/graph-events.jsonl` |
+
+**设计要点是「spawn 现成 CLI，不重复实现判定」** —— 面板显示什么，派单器就按什么判定（口径同源）；
+端点是面板显示层的第三份消费者，另写一份判定必然漂移。两处判据细节：① 判定层 CLI 的**非零退出是正常语义**
+（无可派任务时 exit 1，stdout 仍是合法 JSON）⇒ **先取 stdout 再解析**，不能拿退出码当失败；
+② 判定层不可用时端点返回 `ok:false` 而**不让面板整页 500**。闸门 `fleet-monitor 判定层区块 (P1)` **7 项**
+（区块 + 三个端点 + `runJudgement` 口径同源）。**尚未做**（P2 候选）：`/api/verifiers` 与设计 §8.4 的四条
+告警规则（心跳丢失 / 预算 ≥80% / 任务硬超时 / 开关与进程不一致）—— **面板不告警就只是图表页**。
+K1 的实机判据同日补立（回归矩阵 §3 K1）。
+
+**同日第六批 · 写入收敛（B5）+ 二次独立复核（t-0011 / t-0012）**`[实测]`：口径从笼统的
+「所有文件经唯一入口」改为**可判定的一条** ——「**真相进总线，派生态明确豁免**」：
+
+- **`agents/<id>/usage.jsonl`（成本唯一原始来源）本批改经 applier**（白名单登记，仅允许 `append`），
+  t-0011 实测在其 superstep 的 `paths` 里命中（总线 v20）。
+- **失败语义「数据不丢优先」**：applier 失败 ⇒ 回退直写 + 告警（行内标 `[BUS_BYPASS]`、落
+  `agents/<id>/logs/dispatch.log`，可 grep）；**但 partial 失败不回退** —— partial 意味「补丁可能已落盘」，
+  再写一遍就是**成本双计**（这条由复核指出，属阻断级）。
+- **`status.json` 明确豁免**，理由写进契约：真值在 `result.json` + 事件流；写频 **2 次/派单**、全仓无周期性
+  心跳写者；归因收益低。**原「心跳风暴」论据经复核证伪后已撤回**并如实标注「事件流覆盖是有条件的
+  （事件发射 best-effort）」—— 把推断当成现状写进契约，是这次复核抓到的最典型一处。
+- **台账写者归属统一**：设计文档 **§4.5 的权责表为唯一定义**，消除 §2 / §5 / §7.0 的**四说**。
+
+**复核产出与处置（t-0011，异构 agent / 对抗立场 / 只读）**：**2 条阻断 + 4 条建议全部当批处置** ——
+阻断① **失败轮零计量**（usage 此前只在 `exitCode -eq 0` 时解析 ⇒ 失败轮「跑过但不记账」，与主协议 §9
+「usage 是成本唯一原始来源」直接冲突）；阻断② **partial 失败回退 ⇒ 重复计量**（见上）。
+建议里落地的是：终态事件补 `state`（否则 `blocked` 与 `error` 在事件流里不可分）、`-ResetStatus` 补
+`agent.status.reset` 事件（**新增事件类型**，同步扩 `EVENT_TYPES` 与 schema enum）、「回退直写」的告警
+不再只走控制台（此前 `logs/` 里查不到任何 `[usage]` 行 ⇒ 缺口的唯一记录不持久）。
+**另修两个同族命令构造缺陷**：prompt 里的引号泄漏成 CLI 参数（实测 CLI 收到 `-A` / `20` 直接报错）；
+`cmd:` 行的**成对引号**未剥离（缺它会把 `"process.exit(3)"` 字面量传给 node，JS 视其为合法字符串表达式
+⇒ 命令**静默 exit 0 被记成成功**）。新增 `-ShowCommand`（打印将要执行的 argv，不派单不写盘），
+与真实执行**共用** `Resolve-Argv`（各写一份必然漂移）。
+**已知未收敛（登记在册，勿当成已完成）**：`agents/<id>/control.json`（fleet-monitor 的 `POST /api/toggle`
+直写 —— 派单许可是**输入**不是派生态）、`agents/<id>/manifest.json` 与 `agents/registry.json`
+（`scan-agents.ps1` 直写 —— 能力闸门的**实际输入**）；另 `capability.json` 虽在白名单内但**全仓零写者**。
+**验收载体 t-0012**：用 `cmd:` 造一条**零成本必然失败**的轮次（`node -e "process.exit(3)"`，不调用任何模型），
+验三条 —— 失败轮**仍新增一行**显式未计量行（`note` 注明本轮失败）/ 事件流 `failure.detected` 带
+`state=error` / 派单器退出码为 3。可随时重跑。回归：`bus-contract` **23 → 26 例**、
+`dispatch-gate` 夹具 **23 → 26 例**，可派闸门接线断言 **26 → 36 项**。
+
+**当日最终基线（2026-09-30 收工）**`[实测]`：全量 **179 项、十类全 PASS** —— sidebar 13 / canvas 14 /
+**fleet 21** / desktop 39 / ssh 31 / dual-model 15 / appearance 18 / usage 7 / free-model 15 / repo 6。
+**Node v24.15.0 与 v22.19.0（CI 版本）各自实跑 179/179**，两条版本口径一致 ⇒ CI 应绿。
+fleet **20 → 21**（+P1 面板判定层区块断言）；对照上一条「178 项」的差额即此项。
+
+**同日第七件 · 口径对账（文档失真逐条订正）**：本轮收工前把「文档写的」与「实跑出来的」逐项对齐，
+订正的**都不是本轮新引入的**，而是历史时点数字长期未跟上的形态（本仓最警惕的那类：注释/文档与实现不一致）：
+可派闸门接线断言 **36 项**（文档曾写 12 / 20 / 26 / 31 四个值）、`dispatch-gate` 夹具 **26 例**（曾写 23）、
+`bus-contract` **26 例**（曾写 23）、`bus-integration` **17 例**（曾写 13）、`fleet-monitor` **16 例**（曾写 11）、
+fleet 全线用例 **177 例**（曾写 119 / 161）、dispatch 能力闸门断言 **7 项**（曾写 8 —— 实际脚本里就是 7 条，
+写 8 从落地起就不成立）。根 README 的静态回归 **173 → 179**、回归矩阵 §3.0 分母 **106 → 109**
+（C11 / C12 / F5 三项补立后未同步分母）。**教训与「迁移漏登记」同族**：数字类失真不会自己暴露，
+**唯一可靠的订正方式是把每处数字重新实跑一遍**，而不是按上一次的记录顺手 +1。
+
+**同日第八件 · 修掉一处「钦定复跑方式假红」**`[实测]`：用 `npx -y node@22.19.0 scripts/verify-all.mjs`
+（CI 注释与本文档都推荐的「对齐 CI Node 版本」复跑方式）时，`fleet` **20/21** —— 唯一红的
+`tests/dispatch-gate.test.mjs` 里全部「放行」用例挂在「判定器输出无法解析」。**根因不在 Node 版本**：
+npx 的 `.bin` 目录里**只有 `node`（sh 脚本）/ `node.cmd` / `node.ps1`，没有 `node.exe`**，pwsh 的
+`& node <判定器>` 命中 `node.ps1`，而该 shim 调向 `../node/bin/node`（Windows 下无扩展名、不是可执行文件）
+⇒ **零输出** ⇒ 派单器（正确地）判「无法解析」并拒绝派单。修法是**测试侧**把 `process.execPath` 所在目录
+**前置进子进程 PATH**（不改产品：生产环境 PATH 里是真 `node.exe`）。**CI 本身不会红**（`setup-node` 安装的
+node 目录里是真 `node.exe`），但**这条要修的理由不是 CI**：一个「钦定的复跑方式」会稳定假红，下一步就是
+**真红被当成假红略过** —— 那正是本仓 2026-09-26「CI 红 11 次没人看」的同族形态。
 
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）

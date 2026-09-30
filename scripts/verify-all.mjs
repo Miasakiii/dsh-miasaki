@@ -116,6 +116,89 @@ function planFleet() {
     ],
     cwd: dir,
   })
+  // 派单可派闸门接线（G1/G0，2026-09-30）：同为纯文本断言（不 spawn PowerShell、
+  // 不依赖 PS7，任何环境都能跑）。守护四件事：①G1 闸门与事件留痕仍在；②G1 闸门的
+  // **两处调用点**都在（只钉函数定义会让「接线悄悄退化」全绿 —— 见下条注释）；
+  // ③冷启动降级依赖的结构化字段 `agent` 仍在，且「丢弃哪条 reason」的文案与判定层
+  // 那一侧**成对**存在；④冷启动降级、BUS_ROOT 对齐、CLI 存在性预检、事件不阻断仍在。
+  checks.push({
+    line: 'fleet',
+    name: 'dispatch 可派闸门接线 (G1 + G0 事件)',
+    cmd: process.execPath,
+    args: [
+      '-e',
+      [
+        "const fs=require('fs'),p=require('path');",
+        "const s=fs.readFileSync(p.join(process.cwd(),'workers','dispatch','dispatch-task.ps1'),'utf8');",
+        "const r=fs.readFileSync(p.join(process.cwd(),'workers','graph','task-ready.mjs'),'utf8');",
+        "const g=fs.readFileSync(p.join(process.cwd(),'workers','lib','task-graph.cjs'),'utf8');",
+        "const l=fs.readFileSync(p.join(process.cwd(),'workers','lib','liveness.cjs'),'utf8');",
+        "const v=fs.readFileSync(p.join(process.cwd(),'workers','graph','verifier-pick.mjs'),'utf8');",
+        "const c=fs.readFileSync(p.join(process.cwd(),'workers','lib','verifier.cjs'),'utf8');",
+        "const b=fs.readFileSync(p.join(process.cwd(),'workers','lib','bus-contract.cjs'),'utf8');",
+        "const files={s:s,r:r,g:g,l:l,v:v,c:c,b:b};",
+        "const need=[",
+        "['G1 闸门函数','function Test-DispatchableGate','s'],",
+        // 两条**调用点**断言（2026-09-30 由 t-0010 独立复核 F3 补入）：此前只钉函数定义与
+        // 函数体字面量，删掉派单主路径那处调用全仓不会变红 —— 行为用例只覆盖 -CheckOnly。
+        "['预检分支调用点','Test-DispatchableGate $TaskId $Agent $localEnabled','s'],",
+        "['派单主路径调用点','Test-DispatchableGate $TaskId $Agent $true','s'],",
+        "['复用判定器','task-ready.mjs','s'],",
+        "['单任务查询','--explain','s'],",
+        "['assignee 一致性','reassign 补丁','s'],",
+        "['冷启动降级','判活按首跑放行','s'],",
+        // 这一对**必须同生同死**（复核 F4）：降级时「丢弃哪条 reason」只能按文案匹配
+        // （reasons 目前无 code）。改任一侧文案而不同改另一侧 ⇒ 降级静默退化为硬拒首跑。
+        "['判活丢弃判据（派单器侧）',\"-notmatch '判活失败'\",'s'],",
+        "['判活文案（判定层侧，与上条成对）','判活失败（心跳过龄，F3）','g'],",
+        "['工作区对齐','$env:BUS_ROOT = $Workspace','s'],",
+        // 复核 F2：CLI 不存在时 pwsh 不改 $LASTEXITCODE ⇒ 假成功会写进事件流（唯一真相）。
+        "['CLI 存在性预检','Get-Command $exe','s'],",
+        // 复核 findings 收口批次（2026-09-30 第二批）：这四条各对应一个「不报错的失效形态」——
+        // F1 崩溃残留无恢复入口 / F7 终态判定失败被静默记成 idle / F5 预算双实现无比对 / F6 坏行静默跳过。
+        "['崩溃残留恢复入口','-ResetStatus','s'],",
+        "['终态判定失败不静默回退','保守记 error','s'],",
+        "['预算口径分歧比对','预算本地判定','s'],",
+        "['台账坏行拒绝','bus_bad_lines','s'],",
+        "['事件函数','function Write-BusEvent','s'],",
+        "['开始事件','task.started','s'],",
+        "['失败事件','failure.detected','s'],",
+        "['事件不阻断派单','不影响派单','s'],",
+        "['判定器结构化字段','agent: agentInfo','r'],",
+        "['判定器坏行字段','bus_bad_lines: ctx.badLines','r'],",
+        // 第三批（B4）G4 验证器挂载：声明了风险就必须有**可用**验证者；未声明即跳过（零行为变更）。
+        // 同样钉住**调用点**：只钉函数定义的话，「接了却没调用」会全绿（第一批 F3 的教训）。
+        "['验证闸门函数','function Test-VerifierGate','s'],",
+        "['验证闸门调用点','Test-VerifierGate $Agent $verifyMinLevel','s'],",
+        "['风险声明解析','function Resolve-VerifyLevel','s'],",
+        "['等级映射不猜','function ConvertTo-MinLevel','s'],",
+        "['验证任务书生成','function Write-VerifyBrief','s'],",
+        "['未声明即跳过','跳过验证闸门','s'],",
+        // 首跑豁免（2026-09-30 统一两层判活口径）：判据单点在 liveness.cjs，
+        // 两个消费方各自**引用**它。此前两侧各自实现同一口径、结论相反 ——
+        // 派单闸门对 no-status 降级放行，验证者选取却把 alive=false 判不可用 ⇒
+        // 从未运行过的 agent 永远当不了验证者（与「新 agent 永远派不出去」同族）。
+        "['首跑口径单点','function isFirstRun','l'],",
+        "['首跑状态字面量','FIRST_RUN_STATE = \\'no-status\\'','l'],",
+        "['验证者选取消费首跑标记','firstRun: !archived && isFirstRun(live)','v'],",
+        "['验证者可用性含首跑豁免','meta.firstRun === true','c'],",
+        "['派单闸门同口径','agent.state -eq \\'no-status\\'','s'],",
+        // B5 写入收敛（2026-09-30）：收敛口径是「**真相类文件进总线，派生态明确豁免**」——
+        // 计量（usage）是真相 ⇒ 经唯一入口；status.json 是派生态缓存（真相在事件流，
+        // 且心跳是高频字段，进总线会引发事件风暴）⇒ 刻意豁免。两侧都要钉住：
+        // 只钉「usage 进总线」会漏掉「status 被顺手加进白名单」这种退化。
+        "['usage 经唯一入口','agents/$AgentId/usage.jsonl','s'],",
+        "['usage 失败回退直写','回退直写以保住计量数据','s'],",
+        "['回退时显式告警','未经唯一入口','s'],",
+        "['派生态豁免写进契约','派生态缓存','b'],",
+        "];",
+        "const miss=need.filter(x=>!files[x[2]].includes(x[1])).map(x=>x[0]);",
+        "if(miss.length){console.error('[dispatch-wiring] 缺失：'+miss.join(' / '));process.exit(1)}",
+        "console.log('[dispatch-wiring] 接线完整：'+need.length+' 项断言通过');",
+      ].join(''),
+    ],
+    cwd: dir,
+  })
   // G4：验证器选取与异构性判定（自验必须被拒；异构等级按厂商/模型判定）。
   checks.push({ line: 'fleet', name: 'test verifier (G4 异构验证)', cmd: process.execPath, args: [join(dir, 'tests/verifier.test.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'verifier-pick --check (G4 契约)', cmd: process.execPath, args: [join(dir, 'workers/graph/verifier-pick.mjs'), '--check'], cwd: dir })
@@ -130,6 +213,39 @@ function planFleet() {
   // 面板与桌宠照常显示正常。同一文件顺带覆盖 workers/dispatch/{final-state,dispatch-task}.ps1
   // 的语法（PowerShell 侧此前没有任何自动化检查）。
   checks.push({ line: 'fleet', name: 'test dispatch-state (K4 派单终态)', cmd: process.execPath, args: [join(dir, 'tests/dispatch-state.test.mjs')], cwd: dir })
+  // G1 派单可派闸门（2026-09-30）：真实台账 9 个任务全终态（可派 0 个），真实数据只能覆盖
+  // 「拒绝」分支 —— 故用夹具覆盖「放行」与冷启动降级，避免「闸门把该派的也拒了」这类
+  // 只会在下次真派单时才暴露的缺陷。
+  checks.push({ line: 'fleet', name: 'test dispatch-gate (G1 可派闸门)', cmd: process.execPath, args: [join(dir, 'tests/dispatch-gate.test.mjs')], cwd: dir })
+  // P1 面板判定层区块（2026-09-30）：面板此前只有「在线数/任务数/成本」——判定层的事实
+  //（可派集与不可派原因、能力断层、机器事件流）一条都没上屏。这条断言钉住「区块 + 三个端点 +
+  // 判定口径同源」三件事都在，避免它被后续改版静默删掉。
+  checks.push({
+    line: 'fleet',
+    name: 'fleet-monitor 判定层区块 (P1)',
+    cmd: process.execPath,
+    args: [
+      '-e',
+      [
+        "const fs=require('fs'),p=require('path');",
+        "const h=fs.readFileSync(p.join(process.cwd(),'fleet-monitor','panel.html'),'utf8');",
+        "const s=fs.readFileSync(p.join(process.cwd(),'fleet-monitor','server.js'),'utf8');",
+        "const need=[",
+        "['可派集区块','jDispatchable'],",
+        "['能力断层区块','jGaps'],",
+        "['机器事件区块','jEvents'],",
+        "['端点 dispatchable','/api/dispatchable'],",
+        "['端点 gaps','/api/gaps'],",
+        "['端点 events','/api/events'],",
+        "['判定口径同源（spawn CLI 而非重写）','runJudgement'],",
+        "];",
+        "const miss=need.filter(x=>!h.includes(x[1])&&!s.includes(x[1])).map(x=>x[0]);",
+        "if(miss.length){console.error('[panel] 缺失：'+miss.join(' / '));process.exit(1)}",
+        "console.log('[panel] 判定层区块与端点齐全：'+need.length+' 项');",
+      ].join(''),
+    ],
+    cwd: dir,
+  })
   // Bus validation is the fleet line's regression suite (F1 contract + G0 graph/event/result).
   checks.push({ line: 'fleet', name: 'validate-bus', cmd: process.execPath, args: [join(dir, 'workers/validate-bus.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'publish-pulse', cmd: process.execPath, args: [join(dir, 'workers/pulse/publish-pulse.mjs')], cwd: dir })
@@ -376,6 +492,18 @@ function planDesktop() {
     name: 'patch verify (品牌徽标 miasaki 化补丁可重建)',
     cmd: process.execPath,
     args: [join(dir, 'patches/dsh-client-ui-brand-official/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  // 会话浏览器「侧线会话不占列表」补丁（2026-09-30 新建，基线 0.2.0-rc.2）的自证。
+  // 1 条 JS 编辑：`sessionVisible()` 的 origin 判定之后追加一条「插件声明的侧线不显示」。
+  // 判据是**跨包契约** —— 读 `@miasaki/dsh-sidebar` 写入的 localStorage 声明键
+  // （`miasaki-sidebar:sidechat:hidden:v1`）；声明缺席/损坏即官方原状，故这个补丁
+  // 不可能把任何会话挡在列表外。SHA 重建比对 + vm.Script 语法闸门。纯离线。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (侧线会话不占列表补丁可重建)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-client-ui-workspace/patch.mjs'), 'verify'],
     cwd: dir,
   })
   // 「测试连通性 v2」的 host 侧能力（plugins/dsh-model-probe）：语法检查 +
