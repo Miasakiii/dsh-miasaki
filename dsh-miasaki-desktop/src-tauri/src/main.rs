@@ -2,6 +2,7 @@
 
 mod asset_source;
 mod assets;
+mod boot_intro;
 mod diag;
 mod launcher_icon;
 mod pet_native;
@@ -2331,6 +2332,20 @@ fn bootstrap_state() -> serde_json::Value {
     }
 }
 
+/// 启动片头设置（加载页 L2 视频层读；见 `boot_intro` 模块头注释的跨线契约）。
+///
+/// 只回答三个原语的最终投影：`intro`（段 id 或 `"off"`）与 `audio`。判定与门控
+/// （总开关 / 枚举白名单 / 异常一律不播）全在 `boot_intro` 模块内，本命令不做逻辑。
+/// 从不为配置问题报错——加载页拿不到就静默不播（L1 纹章层接管）。
+#[tauri::command]
+fn boot_intro_state() -> serde_json::Value {
+    let decided = boot_intro::read_boot_intro();
+    serde_json::json!({
+        "intro": decided.intro.unwrap_or_else(|| "off".to_string()),
+        "audio": decided.audio,
+    })
+}
+
 /// dsh 安装探测：where dsh + dsh --version + 环境自证（失败时也能一眼分清是哪一类问题）。
 #[tauri::command]
 fn dsh_check() -> String {
@@ -2878,6 +2893,7 @@ fn main() {
             retry_start,
             shutdown,
             bootstrap_state,
+            boot_intro_state,
             dsh_check,
             open_terminal,
             open_logs_dir,

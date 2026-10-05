@@ -33,7 +33,8 @@ use tauri::image::Image;
 use tauri::{AppHandle, Manager};
 
 /// 配置相对 dshHome 的路径（与 cordis.patch.yml 的 `dataDir` 对齐）。
-const CONFIG_REL: &str = "miasaki-appearance/config.json";
+/// `pub(crate)`：`boot_intro` 模块读同一份配置的 `boot` 板块（跨模块单一定义，防止路径漂移）。
+pub(crate) const CONFIG_REL: &str = "miasaki-appearance/config.json";
 /// 头像目录相对 dshHome 的路径。
 const AVATAR_DIR_REL: &str = "miasaki-appearance/avatars";
 /// 头像 URL 前缀（跨线契约，对应 lib/avatar.js 的 AVATAR_URL_PREFIX）。

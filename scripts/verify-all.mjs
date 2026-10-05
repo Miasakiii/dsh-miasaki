@@ -286,15 +286,30 @@ function planDesktop() {
     args: [join(dir, 'themes', 'test', 'auth-cookie.test.js')],
     cwd: dir,
   })
-  // 启动页 S4a 视觉层契约（design/boot-loading-terminal.md §4.2 的无 Rust 依赖部分）：
-  // 动画属性只准 transform/opacity（性能预算）、扫描线 opacity ≤ .06、零新增色、
-  // reduced-motion 全量静止、类名 .mia-boot-* 前缀；行为侧 VM 驱动就绪回弹触发。
+  // 启动页视觉层契约（design/boot-loading-terminal.md §4.2 的无 Rust 依赖部分 +
+  // design/2026-10-04-boot-intro-video.md §5 的 L2 视频片头层）：
+  // S4a —— 动画属性只准 transform/opacity（性能预算）、扫描线 opacity ≤ .06、零新增色、
+  // reduced-motion 全量静止、类名前缀；行为侧 VM 驱动就绪回弹触发。
+  // L2 —— 段与音轨来自宿主设置（boot_intro_state ← appearance config v7 的 boot 板块），
+  // 「关闭 / 未知段 / IPC 不可用 / reduced-motion ⇒ 一层都不建」的门控矩阵、退场四路
+  // （就绪 / 失败 / 解码失败 / 点击跳过）幂等、遮罩走主题变量、层盖在舞台层之上。
   // S4b（日志流 / 阶段进度）待 S3 stdout tee 钩子，落地时同批补行为断言。
   checks.push({
     line: 'desktop',
-    name: 'test loading (S4a 视觉层契约)',
+    name: 'test loading (S4a 视觉层 + L2 片头层契约)',
     cmd: process.execPath,
     args: [join(dir, 'ui', 'test', 'loading-visual.test.js')],
+    cwd: dir,
+  })
+  // 启动片头素材闸门（design/2026-10-04-boot-intro-video.md §4）：ui/intro/ 四段第三方 mp4
+  // 必须与台账（字节数 + SHA256 前 16 位，对齐上游 clips.meta.js）逐段一致。
+  // 素材是**快照不是依赖** —— 上游更新与本仓无关，但入库产物被改动（半截下载 / 手工替换）
+  // 必须在这里拦下；重放 `node scripts/extract-intro-clips.mjs`（无 --check）可修复。
+  checks.push({
+    line: 'desktop',
+    name: 'intro-clips (片头素材 SHA 台账)',
+    cmd: process.execPath,
+    args: [join(dir, 'scripts', 'extract-intro-clips.mjs'), '--check'],
     cwd: dir,
   })
   // 拖拽上传安全网（design/drag-drop-attachment-upload.md）：09-dropguard.js 分片登记 /

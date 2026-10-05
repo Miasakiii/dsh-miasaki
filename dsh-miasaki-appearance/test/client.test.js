@@ -133,6 +133,7 @@ const CONV_FETCH_CONFIG = {
   avatar: { source: '' },
   motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'off' },
   conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+  boot: { intro: 'brand', audio: false },
 }
 
 /**
@@ -141,7 +142,7 @@ const CONV_FETCH_CONFIG = {
  * 其余板块也取默认值 ⇒ **只有被行为测试改过的板块才会冒出恢复按钮**。
  */
 const CONV_DEFAULTS = {
-  version: 6,
+  version: 7,
   enabled: false,
   theme: { skin: 'pure' },
   wallpaper: {
@@ -152,6 +153,7 @@ const CONV_DEFAULTS = {
   avatar: { source: '' },
   motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
   conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+  boot: { intro: 'brand', audio: false },
 }
 
 /** 等 sync* 协程落定（stub 全部同步 resolve，一个宏任务 tick 即排空 microtask 队列）。 */
@@ -1208,7 +1210,7 @@ function renderPanelReturningText(config) {
 function nativeConfig(over) {
   return {
     // host 下发的配置**一定**带 version（sanitizeConfig 补的）；夹具照抄，否则导出名/迁移判据失真
-    version: 6,
+    version: 7,
     enabled: true,
     theme: { skin: 'pure' },
     wallpaper: {
@@ -1221,6 +1223,9 @@ function nativeConfig(over) {
     // P4 的恢复按钮判定当成「非默认」，两个夹具就此不自洽（首版即踩：写成了 'off'）。
     motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
     conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+    // 启动片头（v7）同理：必须等于出厂档，否则 P4 会在启动板块凭空长出一枚恢复按钮，
+    // 而「全原生档」用例（#8）断言的正是「一个恢复按钮都不出现」。
+    boot: { intro: 'brand', audio: false },
     ...over,
   }
 }
@@ -1351,6 +1356,74 @@ test('P4：默认值不得在客户端硬编码（防「恢复成旧版默认」
 })
 
 // ---------------------------------------------------------------------------
+// 启动片头（v7）：跨线字段的面板半（design/2026-10-04-boot-intro-video.md §5-D10）
+//
+// 本组钉住四件事：① 板块在位，且值域与 lib/config.js 的 INTRO_CLIPS 逐字一致（跨线契约的
+// 面板半——壳侧 boot_intro.rs 按同一值域校验）；② 旧 host（v6 配置没有 boot 板块）⇒ 给重启
+// 提示而不是整面板空白（2026-09-12 / 09-30 两次空白事故同族的防线）；③ 两枚控件各自只发
+// 自己那一格的增量 patch（不能连板块兄弟字段一起冲刷）；④ 总开关关闭 ⇒ 控件禁用 —— 与
+// splash 同源门控，壳侧读配置时同样据此不播（「关掉即原生」）。
+// ---------------------------------------------------------------------------
+
+/** 面板上的启动片头选择丸（Menu 原语的 items 里含 brand 的那一枚）。 */
+const bootIntroMenu = nodes => nodes.filter(n => n.type === primitivesStub.Menu
+  && Array.isArray(n.props.items) && n.props.items.some(item => item.id === 'brand'))
+
+test('启动板块：片头选择丸 + 声音开关在位，值域与 INTRO_CLIPS 逐字一致', () => {
+  const { text, nodes } = renderPanel(nativeConfig())
+  assert.match(text, /启动片头/, '行标题必须在位')
+  assert.match(text, /片头声音/)
+  assert.match(text, /下次启动应用/, '必须写明生效时机（片头不做热重载）')
+
+  const menus = bootIntroMenu(nodes)
+  assert.equal(menus.length, 1, '片库必须是官方选择丸（唯一一枚）')
+  assert.deepEqual([...menus[0].props.items].map(item => item.id),
+    ['off', 'brand', 'cyberpunk', 'awakening', 'startup'],
+    '选项 id 必须与 lib/config.js 的 INTRO_CLIPS 一致（跨线值域，壳侧白名单同源）')
+  assert.equal(menus[0].props.selectedId, 'brand', '当前值来自配置')
+
+  const sw = nodes.find(n => n.type === primitivesStub.Switch && n.props.label === '片头声音')
+  assert.notEqual(sw, undefined, '声音开关必须有无障碍名')
+  assert.equal(sw.props.checked, false, '出厂静音')
+})
+
+test('启动板块：旧 host（v6 形态，无 boot 板块）⇒ 给重启提示而不是崩面板', () => {
+  const config = nativeConfig()
+  delete config.boot
+  const { text } = renderPanel(config)
+  assert.match(text, /本板块需要 v7 配置/, '缺板块必须给人话提示')
+  assert.doesNotMatch(text, /启动片头/, '不给控件（免得用户以为设置生效了）')
+})
+
+test('启动板块：改片头 / 开声音 ⇒ 各自只发 boot 板块的增量 patch', async () => {
+  const { nodes, cap } = renderPanel(nativeConfig())
+  const menu = bootIntroMenu(nodes)[0]
+  menu.props.onSelect('cyberpunk')
+  await flushAsync()
+  const sw = nodes.find(n => n.type === primitivesStub.Switch && n.props.label === '片头声音')
+  sw.props.onChange(true)
+  await flushAsync()
+
+  const posts = cap.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/config'))
+  assert.equal(posts.length, 2, '两次操作各发一次保存')
+  assert.deepEqual(JSON.parse(posts[0].body).patch, { boot: { intro: 'cyberpunk' } },
+    '只发片头那一格，不带 audio')
+  assert.deepEqual(JSON.parse(posts[1].body).patch, { boot: { audio: true } },
+    '只发声音那一格，不带 intro')
+})
+
+test('启动板块：总开关关闭 ⇒ 控件禁用（与 splash 同源门控）', () => {
+  const { nodes } = renderPanel(nativeConfig({ enabled: false }))
+  const sw = nodes.find(n => n.type === primitivesStub.Switch && n.props.label === '片头声音')
+  assert.notEqual(sw, undefined)
+  assert.equal(sw.props.disabled, true, '总开关关 ⇒ 声音开关禁用')
+  const menu = bootIntroMenu(nodes)[0]
+  assert.notEqual(menu, undefined, '选择丸仍在（可提前配置），但锚点按钮禁用')
+  // 锚点按钮由 selectControl 以 `anchor` prop 交给官方 Menu（不是 children），故直取
+  assert.equal(menu.props.anchor.props.disabled, true, '总开关关 ⇒ 选择丸锚点禁用')
+})
+
+// ---------------------------------------------------------------------------
 // P5 配置导入 / 导出（2026-09-30）
 //
 // 路线要求：一段 JSON 下载/上传，**sanitize 全量收窄后整体替换**，**导入前二次确认**。
@@ -1387,13 +1460,15 @@ test('P5：导出 —— 下发的 JSON 带自描述标记、版本与当前配�
   assert.equal(cap.blobs.length, 1, '导出应造出一份 Blob')
   const payload = JSON.parse(cap.blobs[0].parts[0])
   assert.equal(payload.kind, 'miasaki-appearance-config', '自描述标记：导入侧据此识别本线配置')
-  assert.equal(payload.version, 6, '带配置版本，便于将来迁移')
+  // 版本随 CONFIG_VERSION（v7 起含启动片头板块）；夹具 nativeConfig 同步抬版本，
+  // 此处硬编码是**有意**的：版本漂移时必须有人来改这一行，而不是让断言跟着实现自动漂。
+  assert.equal(payload.version, 7, '带配置版本，便于将来迁移')
   assert.equal(payload.config.theme.skin, 'zafkiel', '导出的是**当前**配置')
   assert.deepEqual(Object.keys(payload.config).sort(), Object.keys(CONV_DEFAULTS).sort(), '导出的是归一化后的完整配置')
 
   const anchor = cap.created.find(el => el.tagName === 'A')
   assert.notEqual(anchor, undefined, '导出应创建下载锚点')
-  assert.match(anchor.download, /^miasaki-appearance-config-v6\.json$/, '文件名带版本，便于区分备份')
+  assert.match(anchor.download, /^miasaki-appearance-config-v7\.json$/, '文件名带版本，便于区分备份')
   assert.equal(anchor.clicked, true, '必须真的触发下载')
   assert.equal(cap.objectUrls.length, 1, 'objectURL 应被回收（不泄漏）')
 })

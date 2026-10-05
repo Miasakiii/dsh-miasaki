@@ -534,7 +534,20 @@ window.__ModuleLoader__.load({
       avatar: '应用图标',
       motion: '动效',
       conversation: '会话效果',
+      boot: '启动',
     })
+
+    /**
+     * 启动片头片库选项（id 与 lib/config.js 的 INTRO_CLIPS **逐字一致**——那是跨线契约的
+     * 值域来源，同时被桌面壳 `boot_intro.rs` 的白名单校验；三处新增一段要同时改）。
+     */
+    const INTRO_OPTIONS = [
+      { id: 'off', label: '关闭' },
+      { id: 'brand', label: '品牌片头' },
+      { id: 'cyberpunk', label: '赛博朋克' },
+      { id: 'awakening', label: '数字角色苏醒' },
+      { id: 'startup', label: '启动问题' },
+    ]
 
     /**
      * P5（2026-09-30）导出文件的自描述标记。导入侧据此认出「这是本线的配置文件」，
@@ -1248,6 +1261,40 @@ window.__ModuleLoader__.load({
       }
 
       children.push(group('会话效果', convRows === null ? [hint('配置未加载，或宿主版本较旧（本板块需要 v6 配置）——重启宿主后重试。')] : convRows))
+
+      // ---- 启动（v7：桌面壳加载页的视频片头；跨线字段，壳侧 boot_intro.rs 读同一份配置）
+      //
+      // 「不在场」判据与 conversation 同款（null **或 undefined**）：旧 host（v7 前配置
+      // 没有 boot 板块）下读 boot.intro 会让整面板空白 —— 2026-09-30 同类事故的教训。
+      // 说明行刻意写明「下次启动应用生效」：片头只活在启动头几秒，本线**不做热重载**
+      // （面板写盘 ≠ 当前正在运行的壳会重播），不写清楚用户会以为设置坏了。
+      const bootRaw = state === null ? undefined : state.config.boot
+      const boot = bootRaw && typeof bootRaw === 'object' ? bootRaw : null
+      children.push(group('启动', boot === null ? [hint('配置未加载，或宿主版本较旧（本板块需要 v7 配置）——重启宿主后重试。')] : [
+        row(
+          '启动片头',
+          '打开桌面端时在加载页铺满播一段视频片头（7–8 秒，静音）；服务就绪即自动淡出切走，'
+            + '播放中点击任意处可跳过。改动**下次启动应用**时生效。'
+            + (masterLive ? '' : '（总开关关闭时不播放）'),
+          selectControl(
+            'boot-intro',
+            boot.intro,
+            INTRO_OPTIONS,
+            id => save({ boot: { intro: id } }),
+            openMenu, setOpenMenu,
+            !masterLive || busy,
+          ),
+        ),
+        row(
+          '片头声音',
+          '片头是否出声（出厂静音）。若系统自动播放策略拦下带声播放，会自动回落为静音播放一次，'
+            + '不会因此卡住启动。',
+          masterSwitch(boot.audio === true, (next) => {
+            save({ boot: { audio: next } })
+          }, !masterLive || busy, '片头声音', '关闭时静音播放'),
+        ),
+        resetRow('boot'),
+      ]))
 
       // ---- 配置导入 / 导出（P5，2026-09-30；路线见 2026-09-26 视觉统一与路线的 P5）
       //

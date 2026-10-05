@@ -421,7 +421,7 @@ test('sanitizeConfig：M4 会话效果三字段白名单收窄（v6；首档 = �
   })
 })
 
-test('migrateConfig：v5 配置升到 v6 时 M4 新字段补默认（纯新增、无搬运）', () => {
+test('migrateConfig：v5 配置升到当前版本时 M4/M4+ 新字段补默认（纯新增、无搬运）', () => {
   // v5 的 conversation 只有 density/maxWidth（M3 前的预留字段）；v5→v6 加
   // font/cursor/quoteCode——sanitize 对缺失字段回退首档即可，无迁移代码。
   const safe = sanitizeConfig({
@@ -433,9 +433,25 @@ test('migrateConfig：v5 配置升到 v6 时 M4 新字段补默认（纯新增�
     density: 'compact', maxWidth: 720, font: 'system', cursor: 'off', quoteCode: 'default',
   }, '旧配置保留 density/maxWidth，新字段补首档')
   assert.equal(migrateConfig({ version: 5 }).version, CONFIG_VERSION)
-  // v6 及以上原样返回（幂等）
-  assert.equal(migrateConfig({ version: 6 }).version, 6)
+  // 迁移必须**逐级抬到当前版本**（不能停在中间版本，否则后续 sanitize 的补齐判据会错位）
+  assert.equal(migrateConfig({ version: 6 }).version, CONFIG_VERSION, 'v6 也必须升到当前版本')
+  // 当前版本与更高版本原样返回（幂等 / 未来版本不降级）
+  assert.equal(migrateConfig({ version: CONFIG_VERSION }).version, CONFIG_VERSION)
   assert.equal(migrateConfig({ version: 99 }).version, 99)
+})
+
+test('v6 → v7：新增 boot 板块（启动片头），旧配置补出厂档 brand + 静音', () => {
+  const safe = sanitizeConfig({ version: 6, enabled: true, theme: { skin: 'zafkiel' } })
+  assert.equal(safe.version, CONFIG_VERSION)
+  assert.deepEqual(safe.boot, { intro: 'brand', audio: false }, 'v6 旧配置补 boot 出厂档')
+  // boot 板块自守：非法枚举收窄回出厂档、非布尔音轨收窄为关
+  assert.equal(sanitizeConfig({ boot: { intro: 'nope' } }).boot.intro, 'brand')
+  assert.equal(sanitizeConfig({ boot: { intro: 'off' } }).boot.intro, 'off', '「关闭」是合法枚举')
+  assert.equal(sanitizeConfig({ boot: { audio: 'yes' } }).boot.audio, false, '非布尔音轨 ⇒ 静音')
+  assert.deepEqual(sanitizeConfig({}).boot, { intro: 'brand', audio: false }, '出厂默认')
+  // 单字段更新不冲刷同板块另一字段（面板每次只发改动那一格）
+  const merged = mergeConfig(sanitizeConfig({ boot: { intro: 'cyberpunk', audio: true } }), { boot: { audio: false } })
+  assert.deepEqual(merged.boot, { intro: 'cyberpunk', audio: false })
 })
 
 test('mergeConfig：会话效果单字段可独立更新，不被同板块或其它板块影响', () => {

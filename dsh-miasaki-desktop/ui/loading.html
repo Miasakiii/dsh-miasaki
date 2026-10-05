@@ -18,6 +18,14 @@
   The log stream and phase progress (S4b) land with the S3 stdout-tee hooks
   (__appendLog / __setPhase); contract in that design 4.1.
 -->
+<!--
+  L2 video intro layer (2026-10-05, design/2026-10-04-boot-intro-video.md 5): full-window
+  mp4 intro above the crest layer, created on demand from the host setting
+  (`boot_intro_state` ← <dshHome>/miasaki-appearance/config.json `boot` section, written by
+  the appearance settings panel). Exit: ready 300ms fade / failure 150ms yield / ended
+  hold-2s / click to skip. off / unknown clip / reduced-motion ⇒ the layer is never created.
+  Assets live in ui/intro/ (third-party, see ui/intro/THIRD-PARTY-NOTICE.md).
+-->
 <style>
   /* —— 主题变量：默认 = zafkiel（刻刻帝 · 永夜钟阁，保持原观感）—— */
   :root {
@@ -124,10 +132,36 @@
   .stage { position: relative; z-index: 1; }
   body.mia-boot-ready .crest { animation: mia-boot-pop .6s ease-out; }
   @keyframes mia-boot-pop { 0% { transform: scale(1); } 55% { transform: scale(1.06); } 100% { transform: scale(1); } }
+  /* —— L2 视频片头层（design/2026-10-04-boot-intro-video.md §5-D3/D5/D6，2026-10-05）——
+     铺满窗口的启动片头，盖在纹章层之上（z-index 2 > .stage 的 1）：就绪即淡出，淡出后露出
+     下层纹章与状态（退场即无缝）。本层由页面脚本按宿主设置**按需创建**——
+     关闭 / 未知段 / reduced-motion 时元素根本不存在（「关掉即原生」硬契约）。 */
+  .mia-intro {
+    position: fixed; inset: 0; z-index: 2; overflow: hidden;
+    opacity: 0; pointer-events: none; transition: opacity .3s ease;
+    background: var(--mia-bg-lo);
+  }
+  body.mia-intro-on .mia-intro { opacity: 1; pointer-events: auto; }
+  .mia-intro > video {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block;
+  }
+  /* 上下遮罩渐变：视频底色过渡到主题底色（亮主题直切最突兀，§5-D6） */
+  .mia-intro-mask { position: absolute; left: 0; right: 0; height: 96px; pointer-events: none; }
+  .mia-intro-mask-top { top: 0; background: linear-gradient(to bottom, var(--mia-bg-lo), transparent); }
+  .mia-intro-mask-bottom { bottom: 0; background: linear-gradient(to top, var(--mia-bg-lo), transparent); }
+  /* 跳过提示：延迟出现（不与开场抢注意力），纯 opacity 过渡 */
+  .mia-intro-skip {
+    position: absolute; bottom: 18px; left: 0; right: 0; text-align: center;
+    font-size: 11px; letter-spacing: .18em; color: var(--mia-muted);
+    opacity: 0; transition: opacity .4s ease; pointer-events: none;
+  }
+  body.mia-intro-skip-shown .mia-intro-skip { opacity: .8; }
   /* 降级：系统「减少动画效果」→ 全部静止、功能不变（设计 §6-6） */
   @media (prefers-reduced-motion: reduce) {
     .mia-boot-scan { display: none; }
     .mia-boot-ring, .mia-boot-halo, body.mia-boot-ready .crest { animation: none; }
+    .mia-intro { display: none; }
   }
 </style>
 </head>
@@ -214,6 +248,8 @@
         document.body.classList.add('mia-boot-ready');
       }
       window.__bootStopTimer();
+      // L2 片头层退场（D3：就绪即切——片头不是屏保）。层不存在时 __miaIntroStop 是空操作。
+      if (typeof window.__miaIntroStop === 'function') window.__miaIntroStop(300);
     };
     // S4a-2 启动计时（2026-09-24）：冷启动 3~6s、重拉等待最坏 90s——给一个诚实的
     // 「已等待」读数（不出假百分比，与设计 §4.1「不假装」同纪律）。就绪即停（马上退场）；
@@ -241,6 +277,8 @@
       if (el) el.style.display = show ? 'inline-block' : 'none';
       var diag = document.getElementById('diag');
       if (diag) diag.style.display = show ? 'flex' : 'none';
+      // D4 失败让路：失败现场优先于观感——片头层 150ms 内让位（≤200ms 契约）。
+      if (show && typeof window.__miaIntroStop === 'function') window.__miaIntroStop(150);
     };
     window.retry = function () {
       var el = document.getElementById('retry');
@@ -269,6 +307,100 @@
         diag.style.display = 'flex';
       }
     }).catch(function () {});
+
+    // —— L2 视频片头层（2026-10-05，design/2026-10-04-boot-intro-video.md §5）——
+    // 段与音轨来自宿主设置（invoke('boot_intro_state')）：配置由桌面壳读
+    // <dshHome>/miasaki-appearance/config.json 的 boot 板块（外观设置页「启动」栏写盘）。
+    // 纪律：关闭 / 未知段 / reduced-motion ⇒ 本层**根本不创建**（「关掉即原生」硬契约）；
+    // 失败链全静默（解码失败 / autoplay 被拒 / IPC 不可用 ⇒ 撤层，L1 纹章层接管）；
+    // 退场四路：就绪 300ms（D3）/ 失败 150ms（D4）/ 播完停尾帧 2s / 点击跳过。
+    ;(function () {
+      var IDS = ['brand', 'cyberpunk', 'awakening', 'startup'];
+      var layer = null, video = null, endedTimer = null, skipTimer = null, done = false;
+
+      // classList 在真实 WebView2 恒在；守卫只为离线 VM 契约测试的假 document 不炸
+      // （测试只在脚本装载期驱动，构建路径不执行——守卫成本为零，换来测试与运行同一份代码）。
+      function flag(name, on) {
+        var body = document.body;
+        var cl = body && body.classList;
+        if (!cl) return;
+        if (on && typeof cl.add === 'function') cl.add(name);
+        if (!on && typeof cl.remove === 'function') cl.remove(name);
+      }
+      function stop(ms) {
+        if (done) return;   // 幂等：四路退场谁先到谁执行
+        done = true;
+        if (endedTimer) { clearTimeout(endedTimer); endedTimer = null; }
+        if (skipTimer) { clearTimeout(skipTimer); skipTimer = null; }
+        flag('mia-intro-on', false);
+        var node = layer;
+        layer = null; video = null;
+        if (!node) return;
+        var removed = false;
+        var kill = function () {
+          if (removed) return;
+          removed = true;
+          if (node.parentNode) node.parentNode.removeChild(node);
+        };
+        node.addEventListener('transitionend', kill, false);
+        setTimeout(kill, (ms || 0) + 150);   // 过渡被跳过（reduced-motion / 未渲染）时的兜底
+      }
+      function onPlaying() {
+        flag('mia-intro-on', true);
+        skipTimer = setTimeout(function () { flag('mia-intro-skip-shown', true); }, 1200);
+      }
+      function build(id, audio) {
+        layer = document.createElement('div');
+        layer.className = 'mia-intro';
+        layer.setAttribute('aria-hidden', 'true');
+        video = document.createElement('video');
+        video.setAttribute('playsinline', '');
+        video.setAttribute('preload', 'auto');
+        video.muted = !audio;   // D2：默认静音（同时是 autoplay 放行的前提）
+        video.src = 'intro/intro-' + id + '.mp4';
+        video.addEventListener('error', function () { stop(0); }, false);   // D5 解码/加载失败
+        video.addEventListener('ended', function () {                       // D3 播完回落纹章层
+          endedTimer = setTimeout(function () { stop(300); }, 2000);
+        }, false);
+        var top = document.createElement('div');
+        top.className = 'mia-intro-mask mia-intro-mask-top';
+        var bottom = document.createElement('div');
+        bottom.className = 'mia-intro-mask mia-intro-mask-bottom';
+        var skip = document.createElement('div');
+        skip.className = 'mia-intro-skip';
+        skip.textContent = '点击任意处跳过';
+        layer.appendChild(video);
+        layer.appendChild(top);
+        layer.appendChild(bottom);
+        layer.appendChild(skip);
+        layer.addEventListener('click', function () { stop(300); }, false);
+        document.body.appendChild(layer);
+        var started = video.play();
+        if (started && typeof started.then === 'function') {
+          started.then(onPlaying).catch(function () {
+            // 出声被 autoplay 策略拦（WebView2 可能）⇒ 回落静音重试；仍失败 ⇒ 撤层（D5）
+            video.muted = true;
+            var again = video.play();
+            if (again && typeof again.then === 'function') again.then(onPlaying).catch(function () { stop(0); });
+            else stop(0);
+          });
+        } else { onPlaying(); }
+      }
+
+      window.__miaIntroStop = stop;   // 供 __setReady / __setRetry 调用（退场四路的其中两路）
+
+      var reduced = false;
+      try {
+        reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      } catch (e) { reduced = false; }
+      if (reduced) return;   // D5：减少动态 ⇒ 不播，纹章层照常
+
+      invoke('boot_intro_state').then(function (s) {
+        var id = (s && typeof s.intro === 'string') ? s.intro : 'off';
+        if (id === 'off' || IDS.indexOf(id) < 0) return;   // 关闭 / 非法值 ⇒ 一层不建
+        build(id, !!(s && s.audio === true));
+      }).catch(function () { /* IPC 不可用 / 宿主未就绪 ⇒ 不播，静默降级 */ });
+    })();
 
     // 拖放安全网（design/drag-drop-attachment-upload.md §4.3）：主窗已禁用 tauri 拖放
     // handler（main.rs .disable_drag_drop_handler()），WebView2 原生拖放直达页面；

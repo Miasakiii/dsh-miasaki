@@ -1,12 +1,16 @@
-// loading-visual.test.js — 启动页 S4a 视觉层契约（design/boot-loading-terminal.md §4.2）。
+// loading-visual.test.js — 启动页视觉层契约（design/boot-loading-terminal.md §4.2 +
+// design/2026-10-04-boot-intro-video.md §5）。
 //
-// 守什麽：2026-09-24 落地的「无 Rust 依赖」视觉层——纹章外环缓旋 / 呼吸光晕 /
-// 舞台扫描线 / 就绪纹章回弹 / prefers-reduced-motion 降级。硬契约来自设计 §4.2 与 §4.4：
-//   ① 动画属性只准 transform / opacity（性能预算：零 JS 动画循环、GPU 友好）；
-//   ② 扫描线 opacity ≤ .06；零新增色（只准引用既有 --mia-* 变量）；
-//   ③ reduced-motion 下全部静止；
-//   ④ 类名一律 .mia-boot-* 前缀（禁哈希类名纪律）。
-// 行为侧用 VM + 假浏览器驱动页面脚本，钉死就绪回弹触发（文案派生 + __setReady 幂等）。
+// 守什麽：
+//   ① S4a 视觉层（2026-09-24 落地，无 Rust 依赖部分）——纹章外环缓旋 / 呼吸光晕 /
+//      舞台扫描线 / 就绪纹章回弹 / prefers-reduced-motion 降级。硬契约来自设计 §4.2 与 §4.4：
+//      动画属性只准 transform / opacity（性能预算：零 JS 动画循环、GPU 友好）；
+//      扫描线 opacity ≤ .06；零新增色（只准引用既有 --mia-* 变量）；
+//      reduced-motion 下全部静止；类名一律 .mia-boot-* 前缀（禁哈希类名纪律）。
+//   ② L2 视频片头层（2026-10-05）——按宿主设置**按需创建**：关闭 / 未知段 / reduced-motion
+//      时元素根本不存在（「关掉即原生」）；退场四路（就绪 / 失败 / 播完 / 点击跳过）幂等。
+// 行为侧用 VM + 假浏览器驱动页面脚本，钉死就绪回弹触发（文案派生 + __setReady 幂等）
+// 与 L2 层的门控矩阵 / 退场路径。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -262,4 +266,164 @@ test('行为：拖放安全网只拦文件拖放，官方已消费/文本链接�
   const anyOver = mk(['Files'])
   over(anyOver)
   assert.equal(anyOver.stopped, true, 'dragover 一律阻止（否则 drop 不触发）')
+})
+
+// ---------------------------------------------------------------------------
+// L2 视频片头层（2026-10-05，design/2026-10-04-boot-intro-video.md §5）
+//
+// 守四条硬契约：
+//   ① 按需创建 —— 关闭 / 未知段 / IPC 不可用 / reduced-motion 时**元素根本不存在**
+//      （「关掉即原生」，与 appearance 线总开关关闭时零注入同源纪律）；
+//   ② 位置与观感 —— 盖在纹章层之上、cover 铺满、上下遮罩走主题变量（零字面量新色）；
+//   ③ 退场四路（就绪 / 失败 / 解码失败 / 点击跳过）都撤层且**幂等**；
+//   ④ 失败链全静默 —— 任何一环出问题都退回 L1 纹章层，不挡失败卡片。
+//
+// 这里的假 DOM **只实现页面脚本真正用到的 API**（特性守卫因此也被间接验证：页面代码对
+// 缺失 API 不得抛错 —— 真实 WebView2 恒有，但离线契约要能在贫 API 下跑）。
+// ---------------------------------------------------------------------------
+
+/** L2 层的假浏览器 + 假 Tauri IPC。 */
+function bootDom({ reduced = false, config = { intro: 'brand', audio: false }, ipc = true } = {}) {
+  const classes = new Set()
+  const bodyChildren = []
+  const layers = []
+  const make = tag => {
+    const el = {
+      tagName: tag, className: '', attrs: {}, listeners: {}, children: [], parentNode: null,
+      muted: false, src: '', textContent: '', style: {},
+      setAttribute(name, value) { el.attrs[name] = value },
+      addEventListener(type, fn) { (el.listeners[type] ??= []).push(fn) },
+      appendChild(child) { child.parentNode = el; el.children.push(child); return child },
+      removeChild(child) { el.children = el.children.filter(c => c !== child); child.parentNode = null },
+      play() { return Promise.resolve() },
+      fire(type) { for (const fn of (el.listeners[type] ?? [])) fn({}) },
+    }
+    return el
+  }
+  const body = {
+    classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) },
+    appendChild(el) {
+      el.parentNode = body
+      bodyChildren.push(el)
+      if (el.className === 'mia-intro') layers.push(el)
+      return el
+    },
+    removeChild(el) {
+      const index = bodyChildren.indexOf(el)
+      if (index >= 0) bodyChildren.splice(index, 1)
+      el.parentNode = null
+    },
+  }
+  const document = {
+    readyState: 'complete',
+    body,
+    getElementById: () => null,
+    createElement: make,
+    addEventListener: () => {},
+  }
+  const window = { matchMedia: q => ({ matches: q.includes('reduced-motion') ? reduced : false }) }
+  if (ipc) window.__TAURI__ = { core: { invoke: () => Promise.resolve(config) } }
+  vm.runInContext(script, vm.createContext({
+    window, document, console, Promise, setTimeout, clearTimeout, setInterval, clearInterval,
+    btoa: s => s, atob: s => s,
+  }), { filename: 'loading.html' })
+  return { window, bodyChildren, layers, classes }
+}
+
+/** 让 invoke 的微任务链跑完（build 发生在 then 里）。 */
+const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
+test('L2 布局契约：盖在舞台层之上、cover 铺满、上下遮罩走主题变量、零字面量新色', () => {
+  assert.match(style, /\.mia-intro\s*\{[^}]*position:\s*fixed/)
+  assert.match(style, /\.mia-intro\s*\{[^}]*transition:\s*opacity/)
+  assert.match(style, /\.mia-intro > video\s*\{[^}]*object-fit:\s*cover/)
+  const layerZ = Number((style.match(/\.mia-intro\s*\{[^}]*z-index:\s*(\d+)/) ?? [])[1])
+  const stageZ = Number((style.match(/\.stage\s*\{[^}]*z-index:\s*(\d+)/) ?? [])[1])
+  assert.ok(Number.isFinite(layerZ) && Number.isFinite(stageZ), '两层都必须显式声明 z-index')
+  assert.ok(layerZ > stageZ, `片头层 z-index(${layerZ}) 必须高于舞台层(${stageZ})`)
+  assert.match(style, /\.mia-intro-mask-top\s*\{[^}]*linear-gradient\(to bottom, var\(--mia-bg-lo\)/)
+  assert.match(style, /\.mia-intro-mask-bottom\s*\{[^}]*linear-gradient\(to top, var\(--mia-bg-lo\)/)
+  assert.match(style, /body\.mia-intro-on \.mia-intro\s*\{[^}]*opacity:\s*1/)
+  // 零字面量新色：L2 规则只准 var() / transparent（与 S4a 同一条纪律）
+  const l2Rules = [...style.matchAll(/\.mia-intro[^{}]*\{[^}]*\}/g)].map(m => m[0])
+  assert.ok(l2Rules.length >= 6, 'L2 规则数不应少于 6 条（层 / video / 两遮罩 / 跳过 / 点亮）')
+  for (const rule of l2Rules) {
+    assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(rule), `L2 规则引入字面量颜色：${rule.slice(0, 80)}`)
+    assert.ok(!/\b(?:rgba?|hsla?)\(/.test(rule), `L2 规则引入字面量颜色：${rule.slice(0, 80)}`)
+  }
+  // reduced-motion 第二道兜底（JS 不建层是第一道）：即便层已在，也整层隐藏
+  const at = style.indexOf('@media (prefers-reduced-motion: reduce)')
+  assert.match(blockBody(style, at), /\.mia-intro\s*\{[^}]*display:\s*none/)
+  // 类名纪律（L2 族同样禁哈希类名）
+  for (const cls of ['mia-intro', 'mia-intro-mask', 'mia-intro-mask-top', 'mia-intro-mask-bottom', 'mia-intro-skip']) {
+    assert.match(cls, /^mia-intro(-[a-z-]+)*$/)
+  }
+})
+
+test('L2 门控矩阵：关闭 / 未知段 / 非字符串 / IPC 不可用 / reduced-motion ⇒ 一层都不建', async () => {
+  const cases = [
+    ['关闭档', { config: { intro: 'off', audio: false } }],
+    ['未知段', { config: { intro: 'bogus', audio: false } }],
+    ['非字符串', { config: { intro: 42, audio: false } }],
+    ['IPC 不可用（非 Tauri 环境）', { ipc: false }],
+    ['reduced-motion', { reduced: true }],
+  ]
+  for (const [name, opts] of cases) {
+    const dom = bootDom(opts)
+    await settle()
+    assert.equal(dom.bodyChildren.length, 0, `${name}：不得创建片头层（关掉即原生）`)
+    assert.equal(dom.classes.has('mia-intro-on'), false, `${name}：不得点亮层`)
+  }
+})
+
+test('L2 正常路径：段 id 直译素材路径、muted 随音轨、播放后点亮、点击跳过即撤层', async () => {
+  const dom = bootDom({ config: { intro: 'cyberpunk', audio: false } })
+  await settle()
+  assert.equal(dom.layers.length, 1, '应创建且仅创建一层')
+  const layer = dom.layers[0]
+  assert.equal(layer.children.length, 4, 'video + 上下遮罩 + 跳过提示')
+  const video = layer.children[0]
+  assert.equal(video.tagName, 'video', '第一个子节点必须是 video')
+  assert.equal(video.src, 'intro/intro-cyberpunk.mp4', '段 id 直译素材路径（ui/intro/ 台账同源）')
+  assert.equal(video.muted, true, '默认静音（D2 出厂档）')
+  assert.equal(video.attrs.playsinline, '', 'playsinline 必设')
+  assert.equal(dom.classes.has('mia-intro-on'), true, 'play 成功后点亮（淡入）')
+
+  layer.fire('click')          // 跳过（第三路退场）
+  layer.fire('transitionend')  // 淡出结束 → 移除节点
+  assert.equal(dom.bodyChildren.length, 0, '点击跳过必须撤层')
+
+  const loud = bootDom({ config: { intro: 'startup', audio: true } })
+  await settle()
+  assert.equal(loud.layers[0].children[0].muted, false, '音轨开启 ⇒ 不静音')
+})
+
+test('L2 退场：就绪淡出 / 失败让路 / 解码失败撤层，且重复调用幂等', async () => {
+  // ① 就绪即切（D3 主路径）
+  const a = bootDom()
+  await settle()
+  assert.equal(a.classes.has('mia-intro-on'), true)
+  a.window.__setReady()
+  assert.equal(a.classes.has('mia-intro-on'), false, '就绪必须撤下片头（片头不是屏保）')
+  a.layers[0].fire('transitionend')
+  assert.equal(a.bodyChildren.length, 0, '淡出后节点必须移除')
+  // 幂等：已撤场后再触发（就绪重复到达 / 失败与就绪竞争）不得抛错、不再动节点
+  a.window.__setReady()
+  a.window.__miaIntroStop(300)
+  assert.equal(a.bodyChildren.length, 0)
+
+  // ② 失败让路（D4：失败现场优先于观感）
+  const b = bootDom()
+  await settle()
+  b.window.__setRetry(true)
+  assert.equal(b.classes.has('mia-intro-on'), false, '失败必须让路')
+  b.layers[0].fire('transitionend')
+  assert.equal(b.bodyChildren.length, 0)
+
+  // ③ 解码 / 加载失败（D5：静默撤层，L1 纹章层接管）
+  const c = bootDom()
+  await settle()
+  c.layers[0].children[0].fire('error')
+  c.layers[0].fire('transitionend')
+  assert.equal(c.bodyChildren.length, 0, '解码失败必须撤层（不挡住任何东西）')
 })

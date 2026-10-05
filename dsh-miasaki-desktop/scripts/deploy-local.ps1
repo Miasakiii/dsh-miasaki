@@ -60,6 +60,22 @@ if (-not (Test-Path -LiteralPath $srcExe)) {
 Check '构建产物存在' $true 'Miasaki.exe'
 Check 'ui 资源存在' (Test-Path (Join-Path $srcUi 'loading.html')) 'ui\loading.html'
 
+# ---------- 1b. 启动片头素材（2026-10-05，design/2026-10-04-boot-intro-video.md §4）----------
+# 为什么必须显式检查：片头缺失**不会报错**——壳侧 boot_intro 判据是「配置里 intro 的枚举值」，
+# 素材在不在要到浏览器发 Range 请求才暴露。缺失时的真实表现是「静默退化成 S4a 纹章层」：
+# 启动照常、动画照旧、只是片头不播 ⇒ 用户只会以为「设置没生效」。
+# 因此素材缺在**部署这一步**就必须拦住，而不是留给实机目检。
+$introDir = Join-Path $srcUi 'intro'
+$introClips = @('brand', 'cyberpunk', 'awakening', 'startup')
+$introMissing = @($introClips | Where-Object { -not (Test-Path (Join-Path $introDir "intro-$_.mp4")) })
+if ($introMissing.Count -gt 0) {
+  Write-Host "abort: 启动片头素材缺失 $($introMissing -join ', ')（ui\intro\）。"
+  Write-Host '       跑 node scripts\extract-intro-clips.mjs 重新入库；若确认不再启用片头，'
+  Write-Host '       把外观设置「启动片头」设为「关闭」并重启 dsh web。'
+  exit 1
+}
+Check '启动片头素材齐备(4 段)' $true 'ui\intro\intro-{brand,cyberpunk,awakening,startup}.mp4'
+
 # ---------- 2. 目标 exe 是否被运行中的实例占用 ----------
 # 判据精准到「跑的就是 $dstExe」:跑在别处的 Miasaki(旧副本/构建目录)不挡路,
 # 只有目标位置的那个实例会锁住文件、让覆盖失败。
@@ -122,6 +138,11 @@ $srcHash = (Get-FileHash -LiteralPath $srcExe -Algorithm SHA256).Hash
 $dstHash = (Get-FileHash -LiteralPath $dstExe -Algorithm SHA256).Hash
 Check 'exe 哈希一致' ($srcHash -eq $dstHash) $dstHash.Substring(0, 16)
 Check '安装目录 loading.html 就位' (Test-Path (Join-Path $Target 'ui\loading.html'))
+# 部署后**再验一次**素材到位：/MIR 只保证「不残留旧文件」，不保证「新文件被带上」
+# （源目录缺 ⇒ 目标目录照样绿，这正是片头会静默消失的那条缝）。
+$dstIntroMissing = @($introClips | Where-Object { -not (Test-Path (Join-Path $Target "ui\intro\intro-$_.mp4")) })
+Check '安装目录片头素材就位' ($dstIntroMissing.Count -eq 0) `
+  $(if ($dstIntroMissing.Count -eq 0) { '4 段' } else { "缺 $($dstIntroMissing -join ',')" })
 
 # ---------- 6. 桌面快捷方式修复(可选) ----------
 if ($FixShortcuts) {

@@ -50,6 +50,15 @@
 上传一张 PNG 作为头像。桌面壳 `Miasaki.exe` 读**同一份配置**，把它用作窗口 / 任务栏 / 托盘图标；
 另内置三款可直接选的预设（默认 / 头像 / 立绘）。
 
+### 启动片头（桌面壳）
+
+四段视频片头（品牌 / 赛博 / 觉醒 / 开机）任选一段，在**桌面壳 `Miasaki.exe` 的加载页**全屏播放，
+播完自动回落纹章层；可单独开声音（默认静音）。选「关闭」则与原生一致。
+
+- 素材随桌面壳打包（`ui/intro/` 四段 mp4），**与本插件同源读一份配置**（`boot` 板块）；
+- **改动下次启动生效** —— 加载页只活在启动头几秒，本板块不做轮询；
+- 桌面壳不在场时（浏览器里的 `dsh web`）本板块不产生任何效果。
+
 ## 安装
 
 ```bash
@@ -77,8 +86,11 @@ dsh plugin --profile <profile> add @miasaki/dsh-appearance
 
 ## 配置
 
-配置自管 `~/.dsh/miasaki-appearance/config.json`（当前 **v6**，旧版本载入时自动迁移）。
+配置自管 `~/.dsh/miasaki-appearance/config.json`（当前 **v7**，旧版本载入时自动迁移）。
 
+- **旧版配置在宿主启动时迁移并立即回写磁盘**：桌面壳等跨线消费端**直接读这个文件**
+  （`boot` 板块决定是否播片头、`avatar` 决定窗口图标），内存里的迁移对它不可见 ——
+  只迁移不落盘会让这些能力**永远不生效**（2026-10-05 修，详见 `design/CHANGELOG.md`）；
 - 写盘失败会**如实失败**（`500 + changed:false` + 可读原因），不假报成功；
 - 原子写（临时名带 pid / 时间戳），避免多实例互踩半截 JSON；
 - 面板显示的是真实修订号，不会拿陈旧值骗你。
@@ -88,7 +100,7 @@ dsh plugin --profile <profile> add @miasaki/dsh-appearance
 ```bash
 pnpm install
 pnpm run build         # node --check 入口与 lib/
-pnpm test              # 120 例单测
+pnpm test              # 153 例单测
 pnpm run derive:check  # 皮肤 token 表未被手改（与派生脚本重算比对）
 ```
 

@@ -7,7 +7,7 @@
 import { avatarFileFromSource } from './avatar.js'
 
 /** 配置版本；结构不兼容变更时 +1，并在 migrateConfig 里补一条迁移分支。 */
-export const CONFIG_VERSION = 6
+export const CONFIG_VERSION = 7
 
 /** 皮肤白名单。M1 只有「纯净」；M2 下沉 desktop 线的刻刻帝 / 狂狂帝。 */
 export const SKINS = Object.freeze(['pure', 'zafkiel', 'kurkuriel'])
@@ -17,6 +17,16 @@ export const MOTION_PRESETS = Object.freeze(['fluid', 'elegant', 'minimal'])
 
 /** Boot Splash 开关（P2 首帧启动画）：auto = 总开关开启时注入；off = 永不注入。 */
 export const BOOT_SPLASH_MODES = Object.freeze(['auto', 'off'])
+
+/**
+ * 启动片头片库（v7）：值域与 `dsh-miasaki-desktop/ui/intro/intro-<id>.mp4` 一一对应
+ * （素材台账见该线 `scripts/extract-intro-clips.mjs`），`off` = 不播。
+ *
+ * **这是跨线契约**：桌面壳 `src-tauri/src/boot_intro.rs` 读同一份配置的同一字段，
+ * 其白名单 INTRO_IDS 必须与本常量同步（新增一段要同时改：本处 / 面板选项 /
+ * 提取脚本台账 / 壳侧白名单 四处）。壳侧遇未知 id 一律不播（宁可不播，不猜）。
+ */
+export const INTRO_CLIPS = Object.freeze(['off', 'brand', 'cyberpunk', 'awakening', 'startup'])
 
 /** 会话密度（M4）：comfortable = 官方默认 16px 消息流间距；compact = 8px。 */
 export const DENSITIES = Object.freeze(['comfortable', 'compact'])
@@ -98,6 +108,10 @@ export const DEFAULT_CONFIG = Object.freeze({
     cursor: 'off',
     quoteCode: 'default',
   }),
+  // 启动片头（v7）：桌面壳的启动加载页（loading.html）播哪一段视频、是否出声。
+  // **跨线字段**——壳侧 `boot_intro` 模块读同一份配置，改动需同步该模块的白名单与门控。
+  // 门控与 splash 同源：总开关 `enabled` 关闭 ⇒ 壳侧一律不播（「关掉即原生」）。
+  boot: Object.freeze({ intro: 'brand', audio: false }),
 })
 
 // ---------------------------------------------------------------------------
@@ -191,6 +205,10 @@ export function migrateConfig(raw) {
   // （纯新增）。density / maxWidth 早在 v5 就是预留死字段（从未有面板入口），
   // 本次接上控件；旧配置的三个新字段由 sanitize 回退默认（system / off / default
   // = 不注入规则），无需搬运。
+  // v6 → v7：启动片头（desktop 壳 loading 页的视频片头）—— 新增顶层 `boot` 板块
+  // （intro 枚举 + audio 布尔），纯新增，旧配置由 sanitize 补默认（brand / 静音）。
+  // 注意：**门控不看本板块**——总开关关闭时壳侧一律不播（见 boot_intro.rs），
+  // 因此旧配置升级后不会凭空出现片头，除非用户本来就开着总开关。
   return { ...source, version: CONFIG_VERSION }
 }
 
@@ -206,6 +224,7 @@ export function sanitizeConfig(raw) {
   const avatar = asRecord(source.avatar)
   const motion = asRecord(source.motion)
   const conversation = asRecord(source.conversation)
+  const boot = asRecord(source.boot)
 
   return {
     version: CONFIG_VERSION,
@@ -246,6 +265,10 @@ export function sanitizeConfig(raw) {
       cursor: pickEnum(conversation.cursor, CURSOR_STYLES, DEFAULT_CONFIG.conversation.cursor),
       quoteCode: pickEnum(conversation.quoteCode, QUOTE_CODE_LEVELS, DEFAULT_CONFIG.conversation.quoteCode),
     },
+    boot: {
+      intro: pickEnum(boot.intro, INTRO_CLIPS, DEFAULT_CONFIG.boot.intro),
+      audio: toBoolean(boot.audio, DEFAULT_CONFIG.boot.audio),
+    },
   }
 }
 
@@ -273,6 +296,7 @@ export function mergeConfig(current, patch) {
     avatar: { ...base.avatar, ...asRecord(incoming.avatar) },
     motion: { ...base.motion, ...asRecord(incoming.motion) },
     conversation: { ...base.conversation, ...asRecord(incoming.conversation) },
+    boot: { ...base.boot, ...asRecord(incoming.boot) },
   })
 }
 

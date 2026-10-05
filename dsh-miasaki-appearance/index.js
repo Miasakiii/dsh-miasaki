@@ -116,9 +116,19 @@ export function apply(ctx, config) {
   ctx.effect(() => () => { store.persistent = false }, 'appearance: release store')
 
   ctx.effect(() => {
-    store.load().then(loaded => {
+    store.loadWithMigration().then(({ config: loaded, migrated, error }) => {
       current = loaded
       revision += 1
+      // 迁移回写是**跨线契约的必须动作**：桌面壳 `boot_intro.rs` 直接读磁盘配置决定是否播
+      // 片头（看不见内存里的迁移结果，见 lib/store.js 该方法注释）。所以结果必须可观察 ——
+      // 成功记 info（排查「片头怎么还不播」时的第一条线索），回写失败记 error，绝不静默。
+      if (migrated) {
+        if (error === null) {
+          ctx.logger?.info?.(`appearance: 配置已迁移到 v${loaded.version} 并回写磁盘`)
+        } else {
+          ctx.logger?.error?.(error)
+        }
+      }
     }).catch(error => {
       ctx.logger?.error?.(error instanceof Error ? error : new Error(String(error)))
     })
