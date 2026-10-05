@@ -7,6 +7,11 @@
 > `ARCHITECTURE.md`（单向依赖/铁律）、`TODO.md`（P0 挂起未收敛）。
 > 证据来源：源码快照归档于 `_refs/dsh-pet-indesktop/`（会话期临时档案，**不入库**，已 ignore）。
 > 本文所有引用均标注 `文件:行号` 或函数名，可回溯核对。
+>
+> **2026-10-04 增补**：本文主体评估的是**上游的一个 fork**，不是上游本体。
+> 上游本体（`PC2005-cloud/dsh-pet`）在 10-02～10-04 有三处结构性新增，
+> 且其「事件驱动 vs 我方快照驱动」的架构差异暴露了我方一处**真实 bug**
+> ⇒ 见 **§8 上游本体增量对标（2026-10-04）**（该节独立于 §1–§7，§0–§7 的结论不因它改动）。
 
 ---
 
@@ -441,4 +446,144 @@ compose 固定 33ms（`window.rs:697`）；**无任何绘制变换层**（`blit_
 - `A-dsh-link.md`（DSH 联动与审批链路，316 行：链路全景 + 18 项逐条对照 + 三条建议 + 证据索引）
 - `B-interaction.md`（交互玩法与体验特性，482 行：24 项特性表 + 11 项机制细节 + 优先 5 项）
 - `C-perf-governance.md`（性能/内存/工程治理与 P0 建议，413 行：25 项对照 + P0 三条可执行机制）
+
+---
+
+# 8. 上游本体增量对标（2026-10-04）
+
+> **本节与 §0–§7 的关系**：§0–§7 评估的是 fork `MerZlin/dsh-pet-indesktop`；
+> 本节评估**上游本体** `PC2005-cloud/dsh-pet`。两者结论独立 —— 本节**不推翻**上文任何一条，
+> 只补三件上文拿不到的东西：① 上游本体的最新能力面；② 一条**我方独有、抄不来**的 bug；
+> ③ 三处语义缺口的现状认定。
+> 证据快照（临时档案，`_refs/` 已 ignore、不入库）：
+> `dsh-pet-readme.md`（44 KB）、`dsh-pet-openapi.yaml`、`dsh-pet-upstream/src_{host_index,client_pet,client_settings,shared_menu}.ts`。
+> 快照时点：HEAD `fc843cc`，`dsh-pet@0.3.5`，2026-10-04。
+
+## 8.1 事实快照
+
+| 维度 | 值 |
+|---|---|
+| 规模 | `1028★ / 76 fork / 175 commits / MIT / TypeScript`，创建 2026-08-14，最近推送 2026-10-04 |
+| 依赖 | peerDeps **全为 `@deepseek-ai/*` 官方包**（cordis / llm / commands / host-webserver / client-ui-slots 等）—— 与本仓 `dsh-miasaki-usage` 同构，**零 miasaki 耦合** |
+| 素材 | 100+ 段 VP9-alpha webm（640×360）；Safari 另发 HEVC-alpha `.mov`（Release 固定 tag `assets-mov`） |
+| 许可 | **代码 MIT；素材允许开源使用但禁止商用**；二创须在介绍/展示/分发处附原作者 GitHub 地址 |
+| 生态 | 自列 20+ 衍生项目（桌面 / 移动 / 网页 / pi 平台）；`dsh-tauri/deepseek-harness-desktop`（2974★，**Tauri 2**）已把 `dsh-pet-component` 作预置桌宠内置 |
+
+**许可口径与 fork 不同，须分开记**：本节上游是「允许开源、禁止商用」，§0.3 记的 fork 是 CC BY-NC-SA 类。
+两者**都非商用** ⇒ 本项目「不引入其素材、继续走自建素材链」的原决策不变。
+
+## 8.2 三处结构性新增（10-02～10-04 三天内落地，§1.6 快照里都没有）
+
+1. **对外 HTTP API**（`API.md` + `openapi.yaml`，OpenAPI 3.1，仓内有 `scripts/check-openapi.mjs` 门禁）：
+   单一前缀 `/dsh-pet-7340`，挂在 `ctx.webServer` 上，只监听 `127.0.0.1`、**无鉴权**。
+   两条设计约定值得抄：**① 数据只有一个出口 `GET /state`**（say / workStatus / notify / balance
+   四类，每个状态位是 `{counter, data}`，`counter` = `Date.now()` 严格递增、宿主重启不倒退、
+   **变了才渲染**）；**② 动作端点不回数据**（`POST /whisper|broadcast|anim|chat` 只回 `{ok:true}`），
+   结果一律回读 `/state`。
+   一个易踩的约定：状态路径（如 `pets.<id>.say`）须当**不透明键**，**不能按 `.` 切分** ——
+   宠物 id 允许含点号。
+2. **统一状态端点重构**（commit `cf24d6b`）：原先分散的轮询合并为 `GET /state`。
+3. **独立运行模式**（`f14e022`，PR #79，v0.3.3）：`src/standalone/` 用**伪 ctx + 本机 `node:http`**
+   接管**同一份路由表**（同一 handler 同时服务 HTTP 与桌面助手 bridge 管道 ⇒ 无第二套实现、无漂移）；
+   三个只在 DSH 里存在的包用 `src/standalone/shims/` 替身，由 tsdown 第二入口 + `alias` +
+   `noExternal` 只在该入口生效。依赖 DSH 的能力**结构化降级、不假装成功**：
+   `/whisper` `/chat` → `{ok:false, reason:'provider-missing'}`，`/balance` → `{ok:false, reason:'unsupported'}`。
+   另有一条发布链教训可抄：`build` 只挂 `prepack` 而非 `prepare`（npm 11 会把 `prepare` 判为
+   未批准的安装脚本，而 `scripts/prepare.js` 不随包发布 ⇒ 用户批准即 ENOENT）。
+
+## 8.3 ★ 我方独有、抄不来的真实 bug：`error` 态会永久挂起
+
+**这是本次对标唯一的「发现别人家没有、而我们有」的问题**，也是本文档最重要的一条新增。
+
+**取证（官方实现，已实测 vendor 源码）** `dsh-api-session-controller/lib/client.js`：
+
+| 行号 | 动作 |
+|---|---|
+| `:2001` | `handleAgentError(message)` → `this.lastAgentError = message` |
+| `:1697` | `prompt()` 开头才 `lastAgentError = null` |
+| `:1586` | `reset()` 才清 |
+
+⇒ **写入后没有任何自动清除路径。** 官方类型定义处也印证：
+`types/client/contract/snapshot.d.ts:75` 的 `readonly lastAgentError: string | null`（无时间戳、无「已消费」标记）。
+
+**我方旧实现因此是错的**（`plugins/dsh-pet-panel/lib/client.js:603-608`）：
+
+```
+waiting > error > done(边沿,10s) > thinking > idle
+else if (agg.agentError) state = "error";
+```
+
+`error` 排在 `running` **之前**，且判定只看「字段非空」。⇒ 任何一次偶发 agent 错误
+（网络抖、工具抛异常）会让桌宠**一直停在「出错了」**，直到用户恰好在**那个会话**里再发一条消息；
+而 `readRunningAggregate` 是**跨会话聚合**（R0 口径）⇒ 历史里任一会话挂账即全局生效。
+
+**为什么上游没这个问题**：它是**事件驱动** —— `agent/error` 只写一次性通知帧（不进持久工作状态），
+档位由 `turn/end` 的 `reason.kind` 结算（`src/host/work-status.ts` 的 `turnEndState()`）。
+回合一结束就归位，**天然无粘滞**。
+⇒ **这条抄不来，必须自己加时效** —— 这也是「同生态位不等于同架构」的一个具体例证。
+
+**处置（2026-10-04 已落地）**：给 error 加**指纹化老化窗口**（`ERROR_STALE_MS = 30s` = 20 个心跳）。
+三条纪律：① 只在**同一错误指纹**上老化，换一条错误立即重新计时（连续不同错误不被压成一次）；
+② **重复观测不得顺延计时**（否则每 1.5s 刷一次就永远不老化 —— 这是该逻辑最容易写坏的方式，
+已写成专门的反例测试）；③ 官方清空（指纹变空）时状态一并复位。
+证据：`test/panel-settings.test.js` E1 组 4 例 + 负向验证（把老化改成永不复位 ⇒ 3 条转红）。
+
+## 8.4 三处语义缺口（现状认定，非本轮全部处置）
+
+| # | 上游做法（`src/host/work-status.ts`） | 我方现状 | 认定 |
+|---|---|---|---|
+| **G1** | `turn/end` 的 `reason.kind` 为 `aborted` 等 ⇒ 返回 `null` **清该会话回空闲**（源码注释原文：否则回合被打断后会永远卡在 working，即当年「这一步正在进行中哦」挂死的根因） | 快照驱动无「回合结束」概念，只有 `running` 布尔 | 🟡 **派生自 8.3**，处置后自然缓解；若要彻底对齐需引入回合边界 |
+| **G2** | **goal 自动续跑轮**：中间轮 → `result`（**不庆祝**），收尾轮 `update_goal complete` → `success` / `blocked` → `error`（`completedState()`） | 无 goal 概念；`done` 是 `lastRunning && !agg.running` 的边沿触发 | 🟡 **真缺口**：多轮任务会**每轮都放一次 done 烟花**。**2026-10-05 部分处置**（45s 冷却窗口）＋**真解受阻的原因已坐实**：官方 `SessionSnapshot` 12 个字段里无 goal 状态 / turnId / 回合边界 ⇒ 上游判据依赖的 `turn/end` + `update_goal` 在快照驱动下**无数据源** |
+| **G3** | 优先级 `waiting 60 > error 50 > working 40 > thinking 30 > result 25 > success 20`，**`result` 刻意高于 `success`**（任何会话的进行中过渡态都不被别处已完成态压过，防中途庆祝） | `waiting > error > done > thinking > idle` | ⛔ **与 G2 同源、随 G2 一并封存**：G3 的意义只在「有 `result` 档」时成立（用它承载「进行中的过渡态」）；既然 G2 因**快照无回合边界**而只能做冷却窗口、不引入 `result` 档，G3 便无处附着。冷却窗口已把「中途庆祝」这一症状压到可接受 ⇒ 两条同批留档，不单独开工 |
+
+**另有一个未利用的官方字段**（查 `snapshot.d.ts` 时发现，全仓零引用）：
+
+| 字段 | 官方注释 | 用途 |
+|---|---|---|
+| `awaitingFirstTurn` | 「The first accepted prompt has not reached a durable `turn/start` event」 | 覆盖「已提交但 agent 还没起跑」的空窗 —— 我方这段时间一律报 idle，用户体感是「我发了消息，桌宠却没反应」 |
+| `openError` / `pendingSubmissions` | 见类型定义 | 本轮未评估，暂不处置 |
+
+> 注：`awaitingFirstTurn` 只在 `SessionSnapshot` 上，**`list` 的 row 只有 `running`** ⇒ 必须经
+> `ctx.sessions.get(id).getSnapshot()` 读，与 `lastAgentError` 同一条探测路径（已落地）。
+
+## 8.5 本轮一并修掉的一处历史欠账
+
+`MOTION_MIN` 此前是 **0.5**（`settings.rs:24`）⇒ 用户拉到最低仍有半强度摇摆与呼吸，
+「减少动效」这条诉求**在数值上无法真正落地**。已放行到 **0.0**，
+并同步了**第二处下限**（面板 stepper 的 `min`，`client.js:302`）——
+Rust 改了而面板没改是这类改动的典型漏半边，本批已用测试钉住两处必须同步。
+
+**0.0 的语义边界**：`motion` 只乘在 `breath_offset` / `sway_angle` / `squash_scales` 三个形变函数上
+（`window.rs` 四路调用点）⇒ 置 0 表示「关掉形变」，**帧动画本身照常播放**。
+这是有意为之：关的是「动效」不是「动画」，与上游关掉 Q 弹但保留待机呼吸的处理同构。
+对照上游的 `prefers-reduced-motion`（`pet.ts:1079` 直接 return 跳过 Q 弹、`:102` 用 CSS 关过渡）。
+
+## 8.6 生态位结论：不重叠，不需要 fork
+
+| | 上游 dsh-pet | 本仓 dsh-miasaki-desktop |
+|---|---|---|
+| 定位 | **自带渲染**的完整桌宠 | **只供料不渲染**的状态通道 |
+| 渲染层 | 浏览器 overlay + Electron 透明窗 + webm | Tauri 2 + Win32 原生分层窗 + PNG 图集 |
+| 状态源 | 事件驱动（`session/event` 逐事件归约） | 快照驱动（官方 `sessions` / `uiSession.pendingInteractions` + 1.5s 心跳） |
+| 上报通道 | 对外 HTTP `/dsh-pet-7340` | hash `pet=` 单写者（`themes/src/02-core.js` 的 `syncHash`） |
+| 契约纯度 | 全官方包，零 miasaki 耦合（与 `dsh-miasaki-usage` 同构） | 桌面线自有插件 |
+
+⇒ **二者可同时安装、互不干扰，不需要 fork**（符合九线零耦合纪律）。
+可借鉴的是**六档聚合的语义细节**（8.4）与**对外 API 的契约设计**（8.2 的 `{counter,data}` +
+「动作端点不回数据、单一 `/state` 回读」）——
+若将来我方桌宠需要对外表达（如 fleet 巡检让桌宠开口），`POST /dsh-pet-7340/broadcast` 是现成契约，
+**不必自造第二套 HTTP 面**。
+
+## 8.7 仍未处置的（留档）
+
+| 项 | 状态 |
+|---|---|
+| **G2 多轮任务重复庆祝** | 🟡 **2026-10-05 部分处置**：加了 45s 冷却窗口（`DONE_COOLDOWN_MS`），连续庆祝被拉开，**但 45s 内跑完的多轮仍会各庆祝一次**。**真解做不了的原因已实测坐实**：官方 `SessionSnapshot`（`snapshot.d.ts:56-90`）**共 12 个字段，无 goal 状态、无 turnId、无回合边界** ⇒ 上游那套判据依赖的 `turn/end` + `update_goal` 在快照驱动下**没有数据源**，属**上游依赖**而非本仓可补 |
+| **ambient 池无去重** | ✅ **2026-10-05 已修**（E5）：`pick_ambient_pool_index(rnd, last)` 纯函数 + `thread_local! { Cell<Option<usize>> }` 记忆；实测每个 `last` 下另两行各占一半 |
+| **inverse 三态仍各 1 帧** | `ui/pets/inverse/states/` 三张 png。真素材缺口，v5-motion-plan §6 已记 |
+| **whale r7–r10 四行未接** | `frames/` 只有 r0–r6（+1.33 MB）。v5-motion-plan §6 待拍板第 2 条 |
+| **whale 死素材去留** | `states.idle` / `states.work` 在图集接管后已无渲染用途（`deep` 仍是活跃的强度特例）。v5-motion-plan §6 待拍板第 1 条 |
+| **L1 M4 拖动尾随** | v5-motion-plan §6 待拍板第 3 条（含前置 R13 拖动合帧） |
+| **M4.1 边缘停靠** | 用户核心诉求，R3 已先行铺好 `pos_visible` 判据 |
+
 

@@ -299,10 +299,10 @@ window.__ModuleLoader__.load({
 
 				// ② 外观与行为（壳侧设置：经 hash `ps*` 传给 Rust，权威在 pet-settings.json）
 				group("外观与行为", [
-					row("动效强度", "呼吸 / 摇摆 / 挤压三条动效的统一幅度。",
+					row("动效强度", "呼吸 / 摇摆 / 挤压三条动效的统一幅度。0× = 完全关闭形变（动画本身照常播）。",
 						stepper(shell.motion, Number(shell.motion).toFixed(1) + "×",
 							d => applyShell({ motion: Math.round((Number(shell.motion) + d) * 10) / 10 }),
-							{ step: 0.1, min: 0.5, max: 1.6, disabled: !isDesktop })),
+							{ step: 0.1, min: 0, max: 1.6, disabled: !isDesktop })),
 					row("气泡时长", "台词气泡的驻留时间。",
 						stepper(shell.bubbleMs, (Number(shell.bubbleMs) / 1000).toFixed(1) + " 秒",
 							d => applyShell({ bubbleMs: Math.min(10000, Math.max(1000, Number(shell.bubbleMs) + d)) }),
@@ -467,6 +467,7 @@ window.__ModuleLoader__.load({
 		 */
 		function readRunningAggregate(ctx) {
 			let running = false;
+			let starting = false;
 			let agentError = null;
 			try {
 				const ls = ctx.sessions.list.getSnapshot();
@@ -490,12 +491,19 @@ window.__ModuleLoader__.load({
 						try {
 							const f = ctx.sessions.get(id);
 							const s = f && typeof f.getSnapshot === "function" ? f.getSnapshot() : null;
-							if (s && s.lastAgentError) { agentError = s.lastAgentError; break; }
-						} catch (e2) { /* 未 materialize → 无 error 信号 */ }
+							if (!s) continue;
+							// E3（2026-10-04）：`awaitingFirstTurn` = 首个 prompt 已被接受、
+							// 但还没到 durable `turn/start`（官方 snapshot.d.ts:80 原文注释）。
+							// 官方给的是 SessionSnapshot，而 `list` 的 row 只有 running ——
+							// 所以必须经 `sessions.get(id)` 读，与 lastAgentError 同一条探测路径。
+							// 这段空窗原先一律报 idle，用户表现为「我发了消息，桌宠却没反应」。
+							if (s.awaitingFirstTurn) starting = true;
+							if (s.lastAgentError) { agentError = s.lastAgentError; break; }
+						} catch (e2) { /* 未 materialize → 无 error / starting 信号 */ }
 					}
 				}
 			} catch (e) { /* ignore */ }
-			return { running: running, agentError: agentError };
+			return { running: running, starting: starting, agentError: agentError };
 		}
 
 		const PET_PANEL_KEY = "__miasakiPetPanel";
@@ -505,6 +513,51 @@ window.__ModuleLoader__.load({
 		const APPROVAL_REASON_MAX = 160;
 		/** R0：lastAgentError 探测的会话上限（避免每心跳遍历过多会话） */
 		const ERROR_PROBE_MAX = 6;
+		/**
+		 * E1（2026-10-04）：`lastAgentError` 的**老化窗口**（毫秒）。
+		 *
+		 * **为什么必须有**：官方 `lastAgentError` 是**粘滞**的——实测
+		 * `dsh-api-session-controller/lib/client.js`：`:2001` `handleAgentError` 写入后，
+		 * **只有** `:1697` `prompt()` 与 `:1586` `reset()` 会清回 `null`，没有任何自动清除路径。
+		 * 而本插件走**快照驱动**（跨会话聚合 + 1.5s 心跳），旧实现 `else if (agg.agentError)`
+		 * 直接判 error ⇒ **一次偶发错误会让桌宠永久停在「出错了」**，直到用户恰好在那个会话里
+		 * 再发一条消息（跨会话聚合 ⇒ 历史里任一会话挂账即全局生效）。
+		 * 上游 dsh-pet 走**事件驱动**（`agent/error` 只写一次性通知帧、`turn/end` 结算档位），
+		 * 天然无此问题 ⇒ **这一条抄不来，必须自己加时效**。
+		 *
+		 * **口径选择（与 DONE_HOLD_MS 同一套「边沿 + 窗口」机制，非猜测阈值）**：
+		 * 只在**同一错误指纹**上老化，新错误（指纹变化）立即重新计时 ⇒ 连续不同错误不会被压掉；
+		 * 官方清空（指纹变空）时状态一并复位。窗口取 30s = 20 个心跳，足够读完一句错误文案，
+		 * 又不会让「出错」成为长期姿态。
+		 */
+		const ERROR_STALE_MS = 30000;
+		/**
+		 * G2（2026-10-04）：两次 done 庆祝之间的**冷却窗口**（毫秒）。
+		 *
+		 * **要解决的真实问题**：多轮任务（agent 一个目标拆成好几轮跑）会**每轮都放一次庆祝**。
+		 *
+		 * **为什么只能做冷却、不能照抄上游（这条限制是实测出来的，别再试图绕过）**：
+		 * 上游 dsh-pet 的做法是「goal 自动续跑轮的中间轮 → `result` 档、收尾轮才 `success`」，
+		 * 判据来自 `turn/end` 的 `reason.kind` + `update_goal` 工具调用 —— 即**回合边界**。
+		 * 而我方走**快照驱动**，实测官方 `SessionSnapshot`（`snapshot.d.ts:56-90`）**共 12 个字段**：
+		 * `sessionId / pendingSubmissions / running / subagent / removed / openState / openError /
+		 * hasMore / loadingOlder / promptError / blank / lastAgentError / promptAttempted /
+		 * awaitingFirstTurn` —— **没有任何 goal 状态、没有 turnId、没有回合边界**。
+		 * ⇒ 上游那套「回合结束才结算」在快照驱动下**根本没有数据源**，照抄无从谈起。
+		 * 本仓能观测到的只有 `running` 布尔：多轮任务期间它会 true→false→true 抖动，
+		 * 每次抖动都被旧实现当成「一轮结束」。
+		 *
+		 * **冷却窗口做了什么 / 没做什么**（用户已知并接受）：
+		 *  · ✅ 做到的：连续庆祝被拉开到 ≥ 45s，不再出现「连着放两次烟花」；
+		 *  · ❌ 没做到的：45s 内跑完的多轮任务**仍会各庆祝一次**（间隔被拉开，不是被消除）。
+		 * 真解需要 DSH 侧暴露回合边界或 goal 状态，属**上游依赖**而非本仓可补 ⇒ 见
+		 * `design/pet-reference-benchmark.md` §8.7 留档。
+		 *
+		 * 45s 的由来：`DONE_HOLD_MS`（10s 气泡驻留）× 4 + 余量 5s；
+		 * 即「至少让前一次的气泡自然消失，再考虑下一次」。不写成更短是因为 10s 气泡期内
+		 * 重复庆祝会让气泡文字互相顶掉（那正是 R4 提醒队列要防的事）。
+		 */
+		const DONE_COOLDOWN_MS = 45000;
 
 		/**
 		 * 面板自管设置（**纯客户端**，localStorage，零 Rust 改动、不需要重编 exe）。
@@ -589,22 +642,61 @@ window.__ModuleLoader__.load({
 			}
 		}
 
+		/**
+		 * E1：把粘滞的 `lastAgentError` 折算成「是否仍算新鲜」。
+		 *
+		 * 规则（全部按**指纹**判定，不看数组下标、不猜用户意图）：
+		 *  · 无错误 ⇒ 复位（`null`），下一次错误重新计时；
+		 *  · 指纹变化 ⇒ 视为新错误，重置计时（连续不同错误不会被压成一次）；
+		 *  · 指纹不变且在窗口内 ⇒ 新鲜，老化计时按原时刻算（**不因重复观测而顺延**，
+		 *    否则每 1.5s 刷一次就永远不老化 —— 这正是「无脑重置计时」的经典写坏方式）。
+		 *
+		 * 独立成工厂函数（而非内联在 tick 里）有两个理由：状态不该在每次心跳里被
+		 * 重新创建；而它同时是**可被行为测试直接求值**的纯逻辑 —— 见
+		 * `test/panel-settings.test.js` 的 E1 组（老化逻辑的失败形态是「时间算错」，
+		 * 正则匹配到符号也证明不了对错）。
+		 */
+		function makeFreshError() {
+			// error 指纹与它的起始时刻（见 ERROR_STALE_MS 处的粘滞取证）。
+			// `errorFingerprint === null` 表示当前无 error；非空时 `errorSince` 才有意义。
+			let errorFingerprint = null;
+			let errorSince = 0;
+			return (rawError, now) => {
+				if (rawError === null || rawError === undefined || rawError === "") {
+					errorFingerprint = null;
+					errorSince = 0;
+					return false;
+				}
+				if (rawError !== errorFingerprint) {
+					errorFingerprint = rawError;
+					errorSince = now;
+					return true;
+				}
+				return now - errorSince < ERROR_STALE_MS;
+			};
+		}
+
 		function startPetStateReporter(ctx) {
 			let lastRunning = false;
 			let doneHoldUntil = 0;
+			// G2：上一次进入 done 的时刻（0 = 从未庆祝过）。见 DONE_COOLDOWN_MS 处的说明。
+			let lastDoneAt = 0;
+			const freshError = makeFreshError();
 			const tick = () => {
 				// —— 审批等待（优先级最高）：跨会话遍历 pendingInteractions（R0）——
 				const approval = readPendingApproval(ctx);
 				// —— 运行状态：跨会话聚合（R0；list row 自带 running，探针实证 2026-09-12）——
 				const agg = readRunningAggregate(ctx);
 				// —— 六态合成：waiting > error > done(边沿,10s) > thinking > idle ——
+				// E1：error 判定从「字段非空」改为「非空**且未老化**」（快照驱动的必要时效）。
 				const now = Date.now();
+				const errorLive = freshError(agg.agentError, now);
 				let state;
 				if (approval !== null) state = "waiting";
-				else if (agg.agentError) state = "error";
-				else if (lastRunning && !agg.running && now >= doneHoldUntil) { state = "done"; doneHoldUntil = now + DONE_HOLD_MS; }
+				else if (errorLive) state = "error";
+				else if (lastRunning && !agg.running && now >= doneHoldUntil && now - lastDoneAt >= DONE_COOLDOWN_MS) { state = "done"; doneHoldUntil = now + DONE_HOLD_MS; lastDoneAt = now; }
 				else if (now < doneHoldUntil && !agg.running) state = "done";
-				else if (agg.running) state = "thinking";
+				else if (agg.running || agg.starting) state = "thinking";
 				else state = "idle";
 				if (agg.running) doneHoldUntil = 0;
 				lastRunning = agg.running;

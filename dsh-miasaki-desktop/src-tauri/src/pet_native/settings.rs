@@ -21,7 +21,18 @@
 use std::path::PathBuf;
 
 /// 动效强度的合法区间（倍率）。1.0 = 现在的手感。
-pub(crate) const MOTION_MIN: f32 = 0.5;
+///
+/// **E2（2026-10-04）：下限由 0.5 放行到 0.0**，即「允许完全关闭形变」。
+/// 此前 0.5 的下限让「减少动效」这条诉求**无法真正落地**——用户拉到最低仍有半强度摇摆与呼吸。
+/// 上游 dsh-pet 对应的是 `prefers-reduced-motion`（`pet.ts:1079` 直接 return 跳过 Q 弹、
+/// `:102` 用 CSS 关掉过渡），本仓是对等实现而非开关的附庸。
+///
+/// **0.0 的语义边界**：`motion` 只乘在 `breath_offset` / `sway_angle` / `squash_scales` 三个
+/// 形变函数上（`window.rs` 的四路调用点），置 0 ⇒ 三者恒返回中性值（0 位移 / 0 角 / 1.0 缩放），
+/// **帧动画本身照常播放**——这是有意为之：关的是「动效」不是「动画」，
+/// 与上游关掉 Q 弹但保留待机呼吸的处理同构。
+/// 另注：`sway_layout_margin` 按 `MOTION_MAX`（1.6）而非本下限算余量，故下限变更不影响底部留白。
+pub(crate) const MOTION_MIN: f32 = 0.0;
 pub(crate) const MOTION_MAX: f32 = 1.6;
 /// 气泡驻留的合法区间（毫秒）。默认对齐 `config::QUOTE_MS`。
 pub(crate) const BUBBLE_MS_MIN: u64 = 1000;
@@ -200,6 +211,61 @@ mod tests {
         assert_eq!(s.motion, MOTION_MAX);
         assert_eq!(s.bubble_ms, BUBBLE_MS_MIN);
         assert_eq!(s.alpha, ALPHA_MAX);
+    }
+
+    /// E2：`motion = 0`（完全关闭形变）必须能**存能读能规范化**，且不被当缺失回落。
+    ///
+    /// 这条钉住的是三个各自会静默出错的环节，任一坏掉都不会报错、只会「关不掉动效」：
+    /// ① 反序列化：`0` 是合法 `f32`，不得被 `#[serde(default)]` 覆盖成 1.0；
+    /// ② 规范化：`clamp(0.0, 1.6)` 必须留住 0.0（写成 truthy 判定就会变成 1.0）；
+    /// ③ 往返：写盘再读回仍是 0.0。
+    #[test]
+    fn zero_motion_survives_round_trip() {
+        // ① 显式写 0（不是缺字段）—— 读出来必须是 0
+        let s: PetSettings = serde_json::from_str(r#"{"version":1,"motion":0.0}"#).unwrap();
+        assert_eq!(s.motion, 0.0, "显式 motion:0 不得被 serde(default) 覆盖成 1.0");
+        // 缺字段仍走默认 1.0（对照：0 与「没写」必须可区分）
+        let d: PetSettings = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert_eq!(d.motion, 1.0, "缺字段仍回默认 1.0（0 与「没写」的区分）");
+
+        // ② normalize 必须把 0 留住、且报告「无改动」（已在合法区间内）
+        // 输入是 ① 里显式 motion:0 的那份样本——不是缺字段的 d（d 的 motion=1.0，
+        // 拿它过 normalize 恒为 1.0，断言就变成恒红；首版正是拿错了 d，且从未真跑过）。
+        let mut z = s.clone();
+        assert!(!z.normalize(), "motion=0 在 [0.0, 1.6] 内，不该被报告为改动");
+        assert_eq!(z.motion, 0.0, "normalize 不得把 0 抬回 1.0（truthy 陷阱）");
+
+        // ③ 往返
+        let json = serde_json::to_string(&z).unwrap();
+        let back: PetSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.motion, 0.0, "写盘再读回必须仍是 0");
+    }
+
+    /// E2 的语义边界：`0` 关掉的是**形变**、不是**动画**——三条形变函数都要回中性值。
+    ///
+    /// **这条必须走 `normalize()` 才能钉住 `MOTION_MIN`**：初版直接把 `0.0` 传给形变函数，
+    /// 结果反向验证时把 `MOTION_MIN` 改回 `0.5` 它**照样全绿** —— 因为压根没经过下限判定，
+    /// 测的是「形变函数在 0 时是中性的」（那是 xform 的性质，与 E2 无关），
+    /// 而 E2 的真实主张是「0 能通过规范化存活」。两条必须都过 normalize 才测得到。
+    #[test]
+    fn zero_motion_survives_normalize_and_yields_neutral_transforms() {
+        use crate::pet_native::xform::{breath_offset, squash_scales, sway_angle};
+
+        // ① 过一遍 normalize（下限判定的真实入口）
+        let mut s = PetSettings { motion: 0.0, ..Default::default() };
+        assert!(!s.normalize(), "motion=0 在合法区间内，不该被报告为改动");
+        assert_eq!(s.motion, 0.0,
+            "normalize 不得把 0 抬回 MOTION_MIN={MOTION_MIN}（truthy 陷阱）");
+
+        // ② 归一后的值喂给形变：全部中性
+        let m = s.motion;
+        for t in [0_u64, 250, 500, 750] {
+            assert_eq!(breath_offset(t, 2.0, m), 0.0, "t={t}: 呼吸位移须为 0");
+            assert_eq!(sway_angle(t, m), 0.0, "t={t}: 摇摆角须为 0");
+        }
+        let (sx, sy) = squash_scales(0.0, m);
+        assert!((sx - 1.0).abs() < 1e-6 && (sy - 1.0).abs() < 1e-6,
+            "挤压缩放须回中性 1.0（得到 {sx} / {sy}）——0 是「不形变」不是「塌成一点」");
     }
 
     #[test]
