@@ -225,6 +225,58 @@ pub(crate) fn pick_ambient_row() -> String {
     POOL[picked].to_string()
 }
 
+/* ---------------- DPI 缩放判据（纯函数） ---------------- */
+
+/// 基准 DPI。Win32 的 96 DPI 记为 100% 缩放，所有 scale 由它推出。
+pub(crate) const DPI_BASE: u32 = 96;
+
+/// 由 DPI 求缩放倍数（96 → 1.0、192 → 2.0）。
+///
+/// **为什么不能直接 `dpi as f32 / 96.0`**：结果是小数（125% → 1.25、175% → 1.828），
+/// 而窗口尺寸必须是整数像素 ⇒ 浮点结果必须在这里一次性取整，**且取整方向要固定**。
+/// 取整散落在各调用点时，窗口宽与 DIB 宽可能各自取整到不同值
+/// （`UpdateLayeredWindow` 会静默拉伸填满，两者不一致就是「画面被拉扁一像素」）。
+///
+/// 判据四条（`dpi_scale` 的单测逐条钉住）：
+/// ① `dpi == 0`（`GetDpiForWindow` 在无效 hwnd 上返回 0）⇒ 回落 1.0，**不返回 0**
+///    ——0 会让窗口尺寸塌成 0×0，桌宠直接消失且无任何报错；
+/// ② 下限 1.0：小于基准的 DPI 不缩（素材按 1:1 绘制即可，放到 0.5 只会糊）；
+/// ③ 取整在**换算成像素时**做（见 `scaled_window_size`），**scale 本身保持精确**。
+///    ——这里曾把 scale 量化到 0.5 档，被单测当场抓住：175%（dpi 168）被抬成 2.0、
+///    144 与 168 撞成同一档，等于「两档不同缩放渲染成同样大小」。
+///    量化是错的：DPI 档位由系统给定，不该由我们改写。
+pub(crate) fn dpi_scale(dpi: u32) -> f32 {
+    if dpi == 0 {
+        return 1.0;
+    }
+    let s = dpi as f32 / DPI_BASE as f32;
+    if s < 1.0 { 1.0 } else { s }
+}
+
+/// 把**素材基准尺寸**（`WIN_W`/`WIN_H`）换算成当前 DPI 下的**窗口物理尺寸**。
+///
+/// 这是 DPI 适配的唯一入口：`MoveWindow` / `CreateWindowExW` / DIB 的
+/// `width`/`height` / `buf` 长度 / `Size` 全部走它，**保证四处永远同值**。
+/// 分两处取整（先缩放后各自取整）是**故意**的：DIB 与 `Size` 必须逐字相等，
+/// 而 `buf` 只需 ≥ 两者，取整方式不影响正确性。
+pub(crate) fn scaled_window_size(base_w: i32, base_h: i32, dpi: u32) -> (i32, i32) {
+    let s = dpi_scale(dpi);
+    let w = (base_w as f32 * s).round() as i32;
+    let h = (base_h as f32 * s).round() as i32;
+    (w.max(1), h.max(1))
+}
+
+/// 把**逻辑像素量**（`DOCK_MARGIN_PX` 这类与 `character_local_rect` 配对推导的常量）
+/// 换算成当前 DPI 下的物理像素量。
+///
+/// 与 `scaled_window_size` 分开是因为**它必须能被独立测试**：M4.1 的整套吸附/探头
+/// 判据都建立在「`DOCK_MARGIN_PX` 恰等于帧内单侧留白」这个前提上
+/// （`config.rs` / `model.rs` 的推导）。不缩放它，200% 下吸附时留白会从
+/// 18 逻辑像素塌成 9 —— 桌宠「陷进」屏幕边缘，而不是设计里的「恰好贴边」。
+pub(crate) fn scaled_px(px: i32, dpi: u32) -> i32 {
+    (px as f32 * dpi_scale(dpi)).round() as i32
+}
+
 /* ---------------- R13：拖动目标推进（合帧的纯逻辑） ---------------- */
 
 /// 把一个鼠标事件的位移**推进到逻辑目标**上。
@@ -284,7 +336,11 @@ pub(crate) const DOCK_MARGIN_PX: i32 = 18;
 ///
 /// **纯函数**：入参是「角色可见区域」与「工作区」，都已是窗口坐标 —— 不碰 Win32，
 /// 故可 `rustc --test` 直编单测。
-pub(crate) fn pick_dock_edge(role: Rect, work: Rect) -> Option<DockEdge> {
+///
+/// DPI(2026-10-05)：`margin` 是**物理像素**下的吸附阈值（`scaled_px(DOCK_MARGIN_PX, dpi)`），
+/// 由调用方传入而非本函数读常量 —— 纯函数层不该知道 DPI，且便于单测直接喂任意阈值。
+/// 传 `DOCK_MARGIN_PX` 即 100% 缩放下的原值。
+pub(crate) fn pick_dock_edge(role: Rect, work: Rect, margin: i32) -> Option<DockEdge> {
     // 角色区域完全在工作区外 ⇒ 不该吸附（那是「屏幕外」，由 pos_visible 兜底回默认位置）
     if role.right <= work.left || role.left >= work.right || role.bottom <= work.top
         || role.top >= work.bottom
@@ -295,7 +351,7 @@ pub(crate) fn pick_dock_edge(role: Rect, work: Rect) -> Option<DockEdge> {
     let d_right = work.right - role.right;
     let d_top = role.top - work.top;
     let d_bottom = work.bottom - role.bottom;
-    let m = DOCK_MARGIN_PX;
+    let m = margin;
     // 先横向再纵向（见上方注释的理由）
     if d_left <= m {
         return Some(DockEdge::Left);
@@ -322,11 +378,14 @@ pub(crate) fn pick_dock_edge(role: Rect, work: Rect) -> Option<DockEdge> {
 /// 不判断「该不该推」（混在一起会让「角落同时贴两边」的情形无法表达）。
 ///
 /// 返回 `None` 表示 `role` 不在该边的工作区内（推出去会跑错屏）——调用方应保持原位。
+///
+/// DPI(2026-10-05)：`margin` 语义同 `pick_dock_edge`（物理像素，由调用方按 DPI 换算）。
 pub(crate) fn dock_push_out(
     pos: (i32, i32),
     role: Rect,
     work: Rect,
     edge: DockEdge,
+    margin: i32,
 ) -> Option<(i32, i32)> {
     // 角色区域与工作区无交集 ⇒ 跨屏推算无意义（会出现窗口跑掉一整屏）
     if role.right <= work.left || role.left >= work.right || role.bottom <= work.top
@@ -336,13 +395,13 @@ pub(crate) fn dock_push_out(
     }
     let dx = match edge {
         // 角色左边要距工作区左边 m ⇒ 窗口 x = work.left + m - role.left（role 是相对窗口的偏移）
-        DockEdge::Left => work.left + DOCK_MARGIN_PX - role.left,
-        DockEdge::Right => work.right - DOCK_MARGIN_PX - role.right,
+        DockEdge::Left => work.left + margin - role.left,
+        DockEdge::Right => work.right - margin - role.right,
         DockEdge::Top | DockEdge::Bottom => 0,
     };
     let dy = match edge {
-        DockEdge::Top => work.top + DOCK_MARGIN_PX - role.top,
-        DockEdge::Bottom => work.bottom - DOCK_MARGIN_PX - role.bottom,
+        DockEdge::Top => work.top + margin - role.top,
+        DockEdge::Bottom => work.bottom - margin - role.bottom,
         DockEdge::Left | DockEdge::Right => 0,
     };
     if dx == 0 && dy == 0 {
@@ -418,8 +477,9 @@ pub(crate) fn peek_extent(role: Rect, edge: DockEdge) -> i32 {
 /// （slide ≤ M 时未开始裁切，全可见）⇒ 令可见 = exposure×extent：
 /// `slide = (1 − exposure) × extent + M`。
 /// 「+M」就是那 18px 预留间距：外移要先吃掉它，角色本体才开始没入屏外。
-pub(crate) fn peek_slide_target(role: Rect, edge: DockEdge, exposure: f32) -> f32 {
-    (1.0 - exposure) * peek_extent(role, edge) as f32 + DOCK_MARGIN_PX as f32
+/// peek 的目标外移量。`margin` 语义同 `pick_dock_edge`（物理像素，由调用方按 DPI 换算）。
+pub(crate) fn peek_slide_target(role: Rect, edge: DockEdge, exposure: f32, margin: i32) -> f32 {
+    (1.0 - exposure) * peek_extent(role, edge) as f32 + margin as f32
 }
 
 /// smoothstep 缓动（两端零速度）。300ms 的短过渡用线性会有「撞墙」感，
@@ -437,13 +497,23 @@ fn peek_ease(p: f32) -> f32 {
 /// 调用方负责把 dt 夹到安全区间（防挂起后首拍暴走）。
 ///
 /// **纯函数**：入参只有状态与几何，不碰 Win32 ⇒ 可 `rustc --test` 直编单测。
-pub(crate) fn peek_advance(st: &mut PeekState, role: Rect, edge: DockEdge, dt_ms: u32) {
+///
+/// DPI(2026-10-05)：`margin` 语义同 `pick_dock_edge`（物理像素）。**必须与 `role` 同源**
+/// —— role 若已是物理尺寸而 margin 仍是基准值，探头跨距会算短（200% 下少露 45%）。
+pub(crate) fn peek_advance(st: &mut PeekState, role: Rect, edge: DockEdge, margin: i32, dt_ms: u32) {
     let (dur, to) = match st.phase {
-        PeekPhase::Entering => (PEEK_ENTER_MS, peek_slide_target(role, edge, PEEK_REST_EXPOSURE)),
-        PeekPhase::Straightening => {
-            (PEEK_STRAIGHTEN_MS, peek_slide_target(role, edge, PEEK_ENGAGE_EXPOSURE))
-        }
-        PeekPhase::Returning => (PEEK_RETURN_MS, peek_slide_target(role, edge, PEEK_REST_EXPOSURE)),
+        PeekPhase::Entering => (
+            PEEK_ENTER_MS,
+            peek_slide_target(role, edge, PEEK_REST_EXPOSURE, margin),
+        ),
+        PeekPhase::Straightening => (
+            PEEK_STRAIGHTEN_MS,
+            peek_slide_target(role, edge, PEEK_ENGAGE_EXPOSURE, margin),
+        ),
+        PeekPhase::Returning => (
+            PEEK_RETURN_MS,
+            peek_slide_target(role, edge, PEEK_REST_EXPOSURE, margin),
+        ),
         // 非过渡相位：slide 已停在目标上，无可推进
         _ => return,
     };
@@ -804,12 +874,12 @@ mod tests {
         let near_right = rect(work.right - m - 250, 300, work.right - m, 700);
         let near_top = rect(700, m, 950, m + 400);
         let near_bottom = rect(700, work.bottom - m - 400, 950, work.bottom - m);
-        assert_eq!(pick_dock_edge(near_left, work), Some(DockEdge::Left));
-        assert_eq!(pick_dock_edge(near_right, work), Some(DockEdge::Right));
-        assert_eq!(pick_dock_edge(near_top, work), Some(DockEdge::Top));
-        assert_eq!(pick_dock_edge(near_bottom, work), Some(DockEdge::Bottom));
+        assert_eq!(pick_dock_edge(near_left, work, DOCK_MARGIN_PX), Some(DockEdge::Left));
+        assert_eq!(pick_dock_edge(near_right, work, DOCK_MARGIN_PX), Some(DockEdge::Right));
+        assert_eq!(pick_dock_edge(near_top, work, DOCK_MARGIN_PX), Some(DockEdge::Top));
+        assert_eq!(pick_dock_edge(near_bottom, work, DOCK_MARGIN_PX), Some(DockEdge::Bottom));
         // 远离所有边 ⇒ 不吸附
-        assert_eq!(pick_dock_edge(rect(800, 400, 1050, 800), work), None);
+        assert_eq!(pick_dock_edge(rect(800, 400, 1050, 800), work, DOCK_MARGIN_PX), None);
     }
 
     /// M4.1-2：**完全出屏不得吸附**。角色不在工作区内时若也判「贴边」，
@@ -819,11 +889,11 @@ mod tests {
     fn dock_not_detected_when_fully_outside() {
         let work = rect(0, 0, 1920, 1040);
         // 整块角色在左边外
-        assert_eq!(pick_dock_edge(rect(-300, 300, -50, 700), work), None);
+        assert_eq!(pick_dock_edge(rect(-300, 300, -50, 700), work, DOCK_MARGIN_PX), None);
         // 整块角色在右边外
-        assert_eq!(pick_dock_edge(rect(2000, 300, 2250, 700), work), None);
+        assert_eq!(pick_dock_edge(rect(2000, 300, 2250, 700), work, DOCK_MARGIN_PX), None);
         // 整块在下方
-        assert_eq!(pick_dock_edge(rect(700, 1100, 950, 1500), work), None);
+        assert_eq!(pick_dock_edge(rect(700, 1100, 950, 1500), work, DOCK_MARGIN_PX), None);
     }
 
     /// M4.1-3：推出后**角色与边缘的距离恰为 `DOCK_MARGIN_PX`**（不多不少）。
@@ -837,7 +907,7 @@ mod tests {
         // 从「离左边 100px」推到「离左边 m」
         let role0 = rect(100, 300, 350, 700);
         let pos0 = (0, 0); // 角色区域是相对窗口的偏移：此处 role0 已是窗口坐标
-        let pushed = dock_push_out(pos0, role0, work, DockEdge::Left).expect("应可推出");
+        let pushed = dock_push_out(pos0, role0, work, DockEdge::Left, DOCK_MARGIN_PX).expect("应可推出");
         // 推出后：role.left 应等于 work.left + m
         let new_role_left = role0.left + pushed.0;
         assert_eq!(new_role_left, work.left + m,
@@ -852,12 +922,12 @@ mod tests {
         // 角色右边距 work.right 还有 5px（已在阈值内，但位置没对齐）
         let role_r = rect(work.right - m - 5 - 250, 300, work.right - m - 5, 700);
         let pos = (0, 0);
-        let p = dock_push_out(pos, role_r, work, DockEdge::Right).unwrap();
+        let p = dock_push_out(pos, role_r, work, DockEdge::Right, DOCK_MARGIN_PX).unwrap();
         // 推出后 role.right = work.right - m ⇒ 窗口 x 需 **+5**（往右推）
         assert_eq!(role_r.right + p.0, work.right - m,
             "右边推出应 +5px（把角色往屏幕内挪），实得 {}", p.0);
         let role_b = rect(700, work.bottom - m - 5 - 400, 950, work.bottom - m - 5);
-        let pb = dock_push_out(pos, role_b, work, DockEdge::Bottom).unwrap();
+        let pb = dock_push_out(pos, role_b, work, DockEdge::Bottom, DOCK_MARGIN_PX).unwrap();
         assert_eq!(role_b.bottom + pb.1, work.bottom - m,
             "下边推出应 +5px，实得 {}", pb.1);
     }
@@ -868,7 +938,7 @@ mod tests {
     fn dock_push_refuses_when_role_outside_work() {
         let work = rect(0, 0, 1920, 1040);
         let role = rect(-300, 300, -50, 700); // 完全在左外
-        assert_eq!(dock_push_out((0, 0), role, work, DockEdge::Left), None,
+        assert_eq!(dock_push_out((0, 0), role, work, DockEdge::Left, DOCK_MARGIN_PX), None,
             "角色完全在屏外时不得推出（会把窗口推到错误的屏）");
     }
 
@@ -881,7 +951,7 @@ mod tests {
         let m = DOCK_MARGIN_PX;
         let role = rect(work.left + m, 300, work.left + m + 250, 700);
         let pos = (0, 0);
-        assert_eq!(dock_push_out(pos, role, work, DockEdge::Left), Some(pos),
+        assert_eq!(dock_push_out(pos, role, work, DockEdge::Left, DOCK_MARGIN_PX), Some(pos),
             "已精确贴边时必须原样返回（否则贴边会抖）");
     }
 
@@ -894,7 +964,7 @@ mod tests {
 
     fn advance_n(st: &mut PeekState, role: Rect, edge: DockEdge, n: u32) {
         for _ in 0..n {
-            peek_advance(st, role, edge, 33); // 与 compose 同节拍
+            peek_advance(st, role, edge, DOCK_MARGIN_PX, 33); // 与 compose 同节拍
         }
     }
 
@@ -906,14 +976,14 @@ mod tests {
         let m = DOCK_MARGIN_PX as f32;
         for edge in [DockEdge::Left, DockEdge::Right] {
             let ext = peek_extent(role, edge) as f32;
-            let t = peek_slide_target(role, edge, PEEK_REST_EXPOSURE);
+            let t = peek_slide_target(role, edge, PEEK_REST_EXPOSURE, DOCK_MARGIN_PX);
             let visible = ext + m - t; // slide > M 后的可见带宽
             assert!((visible / ext - PEEK_REST_EXPOSURE).abs() < 1e-4,
                 "Left/Right：可见比例应为 0.55，实得 {}", visible / ext);
         }
         for edge in [DockEdge::Top, DockEdge::Bottom] {
             let ext = peek_extent(role, edge) as f32;
-            let t = peek_slide_target(role, edge, PEEK_ENGAGE_EXPOSURE);
+            let t = peek_slide_target(role, edge, PEEK_ENGAGE_EXPOSURE, DOCK_MARGIN_PX);
             let visible = ext + m - t;
             assert!((visible / ext - PEEK_ENGAGE_EXPOSURE).abs() < 1e-4,
                 "Top/Bottom：可见比例应为 0.82，实得 {}", visible / ext);
@@ -951,7 +1021,7 @@ mod tests {
         assert_eq!(st.phase, PeekPhase::Entering, "297ms < 300ms，不应提前到位");
         advance_n(&mut st, role, DockEdge::Left, 1);
         assert_eq!(st.phase, PeekPhase::Peeking, "330ms ≥ 300ms，应已到位");
-        let want = peek_slide_target(role, DockEdge::Left, PEEK_REST_EXPOSURE);
+        let want = peek_slide_target(role, DockEdge::Left, PEEK_REST_EXPOSURE, DOCK_MARGIN_PX);
         assert!((st.slide - want).abs() < 0.5, "落点应是常驻档 {want}，实得 {}", st.slide);
     }
 
@@ -971,7 +1041,7 @@ mod tests {
         assert_eq!(st.phase, PeekPhase::Straightening, "231ms < 250ms，不应提前到位");
         advance_n(&mut st, role, DockEdge::Right, 1);
         assert_eq!(st.phase, PeekPhase::Straightened);
-        let engage = peek_slide_target(role, DockEdge::Right, PEEK_ENGAGE_EXPOSURE);
+        let engage = peek_slide_target(role, DockEdge::Right, PEEK_ENGAGE_EXPOSURE, DOCK_MARGIN_PX);
         assert!((st.slide - engage).abs() < 0.5, "拉直落点应是 engage 档 {engage}，实得 {}", st.slide);
 
         // 退回：目标是常驻档（继续探头），不是吸附位（没拖走就不该回去）
@@ -979,7 +1049,7 @@ mod tests {
         assert_eq!(st.phase, PeekPhase::Returning);
         advance_n(&mut st, role, DockEdge::Right, 12);
         assert_eq!(st.phase, PeekPhase::Peeking);
-        let rest = peek_slide_target(role, DockEdge::Right, PEEK_REST_EXPOSURE);
+        let rest = peek_slide_target(role, DockEdge::Right, PEEK_REST_EXPOSURE, DOCK_MARGIN_PX);
         assert!((st.slide - rest).abs() < 0.5, "退回落点应是常驻档 {rest}，实得 {}", st.slide);
         assert!(st.slide > 0.0, "退回绝不是回吸附位（slide 必须仍 > 0）");
     }
@@ -994,11 +1064,11 @@ mod tests {
         advance_n(&mut st, role, DockEdge::Left, 3); // ≈99ms，走到一半
         assert_eq!(st.phase, PeekPhase::Entering);
         let at_interrupt = st.slide;
-        assert!(at_interrupt > 0.0 && at_interrupt < peek_slide_target(role, DockEdge::Left, PEEK_REST_EXPOSURE));
+        assert!(at_interrupt > 0.0 && at_interrupt < peek_slide_target(role, DockEdge::Left, PEEK_REST_EXPOSURE, DOCK_MARGIN_PX));
         peek_kick_engage(&mut st);
         assert_eq!(st.phase, PeekPhase::Straightening);
         advance_n(&mut st, role, DockEdge::Left, 1);
-        let engage = peek_slide_target(role, DockEdge::Left, PEEK_ENGAGE_EXPOSURE);
+        let engage = peek_slide_target(role, DockEdge::Left, PEEK_ENGAGE_EXPOSURE, DOCK_MARGIN_PX);
         let step = (st.slide - at_interrupt).abs();
         assert!(step < (engage - at_interrupt).abs() * 0.2,
             "拉直首拍位移 {step}px 过大 ⇒ 起点没接在打断处（跳变）");
@@ -1012,12 +1082,12 @@ mod tests {
     #[test]
     fn peek_advance_is_monotonic_and_bounded() {
         let role = char_rect();
-        let target = peek_slide_target(role, DockEdge::Left, PEEK_REST_EXPOSURE);
+        let target = peek_slide_target(role, DockEdge::Left, PEEK_REST_EXPOSURE, DOCK_MARGIN_PX);
         let mut st = PeekState::off();
         peek_kick_idle(&mut st);
         let mut last = st.slide;
         for _ in 0..12 {
-            peek_advance(&mut st, role, DockEdge::Left, 33);
+            peek_advance(&mut st, role, DockEdge::Left, DOCK_MARGIN_PX, 33);
             assert!(st.slide >= last, "slide 回退（{} → {}）⇒ 缓动不单调", last, st.slide);
             assert!(st.slide <= target + 1e-3, "slide {} 越过目标 {target}", st.slide);
             last = st.slide;
@@ -1031,7 +1101,7 @@ mod tests {
         // Off / Peeking 推进不改 slide（两态都手写 slide=42，断言才有区分度）
         for phase in [PeekPhase::Off, PeekPhase::Peeking, PeekPhase::Straightened] {
             let mut st = PeekState { phase, slide: 42.0, from: 42.0, elapsed: 0.0 };
-            peek_advance(&mut st, role, DockEdge::Left, 33);
+            peek_advance(&mut st, role, DockEdge::Left, DOCK_MARGIN_PX, 33);
             assert_eq!(st.slide, 42.0, "相位 {phase:?} 不该被推进");
         }
         // Off 不能直接 engage；Straightened 不能再 engage（只能 return）
@@ -1059,7 +1129,7 @@ mod tests {
         // 吸附位（Left 边）：角色区域左边距边 m
         let docked_pos = (work.left + m, 300);
         for exposure in [PEEK_REST_EXPOSURE, PEEK_ENGAGE_EXPOSURE] {
-            let slide = peek_slide_target(role, DockEdge::Left, exposure).round() as i32;
+            let slide = peek_slide_target(role, DockEdge::Left, exposure, DOCK_MARGIN_PX).round() as i32;
             let pos = peek_window_pos(docked_pos, DockEdge::Left, slide as f32);
             let g = rect(pos.0 + role.left, pos.1 + role.top, pos.0 + role.right, pos.1 + role.bottom);
             let l = g.left.max(work.left);
@@ -1068,6 +1138,93 @@ mod tests {
             let total = ((g.right - g.left) as i64) * ((g.bottom - g.top) as i64);
             assert!(area * 100 >= total * VISIBLE_MIN_PCT,
                 "露出 {exposure} 时可见占比 {}% 低于 R3 阈值", area * 100 / total);
+        }
+    }
+
+    /* ---------------- DPI 缩放判据的单测 ---------------- */
+
+    #[test]
+    fn dpi_scale_maps_base_and_doubles() {
+        assert_eq!(dpi_scale(96), 1.0, "基准 DPI 必须是 1.0（不缩放）");
+        assert_eq!(dpi_scale(192), 2.0, "200% 必须精确 2.0");
+    }
+
+    #[test]
+    fn dpi_scale_never_returns_zero_for_invalid_dpi() {
+        // GetDpiForWindow 在无效 hwnd 上返回 0。若此处返回 0，窗口尺寸塌成 0×0 ⇒
+        // 桌宠静默消失且无任何报错 —— 这条钉住回落分支。
+        assert_eq!(dpi_scale(0), 1.0, "无效 DPI 必须回落 1.0，不得为 0");
+    }
+
+    #[test]
+    fn dpi_scale_clamps_below_base_to_one() {
+        // 小于 96 的 DPI（96 罕见但 API 允许）不缩：缩到 0.5 只会糊。
+        assert_eq!(dpi_scale(48), 1.0);
+        assert_eq!(dpi_scale(1), 1.0);
+    }
+
+    #[test]
+    fn dpi_scale_keeps_fractional_dpi_exact() {
+        // 系统给什么档就是什么档。**曾把 scale 量化到 0.5**（被本条 + 上一条抓到）：
+        // 175%（168）被抬成 2.0、144 与 168 撞成同一档 ⇒ 两档不同缩放渲染成同样大小。
+        // 量化等于替系统改写 DPI 档位，是错的。
+        assert_eq!(dpi_scale(120), 1.25, "125% 必须精确 1.25");
+        assert_eq!(dpi_scale(144), 1.5, "150% 必须精确 1.5");
+        assert_eq!(dpi_scale(168), 1.75, "175% 必须精确 1.75，不得被抬成 2.0");
+    }
+
+    #[test]
+    fn dpi_scale_is_strictly_increasing_across_real_dpi_ladder() {
+        // 「严格单调」而非「不减」：量化实现会在 144/168 处出现相等（实测踩过）。
+        let ladder = [96u32, 108, 120, 132, 144, 156, 168, 180, 192, 216, 240];
+        for w in ladder.windows(2) {
+            let (a, b) = (dpi_scale(w[0]), dpi_scale(w[1]));
+            assert!(b > a, "dpi {} 与 {} 的 scale 相等（{a}）⇒ 档位被合并", w[0], w[1]);
+        }
+    }
+
+    #[test]
+    fn scaled_window_size_is_monotonic_in_dpi() {
+        // DPI 越高窗口越大 —— 顺序错了会让桌宠随缩放设置变小。
+        let mut prev = 0;
+        for dpi in [96u32, 120, 144, 168, 192, 216, 240] {
+            let (w, h) = scaled_window_size(286, 390, dpi);
+            assert!(w > prev, "dpi {dpi} 的窗宽 {w} 未大于上一档 {prev}");
+            assert!(w >= 286 && h >= 390, "dpi {dpi} 不得缩到基准以下：{w}x{h}");
+            prev = w;
+        }
+    }
+
+    #[test]
+    fn scaled_window_size_is_never_zero_even_for_degenerate_input() {
+        // buf 分配与 CreateWindowExW 都吃这个值：0 会让桌宠消失。
+        assert_eq!(scaled_window_size(0, 0, 192), (1, 1), "退化输入也要保底 1×1");
+        assert_eq!(scaled_window_size(286, 390, 0), (286, 390), "无效 DPI 走 1.0 回落");
+    }
+
+    #[test]
+    fn scaled_px_keeps_dock_margin_proportion() {
+        // 本次修复的核心判据：200% 下 DOCK_MARGIN_PX 必须同步放大，
+        // 否则吸附时「角色贴边」的留白从 18 逻辑像素塌成 9（桌宠陷进屏幕边缘）。
+        assert_eq!(scaled_px(DOCK_MARGIN_PX, 96), 18);
+        assert_eq!(scaled_px(DOCK_MARGIN_PX, 192), 36);
+        // 比例一致性：任意 DPI 下 换算后/原始 = scale
+        for dpi in [96u32, 120, 144, 192] {
+            let s = dpi_scale(dpi);
+            let got = scaled_px(DOCK_MARGIN_PX, dpi) as f32;
+            let want = DOCK_MARGIN_PX as f32 * s;
+            assert!((got - want).abs() <= 0.5, "dpi {dpi}: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn scaled_px_is_consistent_with_scaled_window_size() {
+        // 两者必须出自同一 scale —— 分处取整会让 DIB 与 MoveWindow 尺寸不一致，
+        // UpdateLayeredWindow 会静默拉伸填满 ⇒ 画面被拉扁一像素。
+        for dpi in [96u32, 120, 144, 192, 240] {
+            let s = dpi_scale(dpi);
+            assert!((scaled_px(1, dpi) as f32 - s).abs() <= 0.5,
+                "dpi {dpi}: scaled_px(1) 与 scale 不一致");
         }
     }
 }

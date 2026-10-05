@@ -245,9 +245,20 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
                 y = y.clamp(y_lo, y_hi);
                 // M4.1：peek 位置经比例还原 + clamp 后停在「半出屏」处，这里推回吸附位
                 if let Some(edge) = s.dock {
-                    if let Some((dx, dy)) =
-                        crate::pet_native::model::dock_push_out((x, y), c, w, edge)
-                    {
+                    // DPI(2026-10-05)：`c` 是 `character_local_rect()`（**基准 96 DPI 口径**，
+                    // 未按 DPI 缩放）⇒ margin 必须与 role **同源**，这里用基准 `DOCK_MARGIN_PX`。
+                    // 物理口径的吸附位校准不在此层：恢复期拿不到 hwnd（`GetDpiForWindow` 需要它），
+                    // 由 `create_window` 建窗后的 `apply_dock()` 用 `role_local_phys()` +
+                    // `dock_margin()` 再走一遍（那里已是真实 DPI 口径）。
+                    // 判据出处：`model.rs` 的 `dock_push_out` / `peek_advance` 注释均写明
+                    // 「margin 必须与 role 同源」——混轴会让吸附留白错一倍。
+                    if let Some((dx, dy)) = crate::pet_native::model::dock_push_out(
+                        (x, y),
+                        c,
+                        w,
+                        edge,
+                        crate::pet_native::model::DOCK_MARGIN_PX,
+                    ) {
                         x = dx;
                         y = dy;
                     }
@@ -271,9 +282,14 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
                         .into_iter()
                         .find(|r| ccx >= r.left && ccx < r.right && ccy >= r.top && ccy < r.bottom)
                     {
-                        if let Some((dx, dy)) =
-                            crate::pet_native::model::dock_push_out(pos, c, w, edge)
-                        {
+                        // 同上：`c` 仍是基准口径，margin 取基准值（物理口径校准交建窗后的 `apply_dock`）
+                        if let Some((dx, dy)) = crate::pet_native::model::dock_push_out(
+                            pos,
+                            c,
+                            w,
+                            edge,
+                            crate::pet_native::model::DOCK_MARGIN_PX,
+                        ) {
                             pos = (dx, dy);
                         }
                     }

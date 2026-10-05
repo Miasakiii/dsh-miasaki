@@ -109,6 +109,11 @@ extern "system" {
     pub(crate) fn GetCursorPos(p: *mut Point) -> i32;
     pub(crate) fn MoveWindow(h: isize, x: i32, y: i32, w: i32, ht: i32, repaint: i32) -> i32;
     pub(crate) fn GetWindowRect(h: isize, r: *mut Rect) -> i32;
+    /// DPI(2026-10-05)：取窗口所在显示器的 DPI，基址 96 = 100% 缩放。
+    /// **Win10 1607+ 才有**。本仓最低目标 Win10 1803+（`update.rs` 的 `curl.exe` 依赖同一档），
+    /// 直接用它，不必走 `GetDeviceCaps` 的设备上下文分支。
+    /// 无效 hwnd 返回 0 ⇒ 调方必须回落（`model::dpi_scale` 已按此设计，见其注释①）。
+    pub(crate) fn GetDpiForWindow(h: isize) -> u32;
     pub(crate) fn GetSystemMetrics(idx: i32) -> i32;
     pub(crate) fn SetTimer(h: isize, id: usize, ms: u32, cb: usize) -> usize;
     pub(crate) fn KillTimer(h: isize, id: usize) -> i32;
@@ -120,6 +125,11 @@ extern "system" {
         data: isize,
     ) -> i32;
     pub(crate) fn GetMonitorInfoW(mon: isize, info: *mut MonitorInfo) -> i32;
+    /// DPI(2026-10-05)：取**指定点所在显示器**的 DPI —— 建窗前就要用（`buf` 分配与
+    /// `CreateWindowExW` 的尺寸都得先知道 DPI，而 `GetDpiForWindow` 要 hwnd ⇒ 循环依赖）。
+    /// `MonitorFromPoint` 属 user32；`GetDpiForMonitor` 属 **shcore**（Win8.1+）。
+    /// 取不到时回落 96（100%），由 `model::dpi_scale` 兜住。
+    pub(crate) fn MonitorFromPoint(p: Point, flags: u32) -> isize;
     pub(crate) fn CreatePopupMenu() -> isize;
     pub(crate) fn AppendMenuW(menu: isize, flags: u32, id: usize, item: *const u16) -> i32;
     pub(crate) fn TrackPopupMenu(menu: isize, flags: u32, x: i32, y: i32, rsv: i32, h: isize, rect: usize) -> i32;
@@ -128,6 +138,16 @@ extern "system" {
     pub(crate) fn GetForegroundWindow() -> isize;
     pub(crate) fn PostMessageW(h: isize, m: u32, w: usize, l: isize) -> i32;
     pub(crate) fn GetModuleHandleW(n: *const u16) -> isize;
+}
+
+// DPI(2026-10-05)：`GetDpiForMonitor` 在 **shcore.dll**（Win8.1+），不在 user32。
+// `MDT_EFFECTIVE_DPI = 0`。**与 `GetDpiForWindow` 的区别**：本 API 在建窗前即可用
+// （`MonitorFromPoint` 给显示器句柄），而后者要 hwnd —— 冷启动的尺寸分配正需要前者。
+// 取不到时返回非 0（S_OK = 0），调用方回落 96。
+// 注：此处刻意用 `//` 而非 `///` —— rustdoc 不为 `extern` 块生成文档，会报 unused_doc_comments。
+#[link(name = "shcore")]
+extern "system" {
+    pub(crate) fn GetDpiForMonitor(mon: isize, t: i32, dpi_x: *mut u32, dpi_y: *mut u32) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -174,6 +194,13 @@ pub(crate) const WM_LBUTTONUP: u32 = 0x0202;
 pub(crate) const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub(crate) const WM_RBUTTONDOWN: u32 = 0x0204;
 pub(crate) const WM_MOUSEMOVE: u32 = 0x0200;
+/// DPI(2026-10-05)：窗口跨越到不同缩放的显示器时系统发此消息。
+/// `wParam` 低 16 位 = 新 DPI（高 16 位 = 原 DPI），`lParam` = 建议的窗口矩形（物理像素）。
+/// **本仓必须处理它的原因不是「跨屏错位」而是「尺寸需随 DPI 重算」**：
+/// PMv2 下窗口物理尺寸 = 逻辑尺寸，素材位图恒为 `WIN_W`×`WIN_H`，
+/// 不跟随新 DPI 重建窗口与 DIB 就会一直是「素材原尺寸 / 屏幕倍率」的错配。
+/// 实测（`_refs/dpi-probe/`，2026-10-05）：200% 屏上不缩放 ⇒ 桌宠只有应有逻辑尺寸的 50%。
+pub(crate) const WM_DPICHANGED: u32 = 0x02E0;
 pub(crate) const MK_LBUTTON: usize = 0x0001;
 pub(crate) const MENU_HIDE: usize = 101;
 pub(crate) const MENU_MIN: usize = 102;
@@ -181,6 +208,10 @@ pub(crate) const MENU_EXIT: usize = 103;
 pub(crate) const MENU_SHOW: usize = 104;
 pub(crate) const SM_CXSCREEN: i32 = 0;
 pub(crate) const SM_CYSCREEN: i32 = 1;
+/// `MonitorFromPoint` 的标志：取最近的显示器（点落在所有显示器之外时的兜底）。
+pub(crate) const MONITOR_DEFAULTTONEAREST: u32 = 2;
+/// `GetDpiForMonitor` 的类型：实际生效 DPI（Win8.1+ 唯一定义值 0）。
+pub(crate) const MDT_EFFECTIVE_DPI: i32 = 0;
 
 /* ---------------- 随机数（LCG，无外部依赖） ---------------- */
 

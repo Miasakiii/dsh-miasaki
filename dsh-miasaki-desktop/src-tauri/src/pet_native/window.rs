@@ -77,6 +77,14 @@ pub(crate) struct PetWin {
     /// M4.1：吸附基准位（slide=0 的窗口位置）。peek 动画以它为原点沿边外移，
     /// 这样工作区几何在探头途中变化时只需重算 `dock_push_out`，动画位移不叠在旧位置上。
     dock_base: (i32, i32),
+    /// DPI(2026-10-05)：窗口所在显示器的 DPI（`GetDpiForWindow` 的返回值，96 = 100%）。
+    /// 窗口物理尺寸、present 用的 DIB、以及**素材绘制时的缩放**全部由它推出
+    /// （`model::dpi_scale` / `scaled_window_size`），判据与单测见 `model.rs` 的 DPI 段。
+    ///
+    /// **为什么必须存而不是每次问系统**：`buf` 按物理尺寸分配、DIB 按物理尺寸创建，
+    /// 两者在 DPI 变化时都必须**重建**（尺寸变了），重建代价不小 ⇒ 只在
+    /// `WM_DPICHANGED` 时算一次。`0` = 尚未取值（首个 compose 前会补上）。
+    dpi: u32,
     /// M4.1：最近一次用户交互（光标压上角色 / 按下 / 拖动）——peek「静置 5s」判定的时钟。
     /// 光标一直停在角色上时它持续刷新 ⇒ 桌宠不会从用户手底下缩走。
     last_interaction: std::time::Instant,
@@ -147,8 +155,10 @@ impl PetWin {
             if do_reset {
                 let p = default_pos();
                 self.pos = p;
+                // DPI：位置重置不动尺寸，但 MoveWindow 的尺寸参数必须仍是当前物理尺寸
+                let (ww, wh) = self.win_size();
                 unsafe {
-                    MoveWindow(self.hwnd, p.0, p.1, WIN_W, WIN_H, 1);
+                    MoveWindow(self.hwnd, p.0, p.1, ww, wh, 1);
                 }
                 self.render_dot();
                 pet_log_line(&format!("[native-pet] position reset -> {},{}\n", p.0, p.1));
@@ -369,8 +379,10 @@ impl PetWin {
                 // dt 夹到 100ms：单拍被拖长（系统忙）时动画放缓而不是跳帧
                 let dt = now.duration_since(self.last_peek_tick).as_millis().min(100) as u32;
                 let before = self.peek.slide;
-                let role = character_local_rect();
-                peek_advance(&mut self.peek, role, edge, dt);
+                // DPI(2026-10-05)：role 用物理像素、margin 同步缩放（否则探头跨距算错）
+                let role = self.role_local_phys();
+                let m = self.dock_margin();
+                peek_advance(&mut self.peek, role, edge, m, dt);
                 if self.peek.slide != before {
                     self.pos = peek_window_pos(self.dock_base, edge, self.peek.slide);
                     dirty = true;
@@ -392,12 +404,17 @@ impl PetWin {
             };
             if let Some(dx) = wander_dx {
                 self.pos.0 += dx * WANDER_PX_PER_FRAME;
+                // DPI(2026-10-05)：每帧步长按 DPI 放大（200% 下 9px/帧会是原速的一半），
+                // 撞墙钳制用**物理窗宽**（窗口已按 DPI 放大，用基准值会提前停）。
+                let step = scaled_px(WANDER_PX_PER_FRAME, self.dpi);
+                let (pw, _) = self.win_size();
                 let (sw, _) = screen_size();
+                self.pos.0 += dx * (step - WANDER_PX_PER_FRAME);
                 if self.pos.0 <= 0 {
                     self.pos.0 = 0;
                     self.action = None;
-                } else if self.pos.0 >= sw - WIN_W {
-                    self.pos.0 = sw - WIN_W;
+                } else if self.pos.0 >= sw - pw {
+                    self.pos.0 = sw - pw;
                     self.action = None;
                 }
                 if self.action.is_none() {
@@ -684,7 +701,13 @@ impl PetWin {
     /// 性能：全程就地写缓冲，**零分配、零新增 GDI 对象**（motion-plan §3.6 的硬约束）。
     /// 包围盒比原框大约 11%（±2° 摇摆的最坏情况），仍在 33ms 预算内。
     fn blit_center_bottom(&mut self, img: &Image, bob: f32, scale: f32, xf: &DrawXform) {
-        let h = (CELL_H as f32 * scale) as i32;
+        // DPI(2026-10-05)：以下几何全部走**物理像素**口径（`pw`/`ph`/`dpr`），
+        // 素材绘制高度 = `CELL_H × scale × dpr`。此前硬编码 `WIN_W`/`CELL_H`
+        // ⇒ 200% 下素材只有窗口面积的 1/4（窗放大 2× 而素材没放大）。
+        let (pw, ph) = self.win_size();
+        let dpr = dpi_scale(self.dpi);
+        let cell_h = (CELL_H as f32 * dpr).round() as i32;
+        let h = (cell_h as f32 * scale) as i32;
         let w = (img.w as f32 / img.h as f32 * h as f32) as i32;
         if w <= 0 || h <= 0 {
             return;
@@ -695,8 +718,8 @@ impl PetWin {
         let (hw, hh) = (fw / 2.0, fh);
         // 未变换框左上角（窗口坐标）。底部留白 2px 之外再让出摇摆余量：旋转让底边两端
         // 一高一低，低的那一端会低于 pivot，不让位就会被窗口下沿切掉「脚尖」。
-        let x0 = (WIN_W as f32 - fw) / 2.0;
-        let y0 = WIN_H as f32 - fh - 2.0 - sway_layout_margin(fw) + bob;
+        let x0 = (pw as f32 - fw) / 2.0;
+        let y0 = ph as f32 - fh - 2.0 * dpr - sway_layout_margin(fw) * dpr + bob;
         let pivot_x = x0 + hw;
         let pivot_y = y0 + hh;
         // 外接包围盒（相对未变换框左上角）→ 窗口坐标下的整数遍历区间
@@ -706,11 +729,11 @@ impl PetWin {
         let ix1 = (x0 + br).ceil() as i32;
         let iy1 = (y0 + bb).ceil() as i32;
         for dy in iy0..=iy1 {
-            if dy < 0 || dy >= WIN_H {
+            if dy < 0 || dy >= ph {
                 continue;
             }
             for dx in ix0..=ix1 {
-                if dx < 0 || dx >= WIN_W {
+                if dx < 0 || dx >= pw {
                     continue;
                 }
                 // 目标像素中心 → 相对 pivot 的偏移 → 逆变换 → 未变换框内坐标
@@ -763,7 +786,7 @@ impl PetWin {
                 let r = blend(16);
                 let g = blend(8);
                 let b = blend(0);
-                let dst = &mut self.buf[(dy * WIN_W + dx) as usize];
+                let dst = &mut self.buf[(dy * pw + dx) as usize];
                 let da = (*dst >> 24) & 0xFF;
                 let inv = 255 - a;
                 let rr = ((r + (((*dst >> 16) & 0xFF) * inv / 255)) as u32).min(255);
@@ -775,27 +798,97 @@ impl PetWin {
         }
     }
 
-    /// 纯像素叠加一张预渲染帧(无缩放)。
+    /// 叠加一张预渲染帧，按当前 DPI 放大（100% 时即 1:1 直贴）。
+    ///
+    /// DPI(2026-10-05)：原实现是「无缩放直贴」，而窗口已按 DPI 放大 ⇒ 气泡/审批框
+    /// 在 200% 下只有应有尺寸的一半（与素材未放大的老症状同源，只是范围小得多）。
+    /// 放大用**双线性采样**而非整数倍最近邻：非整数缩放档（125% / 150% / 175%）下
+    /// 最近邻会让圆角与 1px 描边出现不均匀的宽窄（气泡是圆角+描边的连续色调，
+    /// 抖动比轻微模糊更难看）。
+    ///
+    /// 采样与 `blit_center_bottom` 同构（目标像素中心 → 源坐标 → 通道独立插值），
+    /// 差别只在于**不做逆变换**（此处不涉及旋转/形变）。
     fn blit_img(&mut self, img: &Image, x0: i32, y0: i32) {
-        for y in 0..img.h as i32 {
-            for x in 0..img.w as i32 {
-                let px = img.bgra[(y as usize) * img.w + x as usize];
-                let a = (px >> 24) & 0xFF;
+        let (pw, ph) = self.win_size();
+        let dpr = dpi_scale(self.dpi);
+        let (sw, sh) = (img.w as i32, img.h as i32);
+        let dw = (sw as f32 * dpr).round().max(1.0) as i32;
+        let dh = (sh as f32 * dpr).round().max(1.0) as i32;
+        if dw == sw && dh == sh {
+            // 100%：保留原直贴快路径（零插值开销，33ms 节拍的热路径）
+            for y in 0..sh {
+                for x in 0..sw {
+                    let px = img.bgra[(y as usize) * img.w + x as usize];
+                    let a = (px >> 24) & 0xFF;
+                    if a == 0 {
+                        continue;
+                    }
+                    let dx = x0 + x;
+                    let dy = y0 + y;
+                    if dx < 0 || dy < 0 || dx >= pw || dy >= ph {
+                        continue;
+                    }
+                    let dst = &mut self.buf[(dy * pw + dx) as usize];
+                    let da = (*dst >> 24) & 0xFF;
+                    let inv = 255 - a;
+                    let r = (((px >> 16) & 0xFF) + (((*dst >> 16) & 0xFF) * inv / 255)) & 0xFF;
+                    let g = (((px >> 8) & 0xFF) + (((*dst >> 8) & 0xFF) * inv / 255)) & 0xFF;
+                    let b = ((px & 0xFF) + ((*dst & 0xFF) * inv / 255)) & 0xFF;
+                    let oa = (a + da * inv / 255) & 0xFF;
+                    *dst = (oa << 24) | (r << 16) | (g << 8) | b;
+                }
+            }
+            return;
+        }
+        for dy in 0..dh {
+            let wy = y0 + dy;
+            if wy < 0 || wy >= ph {
+                continue;
+            }
+            // 源坐标中心对齐（同 blit_center_bottom 的注释：避免偏一像素的非对称采样）
+            let syf = (dy as f32 + 0.5) * (sh as f32) / (dh as f32) - 0.5;
+            let sy0 = syf.floor() as i32;
+            let fy = (syf - sy0 as f32).clamp(0.0, 1.0);
+            let cy0 = sy0.clamp(0, sh - 1) as usize;
+            let cy1 = (sy0 + 1).clamp(0, sh - 1) as usize;
+            let ify = 1.0 - fy;
+            for dx in 0..dw {
+                let wx = x0 + dx;
+                if wx < 0 || wx >= pw {
+                    continue;
+                }
+                let sxf = (dx as f32 + 0.5) * (sw as f32) / (dw as f32) - 0.5;
+                let sx0 = sxf.floor() as i32;
+                let fx = (sxf - sx0 as f32).clamp(0.0, 1.0);
+                let cx0 = sx0.clamp(0, sw - 1) as usize;
+                let cx1 = (sx0 + 1).clamp(0, sw - 1) as usize;
+                let p00 = img.bgra[cy0 * img.w + cx0];
+                let p10 = img.bgra[cy0 * img.w + cx1];
+                let p01 = img.bgra[cy1 * img.w + cx0];
+                let p11 = img.bgra[cy1 * img.w + cx1];
+                let w00 = (1.0 - fx) * ify;
+                let w10 = fx * ify;
+                let w01 = (1.0 - fx) * fy;
+                let w11 = fx * fy;
+                let blend = |shift: u32| -> u32 {
+                    let v = ((((p00 >> shift) & 0xFF) as f32) * w00
+                        + (((p10 >> shift) & 0xFF) as f32) * w10
+                        + (((p01 >> shift) & 0xFF) as f32) * w01
+                        + (((p11 >> shift) & 0xFF) as f32) * w11)
+                        as u32;
+                    v.min(255)
+                };
+                let a = blend(24);
                 if a == 0 {
                     continue;
                 }
-                let dx = x0 + x;
-                let dy = y0 + y;
-                if dx < 0 || dy < 0 || dx >= WIN_W || dy >= WIN_H {
-                    continue;
-                }
-                let dst = &mut self.buf[(dy * WIN_W + dx) as usize];
+                let dst = &mut self.buf[(wy * pw + wx) as usize];
                 let da = (*dst >> 24) & 0xFF;
                 let inv = 255 - a;
-                let r = (((px >> 16) & 0xFF) + (((*dst >> 16) & 0xFF) * inv / 255)) & 0xFF;
-                let g = (((px >> 8) & 0xFF) + (((*dst >> 8) & 0xFF) * inv / 255)) & 0xFF;
-                let b = ((px & 0xFF) + ((*dst & 0xFF) * inv / 255)) & 0xFF;
-                let oa = (a + da * inv / 255) & 0xFF;
+                let r = (blend(16) + (((*dst >> 16) & 0xFF) as u32 * inv / 255)).min(255);
+                let g = (blend(8) + (((*dst >> 8) & 0xFF) as u32 * inv / 255)).min(255);
+                let b = (blend(0) + ((*dst & 0xFF) as u32 * inv / 255)).min(255);
+                let oa = (a + da * inv / 255).min(255);
                 *dst = (oa << 24) | (r << 16) | (g << 8) | b;
             }
         }
@@ -805,9 +898,14 @@ impl PetWin {
     fn blit_bubble(&mut self, idx: usize) {
         let frame = self.frames.bubbles.get(idx).cloned();
         if let Some(img) = frame {
+            // DPI(2026-10-05)：气泡位置贴着「角色区上沿」——该沿随窗口放大而移动，
+            // 故布局量（宽、高、留白）全部按 dpr 换算，不能用基准常量。
+            let (pw, ph) = self.win_size();
             // 帧气泡矩形位于帧内 (15,4),blit 后与旧像素布局一致:文本中心 = 原 (54,73)
-            let x0 = (WIN_W - BUBBLE_W) / 2;
-            let y0 = WIN_H - CELL_H as i32 - 56 - 4;
+            let bw = scaled_px(BUBBLE_W, self.dpi);
+            let x0 = (pw - bw) / 2;
+            let y0 = ph - scaled_px(CELL_H as i32, self.dpi) - scaled_px(56, self.dpi)
+                - scaled_px(4, self.dpi);
             self.blit_img(&img, x0, y0);
         }
     }
@@ -829,10 +927,12 @@ impl PetWin {
         if self.through_disabled() {
             return false;
         }
-        if x < 0 || y < 0 || x >= WIN_W || y >= WIN_H {
+        // DPI：`buf` 是物理尺寸缓冲 ⇒ 越界判断与索引步长必须同口径。
+        let (pw, ph) = self.win_size();
+        if x < 0 || y < 0 || x >= pw || y >= ph {
             return true;
         }
-        let a = (self.buf[(y * WIN_W + x) as usize] >> 24) & 0xFF;
+        let a = (self.buf[(y * pw + x) as usize] >> 24) & 0xFF;
         a < CLICK_THROUGH_ALPHA
     }
 
@@ -1027,8 +1127,13 @@ impl PetWin {
     }
 
     /// R5:审批气泡在窗口内的 y——帧高 84（普通气泡 56），故独立定位。
-    fn approval_y0() -> i32 {
-        WIN_H - CELL_H as i32 - APPROVAL_H - 4
+    ///
+    /// DPI(2026-10-05)：改为**实例方法**（原为 `fn approval_y0() -> i32` 静态）——
+    /// 布局量随窗口尺寸移动，必须知道当前 DPI。绘制与命中判定共用它，两处自然一致。
+    fn approval_y0(&self) -> i32 {
+        let (_, ph) = self.win_size();
+        ph - scaled_px(CELL_H as i32, self.dpi) - scaled_px(APPROVAL_H, self.dpi)
+            - scaled_px(4, self.dpi)
     }
 
     /// R5:绘制审批气泡（预渲染位图，含「拒绝 / 允许一次」两按钮）。**不调用任何字体 API**。
@@ -1041,8 +1146,10 @@ impl PetWin {
             None => return,
         };
         let img = unsafe { &*ptr };
-        let x0 = (WIN_W - APPROVAL_W) / 2;
-        self.blit_img(img, x0, Self::approval_y0());
+        let (pw, _) = self.win_size();
+        // DPI：按钮框宽度与命中区宽度都须同比例放大，否则「画出来了但点不到」
+        let x0 = (pw - scaled_px(APPROVAL_W, self.dpi)) / 2;
+        self.blit_img(img, x0, self.approval_y0());
     }
 
     /// R5:命中审批按钮 → `Some(true)`=「允许一次」/`Some(false)`=「拒绝」/`None`=未命中。
@@ -1052,13 +1159,21 @@ impl PetWin {
         if !a.id.starts_with(APPROVAL_ID_PREFIX) {
             return None;
         }
-        let x0 = (WIN_W - APPROVAL_W) / 2;
-        let y0 = Self::approval_y0();
+        // DPI(2026-10-05)：命中区**必须与 `blit_approval` 的绘制区逐字同源** ——
+        // 两者都经 `scaled_px` + `win_size` 换算。此前绘制用基准值、命中也用基准值，
+        // 窗口放大后二者仍一致；但只要有一处漏乘 scale，就会变成
+        // 「按钮画在别处、点不到」（参考实现踩过同型的挂死气泡坑）。
+        let (pw, _) = self.win_size();
+        let x0 = (pw - scaled_px(APPROVAL_W, self.dpi)) / 2;
+        let y0 = self.approval_y0();
+        let bw = scaled_px(APPROVAL_BTN_W, self.dpi);
+        let by = scaled_px(APPROVAL_BTN_Y, self.dpi);
+        let bh = scaled_px(APPROVAL_BTN_H, self.dpi);
         let hit = |bx: i32| -> bool {
-            x >= x0 + bx
-                && x < x0 + bx + APPROVAL_BTN_W
-                && y >= y0 + APPROVAL_BTN_Y
-                && y < y0 + APPROVAL_BTN_Y + APPROVAL_BTN_H
+            x >= x0 + scaled_px(bx, self.dpi)
+                && x < x0 + scaled_px(bx, self.dpi) + bw
+                && y >= y0 + by
+                && y < y0 + by + bh
         };
         if hit(APPROVAL_BTN_ALLOW_X) {
             Some(true)
@@ -1104,12 +1219,87 @@ impl PetWin {
         ));
     }
 
+    /// DPI(2026-10-05)：当前 DPI 下的**窗口物理尺寸**。
+    ///
+    /// 唯一尺寸换算入口（`model::scaled_window_size`）。`MoveWindow` / DIB / `Size`
+    /// 三处必须都走它，否则三者会不一致 —— `UpdateLayeredWindow` 遇到 DIB 与目标尺寸
+    /// 不符会**静默拉伸填满**（画面被拉扁一像素，且不报错）。
+    #[inline]
+    fn win_size(&self) -> (i32, i32) {
+        scaled_window_size(WIN_W, WIN_H, self.dpi)
+    }
+
+    /// DPI(2026-10-05)：当前 DPI 下的**角色可见区域**（窗口局部坐标，物理像素）。
+    ///
+    /// 与 `apply_dock` / peek 节拍共用同一份推导 —— 三处各写一遍是「口径漂移」的温床：
+    /// 只要有一处忘了乘 scale，吸附判据与探头几何就会互相错位（现象是「缩边后角色不贴边」）。
+    #[inline]
+    fn role_local_phys(&self) -> Rect {
+        let (pw, ph) = self.win_size();
+        let base = character_local_rect();
+        let sx = pw as f32 / WIN_W as f32;
+        let sy = ph as f32 / WIN_H as f32;
+        Rect {
+            left: (base.left as f32 * sx).round() as i32,
+            top: (base.top as f32 * sy).round() as i32,
+            right: (base.right as f32 * sx).round() as i32,
+            bottom: (base.bottom as f32 * sy).round() as i32,
+        }
+    }
+
+    /// DPI(2026-10-05)：`DOCK_MARGIN_PX` 的物理像素值。
+    /// 必须与 `role_local_phys()` 同步缩放，否则 200% 下留白从 18 塌成 9
+    /// （桌宠「陷进」屏幕边缘，而不是设计里的「恰好贴边」）。
+    #[inline]
+    fn dock_margin(&self) -> i32 {
+        scaled_px(DOCK_MARGIN_PX, self.dpi)
+    }
+
+    /// DPI(2026-10-05)：把窗口与 present 表面**重建**到新 DPI 下。
+    ///
+    /// 触发点只有两处：① `WM_CREATE` 后的首次取值；② `WM_DPICHANGED`。
+    ///
+    /// **为什么必须重建而不是只 MoveWindow**：`buf` 是按物理尺寸分配的定长 `Vec`，
+    /// DIB 同理 —— 尺寸变了这两者都要重开。同时素材必须按新 scale 放大绘制
+    /// （否则素材是 286×390 塞进 572×780 的窗口 = 只占左上 1/4 面积）。
+    /// 顺序刻意是「先换 buf 再重建表面再 MoveWindow」：任何一步失败时，
+    /// 表面与 buf 至少仍是一对（`present` 的兜底重建路径靠这个前提工作）。
+    fn apply_dpi(&mut self, new_dpi: u32) {
+        if new_dpi == 0 || new_dpi == self.dpi {
+            return;
+        }
+        let old = self.dpi;
+        self.dpi = new_dpi;
+        let (pw, ph) = self.win_size();
+        // ① buf：物理尺寸的合成缓冲。缩小时保留旧长度的下界即可（多出的尾部不会被画/不会
+        //    提交到 DIB，因为 DIB 的 width/height 已按新尺寸收窄）——但为免「索引越界读到
+        //    旧帧残留」，仍按新尺寸重建。
+        self.buf = vec![0u32; (pw as usize) * (ph as usize)];
+        // ② present 表面：尺寸变了必须重开 DIB。先删旧的（恢复→删除顺序铁律）。
+        if self.present_dc != 0 || self.present_dib != 0 {
+            destroy_present_surface(self.present_dc, self.present_dib);
+            self.present_dc = 0;
+            self.present_dib = 0;
+            self.present_bits = std::ptr::null_mut();
+            self.surface_fail_streak = 1; // 让 present() 的兜底路径接管重建
+        }
+        // ③ 窗口本体：位置不变、尺寸换新。**不复用 lParam 的建议矩形** ——
+        //    那是系统按「整窗等比缩放」建议的，而本仓的素材/判据是固定基准尺寸，
+        //    用系统建议会与 `scaled_window_size` 不一致 ⇒ 又一处静默拉伸。
+        unsafe { MoveWindow(self.hwnd, self.pos.0, self.pos.1, pw, ph, 1); }
+        pet_log_line(&format!(
+            "[native-pet] DPI {old} -> {new_dpi} (scale {:.2}) 窗口尺寸 {pw}x{ph}\n",
+            dpi_scale(new_dpi)
+        ));
+    }
+
     fn present(&mut self) {
         // D3 GDI 兜底:表面无效 → 低频重试重建（每 ~30 次 compose 一次 ≈1s，不刷屏不自旋）
         if self.present_dc == 0 || self.present_dib == 0 || self.present_bits.is_null() {
             self.surface_fail_streak += 1;
             if self.surface_fail_streak % 30 == 1 {
-                if let Some((dc, dib, bits)) = create_present_surface() {
+                let (pw, ph) = self.win_size();
+                if let Some((dc, dib, bits)) = create_present_surface(pw, ph) {
                     self.present_dc = dc;
                     self.present_dib = dib;
                     self.present_bits = bits;
@@ -1129,7 +1319,9 @@ impl PetWin {
             // 持久 DC/DIB 复用:仅在创建窗口时初始化,否则低频 GDI 交互
             std::ptr::copy_nonoverlapping(self.buf.as_ptr(), self.present_bits as *mut u32, self.buf.len());
             let mut pt = Point { x: self.pos.0, y: self.pos.1 };
-            let mut sz = Size { cx: WIN_W, cy: WIN_H };
+            // DPI(2026-10-05)：物理尺寸而非基准尺寸（DIB 已按同值创建，见 apply_dpi）。
+            let (pw, ph) = self.win_size();
+            let mut sz = Size { cx: pw, cy: ph };
             let mut src = Point { x: 0, y: 0 };
             // 2026-09-29：整窗不透明度由用户设置决定（`settings.alpha`，百分比）。
             // 用 `SourceConstantAlpha` 而不是逐像素乘 —— 后者要在 33ms 的每帧里多遍历
@@ -1260,7 +1452,8 @@ impl PetWin {
         if nx == self.pos.0 && ny == self.pos.1 {
             return false; // 亚像素级移动 ⇒ 不惊动窗口
         }
-        unsafe { MoveWindow(self.hwnd, nx, ny, WIN_W, WIN_H, 1) };
+        let (ww, wh) = self.win_size();
+        unsafe { MoveWindow(self.hwnd, nx, ny, ww, wh, 1) };
         self.pos = (nx, ny);
         true
     }
@@ -1277,7 +1470,8 @@ impl PetWin {
             self.dragging_timer_on = false;
         }
         if let Some((nx, ny)) = self.drag_target {
-            unsafe { MoveWindow(self.hwnd, nx, ny, WIN_W, WIN_H, 1) };
+            let (ww, wh) = self.win_size();
+            unsafe { MoveWindow(self.hwnd, nx, ny, ww, wh, 1) };
             self.pos = (nx, ny);
         }
         self.drag_target = None;
@@ -1300,7 +1494,9 @@ impl PetWin {
     /// **判据用「角色可见区域」而非窗口原点**（`character_local_rect` 排除了气泡带与左右留白）——
     /// 否则那 18px 留白会被算成「离边缘还有 18px」，角色本体永远贴不到边。
     fn apply_dock(&mut self) -> Option<DockEdge> {
-        let local = character_local_rect();
+        // DPI(2026-10-05)：角色区域与吸附留白都取**物理像素**口径
+        // （推导见 `role_local_phys` / `dock_margin` 的注释）。
+        let local = self.role_local_phys();
         let role = Rect {
             left: self.pos.0 + local.left,
             top: self.pos.1 + local.top,
@@ -1316,7 +1512,7 @@ impl PetWin {
                 cx >= r.left && cx < r.right && cy >= r.top && cy < r.bottom
             })
             .unwrap_or(Rect { left: 0, top: 0, right: WIN_W, bottom: WIN_H });
-        let edge = match pick_dock_edge(role, work) {
+        let edge = match pick_dock_edge(role, work, self.dock_margin()) {
             Some(e) => e,
             None => {
                 // 拖到屏幕中间 ⇒ 脱离停靠（必须清，否则显隐切换会把旧 dock 写回去）
@@ -1327,9 +1523,12 @@ impl PetWin {
         };
         // 推出：以**窗口位置**为基准（`dock_push_out` 内部把 role 的偏移换算回窗口位移）
         self.docked_edge = Some(edge);
-        if let Some((nx, ny)) = dock_push_out(self.pos, local, work, edge) {
+        if let Some((nx, ny)) = dock_push_out(self.pos, local, work, edge, self.dock_margin()) {
             if (nx, ny) != self.pos {
-                unsafe { MoveWindow(self.hwnd, nx, ny, WIN_W, WIN_H, 1) };
+                // DPI(2026-10-05)：尺寸取**当前 DPI 下的物理窗尺寸**（`win_size()` 是唯一换算入口
+                // —— MoveWindow / DIB / Size 三处必须同源，否则 ULW 会静默拉伸）。
+                let (ww, wh) = self.win_size();
+                unsafe { MoveWindow(self.hwnd, nx, ny, ww, wh, 1) };
                 self.pos = (nx, ny);
             }
         }
@@ -1416,8 +1615,28 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
         return DefWindowProcW(hwnd, msg, wp, _lp);
     }
     match msg {
+        WM_DPICHANGED => {
+            // DPI(2026-10-05)：窗口跨到不同缩放的显示器。
+            // `wParam` 低 16 位 = 新 DPI（高 16 位 = 原 DPI）。**不复用 lParam 的建议矩形**
+            // —— 那是系统按「整窗等比缩放」给的，而本仓的素材与判据都锚在基准尺寸上，
+            // 用系统建议会与 `scaled_window_size` 不一致 ⇒ 又一处静默拉伸。
+            // `apply_dpi` 内部走唯一换算入口，并把 buf / DIB / MoveWindow 一起对齐。
+            let new_dpi = (wp & 0xFFFF) as u32;
+            (*pet).apply_dpi(new_dpi);
+            // 位图内容需按新 scale 重画（buf 已清零 ⇒ 留空窗一帧）。置 dirty 由 compose 节拍接管，
+            // 这里直接标脏以免等到下一张动画帧才补上。
+            0
+        }
         WM_CREATE => {
             SetTimer(hwnd, IDT_COMPOSE, 33, 0);
+            // DPI(2026-10-05)：用**真实 hwnd** 复核冷启动估算的 DPI。
+            // `boot_dpi` 走 `dpi_at_point`（按落点估算），而窗口实际落在哪块屏以 hwnd 为准；
+            // 两者不一致时（落点跨屏 / 显示器布局在启动瞬间变化）以此为准。
+            // `apply_dpi` 在 `new_dpi == self.dpi` 时直接返回，故常态零开销。
+            let real = GetDpiForWindow(hwnd);
+            if real != 0 {
+                (*pet).apply_dpi(real);
+            }
             0
         }
         WM_TIMER => {
@@ -1700,7 +1919,12 @@ fn blit_dot(dot_hwnd: isize, pos: (i32, i32), buf: &[u32]) {
 }
 
 /// D3 GDI 兜底:创建持久 present 表面（DC + 32bpp 预乘 DIB）。失败 → None（调用方计数重试）。
-fn create_present_surface() -> Option<(isize, isize, *mut c_void)> {
+///
+/// DPI(2026-10-05)：尺寸改为**入参**（物理像素）。此前硬编码 `WIN_W`/`WIN_H`，
+/// 而 PMv2 下窗口物理尺寸必须随显示器缩放放大 ⇒ 沿用基准尺寸会在高 DPI 屏上
+/// 让 `UpdateLayeredWindow` 拿到「DIB 比窗口小」的组合（画面被截 / 被拉伸）。
+/// 判据在 `model::scaled_window_size`（唯一尺寸换算入口）。
+fn create_present_surface(w: i32, h: i32) -> Option<(isize, isize, *mut c_void)> {
     unsafe {
         let dc = CreateCompatibleDC(0);
         if dc == 0 {
@@ -1708,8 +1932,8 @@ fn create_present_surface() -> Option<(isize, isize, *mut c_void)> {
         }
         let bmi = BmiHeader {
             size: 40,
-            width: WIN_W,
-            height: -WIN_H,
+            width: w,
+            height: -h,
             planes: 1,
             bit_count: 32,
             compression: 0,
@@ -1747,6 +1971,36 @@ fn destroy_present_surface(dc: isize, dib: isize) {
     }
 }
 
+/// DPI(2026-10-05)：取「点所在显示器」的 DPI —— **建窗前**的唯一可用路径。
+///
+/// **为什么不能直接 `GetDpiForWindow`**：它要 hwnd，而冷启动的尺寸分配
+/// （`buf` 的长度、`CreateWindowExW` 的宽高）必须在建窗**之前**就定下来 ⇒ 循环依赖。
+/// `MonitorFromPoint`（user32）+ `GetDpiForMonitor`（shcore）不需要 hwnd。
+///
+/// 实测（`_refs/dpi-probe/pt.rs`，本机 200%）：返回 192，与建窗后的
+/// `GetDpiForWindow` 完全一致 ⇒ 两条路径不冲突。
+///
+/// **回落**：任何一步失败（点不在任何显示器上 / shcore 不可用 / 返回非 S_OK）
+/// 一律返回 `DPI_BASE`（96 = 100%），由 `model::dpi_scale` 兜住
+/// （它对 `dpi == 0` 回落 1.0，但这里直接给 96 更明确：语义是「按不缩放走」）。
+pub(crate) fn dpi_at_point(x: i32, y: i32) -> u32 {
+    unsafe {
+        let mon = MonitorFromPoint(Point { x, y }, MONITOR_DEFAULTTONEAREST);
+        if mon == 0 {
+            return DPI_BASE;
+        }
+        let (mut dx, mut dy) = (0u32, 0u32);
+        // S_OK = 0；非 0 说明该 API 在本系统不可用 ⇒ 回落
+        if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) != 0 {
+            return DPI_BASE;
+        }
+        if dx == 0 {
+            return DPI_BASE;
+        }
+        dx
+    }
+}
+
 pub(crate) fn pet_log_line(line: &str) {
     if let Ok(base) = std::env::var("LOCALAPPDATA") {
         let dir = std::path::Path::new(&base).join("miasaki");
@@ -1760,10 +2014,25 @@ pub(crate) fn pet_log_line(line: &str) {
 
 pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frames: Frames) {
     unsafe {
-        // 显式按监视器 DPI 感知，保证窗口物理尺寸正确
-        SetProcessDpiAwarenessContext(-4);
+        // 显式按监视器 DPI 感知（PMv2），保证窗口物理尺寸正确。
+        //
+        // DPI(2026-10-05)：**返回值此前未检查**。这是进程级一次性设置 ——
+        // 一旦进程里已建过窗（WebView2 宿主 / 未来任何 manifest DPI 声明），
+        // 本次调用返回 0 且**不生效**，而窗口仍按 PMv2 语义工作（坐标是物理像素）
+        // ⇒ 素材不缩放，桌宠只有应有尺寸的一半。故落一行日志，把「声明失败」变成可观测事实。
+        // 取证：`_refs/dpi-probe/ab.rs`（A/B/E 三组对照，本机无 manifest 声明 ⇒ 返回 1）。
+        if SetProcessDpiAwarenessContext(-4) == 0 {
+            pet_log_line(
+                "[native-pet] SetProcessDpiAwarenessContext(PMv2) 返回 0：进程已有窗口或已被设过 awareness，本次调用未生效（桌宠尺寸将偏小）\n",
+            );
+        }
         // M4.1：第四个返回值 = 落盘的停靠边（pet.json `dock` 字段）
         let (x, y, restore_hide, restore_dock) = initial_pet_state();
+        // DPI(2026-10-05)：冷启动取一次 DPI（`GetDpiForWindow` 需要 hwnd，故在建窗后补取；
+        // 这里先用**光标所在显示器**的默认值建窗与分配缓冲，随后 `apply_dpi` 校准）。
+        // 兜底 96 = 100%：取不到时按不缩放走，与「素材 1:1」的历史行为一致（保守）。
+        let boot_dpi = dpi_at_point(x + WIN_W / 2, y + WIN_H / 2);
+        let (bw, bh) = scaled_window_size(WIN_W, WIN_H, boot_dpi);
         // 悬浮球球面初值 = 当前主题（spawn 时从 prefs.json 载入）→ 隐藏态冷启动第一帧即正确球面
         let theme0 = shared.lock().map(|s| s.theme.clone()).unwrap_or_else(|_| "pure".to_string());
         let mut pet = Box::new(PetWin {
@@ -1772,7 +2041,8 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             app,
             shared,
             frames,
-            buf: vec![0u32; (WIN_W * WIN_H) as usize],
+            buf: vec![0u32; (bw as usize) * (bh as usize)],
+            dpi: boot_dpi,
             frame_idx: 0,
             anim_ms: 125,
             last_tick: std::time::Instant::now() - std::time::Duration::from_secs(10),
@@ -1854,7 +2124,7 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         let ex = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         let hwnd = CreateWindowExW(
             ex, cls.as_ptr(), cls.as_ptr(), WS_POPUP,
-            x, y, WIN_W, WIN_H,
+            x, y, bw, bh,
             0, 0, inst, pet_ptr as *mut c_void,
         );
         pet.hwnd = hwnd;
@@ -1887,7 +2157,8 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
 
         // 持久 GDI 表面(创建一次,终身复用;避免高频 CreateDIBSection 触发 gdi32full 崩溃)
         // D3:失败不致命 → present() 低频重试重建（surface_fail_streak 路径）
-        match create_present_surface() {
+        // DPI(2026-10-05)：尺寸按 hwnd 所在显示器的 DPI 换算，不写死基准值。
+        match create_present_surface(bw, bh) {
             Some((dc, dib, bits)) => {
                 pet.present_dc = dc;
                 pet.present_dib = dib;

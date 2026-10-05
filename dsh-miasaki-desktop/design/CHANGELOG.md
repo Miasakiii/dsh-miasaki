@@ -2,6 +2,44 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-05（续五）· 混合 DPI 修复补记：真仓编译暴露 7 个错误 —— 「harness 绿」在这类改动上是无效证据
+
+**这条既是补记，也是一次假绿复盘。** 同日稍早把混合 DPI 修复写进 `model.rs` / `window.rs` /
+`ffi.rs` 后，只在 `_refs/rust-harness/`（**`model.rs` 的摘取副本**）上跑出 **51 passed**，
+并如实登记了「`window.rs` / `ffi.rs` 从未被编译过」。本轮回到真仓跑
+`cargo test --bin miasaki`，**7 个错误一次暴露**：
+
+| 位置 | 错误 | 性质 |
+|---|---|---|
+| `window.rs:385` | E0308：`peek_advance` 的 `margin: i32` 收到 `f32` | 新写的多余 `as f32` |
+| `window.rs:1528` | E0425 ×2：`ww` / `wh` 未定义（`MoveWindow`） | 改 `apply_dock` 时丢了尺寸来源 |
+| `window.rs:2158` | E0425 ×2：`pw` 未定义（应为 `bw`） | 笔误 |
+| `persist.rs:249 / :275` | E0061 ×2：`dock_push_out` 缺第 5 参 `margin` | **调用方漏改 —— `persist.rs` 从未进过改动清单** |
+
+**根因（入纪律）**：harness 只摘 `model.rs` 的**纯函数段**，不含 `window.rs` 的 Win32 接线、
+不含 `persist.rs` 调用方 ⇒ 纯函数层全绿，而**签名变更后的调用点不匹配，它一个都照不到**。
+「摘取副本绿」在跨文件签名变更的场景下不是弱证据，是**无效证据** —— 与「能全绿也可能是假绿」
+同族：摘出来的那一段没有调用方，等于没验证接线。
+
+**修法**：
+
+- `window.rs:385` 去掉 `as f32`（`dock_margin()` 本就是 `i32`，与 `peek_advance` 同型）。
+- `window.rs:1528` 补 `let (ww, wh) = self.win_size();` —— 复用**唯一尺寸换算入口**
+  （`MoveWindow` / DIB / `Size` 三处必须同源，混用会触发 ULW 静默拉伸）。
+- `window.rs:2158` `pw` → `bw`（建窗时 `scaled_window_size(WIN_W, WIN_H, boot_dpi)` 的产物，
+  与 `create_present_surface` 的语义一致）。
+- `persist.rs` 两处补 **`DOCK_MARGIN_PX`（基准口径）**，理由写进代码注释：那里的 `role` 是
+  `character_local_rect()`（基准 96 DPI 口径），而 `dock_push_out` / `peek_advance` 的注释
+  都要求 **margin 必须与 role 同源**（混轴会让吸附留白错一倍）；恢复期拿不到 hwnd
+  （`GetDpiForWindow` 需要它），**物理口径的校准交给建窗后的 `apply_dock()`**
+  （它取 `role_local_phys()` + `dock_margin()`）。
+- 顺带清掉 2 个 warning：`ffi.rs` 的 `extern` 块上误用 `///`（rustdoc 不为 extern 块生成文档，
+  已改 `//` 并注明原因）、`window.rs` 索引表达式多余括号。
+
+**验收**：`cargo test --bin miasaki` **164 passed / 0 failed**（口径 155 → **164**，新增 9 条 =
+DPI 判据层；`verify-all desktop` 由 39/40 回到 **40/40**）。
+**实机项仍归用户**：单屏 200% 目检、125%/150% 副屏混合、跨屏拖动、M4.1 验收⑤「混合 DPI 下吸附不偏移」。
+
 ## 2026-10-05（续四）· T6 跨线契约闸门落地：fleet 脉冲字段对账 + 计数缺键从「按 0 容忍」翻转为「拒绝整份」
 
 **要防的事**（desktop-adaptation-plan-2026-09-27 §3.1 的原始案例，当日定了 T6 但一直未做）：

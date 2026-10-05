@@ -52,7 +52,7 @@
   Job 兜底，而实测会残留 —— `server.log` 里 canvas 的「已被另一个 dsh web 实例修改」即其证据）；
   ③ 启动页显示后端失败的**具体原因**（`server.log` 尾 / startup 日志路径）——
   P9 已把「cmd.exe / node 直启」两项摆上自证页，`server.log` 尾仍待接。
-- [ ] **`os error 740` 的机制收敛（已知现象，未解）** — P9 的四步排查证明：同机、同用户、
+- [x] **`os error 740` 的机制收敛（2026-10-05 收敛：cmd 路径专属，非子进程创建被整体约束）** — P9 的四步排查证明：同机、同用户、 **证据**：`pet.log` 仅 **4 次**真实 740（行 157026/157027/157136/157137，均 `spawn-dsh: … 请求的操作需要提升`），时间戳 `1790391329s`–`1790394552s`，**全部早于 P9**；P9 上线后 `node 直启后端` 连续 **59 次全成功、740 零复发**（首次 `1790397567s`，距末次 740 仅 3015s）。 ⇒ 若限制比 cmd 更宽（子进程创建被整体约束），node 直启也该失败 —— 它没有，故 740 是 **`cmd` 路径专属**。 **旁证**：`Miasaki.exe` ACL 有 `<当前用户>:(I)(F)`、属主 `<当前用户>`（非管理员）⇒ 壳本身非提权态；`HKCU\…\AppCompatFlags\Layers` 的 `c:\windows\system32\cmd.exe = RUNASADMIN` **至今仍在**（用户异常配置，清不清由用户定）。 **仍缺的**：「壳进程内为何 CreateProcess 被判需提升」的**进程内**证据 —— 本会话写的探针（`_refs/probe740/`）九项全返 `os error 5` 而非 740，**是同一沙箱边界在污染探针**，要复现必须在用户普通终端跑该探针。
   同 PATH 下用 Rust 复现壳的 `Command::new("cmd")`（含裸名 + `CREATE_NO_WINDOW`）**五种全部成功**，
   而在壳进程里三处调用**同时** `ERROR_ELEVATION_REQUIRED`；`HKCU\…\AppCompatFlags\Layers` 里那条
   `c:\windows\system32\cmd.exe = RUNASADMIN`（09-21 起）**不是充分解释**（11:29 那次 spawn 成功）。
