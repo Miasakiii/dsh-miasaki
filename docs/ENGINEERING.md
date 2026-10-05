@@ -870,6 +870,21 @@ node 目录里是真 `node.exe`），但**这条要修的理由不是 CI**：一
   会当场报出来 —— 这正是本仓「不留散落文件」纪律想要的。**这条修正的价值高于那次修复本身**：
   它把「提交后才发现」提前到了「提交前」。
 
+**当前基线（2026-10-05 提交后）**`[实测]`：全量 **180 项、十类全 PASS** —— sidebar 13 / canvas 14 /
+fleet 21 / desktop **40** / ssh 31 / dual-model 15 / appearance 18 / usage 7 / free-model 15 / repo 6。
+本批为**启动片头 3.0 + 桌宠 v5 M4/M4.1**（四项提交 `584cc1b` / `e9d77da` / `588369d` / `4e6549b`）：
+desktop 新增 `intro-clips` 闸门（`ui/intro/` 四段第三方 mp4 的字节数 + SHA256 前 16 位逐段比对台账）；
+`ui/test/loading-visual.test.js` **11 → 15 例**（L2 片头层：布局 / 门控矩阵 / 正常路径 / 退场四路）；
+appearance 单测 **120 → 153 例**（配置 v7 `boot` 板块 + `loadWithMigration` 落盘 7 → 11 例）；
+desktop `cargo test` **147 → 155 例**（M4.1 peek 8 例及各批）。
+**本批没有任何环境阻塞**：上一轮需要在受限沙箱里绕行的 `cargo test` 与 `repo/md-links` 这次都直过 ——
+`md-links` 当时报的唯一断链（`design/CHANGELOG.md` 指向未跟踪的 `2026-10-04-boot-intro-video.md`）
+正是「本批未提交」的暂态红，随本批提交自动转绿，实测了一次「闸门能在提交前抓到它」。
+**文档对账（本批顺手订正的五处数字失真）**：根 README 静态回归 179 → **180**；回归矩阵 §3.0 分母
+**109 → 114**、已验 7 → **9**（K2a / K2b-1 两个子项漏计）；appearance 单测 149 → **153**；
+sidebar 单测 86 → **104** —— 五处都是「历史时点数字没跟上」，**没有一处是本批引入的**
+（与同日第七件同族：数字类失真不会自己暴露，唯一可靠订正方式是把每处数字重新实跑一遍）。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
