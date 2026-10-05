@@ -900,6 +900,54 @@ sidebar 单测 86 → **104** —— 五处都是「历史时点数字没跟上�
 探针留档、未跟踪目录或环境变量** —— 本仓既有的 EPERM / EBUSY / `os error 5` 一族是「环境拦住闸门」，
 这次是**「环境喂饱了闸门」**：同一枚硬币的两面，判据要对两者都免疫。
 
+**2026-10-05（续二）· 治理收尾批：T6 契约闸门 + fleet 写入收敛第二批 + lint/format 口径分层 + 四项裁决**`[实测]`：
+用户点名四项待办（lint/format CI 强制、T6 契约闸门、fleet 三处直写、F1 崩溃残留裁决），核查后
+**两项信息过时、两项属实** —— ① F1 崩溃残留**已于 2026-09-30 第二批收口**（`-ResetStatus` + 六态夹具），
+「⏸️ 待裁决」是 t-0010 首批表格的历史行没回填，本批把 wiring plan §8 一并回填（_refs 本地规划档）；
+② lint/format 的「无 CI 强制」**口径过时**（`repo/style` 自 09-30 起随 verify-all 进 CI），
+真缺口只剩 CI 裸词脱敏。四项裁决（Operator 拍板）：**D2 取 A 档**（`-RequireContract` 默认关，待实施）、
+**notes.md 指纹取契约显式豁免**（evidence[] 口径已实转四轮，分片收益不成比例）、
+**notes.md 行数取「每次追加后总量 ≤10 行」**、**control.json 收敛取「失败 500 不回退」**。
+
+**批次一 · T6（repo 第 7 道闸门 `check-pulse-contract.mjs`）**：判据 = 消费集 ⊆ 生产集 +
+`v`/`ts` 两侧同现 + 协议版本一致。**生产集由闸门现跑入库的 `publish-pulse.mjs` 解析 stdout**——
+刻意不复用已 publish 的 `state/fleet-pulse.json`（未跟踪产物，正是 intro-clips 事故的「依赖本地事实」；
+发布器全部读取带降级，干净 checkout 可跑且字段集完整）；**消费集锚定 `fn parse_pulse_flag` 函数体**
+（行号会漂移，函数名是锚），抽 `.get("…")` 顶层字段 + 计数闭包**绑定形态** `let N = |k: &str| f.get(k)`
+后的 `N("…")` 调用，任何一类抽不到即 exit 1，消费集不足 7 项同判。比较逻辑内置自证五组正反例。
+**配套翻转一处口径（如实登记）**：`main.rs` 计数闭包 `unwrap_or(0)` → 缺键 `?` 拒绝整份 ——
+原单测固化的是「缺键按 0 容忍」（T7 纯函数化时的旧现状），与 T6 设计稿相反，按 T6 实施并注明翻转理由。
+验收：故障注入 `running`→`active` 必红并点名 / 干净 `git clone --local` 树 exit 0 / `cargo test` **155/155**（MSVC）/
+`repo` **7/7**（全量 180 → **181**）。
+
+**批次二 · fleet 写入收敛第二批（v0.28）**：v0.26 登记的三处输入类直写全部收口 ——
+白名单 +3 条 `set` 规则；monitor toggle 组 `set` 补丁（author=operator，`expected_version=-1` 占位由
+CLI 层填当前值）经 applier，**失败 500 / exit 3→409，绝不回退直写**（交互式操作可重试，回退 = 复活
+静默绕行；与 usage 的「数据不丢优先」刻意不同），可注入 `__setBusApplier`；`scan-agents.ps1` 改组
+N+1 个 set 补丁**一次超步**提交（原子），失败 exit 1 重跑即重试。**三个 PS 5.1 实测坑（可复用）**：
+① payload 必须 `ConvertTo-Json -InputObject` 形态 —— **管道形态对多元素数组本来就输出 `[...]`**，
+再手工包一层就是 `[[...]]` ⇒ applier 报「补丁[0]: 补丁应为 object」（与 dispatch-task 记的
+`-AsArray` 单元素坑**同族不同根**）；② 脚本头部 `$ErrorActionPreference='SilentlyContinue'` 会把
+`2>&1` 合并进来的 stderr ErrorRecord **静默吞掉** ⇒ bus-apply 必须带 `--json` 把契约错误打到 stdout
+（排查时 exit 2 的原因一行都看不见，白花一轮才定位到）；③ 探针里 `$env:TEMP\scan-payload.json`
+写成 `$env:TEMPscan-payload.json` 时，PS 把 `TEMPscan-payload` 解析成**空环境变量**，
+产物落在 CWD 变成 `-payload.json` —— 探针路径必须用显式绝对路径（该游离文件已按「来历不明文件」
+纪律查明并删除）。顺带修掉 `Set-Content -Encoding UTF8` 在 PS 5.1 下写 BOM 的隐性缺陷
+（applier 落盘恒为无 BOM UTF-8）。实弹：临时工作区 7 补丁一次超步（paths 全登记、无 BOM）；
+monitor 真 applier 链路 toggle → HTTP 200 + 事件流 paths 命中 `agents/claude/control.json`
+（t-0011 复核指出的「开关变更零机器事件」就此兑现）。回归：fleet-monitor **15 → 19 例**、
+`bus-apply` +1 例、`bus-contract` 反例订正（manifest.json 由「未登记反例」转正，换入刻意不存在的
+`state/bus-version.json`），`verify-all fleet` **21/21**。回归矩阵台账行**未入** ——
+该文件有并行会话未提交的 I5 复验记录，为避免混提本批把实机判据记在 fleet README 与设计文档 v0.28。
+
+**批次三 · lint/format 口径分层 + CI 裸词补口**：AGENTS「仍未修 ③」订正为分层口径（见上）；
+`check-style.mjs` 词表路径支持环境变量 `IDENTITY_TERMS_PATH` 优先（`resolve` 而非 `join` ——
+join 对 Windows 盘符绝对路径不折叠，报错路径会双重拼接），**指了路径但词表为空 ⇒ exit 1**
+（配置失误不允许无声退化成永远绿）；verify-all.yml 新增 secret 注入步骤
+（`IDENTITY_TERMS` → `$RUNNER_TEMP` 临时文件 → 环境变量，secret 自动掩码、词表本体仍不入库；
+secret 未配置时保持显式跳过的旧形态）。语义 lint 层维持 2026-09-30 的不引入决策，等真实事故催生。
+
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

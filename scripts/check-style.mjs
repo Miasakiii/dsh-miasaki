@@ -44,6 +44,8 @@
 //   · 脱敏查**两种形态**：① 路径形态 `C:\Users\<段>\…`（段必须是占位）——**无基线、永远生效**；
 //     ② 裸词形态 —— 词表来自 `_refs/identity-terms.txt`（**本地、不入库**，一行一个词、`#` 注释）。
 //     词表不存在时**显式打印跳过**（CI 没有这个文件，属常态），不静默。
+//     CI 可用 repo secret `IDENTITY_TERMS` + 环境变量 `IDENTITY_TERMS_PATH` 注入词表
+//     （verify-all.yml 有现成步骤）；**指了路径但词表为空 ⇒ exit 1**（配置失误不允许无声退化成永远绿）。
 //     **刻意不把维护者名字写进本脚本** —— 那本身就违反脱敏纪律。
 //   · 仍然抓不到：改名换姓的间接指代、图片/二进制里的痕迹、git 历史里的旧提交。
 //   · 入库边界由 `git ls-files --cached --others --exclude-standard` 决定 —— **索引 + 未跟踪未忽略**
@@ -90,8 +92,13 @@ const PLACEHOLDER = /^(<.*>|%.*%|\.{2,}|…)$/
 /** `C:\Users\<段>` 与 `C:/Users/<段>` 两种形态。 */
 const USER_PATH = /[A-Za-z]:[\\/]Users[\\/]([^\\/\s"'`）)、，,;；]+)/g
 
-/** 本地身份词表（**不入库**）：一行一个词，`#` 起注释。CI 里通常不存在 ⇒ 显式跳过裸词检查。 */
-const IDENTITY_TERMS_PATH = join(ROOT, '_refs', 'identity-terms.txt')
+/** 本地身份词表（**不入库**）：一行一个词，`#` 起注释。
+ * 路径解析顺序（2026-10-05 起）：① 环境变量 `IDENTITY_TERMS_PATH`（CI 用 GitHub secret 把词表
+ * 写进 runner 临时文件再指过来 —— 词表本体仍不入库，secret 自动掩码）；② `_refs/identity-terms.txt`
+ * （本地常态）。`join` 对绝对路径的语义是「绝对段直接生效」，两种写法共用一行。 */
+const IDENTITY_TERMS_PATH = process.env.IDENTITY_TERMS_PATH
+  ? resolve(ROOT, process.env.IDENTITY_TERMS_PATH)
+  : join(ROOT, '_refs', 'identity-terms.txt')
 
 /** 运行期载入的词表（main 赋值；见 IDENTITY_TERMS_PATH 的说明）。 */
 let IDENTITY_TERMS = []
@@ -232,6 +239,13 @@ try {
 } catch (error) {
   IDENTITY_TERMS = []
   termsNote = ' 本地身份词表 _refs/identity-terms.txt 不存在 ⇒ **跳过裸词检查**（CI 常态；路径形态检查不受影响）'
+}
+if (IDENTITY_TERMS.length === 0 && process.env.IDENTITY_TERMS_PATH) {
+  // 词表**存在但为空**只可能来自 CI 配置失误（secret 未设/设空却指了路径）—— 这时「裸词检查」
+  // 会无声地退化成永远绿，正是本闸门最忌讳的失效形态 ⇒ 响亮失败，让 CI 配置当场修。
+  console.error(`[style] ✗ IDENTITY_TERMS_PATH 指向的词表为空（${IDENTITY_TERMS_PATH}）——裸词检查将无声退化，拒绝在此口径下放行。`)
+  console.error('[style]   修法：补 GitHub secret IDENTITY_TERMS 的内容（一行一个词），或从 CI 步骤里撤掉该环境变量。')
+  process.exit(1)
 }
 
 const tracked = listCandidateFiles()

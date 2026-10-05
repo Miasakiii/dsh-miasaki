@@ -137,6 +137,24 @@ jobs:
         working-directory: dsh-miasaki-desktop
         run: npm ci --omit=dev
 
+      # ── 身份词表注入（2026-10-05，repo/style 裸词脱敏在 CI 的唯一缺口）─────────────
+      # repo/style 的裸词脱敏检查依赖 `_refs/identity-terms.txt`（本地维护、**刻意不入库** ——
+      # 词表本体就是身份痕迹），因此 CI 上历来显式跳过（闸门打印跳过原因，不静默）。
+      # 本步骤用 repo secret 把词表带到 runner：secret 本体自动掩码、不进日志，仓库里永远没有这份文件。
+      # 词表 secret 未配置时本步骤保持跳过形态（与旧行为一致）；**配置了但为空**时闸门会响亮失败
+      # （check-style.mjs 对「词表存在但零词」exit 1 —— 那是配置失误，不能让裸词检查无声退化成永远绿）。
+      - name: 注入身份词表（secret → runner 临时文件）
+        env:
+          IDENTITY_TERMS: ${{ secrets.IDENTITY_TERMS }}
+        run: |
+          if [ -n "$IDENTITY_TERMS" ]; then
+            printf '%s\n' "$IDENTITY_TERMS" > "$RUNNER_TEMP/identity-terms.txt"
+            echo "IDENTITY_TERMS_PATH=$RUNNER_TEMP/identity-terms.txt" >> "$GITHUB_ENV"
+            echo "已注入身份词表（词数：$(grep -cv -e '^#' -e '^$' "$RUNNER_TEMP/identity-terms.txt")）"
+          else
+            echo "secret IDENTITY_TERMS 未配置 ⇒ repo/style 的裸词检查保持显式跳过（路径形态检查不受影响）"
+          fi
+
       # 唯一质量闸门：十类统一回归（九线 + 仓库级）。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
       - name: 运行 verify-all（十类 L0 + L1）
         run: node scripts/verify-all.mjs

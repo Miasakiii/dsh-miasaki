@@ -423,8 +423,10 @@ curl -s "http://127.0.0.1:<port>/api/events?limit=5"
 > 持续滚动**的追加文件，把它列进 `result.json` 的 `artifacts[]`（不可变产物指纹）后，
 > **每追加一次都会让所有历史任务的指纹失效** —— 真篡改会淹没在预期内的滚动噪声里。
 > 处置：把共享滚动文件从 `artifacts[]` **移到 `evidence[]`**（用 `note` 记载沿革），
-> `artifacts[]` 只留任务专属、内容稳定的产物。根治选项（notes 按任务分片 / 契约显式豁免）
-> 见 [docs/handover-2026-09-11.md](docs/handover-2026-09-11.md) §9.2，**待 Operator 裁决**。
+> `artifacts[]` 只留任务专属、内容稳定的产物。**根治裁决（2026-10-05，Operator）**：取
+> **契约显式豁免**（`evidence[]` 口径为终态，分片会引入新的任务生命周期，收益不成比例；
+> 该口径已实际运转 t-0004 / t-0010 / t-0011 / t-0012 四轮）。背景见
+> [docs/handover-2026-09-11.md](docs/handover-2026-09-11.md) §9.2。
 
 > **⚠️ 口径澄清（worker 实测，勿混为一谈）**：headless 下 worker 无法落盘，但两轮
 > `permission_denials` 均为 **0** —— 它们遇到的是 `Bash`/`Glob`/`Grep` 的
@@ -436,7 +438,10 @@ curl -s "http://127.0.0.1:<port>/api/events?limit=5"
 > `result.json` 静默放行、派单器无法表达 `blocked` 终态、`notes.md` 口径矛盾、`context.md` 漂移等；
 > t-0004 三项：shared 文档真实末次更新为 **2026-08-17** 非 08-16、措辞口径、`collective-memory`
 > 格式漂移与策展归属）
-> 见 [docs/handover-2026-09-11.md](docs/handover-2026-09-11.md) §8/§9，**语义决策待 Operator 裁决**。
+> 见 [docs/handover-2026-09-11.md](docs/handover-2026-09-11.md) §8/§9。**裁决进度**：P0 各项已随
+> B1–B5 与 2026-10-05 写入收敛第二批落地（见上表与设计文档变更记录）；**notes.md 两项同日裁决** ——
+> ① 指纹根治取**契约显式豁免**（见上）；② 行数口径取**每次追加后总量 ≤10 行**（追加者负责压缩合并，
+> 文件有界；t-0003/t-0004 撞线时的「压缩合并至 10 行」做法即为该口径）。其余建议随各批次行处置。
 
 ## 统一回归
 
