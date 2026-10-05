@@ -59,6 +59,17 @@ pub(crate) struct PetStateV2 {
     pub(crate) y: i32,
     pub(crate) hide: bool,
     pub(crate) work: WorkRect,
+    /// M4.1（2026-10-05）：停靠的边（`None` = 未停靠）。
+    ///
+    /// **为什么加在 v2 而不是升 v3**：本轮口径是「只吸附、不缩边」⇒ 停靠状态**完全可由
+    /// 落盘位置反推**（角色可见区域贴着哪条边就是哪条）。落盘它只是为了
+    /// 「重启后不必重新判定」与「将来做缩边时有地方存 peek 状态」，而**不引入新语义** ⇒ 不必升版本
+    /// （升 v3 要写 v1/v2→v3 迁移，旧文件兼容一破就出问题）。
+    ///
+    /// `Option<DockEdge>` 的 `serde` 形态是字符串 `"Left" | "Right" | "Top" | "Bottom"`；
+    /// **旧文件没有这个字段** ⇒ `#[serde(default)]` 让它缺省为 `None`（不破坏兼容）。
+    #[serde(default)]
+    pub(crate) dock: Option<crate::pet_native::model::DockEdge>,
 }
 
 pub(crate) enum LoadedPetState {
@@ -200,13 +211,17 @@ fn containing_work(cx: i32, cy: i32) -> Option<WorkRect> {
         .map(|r| WorkRect::of(&r))
 }
 
-/// 初始状态（位置 + 是否隐藏）：
+/// 初始状态（位置 + 是否隐藏 + 停靠边）：
 /// - v2 且工作区几何匹配 → 按比例还原（分辨率/缩放变化安全），clamp 回工作区内
 /// - v2 但工作区已变 → 绝对坐标 + 角色可见性校验
 /// - v1 → 绝对坐标 + 角色可见性校验（读旧文件后下次保存即升级为 v2）
 /// - 位置不可见（屏外遗留坐标）→ 回默认位置，保留隐藏设置
 /// - 损坏/版本不符 → 全部默认并重建
-pub(crate) fn initial_pet_state() -> (i32, i32, bool) {
+///
+/// M4.1：落盘了停靠边 ⇒ 启动即复位到**吸附位**。peek 是瞬态不跨重启——
+/// 重启后先全可见（气泡/右键菜单都可用），静置 5s 后由 peek 状态机自然缩边；
+/// 直接把 peek 位置原样还原会让「启动即半只身位在屏外」，观感像出过故障。
+pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::model::DockEdge>) {
     match load_pet_state() {
         Some(LoadedPetState::V2(s)) => {
             let c = character_local_rect();
@@ -228,50 +243,80 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool) {
                 let y_hi = (w.bottom - c.bottom).max(y_lo);
                 x = x.clamp(x_lo, x_hi);
                 y = y.clamp(y_lo, y_hi);
+                // M4.1：peek 位置经比例还原 + clamp 后停在「半出屏」处，这里推回吸附位
+                if let Some(edge) = s.dock {
+                    if let Some((dx, dy)) =
+                        crate::pet_native::model::dock_push_out((x, y), c, w, edge)
+                    {
+                        x = dx;
+                        y = dy;
+                    }
+                }
                 if pos_visible((x, y)) {
                     pet_log_line(&format!(
-                        "[native-pet] pet.json v2 restored by ratio rx={:.3} ry={:.3} -> {},{}\n",
-                        s.rx, s.ry, x, y
+                        "[native-pet] pet.json v2 restored by ratio rx={:.3} ry={:.3} -> {},{} (dock={:?})\n",
+                        s.rx, s.ry, x, y, s.dock
                     ));
-                    return (x, y, s.hide);
+                    return (x, y, s.hide, s.dock);
                 }
             }
             // ② 工作区已变 → 绝对坐标兜底
             if pos_visible((s.x, s.y)) {
+                let mut pos = (s.x, s.y);
+                // M4.1：绝对兜底也要吸附（按角色中心所在工作区算边；找不到就不推，保持原位）
+                if let Some(edge) = s.dock {
+                    let ccx = pos.0 + (c.left + c.right) / 2;
+                    let ccy = pos.1 + (c.top + c.bottom) / 2;
+                    if let Some(w) = monitor_workspaces()
+                        .into_iter()
+                        .find(|r| ccx >= r.left && ccx < r.right && ccy >= r.top && ccy < r.bottom)
+                    {
+                        if let Some((dx, dy)) =
+                            crate::pet_native::model::dock_push_out(pos, c, w, edge)
+                        {
+                            pos = (dx, dy);
+                        }
+                    }
+                }
                 pet_log_line(&format!(
-                    "[native-pet] pet.json v2 workarea changed -> absolute {},{}\n",
-                    s.x, s.y
+                    "[native-pet] pet.json v2 workarea changed -> absolute {},{} (dock={:?})\n",
+                    pos.0, pos.1, s.dock
                 ));
-                return (s.x, s.y, s.hide);
+                return (pos.0, pos.1, s.hide, s.dock);
             }
             pet_log_line(&format!(
                 "[native-pet] pet.json v2 pos ({},{}) not visible -> default pos\n",
                 s.x, s.y
             ));
             let (dx, dy) = default_pos();
-            (dx, dy, s.hide)
+            // 位置都保不住 ⇒ 停靠边也视为失效（旧边按新几何重判，交由下次松手/启动）
+            (dx, dy, s.hide, None)
         }
         Some(LoadedPetState::V1(s)) => {
             if pos_visible((s.x, s.y)) {
-                (s.x, s.y, s.hide)
+                (s.x, s.y, s.hide, None)
             } else {
                 pet_log_line(&format!(
                     "[native-pet] pet.json v1 pos ({},{}) not on any visible workarea -> default pos\n",
                     s.x, s.y
                 ));
                 let (dx, dy) = default_pos();
-                (dx, dy, s.hide)
+                (dx, dy, s.hide, None)
             }
         }
         None => {
             let (dx, dy) = default_pos();
-            (dx, dy, false)
+            (dx, dy, false, None)
         }
     }
 }
 
 /// R3：保存——按「角色可见区域中心」求比例与屏幕身份；同时写入绝对坐标作兜底。
-pub(crate) fn save_pet_pos(pos: (i32, i32), hide: bool) {
+pub(crate) fn save_pet_pos(
+    pos: (i32, i32),
+    hide: bool,
+    dock: Option<crate::pet_native::model::DockEdge>,
+) {
     let c = character_local_rect();
     let cx = pos.0 + (c.left + c.right) / 2;
     let cy = pos.1 + (c.top + c.bottom) / 2;
@@ -296,7 +341,7 @@ pub(crate) fn save_pet_pos(pos: (i32, i32), hide: bool) {
             )
         }
     };
-    save_pet_state(&PetStateV2 { version: 2, rx, ry, x: pos.0, y: pos.1, hide, work });
+    save_pet_state(&PetStateV2 { version: 2, rx, ry, x: pos.0, y: pos.1, hide, work, dock });
 }
 
 #[cfg(test)]
@@ -345,6 +390,34 @@ mod tests {
         assert!(s.hide);
     }
 
+    /// M4.1 的**旧文件兼容**闸门：M4.1 之前写出的 `pet.json` **没有 `dock` 字段**。
+    /// 缺字段必须解析为 `None` 而不是报错 —— 否则升级后老用户的桌宠位置直接读不出来
+    /// （表现为「桌宠位置每次启动都重置」）。
+    #[test]
+    fn v2_json_without_dock_parses_as_none() {
+        let old = r#"{"version":2,"rx":0.25,"ry":0.75,"x":111,"y":222,"hide":false,
+            "work":{"left":0,"top":0,"right":1920,"bottom":1040}}"#;
+        let s: PetStateV2 = serde_json::from_str(old).expect("M4.1 之前的 v2 文件必须仍能解析");
+        assert_eq!(s.dock, None, "缺 dock 字段应回 None（不是报错）");
+        assert!((s.rx - 0.25).abs() < 1e-9);
+    }
+
+    /// M4.1：`dock` 的序列化形态是**字符串**（可读、可手改、不受枚举序号变动影响）。
+    #[test]
+    fn dock_serializes_as_string() {
+        for (edge, name) in [
+            (crate::pet_native::model::DockEdge::Left, "left"),
+            (crate::pet_native::model::DockEdge::Right, "right"),
+            (crate::pet_native::model::DockEdge::Top, "top"),
+            (crate::pet_native::model::DockEdge::Bottom, "bottom"),
+        ] {
+            let txt = serde_json::to_string(&edge).unwrap();
+            assert_eq!(txt, format!("\"{name}\""), "停靠边应序列化为字符串（可读 + 手改安全）");
+            let back: crate::pet_native::model::DockEdge = serde_json::from_str(&txt).unwrap();
+            assert_eq!(back, edge);
+        }
+    }
+
     #[test]
     fn v2_roundtrip() {
         let s = PetStateV2 {
@@ -355,6 +428,7 @@ mod tests {
             y: 222,
             hide: false,
             work: WorkRect { left: 0, top: 0, right: 1920, bottom: 1040 },
+            dock: Some(crate::pet_native::model::DockEdge::Left),
         };
         let txt = serde_json::to_string(&s).unwrap();
         let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
@@ -362,6 +436,8 @@ mod tests {
         let back: PetStateV2 = serde_json::from_value(v).unwrap();
         assert_eq!(back.work, s.work);
         assert!((back.rx - 0.25).abs() < 1e-9 && (back.ry - 0.75).abs() < 1e-9);
+        // M4.1：dock 必须往返一致
+        assert_eq!(back.dock, s.dock, "停靠边必须往返一致（M4.1 落盘契约）");
         assert_eq!((back.x, back.y), (111, 222));
     }
 

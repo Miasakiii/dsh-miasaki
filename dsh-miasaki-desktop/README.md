@@ -414,6 +414,30 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 [`../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md`](../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md)；
 改契约必须同时改 appearance 线的 `lib/avatar.js`（两侧各有单测钉同一组样本）。
 
+## 启动片头（启动视频，2026-10-05）
+
+**在 DSH 页面的「设置 → 外观 → 启动」里选一段视频片头，桌面壳的加载页会全屏播放它** ——
+这是「启动加载 2.0」纹章动效层（S4a）之上新增的视频层（L2），与软件头像同源：读同一份
+appearance 配置。
+
+| 项 | 说明 |
+|---|---|
+| 入口 | DSH 页面 设置 → **外观** → 「启动」→ 启动片头（选择丸）/ 片头声音（开关） |
+| 片库 | 四段：**品牌**（出厂）/ 赛博朋克 / 数字角色苏醒 / 启动问题 —— 视频元素叠加信息层，`object-fit: cover` 铺满 + 上下遮罩渐变过渡到主题底色 |
+| 声音 | **出厂静音**；静音同时是 WebView2 autoplay 放行的前提，出声是显式选择 |
+| 生效时机 | **下次启动应用时生效** —— 加载页只活在启动头几秒，刻意不做热重载 |
+| 时序 | 后端就绪 ⇒ 300ms 淡出 → 进 DSH（「就绪即切」）；等待期视频播完 ⇒ 停尾帧 2s 后回落纹章层；**点击 / 任意键可跳过**（只切视频层，不干扰就绪链路） |
+| 失败让路 | 启动失败 / 超时 ⇒ 视频层 ≤200ms 淡出，失败卡片优先于观感 |
+| 降级链 | 系统开「减少动画效果」/ 视频解码失败 / 素材缺失 / 配置缺失或损坏 ⇒ **一层都不建**，回落既有纹章层，启动照常且不报错 |
+| 「关闭」 | 与原生一致（L2 整层不注入，行为等于 2.0 现状） |
+| 实现 | `src-tauri/src/boot_intro.rs` —— 启动最早瞬间读一次 `config.json` 的 `boot` 板块（**先于宿主**，故本机旧配置需由 appearance 新版迁移落盘一次）；`ui/loading.html` 的 L2 层负责播放与退场 |
+| 素材 | `ui/intro/` 四段 mp4（第三方 BSD-3-Clause，**署名义务见 [`ui/intro/THIRD-PARTY-NOTICE.md`](ui/intro/THIRD-PARTY-NOTICE.md)**）；`scripts/extract-intro-clips.mjs --check` 按「字节数 + SHA256 前 16 位」逐段比对台账，是 `verify-all desktop` 的一项 |
+| **不含** | 3080 侧 appearance「首帧启动画」（`motion.bootSplash`，独立一层，行为未变）、片头与 splash 的接力让位（实测双重片头观感后再定） |
+
+设计与决策全文（含素材授权、就绪赛跑方案对比、验收矩阵）：[`design/2026-10-04-boot-intro-video.md`](design/2026-10-04-boot-intro-video.md)；
+设置面板一侧见 [`../dsh-miasaki-appearance/README.md`](../dsh-miasaki-appearance/README.md)「启动片头（桌面壳）」。
+跨线同步点：`lib/config.js` 的 `INTRO_CLIPS` ↔ `boot_intro.rs` 的 `INTRO_IDS` ↔ 提取脚本台账，**新增一段须三处同改**。
+
 ## Q 版桌宠（Codex 风格）
 
 透明置顶小窗桌宠，随主题自动换角色：
@@ -550,6 +574,14 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
   可见性判据为「**角色可见区域 ∩ 工作区的面积占比 ≥ 25%**」——半出屏/贴边保留，完全出屏才回默认；
   旧的「窗口中心点」判据已废弃，它是 M4.1（peek 缩边）的必然坑：peek 时窗口中心在屏外，
   会被误判「不可见」而把桌宠拉回默认位置（即「桌宠丢了」回归）
+- **边缘吸附与探头（v5 M4.1，2026-10-05）**：拖到屏幕边缘松手（角色可见区域距工作区边 ≤18px）
+  自动吸附并保持角色距边恰 18px，停靠边记入 `pet.json`（`dock` 字段，重启即恢复吸附位）；
+  吸附后静置 5 秒自动**缩边探头**（300ms 缓动滑出、常驻露出约 55% 角色宽度），
+  鼠标压上或点击会**拉直**（250ms 滑出到约 82%，点击在缩边态下就是「出来」而非「撸一下」），
+  光标离开再次静置则退回常驻档；探头期间有气泡（审批/告警/台词）会立即弹回吸附位、气泡完整可点；
+  拖动即脱离停靠。**零绘制改动**：分层窗移出屏外的部分自然不绘制，动画只改窗口位置。
+  拖动全程另有弹簧尾随（M4）：桌宠「被拽着走」、松手自然减速。实机走查判据见
+  `dsh-miasaki-shared-docs/cross/smoke-test-matrix.md` §3.2.3。
 - **设置入口**：DSH「设置 → 桌宠」面板（`plugins/dsh-pet-panel/`）提供：
   显示/隐藏开关、位置重置（屏幕外找回）、状态回显（面板挂载时经
   `cmd=pet-state` 请求，桌面端 eval `miasaki-pet-state` 事件回推）。
@@ -655,6 +687,8 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 ```
 desktop/
 ├─ ui/loading.html           # 本地唤醒页（探活/拉起状态 + 重试 + 随主题换肤/统一标题栏）
+├─ ui/intro/                 # 视频片头素材：四段 mp4（第三方 BSD-3-Clause，署名见
+│                            #   THIRD-PARTY-NOTICE.md；台账闸门 = extract-intro-clips.mjs --check）
 ├─ themes/                   # 主题源（原创设计）
 │  ├─ pure.css / zafkiel.css / kurkuriel.css
 │  ├─ src/                   # 注入运行时分片（9 片，按 MANIFEST.json 拼接；改这里）
@@ -669,11 +703,13 @@ desktop/
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
 ├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）
 ├─ scripts/deploy-local.ps1  # 构建产物同步到系统目录（`npm run deploy`；用户目录下的 exe 在本机必被降权）
+├─ scripts/extract-intro-clips.mjs # 片头素材提取与台账校验（`--check` = 字节数 + SHA256 前 16 位逐段比对）
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
    ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh 后端（专属 profile miasaki）/导航 + 后端存活看门狗 + fleet 脉冲看门狗
    ├─ src/launcher_icon.rs   # 软件头像 → 窗口/托盘图标（读 appearance 线配置，1.5s 巡检跟随）
+   ├─ src/boot_intro.rs      # 启动片头 → 加载页 L2 层（同读 appearance 配置 `boot` 板块，启动最早读一次、不轮询）
    ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
    ├─ src/pet_native/xform.rs # 绘制变换与动效相位（纯逻辑、无 Win32 依赖；pet-v5 M1–M3 的数学层）
    ├─ injected/theme-init.js # 构建产物（include_str! 注入，勿手改）

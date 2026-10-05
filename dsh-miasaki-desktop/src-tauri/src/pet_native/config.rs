@@ -64,6 +64,56 @@ pub(crate) const IDT_SINGLE_CLICK: usize = 2;
 /// 「何时恢复可点击」只能靠主动轮询光标位置（参考实现同款：常态 10ms、拖拽中降频）。
 pub(crate) const IDT_HIT: usize = 3;
 pub(crate) const HIT_POLL_MS: u32 = 10;
+/// R13（2026-10-05）：拖动合帧定时器 —— 消费「最新拖动目标」的节拍。
+///
+/// **为什么需要它**：`WM_MOUSEMOVE` 是**逐事件**派发的，1000Hz 鼠标 = 每秒 1000 次
+/// `MoveWindow`。这有两个问题：① 每个 `MoveWindow` 都会触发一次窗口重定位与重绘调度；
+/// ② 更要紧的是它是 M4「拖动尾随」的**硬前置** —— 弹簧插值要估计「窗口位置对目标的滞后」，
+/// 而**同一帧内的重复样本会污染滞后估计**（`GetCursorPos` 在 8ms 内可能返回同一位置多次，
+/// 算出的速度为 0，插值退化成静止）。
+///
+/// **口径**（照参考实现 `tests/test_drag_move_coalescing.py` 同款思路）：
+/// ① `WM_MOUSEMOVE` 只**记最新绝对目标**，不移动窗口；
+/// ② 8ms 定时器消费最新目标（≈125Hz），同一节拍内的多个事件只算一次；
+/// ③ 松手时**强制 flush**（否则最后一帧可能还没消费，窗口会停在旧位置一拍）。
+///
+/// **8ms 的由来**：与 33ms compose 周期解耦（compose 是画面刷新、这个是窗口移动），
+/// 8ms 在「跟手」与「省调用」之间；参考实现用的是同一量级。
+pub(crate) const IDT_DRAG: usize = 4;
+pub(crate) const DRAG_COALESCE_MS: u32 = 8;
+
+/// M4（2026-10-05）：拖动尾随的临界阻尼弹簧刚度（1/s²）。
+///
+/// **口径与取值理由**（参考实现同族：`pet/physics.py` 拖拽段用阻尼弹簧跟手，
+/// 但参数散在多处；此处集中成常量并由单测钉住行为）：
+/// · **临界阻尼**（`ζ = 1`，即 `c = 2√k`）⇒ **不过冲**。桌宠被甩出去时若过冲，
+///   观感是「弹过头再回来」= 抽搐，不是跟手。
+/// · `k = 220`（ω ≈ 14.8 rad/s，周期 ≈ 0.42s）：肉眼看是「被拽着走、有一点延迟」，
+///   但松手前基本追得上。**再大**会显得像贴手指（无尾随感），**再小**会像掉队。
+/// · 与 `IDT_DRAG` 的 8ms 节拍配合：每拍推进 `ω·dt ≈ 0.12` 弧度，数值稳定
+///   （半隐式欧拉在 `ω·dt < 1` 时不发散）。
+pub(crate) const DRAG_SPRING_K: f32 = 220.0;
+/// 到位判定的位置阈值（px）。0.5 = 肉眼不可见（见 `xform::spring_at_target` 注释）。
+pub(crate) const DRAG_SPRING_SETTLE_PX: f32 = 0.5;
+/// 到位判定的速度阈值（px/s）。约 2px/s —— 低于此肉眼察觉不到「还在动」。
+pub(crate) const DRAG_SPRING_SETTLE_VEL: f32 = 2.0;
+// —— M4.1（2026-10-05，design/pet-v3-roadmap.md §M4.1 + pet-reference-benchmark.md R14）：边缘探头 ——
+/// peek 状态机轮询定时器 id（边界检测：静置到期 / 光标压上）。
+/// 动画推进不在这里——它搭 `IDT_COMPOSE` 的 33ms 节拍（真实 dt 积分）。
+pub(crate) const IDT_PEEK: usize = 5;
+/// 轮询周期。只做两类边界检测，250ms 的反应延迟不可感知；再快只是白烧轮询。
+pub(crate) const PEEK_POLL_MS: u32 = 250;
+/// 静置多久进入探头。R14 采纳参考口径 **5s**（取代 roadmap 初稿的 15s——实测观感 15s 太迟钝）。
+pub(crate) const PEEK_IDLE_MS: u64 = 5000;
+/// 常驻露出比例（对 `character_local_rect` 口径的跨距）。R14：参考项目实测 0.70「探出过多」→ 0.55。
+pub(crate) const PEEK_REST_EXPOSURE: f32 = 0.55;
+/// 点击/悬停「拉直」后的露出比例（R14）。仍留 18% 在屏外是刻意的：拉直态不解除停靠，
+/// 用户要挪走它就拖——拖动即脱停靠，语义比「点击弹回屏幕中央」可预期。
+pub(crate) const PEEK_ENGAGE_EXPOSURE: f32 = 0.82;
+/// 三段过渡时长（R14 = 300/250/300）：进入缩边 / 拉直 / 退回常驻档。
+pub(crate) const PEEK_ENTER_MS: u32 = 300;
+pub(crate) const PEEK_STRAIGHTEN_MS: u32 = 250;
+pub(crate) const PEEK_RETURN_MS: u32 = 300;
 /// R2:命中判据阈值——alpha 低于此值视为「透明像素」（参考实现实机取 16）。
 /// 注：`load_png` 已把 a<8 归零，取 16 可一并消除 8..15 的「看不见但能点到」窄带。
 pub(crate) const CLICK_THROUGH_ALPHA: u32 = 16;

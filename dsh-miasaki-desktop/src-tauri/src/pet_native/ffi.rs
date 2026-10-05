@@ -30,7 +30,11 @@ pub(crate) struct Size {
     pub(crate) cy: i32,
 }
 
+/// M4.1（2026-10-05）：加 `Copy` —— 它是 `#[repr(C)]` 的四个 `i32`、无堆无指针，
+/// 语义上就是值类型；而 M4.1 的吸附判定要按值传 `work`（几何运算全部只读它）。
+/// 不加则复用同一个 `work` 会报 `use of moved value`（该错误在 harness 里先暴露过）。
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub(crate) struct Rect {
     pub(crate) left: i32,
     pub(crate) top: i32,

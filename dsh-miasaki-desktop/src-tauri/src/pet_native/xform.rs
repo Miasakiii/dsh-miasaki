@@ -158,6 +158,58 @@ pub(crate) fn squash_scales(p: f32, scale: f32) -> (f32, f32) {
     (1.0 + SQUASH_DX * k, 1.0 - SQUASH_DY * k)
 }
 
+/* ---------------- M4 · 拖动尾随（弹簧插值） ---------------- */
+
+/// 拖动尾随的一维弹簧状态。
+///
+/// **为什么是「状态 + 纯步进函数」而不是一个闭式公式**：闭式解需要知道整段历史，
+/// 而窗口层每拍只该记住上一拍的 `(pos, vel)`（`ARCHITECTURE.md` 的「33ms 主路径零分配」
+/// 允许有状态、不允许每帧重算历史）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DragSpring {
+    /// 当前位置（窗口左上角，px）。
+    pub(crate) pos: f32,
+    /// 当前速度（px/s）。
+    pub(crate) vel: f32,
+}
+
+/// M4 拖动尾随：把弹簧状态朝目标推进 `dt_ms`，返回新状态。
+///
+/// **模型**：临界阻尼弹簧（`ζ = 1`）。相比欠阻尼的好处是**不过冲**——
+/// 桌宠被甩出去时若过冲会「弹过头再回来」，观感是抽搐而非跟手。
+/// 参考实现用的是「阻尼弹簧跟手」这一族（`pet/physics.py` 的拖拽段），
+/// 但它把参数散在多处；此处集中成两个常量并由单测钉住。
+///
+/// **半隐式欧拉**：先更新速度、再用新速度更新位置。显式欧拉在这种刚度下会
+/// 「越追越抖」（能量注入），半隐式是这类弹簧的标准稳定写法。
+///
+/// **为什么不用固定步长**：窗口层由 `IDT_DRAG`（8ms）驱动，帧间隔本身有抖动；
+/// 把 `dt` 传进来做参数（而不是写死 8ms）才让「参数正确性」可被单测验证。
+/// `dt_ms` 夹到 `[1, 100]`：0 会除零、过大（调试时长时间挂起后恢复）会让弹簧炸开。
+pub(crate) fn spring_step(s: DragSpring, target: f32, dt_ms: u32) -> DragSpring {
+    let dt = (dt_ms.clamp(1, 100) as f32) / 1000.0;
+    // 半隐式欧拉：a = k(target - pos) - c·vel，其中 c = 2√k（临界阻尼）
+    let accel = DRAG_SPRING_K * (target - s.pos) - 2.0 * DRAG_SPRING_K.sqrt() * s.vel;
+    let vel = s.vel + accel * dt;
+    let pos = s.pos + vel * dt;
+    DragSpring { pos, vel }
+}
+
+/// 弹簧是否已「到位」（尾随该退场了）。
+///
+/// **两个条件都要满足**：
+/// · 位置：目标与当前位置之差 < `DRAG_SPRING_SETTLE_PX`（0.5px）——
+///   小于半个像素的滞后肉眼不可见（192px 宽的帧在 33ms 合成周期里走不到 1px）；
+///   但若不设阈值，弹簧会**永远在追**（浮点收敛很慢）⇒ 拖动结束后桌宠仍有微幅抖动、
+///   `IDT_DRAG` 永不停止。
+/// · 速度：`DRAG_SPRING_SETTLE_VEL` —— 位置到了但速度很大意味着**还会过冲**，必须继续积分。
+///
+/// 顺序无所谓，两者都是「小于阈值」的合取。
+pub(crate) fn spring_at_target(s: DragSpring, target: f32) -> bool {
+    s.vel.abs() < DRAG_SPRING_SETTLE_VEL && (target - s.pos).abs() < DRAG_SPRING_SETTLE_PX
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,5 +478,143 @@ mod tests {
             "余量应按最大强度算：{} vs {}", sway_layout_margin(w), need);
         assert!(sway_layout_margin(w) > (w * 0.5) * sway_max_rad().sin(),
             "最大强度大于 1 ⇒ 余量必须比原值大，否则满强度时越界");
+    }
+
+    /* ---------------- M4 · 拖动尾随的弹簧 ---------------- */
+
+    /// M4-1：弹簧**收敛到目标且不过冲**（临界阻尼的定义）。
+    ///
+    /// 这条同时钉住两件事：① 最终到达目标；② **全程不越过目标**。
+    /// ② 是选临界阻尼而非欠阻尼的唯一理由（欠阻尼会过冲 ⇒ 观感是抽搐）。
+    #[test]
+    fn spring_converges_without_overshoot() {
+        let mut s = DragSpring { pos: 0.0, vel: 0.0 };
+        let target = 300.0_f32;
+        let dt = DRAG_COALESCE_MS; // 8ms，与实际节拍一致
+        let mut max_pos = 0.0_f32;
+        for _ in 0..600 { // 600 × 8ms = 4.8s，远超实际拖动时长
+            s = spring_step(s, target, dt);
+            max_pos = max_pos.max(s.pos);
+        }
+        assert!((s.pos - target).abs() < DRAG_SPRING_SETTLE_PX,
+            "4.8s 后应收敛到目标：pos={} target={}", s.pos, target);
+        assert!(max_pos <= target + 1e-3,
+            "临界阻尼**不得过冲**：最大 pos={} 超过 target={}", max_pos, target);
+    }
+
+    /// M4-2：**单调不回头**。临界阻尼的速度必须全程同号（不回负）——
+    /// 一旦回负就说明有振荡，即参数错了。这条比「峰值不超过」更强：它抓的是
+    /// 「速度变号」这个振荡的**根因特征**。
+    #[test]
+    fn spring_never_reverses_direction() {
+        let mut s = DragSpring { pos: 0.0, vel: 0.0 };
+        let mut last_vel_sign = 0_i32;
+        for i in 0..300 {
+            s = spring_step(s, 200.0, DRAG_COALESCE_MS);
+            let sign = if s.vel > 1e-4 { 1 } else if s.vel < -1e-4 { -1 } else { 0 };
+            if sign != 0 && last_vel_sign != 0 {
+                assert_eq!(sign, last_vel_sign,
+                    "第 {} 拍速度变号（{} → {}）⇒ 出现振荡，临界阻尼不该发生", i, last_vel_sign, sign);
+            }
+            if sign != 0 { last_vel_sign = sign; }
+        }
+    }
+
+    /// M4-3：到位判定在**收敛后**必须为真（否则 `IDT_DRAG` 永不停止 = 桌宠永久微抖）。
+    #[test]
+    fn spring_at_target_becomes_true_after_convergence() {
+        let mut s = DragSpring { pos: 0.0, vel: 0.0 };
+        let target = 150.0_f32;
+        let mut settled_at = None;
+        for i in 0..600 {
+            s = spring_step(s, target, DRAG_COALESCE_MS);
+            if spring_at_target(s, target) { settled_at = Some(i); break; }
+        }
+        assert!(settled_at.is_some(), "弹簧必须最终判定到位（否则定时器停不下来）");
+        // 反之：起点就等于目标、速度为 0 ⇒ 立刻到位
+        let at_rest = DragSpring { pos: 10.0, vel: 0.0 };
+        assert!(spring_at_target(at_rest, 10.0), "静止且已在目标上 ⇒ 立即到位");
+        // 位置到了但速度很大 ⇒ **不算**到位（还会过冲）
+        let fast = DragSpring { pos: 10.0, vel: 50.0 };
+        assert!(!spring_at_target(fast, 10.0), "速度高时不得判到位（否则会在目标附近抖动）");
+    }
+
+    /// M4-4：`dt` 的两个边界都必须安全。
+    ///
+    /// `dt` 来自 `Instant::elapsed()` 的真实值，被 clamp 到 `[1,100]`。
+    /// 这条钉住 clamp 真的生效，两个边界的**表现完全不同**：
+    /// · **dt 过大** ⇒ 单次积分步长超过 `2/ω` ⇒ 半隐式欧拉**发散**（实测几步即 NaN）。
+    ///   必须**多步**才看得出来（单步可能还有限）—— 初版只调一次 ⇒ 负向验证时
+    ///   「去掉 clamp」竟然全绿，是**测试自身写坏**的实例。
+    /// · **dt = 0 被夹到 1ms**（不是「不动」！）⇒ 表现为「每拍仍有极小位移」。
+    ///   这正是 clamp 的**目的**：`elapsed()` 取整到 ms 时可能给 0，若原样传入
+    ///   弹簧就完全不动（拖动看起来卡住）。故此处断言的是「**夹到下限后仍在推进**」，
+    ///   而不是「位置不变」—— 初版后者是错的（clamp 后 0 变 1ms，位置会动）。
+    #[test]
+    fn spring_step_is_safe_at_dt_extremes() {
+        let start = DragSpring { pos: 0.0, vel: 0.0 };
+        // ① dt = 0 → 被夹到 1ms：不得产生非有限值，且**仍在缓慢推进**（不能卡住）
+        let mut s0 = start;
+        for _ in 0..10 {
+            s0 = spring_step(s0, 100.0, 0);
+        }
+        assert!(s0.pos.is_finite() && s0.vel.is_finite(), "dt=0 产生了非有限值：{s0:?}");
+        assert!(s0.pos > 0.0,
+            "dt=0 被夹到下限 1ms 后仍应推进（实得 pos={}）—— 若为 0 说明拖动会卡住", s0.pos);
+        assert!(s0.pos < 10.0,
+            "1ms/拍 × 10 拍的位移应很小（实得 {}），过大说明下限取得不对", s0.pos);
+
+        // ② dt 极大：**多步**积分后仍须有限（clamp 到 100ms 时不会发散）
+        let mut s_big = start;
+        for _ in 0..20 {
+            s_big = spring_step(s_big, 100.0, 100_000);
+        }
+        assert!(
+            s_big.pos.is_finite() && s_big.vel.is_finite(),
+            "超大 dt 产生了非有限值（发散）：{s_big:?} —— clamp 失效或步长过大"
+        );
+    }
+
+    /// M4-5：**刚度与节拍必须匹配**（数值稳定性）。
+    ///
+    /// 半隐式欧拉在 `ω·dt` 接近或超过 1 时会发散。这条用实际参数验证 `ω·dt ≈ 0.12`
+    /// —— 即**余量充足**；若有人把 `DRAG_SPRING_K` 调大两个数量级，这条会先红。
+    #[test]
+    fn spring_stiffness_is_stable_at_current_tick_rate() {
+        let omega = DRAG_SPRING_K.sqrt();
+        let dt = DRAG_COALESCE_MS as f32 / 1000.0;
+        let wdt = omega * dt;
+        assert!(wdt < 0.5,
+            "ω·dt = {wdt:.3}（k={}, dt={}ms）逼近 1 ⇒ 半隐式欧拉会发散", DRAG_SPRING_K, DRAG_COALESCE_MS);
+        // 并实测 10 秒内不发散
+        let mut s = DragSpring { pos: 0.0, vel: 0.0 };
+        for _ in 0..1250 {
+            s = spring_step(s, 500.0, DRAG_COALESCE_MS);
+        }
+        assert!(s.pos.is_finite() && s.pos > 400.0,
+            "10s 后应接近目标且不发散，实得 pos={}", s.pos);
+    }
+
+    /// M4·反例：把刚度调成欠阻尼（去掉 `2√k` 阻尼项）时**必须出现过冲**。
+    ///
+    /// 这条是「为什么选临界阻尼」的**可执行证据**，防止日后有人把阻尼项删掉
+    /// 追求「更跟手」——那样观感是抽搐而不是跟手。
+    #[test]
+    fn underdamped_variant_would_overshoot() {
+        // 对照组：同样的 k，但没有阻尼项 ⇒ 等价于无阻尼简谐振荡
+        let k = DRAG_SPRING_K;
+        let mut pos = 0.0_f32;
+        let mut vel = 0.0_f32;
+        let dt = DRAG_COALESCE_MS as f32 / 1000.0;
+        let target = 300.0_f32;
+        let mut max_pos = 0.0_f32;
+        for _ in 0..600 {
+            let accel = k * (target - pos);
+            vel += accel * dt;
+            pos += vel * dt;
+            max_pos = max_pos.max(pos);
+        }
+        assert!(max_pos > target + 1.0,
+            "对照组失效：无阻尼弹簧应明显过冲（实测最大 {max_pos} / 目标 {target}）");
     }
 }

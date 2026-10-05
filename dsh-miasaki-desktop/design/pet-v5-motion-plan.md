@@ -1,7 +1,8 @@
 # 桌宠动作与形变规划（L0 接线 / L1 绘制层动效）
 
-> 状态：**L0 四条已全部落地；L1 的 M1–M3 已于 2026-09-28 落地**（见 §5），
-> M4（拖动尾随，含其前置 R13 拖动合帧）待拍板。
+> 状态：**L0 四条 + L1 的 M1–M4 全部落地**（M1–M3 于 2026-09-28；M4 拖动尾随于 2026-10-05，
+> 其前置 R13 拖动合帧同日先落地）；**M4.1 边缘停靠探头同日落地（§5.4）**。
+> §6 的四条待拍板仍未决。
 > **§3.3 的「命中判定必须与绘制同批改造」已按本仓架构订正为不成立** —— 详见该节，
 > 该条曾把 L1 的工程量估高了一档。
 > 编号说明：`v4` 已被 [`2026-09-27-pet-v4-computer-use.md`](2026-09-27-pet-v4-computer-use.md)
@@ -44,7 +45,7 @@
 | 层 | 内容 | 素材 | 依赖 | 状态 |
 |---|---|---|---|---|
 | **L0** | 接线：把已存在的素材/语义接到状态机上 | 零 | 无 | 4/4 已落地 |
-| **L1** | 绘制层动效：呼吸 / 摇摆 / 挤压拉伸 / 拖动尾随 | 零 | L0（行选择先正确） | **M1–M3 已落地（2026-09-28）；M4 待做** |
+| **L1** | 绘制层动效：呼吸 / 摇摆 / 挤压拉伸 / 拖动尾随 | 零 | L0（行选择先正确） | **M1–M4 已落地（M1–M3 2026-09-28；M4 2026-10-05）；M4.1 探头 2026-10-05 落地（§5.4，属边缘状态线）** |
 | **L2** | 新素材与新姿态语义（探头/攀爬/甩出物理） | 需出图 | L1（变换管线先就绪） | 不在本文件 |
 
 排序理由沿用 `pet-v3-roadmap.md:343` 的下半句：**不建变换管线就堆素材，新玩法会被
@@ -434,6 +435,63 @@ const RUST_ROWS = ['idle', 'wait', 'failed', 'jump', 'wave', 'run', 'review', 'r
 部署目录与仓库逐项 SHA256 一致（`frames.json` / inverse 三态 / `theme-inverse.png` / whale `r0c0.png`），
 `whale/frames` 46 帧、旧 `blue-*.png` 已随镜像删除。
 
+### 5.3 M4 · 拖动尾随（2026-10-05 会话）
+
+| 项 | 文件 | 验证 |
+|---|---|---|
+| 前置 R13 拖动合帧 | `config.rs`（`IDT_DRAG` / `DRAG_COALESCE_MS`）、`window.rs`（`drag_target` + `advance_drag_target` + `flush_drag_target` / `end_drag`） | `model.rs` 4 例（可加性 / 反例 / 首事件 / 零位移） |
+| 弹簧数学（新） | `src-tauri/src/pet_native/xform.rs`（`DragSpring { pos, vel }` + `spring_step()` + `spring_at_target()`） | **6 例**（收敛不过冲 / 速度不反号 / 到位判定 / dt 边界 / 刚度稳定 / 欠阻尼反例） |
+| 参数常量 | `config.rs`（`DRAG_SPRING_K=220` / `SETTLE_PX=0.5` / `SETTLE_VEL=2.0`） | 被 `xform.rs` 的稳定性测试引用 |
+| 接线 | `window.rs`（`flush_drag_target` 改为按 `last_drag_tick` 真实 dt 积分；`end_drag` 强制对齐 + 速度清零） | 编译通过；实机手感待用户验收 |
+
+**参数口径**：`k=220`（ω≈14.8 rad/s，周期≈0.42s）+ **临界阻尼**（`c=2√k`，不过冲）。
+到位阈值 0.5px / 2px·⁻¹。积分用**半隐式欧拉**（显式欧拉在这种刚度下会能量注入、越追越抖）。
+
+**三处必须记住的坑**：
+
+1. **松手要强制对齐，不能只靠弹簧收敛** —— 临界阻尼是渐近逼近、永远不到达目标，
+   而 `save_pet_pos` 落盘的必须是**精确等于**用户看到的目标（否则下次启动位置偏 0.4px）。
+2. **dt 必须用真实经过时间**，不能写死 8ms —— 写死则刚度随帧间隔抖动漂移，且无法单测 dt 正确性。
+3. **`clamp(1,100)` 的下界 1ms 是有意的** —— `Instant::elapsed()` 取整到 ms 可能给 0，
+   原样传入则弹簧完全不动（拖动看起来卡住）。
+
+**回归**：`rustc --test` harness **28 passed / 0 failed**；`verify-all desktop` 39/40
+（唯一失败为 `cargo test` 的沙箱边界）。真仓 `cargo test` **已于同日在 MSVC link 环境确认全绿**（见 §5.4 回归）。
+
+### 5.4 M4.1 · 边缘停靠探头（2026-10-05 会话）
+
+吸附（M4.1 前半：拖动松手 ≤18px 判边 + `dock_push_out` 推出 + `pet.json` 落 `dock` 字段）
+已在上一轮铺好纯函数层；本轮补齐**探头（peek）状态机**与全部窗口层接线。
+口径照 [`pet-reference-benchmark.md`](pet-reference-benchmark.md) R14 采纳参考实现：
+**静置 5s 进入 / 常驻露出 0.55 / 点击拉直 0.82 / 进入·拉直·退回 = 300·250·300ms**，
+状态机六态逐字对齐（`OFF/ENTERING/PEEKING/STRAIGHTENING/STRAIGHTENED/RETURNING`）。
+露出分母 = `character_local_rect()` 跨度（R14「分母 = 当前姿态投影 bbox」在我方无旋转姿态下的对应物，
+口径同源复用；外移量含 `+DOCK_MARGIN_PX` 预留项，推导见 `model::peek_slide_target`）。
+
+| 项 | 文件 | 验证 |
+|---|---|---|
+| peek 常量 | `config.rs`（`IDT_PEEK=5` / `PEEK_POLL_MS=250` / `PEEK_IDLE_MS=5000` / `PEEK_REST_EXPOSURE=0.55` / `PEEK_ENGAGE_EXPOSURE=0.82` / `PEEK_ENTER_MS=300` / `PEEK_STRAIGHTEN_MS=250` / `PEEK_RETURN_MS=300`） | 被 model.rs 测试引用 |
+| 状态机纯函数 | `model.rs`（`PeekPhase` 六态 + `PeekState{phase,slide,from,elapsed}` + `peek_advance`（smoothstep，真实 dt）/ `peek_kick_idle|engage|return` / `peek_reset` / `peek_slide_target` / `peek_extent` / `peek_window_pos`） | **8 例**（定义式 / 四边方向 / 进入·拉直·退回三段时长与落点 / 中途打断连续性 / 单调有界 / 相位守卫 / **与 R3 可见性判据不打架**） |
+| 启动恢复 | `persist.rs`（`initial_pet_state` 返回 `dock` 并按边推回吸附位——**peek 是瞬态不跨重启**，启动恒全可见） | 既有 2 例 dock 兼容 |
+| 窗口层接线 | `window.rs`（`peek`/`dock_base`/`last_interaction`/`last_peek_tick` 四字段；compose 节拍推进 + 气泡在场即弹回；`IDT_PEEK` 250ms 边界检测 `peek_poll`；`update_click_through` 顺带刷交互时钟；点击分派——缩边态点击=拉直；拖动开始即脱停靠+探头归零；wander 触发加 `docked_edge.is_none()` 闸；隐藏/位置重置回吸附位；`IDT_PEEK` 挂表/销毁停表） | 编译通过；实机走查见验收矩阵 §3.2.3 |
+
+**三处实现决策（后人必读）**：
+
+1. **气泡在场禁止探头，探头中气泡出现即同帧弹回吸附位** —— 气泡画在窗口上部、随窗口平移，
+   探头会把它裁出屏外（审批按钮不可点 = 功能回归）。瞬移而非动画的理由：气泡出现的同一拍
+   窗口位置必须已全可见；读感是「它跳出来汇报」。
+2. **动画在外移量 `slide`（px）上插值，不在 exposure 上** —— 吸附位带 18px 预留间距，
+   比例插值会有「e=1 对应 slide=18」的 18px 假位移；且 `peek_advance` 用真实 dt，
+   隐藏/挂起不吃进度（R14 pause/resume 口径）。
+3. **探头中点击 = 拉直，不吃「撸一下」语义** —— 用户点的是「出来」，不是「表演」；
+   拉直态（0.82）的点击恢复原语义。R14 教训②照抄：探头期间**全部位移来源**让位
+   （wander 触发加闸、拖动开始即脱停靠），不缺一处。
+
+**回归（2026-10-05 实测，MSVC link 环境）**：真仓 `cargo test` **155 passed / 0 failed**
+（相对 HEAD 净增 **31** 条：model 21〔ambient 3 + drag 4 + dock 6 + peek 8〕/ xform 6 / settings 2 / persist 2；
+上会话口径「19 条」已含在其中并全部复绿）。吸附/探头的实机走查归用户侧
+（判据已入验收矩阵 §3.2.3 + 台账 E18）。
+
 ## 6. 待拍板
 
 1. **whale 的 `states.idle` / `states.work` 去留**：当前保留在清单、无渲染用途
@@ -442,7 +500,11 @@ const RUST_ROWS = ['idle', 'wait', 'failed', 'jump', 'wave', 'run', 'review', 'r
 2. **whale 图集 r7–r10（4 行待机变体，+1.33 MB）**：进 ambient 池做"待机不重样"，
    还是就停在 r0–r6？
 3. ~~**L1 范围**~~ —— **已决（2026-09-28）**：用户拍板 **M1 + M2 + M3，不含 M4**。
-   M4（拖动尾随，含前置 R13 拖动合帧）仍待拍板，见 §3.5。
+   **M4（拖动尾随）已于 2026-10-05 落地**（临界阻尼弹簧追目标，见 §5.3）—— 用户「继续」拍板。
+   其硬前置 R13 拖动合帧同日先落地
+   （`WM_MOUSEMOVE` 改为记最新目标 + `IDT_DRAG` 8ms 消费 + 松手强制 flush；
+   推进基准抽成 `model::advance_drag_target` 纯函数，harness 4 例单测 + 负向验证两项）。
+   ⇒ §3.5 的前置已清，M4 现在可以直接开工。
 4. **形变是否给用户开关**：`intensity=idle` 时是否降级为"仅呼吸"（对齐 `prefers-reduced-motion` 口径）？
    —— 本轮未做，**新增动效后这个问题的分量变重了**（此前只有 ±2px 呼吸，现在有可见的摇摆）。
    倾向：接 `intensity=idle`（DSH 推理档最低）时只呼吸不摇摆，与 deep 档的处理对称。

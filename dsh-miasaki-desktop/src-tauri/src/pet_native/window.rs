@@ -44,6 +44,45 @@ pub(crate) struct PetWin {
     /// R5:最近一次用户决策（官方 key → 发起时刻）——用于「点了但没生效」的回落提示。
     last_decision: Option<(String, std::time::Instant)>,
     press_pt: (i32, i32),
+    /// R13（2026-10-05）：拖动合帧 —— `WM_MOUSEMOVE` 只记**最新绝对目标**，
+    /// 由 `IDT_DRAG`（8ms）消费。`None` = 本节拍无新目标（已消费过或未在拖动）。
+    ///
+    /// **为什么存绝对目标而不是增量**：原实现每次 `MoveWindow` 后把 `press_pt` 推到当前光标
+    /// （增量式）。合帧后 `MoveWindow` 由定时器做，`WM_MOUSEMOVE` 里不再移动窗口 ⇒ 若仍沿用
+    /// 增量式，`press_pt` 会停留在按下点不动，`dx/dy` 变成「按下点 → 当前光标」的**累计位移**，
+    /// 反复叠加会飞掉。存绝对目标从根上避开。
+    drag_target: Option<(i32, i32)>,
+    /// M4（2026-10-05）：拖动尾随的弹簧状态（x / y 各一份）。
+    /// `None` = 当前不在尾随中（或刚开始拖动尚未初始化）⇒ 用 `pos` 与零速度起跳。
+    ///
+    /// **为什么存两份而不是一个 `[DragSpring; 2]`**：`Option` 的 `None` 能表达
+    /// 「未初始化」这个第三态，数组做不到（得再加一个 bool 标志位）。
+    drag_spring_x: Option<DragSpring>,
+    drag_spring_y: Option<DragSpring>,
+    /// M4：上一拍 `IDT_DRAG` 的时刻 —— 弹簧积分要用**真实经过的时间**而非写死 8ms
+    /// （写死的话，帧间隔抖动会让弹簧的刚度随负载漂移；且无法单测「dt 参数正确性」）。
+    last_drag_tick: std::time::Instant,
+    /// R13：`IDT_DRAG` 是否已挂上（`WM_MOUSEMOVE` 里只挂一次，不每事件重挂）。
+    /// 为什么要显式记而不用 `GetTimer` 反查：`SetTimer` 同 id 会**替换**计时周期，
+    /// 逐事件重挂等于把节拍永远往后推 ⇒ 合帧失效。
+    /// M4.1：当前停靠的边（ = 未停靠）。随拖动更新，也随 `pet.json` 落盘。
+    ///
+    /// **为什么要单独存而不能每次重算**：显隐切换时也会 `save_pet_pos`，那时位置未变、
+    /// 判定结果也相同，但**多屏枚举在某些时刻会失败**（`monitor_workspaces` 返回空 ⇒
+    /// 兜底成主屏 ⇒ 可能算出不同的边）。存住最后一次判定结果更稳。
+    docked_edge: Option<DockEdge>,
+    /// M4.1：peek 状态机（相位 + 当前外移量）。纯逻辑在 `model.rs`，窗口层只驱动节拍——
+    /// 相位推进搭 compose 33ms 节拍（真实 dt），边界检测（静置/光标压上）走 `IDT_PEEK` 轮询。
+    peek: PeekState,
+    /// M4.1：吸附基准位（slide=0 的窗口位置）。peek 动画以它为原点沿边外移，
+    /// 这样工作区几何在探头途中变化时只需重算 `dock_push_out`，动画位移不叠在旧位置上。
+    dock_base: (i32, i32),
+    /// M4.1：最近一次用户交互（光标压上角色 / 按下 / 拖动）——peek「静置 5s」判定的时钟。
+    /// 光标一直停在角色上时它持续刷新 ⇒ 桌宠不会从用户手底下缩走。
+    last_interaction: std::time::Instant,
+    /// M4.1：peek 相位推进的上一拍时刻（compose 内积分真实 dt 用）。
+    last_peek_tick: std::time::Instant,
+    dragging_timer_on: bool,
     dragged: bool,
     pos: (i32, i32),
     /// 主窗口当前实际显示状态（与 shared.hide 同步；show/hide 切换由 compose 单线程执行）。
@@ -113,7 +152,11 @@ impl PetWin {
                 }
                 self.render_dot();
                 pet_log_line(&format!("[native-pet] position reset -> {},{}\n", p.0, p.1));
-                save_pet_pos(p, want_hide);
+                // M4.1：位置重置不是拖动 ⇒ 无停靠语义（dock=None）；peek 同步归零
+                peek_reset(&mut self.peek);
+                self.docked_edge = None;
+                self.dock_base = p;
+                save_pet_pos(p, want_hide, None);
                 self.last_tick = now - std::time::Duration::from_secs(10); // 强制重绘
                 dirty = true;
             }
@@ -140,6 +183,12 @@ impl PetWin {
             if want_hide == self.shown {
                 unsafe {
                     if want_hide {
+                        // M4.1：隐藏前先回吸附位——悬浮球按 pos 定位，peek 外移量会让
+                        // 半颗球在屏外找不回；且重启恢复也应是「全可见的吸附位」。
+                        if self.peek.phase != PeekPhase::Off {
+                            peek_reset(&mut self.peek);
+                            self.pos = self.dock_base;
+                        }
                         ShowWindow(self.hwnd, SW_HIDE);
                         // 2026-09-29 托盘设置：`dot` / `both` 显示悬浮球；`tray` 只留托盘。
                         // `tray=tray` 时的找回入口是系统托盘菜单（`hide_to_tray` 那条路径）。
@@ -161,7 +210,8 @@ impl PetWin {
                     "[native-pet] {} (hide persisted)\n",
                     if want_hide { "hidden" } else { "shown" }
                 ));
-                save_pet_pos(self.pos, want_hide);
+                // M4.1：显隐切换**位置未变** ⇒ 必须保留既有 dock，不能顺手清成 None
+                save_pet_pos(self.pos, want_hide, self.docked_edge);
                 dirty = true;
             }
         }
@@ -260,7 +310,9 @@ impl PetWin {
                 (self.frames.can_wander(&s.mode), s.fleet_running)
             };
             let blocked = state != PetState::Idle || fleet_running;
-            if can_walk && !blocked {
+            // M4.1（R14 实机教训②）：停靠/探头期间必须**拦住全部位移来源**——
+            // wander 是拖动之外唯一的窗口位移源，缺一处就会出现「挂着探头姿态被平移出屏」。
+            if can_walk && !blocked && self.docked_edge.is_none() {
                 let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
                 self.action = Some(ActionSlot {
                     action: Action::Wander { dx: dir },
@@ -298,6 +350,34 @@ impl PetWin {
                 rand_range(AMBIENT_REST_MIN_MS, AMBIENT_REST_MIN_MS + AMBIENT_REST_VAR_MS),
             );
         }
+
+        // —— M4.1：peek 状态机节拍（相位推进）——
+        // 边界检测（静置 5s / 光标压上）在 `IDT_PEEK`（`peek_poll`）；这里只做两件事：
+        // ① 气泡在场 ⇒ 立即弹回吸附位：气泡画在窗口上部、随窗口平移，探头会把它裁出屏外
+        //    （审批按钮不可点 = 功能回归）。瞬移 + 气泡同帧出现，读感是「它跳出来汇报」；
+        // ② 推进过渡动画：真实 dt ⇒ 隐藏/挂起不吃进度（R14 pause/resume 口径），
+        //    slide 变化即置 dirty（present 的 ULW 按新 pos 落窗——缩边零绘制改动的落点）。
+        if self.shown && self.docked_edge.is_some() {
+            let edge = self.docked_edge.unwrap();
+            if self.alert.is_some() {
+                if self.peek.phase != PeekPhase::Off {
+                    peek_reset(&mut self.peek);
+                    self.pos = self.dock_base;
+                    dirty = true;
+                }
+            } else {
+                // dt 夹到 100ms：单拍被拖长（系统忙）时动画放缓而不是跳帧
+                let dt = now.duration_since(self.last_peek_tick).as_millis().min(100) as u32;
+                let before = self.peek.slide;
+                let role = character_local_rect();
+                peek_advance(&mut self.peek, role, edge, dt);
+                if self.peek.slide != before {
+                    self.pos = peek_window_pos(self.dock_base, edge, self.peek.slide);
+                    dirty = true;
+                }
+            }
+        }
+        self.last_peek_tick = now;
 
         if now.duration_since(self.last_tick).as_millis() >= self.anim_ms as u128 {
             self.last_tick = now;
@@ -787,6 +867,12 @@ impl PetWin {
             GetCursorPos(&mut p);
         }
         let transparent = self.is_transparent_at(p.x - self.pos.0, p.y - self.pos.1);
+        // M4.1：光标压在角色不透明像素上 = 用户交互 —— peek「静置 5s」的时钟源。
+        // 「总是可点」档位下 is_transparent_at 恒 false ⇒ 整窗都算感应区（与该档位的
+        // 「整个窗口矩形接住鼠标」语义一致）。
+        if !transparent {
+            self.last_interaction = std::time::Instant::now();
+        }
         self.set_click_through(transparent);
     }
 
@@ -810,6 +896,50 @@ impl PetWin {
                 "[native-pet] click-through toggles={} (now={})\n",
                 self.ct_switches, on
             ));
+        }
+    }
+
+    /// M4.1：peek 边界检测（`IDT_PEEK` 250ms 轮询）。
+    ///
+    /// **只做相位迁移的边界判定，不做动画**（动画在 compose 节拍推进）：
+    /// · `Off`：静置满 `PEEK_IDLE_MS` 且光标不在角色上、无气泡 → 进入缩边；
+    /// · 探头侧（`Peeking/Entering/Returning`）：光标压上（感应区）→ 拉直；
+    /// · `Straightened`：再次静置且光标离开 → 退回常驻档。
+    ///
+    /// 感应区口径与 R2 穿透判定同源（`is_transparent_at`）：光标压在角色不透明像素上。
+    /// 探头态下窗口半在屏外，光标本就到不了屏外部分 ⇒ 屏外部分天然不参与感应。
+    fn peek_poll(&mut self) {
+        if !self.shown || self.docked_edge.is_none() {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let idle =
+            now.duration_since(self.last_interaction).as_millis() >= PEEK_IDLE_MS as u128;
+        let mut p = Point { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut p);
+        }
+        let on_pet = !self.is_transparent_at(p.x - self.pos.0, p.y - self.pos.1);
+        if on_pet {
+            self.last_interaction = now;
+        }
+        match self.peek.phase {
+            PeekPhase::Off => {
+                if idle && !on_pet && self.alert.is_none() {
+                    peek_kick_idle(&mut self.peek);
+                }
+            }
+            PeekPhase::Peeking | PeekPhase::Entering | PeekPhase::Returning => {
+                if on_pet {
+                    peek_kick_engage(&mut self.peek);
+                }
+            }
+            PeekPhase::Straightened => {
+                if idle && !on_pet {
+                    peek_kick_return(&mut self.peek);
+                }
+            }
+            PeekPhase::Straightening => {}
         }
     }
 
@@ -1091,6 +1221,124 @@ impl PetWin {
             .unwrap_or(false)
     }
 
+    /// R13（2026-10-05）：消费「最新拖动目标」——把窗口移到 `drag_target` 并清空。
+    ///
+    /// **返回值 = 是否真的移动了**。`None` 表示本节拍无新目标（同一 8ms 内的重复事件已被合掉）。
+    /// 调用方据此决定要不要重画 —— 这是合帧省下来的开销的去处。
+    ///
+    /// **为什么必须独立成方法而不是内联进定时器分支**：松手时也要调它（强制 flush，
+    /// 见 `WM_LBUTTONUP`）—— 若内联，松手路径就得复制一份 MoveWindow + pos 赋值，
+    /// 而这两份一旦漂移就会出「松手后窗口停一拍」的 bug。
+    fn flush_drag_target(&mut self) -> bool {
+        // R13 的语义（M4 之前）：把窗口直接跳到最新目标。
+        // M4 起改为**弹簧推进**（见 `spring_step`）：窗口不再死板地粘在光标上，
+        // 而是「被拽着走」，松手时自然减速。
+        let target = match self.drag_target {
+            Some(t) => t,
+            None => return false,
+        };
+        // 首次进入拖动（或状态被重置）时用弹簧初始化，避免从上一只宠物的残值起跳。
+        if self.drag_spring_x.is_none() {
+            self.drag_spring_x = Some(DragSpring { pos: self.pos.0 as f32, vel: 0.0 });
+            self.drag_spring_y = Some(DragSpring { pos: self.pos.1 as f32, vel: 0.0 });
+        }
+        // 已有目标且弹簧已到位 ⇒ 本拍不动（省一次 MoveWindow）。
+        if let (Some(sx), Some(sy)) = (self.drag_spring_x, self.drag_spring_y) {
+            if spring_at_target(sx, target.0 as f32) && spring_at_target(sy, target.1 as f32) {
+                return false;
+            }
+        }
+        let dt = self.last_drag_tick.elapsed().as_millis().min(100) as u32;
+        self.last_drag_tick = std::time::Instant::now();
+        let sx = spring_step(self.drag_spring_x.unwrap(), target.0 as f32, dt);
+        let sy = spring_step(self.drag_spring_y.unwrap(), target.1 as f32, dt);
+        // 取整后再夹回 i32：f32 → i32 的 `as` 是截断，负坐标下会差 1px（长期累积成位置漂移）。
+        let nx = sx.pos.round() as i32;
+        let ny = sy.pos.round() as i32;
+        self.drag_spring_x = Some(sx);
+        self.drag_spring_y = Some(sy);
+        if nx == self.pos.0 && ny == self.pos.1 {
+            return false; // 亚像素级移动 ⇒ 不惊动窗口
+        }
+        unsafe { MoveWindow(self.hwnd, nx, ny, WIN_W, WIN_H, 1) };
+        self.pos = (nx, ny);
+        true
+    }
+
+    /// R13/M4.1：松手时**强制落到目标**并复位弹簧。
+    ///
+    /// **为什么松手不能只靠弹簧自己收敛**：临界阻尼弹簧理论上永远不到达目标
+    /// （渐近逼近），而落盘位置必须**精确等于**用户看到的目标 —— 否则
+    /// 「松手后桌宠停在离光标 0.4px 处」看着没事，但下次启动位置就偏了。
+    /// ⇒ 松手走「直接对齐 + 速度清零」，不继续积分。
+    fn end_drag(&mut self) {
+        if self.dragging_timer_on {
+            unsafe { KillTimer(self.hwnd, IDT_DRAG) };
+            self.dragging_timer_on = false;
+        }
+        if let Some((nx, ny)) = self.drag_target {
+            unsafe { MoveWindow(self.hwnd, nx, ny, WIN_W, WIN_H, 1) };
+            self.pos = (nx, ny);
+        }
+        self.drag_target = None;
+        self.drag_spring_x = None;
+        self.drag_spring_y = None;
+    }
+
+    /// M4.1：松手时判定边缘停靠，把窗口沿命中的边推出，返回该边（未命中则 `None`）。
+    ///
+    /// **架构红利（这轮最大的收获）**：缩边/吸附**不需要新增裁剪 blit**。
+    /// v5-roadmap §3.4 写「需要新增按边缘裁剪的 blit（现有 `blit_center_bottom` 不做裁剪）」——
+    /// **这条判断有误**：`blit_center_bottom` 一直在做**窗口边界**裁剪
+    /// （`window.rs:651/655` 的 `dy/dx < 0 || >= WIN_H/WIN_W` 就 `continue`）。
+    /// 而窗口是**分层窗**（`WS_EX_LAYERED`，`window.rs:1657`）⇒ 把窗口移到屏外，
+    /// 超出部分自然不绘制，**零绘制改动**即可得到「只露出一截」的效果。
+    ///
+    /// 若当初照 roadmap 的估计去写裁剪 blit，会白花一轮且引入一个高风险点
+    /// （裁剪逻辑一旦与 `xform` 的逆变换采样不一致，就会出现「看得见的点不到」）。
+    ///
+    /// **判据用「角色可见区域」而非窗口原点**（`character_local_rect` 排除了气泡带与左右留白）——
+    /// 否则那 18px 留白会被算成「离边缘还有 18px」，角色本体永远贴不到边。
+    fn apply_dock(&mut self) -> Option<DockEdge> {
+        let local = character_local_rect();
+        let role = Rect {
+            left: self.pos.0 + local.left,
+            top: self.pos.1 + local.top,
+            right: self.pos.0 + local.right,
+            bottom: self.pos.1 + local.bottom,
+        };
+        // 找到角色中心所在的工作区（跨屏时吸附到「当前那块屏」的边，不是主屏）
+        let work = monitor_workspaces()
+            .into_iter()
+            .find(|r| {
+                let cx = (role.left + role.right) / 2;
+                let cy = (role.top + role.bottom) / 2;
+                cx >= r.left && cx < r.right && cy >= r.top && cy < r.bottom
+            })
+            .unwrap_or(Rect { left: 0, top: 0, right: WIN_W, bottom: WIN_H });
+        let edge = match pick_dock_edge(role, work) {
+            Some(e) => e,
+            None => {
+                // 拖到屏幕中间 ⇒ 脱离停靠（必须清，否则显隐切换会把旧 dock 写回去）
+                self.docked_edge = None;
+                peek_reset(&mut self.peek);
+                return None;
+            }
+        };
+        // 推出：以**窗口位置**为基准（`dock_push_out` 内部把 role 的偏移换算回窗口位移）
+        self.docked_edge = Some(edge);
+        if let Some((nx, ny)) = dock_push_out(self.pos, local, work, edge) {
+            if (nx, ny) != self.pos {
+                unsafe { MoveWindow(self.hwnd, nx, ny, WIN_W, WIN_H, 1) };
+                self.pos = (nx, ny);
+            }
+        }
+        // M4.1：新吸附 ⇒ peek 从头计。吸附位即 slide=0 基准；静置 5s 后状态机会再缩边。
+        self.dock_base = self.pos;
+        peek_reset(&mut self.peek);
+        Some(edge)
+    }
+
     fn show_menu(&self, x: i32, y: i32) {
         unsafe {
             let enc = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
@@ -1185,6 +1433,17 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                 // R2:透明区域鼠标穿透——10ms 轮询光标并切换 WS_EX_TRANSPARENT
                 (*pet).update_click_through();
                 0
+            } else if wp == IDT_DRAG {
+                // R13:拖动合帧——8ms 消费最新目标。**同一节拍内无新目标时不 MoveWindow**
+                // （这正是合帧省下来的开销）；也据此重画，避免无谓的 present。
+                if (*pet).flush_drag_target() {
+                    (*pet).render_dot();
+                }
+                0
+            } else if wp == IDT_PEEK {
+                // M4.1:peek 边界检测（静置到期 / 光标压上）；动画推进在 compose 节拍
+                (*pet).peek_poll();
+                0
             } else {
                 (*pet).compose();
                 0
@@ -1195,10 +1454,15 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             KillTimer(hwnd, IDT_SINGLE_CLICK);
             (*pet).click_pending = false;
             (*pet).swallow_next_up = false;
+            // M4.1:按下即交互（peek 静置时钟;能收到本事件说明光标在可点区域上）
+            (*pet).last_interaction = std::time::Instant::now();
             let mut p = Point { x: 0, y: 0 };
             GetCursorPos(&mut p);
             (*pet).press_pt = (p.x, p.y);
             (*pet).dragged = false;
+            // R13:新按压序列 —— 上一轮若有残留目标（异常路径，如拖动中窗口被销毁），
+            // 在这里清掉并停表，避免下一次拖动时「跳到上一轮的目标」。
+            (*pet).end_drag();
             // v2:指针按下即打断环境编排/挥手/散步(拖拽与动作互斥);跳跃保留不打折反馈
             let interrupt = matches!(
                 &(*pet).action,
@@ -1218,15 +1482,37 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                 GetCursorPos(&mut p);
                 let dx = p.x - (*pet).press_pt.0;
                 let dy = p.y - (*pet).press_pt.1;
-                if dx.abs() + dy.abs() > 4 {
+                if (*pet).dragged {
+                    // —— 已在拖动中：把本事件的增量**推进到逻辑目标**上 ——
+                    // 推进规则见 `model::advance_drag_target`（那里的注释说明了
+                    // 为什么基准既不能用 `GetWindowRect` 的实时位置、也不能用按下点）。
+                    if dx != 0 || dy != 0 {
+                        (*pet).drag_target = Some(advance_drag_target(
+                            (*pet).drag_target,
+                            (*pet).pos,
+                            (dx, dy),
+                        ));
+                        (*pet).press_pt = (p.x, p.y);
+                    }
+                } else if dx.abs() + dy.abs() > 4 {
+                    // —— 阈值判定为「开始拖动」（沿用既有 `DRAG_THRESHOLD` 口径）
                     (*pet).dragged = true;
+                    // M4.1（R14 教训②）：拖动即脱离 peek/停靠——探头期间的全部位移来源
+                    // 都要让位给拖动目标；松手后 `apply_dock` 按新位置重新判定吸附。
+                    peek_reset(&mut (*pet).peek);
+                    (*pet).docked_edge = None;
+                    // R13（2026-10-05）：**只记最新绝对目标，不在这里 MoveWindow**。
+                    // 逐事件 MoveWindow 在 1000Hz 鼠标下是每秒千次窗口重定位；
+                    // 且同一节拍内的重复样本会污染 M4 拖动尾随要用的滞后估计。
+                    // 实际移动由 `IDT_DRAG`（8ms）消费 —— 见 `config::DRAG_COALESCE_MS`。
                     let mut r = Rect { left: 0, top: 0, right: 0, bottom: 0 };
                     GetWindowRect(hwnd, &mut r);
-                    let nx = r.left + dx;
-                    let ny = r.top + dy;
-                    MoveWindow(hwnd, nx, ny, WIN_W, WIN_H, 1);
-                    (*pet).pos = (nx, ny);
+                    (*pet).drag_target = Some((r.left + dx, r.top + dy));
                     (*pet).press_pt = (p.x, p.y);
+                    if !(*pet).dragging_timer_on {
+                        (*pet).dragging_timer_on = true;
+                        SetTimer(hwnd, IDT_DRAG, DRAG_COALESCE_MS, 0);
+                    }
                 }
             }
             0
@@ -1247,6 +1533,19 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                     return 0;
                 }
             }
+            // M4.1：探头中（含缩边/退回过渡）点击 = 拉直（R14：点击 → engage 档 0.82），
+            // 不吃「撸一下」语义——用户点的是「出来」，不是「表演」。拉直态（Straightened）
+            // 的点击走原语义（跳/唤起）。
+            if !(*pet).dragged
+                && matches!(
+                    (*pet).peek.phase,
+                    PeekPhase::Peeking | PeekPhase::Entering | PeekPhase::Returning
+                )
+            {
+                peek_kick_engage(&mut (*pet).peek);
+                (*pet).last_interaction = std::time::Instant::now();
+                return 0;
+            }
             if !(*pet).dragged {
                 // M1.3 单击语义:等待审批或主窗口不可见 → 立即唤起主窗口(保留有用语义);
                 // 否则 → 去抖 250ms 判定是否双击,到期执行「撸一下」——不再无条件抢焦点(D5)
@@ -1260,8 +1559,13 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                     (*pet).click_pending = true;
                 }
             } else {
+                // R13：**先 flush 再落盘**。顺序有讲究——`save_pet_pos` 读的是 `(*pet).pos`，
+                // 若此时目标还压在 `drag_target` 里，落盘的就是上一拍的位置（松手漂移）。
+                (*pet).end_drag();
+                // M4.1：松手时判定边缘停靠并推出。**在落盘之前**做——落盘要记的是吸附后的位置。
+                let docked = (*pet).apply_dock();
                 let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
-                save_pet_pos((*pet).pos, hide);
+                save_pet_pos((*pet).pos, hide, docked);
                 // M1.4:拖动结束同步悬浮球(隐藏后恢复入口与桌宠位置不脱节,D6)
                 (*pet).render_dot();
             }
@@ -1283,6 +1587,8 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             0
         }
         WM_RBUTTONDOWN => {
+            // M4.1:右键菜单是交互（peek 静置时钟;探头态下菜单同帧弹回吸附位,菜单全可见）
+            (*pet).last_interaction = std::time::Instant::now();
             let mut p = Point { x: 0, y: 0 };
             GetCursorPos(&mut p);
             (*pet).show_menu(p.x, p.y);
@@ -1290,6 +1596,8 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
         }
         WM_DESTROY => {
             KillTimer(hwnd, IDT_HIT); // R2:光标轮询随窗口一起停
+            KillTimer(hwnd, IDT_DRAG); // R13:合帧定时器同理（销毁时可能仍挂着）
+            KillTimer(hwnd, IDT_PEEK); // M4.1:peek 边界轮询同理
             PostQuitMessage(0);
             0
         }
@@ -1454,7 +1762,8 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
     unsafe {
         // 显式按监视器 DPI 感知，保证窗口物理尺寸正确
         SetProcessDpiAwarenessContext(-4);
-        let (x, y, restore_hide) = initial_pet_state();
+        // M4.1：第四个返回值 = 落盘的停靠边（pet.json `dock` 字段）
+        let (x, y, restore_hide, restore_dock) = initial_pet_state();
         // 悬浮球球面初值 = 当前主题（spawn 时从 prefs.json 载入）→ 隐藏态冷启动第一帧即正确球面
         let theme0 = shared.lock().map(|s| s.theme.clone()).unwrap_or_else(|_| "pure".to_string());
         let mut pet = Box::new(PetWin {
@@ -1478,6 +1787,17 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             decision_seq: 0,
             last_decision: None,
             press_pt: (0, 0),
+            drag_target: None,
+            drag_spring_x: None,
+            drag_spring_y: None,
+            last_drag_tick: std::time::Instant::now(),
+            docked_edge: None,
+            // M4.1：peek 全 Off 起步（落盘的停靠边在窗口创建后立即恢复并吸附，见下方）
+            peek: PeekState::off(),
+            dock_base: (x, y),
+            last_interaction: std::time::Instant::now(),
+            last_peek_tick: std::time::Instant::now(),
+            dragging_timer_on: false,
             dragged: false,
             pos: (x, y),
             shown: !restore_hide,
@@ -1546,12 +1866,21 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         pet.dot_hwnd = dot_hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, pet_ptr as isize);
         SetWindowLongPtrW(dot_hwnd, GWLP_USERDATA, pet_ptr as isize);
+        // M4.1：落盘了停靠边 ⇒ 启动即吸附（persist 已推回吸附位，这里再走一遍 apply_dock
+        // 以防绝对兜底路径没找到工作区——它按几何重判边，判不出就清掉，行为安全）
+        if restore_dock.is_some() {
+            pet.docked_edge = restore_dock;
+            pet.apply_dock();
+        }
         // 关键:WM_CREATE 期间 USERDATA 尚未设置,wnd_proc 的 SetTimer 不会执行;
         // 在此(USERDATA 就位后)显式启动 33ms 动画定时器
         SetTimer(hwnd, IDT_COMPOSE, 33, 0);
         // R2:透明的光标轮询定时器（独立于 compose；穿透状态下窗口收不到鼠标消息，
         // 只能靠主动轮询恢复可点击判定）
         SetTimer(hwnd, IDT_HIT, HIT_POLL_MS, 0);
+        // M4.1:peek 边界检测轮询（静置到期 / 光标压上）——独立低频定时器，
+        // 不搭 10ms 的 IDT_HIT（那是两个窗口各挂一份的高频轮询，且 dot 窗也会触发）
+        SetTimer(hwnd, IDT_PEEK, PEEK_POLL_MS, 0);
         // 2026-09-24:悬浮球自己的命中轮询（悬停放大 + 透明处穿透）——与主窗同频的独立定时器，
         // 挂在 dot 窗口上，由 dot_proc 消费
         SetTimer(dot_hwnd, IDT_HIT, HIT_POLL_MS, 0);
