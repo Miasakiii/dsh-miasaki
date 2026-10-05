@@ -57,7 +57,6 @@
     "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/baseline/index.original.js",
     "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/baseline/index.patched.js",
     "dsh-miasaki-ssh/cordis.patch.yml",
-    "dsh-miasaki-ssh/lib/store.js",
     "dsh-miasaki-ssh/pnpm-workspace.yaml",
     "dsh-miasaki-ssh/test/store.test.js"
   ]

@@ -318,3 +318,105 @@ test('P1：新增的只读端点同样过围栏 —— 跨站请求 403 且不�
   assert.equal(res.statusCode, 403, '只读端点也不能绕过围栏')
   assert.equal(res.headers['Access-Control-Allow-Origin'], undefined)
 })
+
+/* ---------- ⑥ /api/verifiers（2026-10-05，G4 验证者覆盖上屏） ---------- */
+//
+// 文档原话：「面板不告警就只是图表页」。本组守的是「验证者候选/覆盖度此前只在 CLI 输出里，
+// 面板答不出『这条高风险任务该派谁验证』」。判据单一来源不变：端点 spawn 判定层 CLI，
+// **不重复实现异构判定**（本仓纪律：各写一份必然漂移）。
+
+test('verifiers：无参数 → 概览模式（--check），并把「模型未声明」这一前提如实上屏', async () => {
+  const calls = []
+  const res = await withJudgement(
+    (script, args) => {
+      calls.push([script, args.join(' ')])
+      return JSON.stringify({ ok: true, agents: 10, agents_with_explicit_model: 0, verdicts: 2, problems: [] })
+    },
+    () => call(fakeReq({ url: '/api/verifiers', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, true)
+  assert.equal(body.mode, 'overview')
+  assert.equal(body.agents_with_explicit_model, 0,
+    '「无 agent 显式声明模型」是本机真实状态（8 个活动 agent 全为 cli-default）⇒ 模型级异构不可判定')
+  assert.equal(body.verdicts, 2)
+  assert.deepEqual(calls[0], ['workers/graph/verifier-pick.mjs', '--check --json'])
+})
+
+test('verifiers：?for=<producer> → 候选模式，自验被排除（不在候选里出现产出者自己）', async () => {
+  const calls = []
+  const res = await withJudgement(
+    (script, args) => {
+      calls.push([script, args.join(' ')])
+      return JSON.stringify({
+        producerId: 'claude', minLevel: 'agent',
+        candidates: [
+          { agentId: 'bl', level: 'vendor', levelRank: 3, available: true, notes: [] },
+          { agentId: 'pi', level: 'vendor', levelRank: 3, available: false, unavailableReason: '开关未开', notes: [] },
+        ],
+        warnings: [],
+      })
+    },
+    () => call(fakeReq({ url: '/api/verifiers?for=claude', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.mode, 'candidates')
+  assert.equal(body.producerId, 'claude')
+  const ids = body.candidates.map((c) => c.agentId)
+  assert.ok(!ids.includes('claude'), '异构等级 none = 自验，判定层已排除；面板不得把它显示成候选')
+  assert.deepEqual(calls[0], ['workers/graph/verifier-pick.mjs', '--for claude --json'])
+  assert.deepEqual(calls[0][1], '--for claude --json', '参数直传，不在端点里拼字符串')
+})
+
+test('verifiers：不可用候选必须带原因 —— 面板要能区分「没有候选」与「候选不可用」', async () => {
+  const res = await withJudgement(
+    () => JSON.stringify({ producerId: 'x', candidates: [
+      { agentId: 'y', level: 'agent', available: false, unavailableReason: '首跑无 status.json', notes: [] },
+    ] }),
+    () => call(fakeReq({ url: '/api/verifiers?for=x', headers: LOOPBACK })),
+  )
+  const body = JSON.parse(res.body)
+  assert.equal(body.candidates[0].available, false)
+  assert.match(body.candidates[0].unavailableReason, /首跑/,
+    '不可用原因必须透出：只显示「0 个可用」Operator 无从判断该换人还是该初始化')
+})
+
+test('verifiers：判定层退出非 0 但 stdout 合法 → 照常 200（无候选不是故障）', async () => {
+  const res = await withJudgement(
+    () => { const e = new Error('exit 1'); e.stdout = '{"producerId":"claude","candidates":[],"warnings":[]}'; throw e },
+    () => call(fakeReq({ url: '/api/verifiers?for=claude', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200, '「无可用验证者」是正常状态，不该显示成错误')
+  assert.deepEqual(JSON.parse(res.body).candidates, [])
+})
+
+test('verifiers：判定层崩溃 → ok:false 且不 500（面板整页不该挂）', async () => {
+  const res = await withJudgement(
+    () => { throw new Error('boom') },
+    () => call(fakeReq({ url: '/api/verifiers', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, false)
+  assert.match(body.error, /boom/)
+})
+
+test('verifiers：空 for（?for= 或 ?for=%20）按概览处理，不把空产出者喂给判定层', async () => {
+  const calls = []
+  await withJudgement(
+    (script, args) => { calls.push(args.join(' ')); return JSON.stringify({ ok: true, agents: 1, agents_with_explicit_model: 1, verdicts: 0, problems: [] }) },
+    () => call(fakeReq({ url: '/api/verifiers?for=%20', headers: LOOPBACK })),
+  )
+  assert.deepEqual(calls, ['--check --json'], '空白产出者会让判定层报「未知 agent」，面板应回落到概览')
+})
+
+test('verifiers：同样过围栏 —— 跨站 403 且不带 CORS 头', async () => {
+  const res = await call(fakeReq({
+    url: '/api/verifiers?for=claude',
+    headers: { host: '127.0.0.1:39801', 'sec-fetch-site': 'cross-site' },
+  }))
+  assert.equal(res.statusCode, 403)
+  assert.equal(res.headers['Access-Control-Allow-Origin'], undefined)
+})

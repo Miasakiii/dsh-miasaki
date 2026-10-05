@@ -398,6 +398,7 @@ body {
     <div class="jcard"><h3>可派集</h3><div id="jDispatchable" class="jmeta">加载中…</div></div>
     <div class="jcard"><h3>能力断层</h3><div id="jGaps" class="jmeta">加载中…</div></div>
     <div class="jcard"><h3>最近机器事件</h3><div id="jEvents" class="jmeta">加载中…</div></div>
+    <div class="jcard"><h3>验证者覆盖</h3><div id="jVerifiers" class="jmeta">加载中…</div></div>
   </div>
   <script>
   (async function () {
@@ -418,6 +419,21 @@ body {
     $('jEvents').innerHTML = !e.ok ? '不可用：' + esc(e.error)
       : '<div>共 ' + e.total + ' 条</div>' + e.events.slice().reverse()
         .map((x) => '<div class="jrow">' + esc(x.event) + (x.task_id ? ' · ' + esc(x.task_id) : '') + '</div>').join('');
+    // G4 验证者覆盖（2026-10-05）：`--check` 的全局概览。
+    // **为什么上屏的是「显式声明 model 的数量」而不是一个绿灯**：本机 8 个活动 agent 的
+    // `manifest.model` 全为 `cli-default` ⇒「不同模型」这一级异构在当前数据下**无法判定**
+    // （把 cli-default 当真值会给出虚假的异构结论）。判定层对此的处理是降级到厂商级并留 notes。
+    // 面板必须如实显示这个前提，而不是显示「异构已就绪」——否则 Operator 会据此误判
+    // 「验证一定独立」。厂商表缺失时同理（保守降级 + 说明原因，绝不假装异构）。
+    const v = await j('/api/verifiers');
+    $('jVerifiers').innerHTML = !v.ok ? '不可用：' + esc(v.error)
+      : (v.mode !== 'overview' ? '<div>未知模式：' + esc(v.mode) + '</div>'
+        : '<div>agent ' + v.agents + ' · 显式声明模型 ' + v.agents_with_explicit_model
+          + ' · 已有结论 ' + v.verdicts + '</div>'
+          + (v.agents_with_explicit_model === 0
+            ? '<div class="jrow">⚠ 无 agent 显式声明模型 ⇒「模型级异构」不可判定，验证强度实际按厂商级</div>'
+            : '')
+          + (v.problems || []).map((p) => '<div class="jrow">⚠ ' + esc(p) + '</div>').join(''));
   })();
   </script>
 

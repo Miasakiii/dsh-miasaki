@@ -467,6 +467,30 @@ async function handleRequest(req, res) {
     }
   }
 
+  // GET /api/verifiers → 验证者候选 + 验证状态（G4：异构验证的可视化）
+  //
+  // 两个模式（判定层 CLI 的既有能力，端点只做转发与形状收敛，不重复实现判定）：
+  //   · `?for=<producerId>` → 该产出者的候选验证者（按异构强度排序，自验已排除）
+  //   · 无参数             → 全局概览（`--check`：agent 数、显式声明 model 的数量、已有 verdict 数）
+  //
+  // **为什么面板需要它**：`verdict.json` 契约（G4）要求「验证者必须署名、reject 必须给
+  // findings、每条 finding 必须有 evidence」——但产者侧**看不到**「谁有资格验我」。
+  // 一条高风险任务该派谁验证、当前有谁可派，判据此前只在 CLI 输出里 ⇒ 面板无法回答。
+  if (req.method === 'GET' && pathname === '/api/verifiers') {
+    const producer = (url.searchParams.get('for') || '').trim();
+    try {
+      if (producer) {
+        // 参数直传判定层：CLI 自身对未知 agent 返回空候选而非报错（保守语义，不猜）。
+        const out = runJudgement('workers/graph/verifier-pick.mjs', ['--for', producer, '--json']);
+        return sendJSON(res, Object.assign({ ok: true, mode: 'candidates' }, out));
+      }
+      const out = runJudgement('workers/graph/verifier-pick.mjs', ['--check', '--json']);
+      return sendJSON(res, Object.assign({ ok: true, mode: 'overview' }, out));
+    } catch (e) {
+      return sendJSON(res, { ok: false, error: String((e && e.message) || e) });
+    }
+  }
+
   // GET /api/events?limit=N → 机器事件流尾部（G0：唯一真相的最近若干条）
   if (req.method === 'GET' && pathname === '/api/events') {
     const n = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 200);

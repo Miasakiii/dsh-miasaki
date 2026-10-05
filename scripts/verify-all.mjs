@@ -221,9 +221,14 @@ function planFleet() {
   // 「拒绝」分支 —— 故用夹具覆盖「放行」与冷启动降级，避免「闸门把该派的也拒了」这类
   // 只会在下次真派单时才暴露的缺陷。
   checks.push({ line: 'fleet', name: 'test dispatch-gate (G1 可派闸门)', cmd: process.execPath, args: [join(dir, 'tests/dispatch-gate.test.mjs')], cwd: dir })
-  // P1 面板判定层区块（2026-09-30）：面板此前只有「在线数/任务数/成本」——判定层的事实
-  //（可派集与不可派原因、能力断层、机器事件流）一条都没上屏。这条断言钉住「区块 + 三个端点 +
-  // 判定口径同源」三件事都在，避免它被后续改版静默删掉。
+  // P1 面板判定层区块（2026-09-30；2026-10-05 扩到 G4 验证者覆盖）：面板此前只有
+  // 「在线数/任务数/成本」——判定层的事实（可派集与不可派原因、能力断层、机器事件流、
+  // 验证者候选与覆盖度）一条都没上屏。这条断言钉住「区块 + 端点 + 判定口径同源 +
+  // 异构降级前提上屏」都在，避免它们被后续改版静默删掉。
+  //
+  // **纪律：新增只读端点必须同改这份 `need` 清单**（与「跨线字段值域三处同源」同族）。
+  // 清单是显式登记而非自动发现 —— 不登记的后果不是「闸门变红」，而是**下一个人改版时
+  // 删掉端点也没有任何东西会红**。这正是本仓栽过多次的「静默回收」形态。
   checks.push({
     line: 'fleet',
     name: 'fleet-monitor 判定层区块 (P1)',
@@ -238,10 +243,18 @@ function planFleet() {
         "['可派集区块','jDispatchable'],",
         "['能力断层区块','jGaps'],",
         "['机器事件区块','jEvents'],",
+        // G4 验证者覆盖（2026-10-05）：文档原话「面板不告警就只是图表页」——
+        // 验证者候选/覆盖度此前只在 CLI 输出里，面板答不出「该派谁验证」。
+        "['验证者区块','jVerifiers'],",
         "['端点 dispatchable','/api/dispatchable'],",
         "['端点 gaps','/api/gaps'],",
         "['端点 events','/api/events'],",
+        "['端点 verifiers','/api/verifiers'],",
         "['判定口径同源（spawn CLI 而非重写）','runJudgement'],",
+        // 「模型未声明 ⇒ 模型级异构不可判定」必须上屏：本机 8 个活动 agent 的
+        // manifest.model 全为 cli-default，判定层会降级到厂商级。若面板不显示这个前提，
+        // Operator 会据此误判「验证一定独立」—— 即「假装异构」，与判定层的保守降级相反。
+        "['异构降级前提如实上屏','agents_with_explicit_model'],",
         "];",
         "const miss=need.filter(x=>!h.includes(x[1])&&!s.includes(x[1])).map(x=>x[0]);",
         "if(miss.length){console.error('[panel] 缺失：'+miss.join(' / '));process.exit(1)}",

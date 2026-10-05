@@ -194,7 +194,19 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > **勾选口径**：验完一项把 `- [ ]` 改成 `- [x]`，行尾补日期与一句结论（可指向截图/证据路径）。
 > 判据正文在各 §（括号内标注），本节只做登记、不重复判据。
 >
-> **状态：9 / 114 项已验收**（**分母口径 = §3.0 台账里的 checkbox 总数**）。
+> **状态：18 / 114 项已验收**（**分母口径 = §3.0 台账里的 checkbox 总数**）。
+> **2026-10-05 第三批增勾 8 项**：**A2 / A10 / A24**（三条红线 —— 等效环境实机，真协议 sshd × 隔离实例
+> 全链驱动，20/20 · 17/17 · 16/16）、**A18**（WS upgrade 轴补齐 + 票据门旁证）、**B8 / D4**（0.2.0-rc.2
+> 重核，D4 的 404 分支补齐）、**K1**（面板四组判据 + 非快照反例）、**M1**（rc.2 升级后 12 目标全 patched）。
+> 证据住 `_refs/scripts-archive/accept-2026-10/`（batch3-ssh / batch4-fleet）；
+> **I6** 查明 unknown 分支在自制壳/浏览器路径**结构性不可达**（launcher 恒注入 `DSH_PROFILE`），
+> 唯一可达场是官方桌面 profile，留用户 10 秒目检。
+> **2026-10-05 第二次对账**：**I5**（usage 同源围栏）当日**真机复验通过后勾选**（重启 `dsh web`
+> 起宿主（pid 55428），五条真实路由 —— `session` / `global` / `heatmap` / `config` / `reset`(POST)，
+> **清单取自源码** `lib/index.js:982-1005` —— 在「非环回 Host」与「跨站 Origin」两轴全得 403、
+> 无 CORS 头，同源仍 401（进业务层），跨站 POST `/reset`（清空账本的写操作）同样 403）⇒ 已勾数
+> **9 → 10**，分母不变。⚠ **复验者务必从源码取路由清单**：内核先按 exact 路由匹配，未注册路径在
+> 任何轴都恒 404 —— 与 `test/fence.test.mjs:130` 的 403 断言不矛盾（那是「围栏先于 method 检查」）。
 > **2026-10-05 机器对账订正**：原文写「7 / 109」，逐条数出来是「9 / 114」——
 > 勾选数少记 2（**K2a / K2b-1** 两个子项已勾但没计入），分母少记 5（其中本批新增 **E18 M4.1 边缘停靠**
 > 与 **E23 启动片头** 两项，其余 3 项是 09-30 之后补立未同步的存量漂移）。
@@ -241,7 +253,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 
 - [ ] A1 真实连接：新建主机（用户名必填、不默认 root）→ 密码/私钥/agent 连接成功且**终端有输出**
       （**对账 2026-09-29**：连接核心两度实证 —— 09-16 U2 验收 P0（`connected=true` + 终端 43 行）、09-26 A16 页面路径（终端出现 Welcome + 提示符）；09-26 同日「实机四修」改过连接表单（端口回填 / tryKeyboard / 居中弹层）⇒ 整项按当前版本复跑）
-- [ ] A2 指纹闭环：首连 TOFU → 指纹变更 mismatch（无「仍然继续」）→ 忘记 → 重连重新 TOFU
+- [x] A2 指纹闭环：首连 TOFU → 指纹变更 mismatch（无「仍然继续」）→ 忘记 → 重连重新 TOFU —— **2026-10-05 已验（等效环境：真协议 sshd × 隔离实例 API/WS 全链 20/20）**：首连 TOFU 挂起签发 token 且展示**真实指纹** → accept → connected + 终端有输出；服务端换钥重连 ⇒ `HOST_KEY_MISMATCH` 结构化拒绝且**不签发任何确认 token**（API 层不存在「仍然继续」的入口；伪造 token accept 得 400）→ forget 主机 → 重连**重新走 TOFU**（展示新指纹 B）→ 重信 → connected + 终端有输出。证据 `_refs/scripts-archive/accept-2026-10/batch3-ssh/probe-a2-result.json`（弹层视觉形态归 A19 批目检）
       （**对账 2026-09-29**：U2 验收 P0b 曾 FAIL —— TOFU 入口被 `STALE_SHELL` 横幅覆盖（已修未复验）；mismatch / 忘记 / 重信全环从未实机跑过。安全红线级）
 - [ ] A3 attach 恢复：切对话/画布再回来 scrollback 回放；同主机重复打开不重复 connect
       （**对账 2026-09-29**：D2「真协议零损失」覆盖「重复打开不重复连接 + iframe 未重载 + 30 次开关零帧」；scrollback 回放未单独判 ⇒ 复跑）
@@ -255,7 +267,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 - [ ] A8 入口去重（B1/B2）：会话窗口右上角**不得**有独立 SSH 按钮；首屏 hero **有**且点得开；设置/轨迹页**不出现**
 - [ ] A9 A0 三种意图：送出选中内容 / 最近 40 行 / 让 Agent 看这个错误 —— 首行 `[SSH <标签> · <用户>@<主机>:<端口>]` 格式正确
       （**对账 2026-09-29**：D3 覆盖剪贴板首行格式与状态栏文案；三项意图完整流未跑）
-- [ ] A10 U2 多 shell 与写权：同主机多开互不串扰、接管后原 owner 转只读、某 shell 退出不影响其余
+- [x] A10 U2 多 shell 与写权：同主机多开互不串扰、接管后原 owner 转只读、某 shell 退出不影响其余 —— **2026-10-05 复验通过（修复后首跑；真协议 sshd 逐 channel 日志 17/17）**：双 shell 输入精确路由 A→chan#1 / B→chan#2（**09-16「三标签全落 ch-1」高危反例被正面推翻**，决定性判据打在服务端 chan-data 日志）；只读 viewer 输入零进 PTY（服务端零 chan-data）；`shell.takeover` 回执 `write.granted` / 原 owner 即时收 `write.revoked`（只读条数据源）+ 行为双向成立；单 shell exit 后其余存活可用。证据 `_refs/scripts-archive/accept-2026-10/batch3-ssh/probe-a10-result.json`（U2.4 工作区记忆是独立项 A11，未随本项销账）
       （**对账 2026-09-29**：**09-16 实机验收 FAIL** —— 三标签输入实测全落 ch-1（U2-C 高危）+ 首连 TOFU 入口被覆盖等 4 处产品缺陷，已修（单测 110 → 113）但**复验未跑**（`_refs/scripts-archive/ssh-u2-accept/u2-accept-result.json` `allPassed:false`）。这是「回归无声地作用到错误 shell」的静默失效形态，**必须复跑**）
 - [ ] A11 U2 工作区记忆 + 精确恢复：同标签页刷新恢复形状、新标签页不继承；`vim`/`top` 刷新后逐行一致
       （**对账 2026-09-29**：同上轮 FAIL 项 —— P5a 半 PASS（标签数恢复但集合错乱 `[#3,#2,#3]`）、P5b/P5c FAIL 已修未复验；U2.4「vim/top 逐行一致」当时因 addon 未上线**未执行**）
@@ -265,14 +277,14 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 - [ ] A15 **keepalive 长连接**： NAT/防火墙静默断开场景（或对端 `sleep` 模拟）约 60s 内连接报 TIMEOUT 而不是挂在「已连接」；终端有输出时连接不断
 - [x] A16 **A1 工具面实机** —— **2026-09-26 已验（三轮：Agent 路径 → 页面路径 → `ssh_session_read`）**：`agentTools: true` 后三工具真进模型工具面（会话 `request/header` 的 54 个工具含 `ssh_exec` / `ssh_hosts` / `ssh_session_read`）；`ssh_hosts` 行首 `id` 可直接当 `hostId`；L0 免审批直通（`uname -a` exit 0）；L1 弹卡「允许」→ 远端收到且 exit 0、「拒绝」→ `APPROVAL_REJECTED` 且**远端 sshd 零新增记录**；人在页面连接主机（终端出现 Welcome + 提示符）后 `ssh_session_read` **读回该终端原文**（含手敲 `ls` 的输出），紧接着 `ssh_exec` 在同一连接上跑通（远端日志 `shell: opened` → `exec: "uname -a"`，**J2 通道分离实证**）；审计落盘 `dataDir/exec-audit.jsonl` 可跨重启查。**页面路径必须与 Agent 路径同口径实测**（本轮靠人工复验才照出 REST 404 / attach 400 两处 connId 口径漂移 —— Agent 走 store 直查永远照不到）。基座 `_refs/scripts-archive/ssh-a1-live/`（真 `ssh2.Server` + 隔离 dataDir + 一次性密钥）
 - [ ] A17 工作区布局：SSH 页 = 左主机导航（搜索 + 分组 +「N 个连接保留中」）+ 右标签区 + 底部状态栏，**无整页连接库**（§3.6「工作区布局」行；U1 期（2026-09-12）待实机合并验收积压至今）
-- [ ] A18 围栏不回归：非环回 Host / 跨站打 `/ssh/api/*` → **403**；伪造 origin 的 WS upgrade 被拒（§3.6「围栏不回归」行；HTTP 层**可代跑**）
+- [x] A18 围栏不回归：非环回 Host / 跨站打 `/ssh/api/*` → **403**；伪造 origin 的 WS upgrade 被拒（§3.6「围栏不回归」行；HTTP 层**可代跑**）—— **2026-10-05 已验（0.2.0-rc.2 实例，WS 轴补齐）**：HTTP 两轴 403（无 CORS 头）+ **WS upgrade 伪造 Host / 伪造 Origin 均 403**（fence 先行，拒后 socket 销毁）；环回无凭据 upgrade 落**票据门**（WS attach 无票 `TICKET_INVALID` 即 close，拿不到任何终端访问权）
       （**2026-09-29 代跑已核**：伪造 `Host: evil.example.com` 与跨站 `Origin` 两轴打 `/ssh/api/state` 均 **403**（3080 实例当前加载 bundle）；WS upgrade 轴需浏览器环境，未代跑）
 - [ ] A19 弹层形态：新建 / 编辑主机、连接密码、TOFU 确认全部为**居中悬浮窗**——1540×1042 / 640×820 / 480×640 三档 + 连接密码 + 无壳五场景下与右下角主题球**重叠面积为 0**、确认键点得到（§3.6「弹层形态」行；2026-09-26 探针 5/5 过 —— 宿主页加载真实壳注入产物，**live 未验**）
 - [ ] A20 连接诊断：主机菜单 `⋯` →「连接诊断」与编辑弹窗「测试连接」开出诊断面板——结论条五态（可达 / 不是 SSH / 超时 / 拒绝 / 认证方式受限）+ 事实格；「查询公网出口 IP」**不点不查**、「探测认证方式」**不点不发**（点了也只发协议自带 `none`，服务器侧无失败密码记录）；「复制报告」是可粘贴纯文本（§3.6「连接诊断」行）
 - [ ] A21 只读条：**未连接 / 已断开 / 未开 shell 时不出现**「只读：另一个窗口正在此终端输入」黄条（旧版常驻）；仅会话活着且被其他窗口接管时出现，点「接管写入」能夺回（§3.6「只读条」行；2026-09-26 修复未 live 验）
 - [x] A22 **G1 SFTP 自愈** —— **2026-09-28 已验**（关子系统后 list 仍 200 且服务端子系统计数再 +1；真实例 × 真协议 sshd × 真实路由，23/23 中的 G1 十二项；证据 `_refs/scripts-archive/ssh-g1g2-live/evidence.txt`）
 - [x] A23 **G2 慢 viewer 背压** —— **2026-09-28 已验**（洪水 33.5MB 过 WS、慢 consumer 收 `output.paused` 且零 1011、drain 后 `output.resumed`、连接全程 connected；**状态栏文案的视觉层待下次重启顺手复验**）
-- [ ] A24 **U3 跳板与本地转发**（§3.6 判据行 2026-09-29 补立）：① **跳板**：主机编辑器「经由跳板」选一条**已受信任**主机 → 目标连接经其 `forwardOut` direct-tcpip 通道建连成功且终端有输出；跳板从未连过 / 未就绪 / 正在等指纹 ⇒ `JUMP_UNAVAILABLE` 结构化可读拒绝（**不挂死、不静默失败** ——「不把发起认证暴露成隐式能力」）；② **本地转发**：编辑主机加规则（本机 `127.0.0.1:localPort` → 远端 `remoteHost:remotePort`）→ 连接建立后自动监听、**本机端口字节级往返通**、断开自动撤下；端口被占（`EADDRINUSE`）/ 服务端拒绝转发 ⇒ 状态栏可见异常且**连接状态不翻 error**（终端照常可用）；③ **反例（静默失效红线）**：端口在听 ≠ 转发通 —— 必须字节往返判据。**需外部资源**（跳板 + 目标两台真实机器，或本地假 sshd + 真 echo 服务的等效环境）
+- [x] A24 **U3 跳板与本地转发**（§3.6 判据行 2026-09-29 补立）：① **跳板**：主机编辑器「经由跳板」选一条**已受信任**主机 → 目标连接经其 `forwardOut` direct-tcpip 通道建连成功且终端有输出；跳板从未连过 / 未就绪 / 正在等指纹 ⇒ `JUMP_UNAVAILABLE` 结构化可读拒绝（**不挂死、不静默失败** ——「不把发起认证暴露成隐式能力」）；② **本地转发**：编辑主机加规则（本机 `127.0.0.1:localPort` → 远端 `remoteHost:remotePort`）→ 连接建立后自动监听、**本机端口字节级往返通**、断开自动撤下；端口被占（`EADDRINUSE`）/ 服务端拒绝转发 ⇒ 状态栏可见异常且**连接状态不翻 error**（终端照常可用）；③ **反例（静默失效红线）**：端口在听 ≠ 转发通 —— 必须字节往返判据。**需外部资源**（跳板 + 目标两台真实机器，或本地假 sshd + 真 echo 服务的等效环境）—— **2026-10-05 已验（矩阵明文允许的等效环境：本机真协议 sshd ×2 + 真 echo 服务，16/16）**：① 跳板 forwardOut direct-tcpip 通道实证（跳板服务端日志 `dst=127.0.0.1:2403`）+ 目标真握手 + 终端经两级隧道有输出；② 本地转发 2511 **256B 字节级往返逐字节一致** + echo 服务端 `total=256B` 实证（「端口在听 ≠ 转发通」正反两面都打到了）；③ EADDRINUSE ⇒ WS 收 `forward/listen-error` 结构化广播且连接状态不翻 error；④ 断开自动撤下（本机端口不再监听）；⑤ 跳板缺席 ⇒ `JUMP_UNAVAILABLE` 结构化拒绝（不挂死、不静默）。证据 `_refs/scripts-archive/accept-2026-10/batch3-ssh/probe-a24-result.json`；**真跳板 / 真实云主机复验仍留批 7**（等效环境通过 ≠ 真机过，两笔账分开记）
 
 **B. 双模型（§3.10 —— 2026-09-26 才补上判据节）**
 
@@ -283,7 +295,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 - [ ] B5 零退化：未配辅助模型时拖入图片 → 行为与未装本线一致（准入走官方原生分支，不额外拦截、不报错）
 - [ ] B6 无副作用：发送纯文本消息时当前模型不被切换（`keep` 路径不抖配置）；发过图之后的历史引用旧图仍能正确路由
 - [ ] B7 失效信号：在别处改动模型设置后本线缓存被击穿（0.1.7 双轨失效事件），面板不显示陈旧值
-- [ ] B8 同源围栏：非环回 `Host`，或 `Origin` 与 `Host` 不一致时打本线 `/state` → **403**（`index.js` 的 `fenceOk`，两道判定；HTTP 层**可代跑**）
+- [x] B8 同源围栏：非环回 `Host`，或 `Origin` 与 `Host` 不一致时打本线 `/state` → **403**（`index.js` 的 `fenceOk`，两道判定；HTTP 层**可代跑**）—— **2026-10-05 已核（0.2.0-rc.2 实例）**：伪造 Host / 跨站 Origin 两轴均 **403**、环回正常请求 **200**、403 响应无 CORS 头
       （**2026-09-29 代跑已核**：伪造 Host / 跨站 Origin 两轴打 `/dual-model/api/state` 均 **403**、环回正常请求 **200**，`fenceOk` 两轴实测有区分力）
 
 > **与 `dsh-miasaki-dual-model/design/2026-09-29-live-acceptance-checklist.md` 的关系**：那份清单分
@@ -316,7 +328,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
       —— 按字面该判据**必然失败**。属性是设计如此（CSS 选择器据此匹配，关闭态无消费者 ⇒ 零视觉影响），
       故比对只看**渲染结果**：截图 diff 为空即可，不要求属性缺席
 - [ ] D3 首帧不闪：强刷不出现「先原生、后跳外观」
-- [ ] D4 越权防护：非环回 Host / 跨站打 `/appearance/api/state` → 403；未定义路径 → 404
+- [x] D4 越权防护：非环回 Host / 跨站打 `/appearance/api/state` → 403；未定义路径 → 404 —— **2026-10-05 已核（0.2.0-rc.2 实例）**：伪造 Host / 跨站 Origin 两轴均 **403**（无 CORS 头）；「未定义路径 → 404」分支补齐 —— 环回打未注册路径 **404**、伪造轴打未注册路径 **403**（围栏先于路由匹配）
       （**2026-09-29 代跑已核**：伪造 Host / 跨站 Origin 两轴均 **403**（3080 实例）；「未定义路径 → 404」分支未同批测）
 - [ ] D5 应用图标：预设点选 → 1.5–2s 内任务栏 / 窗口左上角 / 托盘三处跟随；上传 / 清单 / 清除回退 / 坏文件不崩
 - [ ] D6 桌面壳让位协议：`data-miasaki-theme-yield` 免刷新翻转；切换条双入口；aurora×壁纸叠加
@@ -384,7 +396,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 - [ ] I2 插件加载 GUI 层目视：侧栏脚部出现「用量统计」入口；会话页出现「用量」Tab（§3.8 实测记录中两项 ⏳ 待目视的数据面已过，余视觉确认）
 - [ ] I3 会话 Tab 不受影响：上下文剩余 / 会话用量总览 / 按模型明细 / 工具调用正常（纯会话口径、与会话绑定，与账本分区无关）
 - [ ] I4 v0.6.1 性能复看：全局浮窗首屏 ~2ms、稳态每请求 0–1ms（「立即出数」；修复前首屏 2761ms、稳态 327ms）
-- [ ] I5 **围栏不回归（2026-09-29 补账代跑时新发现）**：非环回 Host / 跨站打 `/dsh-token-monitor/*` 应 **403**。**实测返回 200** —— 本线是九线里**唯一没有同源围栏**的（`lib/index.js` 无 Host / Origin 判定；appearance / ssh / free-model / dual-model 四线同批实测两轴均 403）。**定级**：响应**无 CORS 头** ⇒ 浏览器页面读不到响应体，实际暴露面限于本机进程 —— 而本机进程本就能直接读账本文件 ⇒ **纵深防御缺失，非当场可利用漏洞**。处置二选一：按四线同款补围栏（低成本），或显式登记「本线不做围栏」的决策（现在是第三种：谁都没决定过）。**2026-09-30 已修**：按四线同款补围栏 —— 新增 `lib/fence.js`（`structuralFence` + `trustFence` + `fenceHandler`）并在 **register 一处**统一包装覆盖五条路由（新增路由不会漏挂），`inject` 仍只有 `webServer`、`connection` 逐请求求值，**零 miasaki 耦合不变**；`test/fence.test.mjs` **13 例**（含「围栏先于业务」：跨站 POST 得 403 而非 405、handler 调用次数为 0）、`verify-all usage` **3 → 5 项**。**待实机复验**：重启 `dsh web` 后同样两轴应得 **403**（HTTP 层可代跑）
+- [x] I5 **围栏不回归（2026-09-29 补账代跑时新发现）**：非环回 Host / 跨站打 `/dsh-token-monitor/*` 应 **403**。**实测返回 200** —— 本线是九线里**唯一没有同源围栏**的（`lib/index.js` 无 Host / Origin 判定；appearance / ssh / free-model / dual-model 四线同批实测两轴均 403）。**定级**：响应**无 CORS 头** ⇒ 浏览器页面读不到响应体，实际暴露面限于本机进程 —— 而本机进程本就能直接读账本文件 ⇒ **纵深防御缺失，非当场可利用漏洞**。处置二选一：按四线同款补围栏（低成本），或显式登记「本线不做围栏」的决策（现在是第三种：谁都没决定过）。**2026-09-30 已修**：按四线同款补围栏 —— 新增 `lib/fence.js`（`structuralFence` + `trustFence` + `fenceHandler`）并在 **register 一处**统一包装覆盖五条路由（新增路由不会漏挂），`inject` 仍只有 `webServer`、`connection` 逐请求求值，**零 miasaki 耦合不变**；`test/fence.test.mjs` **13 例**（含「围栏先于业务」：跨站 POST 得 403 而非 405、handler 调用次数为 0）、`verify-all usage` **3 → 5 项**。**待实机复验**：重启 `dsh web` 后同样两轴应得 **403**（HTTP 层可代跑）
 - [ ] I6 **未识别 profile 时不得宣称隔离（静默失效 #18，2026-09-30 补立）**：宿主既没有 `profileContext` 服务、环境也没有 `DSH_PROFILE` 时，账本落在**共享兜底桶** `default`（**不是隔离区** —— 多个环境会写进同一个桶），而此前页面照常宣称「与其它 profile 的账本完全隔离」。**判据**：`/dsh-token-monitor/global` 的 `profileSource` 为 `'unknown'`，且浮窗顶部口径显示「未能识别当前 profile … 可能与其它环境混账，并非真隔离」（**不得**出现「完全隔离」字样；底部长说明同款分支）。**2026-09-30 已修**：`resolveProfileKey` 返回 `{ name, source }` —— `unknown` 档目录仍为 `default`（**不搬账本**，与 I1 同一纪律），页面按 `source` 分支如实告知；`test/ledger-dir.test.mjs` **5 → 9 例**（含四种「三档全空」输入形态）。**待实机**：在缺 profile 信息的宿主上打开浮窗看文案
 
 **J. 免费模型（第九线 `@miasaki/dsh-free-model`）**
@@ -402,7 +414,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > **台账缺口 2026-09-29 补账时补**：fleet 此前**没有专节**，面板与派单判据只散在 §4 两行 + L1 自动回归里 ⇒ 实机债务不可见。**2026-10-02 已补 §3.13 专节**（判据正文首次收进矩阵）。
 > K3–K5 是「**先修后验**」项：三处未修的静默缺口，修完后在此验收（修前验不了）。
 
-- [ ] K1 fleet-monitor 面板走查（**判据 2026-09-30 已立** —— P1 判定层上屏；自动闸门 `verify-all fleet` 的
+- [x] K1 fleet-monitor 面板走查（**判据 2026-09-30 已立** —— P1 判定层上屏；自动闸门 `verify-all fleet` 的
       `fleet-monitor 判定层区块 (P1)` **7 项断言**已覆盖「区块 + 三个端点 + 口径同源」，下列为**实机**判据）：
       ① 起面板（本机 `127.0.0.1`）⇒ 页面上出现**可派集 / 能力断层 / 机器事件**三块，数字与
       `node workers/graph/task-ready.mjs --dispatchable --json`、`agent-pick.mjs --gaps --json`、
@@ -412,6 +424,12 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
       ④ **三道信任围栏仍在**：非本机来源 ⇒ 403（且 403 响应**不带** CORS 头）、过围栏才进业务分支。
       **反例（判据的判据）**：改一条判定层输出（如临时给某任务加依赖）⇒ 面板数字跟着变，证明它**真的在读判定层**
       而不是页面里写死的快照
+      —— **2026-10-05 已验（本机 39801 实跑）**：① 三端点 vs 判定层 CLI **逐字段 IDENTICAL**（dispatchable 的
+      ready/blocked/finished + gaps 三块全等，面板 spawn 现成 CLI 的口径同源实锤）；② blocked 带原因由 CLI
+      契约保证（`task-ready.mjs` 输出 `reasons[]`），当前 0 个自然 blocked 样本（不造真实状态，留待真实派单顺验）；
+      ③ 判定层 CLI 改名 ⇒ `/api/dispatchable` 返回 `{ok:false,error}` **不白屏**、面板 200 —— 该测试同时即
+      「非快照」反例：响应随判定层实时变化；④ 伪造 Host / 伪造 Origin → 403 且**不带** CORS 头、环回 200。
+      证据 `_refs/scripts-archive/accept-2026-10/batch4-fleet/k1-*.json`
 - [ ] K2 派单器消费判定层：真实 3 路 fan-out → reduce → verify 跑通（G1/G2/G4 判定层已齐，缺的是派单器接线 —— 治理能力「看起来有了」，实际全靠人记得用）
   - [x] **K2a（2026-09-30）派单器接线已落地**：G1 可派判定 + G0 事件留痕接入 `workers/dispatch/dispatch-task.ps1`（G2 能力闸门 2026-09-11 已接）。判据：任务不可派（状态非 queued / 依赖未满足）/ `-Agent` 与台账 `assignee` 不一致 → **拒绝派单 exit 2** 并打印全部原因；派单开始（CLI 启动前）与终态各写一条机器事件，经 `bus-apply` 唯一入口。**真实派单闭环**：t-0010 首派 claude 失败 —— **非 fleet 侧问题**：claude 经 **ccswitch** 路由模型，当时 ccswitch 未启动 ⇒ 默认模型解析成不可用的 `step-5-preview[1m]` 而返 404；ccswitch 启动后已实测恢复（`claude-sonnet-5[1M]`、exit 0）。这轮失败**恰好实证**了事件流失败分支 `failure.detected`；经 `reassign` 补丁改派 pi → exit 0 → `task.completed`，交付契约与台账终态**同一超步**（总线 v11），`tasks/<id>/result.json` **首次经唯一入口落盘**（此前该路径全是直接写盘）。**独立复核**：t-0010 的任务内容即「由一个异构 agent 复核本次接线」，产出 6 条 findings、无阻断级，F2（CLI 起不来 ⇒ 假成功入事件流）/ F3（主路径调用点零覆盖）/ F4（文案匹配与文档表述矛盾）**当批修复**；F1（崩溃残留 ⇒ 永久硬拒且无重置入口）/ F5（口径分歧只比 `enabled`）/ F6（台账坏行静默跳过）/ Q3 附带的 F7（`final-state.ps1` 调用失败静默回退成 `idle`）**已在同日第二批收口**（新增 `-ResetStatus`（心跳新鲜时拒绝执行）/ 预算纳入分歧比对 / `bus_bad_lines` 有坏行即拒绝 / 终态判定失败保守记 `error`），`dispatch-gate` 夹具 **10 → 17 例**、接线断言 **12 → 20 项**。回归 `verify-all fleet` **20/20**。报告：`dsh-miasaki-fleet/tasks/t-0010/result/result-t-0010.md`；规划与分档：`_refs/fleet-dispatch-wiring-plan-2026-09-30.md`（规划类，不入库）
   - [x] **K2b-1（2026-09-30 第三批）G4 验证挂载已落地**：`Test-VerifierGate` —— brief 声明风险（`risk:` / `需要验证：` 行，或 `-Risk`）即要求**可用**的异构验证者，**无可用候选直接拒绝派单**（比原计划的「告警」更强：派单前判定本就是闸门位）；值非法即拒绝（**不猜**，`none` 属禁止项）；**未声明即跳过**（零行为变更）；派单后生成 `tasks/<id>/verify-brief.md`（**不自动派发**）。**判据是可用候选数而非退出码**（`--all` 语义下候选可能全不可用）。实测 `--for pi --min-level vendor` → bl / opencode 两个 vendor 级可用候选。夹具 17 → **23 例**、断言 20 → **26 项**。**顺带发现并当场收口一处判定层不一致**（同日第四批）：G4 把 `alive=false` 判不可用，而「无 `status.json`」正是 `alive=false`；G1 对同形态是**降级放行** ⇒ 从未运行过的 agent 永远当不了验证者（**同族形态**）。现口径**单点**在 `liveness.cjs` 的 `isFirstRun`，两侧引用它；**豁免不外溢**（真僵尸 / 开关未开 / 字段缺席照旧不可用）。实测 `--for pi --min-level vendor` 的候选由 2 个 → **3 个**；`liveness` 7 → **9 例**、`verifier` 25 → **29 例**
@@ -422,7 +440,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 
 **M. 补丁与插件装卸契约（§2，补账时补）**
 
-- [ ] M1 补丁 live 审计（**常驻闸门**）：`node scripts/patch-live-audit.mjs` 全部 `patched` 且退出码 0 —— **DSH 升级 / profile 依赖重装后必跑**（离线 `patch verify` 绿 ≠ live 在位：0.1.7 升级后六个补丁曾全部静默 `unknown` 数日、dual-model 发图被拒）。**2026-09-29 代跑已核：10 个目标 / 9 件在册补丁全 patched**（含 playwright 双半；cordis-host-runner 已退役不计）
+- [x] M1 补丁 live 审计（**常驻闸门**）：`node scripts/patch-live-audit.mjs` 全部 `patched` 且退出码 0 —— **DSH 升级 / profile 依赖重装后必跑**（离线 `patch verify` 绿 ≠ live 在位：0.1.7 升级后六个补丁曾全部静默 `unknown` 数日、dual-model 发图被拒）。**2026-09-29 代跑已核：10 个目标 / 9 件在册补丁全 patched**（含 playwright 双半；cordis-host-runner 已退役不计）。**2026-10-05 已核（0.2.0-rc.2 升级后）：12 目标 / 11 件在册补丁全 patched、exit 0**（8 件 client-ui 补丁基线对齐 rc.1/rc.2 重打 + api-session-controller + playwright 双半 + our-free-model）
 - [ ] M2 计时面板可恢复：刷新页面 → 打开任一**已结束**步骤的轨迹计时面板 / 悬停消息耗时面板 ⇒ 首 token 延迟、生成、吞吐量三行与气泡「首 token 用时（TTFT）」均为数字（trajectory 与 chat 两个计时补丁**必须一起重打** —— 同一个 `firstTokenTime` 的两处显示；rc.2 重打后未验）
 - [ ] M3 停用可恢复：移除任一插件 → 重启 host ⇒ DSH 原生界面**无残留**（右栏推挤复位、会话头按钮消失、插件树无 `did not activate` / `pending`、无启动屏报错）
 
