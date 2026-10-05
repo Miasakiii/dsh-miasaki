@@ -1945,10 +1945,14 @@ fn parse_pulse_flag(txt: &str, now_ms: i64) -> Option<(bool, bool)> {
         return None;
     }
     let f = v.get("fleet")?;
-    let n = |k: &str| f.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    // T6（2026-10-05）：缺键即拒绝整份 —— 发布器是唯一契约写者且恒写全部五个计数字段，
+    // 缺键只可能是字段改名/漏写（生产漂移）；原先 unwrap_or(0) 会把它静默吞成 0
+    // （桌宠「该亮不亮」且无红灯）。拒绝后走 watchdog 的 None 分支留下日志；
+    // 仓库级闸门 scripts/check-pulse-contract.mjs 对账两侧字段集。
+    let count = |k: &str| f.get(k).and_then(|x| x.as_u64());
     Some((
-        n("running") + n("waiting_approval") > 0,
-        n("blocked") + n("error") > 0,
+        count("running")? + count("waiting_approval")? > 0,
+        count("blocked")? + count("error")? > 0,
     ))
 }
 
@@ -3534,10 +3538,17 @@ mod tests {
         // BOM 前缀（本机 PowerShell 产物常见）必须容错，与 fleet 侧同口径
         let with_bom = format!("\u{feff}{}", pulse(1, 0, 0, 0));
         assert_eq!(parse_pulse_flag(&with_bom, now), Some((true, false)));
-        // 计数字段缺失按 0 处理，不因单字段缺失丢掉整份 pulse
+        // T6（2026-10-05）：计数字段缺键即拒绝整份（**翻转**了原先「按 0 容忍」的口径）——
+        // 发布器是唯一契约写者且恒写全部计数，缺键只可能是生产漂移；按 0 容忍的失效形态
+        // 是「该亮不亮」无红灯。翻转理由见 scripts/check-pulse-contract.mjs 头部。
         assert_eq!(
             parse_pulse_flag(r#"{"v":2,"ts":"2026-09-04T07:40:08Z","fleet":{"running":1}}"#, now),
-            Some((true, false))
+            None
+        );
+        // 整个 fleet 对象为空（五个计数全缺）同理拒绝
+        assert_eq!(
+            parse_pulse_flag(r#"{"v":2,"ts":"2026-09-04T07:40:08Z","fleet":{}}"#, now),
+            None
         );
     }
 

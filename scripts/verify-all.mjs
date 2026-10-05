@@ -746,10 +746,14 @@ function planFreeModel() {
  *   · lock-sync：锁文件与 package.json 的直接依赖 specifier 必须一致 —— 否则 CI 会红在
  *     「安装 XX 线依赖」那一步（ERR_PNPM_OUTDATED_LOCKFILE），后续步骤全部 skipped，
  *     **看起来像测试挂了，其实一个测试都没跑**（2026-09-29 实测连续 11 次）。
- * 五项都零依赖、纯离线，受限沙箱与 CI 同样可跑。
+ *   · style：文件形态（LF / 无 BOM / 末行换行）+ 公开仓库脱敏（路径形态 + 裸词表）；
+ *   · pulse-contract：fleet 脉冲的生产/消费字段集对账（消费集 ⊆ 生产集 + 协议版本两侧一致）
+ *     —— 防「publish-pulse 改字段名、桌宠静默读不到、该亮不亮且无红灯」的跨线漂移。
+ * 七项都零第三方依赖、纯离线，受限沙箱与 CI 同样可跑。
  *
  * 注：本段此前写「这三项」而实际已有四项 —— 加 md-links 时**漏改这段注释**，
- * 正是 AGENTS.md 记的「注释与实现不一致＝漏登记的签名」。加闸门时请连本段一并订正。
+ * 正是 AGENTS.md 记的「注释与实现不一致＝漏登记的签名」。加闸门时请连本段一并订正
+ * （style 闸门落地时也漏了本段 —— 2026-10-05 加 pulse-contract 时一并对齐）。
  */
 function planRepo() {
   checks.push({
@@ -813,6 +817,19 @@ function planRepo() {
     name: 'style (文件形态 + 脱敏)',
     cmd: process.execPath,
     args: [join(ROOT, 'scripts', 'check-style.mjs')],
+    cwd: ROOT,
+  })
+  // 2026-10-05（T6，desktop-adaptation-plan-2026-09-27 §3.1）：fleet 脉冲跨线契约对账。
+  // 要防的事：把 publish-pulse.mjs 的 `running` 改名，两侧回归全绿、桌宠静默读不到
+  // （unwrap_or(0) 按 0）⇒「该亮不亮」无红灯。判据：消费集 ⊆ 生产集 + v/ts 两侧同现 +
+  // 协议版本一致；生产集由闸门**现跑入库的发布器**取得（刻意不复用已 publish 的未跟踪文件
+  // —— intro-clips 事故纪律），消费集从 main.rs 的 parse_pulse_flag 锚定抽取，抽不到即失败。
+  // 判据、边界与内置自证见 scripts/check-pulse-contract.mjs 头部。
+  checks.push({
+    line: 'repo',
+    name: 'pulse-contract (fleet 脉冲生产/消费字段对账)',
+    cmd: process.execPath,
+    args: [join(ROOT, 'scripts', 'check-pulse-contract.mjs')],
     cwd: ROOT,
   })
 }

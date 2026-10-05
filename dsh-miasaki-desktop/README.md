@@ -561,7 +561,8 @@ appearance 配置。
   `dsh-miasaki-fleet/state/fleet-pulse.json`（由 fleet 侧
   `node workers/pulse/publish-pulse.mjs` 发布，契约见
   `dsh-miasaki-shared-docs/cross/ab-linkage-pulse-v2-2026-09-04.md`），桌面端
-  脉冲看门狗 2s 轮询，桌宠按 **fleet 告警(blocked/error，failed 行 + 常驻
+  脉冲看门狗 2s 轮询；**缺键即拒绝整份**（发布器恒写全部计数，缺键 = 生产漂移 ⇒ 指示关闭 + 日志，
+  2026-10-05 起由仓库级闸门 `repo/pulse-contract` 对账两侧字段集），桌宠按 **fleet 告警(blocked/error，failed 行 + 常驻
   “需要你的批准”气泡）> DSH 等待审批 > fleet 运行中（work 立绘 + 常驻“忙碌中…”）
   > busy > intensity** 映射（**2026-09-27 订正**：本行原写「fleet 告警 > DSH 等待审批」，
   与 `pet_native/window.rs:157` 的 `st != Waiting` 守卫相反 —— 实为**等待审批优先**）；
