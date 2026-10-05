@@ -143,7 +143,15 @@ jobs:
       # 本步骤用 repo secret 把词表带到 runner：secret 本体自动掩码、不进日志，仓库里永远没有这份文件。
       # 词表 secret 未配置时本步骤保持跳过形态（与旧行为一致）；**配置了但为空**时闸门会响亮失败
       # （check-style.mjs 对「词表存在但零词」exit 1 —— 那是配置失误，不能让裸词检查无声退化成永远绿）。
+      # ⚠ **必须显式写 `shell: bash`**（2026-10-05 CI 事故，run `37306252341`）：windows-latest 的
+      # 默认 shell 是 **pwsh**，本步骤的脚本体却是 bash 语法 ⇒ `if [ -n "$X" ]; then` 被 PowerShell
+      # 当语句解析，报 `ParserError: Missing '(' after 'if'` ⇒ 步骤 exit 1，**后续「运行 verify-all」
+      # 被 skip** ⇒ 十类回归整轮没跑，CI 却已经红了。事故窗口：该步骤 2026-10-05 随 `8f891c7` 落地
+      # 但**四个提交一直没推**（本地提交 ≠ CI 验证过），直到本批推送才第一次真正执行。
+      # 教训：**改 workflow 的提交在推送前无法被 CI 验证**，通道类改动要么当批推送后立刻看 CI，
+      # 要么本地先用同款 shell 干跑一遍。
       - name: 注入身份词表（secret → runner 临时文件）
+        shell: bash
         env:
           IDENTITY_TERMS: ${{ secrets.IDENTITY_TERMS }}
         run: |
