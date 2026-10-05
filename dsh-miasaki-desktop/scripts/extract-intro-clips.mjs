@@ -4,9 +4,11 @@
 //   · 素材是**快照不是依赖**：上游更新与本仓无关，本脚本把「取哪一段」写死成台账；
 //   · 台账（id / 文件名 / 字节数 / SHA256 前 16 位）对齐上游 lib/clips.meta.js 官方值，
 //     **逐段校验通过才允许落 ui/intro/** —— 半截下载、上游改动、手工替换都会被拦下；
-//   · 源优先本地 `_refs/boot-intro-clips/`（已取证副本，_refs 不入库）；缺失时可用
-//     `--fetch` 经 GitHub raw 下载（需网络）；
-//   · `--check` 只校验已入库产物（不写盘）—— CI / verify 用这个模式。
+//   · **源只在 extract（写盘）模式是前置**：优先本地 `_refs/boot-intro-clips/`（已取证副本，
+//     _refs 不入库）；缺失时可用 `--fetch` 经 GitHub raw 下载（需网络）；
+//   · `--check`（CI / verify 用的模式）判据**只有「已入库产物 vs 台账」**：不读源、不写盘。
+//     源是未入库的本地状态，把它当这个模式的前置，闸门就会**本机假绿、CI 恒红**
+//     —— 2026-10-05 CI 首次跑就踩到（本机 `_refs/` 恰好有取证副本）。
 //
 // 用法：
 //   node scripts/extract-intro-clips.mjs            # 从 _refs 校验并拷入 ui/intro/
@@ -74,6 +76,29 @@ let failed = 0
 
 for (const clip of CLIPS) {
   const target = join(OUT_DIR, `intro-${clip.id}.mp4`)
+
+  // ---- check：判据只有「入库产物 vs 内嵌台账」，**不要求源副本在场** ----
+  // 2026-10-05 实测教训：源（`_refs/boot-intro-clips/`，未入库）曾是这个模式的前置，
+  // 于是**本机假绿、CI 恒红** —— 闸门的判据一旦依赖未入库的本地状态，它就只在作者的机器上成立。
+  // 源只在 extract（写盘）模式是前置；check 模式读源没有任何意义（要比的是产物）。
+  if (MODE === 'check') {
+    if (!existsSync(target)) {
+      report.push(`✗ ${clip.id}: 产物缺失 ${target}`)
+      failed += 1
+      continue
+    }
+    const onDisk = await readFile(target)
+    const disk = verify(clip, onDisk)
+    if (!disk.ok) {
+      report.push(`✗ ${clip.id}: 产物不符（${disk.reasons.join('；')}）`)
+      failed += 1
+      continue
+    }
+    report.push(`✓ ${clip.id}: 产物已入库且与台账一致（${clip.bytes} B）`)
+    continue
+  }
+
+  // ---- extract：必须先拿到源字节（本地 _refs 副本优先，--fetch 回落上游）----
   let buf = null
   let sourceNote = ''
   try {
@@ -90,24 +115,6 @@ for (const clip of CLIPS) {
   if (!ok) {
     report.push(`✗ ${clip.id}: ${reasons.join('；')}`)
     failed += 1
-    continue
-  }
-
-  if (MODE === 'check') {
-    // 只校验产物：已入库字节必须与台账一致（不写盘）。
-    if (!existsSync(target)) {
-      report.push(`✗ ${clip.id}: 产物缺失 ${target}`)
-      failed += 1
-      continue
-    }
-    const onDisk = await readFile(target)
-    const disk = verify(clip, onDisk)
-    if (!disk.ok) {
-      report.push(`✗ ${clip.id}: 产物不符（${disk.reasons.join('；')}）`)
-      failed += 1
-      continue
-    }
-    report.push(`✓ ${clip.id}: 产物已入库且与台账一致（${clip.bytes} B）`)
     continue
   }
 
