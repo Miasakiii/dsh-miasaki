@@ -441,12 +441,22 @@ const PATCH_PATH_RULES = [
   // 已知两处反例**已收口**：`-ResetStatus` 补了 `agent.status.reset` 事件；终态事件补了 `state` 字段
   //（否则 `blocked` 与 `error` 在事件流里不可分）。
   // 收敛口径是「**真相类文件进总线，派生态明确豁免**」，不是「所有文件都进总线」。
-  // ⚠️ **已知未收敛**（同属真相/输入类，仍由程序直写 —— 属独立批次，勿当成已完成）：
-  //   · `agents/<id>/control.json`：fleet-monitor 的 `POST /api/toggle` 直写。它是**派单许可（输入）**，
-  //     不是派生态 —— 与 usage.jsonl 同构，理应经唯一入口；
-  //   · `agents/<id>/manifest.json` 与 `agents/registry.json`：`scan-agents.ps1` 直写。
-  //     它们是**能力闸门的实际输入**（agent-pick 读 skills、派单器读 metering_source）。
-  //   另：本表登记的 `capability.json` 是设计中的**派生视图**，**当前全仓零写者**（保留登记以便未来实现）。
+  // ✅ **2026-10-05 第二批收敛**（此前登记在「已知未收敛」的三处输入类，全部经唯一入口）：
+  //   · `agents/<id>/control.json`：派单许可（Operator 意图）。fleet-monitor 的 toggle 经
+  //     `bus-apply` 落盘（author=operator），失败 500 **不回退**（交互式操作可重试，
+  //     回退直写 = 复活静默绕行）；顺带兑现「开关变更留机器事件」——set 补丁自动产生
+  //     superstep 事件，paths 可查。
+  //   · `agents/<id>/manifest.json` 与 `agents/registry.json`：能力闸门的**实际输入**
+  //    （agent-pick 读 skills、派单器读 metering_source）。`scan-agents.ps1` 改为组
+  //     N+1 个 set 补丁**一次超步**提交（原子：要么全部生效要么全部不动），author=scanner；
+  //     失败 exit 非 0 不回退（discovery 是显式运维动作，重跑即重试）。顺带修掉
+  //     `Set-Content -Encoding UTF8` 在 Windows PowerShell 5.1 下写 BOM 的隐性缺陷
+  //     （applier 落盘恒为无 BOM UTF-8 + 末行换行）。
+  //   另：本表登记的 `capability.json` 是设计中的**派生视图**，**当前全仓零写者**
+  //  （保留登记以便未来实现 —— 不是误登记，是有意的占位）。
+  { re: /^agents\/[a-z0-9-]+\/control\.json$/, ops: ['set'] },
+  { re: /^agents\/[a-z0-9-]+\/manifest\.json$/, ops: ['set'] },
+  { re: /^agents\/registry\.json$/, ops: ['set'] },
   { re: /^agents\/[a-z0-9-]+\/usage\.jsonl$/, ops: ['append'] },
   { re: /^tasks\/t-\d{4}\/result\.json$/, ops: ['set'] },
   { re: /^tasks\/t-\d{4}\/verdict\.json$/, ops: ['set'] },

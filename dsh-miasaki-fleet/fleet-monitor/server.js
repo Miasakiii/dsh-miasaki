@@ -66,6 +66,21 @@ const PANEL_HTML = path.join(__dirname, 'panel.html');
 // 显式声明；默认只认本机（localhost / 127.0.0.1 恒在放行集内）。
 const TRUSTED_HOSTS = buildTrustedHosts((process.env.FLEET_MONITOR_TRUSTED_HOSTS || '').split(','));
 
+// ── 写入收敛（2026-10-05）：toggle 经 bus-apply 唯一入口 ────────────────────────────
+// control.json 是**派单许可（输入类）** —— 此前「已知未收敛」登记项（bus-contract.cjs
+// 白名单注释），本批收敛。要点与判定层同款：**spawn 现成 applier，不重复实现写入**；
+// 可注入 `__setBusApplier` 供测试替换（同 sandbox EPERM 理由）。BUS_ROOT 必须对齐本服务的
+// WORKSPACE —— applier 默认按自身位置推导根，与 -Workspace 参数不一致时会出现
+// 「读 A 工作区、写 B 工作区」的静默错位（dispatch-task.ps1 同款教训）。
+const defaultBusApplier = (patches) =>
+  execFileSync(process.execPath, [path.join(FLEET_ROOT, 'workers', 'bus', 'bus-apply.mjs'), '--stdin'], {
+    input: JSON.stringify(patches), encoding: 'utf8', timeout: 8000,
+    env: Object.assign({}, process.env, { BUS_ROOT: WORKSPACE }),
+  });
+let busApplier = defaultBusApplier;
+/** 测试注入；传 `null` **恢复默认**（与 `__setJudgementRunner` 同约定）。 */
+function __setBusApplier(fn) { busApplier = fn || defaultBusApplier; }
+
 /* ---------- 缓存 ---------- */
 let fleetCache = null;
 let cacheTime = 0;
@@ -462,7 +477,7 @@ async function handleRequest(req, res) {
     return sendJSON(res, { ok: true, total: rows.length, events: rows.slice(-n) });
   }
 
-  // POST /api/toggle/:agentId → 切换开关
+  // POST /api/toggle/:agentId → 切换开关（2026-10-05 写入收敛：经 bus-apply 唯一入口）
   if (req.method === 'POST' && pathname.startsWith('/api/toggle/')) {
     const agentId = pathname.split('/')[3];
     if (!agentId || agentId.includes('..')) {
@@ -471,12 +486,33 @@ async function handleRequest(req, res) {
     try {
       const body = JSON.parse(await readBody(req));
       const controlPath = path.join(AGENTS_DIR, agentId, 'control.json');
-      let control = safeReadJSON(controlPath) || {};
+      const control = safeReadJSON(controlPath) || {};
       control.enabled = !!body.enabled;
       control.updated_at = new Date().toISOString();
       control.updated_by = 'operator-panel';
       if (body.force_kill !== undefined) control.force_kill = !!body.force_kill;
-      fs.writeFileSync(controlPath, JSON.stringify(control, null, 2) + '\n');
+      // set 补丁携带**完整文件内容**（op 语义就是整体替换）；expected_version=-1 是占位，
+      // applier 的 CLI 层会自动填当前版本（调用方不必先查版本，与派单器 Write-UsageRow 同形态）。
+      const patch = {
+        op: 'set',
+        path: `agents/${agentId}/control.json`,
+        value: control,
+        author: 'operator',
+        reason: `monitor 面板 toggle → enabled=${control.enabled}`,
+        expected_version: -1,
+      };
+      try {
+        busApplier([patch]);
+      } catch (e) {
+        // **500 / 409，绝不回退直写**：toggle 是交互式操作，失败立即可见、重试即恢复；
+        // 回退直写会复活本次收敛要消灭的「静默绕行」。exit 3 = 乐观并发冲突
+        // （补丁可能已部分落盘）→ 409 提示重试而非盲目重放。
+        const detail = String((e && e.stdout) || '') + String((e && e.stderr) || '');
+        if (e && e.status === 3) {
+          return sendJSON(res, { error: 'bus version conflict（可能已部分落盘，请重试）', detail: detail.trim() }, 409);
+        }
+        return sendJSON(res, { error: `bus-apply exit ${e && e.status !== undefined ? e.status : '?'}：${detail.trim() || (e && e.message) || 'applier 失败'}` }, 500);
+      }
       fleetCache = null; // invalidate cache
       return sendJSON(res, { ok: true, agent: agentId, enabled: control.enabled });
     } catch (e) {
@@ -511,4 +547,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { handleRequest, server, TRUSTED_HOSTS, __setJudgementRunner };
+module.exports = { handleRequest, server, TRUSTED_HOSTS, __setJudgementRunner, __setBusApplier };

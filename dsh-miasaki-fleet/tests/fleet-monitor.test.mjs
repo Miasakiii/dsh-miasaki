@@ -168,20 +168,88 @@ test('handler：preflight 也走围栏（跨站 OPTIONS 不得 204）', async ()
   assert.equal(allowed.statusCode, 204)
 })
 
-test('handler：过围栏才进业务分支 —— 不可写 agentId 落到 500 而非 403（不创建任何文件）', async () => {
-  // 唯一能区分「围栏挡住」与「路由压根没接上」的判据：给一个必然写不进去的 id
-  // （父目录不存在），过围栏后应在落盘处 ENOENT → 500。writeFileSync 不建父目录，
-  // 因此这个用例不会往 agents/ 里留任何东西。
-  const res = await call(fakeReq({
-    method: 'POST',
-    url: '/api/toggle/__fence_probe_never_exists__',
-    headers: { ...LOOPBACK, origin: 'http://127.0.0.1:39801' },
-    body: JSON.stringify({ enabled: true }),
-  }))
-  assert.equal(res.statusCode, 500, '过围栏后应到达写盘分支并以 ENOENT 收场')
+test('handler：过围栏才进业务分支 —— toggle 到达 applier 边界以失败收场而非 403', async () => {
+  // 唯一能区分「围栏挡住」与「路由压根没接上」的判据：注入一个必然失败的 applier，
+  // 过围栏后应在业务分支收到失败 → 500（围栏拒的话是 403）。2026-10-05 起写入走
+  // bus-apply（本测试文件「不起监听、不 spawn」的原则不变）—— 注入替身同时保证
+  // 这条用例不往真实工作区写任何东西（老实现靠 ENOENT 兜，新实现根本不碰 fs）。
+  const res = await withBusApplier(
+    () => { const e = new Error('boom'); e.status = 4; throw e },
+    () => call(fakeReq({
+      method: 'POST',
+      url: '/api/toggle/__fence_probe_never_exists__',
+      headers: { ...LOOPBACK, origin: 'http://127.0.0.1:39801' },
+      body: JSON.stringify({ enabled: true }),
+    })),
+  )
+  assert.equal(res.statusCode, 500, '过围栏后应到达 applier 分支并以失败收场')
   assert.equal(JSON.parse(res.body).ok, undefined)
   const probeDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'agents', '__fence_probe_never_exists__')
   assert.equal(existsSync(probeDir), false, '这条用例不得往 agents/ 留下任何目录或文件')
+})
+
+/* ---------- ④′ toggle 写入收敛（2026-10-05：经 bus-apply 唯一入口） ---------- */
+
+/** 注入一次 applier 行为，跑完自动恢复默认（与 withJudgement 同约定）。 */
+async function withBusApplier(fn, run) {
+  serverModule.__setBusApplier(fn)
+  try { return await run() } finally { serverModule.__setBusApplier(null) }
+}
+
+function toggleReq(agentId, body) {
+  return fakeReq({
+    method: 'POST',
+    url: `/api/toggle/${agentId}`,
+    headers: { ...LOOPBACK, origin: 'http://127.0.0.1:39801' },
+    body: JSON.stringify(body),
+  })
+}
+
+test('toggle：经 bus-apply 落盘 —— set 补丁带完整 control 内容 + author=operator + expected_version 占位', async () => {
+  const seen = []
+  const res = await withBusApplier(
+    (patches) => { seen.push(...patches); return '{}' },
+    () => call(toggleReq('claude', { enabled: false, force_kill: true })),
+  )
+  assert.equal(res.statusCode, 200)
+  assert.deepEqual(JSON.parse(res.body), { ok: true, agent: 'claude', enabled: false })
+  assert.equal(seen.length, 1, '一次 toggle 恰好一个补丁（一次超步）')
+  const p = seen[0]
+  assert.equal(p.op, 'set')
+  assert.equal(p.path, 'agents/claude/control.json')
+  assert.equal(p.author, 'operator')
+  assert.equal(typeof p.reason, 'string', 'set 类补丁必须带 reason（契约要求）')
+  assert.equal(p.expected_version, -1, '占位版本由 applier CLI 层填当前值')
+  assert.equal(p.value.enabled, false)
+  assert.equal(p.value.force_kill, true)
+  assert.equal(p.value.updated_by, 'operator-panel')
+  assert.ok(p.value.updated_at, '沿用 toggle 的时间戳语义')
+})
+
+test('toggle：applier exit 3（乐观并发冲突）→ 409 而非 500，且不重放', async () => {
+  let calls = 0
+  const res = await withBusApplier(
+    () => { calls++; const e = new Error('conflict'); e.status = 3; throw e },
+    () => call(toggleReq('claude', { enabled: true })),
+  )
+  assert.equal(res.statusCode, 409)
+  assert.match(JSON.parse(res.body).error, /conflict|冲突/)
+  assert.equal(calls, 1, '409 只提示重试，handler 不得自行重放补丁')
+})
+
+test('toggle：applier 其他失败（exit 2 契约 / exit 4 IO）→ 500 且带 applier 输出，绝不回退直写', async () => {
+  for (const status of [2, 4]) {
+    let calls = 0
+    const res = await withBusApplier(
+      () => { calls++; const e = new Error('fail'); e.status = status; e.stdout = '补丁契约非法' ; throw e },
+      () => call(toggleReq('claude', { enabled: true })),
+    )
+    assert.equal(res.statusCode, 500, `exit ${status} 应 500`)
+    const body = JSON.parse(res.body)
+    assert.match(body.error, /bus-apply exit/)
+    assert.match(body.error, /补丁契约非法/, '错误要带出 applier 的人话输出，exit 数字帮不了任何人')
+    assert.equal(calls, 1, '失败后不回退、不重试 —— 回退直写就是复活静默绕行')
+  }
 })
 
 /* ---------- ⑤ 判定层只读端点（2026-09-30，P1：面板消费判定层） ---------- */

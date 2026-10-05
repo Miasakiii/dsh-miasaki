@@ -246,6 +246,42 @@ test('merge 在已有内容上浅合并（能力图回填 confidence 的场景�
   assert.equal(cap.generated_at, '2026-09-10T00:00:00Z')
 })
 
+test('写入收敛第二批：control / manifest / registry 只接受 set（输入类，整体替换）', (t) => {
+  const root = freshRoot(t)
+
+  // 三条 set 全放行（作者与真实调用方一致：toggle=operator、discovery=scanner）；
+  // 同批提交 = 同一超步（与 scan-agents 的真实用法一致）
+  const r = core.applyPatches(root, [
+    { op: 'set', path: 'agents/scout/control.json', value: { enabled: true, updated_by: 'operator-panel' }, author: 'operator', expected_version: 0, reason: '收敛验证' },
+    { op: 'set', path: 'agents/scout/manifest.json', value: { id: 'scout', skills: ['coding'] }, author: 'scanner', expected_version: 0, reason: '收敛验证' },
+    { op: 'set', path: 'agents/registry.json', value: [{ id: 'scout' }, { id: 'claude' }], author: 'scanner', expected_version: 0, reason: '收敛验证' },
+  ], {})
+  assert.equal(r.ok, true, `三条 set 应放行：${r.error}`)
+  // 落盘内容可读、author 如实进事件流（开关变更从此可归因）
+  assert.equal(JSON.parse(readText(root, 'agents/scout/control.json')).enabled, true)
+  const commit = core.readEvents(root).filter((e) => e.event === 'superstep.committed').pop()
+  assert.deepEqual(commit.paths.sort(), [
+    'agents/registry.json',
+    'agents/scout/control.json',
+    'agents/scout/manifest.json',
+  ], '三个文件应登记进同一超步的 paths')
+  assert.equal(commit.author, 'applier', '超步提交事件的 author 恒为 applier（补丁作者在各补丁里）')
+
+  // 输入类不接受 append（usage.jsonl 那种「逐行追加」语义对许可/档案无意义）
+  const bad = core.applyPatches(root, [{
+    op: 'append', path: 'agents/registry.json', value: {}, author: 'scanner', expected_version: 1, reason: 'x',
+  }], {})
+  assert.equal(bad.code, 2)
+  assert.match(bad.error, /不接受 op=append/)
+
+  // 归档目录天然不在白名单（两段路径不匹配 agents/<id>/…）
+  const archive = core.applyPatches(root, [{
+    op: 'set', path: 'agents/archive/scout/manifest.json', value: {}, author: 'scanner', expected_version: 1, reason: 'x',
+  }], {})
+  assert.equal(archive.code, 2)
+  assert.match(archive.error, /不在可写白名单内/)
+})
+
 test('--check 只校验不写入，但报告将要变成的版本', (t) => {
   const root = freshRoot(t)
   const r = core.applyPatches(root, [appendPatch()], { check: true })

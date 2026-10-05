@@ -229,7 +229,7 @@ G3 **完全未实现**，且卡在数据前提：`t-0001~t-0008` 全部真实任
 | **P0** | 派单过程机器事件留痕 | ✅ **已落地（2026-09-30）**：`Write-BusEvent` 经 `bus-apply --emit-event` 写 `task.started`（CLI 启动前）与终态 `task.completed` / `failure.detected`。**注意区分**：这解决的是「过程无事件」，**不等于**下一条 P0-5 的「写入收敛」——`status.json` / `usage.jsonl` 仍是直写 |
 | **P0** | 高风险任务 `verifier-pick` 未挂则告警 | ✅ **已落地（2026-09-30，第三批）**：`Test-VerifierGate` —— brief 声明 `risk:` / `需要验证：`（或 `-Risk`）即要求**可用**的异构验证者，**无可用候选直接拒绝派单**（比「告警」更强，因为派单前判定本来就是闸门位）；值非法即拒绝（不猜）；未声明即跳过（零行为变更）。派单后生成验证任务书（**不自动派发**）。见 fleet README「派单验证闸门（G4）已接线」 |
 | **P0** | **定死 `tasks.jsonl` / `usage.jsonl` / `status.json` 的写者归属** | ✅ **已落地（2026-09-30，B5）**：主协议 **§4.5 的权责表为唯一定义**（Commander 写全部台账 op；worker 不写；派单器**不写台账**、代写的是 `status.json`/`usage.jsonl`/事件），消除 §2 / §5 / §7.0 的**四说** |
-| **P0** | status / usage 经 `dispatcher` 代理写入总线 | ✅ **已落地（2026-09-30，B5）**：`usage.jsonl` 登记白名单（仅 `append`）并经 applier 落盘（t-0011 实测：superstep 的 `paths` 命中该路径）。**`status.json` 刻意豁免** —— 它是**派生态缓存**（真值在 `result.json` + 事件流，写频 2 次/派单，全仓无周期性心跳写者），理由写进契约。**仍已知未收敛**：`control.json`（fleet-monitor 直写派单许可）、`manifest.json`/`registry.json`（扫描器直写，是能力闸门的实际输入）—— 属独立批次 |
+| **P0** | status / usage 经 `dispatcher` 代理写入总线 | ✅ **已落地（2026-09-30，B5）**：`usage.jsonl` 登记白名单（仅 `append`）并经 applier 落盘（t-0011 实测：superstep 的 `paths` 命中该路径）。**`status.json` 刻意豁免** —— 它是**派生态缓存**（真值在 `result.json` + 事件流，写频 2 次/派单，全仓无周期性心跳写者），理由写进契约。**原「仍已知未收敛」三项已于 2026-10-05 第二批收口**（设计文档 v0.28）：`control.json`（monitor toggle 经 applier，500/409 不回退）、`manifest.json`/`registry.json`（扫描器 N+1 补丁一次超步） |
 | **P1** | brief 加 `requires: [cap:*]`；manifest 加 `model` 真值 | ⏳ 待做（激活能力级 confidence 与 G4 的 model 级异构判定） |
 | **P1** | 任务书加 `limits: { max_cost, deadline }`（§4①） | ⏳ 待做 |
 | **P1** | 派单器加超时/重试/orphan 回收（§4②） | ⏳ 待做 |

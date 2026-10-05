@@ -64,6 +64,11 @@
 >   **形态决策（本批定死）**：**spawn 现成 CLI，不重复实现判定** —— 端点分别调 `task-ready.mjs --dispatchable --json`、`agent-pick.mjs --gaps --json`、读 `state/graph-events.jsonl` 尾部；面板显示什么，派单器就按什么判定（口径同源；面板是第三份消费者，另写一份判定必然漂移）。**保留独立 server 作数据层**：将来若要进 DSH GUI，加一个 thin 插件壳复用同一份 `/api/*`，不重写数据层。
 >   **两处判据细节**：① 判定层 CLI 的**非零退出是正常语义**（无可派任务时 exit 1，stdout 仍是合法 JSON）⇒ 必须先取 stdout 再解析，不能拿退出码当失败；② 判定层不可用 ⇒ 端点返回 `ok:false`，**不让面板整页 500**。端点全部只读、同样过三道信任围栏。闸门：`verify-all fleet` 新增 `fleet-monitor 判定层区块 (P1)` **7 项断言**（区块 + 三个端点 + `runJudgement` 口径同源），fleet **20 → 21 项**。
 >   **尚未做（P2 候选）**：`/api/verifiers`（验证者候选）与 §8.4 的四条告警规则（心跳丢失 / 预算 ≥80% / 任务硬超时 / 开关与进程不一致）—— **面板不告警就只是图表页**。K1 的实机判据同日补立（回归矩阵 §3 K1）。
+> - v0.28 写入收敛第二批（2026-10-05，三处输入类直写收敛）：v0.26 登记的「已知未收敛」全部收口 —— `control.json` / `manifest.json` / `registry.json` 三处直写改经 `bus-apply` 唯一入口（白名单 +3 条 `set` 规则，`capability.json` 维持零写者占位登记）。
+>   **① fleet-monitor toggle**：写盘改组 `set` 补丁（author=operator，expected_version=-1 占位由 CLI 层填当前值）经 applier 落盘；**失败 500 / 409，绝不回退直写** —— toggle 是交互式操作，失败立即可见可重试，回退 = 复活静默绕行（与 usage 的「数据不丢优先」刻意不同）；exit 3（并发冲突）→ 409 提示重试。**BUS_ROOT 对齐 WORKSPACE**（v0.25 ⑤ 同款教训）。收益顺带兑现 t-0011 复核指出的「开关变更零机器事件」——set 补丁自动产生超步事件，paths 可查。可注入 `__setBusApplier`（与 `__setJudgementRunner` 同款，测试不起子进程）。
+>   **② scan-agents.ps1**：manifest×N + registry 改组 **N+1 个 set 补丁同批提交**（一次超步原子生效），author=scanner，失败 exit 1 不回退（discovery 是显式运维动作，重跑即重试）。**两个 PS 5.1 实测坑**（同族不同根，均已入注释）：payload 必须 `ConvertTo-Json -InputObject` 形态 —— 管道形态对多元素数组本来就输出 `[...]`，再手工包一层就是 `[[...]]` ⇒ applier 报「补丁[0]: 补丁应为 object」；契约错误必须 `--json` 走 stdout —— 脚本头部的 `$ErrorActionPreference='SilentlyContinue'` 会把 `2>&1` 合并的 stderr ErrorRecord **静默吞掉**（exit 2 的具体原因一行都看不见）。顺带修掉 `Set-Content -Encoding UTF8` 在 PS 5.1 下写 BOM 的隐性缺陷（applier 落盘恒为无 BOM UTF-8 + 末行换行）。
+>   **③ 实弹验证（临时工作区，不动真实总线）**：扫描器 7 补丁一次超步（`superstep.committed.paths` 全数登记、落盘无 BOM）；monitor 真 applier 链路 toggle → HTTP 200 + control.json 翻转 + 事件流 paths 命中。回归：fleet-monitor **15 → 19 例**、`bus-apply` **+1 例**（三路径 set 放行 / append 拒绝 / 归档路径天然不可写 / 超步 paths 登记）、`bus-contract` 反例订正（manifest.json 由「未登记反例」转正，换入刻意不存在的 `state/bus-version.json`），`verify-all fleet` **21/21**。
+>   实机判据：面板点开关 ⇒ `state/graph-events.jsonl` 出现带 `agents/<id>/control.json` 的超步（本批为 HTTP 层实弹已验，面板点击属常规走查）。
 
 ---
 

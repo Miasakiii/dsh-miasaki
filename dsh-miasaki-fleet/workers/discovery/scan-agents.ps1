@@ -21,8 +21,8 @@ $catalog = @(
 )
 
 $agentsDir = Join-Path $Workspace 'agents'
-New-Item -ItemType Directory -Force -Path $agentsDir | Out-Null
 $registry = @()
+$patches = @()
 
 foreach ($a in $catalog) {
   $bin = $null
@@ -65,14 +65,41 @@ foreach ($a in $catalog) {
     if (-not $existing.skills -or @($existing.skills).Count -eq 0) { $existing.skills = $a.skills }
     if (-not $existing.preflight) { $existing.preflight = $a.preflight }
     $existing.updated_at = $entry.updated_at
-    $existing | ConvertTo-Json -Depth 8 | Set-Content $manifestPath -Encoding UTF8
+    $patches += @{ op = 'set'; path = "agents/$($a.id)/manifest.json"; value = $existing; author = 'scanner'; reason = "discovery refresh（刷新 cli 元数据）"; expected_version = -1 }
     Write-Host ("refresh {0,-14} -> {1} {2}" -f $a.id, $binPath, $ver.Trim())
   } else {
-    $entry | ConvertTo-Json -Depth 8 | Set-Content $manifestPath -Encoding UTF8
+    $patches += @{ op = 'set'; path = "agents/$($a.id)/manifest.json"; value = $entry; author = 'scanner'; reason = "discovery create（新发现 agent CLI）"; expected_version = -1 }
     Write-Host ("created {0,-14} -> {1} {2}" -f $a.id, $binPath, $ver.Trim())
   }
   $registry += @{ id = $a.id; name = $a.name; bin = $bin; binPath = $binPathStored; version = $ver.Trim(); invoke = $a.invoke; metering = $a.metering }
 }
 
-$registry | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $agentsDir 'registry.json') -Encoding UTF8
-Write-Host ("`nregistry.json: {0} 个已发现 agent CLI" -f $registry.Count)
+# ── 写入收敛（2026-10-05）：manifest/registry 经 bus-apply 唯一入口，一次超步提交 ──
+# 二者是能力闸门的实际输入（agent-pick 读 skills、派单器读 metering_source），属「输入类」
+# 真相 ⇒ 必须经唯一入口（bus-contract.cjs 白名单，2026-10-05 第二批收敛）。N+1 个 set 补丁
+# **同批提交**（原子：要么全部生效要么全部不动）；失败 exit 1 **不回退直写** —— discovery
+# 是显式运维动作，重跑即重试；回退等于复活静默绕行。expected_version=-1 是占位，applier
+# 的 CLI 层自动填当前版本。顺带修掉 Set-Content -Encoding UTF8 在 Windows PowerShell 5.1
+# 下写 BOM 的隐性缺陷（applier 落盘恒为无 BOM UTF-8 + 末行换行）。
+$patches += @{ op = 'set'; path = 'agents/registry.json'; value = $registry; author = 'scanner'; reason = "discovery registry（{0} 个已发现）" -f $registry.Count; expected_version = -1 }
+$applier = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'workers\bus\bus-apply.mjs'
+# BUS_ROOT 与 -Workspace 对齐：applier 默认按自身位置推导根，与 -Workspace 不一致会
+# 「扫 A 工作区、写 B 工作区」的静默错位（dispatch-task.ps1 同款教训）。
+$env:BUS_ROOT = $Workspace
+# ⚠️ 必须用 **-InputObject 形态**，不能管道也不能手工包方括号：
+#   · 管道形态 `$patches | ConvertTo-Json` 对多元素数组**本来就输出 [...]**（PS 5.1 实测），
+#     再手工包一层就是 [[...]] ⇒ applier 报「补丁[0]: 补丁应为 object」；
+#   · 手工包 brackets 只对「单元素出裸对象」的形态成立（dispatch-task.ps1 记的是单元素管道坑，
+#     同族不同根）—— -InputObject 把整个数组当**一个**输入序列化，单/多元素都稳定出 JSON 数组。
+$payload = ConvertTo-Json -InputObject $patches -Depth 12 -Compress
+# ⚠️ --json 让 bus-apply 把契约错误打到 **stdout**：本脚本头部 $ErrorActionPreference='SilentlyContinue'
+# 会把 2>&1 合并进来的 stderr ErrorRecord **静默吞掉**（实测：exit 2 的具体原因一行都看不见，
+# 排查白花一轮）—— stdout 的 Information 记录不受影响。失败时 $out 里必有人话错误。
+$out = $payload | & node $applier --stdin --json 2>&1
+if ($LASTEXITCODE -ne 0) {
+  Write-Host ("[discovery] ✗ bus-apply exit {0}：{1}" -f $LASTEXITCODE, (($out | Out-String).Trim()))
+  Write-Host '[discovery] 上面打印的 created/refresh 只是扫描结果 —— 本轮**未落盘**（一次超步原子提交）。修复后重跑本脚本即可。'
+  exit 1
+}
+Write-Host ("`n[discovery] 经唯一入口落盘：{0} 个补丁一次超步提交（bus-apply exit 0）" -f $patches.Count)
+Write-Host ("registry.json: {0} 个已发现 agent CLI" -f $registry.Count)

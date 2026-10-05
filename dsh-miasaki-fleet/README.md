@@ -391,9 +391,11 @@ curl -s "http://127.0.0.1:<port>/api/events?limit=5"
 **失败语义「数据不丢优先」**：applier 失败 → 回退直写 + 告警（行内标 `[BUS_BYPASS]`、落 `logs/dispatch.log`，可 grep）；
 但 **partial 失败不回退** —— partial 意味「补丁可能已落盘」，再写一遍就是**成本双计**。
 
-> **⚠️ 已知未收敛**（登记在册，勿当成已完成）：`agents/<id>/control.json`（fleet-monitor 的 `POST /api/toggle` 直写
-> —— 派单许可是**输入**不是派生态）、`agents/<id>/manifest.json` 与 `agents/registry.json`
-> （`scan-agents.ps1` 直写 —— 能力闸门的**实际输入**）；另 `capability.json` 虽在白名单内但**全仓零写者**。
+> **✅ 三处输入类直写已收敛（2026-10-05 第二批，v0.28）**：`control.json`（monitor toggle 经 applier，
+> 失败 **500/409 不回退** —— 交互式操作可重试，回退 = 复活静默绕行）、`manifest.json` + `registry.json`
+> （`scan-agents.ps1` 组 N+1 个 set 补丁**一次超步**提交，失败 exit 1 重跑即重试；顺带修掉 PS 5.1
+> `Set-Content` 写 BOM 的隐性缺陷）。白名单 +3 条 `set` 规则；`capability.json` 维持零写者占位登记。
+> 实机判据：面板点开关 ⇒ 事件流出现带 `agents/<id>/control.json` 的超步。详见设计文档 v0.28。
 
 **复核驱动的修复**：t-0011 的独立复核指出 **2 条阻断**（失败轮零计量、partial 重计）+ 4 条建议，全部当批处置；
 另修两个**同族命令构造缺陷**（prompt 里的引号泄漏成 CLI 参数、`cmd:` 行成对引号未剥离 —— 后者会让命令

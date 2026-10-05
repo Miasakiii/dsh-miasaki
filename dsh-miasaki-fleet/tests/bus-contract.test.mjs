@@ -258,7 +258,9 @@ test('patch：合法补丁通过', () => {
 })
 
 test('patch：路径白名单是硬闸 —— 未登记路径一律拒绝', () => {
-  for (const p of ['state/events.jsonl', 'workers/validate-bus.mjs', 'AGENTS.md', 'agents/scout/manifest.json']) {
+  // （manifest.json 原是这组反例之一 —— 2026-10-05 写入收敛第二批起它已转正为 set 可写，
+  //   反例换成至今刻意不存在的 bus-version.json：版本号是事件流的派生态，见契约头部）
+  for (const p of ['state/events.jsonl', 'workers/validate-bus.mjs', 'AGENTS.md', 'state/bus-version.json']) {
     const r = check((f) => validatePatch({
       op: 'set', path: p, value: {}, author: 'commander', expected_version: 0, reason: 'x',
     }, 'p', f))
