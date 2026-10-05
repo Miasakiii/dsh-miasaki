@@ -194,7 +194,13 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > **勾选口径**：验完一项把 `- [ ]` 改成 `- [x]`，行尾补日期与一句结论（可指向截图/证据路径）。
 > 判据正文在各 §（括号内标注），本节只做登记、不重复判据。
 >
-> **状态：7 / 109 项已验收**（**分母口径 = §3.0 台账里的 checkbox 总数**）。**2026-09-30 增勾 3 项**：
+> **状态：9 / 114 项已验收**（**分母口径 = §3.0 台账里的 checkbox 总数**）。
+> **2026-10-05 机器对账订正**：原文写「7 / 109」，逐条数出来是「9 / 114」——
+> 勾选数少记 2（**K2a / K2b-1** 两个子项已勾但没计入），分母少记 5（其中本批新增 **E18 M4.1 边缘停靠**
+> 与 **E23 启动片头** 两项，其余 3 项是 09-30 之后补立未同步的存量漂移）。
+> **核对命令**（分母/已勾一律以机器统计为准，不用手数）：
+> `Select-String -Path dsh-miasaki-shared-docs/cross/smoke-test-matrix.md -Pattern '^\s*- \[[ x]\]'`。
+> **2026-09-30 增勾 3 项**：
 > **K3**（交付物反向存在性）、**K5**（厂商表断链）、**J5**（上游补丁 live 审计）—— 三项都是
 > 「修完即由自动闸门验证」的形态，证据与判据写在各行内（K3 首跑即抓到存量 7/9 任务「已验收却无交付物」；
 > K5 有「真实表存在且合法」的用例；J5 有故障注入三态自证 + 11 目标 live 审计）。
@@ -344,10 +350,12 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 - [ ] E15 拖拽上传附件十项（§3.1「拖拽上传附件」行）：对话页拖 PNG → 官方遮罩 → 松手 → composer 缩略图 → 发送成功；多文件混合拖入各自入轨；生成中 / 子代理视图拖文件 = 拒绝态遮罩、松手无副作用；拖选中文字 / 链接无反应；轨迹 / 用量 / 设置页拖文件 → SPA 不被导航走（安全网）；loading 页拖文件无导航无报错；超大图 → 官方 toast；窗口拖动 / 双击最大化 / 三主题 / 桌宠回归（清单十项见 desktop `design/drag-drop-attachment-upload.md` §6）
 - [ ] E16 启动加载 S4a 视觉层（§3.1「启动加载视觉层」行）：三主题下纹章外环 24s 缓旋 + 光晕呼吸 + 舞台扫描线（≤.06 不刺眼）；就绪瞬间（文案「已就绪，正在进入…」）纹章 1.06 回弹一次、计时收起；等待期间「已等待 N s」读数 250ms 推进；系统开「减少动画效果」后全部静止、功能不变；失败路径（恢复动作组 / 重试）零回归（S4b 日志流待 S3 tee，不在本项）
 - [ ] E17 Computer Use L3 七步（清单在 `dsh-miasaki-desktop/plugins/dsh-computer-use/README.md`）：① 主窗口「设置 → 模型」确认 **step-5-preview**（视觉模型）可用；② 新建会话 → 模式选择器出现 **「Computer Use 模式」**（preset 注册成功的 UI 判据）；③ 工具目录含 13 个 GUI 工具 + `code_agent` / `code_agent_status` / `code_agent_stop`；④ 只读验：「截个图看看当前窗口」→ screenshot 执行、图落桌面 + 剪贴板；⑤ 写入验：「打开记事本，输入 hello」→ 记事本被拉起并键入；⑥ 异常路径：以管理员运行的窗口应被拒绝输入且如实报错（不假装成功）；⑦ 背景轨：「做个贪吃蛇小游戏」→ `code_agent` 派发后台会话、立即返回、完成通知回会话。**未沙箱化真实桌面控制，写入项围观时做；HID 输入类工具在 L3 前保持未触发态**
-- [ ] E18 契约 v1.1 写能力七条（§3.1「契约 v1.1」行）：`theme.set('kurkuriel')` 切主题；`window.controls.minimize()` 最小化；`.maximize()` 最大化 / 还原切换；`.close()` **隐藏到托盘**（不是退出）；`theme.set('bogus')` 返回 `false` 且无任何副作用；`controls.min` / `.max` 为 `undefined`（内部协议名不外泄）；SSH / 画布 iframe 内该对象仍只有三字段（写能力不泄漏到子 frame）
+- [ ] E18 M4.1 边缘停靠与探头（§3.2.3 八行）：拖到边 ≤18px 自动吸附（距边恰 18px）；静置 5s 缩边露 ~55%（300ms）；压上/点击拉直 ~82%（250ms）、再静置退回常驻档（300ms）；缩边态点击 = 拉直而非跳跃；探头态重启 = 全可见吸附位不回默认；探头期间无 wander 滑步、拖动即脱停靠；气泡出现同帧弹回吸附位且按钮不被裁；副屏与混合 DPI 待验
+- [ ] E22 契约 v1.1 写能力七条（§3.1「契约 v1.1」行；**编号 2026-10-05 订正** —— 本项原也编号 E18，与上一行「M4.1 边缘停靠」重复，勾选时曾产生歧义）：`theme.set('kurkuriel')` 切主题；`window.controls.minimize()` 最小化；`.maximize()` 最大化 / 还原切换；`.close()` **隐藏到托盘**（不是退出）；`theme.set('bogus')` 返回 `false` 且无任何副作用；`controls.min` / `.max` 为 `undefined`（内部协议名不外泄）；SSH / 画布 iframe 内该对象仍只有三字段（写能力不泄漏到子 frame）
 - [ ] E19 W5 自更新降级五条（§3.1「W5」行）：未配置 ⇒ 提示配置文件路径且**不发网络请求**；配真实 `feed` ⇒ 弹「发现新版本」选「是」打开系统默认浏览器到 `page`；`feed` 写 `0.1.0` ⇒ 提示「已是最新版本」；断网 / `feed` 不可达 ⇒ **可读的失败提示**（不静默、不假装已最新）；全程**不出现**任何下载写盘或安装动作
 - [ ] E20 模型连通性探测面板（§3.7 八项）：`step` 的 `step-5-preview` 点「测试连通性」⇒ 绿色「可用 · Nms」（v1 误报文案不再出现即达标）；错 key ⇒ 「认证失败」且握手档 401 即终止（不产生生成调用）；错模型 ID ⇒ 「模型 ID 未注册或拼写错误」（不是 401、不是原始错误串）；`https://127.0.0.1:9` ⇒ 「无法连接」；挂起地址 ⇒ 「连接超时（15s）」；移除插件重启 ⇒ 降级目录探测并附提示（**不白屏、不永久「测试中…」**）；`api` 属三种协议之外 ⇒ 「暂不支持探测」不发请求；各项执行后 `~/.dsh/settings.yaml` 内容未被改动
 - [ ] E21 分组账本全局侧回填生效（§3.9b 唯一 ⏳ 行）：`--merge-intent` 已写入、待 web host 重启生效 —— 生效判据：全局 `workspace.json` 的 `workspaceIds` `0 → 2`、`initialized` 回 `true`、`dsh-miasaki` 分组由 5 条扩到该 cwd 下全部会话
+- [ ] E23 启动片头视频（§3.1「启动片头」行，2026-10-05）：**先看磁盘配置** —— `~/.dsh/miasaki-appearance/config.json` 的 `version` 为 **7** 且含 `boot` 板块（`intro` 为四段之一 / `audio` 布尔）。桌面壳读的是**文件**、不是外观插件内存里的迁移结果 —— 这正是 2026-10-05 修掉的那条裂缝（只迁移不落盘 ⇒ 片头永不播，根因见 desktop `design/2026-10-04-boot-intro-video.md` §10.9）；重启桌面端 ⇒ 加载页全屏播所选段（默认 `brand`）、**播完自动回落纹章层**（无「视频 → 黑屏 → 原生」跳变）；面板「设置 → 外观 → 启动」换段 / 开声音 ⇒ **下次启动**生效（不轮询）；选「关闭」⇒ 与原生一致；删掉 `boot` 板块 ⇒ 静默退化为纹章层、启动照常**且不报错**；系统开「减少动画效果」⇒ 不播片头（`ui/loading.html` 的 reduced-motion 分支）
 
 **F. Canvas（§3.3）**
 
@@ -381,7 +389,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 
 **J. 免费模型（第九线 `@miasaki/dsh-free-model`）**
 
-> **台账缺口 2026-09-29 补账时补**：本线 2026-09-28 迁出后**没有 §3.x 专节、也没有 §3.0 编号** ⇒ 实机债务在文档里不可见。判据暂引本线 `design/CHANGELOG.md` 各条「实机待验」与 README；**§3.12 专节待立**（下一步）。
+> **台账缺口 2026-09-29 补账时补**：本线 2026-09-28 迁出后**没有 §3.x 专节、也没有 §3.0 编号** ⇒ 实机债务在文档里不可见。**2026-10-02 已补 §3.12 专节**（判据正文首次收进矩阵）—— 此前判据暂引本线 `design/CHANGELOG.md` 各条「实机待验」与 README；**注意 CHANGELOG 里 2026-09-28 之前那批「模型页底部应看到免费模型面板」的验收指引是撤销前形态**（`settings.models.footer` / `provider-card` 两个落点已全部撤销），照它验会误判。
 
 - [ ] J1 统一页与上游让位：重启 miasaki ⇒ 设置左栏**只剩「免费模型」一页**（无公告中心分区、无首启 5 页弹窗、nav-label 已改）；模型清单后出现「本机自配平台」分区
 - [ ] J2 scan 真实数据：`POST /freemodel-api/scan` 的 `models[]` 含 our-free-model 的 11 个模型（`source:"adapter"` / `writable:false` / `freeReason` 含「免 Key 车道」）；真实数据上 L1 判定命中（如 openrouter 24 模型 / 21 免费）
@@ -391,7 +399,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 
 **K. Fleet（多 Agent 编排线）**
 
-> **台账缺口 2026-09-29 补账时补**：fleet 此前**没有专节**，面板与派单判据只散在 §4 两行 + L1 自动回归里 ⇒ 实机债务不可见。**§3.13 专节待立**（下一步）。
+> **台账缺口 2026-09-29 补账时补**：fleet 此前**没有专节**，面板与派单判据只散在 §4 两行 + L1 自动回归里 ⇒ 实机债务不可见。**2026-10-02 已补 §3.13 专节**（判据正文首次收进矩阵）。
 > K3–K5 是「**先修后验**」项：三处未修的静默缺口，修完后在此验收（修前验不了）。
 
 - [ ] K1 fleet-monitor 面板走查（**判据 2026-09-30 已立** —— P1 判定层上屏；自动闸门 `verify-all fleet` 的
@@ -445,6 +453,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | **顶部安全区：官方页面标题行下移一格（2026-09-29，插件页报障）** | ① **主判据（目检 + DevTools）**：重编 exe 后打开插件页（侧栏「插件」）→ 右上角「＋ 添加插件」胶囊与「⟳ 刷新」**完整可见且可点**，与右上 `- □ ×` 三键 / 主题徽记**无任何叠压**（改动前实测重叠 10px 高 × 71px 宽）；② DevTools：`getComputedStyle(document.querySelector('#root [class*="_pageHead"]')).marginTop === '21px'`，`getComputedStyle(document.documentElement).getPropertyValue('--ms-titlebar-clearance').trim() === '21px'`；动作区上沿 − `.tb-group` 下沿 = **12px**（≥8px 即达标）；③ 日程页（自动化任务）同一条规则命中 `.t-XoWW_pageHeading`（`_pageHead` 子串），同样不落进窗控带；④ **降级**：浏览器直开 `http://127.0.0.1:3080`（无壳，无注入脚本）⇒ 该 `margin-top` 计算值为 `0px`、页面与官方逐像素一致；⑤ **自动化**（2026-09-29 已在一次性 `dsh --profile web` 实例上实跑，`DSH_HOME` 隔离）：`verify-themes.mjs` §6.6 三项 —— 旧产物 **22/27**（三项如实失败，判据有区分力）→ 新产物 + 干净 profile **27/27**；`verify-all desktop` **36/36**、`repo` **3/3**；探针截图与复跑说明归档 `_refs/scripts-archive/pagehead-clearance-2026-09-29/` |
 | P7 心跳通道 / URL 不再抖动（2026-09-26 下午） | ① 打开任一会话静置 3 分钟后切走再回来：`%LOCALAPPDATA%\com.miasaki.desktop\EBWebView\Default\History` 的**文件大小与修改时间不再持续增长**（改动前实测 87MB、1.2–1.5s 一轮 URL 变更）；② `%LOCALAPPDATA%\miasaki\pet.log` 里 `doc-boot #N` 与 `page-load #N` **都停在个位数**（`doc-boot` 涨 = 页面真被重载；两者都不涨 = 修复生效）；③ 桌宠六态照常 —— 切会话/发问 → `thinking`/`done` 立绘与气泡正确，证明心跳经事件通道被 `set_official_state` 消费（DevTools 里 `window.__TAURI_INTERNALS__` 存在即可走该通道）；④ 断网/无 IPC 场景（浏览器直开 `http://127.0.0.1:3080`）行为与历史一致：心跳仍走 hash、页面上不报错；⑤ F5 刷新后桌宠状态在 1–2 秒内恢复（`on_page_load` 只在文档级导航补注入主题脚本，同文档导航不再重解析 120KB） |
 | P9 后端拉起不依赖 `cmd.exe`（2026-09-26 晚） | ① 冷启动 `miasaki.exe`：启动页**不再**出现「未检测到 dsh」，`pet.log` 出现 `spawn-dsh: node 直启后端（绕开 cmd.exe）pid …`；② 失败页点「检查 dsh」→ 自证里 `cmd.exe：可执行（C:\WINDOWS\System32\cmd.exe）`（**绝对路径，不再是裸名**）与 `node 直启：可用（…\node.exe → …\dsh\lib\bin.js）` 两行都在；③ 后端确实起来（`http://127.0.0.1:3080` 有响应、壳进入 DSH 页）；④ 关闭应用后自拉后端随之退出（Job 兜底仍有效）；⑤ 反例验证（可选）：把 node 从 PATH 摘掉再启动 → 自动回落 `cmd /C dsh …`，错误信息带「node 直启不可用（…）」而非静默失败 |
+| **启动片头视频（2026-10-05，跨 desktop × appearance）** | ① **配置侧（机器判据，先看这条）**：`~/.dsh/miasaki-appearance/config.json` 的 `version` 为 **7** 且含 `boot` 板块（`intro` ∈ `brand`/`cyberpunk`/`awakening`/`startup`，`audio` 为布尔）—— **判据必须落在磁盘上**：桌面壳 `boot_intro.rs` 直接读这个文件，外观插件内存里的迁移结果对它不可见（2026-10-05 修复的正是这条裂缝，根因见 desktop `design/2026-10-04-boot-intro-video.md` §10.9）；② **播放**：重启桌面端（快捷方式指向 `C:\ProgramData\MiasakiApp\Miasaki.exe`）⇒ 加载页出现全屏视频片头（出厂档 `brand`、静音），播完**自动回落**到既有纹章层（S4a），无「视频 → 黑屏 → 原生」跳变；③ **换段 / 开声音**：设置 → 外观 → 启动 → 换一段 / 开音轨 ⇒ **下次启动**生效（片头刻意不轮询）；选「关闭」⇒ 与原生一致；④ **降级**：删掉 `boot` 板块（或整份配置 / 写坏 JSON）⇒ 静默退化为纹章层、启动照常**且不报错**；系统开「减少动画效果」⇒ 不播片头（`ui/loading.html` 的 reduced-motion 分支）；⑤ **署名义务**：`ui/intro/THIRD-PARTY-NOTICE.md` 随部署目录就位（第三方素材 BSD-3） |
 
 ### 3.2 桌宠
 
@@ -486,6 +495,19 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > 与自动回归（desktop **40/40**、`cargo test` 100 例）；3.2.2 的六行是**目视项**，需人执行。
 > （`40/40` 是**第九线迁出前**的口径；迁出后 desktop 为 **36/36** —— 4 项随免费模型池迁入 `free-model`，
 > 见顶部 2026-09-29 基线。）
+
+#### 3.2.3 M4.1 边缘停靠与探头（2026-10-05 落地；判据同 `pet-v3-roadmap.md` §M4.1 验收 + `pet-reference-benchmark.md` R14）
+
+| 检查项 | 通过判据 | 状态 |
+|---|---|---|
+| 拖到边缘自动吸附 | 松手点角色可见区域距工作区边 ≤18px ⇒ 沿边推出、**距边恰 18px**（不多不少不抖动）；拖到屏幕中间松手 ⇒ 不吸附 | 待走查 |
+| 静置自动缩边 | 吸附后静置 5s（期间光标不在角色上）⇒ 300ms 缓动滑向屏外、常驻露出**约 55% 角色宽度**；无跳变、无抽搐 | 待走查 |
+| 感知探出（拉直） | 光标压上探头部分**或**点击 ⇒ 250ms 拉直到约 82%；光标离开再静置 5s ⇒ 300ms 退回**常驻档**（不是退回吸附位——没拖走就继续探头） | 待走查 |
+| 点击语义分派 | 缩边态（含缩边/退回过渡中）点击 = 拉直（**不是**「撸一下」跳跃）；拉直态（Straightened）点击 = 原语义（跳 / 审批时唤起主窗） | 待走查 |
+| 探头态重启不丢 | 探头中重启壳 ⇒ 启动恢复为**全可见吸附位**（peek 是瞬态不跨重启），静置 5s 后自然再探头；**绝不**触发「位置不可见 → 回默认」（R3 判据 ≥25% 兜底） | 待走查 |
+| 位移源拦截（R14 教训②） | 吸附/探头期间**不出现** wander 滑步；拖动即脱停靠、探头立即归零，松手按新位置重判吸附 | 待走查 |
+| 气泡共存 | 探头期间会话出现审批 / 告警 / 状态气泡 ⇒ 桌宠同帧弹回吸附位（读感是「跳出来汇报」），气泡完整可点（审批按钮不被窗口边缘裁切） | 待走查 |
+| 副屏与 DPI（验收④⑤） | 副屏可吸附与探头（吸附到**当前屏**的边）；混合 DPI 下吸附不偏移 | 待走查（需多屏环境） |
 
 ### 3.3 Canvas
 
@@ -764,6 +786,53 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 | 生效（重启后） | 触发一轮记忆召回 → **不再出现**「本轮运行失败 format v4 message requires a producer-owned source kind」 |
 | 落盘形态 | `node scripts/inspect-session-sources.mjs` 在**新**会话里能看到 `plugin:openviking-memory` 的 source kind。旧文件里的 `plugin` 是 v3 历史资产（迁移器认它），**不受影响、也不应批量改** |
 | 回滚 | 新版引入其他问题时：版本约束改回 `^0.2.1` 并 `pnpm install`（记忆功能失效但不再报该错），或把该插件从 `dsh.profile.bundles` 移除 |
+
+### 3.12 免费模型（第九线 `@miasaki/dsh-free-model` v0.4.0，2026-10-02 补节）
+
+> **为什么有这一节**：本线 2026-09-28 由 desktop 线迁出并扩容职责后，**既没有 §3.x 专节、也没有
+> §3.0 编号** ⇒ 实机债务在文档里不可见（「待验」只散在各线 CHANGELOG 的「实机待验」条目里，
+> 无法勾选、无法交接）。台账 J1–J5 此前引的就是这些散落条目，**判据正文第一次收进矩阵**。
+> 逐条设计决策见 [`design/CHANGELOG.md`](../../dsh-miasaki-free-model/design/CHANGELOG.md)。
+>
+> **前置**：重启 `dsh web` 或 miasaki 桌面端（插件 host 半只在启动时加载）+ 浏览器强刷。
+> **上游依赖**：本线界面是上游插件 `dsh-our-free-model` 的**增量补丁**（五处锚点改写本机安装副本），
+> 上游自升级后须重打（台账 J5 = live 闸门，非一次性验收）。
+
+| 检查项 | 通过判据 |
+|---|---|
+| 统一页与上游让位 | 设置左栏**只剩一栏「免费模型」**（无公告中心分区、无首启弹窗、左栏 nav-label 已改）；模型清单后出现「本机自配平台」分区（选平台 → 检测 → 卡片 → 写入配置 / 设为子代理）。**反例（判据的判据）**：停用本线插件后该栏退化为一行「『免费模型』插件不在场」，其余分区照常 |
+| scan 真实数据 | `POST /freemodel-api/scan` 的 `models[]` 含免 Key 车道的模型（`source:"adapter"` / `writable:false` / `freeReason` 含「免 Key 车道」）；自配平台侧真实数据上判定命中（命中数与模型 id 与面板一致） |
+| 能力画像 | 模型卡能力项**只到能被证明的程度**：适配器未声明即标「未声明 · 需实测」，**不得出现未经实测的 false** |
+| 模型卡实测 | 「实测」给出「可用（…）+ 耗时」；**未装 `dsh-model-probe` 时按钮整块隐藏**（不给点了报 404 的按钮） |
+| 设为默认 | 走官方 `agentDefaultModel.saveSelection` ⇒ **下一次会话**立即生效（不是当前会话） |
+| 围栏不回归 | 非环回 `Host` / 跨站打 `/freemodel-api/*` → **403**（围栏**先于 method 检查**：跨站 POST 得 403 而非 405）。**注意** `/apply`（写配置）与 `/subagent`（改预设文件）是写动作，此前裸奔 |
+
+> **两条形态纪律（照旧文档验会误判）**：① 本线**绝不注册 `settings.models.*` 槽位** ——
+> 官方模型页的编辑面板也 dispatch 那个槽，occupant 出问题就**整树白屏**（用一次事故换来的纪律）。
+> 模型页的两个落点（`settings.models.footer` / `provider-card`）已于 2026-09-28 **全部撤销**，
+> CHANGELOG 里仍留有「模型页底部应看到免费模型面板」的旧验收指引 —— **那是撤销前的形态，不是现状**。
+> ② 上游在场时本线让位（只有一个入口），上游不在场才由本线 `settings.section` 顶上（条件注册）。
+
+### 3.13 Fleet（多 Agent 编排线，2026-10-02 补节）
+
+> **为什么有这一节**：同 §3.12 —— fleet 线此前也没有专节，面板与派单判据只散在 §4 两行 + L1
+> 自动回归里。台账 K1–K5 的判据正文第一次收进矩阵。协议与设计见
+> [`docs/multi-agent-cli-orchestrator-design.md`](../../dsh-miasaki-fleet/docs/multi-agent-cli-orchestrator-design.md)。
+>
+> **前置**：本机起 `fleet-monitor` 面板（`127.0.0.1`）；派单类判据需真实 agent CLI（headless）。
+> **K3–K5 是「先修后验」项**：三处静默缺口修完后才在此验收（修前验不了）。
+
+| 检查项 | 通过判据 |
+|---|---|
+| 判定层上屏（K1） | 面板出现**可派集 / 能力断层 / 机器事件**三块，数字与 `task-ready.mjs --dispatchable --json`、`agent-pick.mjs --gaps --json`、`graph-events.jsonl` 尾部**逐条对得上**（面板 spawn 现成 CLI，不自实现判定）；不可派任务**带出原因**（不是只给计数）；**降级不白屏**（判定层 CLI 不可用 ⇒ 端点返回 `ok:false`、面板不整页 500）。**反例（判据的判据）**：临时给某任务加依赖 ⇒ 面板数字跟着变，证明它真在读判定层 |
+| 派单消费判定层（K2） | 真实 **3 路 fan-out → reduce → verify** 钻石图跑通（G1 可派 / G2 能力 / G4 验证三层判定已接线，缺的是多任务实跑的端到端） |
+| 终态如实落账（K4） | 构造一个**真实受阻样本**（worker exit 0 但契约 `status=blocked`）⇒ `agents/<id>/status.json` 落 `blocked` 而非 `idle`，事件流写 `failure.detected` 带 `state`。**反例**：非零退出已实机验证（t-0010 首派 claude 因 ccswitch 未启动返 404 ⇒ `error`），但 `blocked` 分支仍需真实样本 |
+| 交付物反向存在性（K3） | 台账 done+accepted ⇒ `tasks/<id>/result.json` 必须存在，缺失**显式失败**并点名（`validate-bus` 实盘 0 错误） |
+| 厂商表真读（K5） | `shared/agent-vendors.json` 存在且合法，覆盖内置表登记的全部 agent；`verifier-pick --check` 通过 |
+
+> **已知未做（P2，不在本节验收范围）**：`/api/verifiers` 端点与设计 §8.4 的四条告警规则
+> （心跳丢失 / 预算 ≥80% / 任务硬超时 / 开关与进程不一致）—— **面板不告警就只是图表页**。
+> 另：验证任务的**自动派发**刻意不做（会引入新的任务生命周期，属独立议题，见 K2b-2）。
 
 ## 4. L4：跨线联动
 

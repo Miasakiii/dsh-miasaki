@@ -11,7 +11,7 @@
 > ### ⚠️ 尚未发布到 npm —— 当前处于源码阶段
 >
 > 项目正在**逐线完善**：[回归矩阵 §3.0 实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
-> 共 **109 项判据、已验 7 项**（静态回归 **179 项**全绿，但那不等于"在你机器上能用"）。
+> 共 **114 项判据、已验 9 项**（静态回归 **180 项**全绿，但那不等于"在你机器上能用"）。
 > **质量闭环之前不会发布** —— 因此本页出现的 `dsh plugin add` 命令**暂时用不了**，
 > 想现在试请走[源码安装](#安装)。
 
@@ -51,7 +51,7 @@ dsh plugin --profile web add @miasaki/dsh-canvas
 | **会话布** | 可浏览 / 可分支 / 可合并的会话画布 | `@miasaki/dsh-canvas` |
 | **SSH** | 不切终端，在 DSH 里直连服务器：多 shell、SFTP、跳板、端口转发 | `@miasaki/dsh-ssh` |
 | **侧边栏** | 官方右栏的「审查」与「辅助对话」两个 tab，外加底部内嵌终端 | `@miasaki/dsh-sidebar` |
-| **外观** | 设置里多一栏「外观」：皮肤 / 壁纸 / 动效 / 启动画 | `@miasaki/dsh-appearance` |
+| **外观** | 设置里多一栏「外观」：皮肤 / 壁纸 / 动效 / 启动片头 | `@miasaki/dsh-appearance` |
 | **双模型** | 会话级「主模型 + 辅助模型」，任一支持图片即可发图 | `@miasaki/dsh-dual-model` |
 | **用量统计** | 每个会话烧了多少 token：实时明细、年热力图、趋势、今日限额 | `@miasaki/dsh-token-monitor` |
 | **免费模型** | 把本机所有免费模型聚成一张表，带能力画像与一键设默认 | `@miasaki/dsh-free-model` |
@@ -60,7 +60,8 @@ dsh plugin --profile web add @miasaki/dsh-canvas
 
 ### 桌面端
 
-Windows 桌面壳：双击 EXE → 自动拉起 DSH → 自带**三套主题皮肤**（原版纯净 / 刻刻帝 / 狂狂帝）
+Windows 桌面壳：双击 EXE → **全屏视频开机片头**（四段可选，设置 → 外观 → 启动）→ 自动拉起 DSH →
+自带**三套主题皮肤**（原版纯净 / 刻刻帝 / 狂狂帝）
 与一只**会跟着工作状态变化的桌宠**（思考 / 等待 / 出错 / 完成，六态）。
 
 不修改 DSH 本体：主题以令牌层覆盖实现，DSH 升级不受影响。

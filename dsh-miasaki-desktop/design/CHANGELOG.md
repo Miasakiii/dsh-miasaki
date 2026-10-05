@@ -2,6 +2,362 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-05（续二）· M4.1 边缘停靠探头落地：peek 状态机 + `IDT_PEEK` + 启动按 dock 边吸附复位
+
+v3 roadmap §M4.1 / benchmark R14 的「边缘探头」收官（吸附前半 —— ≤18px 判边、`dock_push_out`、
+`pet.json` 落 `dock` 字段 —— 上一轮已铺）。**零绘制改动**成立：分层窗移出屏外的部分自然不绘制，
+peek 动画只改 `self.pos`，由 `present()` 的 ULW 按新位置落窗。口径照 R14 采纳参考实现：
+静置 5s 进入 / 常驻露出 0.55 / 点击拉直 0.82 / 进入·拉直·退回 = 300·250·300ms，
+状态机六态逐字对齐（`OFF/ENTERING/PEEKING/STRAIGHTENING/STRAIGHTENED/RETURNING`），
+露出分母复用 `character_local_rect()` 口径。
+
+- **纯逻辑层（`model.rs`）**：`PeekPhase` + `PeekState{phase, slide, from, elapsed}` +
+  `peek_advance`（smoothstep、真实 dt ⇒ 隐藏/挂起不吃进度）/ 三个 kick / `peek_reset` /
+  `peek_slide_target`（含 +`DOCK_MARGIN_PX` 预留项推导）/ `peek_window_pos`（四边方向）。
+  **8 例单测**（定义式 / 四边方向 / 三段时长与落点 / 中途打断连续性 / 单调有界 / 相位守卫 /
+  与 R3 可见性判据不打架）。
+- **窗口层（`window.rs`）**：compose 节拍推进 + **气泡在场即同帧弹回吸附位**（气泡随窗口平移，
+  探头会把它裁出屏外 —— 审批按钮不可点 = 功能回归）；`IDT_PEEK`（250ms）做边界检测
+  （静置到期 / 光标压上，感应区口径与 R2 穿透判定同源）；**缩边态点击 = 拉直**（不吃「撸一下」）；
+  R14 教训②照抄 —— wander 触发加 `docked_edge` 闸、拖动开始即脱停靠 + 探头归零；
+  隐藏 / 位置重置回吸附位（悬浮球定位不被 peek 外移量带偏）。
+- **持久化（`persist.rs`）**：`initial_pet_state` 返回落盘的 `dock` 边并**按边推回吸附位**——
+  peek 是瞬态不跨重启，启动恒全可见（气泡 / 菜单可用），静置 5s 后自然再探头；
+  绝不触发「位置不可见 → 回默认」回归。
+- **回归**：真仓 `cargo test`（MSVC link 环境）**155 passed / 0 failed** —— 相对 HEAD 净增 31 条
+  （model 21 / xform 6 / settings 2 / persist 2，其中本条 peek 8 条）；
+  上会话「19 条待确认」口径已含其中并全部复绿。实机走查判据入验收矩阵 §3.2.3 + 台账 E18，
+  归用户侧（吸附 / 缩边 / 拉直 / 退回 / 重启 / 气泡共存 / 副屏 DPI）。
+
+### 清单收口（历史「仍未处置」留档现在只剩三项）
+
+2026-10-04 条目与三条 10-05 批次条目末尾各留了一份「仍未处置」清单，**按原样留档不改**，
+但读者不该再照它排期 —— 其中 **多轮任务重复庆祝 / ambient 池去重**已由（第一批）清账，
+**L1 M4 拖动尾随 / M4.1 边缘停靠**已由（第三批）（第四批）与本条清账。
+**当前真正剩下的三项**（均为「待出图能力」或「待拍板」，不是漏做）：
+inverse 三态仍各 1 帧；whale r7–r10 四行未接（+1.33 MB，v5 §6 待拍板第 2 条）；
+whale `states.idle` / `states.work` 死素材去留（同第 1 条）。
+另：既有环境噪声（`cargo` 增量编译锁文件 `os error 5`）不属欠账。
+
+## 2026-10-05（续）· 启动片头 3.0 完整构建清账：4 处 E0133 + 测试样本修复 + 部署 10/10 + P9 闪窗取证 PASS
+
+启动片头（[`2026-10-04-boot-intro-video.md`](2026-10-04-boot-intro-video.md)）上轮因沙箱拦截
+从未过完整编译，本轮在普通终端实跑清账（证据细节见该文档 §10.8）：
+
+- **4 个 E0133**：v5 M4 弹簧拖拽三个新函数（`flush_drag_target` / `end_drag` / `apply_dock`）
+  脱离 unsafe 上下文直调 FFI（`MoveWindow` ×3 / `KillTimer` ×1），按 `show_menu` 先例局部
+  `unsafe {}` 包裹（`window.rs`）；另修 `model.rs` 的 `thread_local!` 上的 unused doc comment。
+- **`cargo test --release` 147/147 全绿**（口径 109 → 147）：抓出并修复 1 个**测试自身写坏**
+  ——`zero_motion_survives_round_trip` ②③ 段拿「缺字段对照样本」（motion=1.0）冒充
+  「显式 0 样本」过 normalize，断言恒红；normalize 实现无缺陷。与设计文档 §10.6 同族：
+  「测试写坏 + 从未真跑过」双重叠加。
+- **构建 + 部署全链**：release 构建 23.64s，exe **+9.0 MB**（36.6 → 45.7 MB，片头素材嵌入
+  体积实锤）；signtool 签名 Valid；`ui/` → `dist/ui/` 镜像（补 §10.5 部署闸门的源头）；
+  `deploy-local.ps1` **10/10 PASS**（片头素材部署前后双验）。
+- **P9 闪窗验收 PASS（三重证据）**：冷启动子树正查只有 `msedgewebview2.exe` + `node.exe`
+  （`pet.log` 同证 node 直启）；空跑对照证明宽口径监控的 12 命中为环境噪声；5 次冷启动
+  应用健康（`phase:"up"`）。探针留档 `_refs/tmp-build-bootintro/`（不入库）。
+- **片头不播 = 预期**：本机 appearance config 停在 v6（无 `boot` 板块）⇒ 壳侧判定不播；
+  待 appearance 新版跑一次迁移 + 面板选段后重启生效。三主题目检与设置链路仍归用户侧。
+
+## 2026-10-04 · 桌宠线三项修正：error 态永久挂起（真 bug）/ 动效可完全关闭 / 补「已提交未起跑」空窗
+
+**触发**：上游 `PC2005-cloud/dsh-pet` 增量对标（HEAD `fc843cc`，`dsh-pet@0.3.5`）——
+发现其「事件驱动 vs 我方快照驱动」的架构差异暴露了我方一处**独有且抄不来的真实 bug**。
+完整对标见 [`pet-reference-benchmark.md`](pet-reference-benchmark.md) §8。
+
+### 一、P0 · `error` 态会永久挂起（本批唯一的 bug 修复）
+
+**取证**（官方实现，实测 `vendor/_probe-0172/…/dsh-api-session-controller/lib/client.js`）：
+
+| 行号 | 动作 |
+|---|---|
+| `:2001` | `handleAgentError(message)` → `this.lastAgentError = message` |
+| `:1697` | `prompt()` 开头才清 `null` |
+| `:1586` | `reset()` 才清 |
+
+⇒ **写入后无任何自动清除路径**（官方类型 `snapshot.d.ts:75` 亦无时间戳 / 已消费标记）。
+
+**我方旧实现因此是错的**：`client.js:603-608` 的 `else if (agg.agentError) state = "error"`
+只看「字段非空」，且 `error` 排在 `running` **之前**。而 `readRunningAggregate` 是**跨会话聚合**（R0 口径）
+⇒ 任何一次偶发 agent 错误会让桌宠一直停在「出错了」，直到用户恰好在**那个会话**里再发一条消息；
+历史里任一会话挂账即全局生效。
+
+**为什么上游没这个问题**：它走**事件驱动**（`agent/error` 只写一次性通知帧，档位由 `turn/end`
+的 `reason.kind` 结算，回合结束即归位）⇒ **天然无粘滞，抄不来**。
+
+**处置**：`makeFreshError()` 工厂 + 指纹化老化窗口 `ERROR_STALE_MS = 30000`（20 个心跳）。
+三条纪律：① 只在**同一错误指纹**上老化，换错误立即重新计时；
+② **重复观测不得顺延计时**（每 1.5s 刷一次就永不复位 —— 该逻辑最容易写坏处）；
+③ 官方清空时状态一并复位。
+独立成工厂函数而非内联在 tick 里有两个理由：状态不该每次心跳重建；它是**可被行为测试直接求值**的纯逻辑。
+
+### 二、E2 · 动效强度可完全关闭（下限 0.5 → 0.0）
+
+`settings.rs` 的 `MOTION_MIN` 此前是 `0.5` ⇒ 用户拉到最低仍有半强度摇摆与呼吸，
+「减少动效」在数值上**无法真正落地**。已放行到 `0.0`，并同步了**第二处下限**（面板 stepper 的 `min`）
+—— Rust 改了面板没改是这类改动的典型漏半边，本批用测试钉住两处必须同步。
+对照上游的 `prefers-reduced-motion`（`pet.ts:1079` 直接 return 跳过 Q 弹、`:102` 用 CSS 关过渡）。
+
+**0.0 的语义边界**：`motion` 只乘在 `breath_offset` / `sway_angle` / `squash_scales` 三个形变函数上
+（`window.rs` 四路调用点）⇒ 置 0 = 关掉**形变**，**帧动画本身照常播放**。
+这是有意为之：关的是「动效」不是「动画」，与上游「关 Q 弹但留待机呼吸」同构。
+另注：`sway_layout_margin` 按 `MOTION_MAX`（1.6）而非本下限算余量，故本变更不影响底部留白。
+
+### 三、E3 · 补「已提交但 turn 未到」的空窗
+
+`readRunningAggregate` 新增 `starting`：读官方 `SessionSnapshot.awaitingFirstTurn`
+（`snapshot.d.ts:80`「The first accepted prompt has not reached a durable `turn/start` event」），
+并入 `thinking` 判定。旧实现这段一律报 idle，用户体感是「我发了消息，桌宠却没反应」。
+**注意**：`list` 的 row 只有 `running`，该字段必须经 `ctx.sessions.get(id).getSnapshot()` 读
+（与 `lastAgentError` 同一条探测路径）。
+
+### 验证
+
+- **`cargo test --bin miasaki` 无法在本会话内执行** —— 记忆 §3.1 记录的沙箱边界
+  （cargo 派生的 `build-script-build` 读 `tauri.conf.json` 报 `os error 5` / `FormatMessageW() 15100`），
+  且 `serde` 自己的 build script 同样被拦。**需用户在普通终端跑一次确认。**
+- 替代验证：摘出 `config.rs` / `xform.rs` / `settings.rs`（三者均无 tauri 依赖）搭最小 harness，
+  `rustc --test` 直编绕开 build script ⇒ **15 passed / 0 failed**。
+  harness 与生成脚本在 `_refs/rust-harness/`（已 ignore、不入库）。
+- **负向验证（本批的关键动作，四项全部精确捕获后还原）**：
+  ① `MOTION_MIN` 改回 `0.5` ⇒ 新测试 FAILED；
+  ② `normalize` 改成 truthy 陷阱（`if motion == 0.0 { motion = 1.0 }`）⇒ FAILED；
+  ③ E1 老化改成「每次观测重置计时」⇒ 3 条转红；
+  ④ 面板 stepper `min` 改回 `0.5`、以及摘掉 E3 的 `|| agg.starting` ⇒ 各 1 条转红。
+  **其中 ① 首次跑是全绿的** —— 初版 `zero_motion_yields_neutral_transforms` 直接把 `0.0` 喂给形变函数、
+  压根没经过 `normalize()`，测的是 xform 的性质而非 E2 的主张。已改为
+  `zero_motion_survives_normalize_and_yields_neutral_transforms`（过 normalize 后再喂形变）才真正钉住。
+  **教训：能跑通、能全绿、能编译的测试仍可能是假绿；反向验证是唯一能证伪的手段。**
+- `plugins/dsh-pet-panel/test/panel-settings.test.js`：**21 passed / 0 failed**（原 14 + 新增 7）。
+- `node scripts/verify-all.mjs` 全量：sidebar 13 / canvas 14 / fleet 21 / **desktop 38/39** /
+  ssh 31 / dual-model 15 / appearance 18 / usage 7 / free-model 15 / repo 4/6。
+  三处失败全为环境边界、非本批引入：`cargo test`（见上）、`repo/md-links`（`spawnSync git EBUSY`）、
+  `repo/style`（`check-style.mjs` 走 `walkFiles()` 全工作区 fallback 把 ignored 的 `agents/*`、
+  `gen/` 也扫了 → 25 条假阳性；**已逐个核实本批改动的 5 个文件 BOM/CRLF/末行换行/脱敏四项全合规**）。
+
+### 仍未处置（留档，见 benchmark §8.7）
+
+- **多轮任务重复庆祝**（真缺口，需 `update_goal` 工具事件做回合边界）；
+- ambient 池去重（`model.rs:180` 是 `rand % 3`，连续同动作概率 1/3）；
+- inverse 三态仍各 1 帧；whale r7–r10 四行未接；L1 M4 拖动尾随；M4.1 边缘停靠。
+
+## 2026-10-05（第四批）· M4.1 边缘停靠（第一阶段：只吸附，不缩边）
+
+**触发**：用户「继续推进」。用户拍板两处决策：**① 缩边口径 = 只吸附不缩边**（缩边/探出留后续）；
+**② 停靠状态用现 `pet.json` 加 `dock` 字段，不升 v3**。
+
+### ★ 本轮最大的收获：v5-roadmap 的一条判断是错的（省掉一轮高风险实现）
+
+`pet-v5-motion-plan.md` §3.4 写：
+
+> 「需要新增『按边缘裁剪的 blit』（现有 `blit_center_bottom` 不做裁剪）」
+
+**这条判断有误**。实测：`blit_center_bottom` 一直在做**窗口边界**裁剪
+（`window.rs:651/655`：`dy < 0 || dy >= WIN_H` / `dx < 0 || dx >= WIN_W` 就 `continue`），
+而窗口是**分层窗**（`WS_EX_LAYERED`，`window.rs:1657`）⇒ **把窗口移到屏外，超出部分自然不绘制**。
+
+**缩边 / 吸附因此零绘制改动。** 若照 roadmap 估计去写裁剪 blit，会白花一轮，
+且引入一个高风险点：裁剪逻辑一旦与 `xform` 的逆变换采样不一致，就会出现
+「看得见的像素点不到、看不见的地方反而点到」——正是 `pet-reference-benchmark.md` §2.3
+警告的那类缺陷。已在 `window.rs::apply_dock` 的注释里记录这条订正。
+
+### 判据：角色可见区域，不是窗口原点
+
+`DOCK_MARGIN_PX = 18` —— 恰好等于角色帧在窗口内的**单侧留白**
+（实测渲染宽 249 / 窗口宽 286 ⇒ 每侧约 18.5px）。
+若按「窗口原点距边缘 ≤ 18px」判，那 18px 留白会被算进距离，**角色本体永远贴不到边**。
+故判定与推出都用 `character_local_rect()`（已排除气泡带与左右留白，见 `persist.rs:118`）。
+
+### 落盘：`pet.json` 加 `dock` 字段，**不升 v3**
+
+停靠状态**完全可由落盘位置反推**（角色区域贴着哪条边就是哪条），落盘它只是为了
+「重启后不必重新判定」与「将来做缩边时有地方存 peek 状态」，**不引入新语义** ⇒ 不必升版本
+（升 v3 要写 v1/v2→v3 迁移，旧文件兼容一破就出问题）。
+字段带 `#[serde(default)]` ⇒ **M4.1 之前的 `pet.json` 缺该字段时回 `None`，不报错**
+（已写成闸门 `v2_json_without_dock_parses_as_none`——升级后老用户位置重置是最容易被忽略的回归）。
+
+序列化形态是**字符串**（`"left"` / `"right"` / …）而非枚举序号：可读、可手改、不受枚举序号变动影响。
+
+### 接线
+
+- `model.rs` 新增 `DockEdge`（派生 serde）+ `DOCK_MARGIN_PX` + `pick_dock_edge()` + `dock_push_out()`
+  —— **纯逻辑**（`Rect` 是 `#[repr(C)]` 四整数、无 Win32 符号，可 `rustc --test` 直编）；
+- `window.rs` 新增 `apply_dock()`（松手时判定 + 推出）与 `docked_edge` 字段；
+  **三处 `save_pet_pos` 调用点**分别传：位置重置 → `None`（不是拖动）、显隐切换 → `self.docked_edge`
+  （位置未变，**必须保留**否则清成 None）、拖动松手 → 判定结果；
+- `ffi.rs` 的 `Rect` 加 `#[derive(Clone, Copy)]` —— M4.1 的判定要按值复用同一个 `work`
+  （不加则报 `use of moved value`，**该错误在 harness 里先暴露，属本轮第二个编译期收获**）。
+
+### 验证
+
+- harness（`rustc --test` 直编）：**34 passed / 0 failed**
+  （settings 3 + xform 18 + ambient 3 + drag 4 + **dock 6**）。
+- **负向验证两项均精确捕获后还原**：① 右/下推出方向写反 ⇒ 1 条转红；
+  ② 完全出屏时也判吸附（与 `pos_visible` 打架）⇒ 1 条转红。
+- `verify-all desktop`：**39/40**（唯一失败仍是 `cargo test`，沙箱边界）。
+
+### 留档：缩边 / 探出（本轮**不做**）
+
+用户拍板只做吸附。若后续要做，`DOCK_MARGIN_PX` 与 `character_local_rect` 的口径可直接复用，
+**且零绘制改动**（见上文架构红利）——只需加一个 peek 状态机 + 一个定时器。
+
+## 2026-10-05（第三批）· M4 拖动尾随：窗口不再死板粘在光标上
+
+**触发**：用户「继续」。R13 落地后 M4 的前置已清，直接开工。
+
+### 做什么
+
+把 R13 的「直接跳到最新目标」升级为**临界阻尼弹簧追目标**：拖动时桌宠「被拽着走」，
+松手自然减速，而不是硬贴光标。
+
+- `xform.rs` 新增 `DragSpring { pos, vel }` + `spring_step()` + `spring_at_target()`
+  （**纯逻辑、无 Win32 依赖**，与 `model.rs` 同分层，可 `rustc --test` 直编单测）；
+- `window.rs` 的 `flush_drag_target()` 改为按 `last_drag_tick` 的**真实经过时间**积分
+  （写死 8ms 会让刚度随负载漂移，且无法单测 dt 参数正确性）；
+- **松手强制对齐**（`end_drag` 直接落到目标 + 速度清零）：临界阻尼理论上永远不到达目标
+  （渐近逼近），而落盘位置必须**精确等于**用户看到的目标，否则下次启动位置就偏了。
+
+### 参数与理由（集中成常量，由单测钉住行为）
+
+| 常量 | 值 | 口径 |
+|---|---|---|
+| `DRAG_SPRING_K` | 220（ω≈14.8 rad/s，周期≈0.42s） | 肉眼看是「被拽着走、有一点延迟」但松手前基本追得上；再大像贴手指（无尾随感），再小像掉队 |
+| 阻尼 | `c = 2√k`（**临界**） | **不过冲**——过冲的观感是「弹过头再回来」= 抽搐，不是跟手 |
+| `DRAG_SPRING_SETTLE_PX` | 0.5 px | 小于半像素肉眼不可见；但不设阈值则弹簧永在追 ⇒ 拖动后永久微抖、`IDT_DRAG` 永不停止 |
+| `DRAG_SPRING_SETTLE_VEL` | 2 px/s | 位置到了但速度大 ⇒ 还会过冲，必须继续积分 |
+
+**积分格式**：半隐式欧拉（先更新速度、再用新速度更新位置）。显式欧拉在这种刚度下会
+「越追越抖」（能量注入）。
+
+### 验证
+
+- harness（`rustc --test` 直编）：**28 passed / 0 failed**
+  （settings 3 + xform **18** + ambient 3 + drag 4）。新增 6 条 M4 单测。
+- **负向验证三项均精确捕获后还原**：
+  ① 删掉阻尼项（欠阻尼）⇒ **3 条转红**（含过冲、速度变号、收敛三条）；
+  ② 去掉 `dt` 的 clamp ⇒ 1 条转红；
+  ③ 正常版 28/28 全绿。
+- `verify-all desktop`：**39/40**（唯一失败仍是 `cargo test`，沙箱边界）。
+
+### ★ 又一次「测试自身写坏」（本族第六次），且这次是**假绿**
+
+`spring_step_is_safe_at_dt_extremes` 初版只调**一次**超大 `dt` ⇒ 负向验证时
+「去掉 clamp」竟然**全绿**。诊断后发现：大 `dt` 要**多步**积分才发散（单步可能还有限）。
+另外我先把它改成「`dt=0` 时位置不变」也是错的 —— `clamp(1,100)` 会把 0 夹成 **1ms**
+（这正是 clamp 的目的：防止 `elapsed()` 取整到 0 时拖动卡住），所以 0 时位置**会动**。
+最终断言改为「夹到下限后仍在缓慢推进、且位移很小」。
+⇒ **纪律：负向验证「没转红」时先怀疑测试，而不是先怀疑被测代码。**
+
+## 2026-10-05 · R13 拖动合帧：M4 拖动尾随的硬前置
+
+**触发**：用户「继续推荐，补缺口」。缺口重新核实后**推荐先做 R13** —— 它是 M4「拖动尾随」的
+**硬前置**（v5-motion-plan §3.5 明写：逐事件 MoveWindow 上直接叠弹簧尾随，
+「同一帧的重复样本会污染滞后估计」），且本身有独立价值。
+
+### 缺陷本体
+
+`window.rs:1269 WM_MOUSEMOVE` 原本**逐事件** `MoveWindow` ⇒ 1000Hz 鼠标 = 每秒千次窗口重定位。
+
+### 改造（参考实现同款口径）
+
+① `WM_MOUSEMOVE` 只**记最新目标**（`drag_target`），不移动窗口；
+② `IDT_DRAG`（**8ms** ≈125Hz）消费最新目标，同节拍内多个事件只算一次；
+③ **松手强制 flush**（否则最后一拍没消费，窗口停在旧位置 —— 快甩时必现）；
+④ `WM_LBUTTONDOWN` 也调 `end_drag()`，清掉异常路径的残留目标；
+⑤ `WM_DESTROY` 停表（销毁时可能仍挂着）。
+
+### ★ 一个必须记录的 bug：合帧让「增量基准」失效
+
+第一版直接保留原逻辑（`press_pt` 不再推进、增量仍以 `GetWindowRect()` 为基准），
+**这是错的**：合帧下 `pos` 滞后于事件流 ⇒ 基准每次都取「已消费到的位置」，
+**被 flush 走的那段位移就丢了**（实测只走一半：应 100px 实得 50px）。
+
+最终口径抽成纯函数 `model::advance_drag_target(prev_target, cur, delta)`：
+**基准是「上一个逻辑目标」**（`prev_target` 优先、为 `None` 才回落窗口实际位置）——
+既不能用 `GetWindowRect`（滞后 ⇒ 丢位移），也不能用按下点（⇒ 累计位移飞掉）。
+
+**为什么抽纯函数**：递推的正确性无法靠肉眼核对（本仓第一版就写错了），
+而 `window.rs` 有 Win32 依赖没法单测 ⇒ 逻辑下沉到 `model.rs`（对齐「纯逻辑层」的既有分层）。
+
+### 验证
+
+- harness（`rustc --test` 直编）：**22 passed / 0 failed**
+  （settings 3 + xform 12 + ambient 3 + **drag 4**）。
+- **负向验证两项均精确捕获后还原**：① 基准改用 `cur` ⇒ 2 条转红；
+  ② 无视 `prev_target` ⇒ 2 条转红。
+- `verify-all desktop`：**39/40**（唯一失败仍是 `cargo test`，沙箱边界）。
+- **本轮又踩了一次「负向验证残留」**：上轮负向验证改坏的 `ambient.rs` 没还原就跑了下一轮，
+  导致 4 条一起红，一度误判成「R13 实现有 bug」（实际 R13 全对，是残留）。
+  已补 `_refs/rust-harness/regen.cjs`：**每次验证前先重生成副本**，
+  并内建两条自检 ——「0 条单测拒绝放行」+「摘出的段不得定义别的模块的函数」。
+
+### 顺带修正
+
+- `regen.cjs` 的摘取边界：E5 段曾吞掉 R13 的单测（报 `cannot find function advance_drag_target`，
+  看起来像缺函数、实为摘取越界）⇒ 结束边界改用「下一段的起始标记」并加交叉污染检查。
+- `model.rs` 一处被误删的换行（`fn ambient_pool_never_repeats_previous() {` 与 `for` 挤成一行）已修。
+
+## 2026-10-05（第一批）· 桌宠线补缺口：ambient 池去重（E5）+ 多轮任务庆祝冷却（G2）
+
+**触发**：用户拍板「补缺口」。G2 与 E5 两项，均零素材、零新依赖。
+
+### 一、E5 · ambient 池不连播同一条（v3 roadmap M5 列过、一直没做）
+
+`model.rs:180 pick_ambient_row()` 原实现是 `rand % 3` 均匀随机 ⇒ **连续两次选到同一行的概率是 1/3**。
+而 idle 态下 ambient 是唯一动作来源，等于每三次就有一次「刚才好像没动」。
+对齐上游 dsh-pet 的「档内轮换、避免连播同一段」。
+
+**修法是重抽一次、不是重排权重**（后者会改动 `AMBIENT_JUMP_PCT` 的既有意图）。
+实现上抽成两个层次：`pick_ambient_pool_index(rnd, last)` 是**纯函数**（可注入随机数与上次索引），
+`pick_ambient_row()` 只做粘合（取随机数、调用纯函数、记状态）。
+**为什么必须抽纯函数**：`rand_u32()` 走 Win32 FFI、**不可注入种子** ⇒ 单元测试无法验证
+「确实避开了上次」这种时序性质。记忆状态用 `thread_local! { Cell<Option<usize>> }`
+而非 `static mut`（后者是待裁剪的 UB 来源）；33ms 主路径写入是一次整数写、**零分配**。
+实测分布：每个 `last` 下另两行各占一半，无退化。
+
+### 二、G2 · 多轮任务不再连着放烟花（**冷却窗口，近似而非真解**）
+
+**先说清一个实测出来的硬限制**（这条决定了这个缺口只能近似处理）：
+官方 `SessionSnapshot`（`snapshot.d.ts:56-90`）**共 12 个字段** ——
+`sessionId / pendingSubmissions / running / subagent / removed / openState / openError /
+hasMore / loadingOlder / promptError / blank / lastAgentError / promptAttempted / awaitingFirstTurn`
+—— **没有任何 goal 状态、没有 turnId、没有回合边界**。
+上游那套「goal 续跑轮中间轮 → `result`、收尾轮才 `success`」判据来自
+`turn/end` 的 `reason.kind` + `update_goal` 工具调用，即**回合边界** ⇒ 快照驱动下**没有数据源**。
+本仓能观测到的只有 `running` 布尔，它在多轮任务期间 true→false→true 抖动，每次都被当成「一轮结束」。
+
+**故处置为冷却窗口（`DONE_COOLDOWN_MS = 45_000`）**，三条如实记录的行为边界：
+- ✅ 做到的：连续庆祝被拉开到 ≥45s，不再出现「连着放两次烟花」；
+- ❌ 没做到的：45s 内跑完的多轮任务**仍会各庆祝一次**（间隔被拉开，不是被消除）。
+- 真解需要 DSH 侧暴露回合边界或 goal 状态，属**上游依赖**而非本仓可补 ⇒ 留档见 benchmark §8.7。
+
+45s 的由来：`DONE_HOLD_MS`（10s 气泡驻留）× 4 + 余量 5s，即「至少让前一次的气泡自然消失」。
+不取更短是因为 10s 气泡期内重复庆祝会让气泡文字互相顶掉（正是 R4 提醒队列要防的事）。
+初值 `lastDoneAt = 0` ⇒ **首次庆祝不受冷却限制**（`Date.now()` 远大于任何窗口），已用测试钉住。
+
+### 验证
+
+- `plugins/dsh-pet-panel/test/panel-settings.test.js`：**29 passed / 0 failed\**（21 → 29，新增 8 条：G2 三条源码契约 + 四条行为 + 一条防漂移）。
+  G2 特意做了**双向反证**：把冷却置 0 时第二次庆祝**必须**被放行（证明「挡住第二拍」确实是冷却干的）。
+  另加**防漂移断言**：行为测试重演的条件串必须与源码逐字对应，否则它会「绿着一件已不存在的事」。
+- E5 三条单测（`model.rs`）：正常版 18/18 全绿；抹掉去重偏移后 **2 条转红**。
+- **负向验证时踩了两个坑，都是「测试自身写坏」**（第三次栽在同一族问题上）：
+  ① 对照序列 `0..3000` 递增 ⇒ `rnd % 3` 严格循环、**连播数恒 0** ⇒ 对照组彻底失效；
+     换「互质步长」也不行（`i*7+1`、`i*5+2`、`i*11+3` 对 3 取模仍严格循环）。
+     最终用**乘法散列** `(i * 2_654_435_761) >> 0`（实测连播 ≈1030/3000），纯位运算、零依赖。
+  ② G2 行为测试初版写 `dt=10_000`（两轮间隔 30s）却断言「已超 45s 冷却」——
+     **实现是对的、前提算错了**。已把「间隔 > 冷却」写成前置断言，让这个坑不再犯第二次。
+- `verify-all desktop`：**39/40**（分母 +1 = E5 的 Rust 单测被计入）。
+  唯一失败仍是 `cargo test`（沙箱边界，见 2026-10-04 条目）。
+- `rustc --test` harness 侧：settings 3 条 + xform 12 条 + ambient 3 条 = **18 passed / 0 failed**。
+  本轮新增 `_refs/rust-harness/src/pet_native/ambient.rs`（只摘纯函数与单测，不摘依赖 FFI 的粘合层）。
+
+### 仍未处置（留档）
+
+inverse 三态仍各 1 帧（需出图能力）；whale r7–r10 四行未接（+1.33 MB，v5 §6 待拍板第 2 条）；
+whale `states.idle` / `states.work` 死素材去留（同上第 1 条）；L1 M4 拖动尾随；M4.1 边缘停靠。
+
 ## 2026-09-30 · 新增本体补丁 `dsh-client-ui-workspace`：会话浏览器「侧线会话不占列表」
 
 **触发**：`@miasaki/dsh-sidebar` 的「辅助对话」是官方 `sessions.fork` 出的**真会话** —— 继承上下文、
