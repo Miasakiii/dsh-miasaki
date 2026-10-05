@@ -18,6 +18,13 @@
 
 1. **fleet 不缺基础设施，缺的是把已建好的判定层接进执行层**。G1/G2/G4 判定层与 71 项单测均已落地，
    但派单器 `dispatch-task.ps1` 至今没有任何依赖判定代码，且真实台账无 `graph` 字段、无 `result.json`。
+   > **2026-10-05 更正**：本句两条结论均已被推翻 —— ①「无 `result.json`」：`f5bc431`（2026-09-11）
+   > 落地首个节点交付契约，现入库 `tasks/<id>/result.json` **12 个**（t-0001–t-0012）；
+   > ②「没有任何依赖判定代码」：2026-09-30 派单器接线（`1330498`）新增 `Test-DispatchableGate`
+   > （`workers/dispatch/dispatch-task.ps1:102`，调用点 `:644` / `:677`），复用
+   > `workers/graph/task-ready.mjs --explain --json` 的 G1 判定，**状态或依赖未满足即拒绝派单（exit 2）**。
+   > **仍成立的一条**：真实台账（`state/tasks.jsonl`）确实无 `graph` 字段、`depends_on` 全空。
+   > 现状详见本文 §7 落地清单 P0 三条与 fleet README「派单能力闸门已接线」/「派单可派闸门 + 事件留痕已接线」。
    → 文章一 §3「缺评估体系就别自进化」在 fleet 的对应物不是「补评估」，而是**接线**。
 2. **文章二的核心诊断与 fleet 的架构选择完全同构**：「通信通道有了，但协作语义没有」。
    fleet 是**有意**禁止横向通信的（§1.5 最小可见性 + 图工程 §7 不做清单），这是设计决策，不是缺口。
@@ -41,6 +48,11 @@
 | 仅纸面 | `timeout_ms` 硬超时、`max_tokens_per_task`、`max_concurrent_tasks`、进程托管器、自动重启、交付期校验、fold 实体化、**G3 全部** | 图工程 §8；本轮 `grep` 实证四个 limits 字段中仅 `heartbeat_ms` 被消费 |
 | 真实台账 | 9 任务；`depends_on` 全空、无 `graph` 字段；**`result.json`/`verdict.json`/`capability.json` 零文件** | `glob` 实证 |
 | 机器事件流 | **本轮首次真实写入**（此前 `graph-events.jsonl` 不存在，总线版本 0） | 本轮执行记录 §5 |
+
+> **2026-10-05 更正（上表「真实台账」行）**：`result.json` 已不再是零文件 —— 现入库 **12 个**
+> （`tasks/t-0001…t-0012/result.json`，首例见 `f5bc431`）；台账任务数亦由 9 增至 **12**（t-0001–t-0012）。
+> `verdict.json` / `capability.json` 仍为零文件（后者全仓零写者，见设计文档 v0.26 条）。
+> `depends_on` 全空、无 `graph` 字段仍成立。
 
 **关键结论**：G0–G4 是**高质量的未接线组件**。fleet 的问题不是设计不足，而是**判定层与执行层之间没有连接**。
 

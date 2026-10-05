@@ -1,5 +1,8 @@
 # 标题栏启动器组设计 — 外部程序跳转按钮 + 终端展开按钮（内嵌终端面板）
 
+> **状态：已过时（2026-10-05 标注）** —— 这个「标题栏启动器组」是两按钮组合，只落地了一半：§3 的**外部程序跳转从未实现**（`EXTERNAL_APPS` / `resolveAppExecutable` / `/apps/open` 在全线代码零命中，配套的 `.dsh-sidebar-menuicon` CSS 已按「从未实现的『外部程序』菜单图标」当死代码清理）；§5 的标题栏让位方案（`--ms-titlebar-reserve` 量测写入）随 2026-09-10 自研壳退役作废；§6 的 S1 硬门（Windows 需 VS Build Tools 编译 node-pty）经 DSH 0.1.5-rc.1 实测不成立。形态决策已被正式取代。
+> 现状见 [`2026-09-12-rightbar-optimization-plan.md`](2026-09-12-rightbar-optimization-plan.md)（其文件头写明本文的**形态决策**已被它取代）。**正文保留作历史记录，不要照着做。**
+
 - 日期：2026-09-09
 - 状态：**设计定稿（未写代码）**；两个前置 spike（S1 node-pty、S3 底部推挤）为本设计的立项门
 - 用户参考图：VS Code 风格「外部程序选择器」下拉（主图标按钮 + 下拉箭头；菜单：资源管理器 / VS Code（✓ 当前）/ VS Code Insiders）

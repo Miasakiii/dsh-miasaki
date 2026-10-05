@@ -320,6 +320,12 @@ t-0009 (fan_out, group=g-0003, 拆解任务)
 
 - 新增 `schemas/graph.schema.json`（`graph` 子对象）与 `schemas/result.schema.json`（节点产出契约）；
 - `schemas/tasks.schema.json` 增加对 `graph` 的可选引用；
+  > **2026-10-05 更正**：`schemas/tasks.schema.json` **从不存在**（`git log --all -- dsh-miasaki-fleet/schemas/tasks.schema.json` 零命中），
+  > 本行所述改动从未落地。「对 `graph` 的可选引用」实际落在别处：`tasks.jsonl` 的 `graph` 子对象契约由
+  > `workers/lib/bus-contract.cjs`（契约的唯一可执行定义，见该文件 `tasks.jsonl` 的 `graph` 子对象段）与
+  > `workers/validate-bus.mjs` 承担；G0 实际交付的 schema 是 **graph / result / graph-event / patch 四类**
+  > （见本文 §8「G0 落地状态」表），`schemas/` 下确无 `tasks.schema.json`。同型表述另见调研稿
+  > `docs/graph-engineering-survey-2026-09-10.md` 对应条目（历史稿，按体例不改）。
 - 全部并入现有 `workers/validate-bus.mjs`（F1），**新增结构性校验**：
   1. `consumes[].task` 必须指向存在的 task；
   2. `group` 内必须有且仅有一个 `reduce` 节点（钻石图完整性）；

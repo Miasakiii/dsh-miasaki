@@ -70,7 +70,7 @@ node patch.mjs revert     # 回退
 ```bash
 pnpm install
 pnpm run build        # node --check 入口与 lib/
-pnpm test             # 33 例单测
+pnpm test             # 39 例单测（2026-10-05 实测：admission 6 / client 4 / content 7 / invalidation 5 / routing 10 / store 7）
 pnpm run patch:verify # 本体补丁离线自证
 ```
 

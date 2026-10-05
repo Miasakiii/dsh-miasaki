@@ -8,7 +8,7 @@
 DSH 的 `session.prompt` 在提交带图消息时按「当前会话模型是否声明支持图片」硬拒整条消息：
 
 ```js
-// dsh-api-session-controller/lib/index.js（0.1.7-alpha.2 第 779-781 行）
+// dsh-api-session-controller/lib/index.js（0.2.0-rc.1 第 871-873 行）
 const current = this.agents.selectionFor(agent).current;
 const model = await this.ctx.llm.resolveModelInfo(current.provider, current.model);
 if (model.inputModalities !== void 0 && !model.inputModalities.includes("image")) throw new RemoteError(...)
@@ -91,13 +91,25 @@ DSH 升级会覆盖 `dsh-api-session-controller`，本补丁随之失效。步�
 > **`EDITS` 零改**。生效待重启 `dsh web`（host 半 bundle 只在启动时加载）——重启后
 > 「主模型 + 辅助模型」带图发送应放行（union 语义）。
 
+> **实操记录（2026-09-25，换 `0.1.7-rc.2` 基线重打）**：锚点在新版中仍**唯一命中**
+> （`:872`，`expect` 断言的两行逐字未变）→ 以新版文件替换 `baseline/index.original.js`
+> （`FB0F7B96…`）→ `seal` 生成新黄金产物（124,896 B，`40A032EF…`）→ `verify` PASS。
+> **`EDITS` 零改**。
+
+> **版本标签更新（2026-09-29，DSH `0.2.0-rc.1` 适配）**：`BASELINE_DSH_VERSION` 由
+> `0.1.7-rc.2` 改为 `0.2.0-rc.1`。该版 `index.js` 与 `0.1.7-rc.2` 基线**逐字节相同**
+> （`ORIGINAL_SHA256` / `PATCHED_SHA256` 与 `baseline/` 两份文件均未变），因此只改版本
+> 标签、无需重新 `seal`。**这也是本节上方 2026-09-23 记录里 `:780` 与下文基线表 `:872`
+> 并存的原因**：前者是 `0.1.7-alpha.2` 时代的行号，历史记录按原样保留。
+
 ## 基线
 
 | 项 | 值 |
 |---|---|
-| DSH 版本 | `0.1.7-alpha.2`（2026-09-23 由 `0.1.5-rc.1` 重打，`EDITS` 零改） |
+| DSH 版本 | `0.2.0-rc.1`（2026-09-25 由 `0.1.7-alpha.2` 重打，`EDITS` 零改；2026-09-29 随 DSH 适配更新版本标签，baseline 字节未变） |
 | 目标 | `@deepseek-ai/dsh-api-session-controller/lib/index.js` |
-| 原始 SHA-256 | `05DAAAF854EABC9DB0E1171A55D54FA2F631CA63FE6A91FEB0D9C60D827AD79E` |
-| 补丁后 SHA-256 | `450C25A264405912D02E6EEE750E9C845DCA796EDBE3AB42FAD80FE411BD7ADA` |
+| 锚点 | `const model = await this.ctx.llm.resolveModelInfo(current.provider, current.model);`，位于 `:872`（全文件唯一） |
+| 原始 SHA-256 | `FB0F7B96130F595DB20809EEB77A195B05F4A039F931D1E67692F1F74A4DD269` |
+| 补丁后 SHA-256 | `40A032EF7123CA975BBF9DFD4C6CA680FAF978748A8EC0EBA5C6880E1787ABA0` |
 | 编辑数 | 1（`replaceRange`，2 行 → 12 行） |
 | 特征串 | `dualModelVisionRoute` |

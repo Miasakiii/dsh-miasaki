@@ -19,6 +19,7 @@
 
 - cordis 由全局 CLI 自带（4.0.1），profile 只供插件包——混装模型成立，与 M3.5「rc.6 CLI 加载 rc.7 家族」同型。
 - **rc7-test 插件树与 M3.5 基线 313 行完全一致**（`diff --strip-trailing-cr` exit 0，零内容漂移）——最关键无回归证据。基线位于 `../../dsh-miasaki-fleet/tests/m3-acp/logs/rc7/profile-dump-config.log`。
+  > **更正（2026-10-05）**：该证据**已不可复现** —— 基线文件从未入库（`dsh-miasaki-fleet/tests/m3-acp/logs/` 整目录被根 `.gitignore` 的规则挡回，`git ls-files` 在同目录下只有 `plan.md`），且本机该路径现已不存在（目录为空）⇒ 上面这条「313 行完全一致」无法再按此路径复核，只能作为当时的过程记录。要重建这条判据，需重跑 `--dump-config` 并把基线另存到入库位置。
 
 ## 方法要点
 - 绕开 PATH 上 dsh 的 sh shim 在受限 shell 的路径转换缺陷（`/c/Users`→`c:\c\Users`，纯环境问题，cmd/PowerShell 下 `dsh.cmd` 正常），直接 `node …/lib/bin.js` 调用。

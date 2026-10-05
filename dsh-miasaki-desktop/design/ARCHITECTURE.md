@@ -177,13 +177,39 @@ Remove dist\ui -Recurse; Copy desktop\ui → dist\ui
 
 ```
 desktop/
-├─ themes/runtime.js       # 注入运行时(主题/标题栏/切换条/水印/aurora/hash 通道/强度)
-├─ themes/{pure,zafkiel,kurkuriel}.css
-├─ scripts/build-init.mjs / cut-frames.mjs / make-icons.mjs / inverse-states.mjs /
-│  capture-all.ps1 / smoke-test.ps1
+├─ themes/                  # 主题源(原创设计)
+│  ├─ {pure,zafkiel,kurkuriel}.css + {zafkiel,kurkuriel}.{skin,deco}.css
+│  ├─ src/                  # 注入运行时分片(按 MANIFEST.json 顺序拼接;改这里)
+│  ├─ runtime.js            # legacy 回退源(build-init 缺 src/ 时使用)
+│  └─ test/                 # 主题来源优先级 / 鉴权 cookie 兜底链等契约测试
+├─ ui/loading.html          # 本地唤醒页(探活/拉起/重试/主题换肤 + S4a 纹章层 + L2 视频片头层)
+├─ ui/{pets,intro,icons}/   # 桌宠帧与立绘 / 片头四段 mp4(BSD-3,署名见 intro/THIRD-PARTY-NOTICE.md) / 图标
+├─ ui/test/                 # 加载页视觉层与片头层的 VM 驱动契约测试(无浏览器依赖)
+├─ plugins/                 # 四个 DSH profile 插件包(各自带 README 与 test)
+│  ├─ dsh-pet-panel/        # 桌宠设置面板(设置 → 桌宠)
+│  ├─ dsh-session-log-move/ # 会话日志下载入口迁移(主界面 → 轨迹页)
+│  ├─ dsh-model-probe/      # 模型连通性真实探测(host only)
+│  └─ dsh-computer-use/     # Computer Use GUI 工具(桌宠 v4 能力底座)
+├─ patches/                 # DSH 本体运行时补丁(九件目录 = 八件生效 + 一件退役)
+│  │                        #   规则 patch.mjs + baseline/ 原始与产物,可重建 / 校验 / 回退
+│  └─ dsh-cordis-host-runner/  # 已于 2026-09-29 退役(官方 rc.2 自行实现同一修复)
+├─ preset-sources/          # 桌宠预设维护材料唯一住处(*.persona.txt + *.preset.yml + apply-presets.ps1)
+├─ scripts/                 # 构建链:build-init / cut-frames / inverse-states / make-icons /
+│                           #   gen-bubbles / deploy-local / diff-tokens / verify-themes /
+│                           #   check-pet-assets / extract-intro-clips / make-inverse-sheet /
+│                           #   capture-all / smoke-test
+├─ design/                  # 设计决策与变更记录(26 份;CHANGELOG.md 按时间倒序,TODO/HANDOVER 为续推入口)
+├─ docs/                    # 一次性验证报告(m36-theme-verify-2026-08-22.md)
 └─ src-tauri/
-   ├─ src/main.rs          # 启动器/hash 通道/托盘/窗口状态
-   ├─ src/pet_native.rs    # Win32 分层窗桌宠(FFI 全裸,无 winapi 依赖)
-   └─ injected/theme-init.js(生成物)
-design/HANDOVER.md(续推入口)/ CHANGELOG.md / TODO.md / themes.md / token-surface.txt
+   ├─ src/main.rs           # 启动器:单实例 / 探活 3080 / 拉起后端(node 直启,绕开 cmd) / 导航 / 两个看门狗
+   ├─ src/pet_native.rs     # 桌宠 facade(共享类型 + NativePet API;实现见下)
+   ├─ src/pet_native/       # config / ffi / image / model / persist / settings / window / xform / dot
+   ├─ src/                  # assets + asset_source(资源链) / diag / recovery / update /
+   │                        #   launcher_icon(软件头像) / boot_intro(启动片头)
+   ├─ src/injected/theme-init.js  # 构建产物(build-init.mjs 生成,勿手改)
+   └─ capabilities/         # 最小权限(core:default)
 ```
+
+> **2026-10-05 复核订正**：本节此前停在早期版本 —— 漏掉 `ui/` `plugins/` `patches/` `preset-sources/`
+> `docs/` 全部条目，且把 `pet_native.rs` 写成单体（现为 facade + 九个 `pet_native/` 子模块）。
+> 现按 `Get-ChildItem` 实测结构重写；**改动目录结构时请顺手同步本节**。

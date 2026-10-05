@@ -1,5 +1,11 @@
 # M3 官方 runtime 评估 — 验证方案（t-0001 结论的执行计划）
 
+> **状态：已过时（2026-10-05 标注）** —— 本文所述 `dsh-sdk` 路线已废弃，现状见
+> [`docs/multi-agent-cli-orchestrator-design.md`](../../docs/multi-agent-cli-orchestrator-design.md)
+> §12「运行时选型」的 v0.11 主路线（worker = 本机已安装的 agent CLI，扫描发现 → 开关 → 派单）。
+> 本方案的评估结论归档于 `docs/m3-official-runtime-eval-2026-08-16.md`，仅 dsh 原生任务参考。
+> 正文保留作历史记录。
+
 - 日期：2026-08-16
 - 目标：验证 `@deepseek-ai/dsh-subagent-dsh-sdk`（0.0.1-rc.1）+ ACP/SDK 协议线能否替代自研薄壳，作为 worker runtime。
 - 方法：跑官方仓库自带的 **keyless 测试**（无需 DEEPSEEK_API_KEY，mock LLM），全部在 workspace 沙箱内执行。

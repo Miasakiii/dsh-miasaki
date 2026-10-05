@@ -18,6 +18,18 @@
 | W6 | ✅ | 10 个自研插件挂进 `~/.dsh/profiles/desktop`（含备份与回滚命令） | 依赖面已核；**需重启官方桌面端生效** |
 | 追加 | ✅ | 契约 **v1.1** 受控写能力（事件驱动，不新增 hash 写者） | +4 例 |
 
+> **2026-10-05 更正**（本表 W6 行）：「10 个自研插件挂进 `~/.dsh/profiles/desktop`」已于 **2026-09-26** 被收敛口径取代 ——
+> 官方桌面端 profile 隔离为**纯净官方版**后**只挂回 `dsh-token-monitor`（usage 线）这一条**
+> （`dependencies` 与 `dsh.profile.bundles` 各只此一条），其余自制插件维持隔离。
+> 收敛原因：`dsh-token-monitor` 是本仓唯一**零 miasaki 耦合**的插件（host 半只用官方 `webServer` / `llm/stream` /
+> `tools/result` / `sessionProjections` / `tokenMeter` / `sessionQuery`，不碰主题、不碰 `patches/`、不 import 任何 miasaki 包），
+> 故可作唯一例外；其余线依赖桌面端本体补丁或主题桥，而官方桌面端加载的是自带 asar 内的 DSH 副本（补丁影响不到它）
+> ⇒ 装进去行为会与自研壳不一致。
+> 依据：`dsh-miasaki-usage/design/CHANGELOG.md` 2026-09-26 条「profile 接入：官方桌面端 profile 加回**仅此一条**」、
+> `dsh-miasaki-desktop/design/CHANGELOG.md` 2026-09-26 条「隔离的唯一例外项」、
+> `docs/ENGINEERING.md` 的 usage 线表（「2026-09-26 官方桌面端 profile 隔离为纯净官方版后只挂回这一条」）、
+> `repo-review-2026-09-27.md` §1 与 §2.3（实测 `desktop` profile 声明只剩 `dsh-token-monitor`）。
+
 **总账**：`verify-all` 七线全绿、desktop **29/29**（起点 23）；`cargo test` **78 passed / 0 failed**（起点 35）；
 desktop 单测 **120 例**（起点 63）。实机验收清单见 [`smoke-test-matrix.md`](smoke-test-matrix.md) §3.1。
 
@@ -200,6 +212,10 @@ W5·分发 ✅ 已完成 —— 降级方案（只查 / 只提示 / 只打开下
 W6·互操作 ✅ 已完成 —— 10 个插件挂进官方 desktop profile（需重启桌面端生效）
 追加·契约 v1.1 ✅ 受控写能力（theme.set / window.controls，事件驱动、不新增 hash 写者）
 ```
+
+> **2026-10-05 更正**（本总览 W6 行）：W6 的「10 个插件」已于 2026-09-26 收敛为
+> **只挂回用量统计（`dsh-token-monitor`）这一条**，其余自制插件维持隔离
+> —— 原因与依据见上方「实施结果」表下的更正说明。
 
 **顺序约束**：W1 → W4 有依赖（injections 契约先立）；W1/W2/W3 相互独立，可任意并行；W5 依赖 W2 的准入锁语义；W6 与全部无关（只改 `~/.dsh/profiles/desktop`）。
 

@@ -1279,7 +1279,7 @@ inline 变量，谁最后落笔不确定）。
 - **标题栏启动器组设计定稿（同日，用户参考图 + 拍板三项）**：设计
   [`2026-09-09-sidebar-launcher-design.md`](2026-09-09-sidebar-launcher-design.md)；**M3 内嵌终端从「仅规划」升为已立项**。
   - **用户拍板**：标题栏按钮组新增两按钮——**外部程序跳转**（VS Code 参考图同款：彩色图标主键直接打开默认程序 + 下拉箭头菜单：资源管理器 / VS Code（✓）/ VS Code Insiders，点菜单项 = 打开 + 设默认）+ **终端展开**（点击展开**底部内嵌终端面板**：xterm + node-pty + WS 路由，再点收起、pty 保活）；两者位于侧栏按钮**左侧**：`[外部程序跳转] [终端展开] [侧栏] [徽章] [min] [max] [close]`；
-  - **落点 = sidebar 线**（标题栏按钮注入本就是本线职责、pty/WS/静态资源需要 host 运行时）；desktop 线唯一改动 = `03-switcher.js` 让位 `118px` → `var(--ms-titlebar-reserve, 118px)`（两个新键 +52px 组宽后写死值必叠压；变量本线注入、保留 118px 兜底）；
+  - **落点 = sidebar 线**（标题栏按钮注入本就是本线职责、pty/WS/静态资源需要 host 运行时）；desktop 线唯一改动 = `03-switcher.js` 让位 `118px` → `var(--ms-titlebar-reserve, 118px)`（两个新键 +52px 组宽后写死值必叠压；变量本线注入、保留 118px 兜底）；**2026-10-05 注**：该兜底值**现为 128px**（壳侧 `themes/src/03-switcher.js`），118px 只是当时的取值 —— 核现状别照这行；
   - **外部程序安全边界沿用启动器纪律**：固定枚举三件 + `Code.exe` 静态定位（`code.cmd` 上溯，**绕开批处理与命令字符串红线**）+ argv 无 shell + cwd 复用 `resolveWorkdir`；未安装项置灰不隐藏、默认选择全局持久化；
   - **pty 生命周期 = 单实例 + 面板收起保活 + 重连回放**（1MB 环形缓冲）；会话切换**不自动重启**（防误杀运行中任务），仅提示条；内嵌 shell 用新 `PTY_SHELLS`（wt.exe 是容器、不入表）；
   - **底座推挤**：`--miasaki-terminal-height` 变量与侧栏 `padding-right` 并存、**无 1280px 下限**（高度推挤与宽度吃紧无关）；SPIKE S3 若不吸收则降级浮层；

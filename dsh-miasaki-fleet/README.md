@@ -410,7 +410,7 @@ curl -s "http://127.0.0.1:<port>/api/events?limit=5"
 | 交付物 | 按既定「派单器代写」协议落盘：`result-t-0003.md`（§4.7 六段）+ `agents/claude/notes.md`（10 行） |
 | **首个 `result.json`** | G0 节点交付契约**首次真实产出**；`validate-bus` 由 24 → **25 文件 0 错误** |
 | 总线 | `bus-apply` 唯一入口一次超步提交：2 条台账补丁 + `task.completed` 事件，版本 **2 → 3** |
-| 回归 | `verify-all fleet` **15/15 PASS**；pulse `today_cost=0.403959` 真实计量已入面板 |
+| 回归 | `verify-all fleet` **15/15 PASS**（当轮口径；**现为 21/21**，见上方口径块）；pulse `today_cost=0.403959` 真实计量已入面板 |
 
 **第二个任务 `t-0004` 同法闭环（5 回合，$0.22051）**，产物为 `result-t-0004.md`（15 行索引覆盖
 `collective-memory.md` 5/5 主题节）+ 第二个 `result.json`（`validate-bus` → **26 文件 0 错误**），
@@ -470,11 +470,11 @@ node ../scripts/verify-all.mjs fleet
 ```
 
 > **口径**：`fleet` 类别 2026-09-30 由 17 项升至 **21 项**（+ dispatch 可派闸门文本断言、+ dispatch-gate 夹具测试、
-> + P1 面板判定层区块断言；全量 **179 项**）。真实台账 9 个任务全终态 ⇒ 第 17 项是「放行」分支的唯一覆盖者，不可省。
+> + P1 面板判定层区块断言；全量 **179 项**，**2026-10-05 起为 180 项**）。真实台账 9 个任务全终态 ⇒ 第 17 项是「放行」分支的唯一覆盖者，不可省。
 > **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（现 37），夹具例数就是 `node --test` 的 pass 数。
 
 实机联动项（pulse → 桌宠状态映射、pulse 缺失/损坏时静默降级）见
-[四线统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §4。
+[统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §4。
 
 > 已知边界：判活针对「status 文件级的陈旧」；desktop 侧另有 pulse 文件级 stale 检查
 > （防发布器自身死亡），两层各管一段。worker 的调度级生命周期（超时 / 重试 /
@@ -496,7 +496,7 @@ node ../scripts/verify-all.mjs fleet
   其唯一输入目录现为空）。
 
 同目录的 `plan.md` **保留**（`docs/m35-rc7-regression-smoke-2026-08-17.md`、`state/events.jsonl` 仍引用它，
-是 M3 回归结论的可追溯锚点）。验证：`node scripts/verify-all.mjs fleet` **15/15 PASS**。
+是 M3 回归结论的可追溯锚点）。验证：`node scripts/verify-all.mjs fleet` **15/15 PASS**（当轮口径；**现为 21/21**）。
 
 > 审计同时确认了本线几处「看起来可疑但必须保留」的结构，**后续清理勿误删**：
 > `workers/lib/` 的 5 对同名 `.cjs`/`.mjs`（`.mjs` 是 ESM 转发门面，两侧各有真实消费者）；

@@ -384,6 +384,24 @@ desktop P7/P9/P10、canvas 存储治理与 sync 400 修复、ssh B1–B4、share
 
 ## 八、文档漂移与断链清单（本轮审计新增，**未修**）
 
+> **2026-10-05 复核闭环（本节已不再是待办清单）**：逐条机器核实后的结论 ——
+> **当前态失真 17 条**：6 条已由 09-26 之后的批次修掉（`ARCHITECTURE.md` §7 之外的五条：
+> ssh README 五处、fleet `collective-memory.md`、fleet `schemas/README.md`、appearance README、
+> usage README `:171`），**11 条于 2026-10-05 订正**（session-log-move README 的 slot 死路、
+> `ARCHITECTURE.md` §7 文件地图补齐 `ui/` `plugins/` `patches/` `preset-sources/` `docs/`、
+> `HANDOVER.md` 版本口径、`main.rs` 两处注释、fleet 四条、dual-model 两条、
+> canvas `docs/architecture.md` 投影段、CI 注释线数）。
+> **断链 5 类**：已由 2026-09-29 新增的 `repo/md-links` 闸门**全量修复并转为持续保证**
+> （该闸门扫全部入库 `.md` 的相对链接，现 196 文档 / 451 链接全解析）。
+> **缺退役横幅 6 份**：5 份于 2026-10-05 补横幅（`2026-09-12-rightbar-optimization-plan.md` 原本已有），
+> 每份都写明「为何过时 + 现行做法 + 该看哪份文档」。
+> **其他口径不一致**：api-routing **9 → 12 项**、ssh **113/117 → 310 例**（均 2026-10-05 实测订正）；
+> 根 README 的 canvas 数字随版本演进已不再以旧值出现。
+> **复核方式**：每一条都**先读当前代码/实测再决定改不改**，不照抄本清单 —— 实测推翻了清单的
+> 4 处判断（fleet `graph-engineering` `:690` 并不矛盾、dual-model「6 个 lib 模块」现状正确、
+> 10-contract 头部已自洽、schemas/README 其实已修）。**未变的体例**：`CHANGELOG` 等历史条目一律
+> 原文保留，只在旁边补「2026-10-05 更正」块。
+
 > 按「当前态失真 / 断链 / 缺退役横幅」分类。历史条目（CHANGELOG 内）按体例不改。
 
 **当前态失真（会让读者误判现状，优先）**

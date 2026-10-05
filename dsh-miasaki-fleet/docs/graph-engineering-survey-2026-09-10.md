@@ -440,6 +440,10 @@ TaskBench、WorFBench、FlowBench、MultiAgentBench、MAST、AgentsNet、TAMAS�
 - `tasks.jsonl` 的 task 对象加 `graph` 字段（§5.3）；
 - `depends_on` 拆分为"数据依赖（须等）"与"时序偏好（可并行）"；
 - `schemas/tasks.schema.json` 同步扩字段，纳入 `validate-bus.mjs`；
+  > **2026-10-05 更正**：`schemas/tasks.schema.json` **从未存在过**，这条计划从未落地
+  > （该目录下的 10 份 schema 见 `schemas/README.md`）。`tasks.jsonl` 的 `graph` 子对象契约实际由
+  > `workers/lib/bus-contract.cjs` 与 `workers/validate-bus.mjs` 承担；同一处失真见
+  > `docs/graph-engineering-fleet-design.md` 的同日更正块。
 - Commander 派单逻辑：从"按 depends_on 串行"改为"按图就绪度调度"（就绪 = 所有数据依赖满足）；
 - **验收**：一个真实 3 路 fan-out → reduce 的任务组跑通，且中间产物可核对。
 

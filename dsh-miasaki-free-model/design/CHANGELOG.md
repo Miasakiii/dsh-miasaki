@@ -666,3 +666,13 @@ node scripts/verify-all.mjs repo  → PASS 3/3（silent-guards / doc-versions / 
 `settings.models.footer`（回退态会打印 `dsh-free-model: models footer slot unavailable`）。
 围栏可用命令行粗验：`curl -i "http://127.0.0.1:<port>/freemodel-api/status"` 应得 401/403
 （无 cookie / 非回环 Host），带浏览器 cookie 的同源请求才 200。
+
+> **2026-10-05 更正 —— 上面这段「实机验收指引」是撤销前形态，照着验必然误判**：
+> `settings.models.footer` 与 `settings.models.provider-card` 两个落点**已于 2026-09-28 全部撤销**，
+> 本线**绝不注册 `settings.models.*`** —— 官方模型页的**编辑面板也 dispatch 那个槽**，
+> occupant 一出问题就**整树白屏**（用一次事故换来的纪律，`README.md` 与
+> `client-bundle.test.js` 里都钉着）。
+> **现行入口只有一个**：设置左栏的「**免费模型**」页 —— 上游 `dsh-our-free-model` 在场时由
+> 它的增量补丁提供该页（本线让位，保证只有一个入口），它不在场才由本线 `settings.section` 顶上。
+> 围栏那条（`curl` 粗验）仍有效。
+> **当前的实机判据以验收矩阵 §3.12（J1–J5）为准**，本节这三行只作历史记录保留。

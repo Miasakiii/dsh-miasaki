@@ -661,7 +661,7 @@ appearance 配置。
   的 `quote_pool`）后必须重新生成**：`powershell -File scripts/gen-bubbles.ps1`（无 PowerShell 5
   时用 `pwsh`）
 
-## 拖拽上传附件到会话（2026-09-22 设计定稿，未实施）
+## 拖拽上传附件到会话（2026-09-22 定稿，已实施）
 
 - **症状**：桌面端把文件拖进主窗口**静默无效果**（光标显示 copy、松手无反应）——
   同一 DSH 在普通浏览器里打开则一切正常（官方本就有拖放上传）。
@@ -678,6 +678,12 @@ appearance 配置。
   安全网只拦文件拖放、官方已消费（`defaultPrevented`）的 drop 精准让位。
 - **不含**：loading 页拖文件排队自动附、自建限额判定（单一事实源在官方
   `intakeFiles`）、Rust 侧 OLE 事件桥（仅作实机失败时的退路）。
+
+**现状（2026-10-05 复核）**：修法与安全网**均已落地** —— 窗口 builder 带
+`.disable_drag_drop_handler()`（`src-tauri/src/main.rs`），`themes/src/09-dropguard.js` 已在
+`MANIFEST.json` 的 order 内并随 `build-init.mjs` 进 `injected/theme-init.js`（`verify-all desktop`
+的 `test dropguard` 四项钉住形态与三判据）。**实机验收十项仍未走查**（判据见
+`design/drag-drop-attachment-upload.md` §6 与验收矩阵 E15）。
 
 设计：`design/drag-drop-attachment-upload.md`（根因证据链 / 方案选型 / 行为规格 /
 实机验收十项）。
@@ -826,11 +832,12 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 
 先行动态插件验证（2026-09-07）通过后按此形态固化；设计见
 `design/session-log-download-relocate.md`，安装同 token-monitor profile bundle。
-**注意（2026-09-26 教训）**：本插件在 profile 里是 `file:` 依赖（快照复制，**不会自动跟随
-源码**）——改完源码必须同步 `~/.dsh/profiles/<名>/node_modules/dsh-session-log-move/` 下的
-副本（本次 0.1.2 的 `package.json` / `lib/client.js` / `cordis.patch.yml` 三个文件已手工同步到
-`miasaki` 与 `web` 两个 profile 并逐一核对哈希），重启 host 后生效。回归：`verify-all desktop`
-新增 3 项（两入口语法 + `test/contract.test.js` 4 例，钉住「不再依赖槽声明 + DOM 路径完整」）。
+**注意（2026-09-26 教训 → 2026-10-05 更新）**：本插件此前在 profile 里是 `file:` 依赖（快照复制，
+**不会自动跟随源码**）——当时改完源码要手工同步 `~/.dsh/profiles/<名>/node_modules/dsh-session-log-move/`
+下的副本。**现已全线改 `link:`（2026-09-29）**：`miasaki` 与 `web` 两个 profile 实测该目录
+`LinkType=Junction` → 指向仓内源码 ⇒ **改完源码只需重启 host，不要再手工同步**。
+回归：`verify-all desktop` 新增 3 项（两入口语法 + `test/contract.test.js` 4 例，
+钉住「不再依赖槽声明 + DOM 路径完整」）。
 
 ## DSH 插件：模型连通性探测（`plugins/dsh-model-probe/`）
 
@@ -974,7 +981,7 @@ invoke → Rust 经 Tauri 2 cookie API 写入 3080 域，navigate 前 3s 超时�
 （47.8s 干净通过）替换 `dist/Miasaki.exe`。
 设计与变更记录：`design/auth-cookie-prepinject.md`；验收清单见 `design/CHANGELOG.md` 同日条目。
 
-## 启动加载 2.0 · 内嵌启动终端与闪窗根治（2026-09-22 设计定稿，未实施）
+## 启动加载 2.0 · 内嵌启动终端与闪窗根治（2026-09-22 定稿：闪窗根治与视觉层已实施，日志流待 S3）
 
 - **根治启动闪窗**：`cmd /C dsh web` 链路闪窗先归因（嫌疑矩阵 + Process Monitor 验证法），
   首选**绕开 cmd 直达 `node <bin.js> web --no-open`**（npm shim 入口解析），解析失败静默回落
@@ -983,6 +990,14 @@ invoke → Rust 经 Tauri 2 cookie API 写入 3080 域，navigate 前 3s 超时�
   （默认折叠计数徽标 / 失败自动展开 / 环形缓冲）+ 探活→拉起→等待→就绪四阶段进度；
 - **视觉升级**：三主题纹章旋转、扫描线、打字机光标（reduced-motion 全降级）；
   与失败恢复卡片 / 诊断按钮并存（日志流即失败现场）。
+
+**现状（2026-10-05 复核）**：三项**不是同一进度**，别把整节读成待办 ——
+① **闪窗根治已落地**（P9，2026-09-26：`node <bin.js> web --no-open` 直启 + `CREATE_NO_WINDOW`，
+解析失败回落 cmd 链；冷启动子树取证 PASS，空跑对照排除环境噪声）；
+③ **视觉层已落地**（S4a 纹章层 2026-09-24 + S4a-2 诚实计时 250ms 推进，以及 2026-10-05 的
+**L2 视频片头层**，见上文「启动片头」一节）；
+② **启动终端（stdout tee 日志流 + 四阶段进度）是本节唯一未实施项**（S3）—— 在它落地前，
+加载页没有内嵌日志流，「失败现场即日志」这条还不成立。
 
 设计：`design/boot-loading-terminal.md`。与之配套的 appearance 线「DSH 首帧启动画」
 （3080 首帧全屏 splash，2.5s 超时兜底不挡错误页）与两线契约见

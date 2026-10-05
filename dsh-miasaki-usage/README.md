@@ -84,6 +84,8 @@ dsh-token-monitor/
 pnpm test  # 无第三方依赖；闸门见下方
 ```
 
-仓库级统一回归：`node ../scripts/verify-all.mjs usage`（**5 项**：三处入口语法 + client bundle 装载契约自检 + 同源围栏 **13 例**）。
+仓库级统一回归：`node ../scripts/verify-all.mjs usage`（**7 项**，2026-10-05 实测 = 四件语法
+（`lib/index.js` / `lib/fence.js` / `lib/ledger-dir.js` / `scripts/dedupe-usage-ledger.mjs`）
++ 同源围栏 **13 例** + 账本目录身份 **9 例** + client bundle 装载契约自检）。
 
 设计决策与逐条变更见 [`design/`](design/)。

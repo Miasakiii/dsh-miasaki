@@ -1,20 +1,22 @@
 # dsh-miasaki 统一回归 CI
 #
 # 落地评审报告 P0-1（无 CI）+ A2（把 desktop 的 cargo test 环境假阴性变成真信号）。
-# 在 windows-latest 上跑 `node scripts/verify-all.mjs`（九线 L0 静态检查 + L1 单线单测）。
+# 在 windows-latest 上跑 `node scripts/verify-all.mjs`（十类 = 九线 + 仓库级治理闸门，
+# L0 静态检查 + L1 单线单测 + 仓库级闸门）。
 #
 # ── 与 2026-09-13 草稿的差异（2026-09-14 审查修正，均已实测验证）────────────────
 #
 # 草稿的核心判断「七线中唯 ssh 有运行时依赖，其余六线零依赖」是错的（那是当时的线数，
-# 现已为九线），据此只装了
+# 现已为九线 + 仓库级共十类），据此只装了
 # ssh 依赖，会导致 CI 首次运行即有两条线必然失败。实际的依赖分布（读各线
 # package.json 核实）：
 #
 #   sidebar   4 个：@xterm/addon-fit @xterm/xterm node-pty ws        ← 草稿漏装
-#   ssh       4 个：@xterm/addon-fit @xterm/xterm ssh2 ws            ← 草稿装了
+#   ssh       5 个：@xterm/addon-fit @xterm/addon-serialize @xterm/xterm ssh2 ws  ← 草稿装了
 #   desktop   3 个：sharp ws（+ devDep @tauri-apps/cli）             ← 草稿漏装
-#   canvas / fleet / dual-model / appearance / usage：确认零依赖，无需安装
-#     （usage 为纯官方契约插件，package.json 只有 peerDependencies；三项检查都不解析模块）
+#   canvas / fleet / dual-model / appearance / usage / free-model：无 dependencies，无需安装
+#     （六条线 package.json 只有 peerDependencies；usage / free-model 为纯官方契约插件，
+#      三项检查都不解析模块）
 #
 # 漏装的后果已用「干净副本（git ls-files 全量复制、无 node_modules/target）」
 # 复现：
@@ -75,7 +77,7 @@ permissions:
 
 jobs:
   verify-all:
-    name: 九线统一回归 (windows-latest)
+    name: 十类统一回归 (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -135,8 +137,8 @@ jobs:
         working-directory: dsh-miasaki-desktop
         run: npm ci --omit=dev
 
-      # 唯一质量闸门：九线统一回归。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
-      - name: 运行 verify-all（九线 L0 + L1）
+      # 唯一质量闸门：十类统一回归（九线 + 仓库级）。任一检查项 exit≠0 → 脚本 exit 1 → 本步骤红。
+      - name: 运行 verify-all（十类 L0 + L1）
         run: node scripts/verify-all.mjs
 
       # 说明：以下实机项不在本 CI 内（需运行中的 DSH host 或桌面壳），

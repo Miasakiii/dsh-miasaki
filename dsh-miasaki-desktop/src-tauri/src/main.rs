@@ -2537,7 +2537,8 @@ fn recovery_dialog(reason: Option<String>) {
     );
 }
 
-/// 取证入口：任何时候都可以让壳落一份诊断报告（页面「反馈问题」按钮、插件自检用）。
+/// 取证入口：任何时候都可以让壳落一份诊断报告（页面 / 插件侧 `invoke('diag_report')` 触发；
+/// 仓库内暂无调用点，人工手动入口是托盘菜单「生成诊断报告」→ `diag::write_manual_report`）。
 /// `source` 可选：main / host / renderer / web-boot / watchdog（缺省 main）。
 #[tauri::command]
 fn diag_report(reason: Option<String>, source: Option<String>) -> Result<String, String> {
@@ -2559,9 +2560,14 @@ fn diag_report(reason: Option<String>, source: Option<String>) -> Result<String,
 
 /// renderer 侧 console 回传入口（`--- renderer console ---` 段的喂点）。
 ///
-/// 现状：**注入链尚未挂 hook**（那属于 `themes/` 的改动面，本轮不动），因此这个命令
-/// 目前是「通道已就位、写者待接」状态；远程页也拿不到 IPC 权限，真要接需走 hash 通道
-/// 或官方 `index-inject`（见设计文档 §1.1）。报告里该段为空时会有显式说明，不会误导。
+/// 现状（2026-09-25 起，W2 收尾）：**写者已接，不再是「待接」** ——
+/// `themes/src/11-console.js`（登记在 `themes/src/MANIFEST.json` 的 `order` 里，由
+/// `scripts/build-init.mjs` 拼进 `src-tauri/injected/theme-init.js`）旁路本页
+/// `console.error` 与 `error` / `unhandledrejection`，只顶层 frame、环形缓冲
+/// （50 条 / 16 KiB，丢最旧）+ 2s 批量，经 `window.__TAURI__.core.invoke('diag_console',
+/// { lines })` 回传；远程页 IPC 由 `capabilities/remote-dsh.json` 放行（与
+/// `start_dragging` 同一份能力声明），浏览器直开（无 `__TAURI__`）静默跳过。
+/// 报告里该段为空时会有显式说明（见 `diag.rs` 的 format_report），不会误导。
 #[tauri::command]
 fn diag_console(lines: Vec<String>) {
     for line in lines.iter().take(64) {

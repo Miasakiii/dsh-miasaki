@@ -1,5 +1,8 @@
 # A×B 联动落地方案：桌宠反映 fleet 状态
 
+> **状态：已过时（2026-10-05 标注）** —— 本文 §3 的数据契约（`fleet_state` / `running` / `budget` / `active` / `bubble`）与 §6 的文件清单（`workers/pulse/build-pulse.ps1` / `pulse-loop.ps1`）**都没有按此形态落地**：B 侧实际发布的是 `fleet-pulse.json` **v2**（`v` / `ts` / `fleet` 五计数 / `today_cost` / `top_task`，写者 `workers/pulse/publish-pulse.mjs`），照本文写聚合器会产出读者不认识的文件；§4 的状态映射只落地了骨架（`fleet_running` / `fleet_alert` 两个布尔 → 常驻气泡），「暖黄 / 绯红辉光 + 抖动」的视觉强调未实施，且现行优先级是「等待审批 > fleet 告警 > fleet 运行中 > busy > intensity」，与本文的 `alert > warn > waiting` 相反；§4 的「agent 员工状态映射到桌宠」另经 2026-08-30 范围裁定改由 `fleet-monitor` 承载、桌宠不参与。
+> 现状见 [`ab-linkage-pulse-v2-2026-09-04.md`](ab-linkage-pulse-v2-2026-09-04.md)。**正文保留作历史记录，不要照着做。**
+
 - 日期：2026-08-18
 - 状态：Draft（落地方案，待 Operator 评审后进入实施）
 - 关联：`design/HANDOVER.md`（项目 A）、`docs/multi-agent-cli-orchestrator-design.md` v0.13（项目 B）

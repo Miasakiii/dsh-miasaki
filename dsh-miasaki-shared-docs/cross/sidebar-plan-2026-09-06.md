@@ -1,5 +1,8 @@
 # 右侧边栏（Sidebar）规划设计 v2 — 轻量路线讨论版
 
+> **状态：已过时（2026-10-05 标注）** —— 本文拍板的「路线 D：无基座自研四组件（右栏壳 + 辅助对话 + 审查 + 系统终端启动器）」形态已被取代：自研右栏壳 2026-09-10 退役、09-11 代码删除，右栏改由**官方右侧边栏**承载；终端也不是「系统终端启动器」，而是底部内嵌终端（Ctrl+`）＋官方右栏自带终端；辅助对话与审查虽已实现，但落点是官方右栏 tab 类型。
+> 现状见 [`../../dsh-miasaki-sidebar/README.md`](../../dsh-miasaki-sidebar/README.md)。**正文保留作历史记录，不要照着做。**
+
 - 日期：2026-09-06（v1 同日重写）
 - 状态：已拍板路线 D；M1 壳 spike 已完成（2026-09-06，结论见 `dsh-miasaki-sidebar/design/2026-09-06-sidebar-roadmap-design.md` §3.1.1），进入 M1 实现
 - 上游参考：[omdsh-dev/DSH-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（MIT，v0.18.0 正式版）

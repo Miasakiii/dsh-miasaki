@@ -3,7 +3,8 @@
 > **⚠️ 本文档为上游 [dsh-synapse](https://github.com/liangmianya/dsh-synapse) v0.4.1 原文，供参考。**
 > 本仓产物是其二开版 **`@miasaki/dsh-canvas`**，以下事实已按本 fork 修正：画布元数据目录为
 > `$DSH_HOME/miasaki-canvas/`（与上游 `$DSH_HOME/synapse/` 零共享），Web 端点为 `/canvas`
-> （上游为 `/synapse`）。其余架构描述（投影模型、工具折叠、边界红线）与上游一致。
+> （上游为 `/synapse`），**投影模型另含本 fork 的存储治理**（见 Projection model 一节）。
+> 其余架构描述（工具折叠、边界红线）与上游一致。
 
 ## Purpose
 
@@ -59,6 +60,12 @@ With `autoProjection` enabled, committed DSH session events are grouped by worki
 Each user question becomes a conversation card. The following assistant messages are folded into that turn, and the final assistant reply is shown as the answer. Forked sessions connect to the parent turn at the durable DSH seed boundary rather than at an arbitrary canvas coordinate.
 
 Projected card text is capped at 8000 characters. Longer messages receive a truncation marker in the card, while their complete content remains available from the conversation detail view.
+
+This fork adds storage governance on top of that cap (upstream has none) — applied to a real 84.2 MB store, it brings the file down to 20.0 MB (−76%) without touching workspaces or threads. The canvas is a preview, so full text always remains in the DSH session log:
+
+- tool payloads (`arguments`, `result`, `error`) are capped at 2000 characters each and carry a visible truncation marker — the same "keep the head, mark the cut" policy as message text. A `null` payload stays `null`, since the client reads it as "waiting for result"; non-string payloads are JSON-encoded before capping.
+- each thread keeps only its most recent 50 messages, and the drop records a `trimmedBeforeSeq` watermark (the highest discarded sequence). Projection refuses events at or below that watermark, so a replay from an earlier sequence cannot resurrect cards that were deliberately trimmed.
+- stores written by older builds are migrated on load: every schema path runs both the payload cap and the retention window, and the file is written back only when the data actually changed — an already-compliant store is not rewritten.
 
 Projection writes are coalesced during event bursts, and live updates reuse cached Markdown and patch the active card instead of rebuilding the complete canvas. Card coordinates remain visual metadata only and never determine conversation lineage.
 
