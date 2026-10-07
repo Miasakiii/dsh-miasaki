@@ -6,6 +6,188 @@
 
 ---
 
+## 2026-10-07（续二） · 升级按钮：8 秒超时吃掉了真实失败原因 + 2.0.0 预判锚点会报废
+
+**触发**：用户截图 —— 「免费模型」页顶部提醒条正常显示（`当前 1.3.1 → 最新 2.0.0`），
+但点「立即升级」后下面跳出一行红框 `signal is aborted without reason`，看起来像按钮坏了。
+
+**诊断（三层，逐层实证）**：
+
+1. **那条红框来自提醒条自己的 catch**：上游 `api()` 给**每个**请求套了 8 秒 `AbortController`
+   （它为防挂起加的兜底），而 `/update/apply` 要做「拉 manifest（自身超时 15s）→ 并发 4 路下载
+   全部文件（每路 30s）→ 备份 → 安装 → 热重载」⇒ 8 秒必然打断，`err.message` 就是那句 abort 措辞。
+2. **host 侧其实真的跑了、也真的失败了**：`~/.dsh/our-free-model/updates.json` 记着
+   `{ "from": "1.3.1", "to": "", "ok": false, "error": "staging failed: vendor/channel-pack/NOTICE.md: fetch failed" }`
+   —— **这条原因随 500 响应发出时客户端早就走了**，所以用户永远看不到它。
+3. **成因是瞬时网络，不是上游缺文件**：那份文件在仓库里存在且可取（两个源实测 HTTP 200、
+   3542 字节、sha256 与清单一致）；本会话用 **Node 的 fetch 复现了同样的 `fetch failed`
+   （ECONNRESET）**，而 PowerShell 的 .NET 栈能过 —— 与 host 侧（Node/undici）的失败形态一致。
+
+**改了什么**（补丁 11 → **12 处锚点**）：
+
+| id | 改动 |
+|---|---|
+| `apply-upgrade-long-timeout` | 上游「升级」分区那次 `post('/update/apply', {})` → `ofmApplyUpgrade()` |
+
+`ofmApplyUpgrade()` 定义在 [`inject/update-notice.js`](../patches/dsh-our-free-model/inject/update-notice.js)：
+**自己发 fetch、240 秒超时**，绕开 `api()` 的 8 秒；失败时把服务端的 `error` 原样抛出 ——
+那才是用户该看到的东西。**提醒条与上游升级按钮共用同一个函数**（两处调用点一起修）。
+
+**提醒条同时补了一句本机事实**（小字，不是上游文案）：「升级会覆盖本机补丁（弹窗静默化 / 更新提醒），
+且新版结构变动后锚点可能已漂移 —— 升级前先跑 `patch.mjs status` 预判。」——
+因为下面这条预判结果必须让人在点按钮**之前**知道。
+
+**「升级到 2.0.0 会怎样」的预判 `[实测]`**（把 2.0.0 的 `client.js` 下到临时目录，`OFM_CLIENT` 指过去跑 `status`）：
+
+```
+1/12 已应用 · 3 处 drift · 8 处 pending
+drift（apply 会显式失败）：inject-platform-section / inject-update-notice-bar / apply-upgrade-long-timeout
+applied（误导性绿灯）：drop-news-section —— 2.0.0 把那两处公告中心改了写法，锚点文本不在场
+                       ⇒ 判 applied，**实际公告中心还在，而且是两处**
+```
+
+⇒ **上游自升级 = 本机补丁全丢 + 打不回来**。要跟到 2.0.0，得按它的新结构（多标签壳：
+`FreePage` / `EacPage` / `ChannelsPage` / `LedgerPage` / `LogsPage` / `GatewayPage`）重新对齐锚点 ——
+那是另一批工作；本批把预判做出来、写进判据（矩阵 J6 第 ⑥ 条）。
+
+**顺带记一条判据局限（本次实测显形）**：`remove` 类锚点的 applied 判据是"`from` 不在场"，
+上游把目标**改写**成别的形态时它会报**绿灯**（目标其实还在）。所以 remove 类锚点不能只信 `status`，
+得配一句"目标语义确实消失"的断言 —— `self-test.mjs` 里「『公告中心』分区那一行已消失」那条
+只对 1.3.1 的写法有效，**升到 2.0.0 后必须重写**。
+
+**本轮又踩到一个坑（同族第二次，已固化成闸门）**：改 `inject/*.js` 的**内容** ⇒ 该插入锚点的
+`to` 跟着变 ⇒ live 上那份**旧版本**判 pending ⇒ 直接 `apply` 会把 `UpdateNotice` 注入**第二份**
+（重复函数声明：不报错、不崩溃，最难发现的那种）。本批实测复现（`function UpdateNotice()` ×2）。
+**正确流程：改注入源码后必须 `revert` → `apply` 整份重打。**
+`self-test.mjs` 新增「注入片段各只出现一次（改注入源码后直接重打会二次注入）」并做了定向故障注入
+（拿二次注入的脏副本跑 ⇒ 只有那一条变红）。
+
+**验证 `[实测]`**：
+
+```
+dry run              第 12 处：status 11 applied / 1 pending → apply → verify 12/12 → --check 通过
+定向故障注入          脏副本上只有「注入片段各只出现一次」变红 ⇒ 判据有区分力
+live                 revert（回上游原版）→ apply 12 处 → verify PASS → 注入片段各 1 份
+self-test            21 条断言全绿
+渲染探针              提醒条含新增的本机提示；有更新 → 提醒条；无更新 → null
+verify-all free-model 16/16 PASS
+2.0.0 预判            1/12 applied / 3 drift / 8 pending（见上）
+```
+
+**实机待验（矩阵 J6 已补判据）**：点「立即升级」后 —— ① 不再出现 8 秒 abort 的红框；
+② 若失败，红框里显示**服务端的真实原因**（例如 `staging failed: … fetch failed`）；
+③ 等待期间按钮显示「正在升级…」并给出进度说明。
+
+---
+
+## 2026-10-07（续） · 分区标题提档 14px → 16px（补丁第 11 处锚点）
+
+**触发**：同一轮里用户点名「外观和桌宠都是，**免费模型里也可以看看**」。核对上游页层级时，
+发现同一形态的问题（分区标题与内容标题几乎同级）。
+
+**问题**：上游分区标题 `.ofm_sec_title` 是 **14px/650**，而分区里的**卡片名** `.ofm_cardname`
+是 **13.5px/650**（整页基准字号 13px）⇒「模型清单 / 本机自配平台 / 升级」这些分区与分区内容
+看不出层级，分区边界基本只能靠 `ofm_sechead` 那条 1px 分隔线辨认。
+
+**改法**：补丁新增第 11 处锚点 `enlarge-section-title` —— 一行 CSS，**只提字号**：
+`.ofm_sec_title{font-size:14px;font-weight:650}` → `font-size:16px`。字重 650 与 `label-primary`
+都是上游自己的取值 ⇒ 提档后仍是它那套设计语言，不是我们另起一套；16px 也与「外观 / 桌宠」
+两页的分组标题同档（见 `../../dsh-miasaki-appearance/design/CHANGELOG.md` 同日条）。
+
+**为什么这次破了「本补丁不动上游 CSS」的自我约束**：那条约束（2026-09-28 立）的收益只是
+"少一处升级漂移面"，而漂移本来就会被 `self-test.mjs` **显式打红**（`drift` ⇒ exit 1，
+绝不静默写坏文件）。用户点名的层级问题优先。除这一行外仍不碰它的 CSS 与 i18n 字典。
+
+**验证 `[实测]`**（本机 Node 24，离线可复跑）：
+
+```
+status（改前）     10 applied / 1 pending（enlarge-section-title）
+self-test（改前）   走"真文件是原版"分支 → 临时副本上 apply 了 11 处；17 条断言全绿 + vm 编译通过
+apply --yes        只写入新锚点这 1 处（其余 10 处按 applied 跳过 ⇒ 不重复注入）
+verify             11/11 applied PASS
+self-test（改后）   走"真文件已带补丁"分支 → 直接断言，同样 17 条全绿
+live 落盘          ~/.dsh/local-plugins/dsh-our-free-model/client.js 里的
+                   `.ofm_sec_title{font-size:16px;font-weight:650}` 已就位（逐行核对）
+```
+
+**口径变化**：补丁锚点 **10 → 11** 处；`self-test.mjs` 断言 **16 → 17** 条。
+`verify-all free-model` 项数不变（没有新增文件，语法清单未变）。
+
+**实机待验**：重启宿主后，设置 → 免费模型页的分区标题应与卡片名明显拉开，
+并与「外观」「桌宠」两页的分组标题同级。
+
+## 2026-10-07 · 上游补丁静默化：没有右下角弹窗，更新只在设置页说
+
+
+**触发**：用户点名「更新 Our Free Model，去掉他的右下角弹窗公告，以后有更新在免费模型设置页提醒」。
+范围先问后做（三选一）：**① 右下角 toast + ② 紧急公告全屏模态 + ③ 系统通知三条一起去掉**，用户选全去。
+
+**上游的弹窗一共五个来源**（逐行核实 `client.js`，不是猜）：
+
+| 来源 | 位置 | 触发时机 |
+|---|---|---|
+| 右下角 toast（新公告） | `announcements` SSE 监听器 | 仓库主人推新公告 |
+| **紧急模态**（`ofm_scrim` 全屏遮罩） | 同一监听器 `item.level === 'urgent'` 分支 | 推 `urgent` 级公告 |
+| **系统通知** `osNotify` | 上面两个监听器各一处 | 用户开过「系统通知」时 |
+| 右下角 toast（**插件可升级**） | `update` SSE 监听器 | 检测到新版本 |
+| 右下角 toast（热重载） | `'our-free-model: reload notice'` effect | 热重载 / 升级完成 |
+
+**改了什么**（补丁从 5 处锚点扩到 **10 处**，新增五处）：
+
+| id | 改动 |
+|---|---|
+| `silence-announcement-push` | 删掉 `announcements` 推送块 —— 一次关掉 toast + 紧急模态 + 系统通知 |
+| `silence-update-push` | 删掉 `update` 推送块里的 `osNotify` + `showToast`（事件广播保留） |
+| `silence-reload-notice` | 删掉整个 reload-notice `effect`（它唯一的产物就是那个 toast；`localStorage` 记账一并移除，不留死逻辑） |
+| `inject-update-notice-component` | 注入 `UpdateNotice` 组件（[`inject/update-notice.js`](../patches/dsh-our-free-model/inject/update-notice.js)） |
+| `inject-update-notice-bar` | 在模型清单之前插入 `h(UpdateNotice, {})` —— **页首 hero 之后**，一进「免费模型」就能看见 |
+
+**提醒条的设计**（为什么是这个形态）：
+
+- **位置**：页首而不是「升级」分区里 —— 用户要的是"提醒"，而分区在页面底部、要滚动才看得到；
+- **数据**：走本页现成的 `api('/update/status')`（同源、cookie 自动携带），并监听上游**仍在广播**的
+  `ofm:update` / `ofm:upgraded` 两个 window 事件 —— 推送通道只关弹窗，事件照旧；
+- **无更新渲染 `null`**：不占位、不留空白条；
+- **样式零新增**：全部复用上游 `ofm_*` 类（`ofm_callout` 警告色 / `ofm_note` / `ofm_row` / `ofm_btn`），
+  颜色走主题令牌 ⇒ 与那张页面天然同一套设计语言，也少一处升级漂移面（补丁不改它的 CSS 与 i18n 字典）；
+- **保留一处 toast**：设置页里「保存失败」的即时应答（`t('settings.failed')`）**刻意不删** ——
+  那是对用户刚做动作的回话，删了只会让保存失败变成静默无提示。被关掉的是"主动找上门"的那几个调用点。
+
+**本轮踩到并修掉的真缺陷（值得单独记）**：新组件最初插在 `function SettingsPage(props) {` 正上方，
+而 `inject-panel-component` 的 applied 判据要求 `PANEL` 与那一行**逐字相邻** ⇒ 它被挤成 `pending`
+⇒ **下一次 `apply` 会二次注入 `PlatformScanPanel`**（重复声明：不报错、不崩溃，最难发现的那种）。
+`dry run` 的 `verify` 当场打出 `9/10` 才暴露。修法：注入锚点改用 `// ── in-app upgrade` 区块标题行
+（语义也更顺 —— 提醒条与升级面板本就是一件事的两端）。
+**固化成闸门**：`self-test.mjs` 新增**幂等断言** —— 对已打过补丁的文本再跑一次 `applyTo`，
+输出必须逐字节不变。`insert-*` 类锚点的 pending 判据是"`from` 恰好出现一次"，
+只要新注入的源码挤进某个 `from` 与其前一个锚点之间，这条判据就会失效 —— 闸门现在看着它。
+
+**验证 `[实测]`**（本机 Node 24，全部离线可复跑）：
+
+```
+dry run（OFM_CLIENT 指向临时副本）  status 5 applied / 5 pending → apply → verify 10/10 → --check 通过
+幂等                               连打两次 SHA-256 相同（07BC4683…E0FD8）
+self-test                          16 条断言全绿；换上游原版为输入同样 PASS（= 升级冲掉后能重打）
+渲染探针                           迷你 hooks 运行时真渲染 SettingsPage：UpdateNotice 恰好 1 个；
+                                   有更新 → ofm_callout 提醒条（文案 + 两个按钮齐全）；无更新 → null
+bundle 加载冒烟                     改写后 bundle 可加载、factory 可执行；apply 注册的槽位只剩
+                                   settings.section（settings.onboarding 已消失）、label = 免费模型
+A/B 对照                           两个探针在上游原版上分别给出"槽位多一个 onboarding""UpdateNotice = 0"
+                                   ⇒ 探针有区分力，不是恒绿
+live 落盘                          真副本 10/10 applied
+```
+
+**口径变化**：`verify-all free-model` **15 → 16 项**（语法清单新增 `inject/update-notice.js`）。
+**不改本线包版本**（仍 0.4.0）：`patches/` 不在 npm `files` 清单里、发布物未变 —— 这次变的是
+本机安装副本的改写规则。两个一次性探针留档在 `_refs/scripts-archive/ofm-silence-probe-2026-10-07/`
+（`_refs/` 不入库）—— 上游自升级冲掉补丁后，可不重启宿主先证一遍"补丁真的改对了"。
+
+**实机待验**（矩阵 §3.12 判据正文已同步，台账 J1/J5 已改，**新立 J6**）：重启 miasaki 桌面端后 ——
+① 设置左栏「免费模型」页**右下角不再出现任何弹窗**；② 页首出现（或按当前版本不出现）更新提醒条；
+③ 把上游版本号人为改旧后应出现提醒条并显示 `当前 → 最新`；④ 上游推公告时不再有任何弹窗打断。
+
+---
+
 ## 2026-09-30 · J5 闭环：上游补丁终于进了 live 审计
 
 **触发**：矩阵台账 J5 早就写着「本项是**常驻闸门**（上游每次自升级都要重跑）」，但**没有任何自动化** ——

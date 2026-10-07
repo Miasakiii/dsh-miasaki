@@ -14,16 +14,54 @@
  * （`src/updater.js` 的 `installStaged`：写清单内文件 + 删除清单外文件），
  * 所以每次升级后都要重打，`status` 一眼可见当前处于哪种状态。
  *
- * ## 改动面（五处锚点，全部唯一命中才动手）
+ * ## 改动面（十二处锚点，全部唯一命中才动手）
  *
- *   nav-label               左栏名字 `t('nav')` → 「免费模型」
- *   drop-news-section       删掉「公告中心」分区那一行
- *   drop-onboarding         删掉首启公告弹窗（`settings.onboarding` 整块注册）
- *   inject-panel-component  注入 `PlatformScanPanel` 组件（`inject/platform-panel.js`）
- *   inject-platform-section 在模型清单之后挂上「本机自配平台」分区
+ * 【一】界面收敛（2026-09-28，用户点名「只要一个页面、且没有公告」）
+ *
+ *   nav-label                       左栏名字 `t('nav')` → 「免费模型」
+ *   drop-news-section               删掉「公告中心」分区那一行
+ *   drop-onboarding                 删掉首启公告弹窗（`settings.onboarding` 整块注册）
+ *   inject-panel-component          注入 `PlatformScanPanel` 组件（`inject/platform-panel.js`）
+ *   inject-platform-section         在模型清单之后挂上「本机自配平台」分区
+ *
+ * 【二】静默化（2026-10-07，用户点名「去掉右下角弹窗公告，以后有更新在设置页提醒」）
+ *
+ *   silence-announcement-push       公告推送：右下角 toast / 紧急模态 / 系统通知**三条一起关**
+ *   silence-update-push             「插件可升级」的 toast 与系统通知
+ *   silence-reload-notice           热重载 / 升级后的右下角提示（整块 effect）
+ *   inject-update-notice-component  注入 `UpdateNotice` 组件（`inject/update-notice.js`）
+ *   inject-update-notice-bar        把提醒条挂在页首（hero 之后、模型清单之前）
+ *
+ * 【三】标题层级（2026-10-07，用户点名「分区标题与内容一样大一样粗」）
+ *
+ *   enlarge-section-title           上游分区标题 14px/650 → 16px（字重 650 保留）
+ *
+ *   上游的分区标题（`.ofm_sec_title`，14px/650）与卡片名（`.ofm_cardname`，13.5px/650）
+ *   **几乎同级** ⇒ 「模型清单 / 本机自配平台 / 升级」这些分区与分区内的模型卡看不出层级。
+ *   只提字号、保留上游的字重（650）与配色，改动面一行、可整行还原。
+ *   **这一处刻意破了"本补丁不动上游 CSS"的自我约束**（原决策见 §【一】的 2026-09-28 记录）：
+ *   该约束的收益是"少一处升级漂移面"，而漂移本来就会被 `self-test.mjs` 显式打红（不会静默
+ *   写坏文件），用户点名的层级问题优先。除这一行外，本补丁仍不碰上游 CSS 与 i18n 字典。
+ *
+ * 【四】自升级不再被 8 秒超时打断（2026-10-07，用户截图报错后补）
+ *
+ *   apply-upgrade-long-timeout      升级按钮那次 `post('/update/apply', {})` → `ofmApplyUpgrade()`
+ *
+ *   现象：点「立即升级」后红框 `signal is aborted without reason`，看起来像按钮坏了。
+ *   根因：`api()` 给每个请求套了 8 秒 `AbortController`（上游为防挂起的兜底），而
+ *   `/update/apply` 要做「拉 manifest（自身 15s）→ 并发 4 路下载全部文件（每路 30s）→
+ *   备份 → 安装 → 热重载」。8 秒必然打断，而**真实失败原因**（host 侧 `updates.json` 记的
+ *   `staging failed: vendor/channel-pack/NOTICE.md: fetch failed`，随 500 响应发出）
+ *   到达时客户端早已断开 —— 用户永远看不到它。实测那次升级在 host 侧**真的跑了、也真的失败了**。
+ *   修法：`inject/update-notice.js` 里的 `ofmApplyUpgrade()`（240 秒超时）原地取代那次调用，
+ *   提醒条自己也走同一个函数；失败原因照实透出。**这是修上游的缺陷**，不是我们的功能新增。
  *
  * 不改它的任何内部逻辑、不动它的 i18n 字典（新分区文案用中文字面量）、
  * 不留任何新文件（纯文本改写，所以 `revert` 能整文件还原）。
+ *
+ * **刻意保留的一处 toast**：设置页里「保存失败」的即时反馈（`t('settings.failed')`）——
+ * 那是对用户刚做的动作的应答，不是公告；删了它只会让保存失败变成静默无提示。
+ * 因此 `showToast` 机制本身留着，被关掉的是"主动找上门"的那三个调用点。
  *
  * ## 用法
  *
@@ -43,9 +81,100 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PANEL = readFileSync(join(HERE, 'inject', 'platform-panel.js'), 'utf8').replace(/\n+$/, '');
+const NOTICE = readFileSync(join(HERE, 'inject', 'update-notice.js'), 'utf8').replace(/\n+$/, '');
 
 /** 模型清单那一行 —— 新分区挂在它后面，这样"免 Key 车道"与"本机自配平台"挨着。 */
 const MODELS_SECTION = "        h(Section, { title: t('section.models'), hint: t('section.modelsHint') }, h(Roster, { summary: data, t: tagged, onBench: bench, benches })),\n";
+
+// ── 被静默化的三段上游代码（逐字取自上游 `client.js`，2026-10-07）─────────────────
+//
+// 为什么逐字而不是正则：改的是人家的文件，锚点必须"要么精确命中一次、要么显式失败"。
+// 正则改写会在上游微调时静默匹配到别处 —— 那正是补丁最不该有的失败形态。
+// 段落里的缩进与换行都是原样，改动任一处都会让 `status` 报 drift（而非默默写坏文件）。
+
+/** 公告推送（`announcements` SSE）：右下角 toast / 紧急模态 / 系统通知三合一的那一块。 */
+const ANNOUNCEMENT_PUSH = [
+  "            for (const item of data.items ?? []) {",
+  "              osNotify(t('toast.annTitle'), item.title)",
+  "              if (item.level === 'urgent') {",
+  "                showUrgentModal({",
+  "                  title: `${t('news.urgentTitle')} · ${item.title}`,",
+  "                  html: item.html ?? '',",
+  "                  confirmLabel: t('news.gotIt'),",
+  // guard-ok: 上游代码逐字拷贝 —— 这是「要被删掉的那段」的锚点数据，不是本仓的降级逻辑
+  "                  onClose: () => { void post('/announcements/ack', { id: item.id }).catch(() => {}) },",
+  "                })",
+  "              } else {",
+  "                showToast({ title: t('toast.annTitle'), body: item.title, tone: item.level === 'warn' ? 'warn' : undefined })",
+  "              }",
+  "            }",
+  '',
+].join('\n');
+
+/** 替换文本：删掉通告块，只留一句补丁说明（下一行的事件广播照旧）。 */
+const ANNOUNCEMENT_SILENCED = [
+  "            // 【补丁 · @miasaki/dsh-free-model】公告不再弹窗：右下角 toast / 紧急模态 /",
+  "            // 系统通知三条通道一并关闭（2026-10-07 用户点名），只留给下一行的事件广播。",
+  '',
+].join('\n');
+
+/** 「插件可升级」推送：右下角 toast + 系统通知。 */
+const UPDATE_PUSH = [
+  "            osNotify(t('toast.updateTitle'), t('toast.updateBody').replace('{latest}', data.latest ?? '').replace('{current}', data.current ?? ''))",
+  "            showToast({",
+  "              title: t('toast.updateTitle'),",
+  "              body: t('toast.updateBody').replace('{latest}', data.latest ?? '').replace('{current}', data.current ?? ''),",
+  "              tone: 'warn', holdMs: 14000,",
+  "            })",
+  '',
+].join('\n');
+
+/** 替换文本：提醒改在设置页顶部（`UpdateNotice`），这里只留事件广播。 */
+const UPDATE_SILENCED = [
+  "            // 【补丁 · @miasaki/dsh-free-model】插件可升级不再弹右下角 toast 与系统通知：",
+  "            // 提醒改在「免费模型」设置页顶部（UpdateNotice），这里只留给下一行的事件广播。",
+  '',
+].join('\n');
+
+/** 热重载 / 升级后的右下角提示 —— 整个 effect 的唯一产物就是那个 toast，故整块移除。 */
+const RELOAD_NOTICE = [
+  "      // A hot reload or in-app upgrade swaps this bundle while the page stays",
+  "      // open. The only durable marker across that swap is localStorage, so the",
+  "      // successor announces what happened exactly once.",
+  "      ctx.effect(() => {",
+  "        void (async () => {",
+  "          try {",
+  "            const meta = await api('/meta')",
+  "            const at = Number(meta?.reloadedAt ?? 0)",
+  "            if (at <= 0) return",
+  "            let seen = ''",
+  // 以下四处 `guard-ok` 同 ANNOUNCEMENT_PUSH：都是锚点数据（上游原文），不是本仓的吞错逻辑。
+  // guard-ok: 锚点数据 —— 要整块删掉的那段上游代码
+  "            try { seen = window.localStorage?.getItem('ofm.reloadedAt') ?? '' } catch { /* storage unavailable */ }",
+  "            if (String(at) === seen) return",
+  // guard-ok: 锚点数据 —— 要整块删掉的那段上游代码
+  "            try { window.localStorage?.setItem('ofm.reloadedAt', String(at)) } catch { /* ignore */ }",
+  "            showToast({",
+  "              title: meta.version !== '' ? `Our Free Model ${meta.version}` : 'Our Free Model',",
+  "              body: t('reload.done').replace('{n}', String(meta.reloadCount ?? 0)),",
+  // guard-ok: 锚点数据 —— 要整块删掉的那段上游代码
+  "              actions: [{ label: t('reload.refresh'), onClick: () => { try { window.location.reload() } catch { /* top-level navigation refused */ } } }],",
+  "              holdMs: 12000,",
+  "            })",
+  // guard-ok: 锚点数据 —— 要整块删掉的那段上游代码
+  "          } catch { /* backend absent */ }",
+  "        })()",
+  "        return () => {}",
+  "      }, 'our-free-model: reload notice')",
+  '',
+].join('\n');
+
+/** 替换文本：`ofm.reloadedAt` 这个 localStorage 键只被这一块读写，整块删掉不留死逻辑。 */
+const RELOAD_SILENCED = [
+  "      // 【补丁 · @miasaki/dsh-free-model】热重载 / 升级后的右下角提示已关闭：",
+  "      // 它唯一的载体就是 showToast，整块移除后不再有「插件重载过」的弹窗。",
+  '',
+].join('\n');
 
 /** 默认目标：本机安装副本。 */
 export function defaultTarget() {
@@ -92,6 +221,74 @@ export const EDITS = [
     why: '在模型清单之后挂上「本机自配平台」分区',
     from: MODELS_SECTION,
     to: () => `${MODELS_SECTION}        h(Section, { title: '本机自配平台', hint: '扫描 llm-pi-ai.providers 中带 baseURL 的平台：检出免费模型、给出能力画像，可写入配置或设为子代理' }, h(PlatformScanPanel, {})),\n`,
+  },
+  // ── 【二】静默化（2026-10-07）────────────────────────────────────────────────
+  // 目标：插件不再"主动找上门"。公告 / 更新 / 热重载三条推送通道全部关掉，
+  // 只保留「设置页里保存失败」那一处对用户动作的即时应答（见文件头 §刻意保留）。
+  {
+    id: 'silence-announcement-push',
+    kind: 'remove',
+    why: '公告推送不再弹窗：右下角 toast + 紧急模态 + 系统通知',
+    from: ANNOUNCEMENT_PUSH,
+    to: ANNOUNCEMENT_SILENCED,
+  },
+  {
+    id: 'silence-update-push',
+    kind: 'remove',
+    why: '「插件可升级」不再弹右下角 toast 与系统通知（提醒改到设置页）',
+    from: UPDATE_PUSH,
+    to: UPDATE_SILENCED,
+  },
+  {
+    id: 'silence-reload-notice',
+    kind: 'remove',
+    why: '热重载 / 升级后的右下角提示整块移除',
+    from: RELOAD_NOTICE,
+    to: RELOAD_SILENCED,
+  },
+  {
+    id: 'inject-update-notice-component',
+    kind: 'insert-before',
+    why: '注入「有新版本就在设置页顶部提醒」的组件定义',
+    // 锚点是「in-app upgrade」区块标题行，**刻意不选 `function SettingsPage`**：
+    // `inject-panel-component` 的判据要求 `PANEL` 与那一行**逐字相邻**，
+    // 在这两者之间再插一份源码会把它挤成 pending ⇒ 下次 apply 会重复注入 PlatformScanPanel。
+    // 放在升级面板旁边语义也更顺（提醒条与升级面板本就是同一件事的两端）。
+    from: '    // ── in-app upgrade ───────────────────────────────────────────────────────',
+    to: () => `${NOTICE}\n    // ── in-app upgrade ───────────────────────────────────────────────────────`,
+  },
+  {
+    id: 'inject-update-notice-bar',
+    kind: 'insert-before',
+    why: '把更新提醒条挂在页首（hero 之后、模型清单之前）',
+    from: MODELS_SECTION,
+    to: () => `        h(UpdateNotice, {}),\n${MODELS_SECTION}`,
+  },
+  // ── 【三】标题层级（2026-10-07）──────────────────────────────────────────────
+  // 分区标题 14px/650 与卡片名 13.5px/650 几乎同级（用户点名「标题与内容一样大一样粗」）。
+  // 只动这一行的字号：字重 650 与 label-primary 都是上游的，保留 ⇒ 观感仍是它自己的设计语言。
+  {
+    id: 'enlarge-section-title',
+    kind: 'replace',
+    why: '分区标题提档：14px → 16px（与卡片名 13.5px 拉开层级）',
+    from: '.ofm_sec_title{font-size:14px;font-weight:650}',
+    to: '.ofm_sec_title{font-size:16px;font-weight:650}',
+  },
+  // ── 【四】自升级不再被 8 秒超时打断（2026-10-07，用户截图报错）──────────────────
+  // 现象：点「立即升级」后红框 `signal is aborted without reason`，看起来像按钮坏了。
+  // 根因：`api()` 给每个请求套了 8 秒 `AbortController`，而 `/update/apply` 要
+  // 「拉 manifest（自身 15s）→ 并发下载全部文件（每路 30s）→ 备份 → 安装 → 热重载」——
+  // 8 秒必然打断；而真实失败原因（host 侧 `updates.json` 记的
+  // `staging failed: vendor/channel-pack/NOTICE.md: fetch failed`，随 500 响应发出）
+  // 到达时客户端早已断开，**用户永远看不到它**。
+  // 修法：`ofmApplyUpgrade()`（定义在 `inject/update-notice.js`，240 秒超时）原地取代
+  // 这里那次 `post()` 调用；提醒条自己也走同一个函数。失败原因照实透出。
+  {
+    id: 'apply-upgrade-long-timeout',
+    kind: 'replace',
+    why: '升级按钮改走长超时请求（不再被 api() 的 8 秒超时打断）',
+    from: "          const result = await post('/update/apply', {})",
+    to: '          const result = await ofmApplyUpgrade()',
   },
 ];
 
@@ -154,7 +351,7 @@ export const TARGET_PACKAGE = 'dsh-our-free-model';
 export const TARGET_RELATIVE = 'client.js';
 
 /**
- * 把五处锚点的状态汇总成 live 审计要的三态。
+ * 把十一处锚点的状态汇总成 live 审计要的三态。
  * @returns `{ state: 'patched' | 'original' | 'unknown', detail? }`
  */
 export function classify(text) {
@@ -218,7 +415,8 @@ if (isCli) {
         writeFileSync(TARGET, text, 'utf8');
         console.log('[ofm-patch] apply 完成，已备份到 ' + BACKUP);
         for (const line of done) console.log('  · ' + line);
-        console.log('\n  重启宿主（或热重载该插件）后生效；设置左栏应只剩一栏「免费模型」，且不再有公告。');
+        console.log('\n  重启宿主（或热重载该插件）后生效；设置左栏应只剩一栏「免费模型」，不再有公告，');
+        console.log('  右下角不再出现任何弹窗；有插件更新时，只在「免费模型」页顶部出现一条提醒。');
       } else if (existsSync(BACKUP)) {
         // 唯一受支持的回退路径：整文件还原。
         writeFileSync(TARGET, readFileSync(BACKUP, 'utf8'), 'utf8');
