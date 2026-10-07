@@ -49,9 +49,12 @@
 //     **刻意不把维护者名字写进本脚本** —— 那本身就违反脱敏纪律。
 //   · 仍然抓不到：改名换姓的间接指代、图片/二进制里的痕迹、git 历史里的旧提交。
 //   · 入库边界由 `git ls-files --cached --others --exclude-standard` 决定 —— **索引 + 未跟踪未忽略**
-//     （= 将要入库的全集；只看索引会让「尚未 git add 的新文件」逃过检查，2026-09-30 实测漏网后改口径）；
-//     git 不可用（受限沙箱下 spawn 走管道会 EPERM）时
-//     回退**文件系统遍历**并**显式打印**回退原因 —— 不静默换口径。
+//     （= 将要入库的全集；只看索引会让「尚未 git add 的新文件」逃过检查，2026-09-30 实测漏网后改口径）。
+//   · **git 不可用 ⇒ 拒绝判定（exit 1），不做近似回退**（2026-10-08 改口径）：本脚本不复刻
+//     `.gitignore`，文件系统遍历会把不入库的运行时产物报成新增 —— 实测把 git 摘出 PATH 后
+//     79 处命中 / 新增 25，全部是被忽略的运行时产物（纯假阳性）。**闸门假阳性比漏报更危险**
+//     （它让人把闸门关掉）⇒ 与 `md-links` / `pulse-contract` 同口径：环境不可判定就不给判定，
+//     而不是换一套口径继续给绿灯或红灯。
 //
 // ## 用法
 //
@@ -59,9 +62,9 @@
 //   node scripts/check-style.mjs --update   # 重写存量基线（须人工复核 diff）
 //   node scripts/check-style.mjs --report   # 只报告不判定（排查用）
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, extname, join, relative, resolve } from 'node:path'
+import { dirname, extname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -71,13 +74,6 @@ const BASELINE_PATH = join(ROOT, 'scripts', 'style-baseline.json')
 const TEXT_EXT = new Set([
   '.md', '.mjs', '.js', '.cjs', '.json', '.yml', '.yaml', '.ps1', '.rs',
   '.toml', '.css', '.ts', '.tsx', '.txt', '.html', '.schema', '.gitattributes', '.editorconfig',
-])
-
-/** 文件系统回退遍历时的跳过目录（与 check-silent-guards.mjs 同口径）。 */
-const SKIP_DIRS = new Set([
-  '.git', 'node_modules', 'dist', 'target', 'vendor', '_refs', '.vs',
-  '.workbuddy', '.workbuddy-ai', '.learnings', '.monkeycode', '.freebuff',
-  '.cluster', '.openclaw', '.zcode', '.commandcode', 'injected',
 ])
 
 const BOM = [0xEF, 0xBB, 0xBF]
@@ -113,18 +109,6 @@ function listCandidateFiles() {
   const r = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: ROOT, encoding: 'utf8' })
   if (r.error || r.status !== 0) return null
   return r.stdout.split('\0').filter(Boolean)
-}
-
-function walkFiles(dir = ROOT, out = []) {
-  for (const name of readdirSync(dir)) {
-    if (SKIP_DIRS.has(name)) continue
-    const full = join(dir, name)
-    let st
-    try { st = statSync(full) } catch { continue }
-    if (st.isDirectory()) walkFiles(full, out)
-    else out.push(relative(ROOT, full).split('\\').join('/'))
-  }
-  return out
 }
 
 /** 裸词命中：**大小写敏感**（与 `git grep -F` 同口径）。导出给自证用。 */
@@ -249,14 +233,24 @@ if (IDENTITY_TERMS.length === 0 && process.env.IDENTITY_TERMS_PATH) {
 }
 
 const tracked = listCandidateFiles()
-let files
-let fallbackNote = ''
 if (tracked === null) {
-  files = walkFiles().sort()
-  fallbackNote = '（git 不可用：受限沙箱下 spawn git 走管道会 EPERM ⇒ 回退文件系统遍历，与 git 口径可能略有出入）'
-} else {
-  files = tracked
+  // git 不可用 ⇒ **拒绝判定**，不做近似回退（2026-10-08 改口径 + 实测取证）。
+  //
+  // 判定集是「将要入库的全集」，而这个边界**只有 git 知道** —— `.gitignore` 的规则本脚本不复刻。
+  // 原先的 walkFiles() 回退会扫到不入库的文件：把 git 从 PATH 里摘掉后跑同一条命令，
+  // 扫了 620 个文本文件、命中 79 处、判「新增 25」，而那 25 条**全部**来自 `.gitignore`
+  // 覆盖的运行时产物（`dsh-miasaki-fleet/agents/**` 的 inbox / status / transcript、
+  // 根级 `IDENTITY.md` / `USER.md`、`config/mcporter.json`、`src-tauri/gen/schemas/*.json`）
+  // ⇒ 纯假阳性。**闸门假阳性比漏报更危险**（它让人把闸门关掉；本闸门首跑就栽过占位符那一次），
+  // 所以这里显式失败，与 `md-links` / `pulse-contract` 在 git 不可用时的行为一致：
+  // 环境不可判定，就不给判定。
+  // 附带收益：`--update` 不再有「在口径不明的全集上重写基线」的机会（那会写坏冻结台账）。
+  console.error('[style] ✗ 无法判定：git 不可用 ⇒ 「将要入库的全集」不可知（判定集不能近似）。')
+  console.error('[style]   本脚本不复刻 .gitignore；文件系统遍历实测会把不入库的运行时产物报成新增（79 处命中 / 新增 25），属纯假阳性。')
+  console.error('[style]   修法：① 在 git 可用的环境跑（普通终端与 CI 都可用）；② 受限沙箱下把 git 放进可执行白名单，或改用 danger-full-access 策略。')
+  process.exit(1)
 }
+const files = tracked
 
 const scanned = files.filter(f => TEXT_EXT.has(extname(f).toLowerCase()))
 const problems = []
@@ -286,7 +280,7 @@ const added = problems.filter(
 const currentKeys = new Set(problems.map(key))
 const gone = [...baselined].filter(k => !currentKeys.has(k))
 
-console.log(`[style] 扫了 ${scanned.length} 个文本文件${fallbackNote} — 命中 ${problems.length} 处（BOM ${problems.filter(p => p.rule === 'bom').length} / CRLF ${problems.filter(p => p.rule === 'crlf').length} / 末行无换行 ${problems.filter(p => p.rule === 'noEof').length} / 脱敏 ${problems.filter(p => p.rule === 'identity').length} / 未判定 ${problems.filter(p => p.rule === 'unreadable').length}）${baselineNote}${termsNote}`)
+console.log(`[style] 扫了 ${scanned.length} 个文本文件 — 命中 ${problems.length} 处（BOM ${problems.filter(p => p.rule === 'bom').length} / CRLF ${problems.filter(p => p.rule === 'crlf').length} / 末行无换行 ${problems.filter(p => p.rule === 'noEof').length} / 脱敏 ${problems.filter(p => p.rule === 'identity').length} / 未判定 ${problems.filter(p => p.rule === 'unreadable').length}）${baselineNote}${termsNote}`)
 
 if (mode === 'update') {
   const next = {

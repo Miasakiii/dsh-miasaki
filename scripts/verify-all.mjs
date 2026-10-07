@@ -314,8 +314,9 @@ function planDesktop() {
     args: [join(dir, 'ui', 'test', 'loading-visual.test.js')],
     cwd: dir,
   })
-  // 启动片头素材闸门（design/2026-10-04-boot-intro-video.md §4）：ui/intro/ 四段第三方 mp4
-  // 必须与台账（字节数 + SHA256 前 16 位，对齐上游 clips.meta.js）逐段一致。
+  // 启动片头素材闸门（design/2026-10-04-boot-intro-video.md §4）：ui/intro/ 七段第三方 mp4
+  // 必须与台账（字节数 + SHA256 前 16 位）逐段一致。台账两个上游、两种许可：
+  // 前四段对齐上游 clips.meta.js 官方值（BSD-3），后三段以发布包字节实测（MIT）。
   // 素材是**快照不是依赖** —— 上游更新与本仓无关，但入库产物被改动（半截下载 / 手工替换）
   // 必须在这里拦下；重放 `node scripts/extract-intro-clips.mjs`（无 --check）可修复。
   checks.push({
@@ -718,10 +719,11 @@ function planFreeModel() {
   for (const entry of ['lib/index.js', 'lib/trust.js', 'lib/settings-read.js', 'lib/profile.js', 'lib/scan.js']) {
     checks.push({ line: 'free-model', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
-  // 上游插件增量补丁（patches/dsh-our-free-model）：把「本机自配平台」接进它的设置页。
+  // 上游插件增量补丁（patches/dsh-our-free-model）：把「本机自配平台」接进它的设置页、
+  // 把公告/更新/热重载三条推送通道静默化（更新提醒改挂设置页顶部）、分区标题提档到 16px。
   // 上游升级会覆盖 client.js、补丁一定会被冲掉，所以锚点是否仍与当前上游版本对得上
   // 必须是闸门（self-test 三种状态各有明确处置：applied / pending → 副本上试打 / drift → 红）。
-  for (const entry of ['patches/dsh-our-free-model/patch.mjs', 'patches/dsh-our-free-model/self-test.mjs', 'patches/dsh-our-free-model/inject/platform-panel.js']) {
+  for (const entry of ['patches/dsh-our-free-model/patch.mjs', 'patches/dsh-our-free-model/self-test.mjs', 'patches/dsh-our-free-model/inject/platform-panel.js', 'patches/dsh-our-free-model/inject/update-notice.js']) {
     checks.push({ line: 'free-model', name: `syntax ${entry}`, cmd: process.execPath, args: ['--check', join(dir, entry)], cwd: dir })
   }
   checks.push({

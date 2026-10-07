@@ -12,7 +12,7 @@
 
 | 线 | 目录 | 定位与现状 |
 |---|---|---|
-| 桌面端 | [`dsh-miasaki-desktop/`](../dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH profile 插件：桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）、Computer Use GUI 工具（dsh-computer-use，桌宠 v4 能力底座）——**用量监控已于 2026-09-26 迁出本线（见第八线），免费模型池已于 2026-09-28 迁出并升级为多来源聚合器（见第九线）**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**2026-09-27/28 桌宠 v4–v5**：whale 图集接入（`cut-frames.mjs` 按主题行名表切 7 行，行号语义不跨主题共享）、反转狂三白军装重画（`inverse-states.mjs` 背景色四角采样，蓝底白底通吃）、`pet_native/xform.rs` 绘制变换层（逆向映射采样 + M1 呼吸 / M2 摇摆 / M3 挤压，cargo 100 例单测）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的**九个**运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）——最新一件是 **2026-09-30 的 `dsh-client-ui-workspace`**（会话浏览器「侧线会话不占列表」，让 `@miasaki/dsh-sidebar` 的辅助对话不进官方列表；判据是跨包 localStorage 声明，声明缺席即官方原状）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。**2026-10-05 启动片头 3.0 实施（S1–S3.5）**：`ui/intro/` 四段第三方 mp4（BSD-3，SHA256 台账 + `extract-intro-clips.mjs` 可重放）+ loading 页 L2 视频层（叠在 S4a 纹章层之上，就绪即淡出 / 失败让路 / 播完回落 / 点击跳过；关闭·未知段·reduced-motion ⇒ 一层不建，L1 纹章层兼作降级层）+ `boot_intro.rs` 读 appearance config 的 `boot` 板块，设计见该线 `design/2026-10-04-boot-intro-video.md`（**2026-10-05 续清账：完整编译修复 4 处 E0133 + `cargo test` 147/147 全绿（口径 109 → 147）+ exe +9.0 MB 素材嵌入实锤 + 部署 10/10 + P9 闪窗取证 PASS（冷启动子树仅 webview2/node，5 次均 `phase:"up"`）；三主题目检与片头实播待用户**）。**2026-10-05 v5 M4 + M4.1 边缘状态落地**：M4 拖动尾随（临界阻尼弹簧 + R13 拖动合帧 `IDT_DRAG`）与 M4.1 屏幕边缘停靠探头（吸附 ≤18px 判边 + `pet.json` v2 落 `dock` 字段；peek 六态状态机——静置 5s 缩边露 0.55、点击/压上拉直 0.82、300/250/300ms，`IDT_PEEK` 边界轮询；**零绘制改动**——分层窗移出屏外自然不裁，动画只改 `pos` 由 ULW 落窗；气泡在场禁探头并同帧弹回吸附位；peek 不跨重启、启动按 dock 边复位吸附位）——真仓 `cargo test` **164/164**（MSVC link 环境；M4.1 批净增 31 条、混合 DPI 批再 **+9** 条），实机走查归用户（判据：验收矩阵 §3.2.3 + 台账 E18）。 |
+| 桌面端 | [`dsh-miasaki-desktop/`](../dsh-miasaki-desktop/) | Tauri 2 薄壳 + Win32 桌宠 + 三主题（pure / zafkiel / kurkuriel）+ Win11 Mica 一体；标题栏 v4 无壳裸键；四个 DSH profile 插件：桌宠面板、会话日志下载入口迁移（dsh-session-log-move）、模型连通性真实探测（dsh-model-probe）、Computer Use GUI 工具（dsh-computer-use，桌宠 v4 能力底座）——**用量监控已于 2026-09-26 迁出本线（见第八线），免费模型池已于 2026-09-28 迁出并升级为多来源聚合器（见第九线）**。**桌宠 v3 M2「真实工作状态」已落地（2026-09-12）**：六态 `PetState`（Idle/Thinking/Waiting/Error/Done/FleetBlocked）以**官方契约为主信号、DOM 扫描降级兜底**，Done 庆祝与出错气泡；主题 CSS 拆 `*.skin.css` / `*.deco.css`（供外观线消费，零行为变更）。**2026-09-27/28 桌宠 v4–v5**：whale 图集接入（`cut-frames.mjs` 按主题行名表切 7 行，行号语义不跨主题共享）、反转狂三白军装重画（`inverse-states.mjs` 背景色四角采样，蓝底白底通吃）、`pet_native/xform.rs` 绘制变换层（逆向映射采样 + M1 呼吸 / M2 摇摆 / M3 挤压，cargo 100 例单测）。**不修改 DSH 本体**，令牌层覆盖实现，DSH 升级不受影响；唯一例外是 `patches/` 下的**九个**运行时补丁（规则 + 基线入库，可重建 / 校验 / 回退）——最新一件是 **2026-09-30 的 `dsh-client-ui-workspace`**（会话浏览器「侧线会话不占列表」，让 `@miasaki/dsh-sidebar` 的辅助对话不进官方列表；判据是跨包 localStorage 声明，声明缺席即官方原状）。**2026-09-22 启动加载 2.0 设计定稿**：cmd 闪窗归因根治（绕开 cmd 直达 node，静默回落兜底）+ loading 页内嵌启动日志流与阶段进度，跨线契约见 `cross/boot-loading-2026-09-22.md`。**2026-10-05 启动片头 3.0 实施（S1–S3.5）**：`ui/intro/` 七段第三方 mp4（前四段 BSD-3 + 2026-10-08 第二批三段 MIT，SHA256 台账 + `extract-intro-clips.mjs` 可重放）+ loading 页 L2 视频层（叠在 S4a 纹章层之上，就绪即淡出 / 失败让路 / 播完回落 / 点击跳过；关闭·未知段·reduced-motion ⇒ 一层不建，L1 纹章层兼作降级层）+ `boot_intro.rs` 读 appearance config 的 `boot` 板块，设计见该线 `design/2026-10-04-boot-intro-video.md`（**2026-10-05 续清账：完整编译修复 4 处 E0133 + `cargo test` 147/147 全绿（口径 109 → 147）+ exe +9.0 MB 素材嵌入实锤 + 部署 10/10 + P9 闪窗取证 PASS（冷启动子树仅 webview2/node，5 次均 `phase:"up"`）；三主题目检与片头实播待用户**）。**2026-10-05 v5 M4 + M4.1 边缘状态落地**：M4 拖动尾随（临界阻尼弹簧 + R13 拖动合帧 `IDT_DRAG`）与 M4.1 屏幕边缘停靠探头（吸附 ≤18px 判边 + `pet.json` v2 落 `dock` 字段；peek 六态状态机——静置 5s 缩边露 0.55、点击/压上拉直 0.82、300/250/300ms，`IDT_PEEK` 边界轮询；**零绘制改动**——分层窗移出屏外自然不裁，动画只改 `pos` 由 ULW 落窗；气泡在场禁探头并同帧弹回吸附位；peek 不跨重启、启动按 dock 边复位吸附位）——真仓 `cargo test` **164/164**（MSVC link 环境；M4.1 批净增 31 条、混合 DPI 批再 **+9** 条），实机走查归用户（判据：验收矩阵 §3.2.3 + 台账 E18）。 |
 | Fleet | [`dsh-miasaki-fleet/`](../dsh-miasaki-fleet/) | 多 Agent CLI 编排（`package.json` 0.20.0）：一个总指挥 + N 个 worker CLI，以文件总线为唯一协调通道——F1 总线校验 / F2 计量全源覆盖 / F3 心跳判活（worker 崩溃后不残留「僵尸 running」）/ X1 脉冲发布（与桌宠 A×B 联动）/ G0–G4 图工程判定层（契约、图与就绪度、能力图、异构验证者选取）。 |
 | Canvas | [`dsh-miasaki-canvas/`](../dsh-miasaki-canvas/) | DSH web 画布插件 `@miasaki/dsh-canvas`（v0.5.0-miasaki.7，fork dsh-synapse）：「会话布」——可浏览 / 可分支 / 可合并的视觉会话工作区，含血缘侧栏、小地图、桌面端窗控与三主题品牌色适配。**2026-09-12 视觉与交互精细化 V1–V4**：令牌化圆润化（卡圆角 16px / 三级阴影）、连线端点与语义色、LOD 三档（full/compact/mini）、状态徽标统一——纯表现层，零 schema 变更、零新依赖。 |
 | Sidebar | [`dsh-miasaki-sidebar/`](../dsh-miasaki-sidebar/) | DSH web 侧边栏插件 `@miasaki/dsh-sidebar`（v0.10.0-miasaki.0）：**接入官方右侧 Sidebar**，注册**两个** tab 类型（「审查」+「辅助对话」，后者 2026-09-28 落地）。自研右栏壳已于 2026-09-10 退役、**2026-09-11 完成第二阶段清理**（壳代码删除）；**2026-09-25 右栏终端退役**——官方右栏已内置终端（多标签 / Shell 选择 / 刷新恢复），沿用官方策略不再自建，内嵌终端收敛为**底部面板单形态**（Ctrl+` / 标题栏按钮唤起，多标签多会话、node-pty 路线 B、一次性 token 闸门、回放环 + 背压淘汰，host 半与容器无关零改动）。单测 **104 例**（2026-10-05 实跑）、静态回归 **13/13**（11 个测试文件）；**M2.1 辅助对话已落地（2026-09-28）**——右栏第二个 tab（侧线 = `ctx.sessions.fork` 不传 `atSeq`，主会话运行中可开；嵌入式官方会话，零自研聊天 UI），实机验收 7/7，M2.2/M2.3 未做。**2026-09-30 回退「只带最近 3 轮」**：09-29 曾传 `atSeq` 截到倒数第 3 个 `turn/start`，但把方向读反了 —— `atSeq` 是**保留 `0..atSeq` 的头部前缀上界**（`dsh-session/lib/types/fork.js:19` 的 `events.slice(0, boundary + 1)`），**只能截尾、不能截头** ⇒ 「只带最近 N 轮」用 `fork` 做不到，真触发时反而丢最近的轮次、留更早的历史；侧线已回到官方默认的全文前缀（`client.js` 与测试 `git restore` 回 09-29 之前，单测 18 → **13** 例）。契约事实见该线设计文档 **C1b**、原因与 ZCode 官方复核见 `design/CHANGELOG.md` 2026-09-30 条。 |
@@ -988,6 +988,36 @@ DIB / `Size` 三处必须同源，混用会触发 ULW 静默拉伸）；`pw` →
 `EXPECTED=10`）；回归矩阵 H1 上误塞的 I5 复验详情下移 §3.0；未跟踪的规划文档
 `unimplemented-backlog-plan-2026-10-05.md` 按「规划类不入库」移入 `_refs/internal-plans/`。
 
+**2026-10-08 · 复核上一轮结论：四项「失败」全是策略边界，三处数字失真已订正，`repo/style` 改判**`[实测]`：
+对上一会话（`workspace-write` 策略）留下的分析逐条复核，**先复跑、后引用** —— 本轮策略为
+`danger-full-access`，`node scripts/verify-all.mjs` **182/182 十类全 PASS**（exit 0）：上一轮报的
+「全量 174/178 + 四项失败（`desktop cargo test` / `md-links` / `pulse-contract` / `style`）」
+**一条都不复现**。四项均为 `workspace-write` 边界（`cargo` build script 读 `tauri.conf.json` 被拒
+`os error 5` / `spawnSync git` EBUSY），**换策略即消失**，与代码无关。分母也不是 178：
+181（HEAD 实测）→ **182**，增量来自本批未入库的 `patches/dsh-our-free-model/inject/update-notice.js`
+进 free-model 语法闸门（free-model 15 → **16**）。
+**四处数字失真（均在本批未入库文档里，已订正）**：① 根 README「静态回归 180 项」→ **182**
+（真实演进 179 → 180 → 181 → 182）；② 入库文件 785 → **806**、代码约 15 万 → **16.1 万**行、
+desktop 占比 61% → **57%**；③ 启动片头七段合计 **33.72 MB**（后三段新增 24.65 MB、前四段 8.65 MB）
+—— 上一轮「七段共 24.6 MB」把新增量当成了总量（只播用户选中的一段，不是全量加载）；
+④ **实机验收台账的分母与已验数** —— 根 README 与矩阵 §3.0 都停在「**114 项 / 已验 9 项**」，
+按「行首恰为 `- [ ]` / `- [x]`」逐条数实测为 **118 项 / 已验 18 项**（118 条全部是真实判据：
+A1–A24 / B1–B8 / C1–C12 / D1–D17 / E1–E25 / F1–F5 / G1–G3 / H1 / I1–I6 / J1–J6 / K1–K5 与
+K2a/K2b-1/K2b-2 / M1–M3，无一条是说明行误计）—— **分母差额 4 恰好是 2026-10-07 新增的 4 项判据
+（D17 / E24 / E25 / J6）没进分母**，已验数则停在 2026-10-05 第二次对账的时点。两处均按实测订正
+（与 §3.0 自己写的「分母口径 = §3.0 台账里的 checkbox 总数」同一口径，只是数字没跟上）。
+**台账重复已修**：回归矩阵 J6 判据⑥**整段出现两遍**（抄判据时的粘贴事故，**闸门查不出重复**），已删重复段。
+**闸门口径修正（本轮唯一代码改动）**：`scripts/check-style.mjs` 在 git 不可用时改为
+**拒绝判定 + exit 1**，删掉 `walkFiles()` 近似回退。判据来自实测取证：把 git 摘出 `PATH` 后，
+同一条命令扫 620 个文本文件、命中 **79** 处、判「新增 **25**」—— 那 25 条**全部**是被 `.gitignore`
+覆盖的运行时产物（`dsh-miasaki-fleet/agents/**` 的 inbox / status / transcript、根级 `IDENTITY.md` /
+`USER.md`、`config/mcporter.json`、`src-tauri/gen/schemas/*.json`），**纯假阳性**；而**闸门假阳性
+比漏报更危险**（它让人把闸门关掉）。新行为与 `md-links` / `pulse-contract` 在 git 不可用时同口径，
+并附带堵住一类风险：`--update` 不再有机会在口径不明的全集上重写冻结台账。
+自证两种情形：git 可用 ⇒ `591 文件 / 命中 54 / 新增 0 / PASS`；git 摘出 ⇒ **exit 1**，
+只打印「✗ 无法判定：git 不可用」一条原因（不再有 25 条假 FAIL）。
+**一处表述失准（未改代码）**：`scripts/patch-live-audit.mjs` **没有**内建三态故障注入自证
+（只有 `--json`）；台账 J5 记的「原版 / 漂移 / 真实安装」三态是当时的一次性取证实验，不是常驻能力。
 
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
