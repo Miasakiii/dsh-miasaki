@@ -547,7 +547,7 @@ L0 回归全绿、单测全绿，症状只会在「装进 profile 后预设格�
 - **闸门**：`test/host.test.js` 新增「注入行 kind 必须落在官方六种行白名单内」——
   正向断言每次实际产出的每一行都合法，另断言 `style` 行不得自带与官方冲突的 `placement`。
 - **回归**：`node scripts/verify-all.mjs appearance` **16/16 PASS**。
-- **依据**：[`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) §4 W4/T4.1
+- **依据**：`official-desktop-adoption-plan-2026-09-25.md` §4 W4/T4.1（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）
   与 [`dsh-official-desktop-analysis-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-desktop-analysis-2026-09-25.md) §1.1（injections kind 白名单实测）。
 
 ## 2026-09-23 · 修：`renderPreset` 对位图预设静默画黑徽记（二轮复审 P3）

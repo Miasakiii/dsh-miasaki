@@ -5,7 +5,7 @@
 - 对象：`<官方桌面端安装目录>` 官方 Windows x64 安装（注册表 `DeepSeek Harness 0.1.7-rc.2`，更新通道 `nightly`）
 - 证据基础：从 `resources/app.asar` 解包出的桌面壳源码（`lib/main.js` 11,695 行 / 57 个模块分区、3 个 preload、`renderer/` 壳内页面）、`@deepseek-ai/dsh-desktop-host` 宿主包、内置 runtime 清单、本机 profile 与用户数据目录、正在运行的宿主环境变量
 - 口径：`[实测]` = 本次解包源码 / 读代码 / 跑命令 / 读运行环境核到；`[推断]` = 基于证据的判断，未做隔离实例验证
-- 配套：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md)、[`dsh-official-repo-review-2026-09-25.md`](dsh-official-repo-review-2026-09-25.md)
+- 配套：`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）、[`dsh-official-repo-review-2026-09-25.md`](dsh-official-repo-review-2026-09-25.md)
 
 ---
 

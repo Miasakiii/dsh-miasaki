@@ -461,7 +461,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 - [ ] M2 计时面板可恢复：刷新页面 → 打开任一**已结束**步骤的轨迹计时面板 / 悬停消息耗时面板 ⇒ 首 token 延迟、生成、吞吐量三行与气泡「首 token 用时（TTFT）」均为数字（trajectory 与 chat 两个计时补丁**必须一起重打** —— 同一个 `firstTokenTime` 的两处显示；rc.2 重打后未验）
 - [ ] M3 停用可恢复：移除任一插件 → 重启 host ⇒ DSH 原生界面**无残留**（右栏推挤复位、会话头按钮消失、插件树无 `did not activate` / `pending`、无启动屏报错）
 
-> **与 `dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md` §验收清单的关系**：那份是
+> **与 `dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md` §验收清单的关系**（该文档 2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）：那份是
 > **升级批次**的验收登记（rc.2 适配相关项），本节是**回归矩阵口径的长期台账**（含升级之外的历史积压）。
 > 两者覆盖有重叠但不完全相同；**以本节为勾选口径**，避免两处各勾一半。
 

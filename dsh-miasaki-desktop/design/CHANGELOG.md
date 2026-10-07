@@ -1563,8 +1563,8 @@ T1 的迁移只完成了一半，两半的生效速度差**一个构建周期** 
 
 ## 2026-09-27 · 桌面端适配整改 A 批 + B 批 T7：契约 v1.2（chrome 几何）· 让位量归壳 · fleet 配置回退
 
-上游：[全线审查报告](../../dsh-miasaki-shared-docs/repo-review-2026-09-27.md) 与
-[整改方案](../../dsh-miasaki-shared-docs/cross/desktop-adaptation-plan-2026-09-27.md)。
+上游：全线审查报告（`repo-review-2026-09-27.md`）与整改方案（`desktop-adaptation-plan-2026-09-27.md`）
+—— 两份均于 2026-10-08 移出公开仓（本地 `_refs/internal-plans/`）。
 审查的核心判断：**壳与插件的契约面已从 1 项长到 12 项，只有 1 项被文档化，而恰恰是那一项零消费**；
 真正在用的 8 项（`data-miasaki-theme`、`--ms-titlebar-reserve`、`.tb-group` …）全是隐式契约，
 且「窗控组实宽」这**一个事实有三方各自取数**（sidebar 写死常量 / canvas 量 DOM / ssh 实测）。
@@ -2318,7 +2318,7 @@ Harness」，点「检查 dsh」返回 `未找到 dsh（不在 PATH）` + `（ds
 
 ## 2026-09-25（晚）· W2 取证与可靠性 + W3 关闭语义 + W4 表现层（官方桌面端借鉴第二批）
 
-**背景**：同 [`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md) 的 W2–W4。
+**背景**：同 `official-desktop-adoption-plan-2026-09-25.md` 的 W2–W4（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）。
 Rust 侧（W2）由子代理实施、Lead 复核并修正两处判据；全部经 `cargo test` 与七线回归验证。
 
 ### W2 · 取证与可靠性（对症 P0「偶发全黑无响应」）
@@ -2449,7 +2449,7 @@ parentNode 判空重建）不变。
 ## 2026-09-25 · W0 顺手修复 + W1 桌面契约 v1（官方桌面端借鉴第一批）
 
 **背景**：官方桌面端（Electron，0.1.7-rc.2）实测分析 → 跨线落地规划，见
-[`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md)。
+`official-desktop-adoption-plan-2026-09-25.md`（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）。
 本轮落地 **W0（既有缺陷修复）** 与 **W1（契约层）**；Rust 侧 W2/W3 另行。
 
 ### W0 · 四处既有缺陷修复（零风险，先做）
@@ -2517,7 +2517,7 @@ parentNode 判空重建）不变。
 **回归**：`plugins/dsh-model-probe` 单测 **12 例全过**，其中含 `probeModel resolves the stored profile on ≤0.1.6 (get world)`
 与 `… on 0.1.7 (describe world)` 两条 —— 正是 0.1.7 设置机制重写后的双轨用例。
 
-**依据**：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §3（W2）
+**依据**：`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md` §3（W2）（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）
 与 [`dsh-official-repo-review-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-repo-review-2026-09-25.md) §4。
 
 ## 2026-09-24（三轮复审）· 文档基线归位 + 两处 P3 断言修复 + live 审计补第八件

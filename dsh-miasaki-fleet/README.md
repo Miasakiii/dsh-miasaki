@@ -522,4 +522,4 @@ node ../scripts/verify-all.mjs fleet
 > `agents/archive/`（G2 能力断层结论与 G4 选型的**活输入**）；`schemas/*.schema.json`（人类可读契约镜像，
 > 权威实现在 `bus-contract.cjs`，`schemas/README.md:21-31` 有此设计的理由）；
 > `tasks/t-0003|t-0004/result.json`（G0 机器契约首例，被 `validate-bus.mjs` 校验、被 `bus-apply` 写白名单覆盖）。
-> 详见 [`../dsh-miasaki-shared-docs/repo-review-2026-09-26.md`](../dsh-miasaki-shared-docs/repo-review-2026-09-26.md) §七。
+> 详见 `dsh-miasaki-shared-docs/repo-review-2026-09-26.md` §七（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）。

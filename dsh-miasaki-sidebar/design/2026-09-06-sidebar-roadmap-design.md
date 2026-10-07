@@ -2,7 +2,7 @@
 
 - 日期：2026-09-06
 - 状态：设计定稿（未写代码）
-- 上游调研与路线论证：[跨线文档 `sidebar-plan-2026-09-06.md`](../../dsh-miasaki-shared-docs/cross/sidebar-plan-2026-09-06.md)
+- 上游调研与路线论证：跨线文档 `sidebar-plan-2026-09-06.md`（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）
 
 ## 1. 目标与红线
 

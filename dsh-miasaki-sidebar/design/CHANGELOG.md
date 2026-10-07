@@ -560,8 +560,8 @@ inline 变量，谁最后落笔不确定）。
   - **触摸点**：`client.js`、`package.json`（0.10.0-miasaki.0 + description 订正）、`README.md`
     （导语 / 待办 / 状态表 / 组件蓝图 / 时间线 / 内嵌终端段 / 版本信号）、本文件、
     `design/2026-09-19-terminal-multi-tab-plan.md`（补退役注记）、
-    [`../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md)
-    §4 W3（补「已被取代」注记）、根 `README.md` 与 `AGENTS.md` 的 sidebar 线描述。
+    `dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`
+    §4 W3（补「已被取代」注记；该文档 2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）、根 `README.md` 与 `AGENTS.md` 的 sidebar 线描述。
   - **回归**：`node --check index.js` / `client.js` 均通过；单测 **57 pass / 5 skip / 0 fail**（62 项总数不变，
     skip 的 5 项是**既有**的 `canCaptureGit()` 环境跳过——受限沙箱无法捕获 git 子进程输出，与本改动无关）。
   - **待实机（需重启 `dsh web`）**：① 引导页只剩「审查」一个入口胶囊；② 底部面板终端全能力不变
@@ -592,7 +592,7 @@ inline 变量，谁最后落笔不确定）。
     其中 skip 的 5 项是**既有**的 `canCaptureGit()` 环境跳过（受限沙箱无法捕获 git 子进程输出），与本改动无关。
   - **待实机（需重启 `dsh web`）**：① 引导页出现**两个**终端入口，我们的显示为「内嵌终端」；
     ② 底部面板「在右栏打开 ↧」显示的是**同一个 pty**（不是新会话）；③ 官方终端独立可用（多标签 / Shell 选择 / 刷新恢复）。
-  - 规划依据：[`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md) §4（W3）。
+  - 规划依据：`dsh-0.1.7-rc2-upgrade-and-refit-plan-2026-09-25.md` §4（W3）（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）。
   - **同日后续（历史注记）**：本条「并存」形态仅存在数小时——用户随即拍板**直接退役右栏终端**
     （见本日第一条），kind `miasaki-terminal` 的类型已注销，官方终端成为右栏终端的唯一提供方。
 
@@ -974,7 +974,7 @@ inline 变量，谁最后落笔不确定）。
   - 辅助对话底座复用 canvas 已验证的「fork + 首条消息注入」链路，侧线隐藏性方案待 M2 spike（origin/subagent 机制优先，元数据标记 + 列表过滤兜底）；
   - 右栏与宿主同文档（非 iframe），直接消费 `--dsw-*` 令牌；tab 框架为插件私有注册表，暂不服务化；
   - 数据隔离目录 `$DSH_HOME/miasaki-sidebar/`。
-- 文档：`design/2026-09-06-sidebar-roadmap-design.md`；路线论证在跨线 `dsh-miasaki-shared-docs/cross/sidebar-plan-2026-09-06.md`。
+- 文档：`design/2026-09-06-sidebar-roadmap-design.md`；路线论证在跨线 `dsh-miasaki-shared-docs/cross/sidebar-plan-2026-09-06.md`（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）。
 - **M1 壳 spike 完成（同日）**：better-sidebar 的 `data-pane="conversation"` 推挤锚点在本机 DSH 0.1.2 bundle 中**不存在**（`data-dsh-frame`/`data-pane` 全 bundle 无匹配）。读 `dsh-client-ui-layout` 源码 + 本机浏览器实测后定稿：
   - 原生 AppFrame 即三列（`sidebar | center | details`），`ctx.layout` 服务存在（`openDetails`/`closeDetails`），但**原生 `details` 插槽路线否决**——官方文档明示该槽 OCCUPIED by ui-conversation's DetailsPanel，`single` 语义下注册即整体顶掉官方工具详情面板；
   - 定稿 **frame `padding-right` 推挤 + `shell.overlay` 挂载**：实测 1280px 视口 center 1000→600px，grid 1fr 正确吸收；dark 主题下 `--dsw-alias-*` 令牌跟随正确；

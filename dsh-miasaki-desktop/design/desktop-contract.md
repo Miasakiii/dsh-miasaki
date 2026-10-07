@@ -3,7 +3,7 @@
 > 状态：**v1.1 已落地（2026-09-25）**——v1 见规划 W1/T1.2–T1.4，v1.1 是**受控写能力**增量。
 > 实现 = `themes/src/10-contract.js`（独立 IIFE 分片），
 > 闸门 = `themes/test/contract.test.js`（**15 例**，已接入 `node scripts/verify-all.mjs desktop`）。
-> 上游规划：[`official-desktop-adoption-plan-2026-09-25.md`](../../dsh-miasaki-shared-docs/cross/official-desktop-adoption-plan-2026-09-25.md)；
+> 上游规划：`official-desktop-adoption-plan-2026-09-25.md`（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）；
 > 对标实现（官方 Electron）：[`dsh-official-desktop-analysis-2026-09-25.md`](../../dsh-miasaki-shared-docs/dsh-platform/dsh-official-desktop-analysis-2026-09-25.md) §3.4。
 
 ## 1. 为什么需要契约
@@ -154,7 +154,7 @@ if (d && d.has('theme.set')) d.theme.set('kurkuriel')
 
 | 日期 | 变更 |
 |---|---|
-| 2026-09-27 | **v1.2：壳 chrome 几何**（`chrome.bounds()` / `chrome.onChange()`）。由来：[全线审查](../../dsh-miasaki-shared-docs/repo-review-2026-09-27.md) §4-① 发现右上角一带有**三方争用**——sidebar 往 `.tb-group` 插终端键并硬编码写 `--ms-titlebar-reserve:156px`、canvas 与 ssh 各自量宽避让、壳自己消费该变量给官方控件让位；同一事实三种取数，且 canvas 还写死了「宽度固定，无需监听」这个已被 sidebar 注入打破的前提。本能力把它收敛成一个**只读**接口（「壳说事实、插件选分支」，与 `12-material` 的 `data-mia-native-mica` 同一分工）。**`protocolVersion` 仍为 1** —— 按 §4 语义，增量能力只追加 `capabilities` 条目。同批：`06-titlebar.js` 用 `ResizeObserver` 观测实宽自动写 `--ms-titlebar-reserve`（**壳成为唯一写者**，sidebar 的两处写入删除）；`06-titlebar.js` 头部纪律同步 v1.1/v1.2（此前仍写「只读 + 不提供写通道」，与同文件 v1.1 实现自相矛盾）；`contract.test.js` 的能力表核验补上**未知命名空间即失败**的守卫（原先对未知 ns 静默跳过）。闸门 **15 → 19 例**。 |
+| 2026-09-27 | **v1.2：壳 chrome 几何**（`chrome.bounds()` / `chrome.onChange()`）。由来：全线审查（`repo-review-2026-09-27.md`，2026-10-08 移出公开仓）§4-① 发现右上角一带有**三方争用**——sidebar 往 `.tb-group` 插终端键并硬编码写 `--ms-titlebar-reserve:156px`、canvas 与 ssh 各自量宽避让、壳自己消费该变量给官方控件让位；同一事实三种取数，且 canvas 还写死了「宽度固定，无需监听」这个已被 sidebar 注入打破的前提。本能力把它收敛成一个**只读**接口（「壳说事实、插件选分支」，与 `12-material` 的 `data-mia-native-mica` 同一分工）。**`protocolVersion` 仍为 1** —— 按 §4 语义，增量能力只追加 `capabilities` 条目。同批：`06-titlebar.js` 用 `ResizeObserver` 观测实宽自动写 `--ms-titlebar-reserve`（**壳成为唯一写者**，sidebar 的两处写入删除）；`06-titlebar.js` 头部纪律同步 v1.1/v1.2（此前仍写「只读 + 不提供写通道」，与同文件 v1.1 实现自相矛盾）；`contract.test.js` 的能力表核验补上**未知命名空间即失败**的守卫（原先对未知 ns 静默跳过）。闸门 **15 → 19 例**。 |
 | 2026-09-26 | **P7：页面 → 壳的事件通道**（`miasaki-pet-heartbeat` / `miasaki-boot`，经 `plugin:event\|emit`；权限来自既有 `core:default` 的 `core:event:default`）。**暴露面不变**：`window.miasakiDesktop` 的能力表、`protocolVersion`（仍为 1）与写者数量（仍为 2）全都没动 —— 变的是**六态心跳的送达通道**：`petts` 不再写 `location.hash`（那正是「URL 每 1.5s 变一次、History 库涨到 87MB」的驱动源），改由事件直达 `main.rs` 的 `app.listen`。§3 纪律②「契约自己不碰 `location.hash`」因此更强：**心跳也不再碰**。详见 [CHANGELOG.md](CHANGELOG.md) 2026-09-26（下午·续）。 |
 | 2026-09-25 | **v1.1**：新增受控写能力 `theme.set` 与 `window.controls`（minimize / maximize / close）。实现走**内部事件**（`miasaki-theme-set` / `miasaki-window-command`），执行落在寄生分片 `02-core.js` / `06-titlebar.js` —— 契约自己不碰 `location.hash`，**写者数量不变**（仍为 2）。闸门 11 → **15 例**（新增：派发与白名单拒绝、只暴露人话名不透内部协议名 `min`/`max`、寄生侧监听的静态断言）。同批修正 §4 的版本语义：`protocolVersion` **只在破坏性变更时提升**，增量能力靠 `has()` 探测。 |
 | 2026-09-25 | v1 落地（W1/T1.2–T1.4）：`10-contract.js` + 11 例闸门 + 本文档；同批记录 T1.1 spike 结论（`__DSH_BOOT_READY__` 闸门不可用，正确通道为 `index-inject`） |

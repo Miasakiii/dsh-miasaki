@@ -164,7 +164,7 @@ G1/G2 均不碰系统提示 / 模型请求 / 工具 schema；G2 新帧是 host�
 ## 2026-09-27 · T4：口径①「壳窗控口径」契约化（口径②与 rootObserver 不变）
 
 **背景**：桌面壳契约 v1.2 增补 `chrome.bounds()` / `chrome.onChange()`（见
-[desktop-adaptation-plan-2026-09-27.md](../../dsh-miasaki-shared-docs/cross/desktop-adaptation-plan-2026-09-27.md) §2.5）。
+`desktop-adaptation-plan-2026-09-27.md` §2.5，2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`）。
 本线此前量壳自己的资产 `#miasaki-titlebar .tb-group` 是靠**猜类名**：壳换一次选择器（v3 的 `.tb-capsule`
 就是这么沦为兜底的）、或侧栏线往按钮组里插一颗键（组宽 108 → 136，让位量少 28px），本线都得跟着改一次。
 

@@ -96,7 +96,7 @@ fleet 15/15、desktop 33/33（含 `cargo test` + 6 个补丁离线自证）、ss
 ssh B1–B4 让位修复、DSH 平台调研）与仓库清仓一并提交：**删除 7 条线的 25 项死代码/冗余**（其中 usage 的
 `scanTemplateLiterals` 由死代码**接线为装载闸门的第 3 项防线**），并回收 25.9 MB 测试残留。
 逐条清单（含「审计误判但复核后保留」的反例）见
-[`dsh-miasaki-shared-docs/repo-review-2026-09-26.md`](../dsh-miasaki-shared-docs/repo-review-2026-09-26.md) §七，
+`dsh-miasaki-shared-docs/repo-review-2026-09-26.md` §七（2026-10-08 移出公开仓 → 本地 `_refs/internal-plans/`），
 各线变更记录见各自 `design/CHANGELOG.md`。
 > ※ 审计纪律注记：本轮 15 名只读审计员给出的删除建议中，**有 4 条经 Lead 复核后推翻**（`mergePanelCard()`
 > 实为活代码、`card-positions` 迁移代码非死代码、`states/idle.png` 归属看串行、`pet-hide/pet-show` 与
@@ -213,8 +213,8 @@ banner/motd 跳过。③ **U2.2 SFTP**（`lib/paths.js` / `lib/sftp.js` / `lib/l
 > [回归矩阵 §1 的 ※※ 注记](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
 
 **2026-09-27（桌面端适配整改 A 批 + B 批 T7：契约 v1.2 与让位量归壳）** `[实测]`：上游是同日的
-[全线审查](../dsh-miasaki-shared-docs/repo-review-2026-09-27.md)（八线对桌面端的适配现状）与
-[整改方案](../dsh-miasaki-shared-docs/cross/desktop-adaptation-plan-2026-09-27.md)。
+全线审查（`repo-review-2026-09-27.md`，八线对桌面端的适配现状）与
+整改方案（`desktop-adaptation-plan-2026-09-27.md`）—— 两份均于 2026-10-08 移出公开仓（本地 `_refs/internal-plans/`）。
 审查的核心判断：**壳与插件的契约面已从 1 项长到 12 项，只有 1 项被文档化，而恰恰是那一项零消费**；
 真正在用的 8 项（`data-miasaki-theme`、`--ms-titlebar-reserve`、`.tb-group` …）全是隐式契约，
 且「窗控组实宽」这**一个事实有三方各自取数**（sidebar 写死常量 / canvas 量 DOM / ssh 实测）。
@@ -1018,6 +1018,14 @@ K2a/K2b-1/K2b-2 / M1–M3，无一条是说明行误计）—— **分母差额 
 只打印「✗ 无法判定：git 不可用」一条原因（不再有 25 条假 FAIL）。
 **一处表述失准（未改代码）**：`scripts/patch-live-audit.mjs` **没有**内建三态故障注入自证
 （只有 `--json`）；台账 J5 记的「原版 / 漂移 / 真实安装」三态是当时的一次性取证实验，不是常驻能力。
+**同批归档**：按「规划类文档不入库」口径把 **11 份**排期 / 评审 / 台账类文档移出公开仓
+（`desktop/design/TODO.md`、`shared-docs/repo-review-*.md` ×5、
+`cross/{desktop-adaptation,official-desktop-adoption,sidebar}-plan-*.md` ×3、
+`dsh-platform/dsh-0.1.{5-rc1,7-rc2}-upgrade*plan` ×2），留档 `_refs/internal-plans/`。
+**入库文档里的 17 处 markdown 相对链接**按 `md-links` 给出的修法（「目标本就不入库 ⇒ 改成反引号
+代码路径，别做链接」）改写为纯代码路径并标注去向，另 4 处反引号路径提及同步标注；各线
+`design/*-plan.md` **刻意保留** —— 它们承载设计决策与验收判据（属应入库四类），不是排期。
+判据：`repo/md-links` 由 **17 处断链** → PASS（185 个入库文档 / 400 个相对链接）。
 
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
