@@ -80,6 +80,10 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
 | 契约 / 错误条 | 12px notice | models `.notice` / `.error` | ✅ 已统一（仅间距要收敛） |
 | 分组标题 | 自绘 14px/500 + 20px 上距 | 通用页**无组标题**；models 16px/500 页标题；plugins tabs | ⚠️ 保留分组（7 组平铺会糊），但规格靠拢官方：组标题 14px/22/500 label-primary（官方 `editorTitle` 同款），组间距统一 24px |
 
+> **2026-10-07 更新**：上表最后一行选的 `editorTitle`（14px/22/500）与行标题**同字号、只差一档字重**，
+> 用户直接点名「标题与内容一样大一样粗」⇒ 组标题改取**同一张表里早已量过的 models `.title`
+> 16px/24/500**（行标题 / 说明 / 间距不动）。决策与验证见 `CHANGELOG.md` 2026-10-07 条。
+
 ## 3. V1 视觉统一方案（行为逻辑零变化）
 
 ### 3.1 新控件：选择丸 + 下拉菜单（本线唯一新增自建制）

@@ -2,8 +2,9 @@
   setAttr(current)
   // 窗口级 chrome 只在顶层 frame 构建：Tauri initialization_script 会注入所有
   // frame（WebView2 行为），SSH/画布等 iframe 里若也构建，页面右上会浮一套假
-  // 窗控、右下浮一颗假主题球（2026-09-12 用户反馈的「两套窗控/多一颗球」即此
-  // 因）。主题属性与样式层各 frame 照常，不受影响。
+  // 窗控（2026-09-12 用户反馈的「两套窗控」即此因；当时右下角还有一颗假主题球，
+  // 2026-10-07 起主题面板已并入窗控组，同样受本守卫保护）。主题属性与样式层各
+  // frame 照常，不受影响。
   var IS_TOP = true
   try { IS_TOP = window.top === window } catch (e) { IS_TOP = false }
   function onReady() {
@@ -28,11 +29,12 @@
     try { wireDragZone() } catch (e) {}
     if (!IS_LOCAL) {
       // 装饰层逐一隔离：单个构建异常不得中断后续构建与巡检启动（装饰层失败不阻断原则）
-      if (IS_TOP) { try { buildSwitcher() } catch (e) {} }
+      // 主题面板不在这里建：它是窗控组的子元素，随 buildTitlebar() 一起挂载
+      // （2026-10-07 由「右下角主题悬浮球」改造而来，构建见 03-switcher.js `buildThemeMenu`）。
       try { buildWatermark() } catch (e) {}
       try { buildAurora() } catch (e) {}
     }
-    refreshSwitcher()
+    refreshThemeMenu()
     // W4.3：首帧也报一次窗口底色（此前 apply() 未跑过时 CUR_BG 为空）
     CUR_BG = resolveNativeBg()
     syncHash(true) // 启动首帧强制重算 diag（后续按 DIAG_MIN_INTERVAL_MS 节流）
@@ -48,7 +50,7 @@
     setInterval(function () {
       try { /* 巡检单次失败不影响下一轮 */
       if (IS_TOP && !document.getElementById('miasaki-titlebar')) buildTitlebar()
-      if (IS_TOP && !document.getElementById('miasaki-switcher') && !IS_LOCAL) buildSwitcher()
+      if (IS_TOP && !document.getElementById('miasaki-theme-menu') && !IS_LOCAL) buildThemeMenu()
       if (!document.getElementById('miasaki-close-dialog')) buildCloseDialog()
       if (!document.getElementById('miasaki-aurora') && !IS_LOCAL) buildAurora()
       if (document.documentElement.getAttribute('data-miasaki-theme') !== current) setAttr(current)

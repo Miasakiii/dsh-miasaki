@@ -152,17 +152,74 @@ try {
   let state = JSON.parse(await evaluate(`JSON.stringify({
     attr: document.documentElement.getAttribute('data-miasaki-theme'),
     bodyDark: document.body.hasAttribute('data-ds-dark-theme'),
-    switcher: !!document.getElementById('miasaki-switcher'),
+    switcher: !!document.getElementById('miasaki-theme-menu'),
     watermark: !!document.getElementById('miasaki-watermark'),
     overlay: !!document.getElementById('miasaki-overlay')
   })`))
   check('pure: html[data-miasaki-theme]', state.attr === 'pure', String(state.attr))
-  check('pure: 切换条已注入', state.switcher === true)
+  check('pure: 主题面板已注入', state.switcher === true)
   check('pure: 无水印（纯透传）', state.watermark === false)
   check('pure: 不干预 DSH 明暗属性', typeof state.bodyDark === 'boolean')
 
+  // ---------- 1.5 主题入口：右上角窗控头像按钮 + 下拉面板（2026-10-07） ----------
+  // 背景：右下角的主题悬浮球（`#miasaki-switcher`：fixed right/bottom 16px 的 46px 圆）
+  // 压住内容区右下角的「发送 / 确认 / 连接」键，历史事故三连；现整体退役，切换能力并入
+  // 窗控组里那颗**同源**的主题头像按钮 `.tb-theme`（面板 `#miasaki-theme-menu` 作为
+  // `.tb-group` 的绝对定位子元素，向下展开）。
+  // 判据四条：① 按钮在窗控组内且带 role/tabindex/aria-expanded；② 面板默认收起；
+  // ③ 点击展开 + Esc 收起（`aria-expanded` 同步）；④ **球与 `.ms-btn` 一个都不剩**。
+  const MENU_STATE = `JSON.stringify((function(){
+    var btn = document.querySelector('#miasaki-titlebar .tb-theme');
+    var menu = document.getElementById('miasaki-theme-menu');
+    return {
+      btn: !!btn,
+      inGroup: !!(btn && btn.closest('#miasaki-titlebar .tb-group')),
+      role: btn ? btn.getAttribute('role') : null,
+      tabindex: btn ? btn.getAttribute('tabindex') : null,
+      expanded: btn ? btn.getAttribute('aria-expanded') : null,
+      title: btn ? btn.getAttribute('title') : null,
+      menu: !!menu,
+      inGroupMenu: !!(menu && menu.closest('#miasaki-titlebar .tb-group')),
+      open: !!(menu && menu.classList.contains('open')),
+      display: menu ? getComputedStyle(menu).display : null,
+      ball: !!document.getElementById('miasaki-switcher'),
+      dots: document.querySelectorAll('.ms-btn').length
+    };
+  })())`
+  let ms = JSON.parse(await evaluate(MENU_STATE))
+  check('主题入口：头像按钮在窗控组内', ms.btn === true && ms.inGroup === true,
+    `btn=${ms.btn} inGroup=${ms.inGroup}`)
+  check('主题入口：按钮带 role/tabindex/aria-expanded（可聚焦）',
+    ms.role === 'button' && ms.tabindex === '0' && ms.expanded === 'false',
+    `role=${ms.role} tabindex=${ms.tabindex} aria-expanded=${ms.expanded} title=${ms.title}`)
+  check('主题入口：面板已注入窗控组且默认收起',
+    ms.menu === true && ms.inGroupMenu === true && ms.open === false && ms.display === 'none',
+    `menu=${ms.menu} inGroup=${ms.inGroupMenu} open=${ms.open} display=${ms.display}`)
+  check('右下角悬浮球已退役（#miasaki-switcher 与 .ms-btn 均不存在）',
+    ms.ball === false && ms.dots === 0,
+    `#miasaki-switcher=${ms.ball} .ms-btn×${ms.dots}`)
+
+  await evaluate(`document.querySelector('#miasaki-titlebar .tb-theme').click(); true`)
+  await sleep(300)
+  ms = JSON.parse(await evaluate(MENU_STATE))
+  check('主题入口：点击头像展开面板（aria-expanded 同步为 true）',
+    ms.open === true && ms.display === 'flex' && ms.expanded === 'true',
+    `open=${ms.open} display=${ms.display} aria-expanded=${ms.expanded}`)
+  await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); true`)
+  await sleep(300)
+  ms = JSON.parse(await evaluate(MENU_STATE))
+  check('主题入口：Esc 收起面板', ms.open === false && ms.expanded === 'false',
+    `open=${ms.open} aria-expanded=${ms.expanded}`)
+
+  /** 真实用户路径：先点右上角头像展开面板，再点主题项（三处切换统一走它）。 */
+  async function pickTheme(t) {
+    await evaluate(`document.querySelector('#miasaki-titlebar .tb-theme').click(); true`)
+    await sleep(150)
+    await evaluate(`document.querySelector('#miasaki-theme-menu .ms-opt[data-theme="${t}"]').click(); true`)
+  }
+
   // ---------- 2. 切换 zafkiel ----------
-  await evaluate(`document.querySelector('#miasaki-switcher .ms-opt[data-theme="zafkiel"]').click(); true`)
+  await pickTheme('zafkiel')
   await sleep(1000)
   state = JSON.parse(await evaluate(`JSON.stringify({
     attr: document.documentElement.getAttribute('data-miasaki-theme'),
@@ -181,7 +238,7 @@ try {
   check('zafkiel: 表盘水印已挂载', state.watermark === true)
 
   // ---------- 3. 切换 kurkuriel ----------
-  await evaluate(`document.querySelector('#miasaki-switcher .ms-opt[data-theme="kurkuriel"]').click(); true`)
+  await pickTheme('kurkuriel')
   await sleep(1000)
   state = JSON.parse(await evaluate(`JSON.stringify({
     attr: document.documentElement.getAttribute('data-miasaki-theme'),
@@ -239,7 +296,7 @@ try {
     `mark=${yieldState.mark} layerLen=${yieldState.layer.length}`)
 
   // ---------- 5. 切回 pure ----------
-  await evaluate(`document.querySelector('#miasaki-switcher .ms-opt[data-theme="pure"]').click(); true`)
+  await pickTheme('pure')
   await sleep(1000)
   const attr = await evaluate(`document.documentElement.getAttribute('data-miasaki-theme')`)
   check('切回 pure 生效', attr === 'pure', String(attr))

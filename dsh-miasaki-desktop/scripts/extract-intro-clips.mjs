@@ -2,8 +2,13 @@
 //
 // 判据与纪律：
 //   · 素材是**快照不是依赖**：上游更新与本仓无关，本脚本把「取哪一段」写死成台账；
-//   · 台账（id / 文件名 / 字节数 / SHA256 前 16 位）对齐上游 lib/clips.meta.js 官方值，
-//     **逐段校验通过才允许落 ui/intro/** —— 半截下载、上游改动、手工替换都会被拦下；
+//   · 台账（id / 文件名 / 字节数 / SHA256 前 16 位）逐段校验通过才允许落 ui/intro/
+//     —— 半截下载、上游改动、手工替换都会被拦下；
+//   · **两个上游、两种许可**（2026-10-08 第二批追加）：brand/cyberpunk/awakening/startup
+//     来自 NativeDog1/dsh-boot-animation@v0.4.2（BSD-3-Clause）；dreamsea/lagoon/bubbles
+//     来自 lxj5820/dsh-boot-animation@v0.2.0（MIT）。后者的 SHA 无上游官方 meta 可对，
+//     **以发布包字节实测为准**（本机下载后逐段计算，值即台账）。
+//     许可差异落在 ui/intro/THIRD-PARTY-NOTICE.md，取用前先读它。
 //   · **源只在 extract（写盘）模式是前置**：优先本地 `_refs/boot-intro-clips/`（已取证副本，
 //     _refs 不入库）；缺失时可用 `--fetch` 经 GitHub raw 下载（需网络）；
 //   · `--check`（CI / verify 用的模式）判据**只有「已入库产物 vs 台账」**：不读源、不写盘。
@@ -12,7 +17,7 @@
 //
 // 用法：
 //   node scripts/extract-intro-clips.mjs            # 从 _refs 校验并拷入 ui/intro/
-//   node scripts/extract-intro-clips.mjs --fetch     # 源缺失时从上游下载（tag 固定 v0.4.2）
+//   node scripts/extract-intro-clips.mjs --fetch     # 源缺失时从上游下载（tag 逐段见台账）
 //   node scripts/extract-intro-clips.mjs --check     # 只校验 ui/intro/ 现状（不写盘）
 //
 // 退出码：0 = 全部通过；1 = 有段不齐（打印逐段差异，不删旧产物）。
@@ -27,20 +32,26 @@ const LINE_ROOT = resolve(HERE, '..')
 const OUT_DIR = join(LINE_ROOT, 'ui', 'intro')
 const LOCAL_SRC_DIR = resolve(LINE_ROOT, '..', '_refs', 'boot-intro-clips')
 
-/** 上游固定 tag：素材快照口径，换 tag 必须同时改这里与台账 SHA。 */
+/**
+ * 台账（design §2.1 实测表）。
+ * id 即 appearance config 的 `boot.intro` 枚举值域（跨线契约，见 design §5-D10）。
+ * 第一批四段 SHA = 上游 lib/clips.meta.js 官方值；第二批三段 SHA = 发布包字节实测
+ * （上游无官方 meta，见头部注释）。
+ * `repo` / `tag` / `dir` 缺省时回落下面的第一批常量；带齐时从对应上游取。
+ */
 const UPSTREAM_TAG = 'v0.4.2'
 const UPSTREAM_REPO = 'NativeDog1/dsh-boot-animation'
 const UPSTREAM_DIR = 'media'
 
-/**
- * 台账（design §2.1 实测表；SHA256 前 16 位 = 上游 lib/clips.meta.js 官方值）。
- * id 即 appearance config 的 `boot.intro` 枚举值域（跨线契约，见 design §5-D10）。
- */
 const CLIPS = [
   { id: 'brand', file: 'deepseek-brand-intro.mp4', bytes: 1308725, sha16: 'b22de4810e195b50' },
   { id: 'cyberpunk', file: 'deepseek-cyberpunk-intro.mp4', bytes: 1856280, sha16: 'beabf5956e0b467e' },
   { id: 'awakening', file: 'deepseek-awakening-intro.mp4', bytes: 2600325, sha16: 'ff5afe0dabc16e09' },
   { id: 'startup', file: 'deepseek-startup-intro.mp4', bytes: 3305269, sha16: 'ba72c501021444cd' },
+  // 第二批（2026-10-08）：lxj5820/dsh-boot-animation@v0.2.0 的 assets/videos/ 三段
+  { id: 'dreamsea', file: '1.mp4', bytes: 8391471, sha16: '970afeb9b8a981de', repo: 'lxj5820/dsh-boot-animation', tag: 'v0.2.0', dir: 'assets/videos' },
+  { id: 'lagoon', file: '2.mp4', bytes: 11065265, sha16: '95794b99c3ae4c36', repo: 'lxj5820/dsh-boot-animation', tag: 'v0.2.0', dir: 'assets/videos' },
+  { id: 'bubbles', file: '3.mp4', bytes: 5195581, sha16: '585143d714778d48', repo: 'lxj5820/dsh-boot-animation', tag: 'v0.2.0', dir: 'assets/videos' },
 ]
 
 const MODE = process.argv.includes('--check') ? 'check' : 'extract'
@@ -53,7 +64,10 @@ async function readClip(clip) {
   const local = join(LOCAL_SRC_DIR, clip.file)
   if (existsSync(local)) return await readFile(local)
   if (!FETCH) return null
-  const url = `https://raw.githubusercontent.com/${UPSTREAM_REPO}/${UPSTREAM_TAG}/${UPSTREAM_DIR}/${clip.file}`
+  const repo = clip.repo ?? UPSTREAM_REPO
+  const tag = clip.tag ?? UPSTREAM_TAG
+  const dir = clip.dir ?? UPSTREAM_DIR
+  const url = `https://raw.githubusercontent.com/${repo}/${tag}/${dir}/${clip.file}`
   const response = await fetch(url)
   if (!response.ok) throw new Error(`下载失败 ${url} → HTTP ${response.status}`)
   return Buffer.from(await response.arrayBuffer())

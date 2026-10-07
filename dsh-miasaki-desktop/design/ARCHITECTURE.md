@@ -52,12 +52,14 @@ Miasaki.exe (Tauri 2, 单进程)
 
 ### 3.1 主题/桌宠联动
 ```
-切换条点击 → apply(t) → (核心同步先行) syncHash()
+主题头像按钮点击 → 面板选主题 → apply(t) → (核心同步先行) syncHash()
   → history.replaceState('#miasaki-theme=t&int=…&diag=…')
   → Rust watchdog(33ms)→ parse_fragment → pet.set_mode(pet_mode_for(t))
 ```
-**apply() 顺序是定律**:syncHash/refreshSwitcher/updateTitlebar 在装饰层(watermark/aurora)之前,
+**apply() 顺序是定律**:syncHash/refreshThemeMenu/updateTitlebar 在装饰层(watermark/aurora)之前,
 装饰层各自 try-catch。曾因装饰层异常阻断同步导致"图标不换+桌宠不切换"。
+（`refreshThemeMenu` 即 2026-10-07 前的 `refreshSwitcher` —— 右下角悬浮球退役后改名并改为
+刷「主题头像按钮 + 面板」；`updateTitlebar` 现在只兜底最大化键图标。）
 
 ### 3.2 拖窗
 ```
@@ -151,12 +153,14 @@ Remove dist\ui -Recurse; Copy desktop\ui → dist\ui
 - **标题栏**(v4 2026-09-06,自 v3 2026-09-05 演进):**零占位叠加**——窗口自绘壳对 DSH 页面零布局侵入
   (无顶带/无下推/无卡片,页面 y=0 起渲染,顶部控件与 web 端同位置);窗控 = 右上角
   **无壳裸键组**(v3 悬浮胶囊外壳已删:无底色/边框/毛玻璃/padding,hover 底色只落单按钮;
-  主题徽章 16px 保留在按钮组左侧;`pointer-events:none` 容器,仅按钮组子元素接收事件);
+  主题头像按钮 26×26 在按钮组里、终端键右侧(2026-10-07 由 16px 静态徽章升格,点击开合主题面板,见 themes.md §1.4);`pointer-events:none` 容器,仅按钮组子元素接收事件);
   拖动 = document 级 mousedown 捕获 + 顶部 36px 命中判定(复用 tauri drag-region 判定口径:
   路径上有可点击标签/contenteditable/tabindex/交互 role 即放行点击,否则
   `plugin:window|start_dragging`/双击 `internal_toggle_maximize`);唯一页面级调整 =
-  **右上角安全区让位**(2026-09-10 晚重写):`:root{--ms-titlebar-reserve:128px}`
-  (裸键组 108px + right 8px + 12px 呼吸位),按恒存锚点让位官方右栏两处控件 ——
+  **右上角安全区让位**(2026-09-10 晚重写):`:root{--ms-titlebar-reserve}`
+  (裸键组**实宽** + right 8px + 12px 呼吸位;2026-10-07 起实宽 110px,此前的 16px 徽章形态是
+   108px。该值自 2026-09-27 起由壳的 `ResizeObserver` 观测 `.tb-group` 自动写入,壳是唯一写者,
+   静态兜底 `156px` 按注入形态上界取值、宁多勿少),按恒存锚点让位官方右栏两处控件 ——
   `#root header:has([data-conversation-header-corner]){padding-right:var(--ms-titlebar-reserve)}`
   + `#root [data-conversation-header-corner]{margin-right:0}`(抵消官方 -16px),
   `#root [data-sidebar-right-panel] [data-dockkit-strip-chrome]{margin-right:calc(var(--ms-titlebar-reserve) - 6px)}`;
@@ -183,7 +187,7 @@ desktop/
 │  ├─ runtime.js            # legacy 回退源(build-init 缺 src/ 时使用)
 │  └─ test/                 # 主题来源优先级 / 鉴权 cookie 兜底链等契约测试
 ├─ ui/loading.html          # 本地唤醒页(探活/拉起/重试/主题换肤 + S4a 纹章层 + L2 视频片头层)
-├─ ui/{pets,intro,icons}/   # 桌宠帧与立绘 / 片头四段 mp4(BSD-3,署名见 intro/THIRD-PARTY-NOTICE.md) / 图标
+├─ ui/{pets,intro,icons}/   # 桌宠帧与立绘 / 片头七段 mp4(前四段 BSD-3,后三段 MIT,署名见 intro/THIRD-PARTY-NOTICE.md) / 图标
 ├─ ui/test/                 # 加载页视觉层与片头层的 VM 驱动契约测试(无浏览器依赖)
 ├─ plugins/                 # 四个 DSH profile 插件包(各自带 README 与 test)
 │  ├─ dsh-pet-panel/        # 桌宠设置面板(设置 → 桌宠)

@@ -163,6 +163,22 @@ test('风格契约：行式排版走 .mia-* 类，不再用内联样式摆布局
   // 字号：标题 14/22、说明 12/18（官方 row.title / row.desc）
   assert.match(source, /\.mia-title\{[^}]*font-size:14px;font-weight:400;line-height:22px/, '标题须为官方 14/22')
   assert.match(source, /\.mia-desc\{[^}]*font-size:12px;font-weight:400;line-height:18px/, '说明须为官方 12/18')
+  // 组标题层级（2026-10-07）：官方 models `.title` 规格 16px/24/500 —— 必须**明显高于**
+  // 行标题（14px/22/400）。原取值与行标题**同字号、只差一档字重**，整页看不出分组
+  // （用户点名「标题与内容字体大小粗细都一样」）。两线同一份规格，改一处要同改另一处。
+  assert.match(source, /\.mia-groupTitle\{[^}]*font-size:16px;font-weight:500;line-height:24px/,
+    '组标题须为官方 models `.title` 的 16/24/500')
+  {
+    const ruleOf = cls => (source.match(new RegExp(`\\.${cls}\\{([^}]*)\\}`)) || [])[1] || ''
+    const pxOf = (rule, prop) => Number((rule.match(new RegExp(`${prop}:([0-9.]+)px`)) || [])[1])
+    const weightOf = rule => Number((rule.match(/font-weight:([0-9]+)/) || [])[1])
+    const groupRule = ruleOf('mia-groupTitle')
+    const rowRule = ruleOf('mia-title')
+    assert.ok(pxOf(groupRule, 'font-size') > pxOf(rowRule, 'font-size'),
+      `组标题字号必须大于行标题（实得 ${pxOf(groupRule, 'font-size')} vs ${pxOf(rowRule, 'font-size')}）`)
+    assert.ok(weightOf(groupRule) >= weightOf(rowRule),
+      '组标题字重不得低于行标题（否则标题回退成正文观感）')
+  }
 })
 
 test('风格契约：配色只走 --dsw-* 官方令牌（不硬编码颜色，才能跟皮肤明暗自动解析）', () => {

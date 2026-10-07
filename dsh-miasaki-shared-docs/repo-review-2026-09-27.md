@@ -110,7 +110,7 @@
 | 5 | `html[data-mia-native-mica]` | 壳 `themes/src/12-material.js` | appearance `client.js:672`、`lib/config.js:372-377` | ❌ | ✅ `themes/test/material.test.js` |
 | 6 | `--ms-titlebar-reserve`（壳默认 128px） | 壳 `03-switcher.js:89`；**sidebar 覆写为 156px** | 壳 CSS `:90,110`、ssh `client.js:725` | ❌ | ❌ |
 | 7 | `#miasaki-titlebar .tb-group`（DOM 挂载点） | 壳 `06-titlebar.js:165` | canvas `client.js:272`、ssh `client.js:322`、sidebar `client.js:1270`（并插按钮） | ❌ | ❌ |
-| 8 | `#miasaki-switcher .ms-btn`（主题球） | 壳 `03-switcher.js` | ssh `app.js:408` | ❌ | ❌ |
+| 8 | ~~`#miasaki-switcher .ms-btn`（主题球）~~ **已退役（2026-10-07）** | ~~壳 `03-switcher.js`~~ | ~~ssh `app.js:408`~~ —— 主题球整体并入窗控组的主题头像按钮 `.tb-theme` + 面板 `#miasaki-theme-menu`（ssh 侧那条避球安全线一并删除，见 desktop/ssh 两线 `design/CHANGELOG.md` 2026-10-07 条） | — | — |
 | 9 | `window.__MIA_THEME__` / `__MIA_NATIVE_MICA__` | 壳 Rust `main.rs:1647-1649` | 壳 `02-core.js:280`、`12-material.js:46` | ❌ | ✅ `theme-source.test.js` |
 | 10 | `location.hash` 字段协议（`miasaki-theme/cmd/seq/int/act/wait/pet/petkey/diag/bg`） | 壳 `02-core.syncHash` / `05-sensors.petHashCmd` | 壳 Rust 33ms 轮询 | 部分 | ✅ `hash-fields.test.js` |
 | 11 | `miasaki-pet-heartbeat` / `miasaki-boot`（Tauri 事件） | 壳 `02-core.js:165` / `08-ready.js:46` | 壳 Rust `main.rs:3159,3177` | ✅（变更记录） | ✅ `hash-sync.test.js` |

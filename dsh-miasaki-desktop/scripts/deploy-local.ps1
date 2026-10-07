@@ -66,7 +66,7 @@ Check 'ui 资源存在' (Test-Path (Join-Path $srcUi 'loading.html')) 'ui\loadin
 # 启动照常、动画照旧、只是片头不播 ⇒ 用户只会以为「设置没生效」。
 # 因此素材缺在**部署这一步**就必须拦住，而不是留给实机目检。
 $introDir = Join-Path $srcUi 'intro'
-$introClips = @('brand', 'cyberpunk', 'awakening', 'startup')
+$introClips = @('brand', 'cyberpunk', 'awakening', 'startup', 'dreamsea', 'lagoon', 'bubbles')
 $introMissing = @($introClips | Where-Object { -not (Test-Path (Join-Path $introDir "intro-$_.mp4")) })
 if ($introMissing.Count -gt 0) {
   Write-Host "abort: 启动片头素材缺失 $($introMissing -join ', ')（ui\intro\）。"
@@ -74,7 +74,7 @@ if ($introMissing.Count -gt 0) {
   Write-Host '       把外观设置「启动片头」设为「关闭」并重启 dsh web。'
   exit 1
 }
-Check '启动片头素材齐备(4 段)' $true 'ui\intro\intro-{brand,cyberpunk,awakening,startup}.mp4'
+Check '启动片头素材齐备(7 段)' $true 'ui\intro\intro-{brand,cyberpunk,awakening,startup,dreamsea,lagoon,bubbles}.mp4'
 
 # ---------- 2. 目标 exe 是否被运行中的实例占用 ----------
 # 判据精准到「跑的就是 $dstExe」:跑在别处的 Miasaki(旧副本/构建目录)不挡路,
@@ -142,7 +142,7 @@ Check '安装目录 loading.html 就位' (Test-Path (Join-Path $Target 'ui\loadi
 # （源目录缺 ⇒ 目标目录照样绿，这正是片头会静默消失的那条缝）。
 $dstIntroMissing = @($introClips | Where-Object { -not (Test-Path (Join-Path $Target "ui\intro\intro-$_.mp4")) })
 Check '安装目录片头素材就位' ($dstIntroMissing.Count -eq 0) `
-  $(if ($dstIntroMissing.Count -eq 0) { '4 段' } else { "缺 $($dstIntroMissing -join ',')" })
+  $(if ($dstIntroMissing.Count -eq 0) { '7 段' } else { "缺 $($dstIntroMissing -join ',')" })
 
 # ---------- 6. 桌面快捷方式修复(可选) ----------
 if ($FixShortcuts) {

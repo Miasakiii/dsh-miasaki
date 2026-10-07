@@ -161,16 +161,24 @@
     if (document.getElementById('miasaki-titlebar') || !document.body) return
     var bar = document.createElement('div')
     bar.id = 'miasaki-titlebar'
+    // 主题头像按钮（2026-10-07）：原 `.tb-brand` 是不可点的 16px 裸 img（只挂 title 提示
+    // 主题名）。现升格为 `.tb-btn` 家族的 26×26 按钮，点击开合主题面板 —— 面板由
+    // 03-switcher.js 的 buildThemeMenu() 作为 `.tb-group` 的**绝对定位子元素**挂载
+    // （脱离 flex 流 ⇒ 不吃组宽，`--ms-titlebar-reserve` 与契约 chrome.bounds() 零改动）。
+    // 位置不变：仍在 `.tb-group` 第二位 —— sidebar 线按 `insertBefore(btn, group.firstElementChild)`
+    // 把终端键插在**首位**（本按钮左侧），故 sidebar 的注入锚点与顺序断言都不受影响。
     bar.innerHTML =
       '<div class="tb-group">' +
-      '<img class="tb-brand" src="' + ICON_BASE + META[current].icon + '" alt="" title="">' +
+      '<div class="tb-btn tb-theme" data-act="theme" role="button" tabindex="0"' +
+      ' aria-haspopup="true" aria-expanded="false" title="">' +
+      '<img class="tb-theme-avatar" src="' + ICON_BASE + META[current].icon + '" alt=""></div>' +
       '<div class="tb-btn" data-act="min" title="\u6700\u5C0F\u5316">' + TB_ICONS.min + '</div>' +
       '<div class="tb-btn" data-act="max" title="\u6700\u5927\u5316/\u8FD8\u539F">' + TB_ICONS.max + '</div>' +
       '<div class="tb-btn tb-close" data-act="close" title="\u5173\u95ED">' + TB_ICONS.close + '</div>' +
       '</div>'
-    // 徽记 icon 失败 → 字形兜底；onerror 用 JS 挂载，换主题后始终引用最新 current
-    var brand = bar.querySelector('.tb-brand')
-    if (brand) brand.onerror = function () { window.__msGlyphFallback && window.__msGlyphFallback(this, current) }
+    // 头像 icon 失败 → 字形兜底；onerror 用 JS 挂载，换主题后始终引用最新 current
+    var avatar = bar.querySelector('.tb-theme-avatar')
+    if (avatar) avatar.onerror = function () { window.__msGlyphFallback && window.__msGlyphFallback(this, current) }
     document.body.appendChild(bar)
     // 让位量自动化（2026-09-27）：壳成为 `--ms-titlebar-reserve` 的唯一写者，见 watchTitlebarReserve
     watchTitlebarReserve(bar)
@@ -178,7 +186,8 @@
       var b = ev.target && ev.target.closest ? ev.target.closest('.tb-btn') : null
       if (!b) return
       var act = b.getAttribute('data-act')
-      if (act === 'min') petHashCmd('min')
+      if (act === 'theme') toggleThemeMenu()
+      else if (act === 'min') petHashCmd('min')
       else if (act === 'max') {
         petHashCmd('max')
         // 非 Tauri 环境(普通浏览器预览)兜底：从未收到 Rust 推送时本地翻转图标
@@ -188,26 +197,31 @@
       }
       else if (act === 'close') petHashCmd('close')
     })
+    // 键盘（2026-10-07）：主题按钮是 `div[role=button]`，补最小键盘闭环 ——
+    // Enter/Space 开合、ArrowDown 展开（面板内的项自带 tabindex，见 03-switcher.js）。
+    var themeBtn = bar.querySelector('.tb-theme')
+    if (themeBtn) {
+      themeBtn.addEventListener('keydown', function (ev) {
+        var k = ev.key
+        if (k !== 'Enter' && k !== ' ' && k !== 'Spacebar' && k !== 'ArrowDown') return
+        ev.preventDefault()
+        if (k === 'ArrowDown') setThemeMenuOpen(true)
+        else toggleThemeMenu()
+      })
+    }
     updateTitlebar()
     syncMaxBtn()
     if (currentMaxState() === null) requestMaxState()
+    // 主题面板与按钮态（实现在 03-switcher.js）：幂等；失败不阻断窗控，1s 巡检会再试。
+    try { buildThemeMenu() } catch (e) { /* 巡检兜底重建 */ }
+    try { refreshThemeMenu() } catch (e) { /* 同上 */ }
   }
 
+  /** 窗控栏刷新入口。主题头像按钮的图标 / tooltip / aria 归 03-switcher.js 的
+   *  `syncThemeButton`（2026-10-07：单一写者 —— 原 `.tb-brand` 的 src/title 写在这里，
+   *  升级成按钮后统一收口到主题面板那一侧，避免两处各写一遍）；这里只兜底最大化键图标态。 */
   function updateTitlebar() {
-    var brand = document.querySelector('#miasaki-titlebar .tb-brand')
-    if (brand) {
-      // 清上次加载失败的字形兜底残留（位于胶囊内，data-glyph 标记），再换新主题图标
-      var holder = brand.parentNode
-      if (holder) {
-        var g = holder.querySelector('span[data-glyph="1"]')
-        if (g) holder.removeChild(g)
-      }
-      brand.style.display = ''
-      var next = ICON_BASE + META[current].icon
-      if (brand.src !== next) brand.src = next
-      // 悬浮提示当前主题（顶部无文字，悬停徽章可知主题）
-      brand.title = META[current].name + ' · ' + META[current].sub
-    }
+    syncMaxBtn()
   }
 
   /* ---------- 让位量自动化：壳是 `--ms-titlebar-reserve` 的唯一写者（2026-09-27） ---------- */

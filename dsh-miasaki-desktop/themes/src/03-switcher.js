@@ -1,48 +1,53 @@
   /* ---------- 悬浮切换条（全部变量带回退色，样式层异常时仍可见可用） ---------- */
+  /* ---------- 主题面板：右上角窗控头像的下拉菜单（2026-10-07） ----------
+   * 由来：原「右下角主题悬浮球」（`#miasaki-switcher`：fixed right/bottom 16px 的 46px 圆
+   * + `::after` 呼吸光圈）压在内容区右下角 —— 那正是「发送 / 确认 / 连接」键密集区，历史上
+   * 造成事故三连（ssh 贴边抽屉的连接键被压、弹层被迫改居中悬浮窗、专门写一条「与球重叠为 0」
+   * 的判据）。现把切换能力并入窗控组里那颗**同源**的主题头像按钮（`.tb-theme`，DOM 见
+   * 06-titlebar.js `buildTitlebar()`），球整体退役。
+   *
+   * 几何（关键）：面板是 `.tb-group`（`position:fixed`）的**绝对定位子元素** ⇒ 脱离 flex 流，
+   * 既不吃组宽、也不影响 `.tb-group` 的 `getBoundingClientRect()` —— `--ms-titlebar-reserve`
+   * 的 ResizeObserver 与契约 `chrome.bounds()` 因此**零改动**自动正确。组下沿 37px（top 11 +
+   * 键高 26）+ 呼吸 8px ⇒ 面板顶 45px；头像在窗口顶部，故面板**向下**展开（旧球在底部，向上）。
+   * 面板右缘贴 `.tb-group` 右缘（距窗口右缘 8px），与旧球面板的观感一致。
+   *
+   * ⚠ 下方 `#miasaki-titlebar .tb-group` 与 `#miasaki-titlebar .tb-btn` 两条规则是
+   * `themes/test/contract.test.js` 顶部安全区**算术闸门**的取数源（正则读本文件源码文本取
+   * `top` / `height`），写法与取值**不得改动** —— 改几何必须同步配平那个闸门。 */
   var SWITCHER_CSS =
-    '#miasaki-switcher{position:fixed;right:16px;bottom:16px;z-index:99990;' +
-    'font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;user-select:none;' +
-    'direction:ltr;text-align:left;}' +
-    '#miasaki-switcher .ms-btn{position:relative;width:46px;height:46px;border-radius:50%;display:flex;' +
-    'align-items:center;justify-content:center;cursor:pointer;' +
-    'background:var(--ms-panel,#1e1a27);border:2px solid var(--ms-accent,#d9b36a);color:var(--ms-accent,#d9b36a);' +
-    'box-shadow:0 0 0 4px rgba(0,0,0,.22),0 6px 20px rgba(0,0,0,.5);' +
-    'transition:transform .2s ease;' +
-    'font-family:Georgia,"Times New Roman",serif;font-size:13px;font-weight:700;}' +
-    '#miasaki-switcher .ms-btn::after{content:"";position:absolute;inset:-6px;border-radius:50%;' +
-    'border:1px solid var(--ms-accent,#d9b36a);opacity:.5;animation:ms-ping 2.6s ease-out infinite;}' +
-    '@keyframes ms-ping{0%{transform:scale(.8);opacity:.6}70%{transform:scale(1.15);opacity:0}100%{opacity:0}}' +
-    '#miasaki-switcher .ms-btn:hover{transform:scale(1.08);}' +
-    '#miasaki-switcher .ms-panel{position:absolute;right:0;bottom:62px;display:none;' +
+    '#miasaki-theme-menu{position:absolute;top:calc(100% + 8px);right:0;display:none;' +
     'flex-direction:column;gap:4px;padding:8px;border-radius:12px;min-width:176px;' +
     'background:var(--ms-panel,#1e1a27);border:1px solid var(--ms-accent,#d9b36a);color:var(--ms-text,#e4def0);' +
-    'box-shadow:0 12px 30px rgba(0,0,0,.5);z-index:1;}' +
-    '#miasaki-switcher.open .ms-panel{display:flex;}' +
-    '#miasaki-switcher .ms-opt{display:flex;align-items:center;gap:10px;padding:7px 10px;' +
+    'box-shadow:0 12px 30px rgba(0,0,0,.5);z-index:1;' +
+    'font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;user-select:none;' +
+    'direction:ltr;text-align:left;}' +
+    '#miasaki-theme-menu.open{display:flex;}' +
+    '#miasaki-theme-menu .ms-opt{display:flex;align-items:center;gap:10px;padding:7px 10px;' +
     'border-radius:8px;cursor:pointer;}' +
-    '#miasaki-switcher .ms-opt:hover{background:var(--ms-hover,#2a2434);}' +
-    '#miasaki-switcher .ms-opt.active{box-shadow:inset 0 0 0 1.5px var(--ms-accent,#d9b36a);}' +
-    '#miasaki-switcher .ms-glyph{width:30px;height:30px;flex:none;border-radius:50%;' +
+    '#miasaki-theme-menu .ms-opt:hover{background:var(--ms-hover,#2a2434);}' +
+    '#miasaki-theme-menu .ms-opt.active{box-shadow:inset 0 0 0 1.5px var(--ms-accent,#d9b36a);}' +
+    '#miasaki-theme-menu .ms-opt:focus-visible{outline:1.5px solid var(--ms-accent,#d9b36a);outline-offset:-1.5px;}' +
+    '#miasaki-theme-menu .ms-glyph{width:30px;height:30px;flex:none;border-radius:50%;' +
     'display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;' +
     'border:1px solid var(--ms-accent,#d9b36a);color:var(--ms-accent,#d9b36a);background:transparent;}' +
-    '#miasaki-switcher .ms-name{font-size:13px;font-weight:600;}' +
-    '#miasaki-switcher .ms-sub{font-size:11px;opacity:.62;}' +
-    '#miasaki-switcher .ms-tip{font-size:11px;opacity:.55;padding:3px 10px 1px;max-width:200px;}' +
+    '#miasaki-theme-menu .ms-name{font-size:13px;font-weight:600;}' +
+    '#miasaki-theme-menu .ms-sub{font-size:11px;opacity:.62;}' +
+    '#miasaki-theme-menu .ms-tip{font-size:11px;opacity:.55;padding:3px 10px 1px;max-width:200px;}' +
     '#miasaki-overlay{position:fixed;inset:0;z-index:99999;pointer-events:none;opacity:0;}' +
     '#miasaki-overlay.run{animation:ms-sweep .4s ease forwards;}' +
     '@keyframes ms-sweep{0%{opacity:0}45%{opacity:.85}100%{opacity:0}}' +
     '@media (prefers-reduced-motion: reduce){' +
-    '#miasaki-switcher .ms-btn::after{animation:none}' +
-    '#miasaki-titlebar .tb-brand{animation:none}' +
     '#miasaki-overlay.run{animation:ms-sweep .15s ease forwards;}}' +
-    '#miasaki-switcher .ms-bright{display:none;align-items:center;gap:6px;padding:5px 10px 2px;' +
+    '#miasaki-theme-menu .ms-bright{display:none;align-items:center;gap:6px;padding:5px 10px 2px;' +
     'border-top:1px solid var(--ms-border,#3a3243);margin-top:4px;}' +
-    '#miasaki-switcher .ms-bright .mb-label{font-size:11px;opacity:.6;margin-right:4px;}' +
-    '#miasaki-switcher .ms-bright .mb{width:26px;height:26px;border-radius:50%;display:flex;' +
+    '#miasaki-theme-menu .ms-bright .mb-label{font-size:11px;opacity:.6;margin-right:4px;}' +
+    '#miasaki-theme-menu .ms-bright .mb{width:26px;height:26px;border-radius:50%;display:flex;' +
     'align-items:center;justify-content:center;cursor:pointer;font-size:13px;' +
     'border:1px solid transparent;opacity:.55;}' +
-    '#miasaki-switcher .ms-bright .mb:hover{background:var(--ms-hover,#2a2434);opacity:.9;}' +
-    '#miasaki-switcher .ms-bright .mb.on{border-color:var(--ms-accent,#d9b36a);opacity:1;}' +
+    '#miasaki-theme-menu .ms-bright .mb:hover{background:var(--ms-hover,#2a2434);opacity:.9;}' +
+    '#miasaki-theme-menu .ms-bright .mb.on{border-color:var(--ms-accent,#d9b36a);opacity:1;}' +
+    '#miasaki-theme-menu .ms-bright .mb:focus-visible{outline:1.5px solid var(--ms-accent,#d9b36a);outline-offset:1px;}' +
     // 标题栏 = 零占位叠加层(V4):对 DSH 页面零布局侵入——不设色带、不推挤页面(y=0 起,
     // 页面顶部控件与 web 端同位置)。窗控三键无壳裸排右上角(去胶囊:无底色/无边框/无毛
     // 玻璃/padding),hover 底色只落在单按钮上(Win11 原生标题栏同款);标题栏容器
@@ -58,9 +63,12 @@
     // 故 top:11px 使 26px 裸键组中心停在 24px,与官方「展开/收起」同一条水平线;
     // 旧值 5px 会让中心停在 18px,与官方控件错开 6~7px。
     '#miasaki-titlebar .tb-group{position:fixed;top:11px;right:8px;display:flex;align-items:center;gap:2px;}' +
-    '#miasaki-titlebar .tb-brand{width:16px;height:16px;border-radius:50%;flex:none;object-fit:cover;display:block;' +
-    'margin:0 4px;box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));}' +
-    '@keyframes ms-brand-breathe{0%,100%{opacity:.78}50%{opacity:1}}' +
+    // 主题头像按钮（2026-10-07）：原为不可点的 16px 裸 img（`.tb-brand`，在组里占
+    // 16 + margin 2×4 = 24px）。现复用 `.tb-btn` 规格给 26×26 热区、图标 16px 居中 ⇒
+    // 组宽 108 → 110（装 sidebar 终端键 136 → 138），`--ms-titlebar-reserve` 由
+    // ResizeObserver 自动跟随，公式与兜底常量都不用动。
+    '#miasaki-titlebar .tb-theme-avatar{width:16px;height:16px;border-radius:50%;object-fit:cover;display:block;' +
+    'box-shadow:0 0 5px var(--ms-glow,rgba(217,179,106,.35));}' +
     '#miasaki-titlebar .tb-btn{width:26px;height:26px;display:flex;align-items:center;justify-content:center;' +
     'cursor:pointer;font-size:13px;border-radius:7px;color:var(--dsw-alias-label-secondary,var(--ms-text,#e4def0));' +
     'opacity:.92;transition:background .15s ease,color .15s ease;}' +
@@ -164,8 +172,7 @@
     '#root [class*="_headerCorner"]{position:relative;top:-1px;}' +
     'html,body{height:100%;overflow:hidden;}' +
     'html,body{height:100%;overflow:hidden;}' +
-    '#miasaki-switcher .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +
-    '#miasaki-switcher .ms-btn img{width:30px;height:30px;border-radius:50%;object-fit:cover;display:block;}' +
+    '#miasaki-theme-menu .ms-glyph img{width:24px;height:24px;border-radius:50%;object-fit:cover;display:block;}' +
     '#miasaki-aurora{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;' +
     'transition:opacity .6s ease;}' +
     '#miasaki-aurora .aur-blob{position:absolute;border-radius:50%;filter:blur(90px);' +
@@ -193,23 +200,51 @@
     'border-color:var(--ms-danger,#c23a2e);color:#fff;}' +
     '#miasaki-close-dialog .mc-btn.mc-ok:hover{filter:brightness(1.08);}'
 
-  var switcher = null
+  var themeMenu = null
   var overlay = null
+  var THEME_MENU_ID = 'miasaki-theme-menu'
+  var menuCloseTimer = null
 
-  function refreshSwitcher() {
-    if (!switcher) return
-    var btn = switcher.querySelector('.ms-btn')
-    if (btn) {
-      btn.innerHTML = '<img src="' + ICON_BASE + META[current].icon + '" alt=""' +
-        ' onerror="window.__msGlyphFallback && window.__msGlyphFallback(this, \'' + current + '\')">'
+  /** 主题按钮（窗控组里的 `.tb-theme`）。取得点唯一，避免各处重复写字面选择器。 */
+  function themeButton() {
+    try { return document.querySelector('#miasaki-titlebar .tb-theme') } catch (e) { return null }
+  }
+
+  /** 面板是否展开：**以 DOM 事实为准** —— 元素变量可能指向已被页面摘掉的旧节点。 */
+  function themeMenuOpen() {
+    return !!(themeMenu && themeMenu.parentNode && themeMenu.classList.contains('open'))
+  }
+
+  /** 按钮态：当前主题头像 + tooltip + aria-expanded（单一写者，替换原悬浮球的球面刷新）。 */
+  function syncThemeButton() {
+    var btn = themeButton()
+    if (!btn) return
+    var img = btn.querySelector('.tb-theme-avatar')
+    if (img) {
+      // 清理字形兜底残留（04-deco 的 __msGlyphFallback 隐藏 img 后挂 span[data-glyph]）
+      img.style.display = ''
+      var g = btn.querySelector('span[data-glyph="1"]')
+      if (g && g.parentNode === btn) btn.removeChild(g)
+      var next = ICON_BASE + META[current].icon
+      if (img.getAttribute('src') !== next) img.setAttribute('src', next)
     }
-    var opts = switcher.querySelectorAll('.ms-opt')
+    btn.setAttribute('title', '切换主题 · 当前：' + META[current].name)
+    btn.setAttribute('aria-expanded', themeMenuOpen() ? 'true' : 'false')
+  }
+
+  /** 主题态收敛：按钮（图 / 提示 / aria）+ 面板（选中项 / 提示文案 / 明暗行）。 */
+  function refreshThemeMenu() {
+    syncThemeButton()
+    if (!themeMenu) return
+    var opts = themeMenu.querySelectorAll('.ms-opt')
     for (var i = 0; i < opts.length; i++) {
-      opts[i].classList.toggle('active', opts[i].getAttribute('data-theme') === current)
+      var on = opts[i].getAttribute('data-theme') === current
+      opts[i].classList.toggle('active', on)
+      opts[i].setAttribute('aria-checked', on ? 'true' : 'false')
     }
-    var tip = switcher.querySelector('.ms-tip')
+    var tip = themeMenu.querySelector('.ms-tip')
     if (tip) tip.textContent = TIPS[current]
-    var bright = switcher.querySelector('.ms-bright')
+    var bright = themeMenu.querySelector('.ms-bright')
     if (bright) {
       bright.style.display = current === 'pure' ? 'flex' : 'none'
       var mbs = bright.querySelectorAll('.mb')
@@ -217,7 +252,6 @@
         mbs[j].classList.toggle('on', mbs[j].getAttribute('data-b') === BRIGHT)
       }
     }
-    switcher.setAttribute('title', TIPS[current])
   }
 
   function runOverlay(target) {
@@ -243,18 +277,127 @@
     }, reduced ? 150 : 400)
   }
 
-  function buildSwitcher() {
-    if (!document.body || IS_LOCAL) return
-    // 仅当切换条真实挂载在文档中时才视为已构建：若元素被页面重渲染移除，
-    // switcher 变量仍指向旧节点（parentNode=null），此前按变量非空判断会导致
-    // 1s 巡检永远无法重建（按钮永久消失）；构建中途抛错时同理可重试。
-    if (switcher && switcher.parentNode) return
-    switcher = document.createElement('div')
-    switcher.id = 'miasaki-switcher'
-    var html = '<div class="ms-btn" title=""></div><div class="ms-panel">'
+  /* ---------- 面板开合（2026-10-07：原「右下角悬浮球」的 hover 展开 → 点击展开） ----------
+   * 为什么不再 hover 展开：头像在窗口**顶部**，鼠标去点最小化/关闭必然经过它；hover 展开会
+   * 频繁弹出 176×210 的面板压住官方会话头右端。点击是确定性的；hover 语义改留给「鼠标离开
+   * 面板 300ms 后自动关」这条宽限（保留旧切换条那次的修复意图：移开鼠标还能点到）。 */
+  function setThemeMenuOpen(open) {
+    if (menuCloseTimer) { clearTimeout(menuCloseTimer); menuCloseTimer = null }
+    if (open) {
+      if (!themeMenu || !themeMenu.parentNode) buildThemeMenu()
+      if (themeMenu) themeMenu.classList.add('open')
+    } else if (themeMenu) {
+      themeMenu.classList.remove('open')
+    }
+    syncThemeButton()
+    if (open && themeMenu) {
+      var cur = themeMenu.querySelector('.ms-opt.active')
+      if (cur && cur.focus) { try { cur.focus({ preventScroll: true }) } catch (e) { /* 焦点不可用不影响展开 */ } }
+    }
+  }
+
+  function toggleThemeMenu() {
+    setThemeMenuOpen(!themeMenuOpen())
+  }
+
+  /** 300ms 宽限关闭：鼠标从面板移向页面的路上不误关。 */
+  function scheduleMenuClose() {
+    if (menuCloseTimer) clearTimeout(menuCloseTimer)
+    menuCloseTimer = setTimeout(function () { setThemeMenuOpen(false) }, 300)
+  }
+
+  /** 面板内点击：主题项 / 明暗档（分流逻辑与原悬浮球逐字一致）。 */
+  function onThemeMenuClick(ev) {
+    var opt = ev.target && ev.target.closest ? ev.target.closest('.ms-opt') : null
+    if (opt) {
+      var target = opt.getAttribute('data-theme')
+      setThemeMenuOpen(false)
+      // M2 S6 双入口：让位时本地 apply 已停用（styleFor 只出 deco），换肤改为写
+      // 外观线配置；成功后自行同步 <html> 门控属性（与 appearance client 半 save()
+      // 的同步逻辑同源、幂等）——appearance 的 yieldObserver 感知翻转；切回 pure
+      // 会解除让位，desktop 自动恢复注入。桌宠人格随目标主题联动。
+      if (appearanceYield()) {
+        try {
+          fetch('/appearance/api/state').then(function (s) { return s.json() }).then(function (st) {
+            return fetch('/appearance/api/config', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ patch: { theme: { skin: target } }, expectedRevision: st.revision })
+            })
+          }).then(function (res) {
+            if (!res.ok) return
+            var root = document.documentElement
+            root.setAttribute('data-mia-appearance', 'on')
+            root.setAttribute('data-mia-skin', target)
+            // W0-T0.3：原此处 try { notifyPet(target) } —— notifyPet 及其 set_pet_mode
+            // invoke 已删除（命令从未注册）；桌宠联动由 hash `miasaki-theme` 统一驱动。
+          }).catch(function () {})
+        } catch (e) { /* fetch 不可用（本地页）时静默 */ }
+        return
+      }
+      if (target !== current) runOverlay(target)
+      return
+    }
+    var mb = ev.target && ev.target.closest ? ev.target.closest('.mb') : null
+    if (mb) {
+      BRIGHT = mb.getAttribute('data-b')
+      try { localStorage.setItem('miasaki.bright', BRIGHT) } catch (e) { /* ignore */ }
+      syncDark()
+      refreshThemeMenu()
+    }
+  }
+
+  /** 面板内键盘激活：项是 tabindex=0 的 div/span，Enter/Space 需自行翻译成 click。 */
+  function onThemeMenuKeydown(ev) {
+    var k = ev.key
+    if (k !== 'Enter' && k !== ' ' && k !== 'Spacebar') return
+    var t = ev.target
+    if (!t || !t.closest) return
+    var hit = t.closest('.ms-opt') || t.closest('.mb')
+    if (!hit) return
+    ev.preventDefault()
+    hit.click()
+  }
+
+  /** 点面板外 / Esc 关闭。document 级监听只挂一次（面板可能被页面重渲染后重建多次）。 */
+  function wireThemeMenuDismiss() {
+    if (document.__msMenuDismissWired) return
+    document.__msMenuDismissWired = true
+    try {
+      document.addEventListener('mousedown', function (ev) {
+        if (!themeMenuOpen()) return
+        var t = ev.target
+        if (!t || !t.closest) return
+        if (t.closest('#' + THEME_MENU_ID)) return
+        if (t.closest('#miasaki-titlebar .tb-theme')) return
+        setThemeMenuOpen(false)
+      }, true)
+      document.addEventListener('keydown', function (ev) {
+        if (!themeMenuOpen()) return
+        if (ev.key !== 'Escape' && ev.key !== 'Esc') return
+        setThemeMenuOpen(false)
+        var btn = themeButton()
+        if (btn && btn.focus) { try { btn.focus({ preventScroll: true }) } catch (e) { /* ignore */ } }
+      }, true)
+    } catch (e) { /* 极端环境：少两条关闭路径，点击主题项仍可用 */ }
+  }
+
+  /** 构建 / 重建主题面板并挂到窗控组（幂等）。返回面板；本地页或无按钮组时返回 null。 */
+  function buildThemeMenu() {
+    if (!document.body || IS_LOCAL) return null
+    var group = document.querySelector('#miasaki-titlebar .tb-group')
+    if (!group) return null
+    // 判据与旧切换条同款：只看**挂载事实**。元素被页面重渲染摘掉后 themeMenu 变量仍指向
+    // 旧节点（parentNode=null），按变量非空判断会让 1s 巡检永远无法重建（点了没反应）。
+    if (themeMenu && themeMenu.parentNode === group) return themeMenu
+    var menu = document.createElement('div')
+    menu.id = THEME_MENU_ID
+    menu.className = 'ms-panel'
+    menu.setAttribute('role', 'menu')
+    var html = ''
     for (var i = 0; i < ORDER.length; i++) {
       var t = ORDER[i]
-      html += '<div class="ms-opt" data-theme="' + t + '">' +
+      html += '<div class="ms-opt" role="menuitemradio" tabindex="0" data-theme="' + t + '">' +
         '<div class="ms-glyph"><img src="' + ICON_BASE + META[t].icon + '" alt=""' +
         ' onerror="window.__msGlyphFallback && window.__msGlyphFallback(this, \'' + t + '\')"></div>' +
         '<div><div class="ms-name">' + META[t].name + '</div>' +
@@ -262,21 +405,23 @@
     }
     // 原版主题明暗三档（仅纯色主题显示）
     html += '<div class="ms-bright"><span class="mb-label">明暗</span>' +
-      '<span class="mb" data-b="light" title="浅色">\u2600</span>' +
-      '<span class="mb" data-b="dark" title="深色">\u263E</span>' +
-      '<span class="mb" data-b="system" title="跟随系统">\u{1F5A5}</span></div>'
-    html += '<div class="ms-tip"></div></div>'
-    switcher.innerHTML = html
-    var opts = switcher.querySelectorAll('.ms-opt')
+      '<span class="mb" tabindex="0" data-b="light" title="浅色">\u2600</span>' +
+      '<span class="mb" tabindex="0" data-b="dark" title="深色">\u263E</span>' +
+      '<span class="mb" tabindex="0" data-b="system" title="跟随系统">\u{1F5A5}</span></div>'
+    html += '<div class="ms-tip"></div>'
+    menu.innerHTML = html
+    var opts = menu.querySelectorAll('.ms-opt')
     for (var ki = 0; ki < opts.length; ki++) {
       var oo = opts[ki]
       var tt = oo.getAttribute('data-theme')
       oo.setAttribute('title', TIPS[tt] || (META[tt].name + ' · ' + META[tt].sub))
     }
-    (function bindTipHover() {
+    // 每项 hover 时把**该主题自己的**介绍写进底部提示（2026-08-29 修复：原实现三项都显示
+    // 当前主题的介绍），移出后回到当前主题。
+    ;(function bindTipHover() {
       try {
-        var tip = switcher.querySelector('.ms-tip')
-        var opts2 = switcher.querySelectorAll('.ms-opt')
+        var tip = menu.querySelector('.ms-tip')
+        var opts2 = menu.querySelectorAll('.ms-opt')
         for (var k2 = 0; k2 < opts2.length; k2++) {
           (function (optEl) {
             var tt2 = optEl.getAttribute('data-theme')
@@ -290,67 +435,16 @@
         }
       } catch (e) {}
     })()
-    switcher.addEventListener('click', function (ev) {
-      var opt = ev.target && ev.target.closest ? ev.target.closest('.ms-opt') : null
-      if (opt) {
-        var target = opt.getAttribute('data-theme')
-        switcher.classList.remove('open')
-        // M2 S6 双入口：让位时本地 apply 已停用（styleFor 只出 deco），换肤改为写
-        // 外观线配置；成功后自行同步 <html> 门控属性（与 appearance client 半 save()
-        // 的同步逻辑同源、幂等）——appearance 的 yieldObserver 感知翻转；切回 pure
-        // 会解除让位，desktop 自动恢复注入。桌宠人格随目标主题联动。
-        if (appearanceYield()) {
-          try {
-            fetch('/appearance/api/state').then(function (s) { return s.json() }).then(function (st) {
-              return fetch('/appearance/api/config', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ patch: { theme: { skin: target } }, expectedRevision: st.revision })
-              })
-            }).then(function (res) {
-              if (!res.ok) return
-              var root = document.documentElement
-              root.setAttribute('data-mia-appearance', 'on')
-              root.setAttribute('data-mia-skin', target)
-              // W0-T0.3：原此处 try { notifyPet(target) } —— notifyPet 及其 set_pet_mode
-              // invoke 已删除（命令从未注册）；桌宠联动由 hash `miasaki-theme` 统一驱动。
-            }).catch(function () {})
-          } catch (e) { /* fetch 不可用（本地页）时静默 */ }
-          return
-        }
-        if (target !== current) runOverlay(target)
-        return
-      }
-      var mb = ev.target && ev.target.closest ? ev.target.closest('.mb') : null
-      if (mb) {
-        BRIGHT = mb.getAttribute('data-b')
-        try { localStorage.setItem('miasaki.bright', BRIGHT) } catch (e) { /* ignore */ }
-        syncDark()
-        refreshSwitcher()
-        return
-      }
-      if (ev.target && ev.target.closest && ev.target.closest('.ms-btn')) {
-        switcher.classList.toggle('open')
-      }
+    menu.addEventListener('click', onThemeMenuClick)
+    menu.addEventListener('keydown', onThemeMenuKeydown)
+    menu.addEventListener('mouseenter', function () {
+      if (menuCloseTimer) { clearTimeout(menuCloseTimer); menuCloseTimer = null }
     })
-    // hover 展开 + 延迟关闭:鼠标移出后 300ms 宽限,移回则取消(解决"一挪开就点不到")
-    var closeTimer = null
-    function openPanel() {
-      if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
-      switcher.classList.add('open')
-    }
-    function scheduleClose() {
-      if (closeTimer) clearTimeout(closeTimer)
-      closeTimer = setTimeout(function () {
-        switcher.classList.remove('open')
-        closeTimer = null
-      }, 300)
-    }
-    switcher.addEventListener('mouseenter', openPanel)
-    switcher.addEventListener('mouseleave', scheduleClose)
-    // 面板自身 hover 时保持展开(面板是 switcher 子元素,mouseleave 不触发,此兜底防误关)
-    var panel = switcher.querySelector('.ms-panel')
-    if (panel) panel.addEventListener('mouseenter', openPanel)
-    document.body.appendChild(switcher)
-    refreshSwitcher()
+    menu.addEventListener('mouseleave', scheduleMenuClose)
+    if (themeMenu && themeMenu.parentNode) themeMenu.parentNode.removeChild(themeMenu)
+    themeMenu = menu
+    group.appendChild(menu)
+    wireThemeMenuDismiss()
+    refreshThemeMenu()
+    return menu
   }

@@ -427,3 +427,15 @@ test('L2 退场：就绪淡出 / 失败让路 / 解码失败撤层，且重复�
   c.layers[0].fire('transitionend')
   assert.equal(c.bodyChildren.length, 0, '解码失败必须撤层（不挡住任何东西）')
 })
+
+test('L2 段位扩容（2026-10-08 第二批 dreamsea/lagoon/bubbles）：新段 id 直译素材路径', async () => {
+  // 跨线契约的面板半：壳侧白名单 / IDS / ui/intro/ 台账同批加了这三段，
+  // 这里证明「设置里选新段 ⇒ 页面真的去取 intro/intro-<id>.mp4」（而不是只在枚举里好看）。
+  for (const id of ['dreamsea', 'lagoon', 'bubbles']) {
+    const dom = bootDom({ config: { intro: id, audio: false } })
+    await settle()
+    assert.equal(dom.layers.length, 1, `${id}：应创建且仅创建一层`)
+    assert.equal(dom.layers[0].children[0].src, `intro/intro-${id}.mp4`, '段 id 直译素材路径')
+    assert.equal(dom.classes.has('mia-intro-on'), true, `${id}：play 成功后点亮`)
+  }
+})

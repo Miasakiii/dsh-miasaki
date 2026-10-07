@@ -31,14 +31,15 @@ window.__ModuleLoader__.load({
 		 *
 		 * 关键取值出处（照 `dsh-miasaki-appearance/client.js` 的 PANEL_CSS 头部注释）：
 		 *   行 = FontSizeRow.row（0.5px 分隔线 + 16px 行距）；标题/说明 = row.title / row.desc；
-		 *   数值 = FontSizeRow.stepper（悬停露出上下箭头）；单选 = 官方 SegmentedControl。
+		 *   组标题 = models `.title`（16px/24/500）；数值 = FontSizeRow.stepper（悬停露出上下箭头）；
+		 *   单选 = 官方 SegmentedControl。
 		 * token 全部走 `--dsw-*` 官方变量 ⇒ 跟着皮肤与明暗自动解析，不需要我们维护配色。
 		 */
 		const PANEL_CSS = `
 .mia-panel{max-width:720px;color:var(--dsw-alias-label-primary);flex-direction:column;display:flex}
 .mia-group{flex-direction:column;display:flex}
 .mia-group + .mia-group{margin-top:24px}
-.mia-groupTitle{color:var(--dsw-alias-label-primary);margin:0;padding:0 0 4px;font-size:14px;font-weight:500;line-height:22px}
+.mia-groupTitle{color:var(--dsw-alias-label-primary);margin:0;padding:0 0 4px;font-size:16px;font-weight:500;line-height:24px}
 .mia-row{border-bottom:.5px solid var(--dsw-alias-border-l2);align-items:center;gap:8px;padding:16px 0;display:flex}
 .mia-group>.mia-row:last-child{border-bottom:none}
 .mia-rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px;display:flex}
@@ -69,7 +70,13 @@ window.__ModuleLoader__.load({
 			(document.head || document.documentElement).appendChild(tag);
 		}
 
-		/** 分组：组标题（官方组标题规格 14px/22/500）+ 组内行。 */
+		/**
+		 * 分组：组标题 + 组内行。
+		 *
+		 * 组标题 16px/24/500 = 官方 models `.title` 逐字取值（与 `dsh-miasaki-appearance`
+		 * 同一份规格）。2026-10-07 由 14px/22/500 提档：原来组标题与行标题**字号相同**、
+		 * 只差一档字重，整页看不出层级（用户点名「标题与内容一样大一样粗」）。
+		 */
 		function group(title, children) {
 			return react.createElement("div", { key: `g-${title}`, className: "mia-group" }, [
 				react.createElement("div", { key: "t", className: "mia-groupTitle" }, title),

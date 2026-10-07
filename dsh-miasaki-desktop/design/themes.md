@@ -25,7 +25,7 @@ Miasaki Desktop（EXE，双击即开）
  └─ 主题引擎：初始化脚本注入远程页面（无 IPC、无 CSP 障碍）
       ├─ 声明 `html[data-miasaki-theme]` + 控制 `body[data-ds-dark-theme]`
       ├─ 覆盖 DSH 令牌层（--dsw-static-* 色阶 + 少量 --dsh-* 杂项）
-      └─ 悬浮主题切换条 + 本地持久化（localStorage）
+      └─ 右上角窗控主题头像按钮 + 下拉面板 + 本地持久化（localStorage）
 ```
 
 ### 1.2 DSH 令牌体系（调研结论）
@@ -52,12 +52,25 @@ html[data-miasaki-theme="zafkiel"] body { /* 令牌重定义 */ }
 - 构建期由 `scripts/build-init.mjs` 把 `themes/*.css` 内联进运行时脚本，产出 `src-tauri/injected/theme-init.js`，Rust 以 `include_str!` 注入——**发布包零网络请求**。
 - 构建脚本同时做**令牌完备性校验**：从 `design/token-surface.txt` 提取的全部 `--dsw-static-*` 引用必须被每个非 pure 主题覆盖，缺失即构建失败。
 
-### 1.4 主题切换条
+### 1.4 主题入口（右上角窗控头像按钮 + 下拉面板）
 
-- 形态：窗口右下角悬浮圆形按钮（默认收起），悬停展开三枚主题卡。
-- 结构：仅由注入层创建（DOM + 样式均归主题运行时所有，不依赖 DSH DOM）。
-- 视觉：随主题换肤；pure 下为中性灰。z 轴最高（99990），不遮挡对话输入区关键操作（v1 固定在右下角，位于输入框旁安全区）。
+- 形态（**2026-10-07 改版**）：**右上角窗控组里的主题头像按钮**（`.tb-theme`，26×26，与最小化/
+  最大化/关闭同规格），**点击**展开主题面板（向下展开、右缘与窗控组对齐、`min-width:176px`）。
+  面板 DOM + 样式均归主题运行时所有（不依赖 DSH DOM），且作为 `.tb-group` 的**绝对定位子元素**
+  挂载 —— 脱离 flex 流，故**不吃组宽**，`--ms-titlebar-reserve` 与契约 `chrome.bounds()` 全自动正确。
+- 关闭：点面板外 / `Esc` / 选中主题后自动关；鼠标移出面板 300ms 宽限关闭（保留旧球那次
+  「一挪开就点不到」的修复意图）。
+- 键盘：按钮 `Enter`/`Space` 开合、`ArrowDown` 展开；面板内 `Enter` 选中；`role="menu"` +
+  `menuitemradio` + `aria-expanded` 同步。
+- 视觉：随主题换肤（`--ms-panel` / `--ms-accent`）；pure 下为中性灰。层级随 `#miasaki-titlebar`
+  （z-index `100000`），高于页面内容、画布浮层（100），也高于旧球（99990）。
 - 切换动效：全屏 400ms 过渡遮罩（zafkiel→金红表针扫过；kurkuriel→血红破碎横切；pure→淡入淡出），随后落定新主题。
+
+> **历史（2026-10-07 前）**：入口曾是**窗口右下角**的 46px 悬浮圆球（`#miasaki-switcher`，
+> hover 展开、`::after` 呼吸光圈、z-index 99990）。它压住内容区右下角 —— 正是「发送 / 确认 /
+> 连接」键的密集区：ssh 贴边抽屉的确认键被它压住点不到（2026-09-26），连带催生了「弹层改居中
+> 悬浮窗」与「专门写一条与球重叠为 0 的判据」。现整体退役，能力并入上面那颗**同源**的主题头像
+> （原为不可点的 16px 徽章 `.tb-brand`）。
 
 ---
 
@@ -65,7 +78,7 @@ html[data-miasaki-theme="zafkiel"] body { /* 令牌重定义 */ }
 
 ### 2.0 pure — 原版简约纯净
 
-> 定义：**不注入任何颜色覆盖**，DSH 原生样貌完整透传；仅保留悬浮切换条（中性灰样式）。
+> 定义：**不注入任何颜色覆盖**，DSH 原生样貌完整透传；仅保留右上角主题入口（中性灰样式）。
 
 - `html[data-miasaki-theme="pure"]` 不声明任何令牌；`body[data-ds-dark-theme]` 交还 DSH 自己管理。
 - 兜底语义：任何主题异常时运行时自动回落 pure，保证 GUI 永远可用。

@@ -2,6 +2,43 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-10-08 · 启动片头片库扩容 4 → 7 段（dreamsea / lagoon / bubbles）
+
+- **触发**：用户分享上游 [lxj5820/dsh-boot-animation](https://github.com/lxj5820/dsh-boot-animation)
+  （v0.2.0，MIT）——「启动动画可以拿来用」。澄清后意图：**不装它的插件，只要它的素材**，
+  让「启动」板块的片头选择丸多三个选项（壳侧 L2 视频层早已存在，装插件会双重片头）。
+- **本线改动（两处 + 一测试）**：`lib/config.js` 的 `INTRO_CLIPS` 追加
+  `dreamsea` / `lagoon` / `bubbles`（跨线契约值域来源）；`client.js` 的 `INTRO_OPTIONS`
+  同步三选项（深海绮梦 / 碧海清凉 / 泡沫光束）；`test/client.test.js` 的值域逐字断言
+  同步为八项（off + 七段）。**配置结构零变更**（仍是 `boot:{intro,audio}` 两个字段，
+  sanitize/merge/迁移一律不动，新 id 只是枚举值域扩大）。
+- **壳侧同批七处**（台账/白名单/IDS/部署清单等）见桌面端线 CHANGELOG 同日条与
+  `../dsh-miasaki-desktop/design/2026-10-04-boot-intro-video.md` §11。
+- **素材授权**：三段来自上游 `assets/videos/`（上游 LICENSE 明示作者自制、MIT 分发），
+  署名与边界见该线 `ui/intro/THIRD-PARTY-NOTICE.md`（已重写为两批两许可结构）。
+- **口径**：本线单测仍 **153 例**（仅既有值域断言的期望值更新，不新增 `test()`）。
+
+## 2026-10-07 · 分组标题提档（14px/22/500 → 16px/24/500）——「标题与内容一样大一样粗」
+
+- **触发**：用户「我加的设置页，分栏设置标题与内容字体大小粗细都一样，改一下，适当区分标题」。
+  确认范围 = **外观页的分组标题**；桌宠页同一份规格同批改（见桌面端线 CHANGELOG），
+  免费模型页另评（见 `../../dsh-miasaki-free-model/design/CHANGELOG.md` 同日条）。
+- **问题**：`.mia-groupTitle`（分组标题）与 `.mia-title`（行标题）**同为 14px**，字重只差一档
+  （500 vs 400）⇒ 一屏 8 个分组（启用 / 主题 / 壁纸 / 应用图标 / 动效 / 会话效果 / 启动 / 配置）
+  铺下来，分组边界基本只能靠 24px 组间距辨认。
+- **改法**：分组标题取官方 `ui-settings-models` 的 `.title` 规格 **16px/24/500**
+  （`vendor/deepseek-harness/packages/client/ui-settings-models/src/client/ModelsSection.module.css:14`；
+  本线视觉统一文档 §页标题行早已量过这个取值）。**行标题、说明、控件、行距、组间距一个字未动** ——
+  只把「标题」这一档提上去。
+- **为什么不顺手加字重**：`editorTitle` 的 14/22/500 当初是刻意挑的"取值有官方出处"的选择；
+  这次要"更高一档"，官方在 16px 档的出处就是 models 页标题的 500。字号差（16 vs 14）已经足够
+  拉开层级，在 500 上再加码会走出"每个取值都能指到官方某处"这条纪律。
+- **闸门**：`test/client.test.js` 的「面板挂载官方通用设置页风格」新增两条 —— ① 逐字断言
+  `font-size:16px;font-weight:500;line-height:24px`；② 解析两条规则的 `font-size` / `font-weight`，
+  断言分组标题**必须大于**行标题（防"改回去"这类回退）。**A/B 对照**：把 CSS 退回 14px/22/500，
+  测试当场转红（已实测），退回后复绿。
+- **口径**：本线测试仍 **45 例**（新增断言并入既有用例，不新增 `test()`）。
+
 ## 2026-10-05 · 旧配置迁移只在内存、从不落盘 —— 桌面壳片头因此永不播
 
 - **现象**（用户回报「桌面端启动动画怎么还没有」）：桌面壳加载页的视频片头**一次都没播过**，

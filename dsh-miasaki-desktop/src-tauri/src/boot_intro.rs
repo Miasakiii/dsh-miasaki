@@ -11,7 +11,7 @@
 //! | 配置路径 | `<dshHome>/miasaki-appearance/config.json`（与 `launcher_icon` 同源） |
 //! | 门控 | 顶层 `enabled === true`（总开关，与 `splashEnabled` 同源纪律） |
 //! | 字段 | `boot.intro`（枚举）/ `boot.audio`（布尔，默认 false） |
-//! | 枚举值域 | `brand` / `cyberpunk` / `awakening` / `startup`，与 `ui/intro/intro-<id>.mp4` 一一对应 |
+//! | 枚举值域 | `brand` / `cyberpunk` / `awakening` / `startup`（第一批 BSD-3）+ `dreamsea` / `lagoon` / `bubbles`（第二批 MIT），与 `ui/intro/intro-<id>.mp4` 一一对应 |
 //! | 未知值 | 一律归「不播」（宁可不播，不猜） |
 //!
 //! ## 边界
@@ -26,8 +26,12 @@ use std::path::Path;
 
 use crate::launcher_icon::{dsh_home, CONFIG_REL};
 
-/// 可选片头 id —— 与 `ui/intro/intro-<id>.mp4` 台账、appearance `boot.intro` 枚举**三方同源**。
-pub const INTRO_IDS: [&str; 4] = ["brand", "cyberpunk", "awakening", "startup"];
+/// 可选片头 id —— 与 `ui/intro/intro-<id>.mp4` 台账、appearance `boot.intro` 枚举**同源**
+/// （共七处同步点，清单见桌面端 README「启动片头」跨线同步点）。
+///
+/// 2026-10-08 第二批扩容（4 → 7）：`dreamsea` / `lagoon` / `bubbles` 来自
+/// lxj5820/dsh-boot-animation@v0.2.0（MIT，素材台账见 `scripts/extract-intro-clips.mjs`）。
+pub const INTRO_IDS: [&str; 7] = ["brand", "cyberpunk", "awakening", "startup", "dreamsea", "lagoon", "bubbles"];
 
 /// 宿主侧的启动片头决定。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +132,17 @@ mod tests {
         // 空串 / 大小写敏感 / 前缀相似值都不是合法 id
         for bad in ["", "BRAND", "brand ", "brandx", "off"] {
             assert_eq!(decide(true, Some(bad), false), BootIntro::off(), "非法 id {bad:?} 必须不播");
+        }
+    }
+
+    #[test]
+    fn intro_ids_pin_cross_line_contract() {
+        // 跨线契约钉住：appearance `lib/config.js` 的 INTRO_CLIPS、面板 INTRO_OPTIONS、
+        // 提取脚本台账、`ui/intro/intro-<id>.mp4` 与本表**同批同值**（2026-10-08 扩到 7 段：
+        // 第一批 4 段 BSD-3 + 第二批 3 段 MIT）。加段不同改 ⇒ 本测试红，逼一次五处同改。
+        assert_eq!(INTRO_IDS.len(), 7, "INTRO_IDS 段数必须与 INTRO_CLIPS / ui/intro 台账一致");
+        for id in ["dreamsea", "lagoon", "bubbles"] {
+            assert!(INTRO_IDS.contains(&id), "第二批段 {id} 必须在白名单内");
         }
     }
 

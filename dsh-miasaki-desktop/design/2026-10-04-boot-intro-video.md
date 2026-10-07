@@ -126,10 +126,10 @@ WebView2 autoplay 放行的前提（§7-1 验收联动）；出声是用户显�
 "boot": { "intro": "brand", "audio": false }
 ```
 
-- `intro`：`'off' | 'brand' | 'cyberpunk' | 'awakening' | 'startup'`，非法值收窄回 `'brand'`
+- `intro`：`'off' | 'brand' | 'cyberpunk' | 'awakening' | 'startup'`（**2026-10-08 起追加 `'dreamsea' | 'lagoon' | 'bubbles'`，共七段，见 §11**），非法值收窄回 `'brand'`
   （`sanitizeConfig` 既有纪律）；迁移 v6 → v7 纯新增板块、旧配置补默认（同 v3/v5 先例）；
 - `audio`：布尔，非布尔走默认 `false`；
-- **`boot.intro` 枚举值域 = §4 素材管线四段 id，跨线同步点**（见下）。
+- **`boot.intro` 枚举值域 = §4 素材管线 id 全集，跨线同步点**（见下；§11 扩容后为七处同改）。
 
 **跨线契约（改一处必须同步另一处，模板 = `launcher_icon.rs` 头注释 ↔ `lib/avatar.js`）**：
 
@@ -473,3 +473,62 @@ schema 迁移属插件；回写是让两侧对齐的**唯一**无重复实现方
 **⑥ 实机待验（归用户）**：重启桌面端 ⇒ 加载页应播 `brand` 段（静音）、播完回落纹章层；
 面板「启动」栏换段 / 开声音 ⇒ **下次启动**生效；选「关闭」⇒ 与原生一致。
 §10.3 的「WebView2 实机 autoplay」验证随这次实机走查一并取得。
+
+---
+
+## 11. 第二批素材扩容（2026-10-08）：dreamsea / lagoon / bubbles
+
+**触发**：用户分享上游插件 [lxj5820/dsh-boot-animation](https://github.com/lxj5820/dsh-boot-animation)（v0.2.0，
+MIT，152 star）并称「启动动画可以拿来用」。澄清后的真实意图：**不装它的插件，把它那几段动画
+收进本仓已有片库，让「设置 → 外观 → 启动」里多几个可选段**。
+
+**决策：只取素材，不装插件**（与 §2.3 同一条纪律，且理由比第一批更硬）：
+
+- 本机 DSH 正是 `0.2.0-rc.2`，与该插件实测版本**吻合**——但它替换的是 **3080 侧**的内核启动页，
+  而壳级 L2 视频层已存在；两者叠加 = **双重片头**（§2.3 已因同样理由否掉装插件路线）；
+- 该插件的设置卡片依赖 profile 级接线（junction + `cordis.patch.yml` 追加行），属用户运行环境，
+  与「壳播自己的片头」不是同一层；
+- 只取素材时，壳侧白名单 / 面板枚举 / 加载页 `IDS` / 部署清单 / 提取闸门**全部既有机制复用**，
+  零新代码路径。
+
+### 11.1 素材实测（2026-10-08，box walk + SHA256；内容经多模态模型逐段辨认）
+
+| 上游文件 | 本仓 id | 大小 (B) | 时长 | 分辨率 | 轨道 | faststart | SHA256 前 16 位 |
+|---|---|---|---|---|---|---|---|
+| `1.mp4` | `dreamsea`（深海绮梦） | 8,391,471 | 8.06s | 1280×720 | H.264+AAC | ✅ | `970afeb9b8a981de` |
+| `2.mp4` | `lagoon`（碧海清凉） | 11,065,265 | 15.10s | 1280×720 | H.264+AAC | ✅ | `95794b99c3ae4c36` |
+| `3.mp4` | `bubbles`（泡沫光束） | 5,195,581 | 12.42s | 1280×720 | H.264+AAC | ✅ | `585143d714778d48` |
+
+- 内容：深海环境下蓝发女仆装动漫少女、上升气泡与穿透水面的光束，梦幻唯美；**无文字 / 无水印**
+  （水印会与跳过提示打架，上游 MANUAL 同款纪律）；
+- **授权**：上游 LICENSE 原文明示「The three `.mp4` files are the author's own animation work and
+  are distributed under the same MIT terms as the code.」⇒ MIT 允许再分发，本声明文件
+  （`ui/intro/THIRD-PARTY-NOTICE.md`）即许可声明随附；
+- **SHA 口径与第一批不同**：上游无官方 `clips.meta.js` 可对，台账值 = 本机下载字节实测；
+- 本地取证副本 `_refs/boot-intro-clips/{1,2,3}.mp4`（不入库，与第一批同目录）。
+
+### 11.2 接线：七处同改（第一批当年只列了三处，实际从来不止）
+
+| # | 落点 | 改动 |
+|---|---|---|
+| 1 | appearance `lib/config.js` `INTRO_CLIPS` | 4 → 7 id |
+| 2 | appearance `client.js` `INTRO_OPTIONS` | +3 选项（含中文 label） |
+| 3 | `src-tauri/src/boot_intro.rs` `INTRO_IDS` | `[&str; 4]` → `[&str; 7]` |
+| 4 | `ui/loading.html` L2 层 `IDS` | +3 id（未知 id 一律一层不建既有纪律不变） |
+| 5 | `scripts/deploy-local.ps1` `$introClips` | 部署前置检查 +4 段 |
+| 6 | `scripts/extract-intro-clips.mjs` 台账 | +3 段；`readClip` 支持 **per-clip 上游**（repo/tag/dir），第一批常量回落为默认值 |
+| 7 | `ui/intro/intro-<id>.mp4` 产物 | +3 文件（闸门逐段校验） |
+
+**测试钉住（防「枚举里加了、路径没通」）**：`boot_intro.rs` 新增
+`intro_ids_pin_cross_line_contract`（`INTRO_IDS.len() == 7` + 三段必须在位）；`loading-visual.test.js`
+新增「段位扩容」用例（三个新段各自建层且 `video.src == 'intro/intro-<id>.mp4'`）；appearance
+`client.test.js` 值域断言同步为八项（off + 七段）。
+
+### 11.3 代价与边界
+
+- **体积**：`ui/` 资产 +23.5 MB（第一批为 +9.1 MB）⇒ exe 嵌入后预估再涨约 24 MB。**不重编码**：
+  本机无 H.264 编码器（剪映自带 ffmpeg 为 `--disable-ffmpeg` 构建），且「字节级与上游一致」
+  正是闸门判据；将来若要减重，换编码器后必须重算台账 SHA 并留档原始字节。
+- `lagoon` 段 15.10s：启动就绪慢时它比第一批任何一段（7–8s）等得更久——「点击 / 任意键跳过」
+  与「就绪即切」既有行为不受影响，但**选段时要知道它在等**（面板说明行不变）。
+- 验收归用户：新三段实机播放（WebView2 muted autoplay）+ 面板依次选七段各播一次。

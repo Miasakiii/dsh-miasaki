@@ -684,10 +684,11 @@ test('官方列宽手柄不再被本线触碰（2026-09-12 反馈项随浮层形
   // 2026-09-12 曾用 :has(iframe[title="SSH"]) 在 SSH 视图下隐藏官方拖拽手柄；该视图形态
   // 随 D3 删除后规则永不命中（D3-F1），浮层本身全屏覆盖 ⇒ 无需再隐藏。改为**零触碰**断言。
   assert.doesNotMatch(css, /width-handle/)
-  // tb-group（用户在用的窗控）与 #miasaki-switcher（主题球）必须保持可见：2026-09-12
-  // 曾误隐藏二者被用户退回——这两条「不许出现」的断言防再次犯同样的错。
+  // tb-group（用户在用的窗控）必须保持可见：2026-09-12 曾误隐藏它被用户退回 ——
+  // 下面这条「不许出现」的断言防再次犯同样的错。
+  // （同日一并防的「#miasaki-switcher」= desktop 线右下角主题球，已于 2026-10-07 退役、
+  // 能力并入 tb-group 里的主题头像按钮 `.tb-theme` ⇒ 主题入口仍在 tb-group 内，受上一条保护。）
   assert.doesNotMatch(css, /#miasaki-titlebar\{display/)
-  assert.doesNotMatch(css, /#miasaki-switcher\{display/)
   assert.doesNotMatch(css, /data-width-hanlde|data-widthhandles/)
 })
 

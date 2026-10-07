@@ -1515,11 +1515,14 @@ window.__ModuleLoader__.load({
       wroteReserve: false,
       /**
        * 注入 / 维持标题栏终端按钮。拍板顺序（2026-09-12 第二次交换要求）：
-       * [终端][其他注入按钮…][brand][窗控]——终端按钮置于 tb-group **最前**。
-       * （第一次拍板是「紧贴 brand」，实测右栏开关同样插在 brand 紧前、落在
+       * [终端][其他注入按钮…][主题头像][窗控]——终端按钮置于 tb-group **最前**。
+       * （第一次拍板是「紧贴主题头像」，实测右栏开关同样插在它紧前、落在
        * 终端右侧；用户要求终端放最左，故改为 group 首位。其它注入方都往
-       * brand 紧前插，天然落在终端之后，互不争抢。）顺序已对时不动 DOM
+       * 主题头像紧前插，天然落在终端之后，互不争抢。）顺序已对时不动 DOM
        * （防 observer 自激循环）。
+       * 2026-10-07：那颗「主题头像」原是不可点的 16px 徽章 `.tb-brand`，现已升格为
+       * 主题切换按钮 `.tb-theme`（desktop 线）—— **本线的注入锚点与顺序判据不受影响**
+       * （仍是 `insertBefore(btn, group.firstElementChild)`，主题按钮仍在终端键右侧）。
        */
       ensure() {
         const group = document.querySelector('#miasaki-titlebar .tb-group')

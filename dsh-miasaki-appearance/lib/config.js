@@ -23,10 +23,11 @@ export const BOOT_SPLASH_MODES = Object.freeze(['auto', 'off'])
  * （素材台账见该线 `scripts/extract-intro-clips.mjs`），`off` = 不播。
  *
  * **这是跨线契约**：桌面壳 `src-tauri/src/boot_intro.rs` 读同一份配置的同一字段，
- * 其白名单 INTRO_IDS 必须与本常量同步（新增一段要同时改：本处 / 面板选项 /
- * 提取脚本台账 / 壳侧白名单 四处）。壳侧遇未知 id 一律不播（宁可不播，不猜）。
+ * 其白名单 INTRO_IDS 必须与本常量同步（新增加一段要同时改：本处 / 面板选项 /
+ * 提取脚本台账 / 壳侧白名单 / loading.html IDS / 部署清单 / ui/intro 产物，共七处，
+ * 清单见桌面端 README「启动片头」）。壳侧遇未知 id 一律不播（宁可不播，不猜）。
  */
-export const INTRO_CLIPS = Object.freeze(['off', 'brand', 'cyberpunk', 'awakening', 'startup'])
+export const INTRO_CLIPS = Object.freeze(['off', 'brand', 'cyberpunk', 'awakening', 'startup', 'dreamsea', 'lagoon', 'bubbles'])
 
 /** 会话密度（M4）：comfortable = 官方默认 16px 消息流间距；compact = 8px。 */
 export const DENSITIES = Object.freeze(['comfortable', 'compact'])

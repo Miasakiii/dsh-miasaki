@@ -1,6 +1,9 @@
   // 主题同步通道：URL hash（replaceState 不触发刷新；Rust 侧轮询解析 → 联动桌宠）
-  // hash 内附带诊断位：stylesLen.headOK.attached.switcher.errCount.baseOK.switcherTop.vh.topEl.switcherCss，
-  // 便于无 IPC 环境远程排障（2026-09-05 侧栏几何同步移除后 diag 尾两位固定为 0.0）
+  // hash 内附带诊断位：stylesLen.headOK.attached.themeBtn.errCount.baseOK.themeBtnTop.vh.topEl.themeBtnCss，
+  // 便于无 IPC 环境远程排障（2026-09-05 侧栏几何同步移除后 diag 尾两位固定为 0.0）。
+  // 2026-10-07：第 4/7/9/10 位原量右下角切换条 `#miasaki-switcher`（它是否被页面重渲染清掉、
+  // 是否被别的元素盖住），切换条退役后改量右上主题头像按钮 `.tb-theme` —— **位数与顺序不变**，
+  // 语义仍是「壳的主题入口是否在位 / 可点」（Rust 侧只做整串比对与落日志，不解析各位含义）。
   //
   // 性能约束（2026-09-08）：diag 段里的 getBoundingClientRect / document.elementFromPoint /
   // getComputedStyle 都是**强制同步布局**调用，而 syncHash 由 05-sensors 的状态扫描每 1.5s
@@ -17,9 +20,9 @@
       var len = styleFor(current).length
       var headOk = document.head ? 1 : 0
       var attached = styleEl && styleEl.parentNode !== null ? 1 : 0
-      var sw = document.getElementById('miasaki-switcher') ? 1 : 0
+      var swEl = document.querySelector('#miasaki-titlebar .tb-theme')
+      var sw = swEl ? 1 : 0
       var baseOk = baseEl && baseEl.parentNode !== null && baseEl.textContent.length > 100 ? 1 : 0
-      var swEl = document.getElementById('miasaki-switcher')
       var swTop = swEl ? Math.round(swEl.getBoundingClientRect().top) : -999
       var vh = window.innerHeight || 0
       var eSw = '?'
@@ -319,7 +322,10 @@
   function ensureBase() {
     if (!baseEl) {
       baseEl = document.createElement('style')
-      baseEl.id = 'miasaki-switcher-css'
+      // 2026-10-07：id 由 `miasaki-switcher-css` 改为 `miasaki-theme-css`（切换条退役，
+      // 这个 style 元素现在载的是窗控组 / 主题面板 / 让位规则那一整段）。
+      // 仅作 DevTools 识别用，无外部读者（全仓唯一引用点就是这里）。
+      baseEl.id = 'miasaki-theme-css'
     }
     var head = document.head || document.documentElement
     if (baseEl.parentNode === null && head) {
@@ -409,12 +415,12 @@
     if (styleEl) styleEl.textContent = styleFor(t)
     syncDark()
     try { localStorage.setItem(KEY, t) } catch (e) { /* ignore */ }
-    // 核心同步优先:桌宠 hash 通道 / 切换条图标 / 标题栏 —— 装饰层失败不得阻断
+    // 核心同步优先:桌宠 hash 通道 / 主题按钮与面板 / 标题栏 —— 装饰层失败不得阻断
     // force=true：样式层刚换，diag 需立即反映新主题（不等节流窗口）
     // W4.3：样式层刚换 → 先重算窗口底色，再同步（顺序即契约：syncHash 读 CUR_BG）
     CUR_BG = resolveNativeBg()
     syncHash(true)
-    refreshSwitcher()
+    refreshThemeMenu()
     updateTitlebar()
     try { updateWatermark() } catch (e) { /* 装饰失败由自愈巡检恢复 */ }
     try { updateAurora() } catch (e) { /* 同上 */ }

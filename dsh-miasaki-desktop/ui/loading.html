@@ -315,7 +315,7 @@
     // 失败链全静默（解码失败 / autoplay 被拒 / IPC 不可用 ⇒ 撤层，L1 纹章层接管）；
     // 退场四路：就绪 300ms（D3）/ 失败 150ms（D4）/ 播完停尾帧 2s / 点击跳过。
     ;(function () {
-      var IDS = ['brand', 'cyberpunk', 'awakening', 'startup'];
+      var IDS = ['brand', 'cyberpunk', 'awakening', 'startup', 'dreamsea', 'lagoon', 'bubbles'];
       var layer = null, video = null, endedTimer = null, skipTimer = null, done = false;
 
       // classList 在真实 WebView2 恒在；守卫只为离线 VM 契约测试的假 document 不炸

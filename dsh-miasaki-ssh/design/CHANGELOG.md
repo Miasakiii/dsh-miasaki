@@ -2,6 +2,38 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-10-07 · 退役「避主题球」让位链（`--ssh-shell-fab-safe-right`）
+
+**背景**：desktop 线把右下角的主题悬浮球（`#miasaki-switcher .ms-btn`，fixed `right/bottom 16px`
+的 46px 圆 + 6px `::after` 光晕）整体并入**右上角窗控组里的主题头像按钮** —— 内容区右下角
+不再有任何壳浮层，本线原先为它留的那条右缘安全线失去对象。
+
+**本线改动**（纯退役，零新增能力）：
+- `app.js`：删 `computeFabSafeRight()` / `measureShellFab()` / `FAB_GLOW_PX` / `FAB_GAP_PX`；
+  `syncChromeClearance()` 只写 `--ssh-chrome-clearance` 一条；段首注释从「两块 chrome」改为
+  「一块 chrome」，并留下退役说明。
+- `styles.css`：`--ssh-modal-edge` 由 `max(32px, var(--ssh-shell-fab-safe-right, 0px))`
+  退回 **32px 常量**；悬浮窗段首的第②条让位口径就地改写为退役说明。
+- `test/app.test.js`：删 `computeFabSafeRight` 的整条用例（12 条断言）与 5 处
+  `--ssh-shell-fab-safe-right` 期望值；`bootShell()` 去掉 `ballRect` 参数与 `#miasaki-switcher`
+  查询分支；**新增两条防回潮判据** —— 运行时不得再写出该变量、css 的 `--ssh-modal-edge`
+  不得回潮成 `max(32px, var(--ssh-shell-fab-safe-right…))`（只禁**声明**层面的回潮；
+  段首注释里保留退役历史说明是允许的，故断言写成 `doesNotMatch(/--ssh-modal-edge:\s*max\(…/)`
+  而非全文件禁词）。
+
+**为什么必须删而不是留着**：留着**不会坏**（`measureShellFab()` 查不到球 → `null` → 安全线归零，
+`computeFabSafeRight` 本就按 null 处理），但会留下 5 处死代码 + 3 处失真注释
+（"避开右下角主题球"）—— 正是后来者最容易照着改错的那类残留。
+
+**形态决策不回退**：贴边抽屉 → 居中悬浮窗（2026-09-26）这条决策保留 —— 它对齐官方设置面板的
+观感，且不再依赖"右下角有没有球"这个随时会变的事实。
+
+**回归**：`dsh-miasaki-ssh/test/*.test.js` **18 文件 309 例全绿**（净 −1 例 = 删掉的避球纯函数
+用例；上一条基线 310）。
+
+**实机待验**：窄窗口（480×640）下新建主机卡片与「保存并连接」键完整可点（球已不在，安全线为 0，
+卡片按 32px 基数居中）。
+
 ## 2026-09-29 · 修 CI 自 2026-09-26 起的持续红：`tools.test.js` 的 unref 定时器陷阱
 
 **现象**：CI（`.github/workflows/verify-all.yml`）自 2026-09-26 12:16 之后**每一次 push 都红**，

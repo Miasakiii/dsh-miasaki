@@ -89,7 +89,10 @@
     var nodes = document.querySelectorAll('button, [role="button"], span')
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i]
-      if (el.closest && el.closest('#miasaki-switcher')) continue
+      // 排除壳自身 UI（2026-10-07：原判 `#miasaki-switcher` 的右下角切换条已退役，主题面板
+      // 现在是 `#miasaki-titlebar` 的子元素）—— 面板里的主题名/副标题/明暗符号都是 span，
+      // 不排除会被当成页面的强度标签扫到（桌宠强度误判）。
+      if (el.closest && el.closest('#miasaki-titlebar')) continue
       var t = (el.textContent || '').trim()
       if (!t || t.length > 48) continue
       var m = t.match(/[^\u00b7\u00b7]*[\u00b7\u00b7]\s*([^\u00b7\u00b7]{1,12})$/i)
@@ -114,7 +117,7 @@
     return false
   }
 
-  // 检测"生成中":页面上存在"停止生成"类按钮(限 #miasaki-switcher / 主题注入组件外)
+  // 检测"生成中":页面上存在"停止生成"类按钮(限壳自身 UI / 主题注入组件外)
   // 顺序即性能：文本匹配（廉价，不碰布局）先行，命中后才做 closest/可见性判断——
   // el.offsetParent 会触发强制同步布局，原先对每个按钮都求值，在流式输出时成本可观。
   function scanActivity() {
@@ -123,7 +126,7 @@
     for (var i = 0; i < btns.length; i++) {
       var el = btns[i]
       if (!isBtnTextMatch(el.textContent, ACT_BTN_TEXT)) continue
-      if (el.closest && (el.closest('#miasaki-switcher') || el.closest('#miasaki-titlebar'))) continue
+      if (el.closest && el.closest('#miasaki-titlebar')) continue
       if (!el.offsetParent && getComputedStyle(el).visibility !== 'visible') continue
       return 'busy'
     }
@@ -136,7 +139,7 @@
     var containers = document.querySelectorAll(APPROVE_CONTAINER_SEL)
     for (var i = 0; i < containers.length; i++) {
       var c = containers[i]
-      if (c.closest && c.closest('#miasaki-switcher')) continue
+      if (c.closest && c.closest('#miasaki-titlebar')) continue
       if (!c.offsetParent) continue
       var btns = c.querySelectorAll('button, [role="button"]')
       var hasApprove = false, hasDeny = false
@@ -220,7 +223,7 @@
     var btns = document.querySelectorAll('button, [role="button"]')
     for (var i = 0; i < btns.length; i++) {
       var el = btns[i]
-      if (el.closest && el.closest('#miasaki-switcher')) continue
+      if (el.closest && el.closest('#miasaki-titlebar')) continue
       var t = (el.textContent || '').replace(/\s+/g, ' ').trim()
       if (!t || t.length > 24) continue
       var inDlg = el.closest('[role="dialog"],[role="alertdialog"],[class*="modal" i]') ? 'in-dialog' : 'free'

@@ -322,9 +322,9 @@ function applyChrome(data) {
   overlayState.token = typeof data.overlayToken === 'string' && data.overlayToken.length > 0 ? data.overlayToken : null
   const reserve = Number.isFinite(data.reserve) ? Math.max(0, Math.round(data.reserve)) : 0
   try { document.documentElement.style.setProperty('--ssh-chrome-reserve', reserve + 'px') } catch { /* 只读环境 */ }
-  // 让位量（`--ssh-chrome-clearance` / `--ssh-shell-fab-safe-right`）不从这里写：它们按父
-  // 视口实测两块壳 chrome，与宿主下发的 reserve（窗控组宽度口径）无关，只在 mount 与
-  // resize 时重算（见 syncChromeClearance）。
+  // 让位量（`--ssh-chrome-clearance`）不从这里写：它按父视口实测**壳窗控组**，与宿主下发的
+  // reserve（窗控组宽度口径）无关，只在 mount 与 resize 时重算（见 syncChromeClearance）。
+  // 2026-10-07：右缘那条 `--ssh-shell-fab-safe-right`（避桌面壳右下角主题球）已随球退役删除。
   const available = data.canvasAvailable !== false
   if (available !== overlayState.canvasAvailable) {
     overlayState.canvasAvailable = available
@@ -337,20 +337,21 @@ function applyChrome(data) {
 const overlayState = { token: null, current: 'ssh', canvasAvailable: true }
 
 // ---- 桌面壳 chrome 让位（实机反馈修复）------------------------------------------
-// 桌面壳有两块 chrome 是**零占位浮层**，压在 /ssh/ iframe 之上、页面 z-index 拦不住：
-//   ① 窗控组（`#miasaki-titlebar .tb-group`：主题徽记 + 最小化/最大化/关闭，fixed 右上角）；
-//   ② 主题球（`#miasaki-switcher .ms-btn`：fixed right/bottom 16px 的 46px 圆，z-index 99990）。
-// 两处都命中过可用性缺陷：抽屉标题栏的 × 被窗控压住点不到（2026-09-15）；贴边抽屉
-// 右下角的「连接」被主题球压住点不到（2026-09-26）。悬浮窗（居中卡片）形态从根上让开了
-// 这两角的大部分面积，剩下两条让位口径：
-//   ① 顶部 —— 卡片（含右上角 ×）整体落到窗控下沿之下：`--ssh-chrome-clearance`；
-//   ② 右缘 —— 窗口窄到卡片会与主题球相交时，卡片宽度按球的安全线留边：
-//      `--ssh-shell-fab-safe-right`。
-// 两条都取**父视口坐标**下的实测矩形相减：同一套算法覆盖浮层（iframe 顶格）与会话视图
-// （iframe 在中栏，两块 chrome 可能都在 iframe 之外 → 自然归零）两种挂载形态，无分支。
+// 桌面壳有一块 chrome 是**零占位浮层**，压在 /ssh/ iframe 之上、页面 z-index 拦不住：
+// 窗控组（`#miasaki-titlebar .tb-group`：主题头像 + 最小化/最大化/关闭，fixed 右上角）。
+// 它命中过可用性缺陷：抽屉标题栏的 × 被窗控压住点不到（2026-09-15）。悬浮窗（居中卡片）
+// 形态从根上让开了这一角的大部分面积，剩下的让位口径只有一条：
+//   ① 顶部 —— 卡片（含右上角 ×）整体落到窗控下沿之下：`--ssh-chrome-clearance`。
+// 取**父视口坐标**下的实测矩形相减：同一套算法覆盖浮层（iframe 顶格）与会话视图
+// （iframe 在中栏，窗控在 iframe 之外 → 自然归零）两种挂载形态，无分支。
+//
+// **2026-10-07 退役原第二条口径（右缘 `--ssh-shell-fab-safe-right`）**：桌面壳右下角的
+// 主题悬浮球（`#miasaki-switcher .ms-btn`，fixed right/bottom 16px 的 46px 圆 + 6px 光晕）
+// 已整体退役 —— 切换能力并入窗控组里的主题头像按钮 `.tb-theme`，面板从右上角向下展开，
+// 不再占用内容区右下角。原先「窗口窄到卡片会与球相交时按球的安全线留边」不再有对象：
+// 连带删除 `computeFabSafeRight()` / `measureShellFab()` / `FAB_GLOW_PX` / `FAB_GAP_PX`,
+// css 侧 `--ssh-modal-edge` 也从一个 `max(32px, …)` 退回常量 32px。
 const CHROME_GAP_PX = 8 // 窗控下沿再留一段呼吸，避免「贴着」的读感
-const FAB_GAP_PX = 8    // 球左缘再留一段呼吸
-const FAB_GLOW_PX = 6   // 球的 ping 光晕（`.ms-btn::after{inset:-6px}`）—— 它同样吃点击
 
 /** 纯函数：父视口坐标下的窗控组矩形 + iframe 矩形 → 本 iframe 顶部让位量（px）；量不到返回 null。 */
 function computeChromeClearance(capsuleRect, frameRect) {
@@ -366,27 +367,6 @@ function computeChromeClearance(capsuleRect, frameRect) {
   return Math.ceil(overlap + CHROME_GAP_PX)
 }
 
-/**
- * 纯函数：父视口坐标下的主题球矩形 + iframe 矩形 → 本 iframe 的右缘安全线（px）。
- * 语义 =「距本 iframe 右缘这么多像素以内的区域归球」：卡片据此留边。球水平不落在
- * 本 iframe 内（会话视图里 iframe 右缘在球左侧）或与 iframe 垂直不相交时返回 0。
- */
-function computeFabSafeRight(fabRect, frameRect) {
-  if (fabRect === null || fabRect === undefined) return 0
-  if (!(fabRect.width > 0) || !(fabRect.height > 0)) return 0
-  const left = Number(fabRect.left)
-  const top = Number(fabRect.top)
-  const bottom = Number(fabRect.bottom)
-  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(bottom)) return 0
-  const right = Number(frameRect?.right)
-  const frameTop = Number(frameRect?.top)
-  const frameBottom = Number(frameRect?.bottom)
-  if (!Number.isFinite(right) || !Number.isFinite(frameTop) || !Number.isFinite(frameBottom)) return 0
-  if (bottom <= frameTop || top >= frameBottom) return 0 // 垂直方向与 iframe 不相交
-  const safe = right - left + FAB_GLOW_PX + FAB_GAP_PX
-  return safe > 0 ? Math.ceil(safe) : 0
-}
-
 /** 从父文档量窗控组（同源才可读）；顶层窗口 / 无窗控组 / 跨源一律 null。 */
 function measureChromeClearance() {
   try {
@@ -400,17 +380,6 @@ function measureChromeClearance() {
   } catch { return null } // 跨源 iframe / 宿主文档不可读
 }
 
-/** 从父文档量主题球（同源才可读）；顶层窗口 / 浏览器里没有球 / 跨源一律 null。 */
-function measureShellFab() {
-  try {
-    if (window.parent === window) return null
-    const doc = window.parent !== null && window.parent !== undefined ? window.parent.document : null
-    const ball = doc?.querySelector?.('#miasaki-switcher .ms-btn') ?? null
-    if (ball === null || typeof ball.getBoundingClientRect !== 'function') return null
-    return computeFabSafeRight(ball.getBoundingClientRect(), frameRectInParent())
-  } catch { return null }
-}
-
 /** 本 iframe 在父视口里的矩形；量不到返回 null（让位口径据此保守归零）。 */
 function frameRectInParent() {
   const frame = window.frameElement ?? null
@@ -420,17 +389,14 @@ function frameRectInParent() {
 }
 
 /**
- * 写两条让位变量：顶部 `--ssh-chrome-clearance`（卡片下移到窗控之下）、右缘
- * `--ssh-shell-fab-safe-right`（卡片留边避开主题球）。量不到一律归零 —— 浏览器里、
- * 或两块 chrome 都不在 iframe 内时，卡片按 `--ssh-modal-edge` 的 32px 基数居中。
+ * 写让位变量：顶部 `--ssh-chrome-clearance`（卡片下移到壳窗控带之下）。量不到一律归零 ——
+ * 浏览器里、或窗控不在本 iframe 内时，卡片按 `--ssh-modal-edge` 的 32px 基数居中。
+ * 2026-10-07：原右缘那条 `--ssh-shell-fab-safe-right`（避主题球）随球退役一并删除。
  */
 function syncChromeClearance() {
   const clearance = measureChromeClearance() ?? 0
-  const fabSafe = measureShellFab() ?? 0
   try {
-    const style = document.documentElement.style
-    style.setProperty('--ssh-chrome-clearance', clearance + 'px')
-    style.setProperty('--ssh-shell-fab-safe-right', fabSafe + 'px')
+    document.documentElement.style.setProperty('--ssh-chrome-clearance', clearance + 'px')
   } catch { /* 只读环境 */ }
 }
 
@@ -608,7 +574,9 @@ function savePrefs() {
 
 // ------------------------------------------------------------------ 悬浮窗（模态）
 // 形态 = 居中悬浮窗（遮罩 + 居中卡片），不是右侧抽屉：贴边抽屉右下角的确认键会被桌面壳
-// 主题球压住（2026-09-26 实机反馈）。样式在 styles.css 的「悬浮窗（模态）」段。
+// 主题球压住（2026-09-26 实机反馈）。**2026-10-07：球已退役**（并入右上角窗控组的主题
+// 头像按钮），但形态决策**不回退** —— 居中悬浮窗对齐官方设置面板的观感，且不再依赖
+// "右下角有没有球"这个随时会变的事实。样式在 styles.css 的「悬浮窗（模态）」段。
 let sheetReturnFocus = null
 
 function openSheet(title, bodyNodes, actions) {
@@ -2345,7 +2313,8 @@ async function mount() {
   applyThemeSnapshot(initialTheme())
   setupThemeListener()
   buildSkeleton(root)
-  // 桌面壳 chrome 让位：悬浮窗卡片要避开壳窗控带（右上）与主题球（右下），见 syncChromeClearance。
+  // 桌面壳 chrome 让位：悬浮窗卡片要避开壳窗控带（右上），见 syncChromeClearance。
+  // （2026-10-07：右下角主题球已退役，原先那条右缘让位口径随之删除。）
   // 先量一次（顶层窗口 / 浏览器里量不到就是 0），窗口尺寸变化时重测 —— 会话视图下 iframe 的右缘会动。
   syncChromeClearance()
   window.addEventListener('resize', scheduleChromeClearance)

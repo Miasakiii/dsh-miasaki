@@ -300,7 +300,7 @@ window.__ModuleLoader__.load({
 .mia-panel{max-width:720px;color:var(--dsw-alias-label-primary);flex-direction:column;display:flex}
 .mia-group{flex-direction:column;display:flex}
 .mia-group + .mia-group{margin-top:24px}
-.mia-groupTitle{color:var(--dsw-alias-label-primary);margin:0;padding:0 0 4px;font-size:14px;font-weight:500;line-height:22px}
+.mia-groupTitle{color:var(--dsw-alias-label-primary);margin:0;padding:0 0 4px;font-size:16px;font-weight:500;line-height:24px}
 .mia-row{border-bottom:.5px solid var(--dsw-alias-border-l2);align-items:center;gap:8px;padding:16px 0;display:flex}
 .mia-group>.mia-row:last-child{border-bottom:none}
 .mia-rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px;display:flex}
@@ -539,7 +539,8 @@ window.__ModuleLoader__.load({
 
     /**
      * 启动片头片库选项（id 与 lib/config.js 的 INTRO_CLIPS **逐字一致**——那是跨线契约的
-     * 值域来源，同时被桌面壳 `boot_intro.rs` 的白名单校验；三处新增一段要同时改）。
+     * 值域来源，同时被桌面壳 `boot_intro.rs` 的白名单校验；加一段须七处同改，清单见
+     * 桌面端 README「启动片头」跨线同步点）。
      */
     const INTRO_OPTIONS = [
       { id: 'off', label: '关闭' },
@@ -547,6 +548,9 @@ window.__ModuleLoader__.load({
       { id: 'cyberpunk', label: '赛博朋克' },
       { id: 'awakening', label: '数字角色苏醒' },
       { id: 'startup', label: '启动问题' },
+      { id: 'dreamsea', label: '深海绮梦' },
+      { id: 'lagoon', label: '碧海清凉' },
+      { id: 'bubbles', label: '泡沫光束' },
     ]
 
     /**
@@ -718,7 +722,14 @@ window.__ModuleLoader__.load({
     }
 
     // ------------------------------------------------------------- 行构造
-    /** 分组：组标题（官方组标题规格 14px/22/500）+ 组内行。 */
+    /**
+     * 分组：组标题 + 组内行。
+     *
+     * 组标题规格 **16px/24/500**（官方 `ui-settings-models` 的 `.title` 逐字取值，
+     * 见 `design/2026-09-26-appearance-visual-unification-and-roadmap.md` §页标题行）。
+     * 2026-10-07 由 `editorTitle` 的 14px/22/500 提档：组标题与行标题（14px/22/400）
+     * 原本**字号相同、只差一档字重**，整页看不出层级（用户点名「标题与内容一样大一样粗」）。
+     */
     function group(title, children) {
       return react.createElement('div', {
         key: `g-${title}`,

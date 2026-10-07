@@ -305,6 +305,22 @@ test('面板挂载官方「通用设置」页风格：mia-* 行式 + 官方 toke
   assert.match(PANEL_CSS_SOURCE, /\.mia-row\{[^}]*border-bottom:\.5px solid var\(--dsw-alias-border-l2\)/)
   assert.match(PANEL_CSS_SOURCE, /\.mia-row\{[^}]*padding:16px 0/)
   assert.match(PANEL_CSS_SOURCE, /\.mia-title\{[^}]*font-size:14px/)
+  // 组标题层级（2026-10-07）：官方 models `.title` 规格 16px/24/500 —— 必须**明显高于**
+  // 行标题（14px/22/400）。原取值 editorTitle 14px/22/500 与行标题**同字号、只差一档字重**，
+  // 整页看不出分组（用户点名「标题与内容字体大小粗细都一样」）。
+  assert.match(PANEL_CSS_SOURCE, /\.mia-groupTitle\{[^}]*font-size:16px;font-weight:500;line-height:24px/,
+    '组标题须为官方 models `.title` 的 16/24/500')
+  {
+    const ruleOf = cls => (PANEL_CSS_SOURCE.match(new RegExp(`\\.${cls}\\{([^}]*)\\}`)) || [])[1] || ''
+    const pxOf = (rule, prop) => Number((rule.match(new RegExp(`${prop}:([0-9.]+)px`)) || [])[1])
+    const weightOf = rule => Number((rule.match(/font-weight:([0-9]+)/) || [])[1])
+    const groupRule = ruleOf('mia-groupTitle')
+    const rowRule = ruleOf('mia-title')
+    assert.ok(pxOf(groupRule, 'font-size') > pxOf(rowRule, 'font-size'),
+      `组标题字号必须大于行标题（实得 ${pxOf(groupRule, 'font-size')} vs ${pxOf(rowRule, 'font-size')}）`)
+    assert.ok(weightOf(groupRule) >= weightOf(rowRule),
+      '组标题字重不得低于行标题（否则标题回退成正文观感）')
+  }
   assert.match(PANEL_CSS_SOURCE, /\.mia-desc\{[^}]*var\(--dsw-alias-label-tertiary\)/)
   assert.match(PANEL_CSS_SOURCE, /\.mia-stepper\{[^}]*var\(--dsw-alias-bg-module-platform\)/)
   // 选择丸：官方 LanguageRow.selector 规格（h36 / r18 / module 底）
@@ -1378,7 +1394,7 @@ test('启动板块：片头选择丸 + 声音开关在位，值域与 INTRO_CLIP
   const menus = bootIntroMenu(nodes)
   assert.equal(menus.length, 1, '片库必须是官方选择丸（唯一一枚）')
   assert.deepEqual([...menus[0].props.items].map(item => item.id),
-    ['off', 'brand', 'cyberpunk', 'awakening', 'startup'],
+    ['off', 'brand', 'cyberpunk', 'awakening', 'startup', 'dreamsea', 'lagoon', 'bubbles'],
     '选项 id 必须与 lib/config.js 的 INTRO_CLIPS 一致（跨线值域，壳侧白名单同源）')
   assert.equal(menus[0].props.selectedId, 'brand', '当前值来自配置')
 

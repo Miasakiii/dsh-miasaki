@@ -399,14 +399,16 @@ test('保存并连接：意图标记不得挂在事件对象上（D-1 回归）'
   assert.match(source, /if \(alsoConnect === true\) void connectFlow\(connection\)/, '标记为真时必须真的发起连接')
 })
 
-// ---- 桌面壳 chrome 让位（两次实机反馈的回归护栏）-----------------------------------
+// ---- 桌面壳 chrome 让位（实机反馈的回归护栏）---------------------------------------
 // ① 2026-09-15：抽屉标题栏的 × 被壳窗控组（fixed 右上角）压住点不到 → 顶部让位
-//    （computeChromeClearance），抽屉整体下移到窗控下沿之下。
+//    （computeChromeClearance），卡片整体下移到窗控下沿之下。
 // ② 2026-09-26：贴边抽屉右下角的确认键被壳主题球（fixed right/bottom 16px 的 46px 圆）
-//    压住点不到 → 形态改为**居中悬浮窗**（贴边形态从根上不再适用），并给卡片留出右缘
-//    安全线（computeFabSafeRight）；窄窗口下卡片宽度/最大高据此缩，球够不着卡片。
-// 两条让位量都取**父视口**坐标实测，浮层（iframe 顶格）与会话视图（iframe 在中栏）
-// 共用一套算法：chrome 不在 iframe 内时自然归零。
+//    压住点不到 → 形态改为**居中悬浮窗**（贴边形态从根上不再适用）。
+// **2026-10-07：②的右缘安全线 `computeFabSafeRight` 退役** —— 桌面壳右下角的主题球已
+// 整体并入窗控组里的主题头像按钮（面板从右上角向下展开），内容区右下角不再有壳浮层，
+// 无对象可避。形态决策（居中悬浮窗）不回退，但让位口径只剩 `--ssh-chrome-clearance` 一条。
+// 让位量取**父视口**坐标实测，浮层（iframe 顶格）与会话视图（iframe 在中栏）
+// 共用一套算法：壳窗控不在 iframe 内时自然归零。
 test('computeChromeClearance：窗控下沿 → 让位量，iframe 在窗控下方时归零', () => {
   const capsule = { width: 100, height: 26, bottom: 37 }
   assert.equal(context.computeChromeClearance(capsule, { top: 0 }), 45, '37 + 8px 呼吸 = 45')
@@ -418,31 +420,8 @@ test('computeChromeClearance：窗控下沿 → 让位量，iframe 在窗控下�
   assert.equal(context.computeChromeClearance({ width: 10, height: 26, bottom: Number.NaN }, { top: 0 }), null)
 })
 
-test('computeFabSafeRight：球左缘 → 卡片右缘安全线，球不在本 iframe 内时归零', () => {
-  // 浮层形态：iframe 顶格铺满父视口，球（46px 圆 + right/bottom 16px）落在 iframe 右下角
-  const frame = { top: 0, right: 1540, bottom: 1530 }
-  const ball = { left: 1478, top: 1468, bottom: 1514, width: 46, height: 46 }
-  assert.equal(context.computeFabSafeRight(ball, frame), 76, '球左缘距右缘 62 + 6px 光晕 + 8px 呼吸 = 76')
-
-  // 窄窗口里球已经压进 iframe 内：安全线随 iframe 右缘收窄
-  assert.equal(context.computeFabSafeRight(ball, { top: 0, right: 1500, bottom: 1530 }), 36)
-
-  // 球整个在本 iframe 右侧之外（会话视图：iframe 只占中栏）
-  assert.equal(context.computeFabSafeRight(ball, { top: 0, right: 800, bottom: 1530 }), 0)
-  // 垂直方向与 iframe 不相交（球在 iframe 下方）
-  assert.equal(context.computeFabSafeRight(ball, { top: 0, right: 1540, bottom: 1200 }), 0)
-
-  // 量不到 / 不可见：浏览器里没有球，球被 display:none 收起时矩形为零
-  assert.equal(context.computeFabSafeRight(null, frame), 0)
-  assert.equal(context.computeFabSafeRight({ left: 0, top: 0, bottom: 0, width: 0, height: 0 }, frame), 0)
-  // iframe 矩形不可用或缺字段：保守不让位，不凭空把卡片缩窄
-  assert.equal(context.computeFabSafeRight(ball, null), 0)
-  assert.equal(context.computeFabSafeRight(ball, { top: 0 }), 0)
-  assert.equal(context.computeFabSafeRight({ left: Number.NaN, top: 0, bottom: 10, width: 46, height: 46 }, frame), 0)
-})
-
 /** 造一个「SSH 页面跑在 iframe 里」的 vm 环境，用于测量 / 让位变量的行为闭环。 */
-function bootShell({ capsuleRect = null, ballRect = null, frameRect = null, topLevel = false, throwOnQuery = false } = {}) {
+function bootShell({ capsuleRect = null, frameRect = null, topLevel = false, throwOnQuery = false } = {}) {
   const style = new Map()
   const iframeDoc = {
     addEventListener() {},
@@ -450,9 +429,11 @@ function bootShell({ capsuleRect = null, ballRect = null, frameRect = null, topL
   }
   const element = rect => (rect === null ? null : { getBoundingClientRect: () => rect })
   const parentDoc = {
-    querySelector(selector) {
+    // 2026-10-07：父文档只剩壳窗控组一个查询对象（主题球已退役，原先的
+    // `#miasaki-switcher` 分支随 `measureShellFab()` 一并删除）。
+    querySelector() {
       if (throwOnQuery) throw new Error('SecurityError: cross-origin frame')
-      return String(selector).includes('miasaki-switcher') ? element(ballRect) : element(capsuleRect)
+      return element(capsuleRect)
     },
   }
   const win = { addEventListener() {} }
@@ -463,58 +444,57 @@ function bootShell({ capsuleRect = null, ballRect = null, frameRect = null, topL
   return { ctx, style }
 }
 
-test('syncChromeClearance：两条让位变量都由父视口实测写出，量不到归零', () => {
+test('syncChromeClearance：顶部让位量由父视口实测写出，量不到归零', () => {
   const capsuleRect = { width: 100, height: 26, bottom: 37 }
   const frameRect = { top: 0, right: 1540, bottom: 1530 }
-  const ballRect = { left: 1478, top: 1468, bottom: 1514, width: 46, height: 46 }
 
-  // ① 桌面壳浮层形态：卡片下移 45px（窗控下沿 + 8px 呼吸）、右缘留 76px（球安全线）
-  const shell = bootShell({ capsuleRect, ballRect, frameRect })
+  // ① 桌面壳浮层形态：卡片下移 45px（窗控下沿 + 8px 呼吸）
+  const shell = bootShell({ capsuleRect, frameRect })
   assert.equal(vm.runInContext('measureChromeClearance()', shell.ctx), 45)
-  assert.equal(vm.runInContext('measureShellFab()', shell.ctx), 76)
   vm.runInContext('syncChromeClearance()', shell.ctx)
   assert.equal(shell.style.get('--ssh-chrome-clearance'), '45px')
-  assert.equal(shell.style.get('--ssh-shell-fab-safe-right'), '76px')
+  // 2026-10-07：避主题球的安全线随球退役 —— 不得再被写出（回潮即失败）
+  assert.equal(shell.style.has('--ssh-shell-fab-safe-right'), false)
 
-  // ② 会话视图（iframe 在中栏，两块壳 chrome 都在 iframe 之外）：都归零，卡片按 32px 基数居中
-  const lower = bootShell({ capsuleRect, ballRect, frameRect: { top: 44, right: 800, bottom: 900 } })
+  // ② 会话视图（iframe 在中栏，壳窗控在 iframe 之外）：归零，卡片按 32px 基数居中
+  const lower = bootShell({ capsuleRect, frameRect: { top: 44, right: 800, bottom: 900 } })
   vm.runInContext('syncChromeClearance()', lower.ctx)
   assert.equal(lower.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(lower.style.get('--ssh-shell-fab-safe-right'), '0px')
 
-  // ③ 浏览器（没有壳 chrome）：归零，且不再写已退役的 --ssh-chrome-avoid-right
+  // ③ 浏览器（没有壳 chrome）：归零，且不写任何已退役的让位变量
   const plain = bootShell({})
   assert.equal(vm.runInContext('measureChromeClearance()', plain.ctx), null)
-  assert.equal(vm.runInContext('measureShellFab()', plain.ctx), null)
   vm.runInContext('syncChromeClearance()', plain.ctx)
   assert.equal(plain.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(plain.style.get('--ssh-shell-fab-safe-right'), '0px')
   assert.equal(plain.style.has('--ssh-chrome-avoid-right'), false)
+  assert.equal(plain.style.has('--ssh-shell-fab-safe-right'), false)
 
   // ④ 顶层窗口（浏览器直接打开 /ssh/）：归零
-  const top = bootShell({ capsuleRect, ballRect, frameRect, topLevel: true })
+  const top = bootShell({ capsuleRect, frameRect, topLevel: true })
   vm.runInContext('syncChromeClearance()', top.ctx)
   assert.equal(top.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(top.style.get('--ssh-shell-fab-safe-right'), '0px')
 
   // ⑤ 跨源读父文档抛错：静默降级为不让位，不冒泡
   const crossOrigin = bootShell({ throwOnQuery: true })
   vm.runInContext('syncChromeClearance()', crossOrigin.ctx)
   assert.equal(crossOrigin.style.get('--ssh-chrome-clearance'), '0px')
-  assert.equal(crossOrigin.style.get('--ssh-shell-fab-safe-right'), '0px')
 })
 
-test('悬浮窗形态的样式契约：遮罩居中 + 顶部让位 + 卡片按球安全线留边', async () => {
+test('悬浮窗形态的样式契约：遮罩居中 + 顶部让位 + 卡片宽度自适应', async () => {
   const css = await readFile(new URL('../styles.css', import.meta.url), 'utf8')
   assert.match(css, /\.overlay \{[^}]*display: flex; align-items: center; justify-content: center;/,
     '悬浮窗必须居中，不得退回贴右缘的抽屉')
   assert.match(css, /\.overlay \{[^}]*padding: var\(--ssh-chrome-clearance, 0px\) 0 0;/,
     '顶部让位要落在遮罩层的内边距上，卡片（含右上角 ×）才会整体落到壳窗控之下')
-  assert.match(css, /--ssh-modal-edge: max\(32px, var\(--ssh-shell-fab-safe-right, 0px\)\)/,
-    '卡片边距 = 32px 基数与球安全线取大值')
+  // 2026-10-07：原先这里是 `max(32px, var(--ssh-shell-fab-safe-right, 0px))`（避壳右下角主题球）。
+  // 球退役 ⇒ 边距退回 32px 常量；两条断言同时守住"基数"与"不得回潮"。
+  assert.match(css, /--ssh-modal-edge: 32px/, '卡片边距 = 32px 固定基数（内容区右下角已无壳浮层可避）')
+  // 只在**声明**层面禁回潮：注释里保留'2026-10-07 退役'的历史说明是允许的（见 styles.css 段首）。
+  assert.doesNotMatch(css, /--ssh-modal-edge:\s*max\(\s*32px\s*,\s*var\(--ssh-shell-fab-safe-right/,
+    '避主题球的安全线随球退役，不得回潮到 --ssh-modal-edge 的声明里')
   assert.match(css, /\.sheet \{[^}]*width: min\(var\(--ssh-modal-w\), calc\(100% - 2 \* var\(--ssh-modal-edge\)\)\)/)
   assert.match(css, /\.sheet \{[^}]*max-height: calc\(100% - 64px\)/,
-    '高度只留固定呼吸位：球在右下角，与卡片上下边界无关')
+    '高度只留固定呼吸位')
   assert.doesNotMatch(css, /--ssh-chrome-avoid-right/, '水平让位兜底随贴边抽屉形态一起退役')
 })
 

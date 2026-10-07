@@ -246,12 +246,14 @@ themes/
 | `startObserver()` | 监听 `body[data-ds-dark-theme]` 并再断言 | `if (yield) return`；新增 `html[data-mia-appearance]` / `[data-mia-skin]` observer |
 | `onReady()` | 首次应用 + 自愈巡检 | 增加 `recomputeYield()`，变化时重跑 `apply(current)` |
 
-**不改动**：`setAttr('data-miasaki-theme')`（装饰层与切换条仍依赖它）、桌宠通道、标题栏、关闭弹窗、
+**不改动**：`setAttr('data-miasaki-theme')`（装饰层与主题入口仍依赖它）、桌宠通道、标题栏、关闭弹窗、
 安全区几何、`localStorage` 持久化——让位只影响"配色与明暗"两件事。
 
-### 4.4 切换条成为第二入口
+### 4.4 主题入口成为第二入口
 
-desktop 的悬浮切换条（`#miasaki-switcher`）继续存在，但点击行为分两种：
+desktop 的**右上角窗控主题头像按钮**（`#miasaki-titlebar .tb-theme` + 面板 `#miasaki-theme-menu`；
+2026-10-07 前是右下角悬浮切换条 `#miasaki-switcher`，那颗球已退役、能力并入这颗同源头像）继续存在，
+但点击行为分两种：
 
 | 模式 | 点击行为 |
 |---|---|

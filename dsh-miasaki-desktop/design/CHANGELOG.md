@@ -2,6 +2,126 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-08 · 启动片头第二批素材入库：dreamsea / lagoon / bubbles（4 → 7 段）
+
+**触发**：用户分享上游插件 [lxj5820/dsh-boot-animation](https://github.com/lxj5820/dsh-boot-animation)
+（v0.2.0，MIT）称「启动动画可以拿来用」。澄清后意图 = **不装插件、只取素材**，让「设置 → 外观 →
+启动」的片头选择丸多三个选项（详见设计文档 §11）。
+
+**决策：只取素材不装插件**（与 §2.3 同纪律）。本机 DSH 正是 `0.2.0-rc.2`（与该插件实测版本吻合），
+但它替换的是 3080 侧内核启动页，与壳级 L2 视频层叠加 = 双重片头；且装它要改用户运行环境
+（profile junction + `cordis.patch.yml`）。素材路线复用全部既有机制：白名单 / 枚举 / `IDS` /
+部署清单 / 提取闸门，零新代码路径。
+
+**素材实测**（box walk + SHA256，内容经多模态逐段辨认）：深海环境蓝发女仆装动漫少女 + 气泡与
+水面光束，梦幻唯美、无文字水印，1280×720 H.264+AAC、moov 均已前置：
+
+| 上游 | id / label | 大小 (B) | 时长 | SHA256 前 16 位 |
+|---|---|---|---|---|
+| `1.mp4` | `dreamsea` / 深海绮梦 | 8,391,471 | 8.06s | `970afeb9b8a981de` |
+| `2.mp4` | `lagoon` / 碧海清凉 | 11,065,265 | 15.10s | `95794b99c3ae4c36` |
+| `3.mp4` | `bubbles` / 泡沫光束 | 5,195,581 | 12.42s | `585143d714778d48` |
+
+**授权**：上游 LICENSE 原文明示三段为作者自制动画、按同仓 MIT 分发 ⇒ 可再分发；
+`ui/intro/THIRD-PARTY-NOTICE.md` 重写为**两批两许可**（前四段 BSD-3 + 后三段 MIT）结构。
+**SHA 口径与第一批不同**：上游无官方 `clips.meta.js`，台账值 = 发布包字节实测。
+
+**接线（七处同改）**：`extract-intro-clips.mjs` 台账 +3 且 `readClip` 支持 **per-clip 上游**
+（repo/tag/dir，第一批常量回落为默认值）；`boot_intro.rs` `INTRO_IDS` `[&str;4] → [&str;7]`；
+`ui/loading.html` `IDS` +3；`deploy-local.ps1` `$introClips` +3（含「7 段」两处计数文案）；
+appearance `lib/config.js` `INTRO_CLIPS` 与 `client.js` `INTRO_OPTIONS` 同步；`ui/intro/` 产物 +3。
+
+**闸门**：① `intro-clips --check` **7/7 绿**；② `boot_intro.rs` 新增
+`intro_ids_pin_cross_line_contract`（`INTRO_IDS.len()==7` + 三段在位——加段不同改即红）；
+③ `loading-visual.test.js` **15 → 16 例**（新段 id 直译 `intro/intro-<id>.mp4` 路径）；
+④ appearance `client.test.js` 值域断言同步为八项（off + 七段），本线单测仍 **153/153**。
+
+**代价**：`ui/` 资产 **+23.5 MB**（第一批 +9.1 MB）⇒ exe 嵌入后再涨约 24 MB；**不重编码**
+（本机无 H.264 编码器，且「字节级与上游一致」正是闸门判据）。`lagoon` 段 15.10s 是全部七段里
+最长的——就绪慢时等得最久，但「就绪即切 / 点击跳过」既有行为不受影响。
+
+**实机待验（归用户）**：新三段在桌面壳加载页实播（WebView2 muted autoplay）；面板依次选七段
+各播一次；`deploy-local.ps1` 10/10（需先 `cargo build --release` 重编壳）。
+
+## 2026-10-07 · 桌宠设置页分组标题提档（与外观页同一份规格：14px/22/500 → 16px/24/500）
+
+**触发**：用户「我加的设置页，分栏设置标题与内容字体大小粗细都一样，改一下，适当区分标题」
+—— 点名的是**分组标题**（「显示与位置 / 外观与行为 / 状态呈现 / 主题联动」这种小节标题）。
+
+**问题**：`.mia-groupTitle` 与行标题 `.mia-title` **同为 14px**，字重只差一档（500 vs 400）
+⇒ 分组边界看不出来（该面板 4 个分组、共 20+ 行，只能靠 24px 组间距辨认）。
+
+**改法**：分组标题取官方 `ui-settings-models` `.title` 的 **16px/24/500**
+（`vendor/deepseek-harness/packages/client/ui-settings-models/src/client/ModelsSection.module.css:14`）。
+行标题 / 说明 / 控件 / 行距 / 组间距**一字未动**，字重也不动（500 是 16px 档的官方取值）。
+
+**两线同规格**：`dsh-miasaki-appearance/client.js` 与 `plugins/dsh-pet-panel/lib/client.js`
+各带一份 `PANEL_CSS`（九线零耦合、允许复制），**类名与取值刻意保持一致** ——
+改一处必须同改另一处，否则两页会漂成两种观感。
+
+**闸门**：`plugins/dsh-pet-panel/test/panel-settings.test.js` 的「风格契约：行式排版走 .mia-* 类」
+新增两条 —— ① 逐字断言 `16px/24/500`；② 解析 `font-size` / `font-weight` 断言分组标题
+**必须大于**行标题。**A/B 对照**：外观线同款断言已实测（退回旧值当场转红）。
+
+**口径**：`panel-settings.test.js` 仍 **29 例**（新增断言并入既有用例，不新增 `test()`）。
+
+## 2026-10-07 · 右下角主题悬浮球退役：切换能力并入右上角窗控头像按钮
+
+**触发**：用户「右下角的主题悬浮球有点碍事，把他的功能集成到右上角窗控小头像那里，做成一个按钮」。
+
+**性质**：不是「删一个 div」，而是**搬一个功能 + 退役一条跨线几何协议 + 迁移一个诊断位**。
+右下角那颗 46px 圆是内容区「发送 / 确认 / 连接」键密集区上的常驻浮层，历史事故三连都源于它
+（ssh 贴边抽屉的连接键被压 2026-09-26 → 弹层改居中悬浮窗 → 专门写一条「与球重叠为 0」的判据）。
+
+| 面 | 前 | 后 |
+|---|---|---|
+| 入口 | `#miasaki-switcher`：**右下角** 46px 悬浮圆 + `::after` 6px 呼吸光圈（`ms-ping`），hover 展开，z-index 99990 | **右上角窗控组里的主题头像按钮** `.tb-theme`（`.tb-btn` 家族：26×26 热区 + 16px 徽章图标），**点击**展开 |
+| 面板 | `.ms-panel` 挂在球内，`right:0; bottom:62px` **向上**展开 | `#miasaki-theme-menu` 挂 `.tb-group` 内（绝对定位子元素），`top:calc(100% + 8px); right:0` **向下**展开 |
+| 功能 | 三主题切换 / pure 明暗三档 / 提示文案 / 400ms 扫光 / localStorage / 桌宠人格联动 / appearance 让位双入口 | **逐字搬运**（分流逻辑一行未改） |
+| 关闭 | 鼠标移出 300ms 宽限 | 点面板外 / `Esc` / 选中后自动关，**并与**鼠标移出 300ms 宽限 |
+| 键盘 | 无（裸 `div`） | 按钮 `Enter`/`Space`/`ArrowDown`；面板项 `tabindex=0` + `Enter`；`role=menu` / `menuitemradio` / `aria-expanded` 同步 |
+| 形状 | `.tb-brand` 16px 静态徽章（`margin:0 4px`，只有 title 提示） | 升格为按钮 ⇒ **组宽 108 → 110px**（装 sidebar 终端键 136 → 138） |
+
+**四个设计决策**：
+1. **面板是 `.tb-group` 的绝对定位子元素**（不是按钮的子元素）—— 脱离 flex 流 ⇒ 不吃组宽，
+   `--ms-titlebar-reserve` 的 `ResizeObserver` 与契约 `chrome.bounds()` **零改动**自动正确；
+   若挂在按钮内部，面板右缘会被三键推开 86px、观感"悬空"。
+2. **点击展开而非 hover** —— 头像在窗口顶部，鼠标去点最小化/关闭必经此处；hover 会频繁弹出
+   176×210 面板压住官方会话头右端（官方控件让位带只有 `reserve` 130/158px）。hover 语义改留给
+   「鼠标移出面板 300ms 宽限关闭」。
+3. **容器 id 改 `#miasaki-theme-menu`** —— 语义正确，且让存量消费者（ssh 的 `measureShellFab()`）
+   **自然失效**（查不到 → `null` → 安全线归零，`computeFabSafeRight` 本就处理 null），
+   使"删球"与"跨线清理"可解耦。
+4. **`updateTitlebar()` 收窄为只兜底最大化键** —— 主题按钮的 `src`/`title`/`aria-expanded`
+   单一写者收口到 `03-switcher.js` 的 `syncThemeButton()`（原 `.tb-brand` 的写点在 06；
+   升级成按钮后两处各写一遍就是漂移源）。
+
+**连带改动（必改，非可选）**：
+- `05-sensors.js` 4 处排除集 `closest('#miasaki-switcher')` → `closest('#miasaki-titlebar')`。
+  **不改会误判**：面板里的 `.ms-name`/`.ms-sub`/`明暗`/`☀` 都是 `span`，会被 `scanEffort()`
+  当成页面的强度标签扫到（桌宠强度错乱）。
+- `02-core.js` diag 4 位（第 4/7/9/10 位 `sw`/`swTop`/`eSw`/`swCss`）改量 `.tb-theme`：
+  **位数与顺序不变**，保住「壳的主题入口是否在位 / 可点」这个远程排障信号（Rust 侧只整串比对
+  并落 `hash-diag` 日志、不解析语义，已核 `main.rs`）。同批把注入样式元素 id
+  `miasaki-switcher-css` → `miasaki-theme-css`（全仓唯一引用点就在这里）。
+- `08-ready.js`：删 `buildSwitcher()` 调用（面板随 `buildTitlebar()` 挂载）、1s 巡检改判
+  `#miasaki-theme-menu`、`refreshSwitcher()` → `refreshThemeMenu()`。
+- `verify-themes.mjs`：三处 `.ms-opt` 点击改为「先点头像开面板、再点项」的真实路径（`pickTheme()`），
+  存在性判据换新容器，**新增 6 项**主题入口用例（按钮在组内 / `role`+`tabindex`+`aria` /
+  面板默认收起 / **球与 `.ms-btn` 一个都不剩** / 点击展开 / `Esc` 收起）。
+
+**回归（本机实跑）**：`verify-all desktop` **40/40 全 PASS**（含 `cargo test` 164 例、注入脚本语法
+闸门、gen-init 三道自校验、patch verify ×6）；`themes/test/*.test.js` **9 文件 90 例全绿**
+（`contract.test.js` 20/20 —— 算术闸门正则未失配，`--ms-titlebar-reserve` 自动跟随未受影响）；
+`build-init` 三道自校验通过（13 片）。
+
+**实机待验**（需 MSVC 重编壳 + `deploy-local.ps1` + 重启；判据见
+[`../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md`](../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
+§3.1 同名行「E24 主题入口改版」）：右上角头像可点 → 面板向下展开
+且**不覆盖**三键 → 三主题逐一切换（含桌宠联动与 appearance 让位双入口）→ pure 明暗三档 →
+点外部 /`Esc` 关闭 → **右下角无球** → 画布与 SSH 视图内面板仍可开（`IS_TOP` 守卫）→
+sidebar 终端键仍在组首位。
+
 ## 2026-10-05（续五）· 混合 DPI 修复补记：真仓编译暴露 7 个错误 —— 「harness 绿」在这类改动上是无效证据
 
 **这条既是补记，也是一次假绿复盘。** 同日稍早把混合 DPI 修复写进 `model.rs` / `window.rs` /

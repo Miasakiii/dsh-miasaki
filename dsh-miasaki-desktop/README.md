@@ -126,7 +126,11 @@ $pwd  = ConvertTo-SecureString -String "<导出密码>" -Force -AsPlainText
 
 **构建环境三件套**（2026-09-23 实测，受限终端/沙箱里跑 `npm run tauri build` 必看）：
 
-1. `cargo` 可能不在 PATH——rustup 实际装在 `%USERPROFILE%\.cargo\bin`，先补上；
+1. `cargo` 可能不在 PATH——rustup 实际装在 `%USERPROFILE%\.cargo\bin`，先补上：
+   `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"`。
+   **不补的后果（2026-10-07 实跑踩到）**：`npm run build` 立刻以
+   `failed to run 'cargo metadata' … program not found` 秒退，**`dist/` 一个字节都不动** ——
+   于是紧接着的 `npm run deploy` 会因 `dist/ui/intro/` 停在旧素材而 abort。两个红其实是同一个根因；
 2. Rust release 编译要 MSVC `link.exe`——没有的终端先执行
    `"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"`
    （`where.exe link` 可自检）；
@@ -393,8 +397,15 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 | `zafkiel` | 刻刻帝 · 永夜钟阁 | 暗夜基底 · 绯红交互 · 鎏金装饰 · 表盘水印 · 金色光标 |
 | `kurkuriel` | 狂狂帝 · 白夜逆钟 | 骨白基底 · 血绯交互 · 枪铁装饰 · 破裂表盘 · 星座母题 |
 
-切换：右下角悬浮按钮 → 悬停展开三主题；每个主题悬浮显示各自的介绍文案（不再全部是当前主题的提示），
-选择持久化于 localStorage，重启保持。
+切换（**2026-10-07 改版**）：**右上角窗控组里的主题头像按钮**（`.tb-theme`）→ 点击展开三主题面板
+（面板向下展开、右缘与窗控组对齐）；每个主题悬浮显示各自的介绍文案（不再全部是当前主题的提示），
+选择持久化于 localStorage，重启保持。面板支持点外部 / `Esc` 关闭；键盘 `Enter`/`Space` 开合、
+面板内 `Enter` 选中（`aria-expanded` 同步）。
+
+> 原先是**右下角**那颗 46px 主题悬浮球（hover 展开、带呼吸光圈）。它压住内容区右下角 —— 那正是
+> 「发送 / 确认 / 连接」键的密集区，历史事故三连（ssh 抽屉确认键被压 → 弹层改居中悬浮窗 →
+> 专门写一条「与球重叠为 0」的判据）。**整体退役**，切换能力并入窗控组里那颗**同源**的
+> 16px 主题徽章（升格为 26px 按钮）。详见 `design/CHANGELOG.md` 2026-10-07 条。
 
 ## 软件头像（启动器图标）
 
@@ -423,7 +434,7 @@ appearance 配置。
 | 项 | 说明 |
 |---|---|
 | 入口 | DSH 页面 设置 → **外观** → 「启动」→ 启动片头（选择丸）/ 片头声音（开关） |
-| 片库 | 四段：**品牌**（出厂）/ 赛博朋克 / 数字角色苏醒 / 启动问题 —— 视频元素叠加信息层，`object-fit: cover` 铺满 + 上下遮罩渐变过渡到主题底色 |
+| 片库 | 七段：**品牌**（出厂）/ 赛博朋克 / 数字角色苏醒 / 启动问题 / 深海绮梦 / 碧海清凉 / 泡沫光束 —— 视频元素叠加信息层，`object-fit: cover` 铺满 + 上下遮罩渐变过渡到主题底色 |
 | 声音 | **出厂静音**；静音同时是 WebView2 autoplay 放行的前提，出声是显式选择 |
 | 生效时机 | **下次启动应用时生效** —— 加载页只活在启动头几秒，刻意不做热重载 |
 | 时序 | 后端就绪 ⇒ 300ms 淡出 → 进 DSH（「就绪即切」）；等待期视频播完 ⇒ 停尾帧 2s 后回落纹章层；**点击 / 任意键可跳过**（只切视频层，不干扰就绪链路） |
@@ -431,12 +442,15 @@ appearance 配置。
 | 降级链 | 系统开「减少动画效果」/ 视频解码失败 / 素材缺失 / 配置缺失或损坏 ⇒ **一层都不建**，回落既有纹章层，启动照常且不报错 |
 | 「关闭」 | 与原生一致（L2 整层不注入，行为等于 2.0 现状） |
 | 实现 | `src-tauri/src/boot_intro.rs` —— 启动最早瞬间读一次 `config.json` 的 `boot` 板块（**先于宿主**，故本机旧配置需由 appearance 新版迁移落盘一次）；`ui/loading.html` 的 L2 层负责播放与退场 |
-| 素材 | `ui/intro/` 四段 mp4（第三方 BSD-3-Clause，**署名义务见 [`ui/intro/THIRD-PARTY-NOTICE.md`](ui/intro/THIRD-PARTY-NOTICE.md)**）；`scripts/extract-intro-clips.mjs --check` 按「字节数 + SHA256 前 16 位」逐段比对台账，是 `verify-all desktop` 的一项 |
+| 素材 | `ui/intro/` 七段 mp4（**两种第三方许可**：前四段 BSD-3-Clause，后三段 MIT，**署名义务见 [`ui/intro/THIRD-PARTY-NOTICE.md`](ui/intro/THIRD-PARTY-NOTICE.md)**）；`scripts/extract-intro-clips.mjs --check` 按「字节数 + SHA256 前 16 位」逐段比对台账，是 `verify-all desktop` 的一项 |
 | **不含** | 3080 侧 appearance「首帧启动画」（`motion.bootSplash`，独立一层，行为未变）、片头与 splash 的接力让位（实测双重片头观感后再定） |
 
 设计与决策全文（含素材授权、就绪赛跑方案对比、验收矩阵）：[`design/2026-10-04-boot-intro-video.md`](design/2026-10-04-boot-intro-video.md)；
 设置面板一侧见 [`../dsh-miasaki-appearance/README.md`](../dsh-miasaki-appearance/README.md)「启动片头（桌面壳）」。
-跨线同步点：`lib/config.js` 的 `INTRO_CLIPS` ↔ `boot_intro.rs` 的 `INTRO_IDS` ↔ 提取脚本台账，**新增一段须三处同改**。
+跨线同步点（**加一段须七处同改，2026-10-08 起七处都已有测试/闸门钉住**）：appearance
+`lib/config.js` 的 `INTRO_CLIPS` ↔ `client.js` 的 `INTRO_OPTIONS` ↔ `boot_intro.rs` 的 `INTRO_IDS`
+↔ `ui/loading.html` 的 `IDS` ↔ `deploy-local.ps1` 的 `$introClips` ↔ 提取脚本台账（`scripts/extract-intro-clips.mjs`）
+↔ `ui/intro/intro-<id>.mp4` 产物本身。
 
 ## Q 版桌宠（Codex 风格）
 
@@ -623,11 +637,13 @@ appearance 配置。
   （`decorations(false)`）后，桌面壳对 DSH 页面**零布局侵入**——无 32px 顶带、无下推、
   无卡片，页面从 y=0 起渲染，顶部控件（会话头「对话/轨迹/用量」页签、Session 日志等）
   位置与 web 端完全一致；窗控三键以**无壳裸键**直接落在右上角（v3 的悬浮胶囊外壳已删：
-  无底色/无边框/无毛玻璃/padding，观感接近标准无边框应用；主题徽章 16px 保留在按钮组
-  左侧，为启动页唯一主题标识——用户拍板 2026-09-06），hover 底色只落在单按钮上
+  无底色/无边框/无毛玻璃/padding，观感接近标准无边框应用；**主题头像按钮**（2026-10-07 由 16px
+  静态徽章 `.tb-brand` 升格：26×26 热区、点击开合主题面板，见上节「三个主题」；仍是启动页
+  唯一主题标识 —— 徽章形态由用户 2026-09-06 拍板）在按钮组里、终端键右侧），hover 底色只落在单按钮上
   （Win11 原生同款，关闭键 hover 红底）。**唯一页面级调整 = 右上角安全区让位**（2026-09-10
-  晚重写；**2026-09-27 实机重叠事件后订正取值口径**）：裸键组实测宽 108px，加 `right:8px` 后恒占
-  距窗口右缘 `[8,116]px`；sidebar 线的终端键插进组首位后组宽 136px ⇒ 占 `[8,144]px`。
+  晚重写；**2026-09-27 实机重叠事件后订正取值口径**）：裸键组实测宽 **110px**（2026-10-07 起 —
+  主题按钮 26 + 三键 26×3 + gap 2×3；此前的 16px 徽章形态是 108），加 `right:8px` 后恒占
+  距窗口右缘 `[8,118]px`；sidebar 线的终端键插进组首位后组宽 **138px** ⇒ 占 `[8,146]px`。
   让位量 `--ms-titlebar-reserve` 自 2026-09-27 起由壳的 `ResizeObserver` 观测 `.tb-group` 实宽
   **自动计算**（组宽 + 8 + 12），静态兜底取**注入形态上界** `156px` —— 兜底是「无人写」时的最后
   防线，**宁多勿少**：按「无终端键」取 128px 时，sidebar 插键后安全线整整少让一格（28px），官方
@@ -694,7 +710,7 @@ appearance 配置。
 ```
 desktop/
 ├─ ui/loading.html           # 本地唤醒页（探活/拉起状态 + 重试 + 随主题换肤/统一标题栏）
-├─ ui/intro/                 # 视频片头素材：四段 mp4（第三方 BSD-3-Clause，署名见
+├─ ui/intro/                 # 视频片头素材：七段 mp4（前四段 BSD-3 / 后三段 MIT，署名见
 │                            #   THIRD-PARTY-NOTICE.md；台账闸门 = extract-intro-clips.mjs --check）
 ├─ themes/                   # 主题源（原创设计）
 │  ├─ pure.css / zafkiel.css / kurkuriel.css
@@ -804,10 +820,16 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
   host 侧 `lib/index.js` 为空壳。
 - **降级**：非桌面端（普通浏览器打开 DSH，无 `window.__MIASAKI_BOOTED__`）面板提示
   命令不会生效，不阻断设置页。
+- **排版**：整页照官方「通用设置」页规格 —— 行 = `FontSizeRow.row`（0.5px 分隔线 + 16px 行距）、
+  行标题 14/22/400、说明 12/18；**分组标题（显示与位置 / 外观与行为 / 状态呈现 / 主题联动）
+  16/24/500**（官方 models `.title` 取值；2026-10-07 由 14/22/500 提档 —— 与行标题同字号时
+  整页看不出分组）。控件一律走官方 primitives（`Switch` / `SegmentedControl` / `Button`），
+  配色只走 `--dsw-*` 令牌。
 
 安装：同免费模型池 —— profile `package.json` 的 `dependencies` + `dsh.profile.bundles`
-加 `dsh-pet-panel`（file: 依赖），profile 目录 `pnpm install` 后核对
-`node_modules/dsh-pet-panel/lib/*` 与源码哈希一致；host 重启后生效。
+加 `dsh-pet-panel`（**`link:` 依赖，不是 `file:`** —— 2026-09-29 实测：`file:` 装的是快照，
+改源码后重启也不生效且不报错），profile 目录 `pnpm install` 后核对
+`(Get-Item <profile>\node_modules\dsh-pet-panel).LinkType` 为 `Junction`；host 重启后生效。
 
 ## DSH 插件：会话日志下载入口迁移（`plugins/dsh-session-log-move/`）
 

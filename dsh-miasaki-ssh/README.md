@@ -77,7 +77,7 @@ dsh plugin --profile <profile> add @miasaki/dsh-ssh
 ```bash
 pnpm install
 pnpm run build   # node --check 全部入口与 lib/
-pnpm test        # 310 例单测
+pnpm test        # 309 例单测（2026-10-07：退役避主题球让位链，净 −1 例）
 ```
 
 仓库级统一回归：`node ../scripts/verify-all.mjs ssh`（31 个检查项）。
