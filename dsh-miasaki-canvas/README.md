@@ -20,7 +20,6 @@
 ## 安装
 
 ```bash
-# 尚未发布到 npm —— 发布后：
 dsh plugin --profile <profile> add @miasaki/dsh-canvas
 ```
 

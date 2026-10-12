@@ -8,12 +8,17 @@
 
 [![verify-all](https://github.com/Miasakiii/dsh-miasaki/actions/workflows/verify-all.yml/badge.svg)](https://github.com/Miasakiii/dsh-miasaki/actions/workflows/verify-all.yml)
 
-> ### ⚠️ 尚未发布到 npm —— 当前处于源码阶段
+> ### ✅ 已发布到 npm（2026-10-12 首发）
 >
-> 项目正在**逐线完善**：[回归矩阵 §3.0 实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)
-> 共 **118 项判据、已验 54 项**（静态回归 **182 项**全绿，但那不等于"在你机器上能用"）。
-> **质量闭环之前不会发布** —— 因此本页出现的 `dsh plugin add` 命令**暂时用不了**，
-> 想现在试请走[源码安装](#安装)。
+> 七个插件全部上架，`dsh plugin add` **可以直接用了**：
+>
+> ```bash
+> dsh plugin --profile web add @miasaki/dsh-canvas
+> ```
+>
+> **进度如实说**：静态回归 **182 项**全绿、分发包 **7/7** 实测可打包、依赖声明与脱敏逐项核过；
+> 但[实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 仍只到 **54 / 120 项** ——
+> 装机遇到问题请[开 issue](https://github.com/Miasakiii/dsh-miasaki/issues)，别自己扛。
 
 ---
 
@@ -34,7 +39,6 @@ DSH 原生会话始终是唯一事实来源——画布只是它的视图。
 | **不变本体** | 不改系统提示、不改模型请求、不改工具 schema |
 
 ```bash
-# 尚未发布到 npm —— 发布后：
 dsh plugin --profile web add @miasaki/dsh-canvas
 ```
 
@@ -84,24 +88,29 @@ Windows 桌面壳：双击 EXE → **全屏视频开机片头**（七段可选�
 > `dsh plugin` **必须带 `--profile <名字>`** —— 插件是按 profile 装的。
 > 常见取值：`web`（浏览器 GUI）、`desktop`（官方桌面端），或你自建的名字。
 
-### 现在：从源码安装
-
-clone 本仓后，以 `link:` 方式装进 profile（改代码即时生效）：
-
-```bash
-dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
-# 换目录名即装其它线；装完重启 DSH，再刷新页面
-```
-
-各线 README 写有该线的依赖安装与本体补丁步骤（部分线需要）。
-
-### 发布后（尚未发生）
+### 从 npm 安装（推荐）
 
 ```bash
 dsh plugin --profile web add @miasaki/dsh-canvas
+# 换包名即装其它插件：@miasaki/dsh-ssh / @miasaki/dsh-sidebar / @miasaki/dsh-appearance
+#                     @miasaki/dsh-dual-model / @miasaki/dsh-token-monitor / @miasaki/dsh-free-model
+# 装完重启 DSH，再刷新页面
 ```
 
+各线 README 写有该线的本体补丁步骤（部分插件需要，补丁文件随包分发）。
+
 卸载：`dsh plugin --profile web remove <包名>` —— 依赖与插件层一并移除。
+
+### 从源码安装（改代码即时生效）
+
+clone 本仓后，以 `link:` 方式装进 profile：
+
+```bash
+dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
+```
+
+> **用 `link:` 不要用 `file:`** —— `file:` 会把包**复制**进 profile（是快照、不跟源码），
+> 症状是「改了代码、重启也不生效」且不报任何错。
 
 ### 兼容性
 

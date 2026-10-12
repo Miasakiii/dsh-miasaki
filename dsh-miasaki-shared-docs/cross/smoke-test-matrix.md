@@ -48,6 +48,40 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > 详见 [desktop CHANGELOG](../../dsh-miasaki-desktop/design/CHANGELOG.md) 与
 > [appearance CHANGELOG](../../dsh-miasaki-appearance/design/CHANGELOG.md) 当日条。
 
+> **2026-10-12 首发已发布（7/7）**：七个插件全部上架 npm，`dsh plugin add` 可用 ——
+> `@miasaki/dsh-canvas@0.5.0` / `@miasaki/dsh-appearance@0.1.0` / `@miasaki/dsh-dual-model@0.1.3` /
+> `@miasaki/dsh-free-model@0.4.0` / `@miasaki/dsh-sidebar@0.10.0` / `@miasaki/dsh-ssh@0.1.0` /
+> `@miasaki/dsh-token-monitor@0.6.1`。**发布前处置**：① 上一批的分发就绪订正（元数据 + `files`
+> + 各线 README 去掉「尚未发布」字样 —— **那行会随包印在 npm 页面上**）；
+> ② 全量回归 **182 项十类全 PASS**；③ `npm publish --dry-run` **7/7**。
+> **发布中两个真实的坑（都值得记）**：
+> ⓐ **2FA**：账号是 `auth-and-writes` ⇒ publish 返回 `EOTP`，必须用能 bypass 2FA 的凭据。
+> 本次用 granular token 写进 `%TEMP%` 的**临时 userconfig**，`npm publish --userconfig` 指向它、
+> 发完即删 —— **全程没有碰用户原有的 `~/.npmrc`**（那是可复用的隔离手法）。
+> ⓑ **首次发布的 packument 索引有延迟**：实测 canvas 从占位版本 `0.0.0-stage` 创建到 `0.5.0`
+> 公开可见隔了 **56 秒**；这期间 `npm view` 与 registry API 都返回 **404**，而 `npm publish` 报的
+> `E403 cannot publish over the previously published versions` **才是权威判断**（= 已发布成功）。
+> 当时据 404 误判成「只有 canvas 成功、其余 6 个没上去」，实际 **7/7 全部成功**，只是尚未索引。
+> **纪律（新增）**：判断发布结果以 registry 的**冲突响应（E403/E409）**为准，
+> **不要相信刚发完的 404** —— 首次发布的索引延迟会持续数十秒到数分钟。
+> 根 README 门面同批改写（「尚未发布」块 → 「已发布」块、安装节 npm 与源码主次对调），
+> 并**如实保留**实机验收进度 **54 / 120** —— 发布不等于质量闭环。
+
+> **2026-10-12 分发就绪订正（不动分母与台账）**：对 7 条可分发线做一次分发就绪检测，硬事实三条 ——
+> 7 个包名在 registry 上**仍全是 404**（与根 README「尚未发布」一致）、本机 npm **未登录（E401）**
+> （当前发不出去）、`npm pack --dry-run` **7/7 成功**且 README/LICENSE 均随包。
+> 本批改动**全部在 `package.json`，零插件行为变化**：① 7 包补 `repository`（含 `directory`）/
+> `homepage` / `bugs` —— 此前全缺，而 npm 正是**靠 `repository` 重写 README 内的相对链接**，
+> 缺失即让各线 README 里 16 处 `design/` 类链接在 npm 页面上全部断链；② free-model 补 `patches`
+> 进 `files`（见上条 2026-10-07 的订正）；③ appearance / dual-model / ssh 剔除 `test/`，
+> appearance 另剔除 `scripts/`；④ free-model 与 usage 补 `engines: node >=22.19.0`。
+> **`pnpm-workspace.yaml` 判定为「按需」而不是口径分歧**（sidebar 的 `node-pty`、ssh 的
+> `ssh2`+`cpu-features` 靠它 `allowBuilds` 跳过 native 构建；canvas 无 native 依赖故无此文件），**不改**。
+> **分母与台账不变**：全量 182 项、`repo` 7、台账 119 项均未动 —— 本批不新增验收判据；
+> 闸门复核全绿：**全量 182 项 / 十类全 PASS（exit 0）** —— 其中 `silent-guards` R4 声明缺口 = 0、
+> `md-links` 186 个入库文档 / 407 条相对链接全解析、`style` 新增 0、`lock-sync` 4 个锁文件全一致。
+> 逐线记录见各线 `design/CHANGELOG.md` 的 2026-10-12 条。
+
 > **2026-10-07 free-model 15 → 16 项（上游补丁：静默化 → 标题层级 → 升级路径）**：用户点名「去掉右下角
 > 弹窗公告，以后有更新在免费模型设置页提醒」—— 补丁锚点 **5 → 12 处**（静默化五处：公告 / 可升级 /
 > 热重载三条推送通道 + 提醒条组件与挂载；标题层级一处；升级超时一处），`verify-all free-model`
@@ -57,7 +91,11 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > **同日实测一条硬事实**：上游 **2.0.0** 把网页半身改成多标签壳 ⇒ 本补丁 12 处锚点只有 8 处还能命中
 > （3 处 `drift`，另 1 处是「`remove` 类判据在上游改写目标时给绿灯」的误导性 applied）——
 > **升级前必须先预判**，命令与判据局限写进补丁 README 的「升级前先预判」一节。
-> 本线包版本不变（仍 `0.4.0` —— `patches/` 不在 npm `files` 清单里，发布物未变）。
+> 本线包版本不变（仍 `0.4.0` —— 当时 `patches/` 不在 npm `files` 清单里，发布物未变）。
+> **2026-10-12 订正**：该前提已不成立。分发就绪检测发现本线 README 有 3 处相对链接指向
+> `patches/dsh-our-free-model/`（含操作步骤 `node patches/dsh-our-free-model/patch.mjs`），
+> 而补丁不随包分发 ⇒ 从 npm 装的用户照 README 走会找不到文件、npm 页面上那 3 个链接也是死链；
+> `patches` 已补进 `files`（tarball 条目 12 → 17）。包版本仍 `0.4.0`（未发布，无需升版本）。
 > 详见 [免费模型 CHANGELOG](../../dsh-miasaki-free-model/design/CHANGELOG.md) 当日条。
 
 > **2026-09-30（本轮）口径 168 → 173**：三处静默缺口（K3/K4/K5）与两道缺席闸门（I5 围栏 / I1 账本身份）同批落地 ——
@@ -228,7 +266,9 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > **勾选口径**：验完一项把 `- [ ]` 改成 `- [x]`，行尾补日期与一句结论（可指向截图/证据路径）。
 > 判据正文在各 §（括号内标注），本节只做登记、不重复判据。
 >
-> **状态：54 / 119 项已验收**（**分母口径 = §3.0 台账里的 checkbox 总数**）。
+> **状态：54 / 120 项已验收**（**分母口径 = §3.0 台账里的 checkbox 总数**）。
+> **2026-10-12（续）再新增 1 项（E28 失败页一键安装 DSH 本体，分母 119 → 120）** ——
+> 用户「桌面端应该要检测宿主机是否有 DSH 本体，没有就装一个适合的」；判据正文就在 E28 行内，勾选数不变。
 > **2026-10-12 新增 1 项（E26 拖动健壮性三修，分母 118 → 119）** —— 用户报障「桌宠拖不动」
 > 的取证结论（判据正文 §3.2.4，设计 `pet-reference-benchmark.md` R16）；勾选数不变。
 > **2026-10-08 增勾 36 项，证据口径 = 用户日常使用确认**（用户原话「日常用实机可以勾了」）——
@@ -417,6 +457,7 @@ node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fl
 > **③⑨ 本轮新增判据并已实测**（CDP 探针在 `loading.html` 上抓到 `★ 片头层在场`、`video.src = intro-brand.mp4` 跟随配置；`page-load` 一次干净进入）；
 > **⑥ 失败出口日志级已验**，但加载页上的「重试 / 恢复选项」按钮**仍未截图确认**；**⑦ 仍待走查**。
 > 耗时实测 **7.0s**（停机 3s + 后端启动 4s；修复前 9.0s）。
+- [ ] E28 **失败页一键安装 DSH 本体（2026-10-12 新增，需 MSVC 重编壳 + 重启桌面壳）**：① **缺失路径** —— 在没装 DSH 的机器上启动（可用把 `%APPDATA%\npm\node_modules\@deepseek-ai` 临时改名模拟）⇒ 失败页动作组出现「**安装 DSH**」；点击后按钮置灰、`diag-note` 显示「正在安装…」、`pet.log` 出现 `install-dsh: 目标 0.2.0-rc.2（latest=0.2.0-rc.2）` ⇒ **装完自动继续启动**（不必再点「重试」），日志见 `install-dsh: 完成 — 已安装 DSH …`；② **缺 Node 路径** —— 把 node 移出 PATH 后启动 ⇒ 点「安装 DSH」应报出「宿主机找不到 node.exe…必须先装 Node.js」，**不得**笼统说「安装失败」，更**不得**擅自去装 Node（副作用边界）；③ **版本护栏** —— 把 `…\node_modules\@deepseek-ai\dsh\package.json` 的 `version` 改成 `0.1.5` 后刷新 ⇒ 页面初始化即揭示「不在支持区间…」且按钮文案为「**装合适版本（当前 0.1.5）**」；改 `0.3.0` 同样触发（**上界不含**）；改 `0.1.7-rc.2` 则**不得**触发（预发布按三元组比较 —— 现役 rc 版本必须被判为支持，这正是严格 semver 会踩的坑）；④ **长任务不卡 UI** —— 安装进行中窗口仍可拖动、按钮置灰而非假死；⑤ **防重复** —— 安装中连点不得并发跑第二个 npm。
 - [ ] E22 契约 v1.1 写能力七条（§3.1「契约 v1.1」行；**编号 2026-10-05 订正** —— 本项原也编号 E18，与上一行「M4.1 边缘停靠」重复，勾选时曾产生歧义）：`theme.set('kurkuriel')` 切主题；`window.controls.minimize()` 最小化；`.maximize()` 最大化 / 还原切换；`.close()` **隐藏到托盘**（不是退出）；`theme.set('bogus')` 返回 `false` 且无任何副作用；`controls.min` / `.max` 为 `undefined`（内部协议名不外泄）；SSH / 画布 iframe 内该对象仍只有三字段（写能力不泄漏到子 frame）
 - [ ] E19 W5 自更新降级五条（§3.1「W5」行）：未配置 ⇒ 提示配置文件路径且**不发网络请求**；配真实 `feed` ⇒ 弹「发现新版本」选「是」打开系统默认浏览器到 `page`；`feed` 写 `0.1.0` ⇒ 提示「已是最新版本」；断网 / `feed` 不可达 ⇒ **可读的失败提示**（不静默、不假装已最新）；全程**不出现**任何下载写盘或安装动作
 - [ ] E20 模型连通性探测面板（§3.7 八项）：`step` 的 `step-5-preview` 点「测试连通性」⇒ 绿色「可用 · Nms」（v1 误报文案不再出现即达标）；错 key ⇒ 「认证失败」且握手档 401 即终止（不产生生成调用）；错模型 ID ⇒ 「模型 ID 未注册或拼写错误」（不是 401、不是原始错误串）；`https://127.0.0.1:9` ⇒ 「无法连接」；挂起地址 ⇒ 「连接超时（15s）」；移除插件重启 ⇒ 降级目录探测并附提示（**不白屏、不永久「测试中…」**）；`api` 属三种协议之外 ⇒ 「暂不支持探测」不发请求；各项执行后 `~/.dsh/settings.yaml` 内容未被改动
