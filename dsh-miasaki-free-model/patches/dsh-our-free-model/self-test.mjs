@@ -2,7 +2,7 @@
 /**
  * 本补丁的**离线自证**：不改真文件、不起子进程，只回答一个问题 ——
  *
- *   「这十一处锚点，在**当前这台机器上的上游版本**里还成立吗？」
+ *   「这十二处锚点，在**当前这台机器上的上游版本**里还成立吗？」
  *
  * 为什么必须有它：上游插件的应用内升级会覆盖 `client.js`（清单内文件），补丁一定会被
  * 冲掉；而"能不能重打"取决于锚点是否仍然唯一命中。等升级完手工发现，代价是"设置页少了
@@ -40,7 +40,7 @@ const drifted = before.filter(row => row.state === 'drift');
 if (drifted.length > 0) {
   console.error('[ofm-patch self-test] ✗ 锚点与当前上游版本不匹配：');
   for (const { edit } of drifted) console.error(`    · ${edit.id}（${edit.why}）`);
-  console.error('  照 patches/dsh-our-free-model/README.md 的「升级后重新对齐」一节更新 EDITS 后再跑。');
+  console.error('  照 patches/dsh-our-free-model/README.md 的「⚠️ 升级后必须重打 / 升级前先预判」两节更新 EDITS 后再跑。');
   process.exit(1);
 }
 
@@ -93,7 +93,14 @@ const checks = [
   ['左栏名字已改为「免费模型」', text.includes("label: '免费模型',")],
   ['注入组件在场', text.includes('function PlatformScanPanel()')],
   ['新分区挂在模型清单之后', text.includes("title: '本机自配平台'")],
-  ['「公告中心」分区那一行已消失', !text.includes("h(Section, { title: t('section.news')")],
+  // 2.1.0 的多页壳里"模型清单"有两份（免费模型页 `only: 'free'` / EAC 页 `only: 'eac'`）。
+  // 这条钉住"我们挂的是免费模型页那一份"——上游哪天改了这行的参数，这里先红，
+  // 而不是等用户发现「本机自配平台」跑到了 EAC 页上。
+  ['注入点落在「免费模型」页的模型清单（不是 EAC 页）',
+    text.includes("h(UpdateNotice, {}),\n        h(Section, { title: t('section.models'), hint: t('section.modelsHint') }, h(Roster, { summary: data, t, onBench: bench, benches, auth: eacAuth, eacLogin, only: 'free' })),")],
+  // 2.1.0 起公告中心在**免费模型页与 EAC 页各有一份**（两条 remove 锚点各管一处），
+  // 所以判据查的是"整个调用点形态都不在场"，而不是某一行。
+  ['两处「公告中心」分区都已消失', !text.includes("h(Section, { title: t('section.news')")],
   ['首启公告注册已消失', !text.includes("ctx.slots.inject('settings.onboarding'")],
   ['i18n 字典未被改动（只删渲染、不删词条）', text.includes("'section.news'") && text.includes("'toast.updateBody'")],
   // ── 静默化（2026-10-07）────────────────────────────────────────────────────
@@ -108,23 +115,32 @@ const checks = [
   ['热重载后的右下角提示整块移除', !text.includes('ofm.reloadedAt') && !text.includes("'our-free-model: reload notice'")],
   ['更新提醒条已注入并挂在页首', text.includes('function UpdateNotice()') && text.includes('h(UpdateNotice, {})')],
   // 标题层级（2026-10-07）：分区标题必须高于卡片名（13.5px/650）——原来 14px/650 只差 0.5px，
-  // 分区与内容看不出层级（用户点名）。判据写成整条声明：回到 14px 即红。
+  // 分区与内容看不出层级（用户点名）。判据写成整条声明：字重与字距照抄上游 2.1.0（680 /
+  // -.2px），只有字号是 16px；上游改了这两项而字号没跟 ⇒ 这里先红。
   ['分区标题已提档到 16px（与卡片名 13.5px 拉开）',
-    text.includes('.ofm_sec_title{font-size:16px;font-weight:650}')],
-  // 自升级超时（2026-10-07，用户截图报红框 `signal is aborted without reason`）：
-  // `api()` 的 8 秒超时对 `/update/apply` 必然不够（manifest 15s + 每路下载 30s + 安装 + 热重载），
-  // 而且真实失败原因随 500 到达时客户端已断开 ⇒ 用户只看到一句无信息量的 abort 报错。
-  // 判据是"两处调用点都不再走 8 秒超时的 post"，且长超时辅助函数确实在注入片段里。
-  ['升级请求不再走 8 秒超时的 post（两处调用点）',
-    !text.includes("post('/update/apply', {})") && text.includes('async function ofmApplyUpgrade()')],
-  ['升级失败原因透传路径在场（读服务端 error 再抛）',
-    text.includes("payload?.error ?? `HTTP ${response.status}`") && text.includes('240000')],
+    text.includes('.ofm_sec_title{font-size:16px;font-weight:680;letter-spacing:-.2px}')],
+  // 自升级超时（2026-10-07 用户截图报红框 `signal is aborted without reason`；2026-10-12 退役）：
+  // 上游 2.1.0 自己把那次调用改成 `post('/update/apply', {}, 600_000)`（`post` 第三参数即超时）
+  // ⇒ 本补丁那处 replace 规则**退役删除**，不再改写上游代码。
+  // **哨兵断言**：上游不得退回"不带超时的 post"形态 —— 那样 8 秒 abort 的老毛病会复现，
+  // 届时必须把 `apply-upgrade-long-timeout` 规则加回来（历史与判据见 patch.mjs §【四】）。
+  ['上游升级调用未退回短超时形态（退役规则的哨兵）',
+    !text.includes("post('/update/apply', {})")],
+  // 而我们注入的提醒条那一颗「立即升级」按钮仍走自己的 240 秒长超时（上游没有这个组件）。
+  ['提醒条的升级按钮走 240 秒长超时',
+    text.includes('async function ofmApplyUpgrade()') && text.includes('240000')],
   // 反向判据：设置页里"保存失败"的即时应答必须留着 —— 静默化不该连操作反馈一起吞掉。
   ['设置页保存失败的错误提示仍保留', text.includes("t('settings.failed')")],
   // 注入源码用的是上游 factory 作用域里的名字；上游哪天重命名，这里先红，
   // 而不是等到用户打开设置页看到白屏。
-  ['注入组件引用的上游帮助函数都还在',
-    ['async function api(', 'const post =', 'const Button =', 'function useAsync(', "const API = '"].every(mark => text.includes(mark))],
+  // 2.1.0 起 `API` 由字面量改成 IIFE（`const API = (() => { … new URL('api/our-free-model', document.baseURI).pathname … })()`），
+  // 判据因此从 `"const API = '"` 放宽为 `'const API = '` —— 只要求"这个名字仍有常量绑定"，
+  // 不绑定定义形态（形态一改就红的断言，红的是断言自己）。
+  // `function kilo(` 是 2026-10-12 补上的：`inject/platform-panel.js` 一直在用它，
+  // 而这份清单此前漏了它 —— 上游改名时不会有人提醒。
+  ['注入组件引用的上游名字都还在',
+    ['async function api(', 'const post =', 'const Button =', 'function useAsync(', 'const API = ', 'function kilo(']
+      .every(mark => text.includes(mark))],
 ];
 
 let ok = checks.every(([, pass]) => pass === true);

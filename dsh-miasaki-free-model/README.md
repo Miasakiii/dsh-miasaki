@@ -59,18 +59,22 @@ dsh plugin --profile <profile> add @miasaki/dsh-free-model
   写清 `当前 → 最新`，带「立即升级」「稍后再说」；没有新版本时**不占位**；
 - 热重载：不再提示。
 
-「立即升级」与下方「升级」分区的按钮**都走同一个 240 秒超时的请求**：上游 `api()` 给每个请求
-套了 8 秒 `AbortController`，而一次自升级要「拉 manifest（15s）→ 并发下载全部文件（每路 30s）→
+「立即升级」（提醒条）走**它自己的 240 秒超时请求**：上游 `api()` 给每个请求套了 8 秒
+`AbortController`，而一次自升级要「拉 manifest（15s）→ 并发下载全部文件（每路 30s）→
 安装 → 热重载」—— 8 秒必然打断，**真实失败原因随 500 到达时客户端早就走了**
 （2026-10-07 实测：用户只看到 `signal is aborted without reason`，而 host 侧其实记着
 `staging failed: … fetch failed`）。现在失败原因会照实显示在提醒条里。
+**2026-10-12 起上游 2.1.0 自己也给那次调用加了 600 秒超时** ⇒ 补丁原先对它的一处改写已退役，
+下方「升级」分区的按钮走的就是上游自带的超时。
 
 唯一保留的弹窗是设置页里「保存失败」的即时应答 —— 那是对你刚做动作的回话，不是公告。
 
 > 补丁按**锚点**改写本机安装副本，可重放 / 可自检 / 可回退。上游自升级后重打即可
 > （`node patches/dsh-our-free-model/patch.mjs`）。
-> **升级前先预判**：2.0.0 实测 12 处锚点只有 8 处还能命中（3 处 drift ⇒ 重打会显式失败）——
-> 命令与判据局限见[补丁 README](patches/dsh-our-free-model/README.md) 的「升级前先预判」一节。
+> **升级前先预判**：2.1.0 的 `client.js` 实测 12 处锚点 **1 applied（误导性绿灯）/ 7 pending /
+> 4 drift** —— 已按它重对齐（一处退役、一处拆成两条），当前补丁在 2.1.0 上 `verify 12/12`、
+> self-test 22 条全绿。命令与判据局限见[补丁 README](patches/dsh-our-free-model/README.md)
+> 的「升级前先预判」一节。
 
 ## 安全
 

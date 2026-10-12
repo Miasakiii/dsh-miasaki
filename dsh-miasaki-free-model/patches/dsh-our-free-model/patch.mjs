@@ -14,15 +14,32 @@
  * （`src/updater.js` 的 `installStaged`：写清单内文件 + 删除清单外文件），
  * 所以每次升级后都要重打，`status` 一眼可见当前处于哪种状态。
  *
+ * ⚠️ 连带事实（2026-10-12 实测确认）：备份文件 `client.js.ofm-patchbak` 属于**清单外文件**，
+ * 会被那次升级一并删掉 ⇒ 升级后第一次 `apply` 会用**升级后的新版原版**重建它（`revert` 因此
+ * 总是回到"上游原版"，语义正确）；但**升级前那一版原版就没有了** —— 想留退路就在升级前
+ * 自己把它复制出安装目录（本次升级的留档见 `_refs/ofm-210/backup-1.3.1/`，`_refs/` 不入库）。
+ *
  * ## 改动面（十二处锚点，全部唯一命中才动手）
+ *
+ * 锚点口径：**针对本机当前安装的那一版上游**。上游升级后先跑 `node patch.mjs status`，
+ * `drift` 就是"这几行上游改了写法"，照 README「升级后重新对齐」改锚点，改完 self-test 才算数。
+ * 最近一次对齐：**2026-10-12，上游 1.3.1 → 2.1.0** —— 一处**退役**（`apply-upgrade-long-timeout`，
+ * 上游自修）、一处**拆成两条**（公告中心在 2.1.0 变成两处），故净数仍是十二处。
  *
  * 【一】界面收敛（2026-09-28，用户点名「只要一个页面、且没有公告」）
  *
  *   nav-label                       左栏名字 `t('nav')` → 「免费模型」
- *   drop-news-section               删掉「公告中心」分区那一行
+ *   drop-news-section-free          删掉「免费模型」页的公告中心分区
+ *   drop-news-section-eac           删掉 EAC 页的公告中心分区（2.1.0 起公告中心有两处）
  *   drop-onboarding                 删掉首启公告弹窗（`settings.onboarding` 整块注册）
  *   inject-panel-component          注入 `PlatformScanPanel` 组件（`inject/platform-panel.js`）
- *   inject-platform-section         在模型清单之后挂上「本机自配平台」分区
+ *   inject-platform-section         在**免费模型页**的模型清单之后挂上「本机自配平台」分区
+ *
+ *   ⚠️ 2.1.0 把网页半身改成了**多页壳**（`FreePage` / `EacPage` / `ChannelsPage` / …，
+ *   左栏 `nav.tab.free` = 「免费模型」）⇒ 模型清单与公告中心在**两个页面各有一份**。
+ *   本补丁只挂**免费模型页**（用户要的那一页），靠该行独有的 `only: 'free'` 唯一化。
+ *   另：`remove` 类锚点有"上游改写形态后仍报绿灯"的局限 —— 两条 `drop-news-section-*`
+ *   的注释里写了这个坑（2026-10-12 预判 2.1.0 时正是这个形态）。
  *
  * 【二】静默化（2026-10-07，用户点名「去掉右下角弹窗公告，以后有更新在设置页提醒」）
  *
@@ -34,27 +51,30 @@
  *
  * 【三】标题层级（2026-10-07，用户点名「分区标题与内容一样大一样粗」）
  *
- *   enlarge-section-title           上游分区标题 14px/650 → 16px（字重 650 保留）
+ *   enlarge-section-title           上游分区标题 14px → 16px（字重与字距逐字照抄上游）
  *
- *   上游的分区标题（`.ofm_sec_title`，14px/650）与卡片名（`.ofm_cardname`，13.5px/650）
- *   **几乎同级** ⇒ 「模型清单 / 本机自配平台 / 升级」这些分区与分区内的模型卡看不出层级。
- *   只提字号、保留上游的字重（650）与配色，改动面一行、可整行还原。
+ *   上游的分区标题（`.ofm_sec_title`）与卡片名（`.ofm_cardname`，13.5px/650）在 1.3.1 里
+ *   **几乎同级**（14px/650）⇒ 「模型清单 / 本机自配平台 / 升级」这些分区与分区内的模型卡
+ *   看不出层级。只提字号、其余照抄上游（2.1.0 起这一行是 `font-weight:680;letter-spacing:-.2px`），
+ *   改动面一行、可整行还原。
  *   **这一处刻意破了"本补丁不动上游 CSS"的自我约束**（原决策见 §【一】的 2026-09-28 记录）：
  *   该约束的收益是"少一处升级漂移面"，而漂移本来就会被 `self-test.mjs` 显式打红（不会静默
  *   写坏文件），用户点名的层级问题优先。除这一行外，本补丁仍不碰上游 CSS 与 i18n 字典。
  *
- * 【四】自升级不再被 8 秒超时打断（2026-10-07，用户截图报错后补）
+ * 【四】自升级超时 —— **2026-10-12 退役**（上游 2.1.0 自己修好了）
  *
- *   apply-upgrade-long-timeout      升级按钮那次 `post('/update/apply', {})` → `ofmApplyUpgrade()`
- *
- *   现象：点「立即升级」后红框 `signal is aborted without reason`，看起来像按钮坏了。
- *   根因：`api()` 给每个请求套了 8 秒 `AbortController`（上游为防挂起的兜底），而
+ *   历史（2026-10-07）：上游给 `api()` 的每个请求套 8 秒 `AbortController`，而
  *   `/update/apply` 要做「拉 manifest（自身 15s）→ 并发 4 路下载全部文件（每路 30s）→
  *   备份 → 安装 → 热重载」。8 秒必然打断，而**真实失败原因**（host 侧 `updates.json` 记的
  *   `staging failed: vendor/channel-pack/NOTICE.md: fetch failed`，随 500 响应发出）
  *   到达时客户端早已断开 —— 用户永远看不到它。实测那次升级在 host 侧**真的跑了、也真的失败了**。
- *   修法：`inject/update-notice.js` 里的 `ofmApplyUpgrade()`（240 秒超时）原地取代那次调用，
- *   提醒条自己也走同一个函数；失败原因照实透出。**这是修上游的缺陷**，不是我们的功能新增。
+ *   当时的修法：用 `inject/update-notice.js` 的 `ofmApplyUpgrade()`（240 秒超时）取代那次调用。
+ *
+ *   2.1.0 实测：上游自己改成了 `post('/update/apply', {}, 600_000)`（`post` 第三参数就是超时）
+ *   ⇒ 根因消除，**这处 replace 规则退役删除**，不再改写上游代码。
+ *   保留下来的是 `ofmApplyUpgrade()` 本身 —— 它服务的是**我们注入的提醒条**那颗「立即升级」
+ *   按钮（上游没有这个组件），与上游那次调用无关。
+ *   self-test 里留了一条哨兵断言：上游升级调用不得退回短超时形态。
  *
  * 不改它的任何内部逻辑、不动它的 i18n 字典（新分区文案用中文字面量）、
  * 不留任何新文件（纯文本改写，所以 `revert` 能整文件还原）。
@@ -83,8 +103,17 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PANEL = readFileSync(join(HERE, 'inject', 'platform-panel.js'), 'utf8').replace(/\n+$/, '');
 const NOTICE = readFileSync(join(HERE, 'inject', 'update-notice.js'), 'utf8').replace(/\n+$/, '');
 
-/** 模型清单那一行 —— 新分区挂在它后面，这样"免 Key 车道"与"本机自配平台"挨着。 */
-const MODELS_SECTION = "        h(Section, { title: t('section.models'), hint: t('section.modelsHint') }, h(Roster, { summary: data, t: tagged, onBench: bench, benches })),\n";
+/**
+ * 「免费模型」页的模型清单那一行 —— 新分区挂在它后面、提醒条挂在它前面，
+ * 这样"免 Key 车道"与"本机自配平台"挨着，更新提醒在页首第一眼可见。
+ *
+ * **2026-10-12 对齐上游 2.1.0**：上游把网页半身改成了多页壳（`FreePage` /
+ * `EacPage` / `ChannelsPage` / …，左栏 `nav.tab.free` = 「免费模型」），模型清单
+ * 因此在**两个页面各有一份**且参数不同：免费模型页 `only: 'free'`、EAC 页
+ * `only: 'eac'`。本补丁只挂**免费模型页**（用户要的那一页），故锚点取
+ * `only: 'free'` 那一行 —— 与 EAC 页那行逐字不同，天然唯一。
+ */
+const MODELS_SECTION = "        h(Section, { title: t('section.models'), hint: t('section.modelsHint') }, h(Roster, { summary: data, t, onBench: bench, benches, auth: eacAuth, eacLogin, only: 'free' })),\n";
 
 // ── 被静默化的三段上游代码（逐字取自上游 `client.js`，2026-10-07）─────────────────
 //
@@ -189,11 +218,27 @@ export const EDITS = [
     from: "        label: () => t('nav'),",
     to: "        label: '免费模型',",
   },
+  // 2.1.0 起「免费模型」页与 EAC 页**各有一份**公告中心，两行几乎逐字相同 ——
+  // 唯一区别是行尾（免费模型页那行后面还有「升级」分区 ⇒ 行尾 `,`；EAC 页那行是
+  // 该页 return 的**最后一个参数** ⇒ 行尾 `)))`）。取完整行（含行尾换行）即各自唯一。
+  // ⚠️ 别按"命中数"判死这一处：上游 2.0.0 把旧写法换掉时，`remove` 类锚点会报
+  // **误导性绿灯**（`from` 不在场 ⇒ applied），而公告中心其实还在 —— 2026-10-12
+  // 预判 2.1.0 时正是这个形态，故这里配了 self-test 的语义断言。
   {
-    id: 'drop-news-section',
+    id: 'drop-news-section-free',
     kind: 'remove',
-    why: '去掉「公告中心」分区（用户点名）',
-    from: "        h(Section, { title: t('section.news'), hint: t('section.newsHint') }, h(NewsPanel, { t: tagged })),\n",
+    why: '去掉「免费模型」页的公告中心分区（用户点名）',
+    from: "        h(Section, { title: t('section.news'), hint: t('section.newsHint') }, h(NewsPanel, { t })),\n",
+  },
+  {
+    id: 'drop-news-section-eac',
+    kind: 'remove',
+    why: '去掉 EAC 页的公告中心分区（同一诉求的另一处）',
+    from: "        h(Section, { title: t('section.news'), hint: t('section.newsHint') }, h(NewsPanel, { t })))\n",
+    // 这一行是 `h('div', { className: 'ofm_page' }, …)` 的最后一个实参，整行删掉会把
+    // 闭合括号一并带走 ⇒ 语法错误（vm 编译会红）。所以替换成"补丁注释 + 一个独立右括号"：
+    // 前一行以 `),` 结尾，尾随逗号合法，这个 `)` 负责闭合 div。
+    to: "        // 【补丁 · @miasaki/dsh-free-model】公告中心已移除（2026-10-07 用户点名）\n        )\n",
   },
   {
     id: 'drop-onboarding',
@@ -271,25 +316,22 @@ export const EDITS = [
     id: 'enlarge-section-title',
     kind: 'replace',
     why: '分区标题提档：14px → 16px（与卡片名 13.5px 拉开层级）',
-    from: '.ofm_sec_title{font-size:14px;font-weight:650}',
-    to: '.ofm_sec_title{font-size:16px;font-weight:650}',
+    // 2.1.0 起上游把这一行改成 680 字重 + letter-spacing：只提字号，其余逐字照抄上游，
+    // 观感仍是它自己那套设计语言（决策依据见文件头 §【三】）。
+    from: '.ofm_sec_title{font-size:14px;font-weight:680;letter-spacing:-.2px}',
+    to: '.ofm_sec_title{font-size:16px;font-weight:680;letter-spacing:-.2px}',
   },
-  // ── 【四】自升级不再被 8 秒超时打断（2026-10-07，用户截图报错）──────────────────
-  // 现象：点「立即升级」后红框 `signal is aborted without reason`，看起来像按钮坏了。
-  // 根因：`api()` 给每个请求套了 8 秒 `AbortController`，而 `/update/apply` 要
-  // 「拉 manifest（自身 15s）→ 并发下载全部文件（每路 30s）→ 备份 → 安装 → 热重载」——
-  // 8 秒必然打断；而真实失败原因（host 侧 `updates.json` 记的
-  // `staging failed: vendor/channel-pack/NOTICE.md: fetch failed`，随 500 响应发出）
-  // 到达时客户端早已断开，**用户永远看不到它**。
-  // 修法：`ofmApplyUpgrade()`（定义在 `inject/update-notice.js`，240 秒超时）原地取代
-  // 这里那次 `post()` 调用；提醒条自己也走同一个函数。失败原因照实透出。
-  {
-    id: 'apply-upgrade-long-timeout',
-    kind: 'replace',
-    why: '升级按钮改走长超时请求（不再被 api() 的 8 秒超时打断）',
-    from: "          const result = await post('/update/apply', {})",
-    to: '          const result = await ofmApplyUpgrade()',
-  },
+  // ── 【四】自升级超时 —— **2026-10-12 退役**（上游 2.1.0 自己修好了）──────────────
+  // 历史：2026-10-07 上游给 `api()` 的每个请求套 8 秒 `AbortController`，而
+  // `/update/apply` 要做「拉 manifest(15s) → 并发下载全部文件(每路 30s) → 安装 → 热重载」，
+  // 8 秒必然打断；真实失败原因随 500 到达时客户端早已断开 ⇒ 用户只看到一句
+  // `signal is aborted without reason`。当时的修法是把那次调用换成 `ofmApplyUpgrade()`。
+  //
+  // 2.1.0 实测：上游自己改成了 `post('/update/apply', {}, 600_000)`（`post` 第三参数即超时），
+  // 根因已消除 ⇒ 这处 replace 规则**退役删除**，不再改写上游代码。
+  // 仍然保留的是 `inject/update-notice.js` 里的 `ofmApplyUpgrade()` —— 它服务的是**我们注入的
+  // 提醒条**那颗「立即升级」按钮（上游没有这个组件），与上游那次调用无关。
+  // self-test 留了一条哨兵断言：上游的升级调用不得退回短超时形态。
 ];
 
 /** 把（可能是函数的）`to` 求值。 */
@@ -321,7 +363,7 @@ export function applyTo(text) {
     if (state === 'drift') {
       throw new Error(
         `锚点 "${edit.id}" 漂移（既不在场、也非恰好命中一次）—— 上游可能已升级；\n` +
-        '  见 patches/dsh-our-free-model/README.md 的「升级后重新对齐」一节。',
+        '  见 patches/dsh-our-free-model/README.md 的「⚠️ 升级后必须重打」与「升级前先预判」两节。',
       );
     }
     if (state === 'applied') { done.push(`${edit.id}（已应用，跳过）`); continue }
@@ -351,7 +393,7 @@ export const TARGET_PACKAGE = 'dsh-our-free-model';
 export const TARGET_RELATIVE = 'client.js';
 
 /**
- * 把十一处锚点的状态汇总成 live 审计要的三态。
+ * 把十二处锚点的状态汇总成 live 审计要的三态。
  * @returns `{ state: 'patched' | 'original' | 'unknown', detail? }`
  */
 export function classify(text) {

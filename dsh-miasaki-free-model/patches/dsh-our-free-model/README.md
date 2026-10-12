@@ -32,10 +32,11 @@
 | id | 改动 | 说明 |
 |---|---|---|
 | `nav-label` | `label: () => t('nav')` → `label: '免费模型'` | 左栏名字 |
-| `drop-news-section` | 删掉 `h(Section, { title: t('section.news') … })` 那一行 | 「公告中心」分区 |
+| `drop-news-section-free` | 删掉免费模型页的 `h(Section, { title: t('section.news') … }),` 那一行 | 「公告中心」分区 |
+| `drop-news-section-eac` | 删掉 EAC 页的同名那一行（**2.1.0 起公告中心有两处**，靠行尾区分） | 同一诉求的另一处 |
 | `drop-onboarding` | 删掉 `ctx.slots.inject('settings.onboarding', …)` 整块 | 首启那个 5 页公告弹窗 |
 | `inject-panel-component` | 在 `function SettingsPage(props) {` 之前插入 `PlatformScanPanel` | 新分区的组件，源码在 [`inject/platform-panel.js`](inject/platform-panel.js) |
-| `inject-platform-section` | 在模型清单那一行之后插入新 `<Section>` | 「本机自配平台」分区 |
+| `inject-platform-section` | 在**免费模型页**的模型清单那一行之后插入新 `<Section>` | 「本机自配平台」分区 |
 
 ### 二、静默化（2026-10-07，用户点名「去掉右下角弹窗公告，以后有更新在设置页提醒」）
 
@@ -45,7 +46,13 @@
 | `silence-update-push` | 删掉 `update` SSE 里的 `osNotify` + `showToast` | 「插件可升级」不再弹窗；事件广播照旧 |
 | `silence-reload-notice` | 删掉 `'our-free-model: reload notice'` 整个 `ctx.effect` | 它唯一的产物就是那个右下角提示（连 `localStorage` 记账一起移除，不留死逻辑） |
 | `inject-update-notice-component` | 注入 `UpdateNotice` 组件 | 源码在 [`inject/update-notice.js`](inject/update-notice.js)；锚点是 `// ── in-app upgrade` 标题行 |
-| `inject-update-notice-bar` | 在模型清单之前插入 `h(UpdateNotice, {})` | 提醒条落在**页首 hero 之后**，一进「免费模型」就能看见 |
+| `inject-update-notice-bar` | 在**免费模型页**的模型清单之前插入 `h(UpdateNotice, {})` | 提醒条落在该页**页首 hero 之后**，一进「免费模型」就能看见 |
+
+> **多页壳坐标（2026-10-12 对齐上游 2.1.0）**：上游把网页半身改成了多页壳
+> （`FreePage` / `EacPage` / `ChannelsPage` / `AggregatePage` / `SaverPage` / `RoutingPage` /
+> `LedgerPage` / `LogsPage` / `GatewayPage`，左栏 `nav.tab.free` = 「免费模型」）。
+> **模型清单与公告中心因此各有两个副本**（免费模型页 `only: 'free'` / EAC 页 `only: 'eac'`），
+> 本补丁一律只挂**免费模型页** —— 那是用户点名的「免费模型」页，也是 `nav.tab.free` 那一栏。
 
 **新提醒条的行为**：读 `api('/update/status')`（本页现成辅助函数，同源带 cookie），
 并监听上游仍在广播的 `ofm:update` / `ofm:upgraded` 两个 window 事件；
@@ -75,11 +82,15 @@
 那条约束的收益只是"少一处升级漂移面"，而漂移本来就会被 `self-test.mjs` **显式打红**
 （`drift` ⇒ exit 1，绝不静默写坏文件），用户点名的层级问题优先。除这一行外仍不碰它的 CSS。
 
-### 四、自升级不再被 8 秒超时打断（2026-10-07，用户截图报红框后补）
+### 四、自升级不再被 8 秒超时打断 —— **2026-10-12 退役**（上游 2.1.0 自己修好了）
 
 | id | 改动 | 说明 |
 |---|---|---|
-| `apply-upgrade-long-timeout` | `const result = await post('/update/apply', {})` → `await ofmApplyUpgrade()` | 上游「升级」分区那次调用；提醒条自己也走同一个函数 |
+| ~~`apply-upgrade-long-timeout`~~ | ~~`post('/update/apply', {})` → `ofmApplyUpgrade()`~~ | **已退役**：2.1.0 起上游自带 `post('/update/apply', {}, 600_000)` |
+
+退役理由与保留项见 [`patch.mjs`](patch.mjs) 文件头 §【四】。要点：上游根因已消除 ⇒ 本补丁不再
+改写它的代码；`ofmApplyUpgrade()`（240 秒）留给我们**自己注入的提醒条**那颗「立即升级」按钮。
+`self-test.mjs` 里留了一条**哨兵断言**（上游不得退回"不带超时的 post"），哪天退回去会先红。
 
 **现象**：点「立即升级」后红框 `signal is aborted without reason`，看起来像按钮坏了。
 
@@ -89,8 +100,10 @@
 记的 `staging failed: … fetch failed`，随 500 响应发出）到达时客户端早已断开，用户永远看不到它。
 2026-10-07 实测那次升级在 host 侧**真的跑了、也真的失败了**。
 
-**修法**：`inject/update-notice.js` 里的 `ofmApplyUpgrade()` —— 自己发 `fetch`、**240 秒超时**、
-失败时把服务端 `error` 原样抛出；两处调用点共用它。**这是修上游的缺陷，不是我们的功能新增。**
+**历史修法（2026-10-07 → 2026-10-12）**：`inject/update-notice.js` 里的 `ofmApplyUpgrade()` ——
+自己发 `fetch`、**240 秒超时**、失败时把服务端 `error` 原样抛出；当时两处调用点共用它。
+**上游 2.1.0 把根因修掉了**（`post('/update/apply', {}, 600_000)`）⇒ 那处 replace 规则退役；
+如今 `ofmApplyUpgrade()` 只服务**提醒条**那颗按钮。**这始终是修上游的缺陷，不是我们的功能新增。**
 
 新分区的**数据来自同源路由** `/freemodel-api/*`（本线 host 半身注册，cookie 自动携带，
 与内核 `/api` 同级）。**本线插件不在场时**，新分区退化成一行说明 —— 不抛错、不影响本页其它分区。
@@ -116,6 +129,13 @@ node patch.mjs revert --yes  # 从 .ofm-patchbak 整文件还原
 上游插件的**应用内升级会覆盖清单内文件、并删除清单外文件**
 （`src/updater.js` 的 `installStaged`，逐行核实过）。`client.js` 在发布清单内，
 所以**每次它自升级之后，本补丁都会被冲掉**：
+
+> ⚠️ **2026-10-12 实测**：被删掉的"清单外文件"里就有 `client.js.ofm-patchbak` —— 它是本补丁
+> **唯一的 baseline**（`revert` 靠它整文件还原）。所以**升级前先把它复制出安装目录**
+> （本次升级的留档：`_refs/ofm-210/backup-1.3.1/`，`_refs/` 不入库）。
+> 好消息是不必手工补回：升级后第一次 `apply` 会用**新版原版**重建它 ⇒ `revert` 语义仍正确，
+> 只是"回到上一版原版"这条路得靠自己提前留档。同一次升级还删掉了 `README.md` 与 `README_EN.md`
+> （2.1.0 的发布清单不含这两个文档 —— 上游 2.1.0 起文档不再随包发布）。
 
 ```
 node patch.mjs status        # 期望看到 12 处 pending（= 被升级冲掉了）
@@ -147,7 +167,22 @@ $env:OFM_CLIENT = "$tmp\client.js"; node patch.mjs status
 上游把目标**改写**成别的形态时它会报**绿灯**，而目标其实还在。
 2.0.0 实测就是这样：`drop-news-section` 报 `applied`，而公告中心在 2.0.0 里**变成了两处新写法**、
 一处都没删掉。所以 **`remove` 类锚点不能只信 `status`**，要配一句"目标语义确实消失"的断言 ——
-`self-test.mjs` 里「『公告中心』分区那一行已消失」那条只对 1.3.1 的写法有效。
+`self-test.mjs` 里「两处『公告中心』分区都已消失」那条就是干这个的（判据刻意**不绑具体写法**：
+查的是 `h(Section, { title: t('section.news')` 这个调用点形态在不在场）。
+
+**2026-10-12 对 2.1.0 的实测**（同一条局限第二次现身，也第二次被兜住）：
+
+```
+$env:OFM_CLIENT = <2.1.0 的 client.js>; node patch.mjs status
+  → 1 applied / 7 pending / 4 drift
+```
+
+那唯一一处 `applied`（当时的 `drop-news-section`，2.1.0 对齐后已拆成 `-free` / `-eac` 两条）
+**又是误导性绿灯**：2.1.0 把公告中心改成
+"免费模型页 + EAC 页各一份"（`h(NewsPanel, { t })`），旧写法不在场所以报绿，而两处都还在。
+逐条人工核对后的处置见上方「十二处改动」表与 `patch.mjs` 里各条 EDITS 的注释。
+**结论**：`status` 的 `drift` 可信（`apply` 会显式失败），`applied` 对 `remove` 类**不可信** ——
+绿灯一律要人眼复核 + self-test 的语义断言。
 
 ## ⚠️ 改了 `inject/*.js` 的内容之后：必须 revert 再整份重打
 
@@ -226,6 +261,26 @@ self-test          21 条断言全绿
 渲染探针            提醒条文本含新增的本机提示；有更新 → 提醒条；无更新 → null
 verify-all          free-model 16/16 PASS
 2.0.0 预判          1/12 applied / 3 drift / 8 pending（见「升级前先预判」一节）
+```
+
+**2026-10-12（上游 1.3.1 → 2.1.0 正式升级 + 12 处重对齐；一处退役、一处拆分）**
+
+```
+触发               用户「准备升级，应对一下」—— 先把锚点对齐到 2.1.0，再执行升级
+升级前备份          _refs/ofm-210/backup-1.3.1/（安装副本 29 文件 + 数据目录 5 文件，_refs/ 不入库）
+2.1.0 预判          1 applied（误导性绿灯）/ 7 pending / 4 drift
+人工核对            多页壳 FreePage/EacPage 各有一份模型清单与公告中心；CSS 650→680；
+                   apply-upgrade-long-timeout 上游自修（post(..., 600_000)）⇒ 该规则退役
+改锚点              drop-news-section 拆成 -free / -eac（靠行尾区分）；MODELS_SECTION 改指
+                   only:'free' 那行；enlarge-section-title 跟到 680；self-test 断言同步
+离线自证            self-test 22 条断言全绿（含幂等 + vm 编译）；改前唯一红是 API 断言绑了
+                   定义形态（上游把它从字面量改成 IIFE）
+升级                PluginUpdater.apply()：1.3.1 → 2.1.0，72 文件 / 4,566,584 B / 15.2s
+清单外文件           实测删除 client.js.ofm-patchbak + README.md + README_EN.md（已提前留档）
+重打                patch.mjs apply --yes → 12 处写入；verify 12/12 PASS
+真文件 self-test     PASS —— 12 处锚点在上游当前版本上成立
+回归                verify-all free-model 16/16 PASS；repo 7/7 PASS（style 新增 0）
+待用户              重启 miasaki 桌面端加载 2.1.0 + 补丁（host 内存里仍是 1.3.1 代码）
 ```
 
 ## 许可

@@ -6,6 +6,66 @@
 
 ---
 
+## 2026-10-12（续） · 上游 1.3.1 → 2.1.0 应用内升级 + 补丁 12 处重对齐（一处退役、一处拆分）
+
+**触发**：用户「准备升级，应对一下」—— 要求先把补丁对齐到 2.1.0，再执行升级。
+**前置**：升级检查此前的 `no manifest source answered` 已由「让 Node 走本机代理」解决
+（三个 manifest 源全通，72 文件下载 8.3s）——本条只记补丁与升级本身。
+
+### 一、升级前先预判 —— 2.1.0 上 12 处锚点只有 1 处「绿灯」，而它是误导性的
+
+照 README「升级前先预判」的办法把 2.1.0 的 `client.js` 下到临时目录对状态：
+**1 applied / 7 pending / 4 drift**。逐条核实后的真实差异：
+
+| 现象 | 2.1.0 实际结构 | 处置 |
+|---|---|---|
+| 4 处 drift | 上游把网页半身改成**多页壳**（`FreePage` / `EacPage` / …，左栏 `nav.tab.free` = 「免费模型」） | 改锚点 |
+| `drop-news-section` 报 **applied** | 公告中心**变成两处**（免费模型页 + EAC 页），旧写法不在场 ⇒ `remove` 类判绿灯 | **拆成两条** |
+| `apply-upgrade-long-timeout` drift | 上游**自己修了**：`post('/update/apply', {}, 600_000)` | **退役删除** |
+| `.ofm_sec_title` | 字重 650 → 680，并多出 `letter-spacing:-.2px` | 只提字号，其余照抄上游 |
+| 模型清单行 | `t: tagged` → `t`，多 `auth / eacAuth / eacLogin, only: 'free'`；EAC 页另有一份 `only: 'eac'` | 锚点取 `only: 'free'` 那一行 |
+
+⚠️ **`remove` 类的误导性绿灯这次真的现身了**：预判时它报 applied，而公告中心在两个页面都还在。
+判据只看「`from` 不在场」，上游把目标改写成别的形态时它会静默变绿 —— 这次靠人工核对 +
+self-test 的语义断言兜住（README 早已写明这条局限）。
+
+### 二、补丁改动（`patches/dsh-our-free-model/`）
+
+- `drop-news-section` → **`drop-news-section-free` + `drop-news-section-eac`**：两行几乎逐字相同，
+  靠**行尾**区分 —— 免费模型页那行后面还有「升级」分区（行尾 `,`），EAC 页那行是该页 `return`
+  的**最后一个实参**（行尾 `)))`）。EAC 那行整行删掉会把闭合括号一起带走 ⇒ 语法错误，
+  故替换成「补丁注释 + 一个独立右括号」（前一行以 `),` 结尾，尾随逗号合法）。
+- `MODELS_SECTION` 改指**免费模型页**那一行 —— 「本机自配平台」分区与更新提醒条都挂这一页
+  （用户点名的就是这一页），靠该行独有的 `only: 'free'` 唯一化。
+- `enlarge-section-title`：锚点跟上游改成 `680` + `letter-spacing:-.2px`，仍**只提字号**。
+- `apply-upgrade-long-timeout`：**退役删除**（上游 2.1.0 自修，见上表）。仍保留
+  `ofmApplyUpgrade()` —— 它现在只服务**我们注入的提醒条**那颗「立即升级」按钮。
+- `self-test.mjs`：`API` 断言从 `"const API = '"` 放宽为 `'const API = '`（上游把它从字面量
+  改成 IIFE，值仍是字符串 —— **断言绑定义形态就会红在断言自己身上**）；补上一直漏掉的
+  `function kilo(`（`inject/platform-panel.js` 一直在用它，而清单里没有）；新增「注入点落在
+  `only: 'free'` 那页」断言；新增退役规则的**哨兵断言**（上游不得退回短超时 `post`）；
+  分区标题断言跟进 680；顺手订正两处指向不存在小节名的文档引用。
+
+### 三、升级执行与实测 `[实测]`
+
+```
+升级前备份            _refs/ofm-210/backup-1.3.1/（安装副本 29 文件 + 数据目录 5 文件，_refs/ 不入库）
+预判（2.1.0 临时副本） 1 applied / 7 pending / 4 drift（改锚点前）
+离线自证（改后）      self-test 22 条断言全绿（含幂等 + vm 编译）
+升级                  PluginUpdater.apply()：1.3.1 → 2.1.0，72 文件 / 4,566,584 B / 15.2s
+重打补丁              patch.mjs apply --yes → 12 处写入；verify 12/12 PASS
+真文件 self-test      PASS（12 处锚点在上游当前版本上成立）
+回归                  verify-all free-model 16/16 PASS；repo 7/7 PASS（style 无新增）
+```
+
+**实测确认的一条连带事实**：`installStaged` 会删除**清单外文件** —— 本次删掉了
+`client.js.ofm-patchbak`（补丁唯一的 baseline）、`README.md` 与 `README_EN.md`
+（2.1.0 的发布清单不含这两个文档）。⇒ **升级前必须自己把 `.ofm-patchbak` 复制出安装目录**，
+否则连"退回 1.3.1 原版"的退路都没了。升级后第一次 `apply` 会用**新版原版**重建它，
+`revert` 语义因此仍然正确。
+
+**待用户执行**：重启 `miasaki` 桌面端加载 2.1.0 + 补丁（host 内存里仍是 1.3.1 的代码）。
+
 ## 2026-10-12 · 分发就绪订正：`patches/` 补进 `files`（README 的三处链接终于指得到）
 
 **背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测，抓到一个**跨线口径相反**的缺口：
