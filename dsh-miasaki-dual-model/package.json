@@ -14,7 +14,6 @@
     "index.js",
     "client.js",
     "lib/",
-    "test/",
     "patches/",
     "cordis.patch.yml",
     "README.md"
@@ -34,6 +33,13 @@
     "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Miasakiii/dsh-miasaki.git",
+    "directory": "dsh-miasaki-dual-model"
+  },
+  "homepage": "https://github.com/Miasakiii/dsh-miasaki/tree/master/dsh-miasaki-dual-model#readme",
+  "bugs": "https://github.com/Miasakiii/dsh-miasaki/issues",
   "publishConfig": {
     "access": "public"
   },

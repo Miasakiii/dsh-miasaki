@@ -2,6 +2,21 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-10-12 · 分发就绪订正：npm 元数据补全
+
+**背景**：本仓已进入插件对外分发阶段（根 README 的 `dsh plugin add @miasaki/…` 命令行已就位、
+但标注「尚未发布」）。本轮对 7 条可分发线做分发就绪检测，7 个包名在 registry 上确实仍全是 404，
+且本机 npm **未登录（E401）** ⇒ 当前发不出去。
+
+**本线改动**（`package.json`）：补 `repository`（含 `directory: dsh-miasaki-canvas`）/ `homepage` / `bugs`。
+此前 **7 个包全部缺失**这两个字段：npm 页面既没有源码入口，而 npm 又正是**靠 `repository`
+重写 README 内的相对链接** —— 缺失即让本线 README 里的 `design/` 类链接在 npm 页面上全部断链。
+
+**`files` 未动**：本线白名单本来就是「运行时 + 面向用户文档（`docs/`）」口径，无 `test/` / `scripts/`。
+
+**实测**：`npm pack --dry-run` 条目 12 → 12、tarball 94.4 → 94.5 KB（仅元数据增量）；
+`check-silent-guards` 的 R4（`files` 声明缺口）保持 0 命中。
+
 ## 2026-09-30 · 辅助对话（侧线）在会话布上照旧显示，并加「辅助对话」标注
 
 **触发**：用户「辅助对话虽然不在主会话列表显示，在会话布里要显示并且标注」。

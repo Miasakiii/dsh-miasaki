@@ -2,6 +2,22 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-10-12 · 分发就绪订正：npm 元数据补全 + `files` 白名单收敛
+
+**背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——
+7 个包名在 registry 上仍全是 404（与根 README「尚未发布」一致），本机 npm 亦**未登录（E401）**。
+
+**本线改动**（`package.json`）：
+- 补 `repository`（含 `directory: dsh-miasaki-appearance`）/ `homepage` / `bugs`。此前 **7 个包全部缺失** ——
+  npm 页面没有源码入口，而 npm 正是**靠 `repository` 重写 README 内的相对链接**，
+  缺失即让本线 README 里的 `design/` 类链接在 npm 页面上全部断链。
+- `files` 剔除 `test/`（9 文件 / 188 KB）与 `scripts/`（`derive-skins.mjs`）—— 两者都不是运行时依赖；
+  测试随包分发还会让依赖审计被夹具字符串误导（本轮 `require('mime-types')` 就被误判成本包依赖）。
+
+**实测**：`npm pack --dry-run` 条目 28 → 18、tarball 439.9 → **384.9 KB**；
+`check-silent-guards` 的 R4（`files` 声明缺口）保持 0 命中 —— 该规则扫的是磁盘上的 host 半源码，
+且 `collectFiles` 本就跳过 `test/`，故剔除不改变判据覆盖。
+
 ## 2026-10-08 · 「应用图标」预览化 —— 顺带揪出「预设清单永远加载中」的真根因
 
 - **触发**：用户贴「外观 → 应用图标」截图 +「外观设置这里应该要有预览图标，更直观地选择应用图标」。

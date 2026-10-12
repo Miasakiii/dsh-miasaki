@@ -1,5 +1,20 @@
 # 变更记录 — dsh-miasaki-dual-model
 
+## 2026-10-12 · 分发就绪订正：npm 元数据补全 + `files` 剔除 `test/`
+
+**背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——
+7 个包名在 registry 上仍全是 404，本机 npm 亦**未登录（E401）**。
+
+**本线改动**（`package.json`）：
+- 补 `repository`（含 `directory: dsh-miasaki-dual-model`）/ `homepage` / `bugs`。此前 **7 个包全部缺失** ——
+  npm 页面没有源码入口，而 npm 正是**靠 `repository` 重写 README 内的相对链接**，
+  缺失即让本线 README 里的 `design/` 类链接在 npm 页面上全部断链。
+- `files` 剔除 `test/`（6 文件 / 24 KB）。**`patches/` 照旧随包** —— 本线补丁是功能的一部分，
+  `patch:verify` / `patch:status` 两个脚本要按路径找到它（剔除 `test/` 只减测试，不动补丁链）。
+
+**实测**：`npm pack --dry-run` 条目 22 → 16、tarball 89.3 → 82.6 KB；
+`check-silent-guards` 的 R4（`files` 声明缺口）保持 0 命中。
+
 ## 2026-09-29 · 堵住「静默丢图」链：准入与路由判据同源
 
 **问题（代码审计发现，非实机复现）**：本线的设计是「准入放行 + 路由切换」两段配合，

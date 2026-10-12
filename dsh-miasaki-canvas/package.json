@@ -35,6 +35,13 @@
     "@deepseek-ai/dsh-api-session-controller": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Miasakiii/dsh-miasaki.git",
+    "directory": "dsh-miasaki-canvas"
+  },
+  "homepage": "https://github.com/Miasakiii/dsh-miasaki/tree/master/dsh-miasaki-canvas#readme",
+  "bugs": "https://github.com/Miasakiii/dsh-miasaki/issues",
   "publishConfig": {
     "access": "public"
   },

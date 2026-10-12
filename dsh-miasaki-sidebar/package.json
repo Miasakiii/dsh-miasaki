@@ -30,6 +30,13 @@
     "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Miasakiii/dsh-miasaki.git",
+    "directory": "dsh-miasaki-sidebar"
+  },
+  "homepage": "https://github.com/Miasakiii/dsh-miasaki/tree/master/dsh-miasaki-sidebar#readme",
+  "bugs": "https://github.com/Miasakiii/dsh-miasaki/issues",
   "publishConfig": {
     "access": "public"
   },

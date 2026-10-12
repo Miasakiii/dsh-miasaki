@@ -2,6 +2,22 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-10-12 · 分发就绪订正：npm 元数据补全（`files` 未动）
+
+**背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——
+7 个包名在 registry 上仍全是 404，本机 npm 亦**未登录（E401）**。
+
+**本线改动**（`package.json`）：补 `repository`（含 `directory: dsh-miasaki-sidebar`）/ `homepage` / `bugs`。
+此前 **7 个包全部缺失** —— npm 页面没有源码入口，而 npm 正是**靠 `repository` 重写 README 内的相对链接**，
+缺失即让本线 README 里的 `design/` 类链接在 npm 页面上全部断链。
+
+**`files` 刻意未动 —— `pnpm-workspace.yaml` 是「按需」而不是噪音**：本线 host 半依赖 `node-pty`（native），
+该文件用 `allowBuilds: node-pty: false` 让 `pnpm install` 确定性通过（无 node-gyp 步骤）。
+canvas 的 `files` 里没有它，是因为 canvas **无 native 依赖**，不是两条线口径分歧 —— 检测时一度按
+「口径不一」列出，复核后撤回。剔除 `test/` 的收敛同样不适用于本线：本线 `files` 本来就没有 `test/`。
+
+**实测**：`npm pack --dry-run` 条目 7 → 7、tarball 70.8 → 70.9 KB（仅元数据增量）。
+
 ## 2026-09-30（续二）· **辅助对话终于是「干净的侧边会话页」：不占会话记录 + 继承段不显示**
 
 **用户原话**：「辅助对话怎么还是有记录，会上会话记录，我要干净的侧边会话页，有一定的上下文但是不显示。

@@ -4,6 +4,13 @@
   "type": "module",
   "description": "多来源免费模型聚合器：经官方 llm 契约枚举本机全部 provider（含免 Key 车道）与自配 OpenAI 兼容平台，检出免费模型并给出能力画像与适用性决策，可显式写入模型配置、指派子代理后端。",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Miasakiii/dsh-miasaki.git",
+    "directory": "dsh-miasaki-free-model"
+  },
+  "homepage": "https://github.com/Miasakiii/dsh-miasaki/tree/master/dsh-miasaki-free-model#readme",
+  "bugs": "https://github.com/Miasakiii/dsh-miasaki/issues",
   "publishConfig": {
     "access": "public"
   },
@@ -22,8 +29,12 @@
   },
   "files": [
     "lib",
+    "patches",
     "cordis.patch.yml"
   ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-settings": ">=0.1.2-rc.1 <0.3.0",

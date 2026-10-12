@@ -6,6 +6,23 @@
 
 ---
 
+## 2026-10-12 · 分发就绪订正：`patches/` 补进 `files`（README 的三处链接终于指得到）
+
+**背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测，抓到一个**跨线口径相反**的缺口：
+dual-model 的 `files` 含 `patches/`，而本线的 `files` 只有 `["lib", "cordis.patch.yml"]` —— 补丁**不随包分发**。
+但本线 README 有 **3 处相对链接指向 `patches/dsh-our-free-model/`**，其中一句是操作步骤
+（`node patches/dsh-our-free-model/patch.mjs`）⇒ **从 npm 装的用户照 README 走会找不到文件**，
+npm 页面上那 3 个链接也全是死链。补丁本体只有 5 文件 / 62 KB，没有不发的理由。
+
+**本线改动**（`package.json`）：
+- `files` 补 `patches` —— 让「README 承诺的东西都在包里」重新成立。
+- 补 `engines: { node: ">=22.19.0" }`：其余 6 条线都有，本线与 usage 此前漏声明。
+- 补 `repository`（含 `directory: dsh-miasaki-free-model`）/ `homepage` / `bugs`。此前 **7 个包全部缺失** ——
+  npm 页面没有源码入口，而 npm 正是**靠 `repository` 重写 README 内的相对链接**。
+
+**实测**：`npm pack --dry-run` 条目 12 → 17（新增 `patches` 5 条）、tarball 27.4 → 48.5 KB；
+`check-silent-guards` 的 R4（`files` 声明缺口）保持 0 命中。
+
 ## 2026-10-07（续二） · 升级按钮：8 秒超时吃掉了真实失败原因 + 2.0.0 预判锚点会报废
 
 **触发**：用户截图 —— 「免费模型」页顶部提醒条正常显示（`当前 1.3.1 → 最新 2.0.0`），
@@ -178,8 +195,9 @@ live 落盘                          真副本 10/10 applied
 ```
 
 **口径变化**：`verify-all free-model` **15 → 16 项**（语法清单新增 `inject/update-notice.js`）。
-**不改本线包版本**（仍 0.4.0）：`patches/` 不在 npm `files` 清单里、发布物未变 —— 这次变的是
-本机安装副本的改写规则。两个一次性探针留档在 `_refs/scripts-archive/ofm-silence-probe-2026-10-07/`
+**不改本线包版本**（仍 0.4.0）：当时 `patches/` 不在 npm `files` 清单里、发布物未变 —— 这次变的是
+本机安装副本的改写规则。**2026-10-12 订正**：该前提已不成立 —— `patches` 本轮已补进 `files`
+（见本文件 2026-10-12 条），包版本仍 `0.4.0`（未发布，无需升版本）。两个一次性探针留档在 `_refs/scripts-archive/ofm-silence-probe-2026-10-07/`
 （`_refs/` 不入库）—— 上游自升级冲掉补丁后，可不重启宿主先证一遍"补丁真的改对了"。
 
 **实机待验**（矩阵 §3.12 判据正文已同步，台账 J1/J5 已改，**新立 J6**）：重启 miasaki 桌面端后 ——

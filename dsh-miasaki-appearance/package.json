@@ -14,10 +14,8 @@
     "index.js",
     "client.js",
     "lib/",
-    "test/",
     "cordis.patch.yml",
     "README.md",
-    "scripts/",
     "lib/skins/",
     "assets/"
   ],
@@ -36,6 +34,13 @@
     "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Miasakiii/dsh-miasaki.git",
+    "directory": "dsh-miasaki-appearance"
+  },
+  "homepage": "https://github.com/Miasakiii/dsh-miasaki/tree/master/dsh-miasaki-appearance#readme",
+  "bugs": "https://github.com/Miasakiii/dsh-miasaki/issues",
   "publishConfig": {
     "access": "public"
   },

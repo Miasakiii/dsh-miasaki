@@ -7,6 +7,22 @@
 
 ---
 
+## 2026-10-12 · 分发就绪订正：npm 元数据补全 + 补 `engines`
+
+**背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——
+7 个包名在 registry 上仍全是 404，本机 npm 亦**未登录（E401）**。
+
+**本线改动**（`package.json`）：
+- 补 `engines: { node: ">=22.19.0" }`：其余 6 条线都有，本线与 free-model 此前漏声明。
+- 补 `repository`（含 `directory: dsh-miasaki-usage` —— 目录名与包名 `@miasaki/dsh-token-monitor`
+  不同，`directory` 必须写**目录**）/ `homepage` / `bugs`。此前 **7 个包全部缺失** ——
+  npm 页面没有源码入口，而 npm 正是**靠 `repository` 重写 README 内的相对链接**。
+
+**`files` 未动**：本线白名单本来就是 `["lib", "cordis.patch.yml"]`，无 `test/` / `scripts/` 需要收敛。
+
+**实测**：`npm pack --dry-run` 条目 10 → 10、tarball 49.9 → 50.0 KB（仅元数据增量）；
+`check-silent-guards` 的 R4（`files` 声明缺口）保持 0 命中。
+
 ## 2026-09-30（续二）· 静默失效 #18：拿不到 profile 名时不再假装隔离
 
 **问题**：`resolveProfileName` 三档（宿主 `profileContext` → 环境变量 `DSH_PROFILE` → 兜底）都拿不到时
