@@ -331,14 +331,35 @@ window.__ModuleLoader__.load({
 .mia-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:18px}
 /* P4「恢复默认」行：与行内说明同边距、官方 linkButton 观感（次操作，h28/r14/12px tertiary）。 */
 .mia-resetRow{display:flex;justify-content:flex-end;padding:4px 0 8px}
-/* 应用图标九宫格：官方卡片语言（models rowCard：border-l4 / r16 / pad 12 14 收敛为图标格） */
-.mia-iconGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;padding:16px 0 4px;display:grid}
+/* 应用图标「当前生效」预览（2026-10-08）：左大图 + 右名称 / 来源。
+   由来：原形态只有九宫格 + 纯文字选择丸，用户看不出「我现在用的到底是哪一个」
+   （用户实机反馈「应该要有预览图标，更直观地选择应用图标」）。 */
+.mia-avatarHero{border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-module-platform);border-radius:16px;align-items:center;gap:14px;margin:16px 0 4px;padding:14px 16px;display:flex}
+.mia-avatarHeroImg{border-radius:14px;flex:none;width:64px;height:64px;object-fit:cover;display:block}
+.mia-avatarHeroPh{border-radius:14px;flex:none;width:64px;height:64px;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;display:flex}
+.mia-avatarHeroText{flex-direction:column;flex:1;gap:4px;min-width:0;display:flex}
+.mia-avatarHeroName{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px;overflow-wrap:anywhere}
+.mia-avatarHeroMeta{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+/* 子块（预设 / 我的上传）：与官方行式同规格（0.5px 分隔线 + 16px 行距），
+   但控件铺满下一行——九宫格塞不进 `.mia-row` 右侧的控件位。 */
+.mia-block{border-bottom:.5px solid var(--dsw-alias-border-l2);flex-direction:column;gap:4px;padding:16px 0;display:flex}
+.mia-blockTitle{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}
+.mia-blockBody{padding:8px 0 0}
+.mia-presetRetry{padding:8px 0 0}
+/* 落不了盘的提示（host 无 dataDir）：warn 着色，与契约条同一取色。 */
+.mia-presetNote{color:var(--dsw-alias-state-warn-label);padding:8px 0 0;font-size:12px;line-height:18px}
+/* 应用图标九宫格：官方卡片语言（models rowCard：border-l4 / r16 / pad 12 14 收敛为图标格）。
+   预设与「我的上传」共用同一套格子——两者对用户是同一件事（挑一张图当图标）。 */
+.mia-iconGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;display:grid}
 .mia-iconCell{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:0 0;border-radius:16px;flex-direction:column;align-items:center;gap:8px;padding:12px 6px 10px;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;display:flex}
 .mia-iconCell:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .mia-iconCell:disabled{cursor:default;opacity:.5}
 .mia-iconCell.is-active{border-color:var(--dsw-static-neutral-bluish-400);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary)}
+.mia-iconCell.is-skeleton{cursor:default}
 .mia-iconImg{border-radius:12px;width:56px;height:56px;object-fit:cover;background:0 0;display:block}
-.mia-iconLabel{text-align:center;font-size:12px;line-height:18px}
+.mia-iconSkeletonBox{border-radius:12px;width:56px;height:56px;background:var(--dsw-alias-bg-layer-2);display:block}
+/* 文件名可能很长（avatar-<时间戳>-<随机>.png）——格子内截断，title 给全名。 */
+.mia-iconLabel{text-align:center;font-size:12px;line-height:18px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 /* 运行信息：面板底部一行三级说明（不再独占组标题） */
 .mia-runinfo{color:var(--dsw-alias-label-tertiary);margin:24px 0 0;font-size:12px;line-height:18px}
 `
@@ -760,6 +781,21 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 子块：行式标题 + 说明 + **铺满整行**的控件（2026-10-08）。
+     *
+     * 为什么需要新形态：`.mia-row` 是「左文字 / 右控件」两栏，右侧控件位放得下选择丸与
+     * 步进器，但放不下九宫格——应用图标板块的两组「图」（预设 / 我的上传）因此各占一整块，
+     * 标题与说明仍照官方行式（14px/22/400 + 12px/18 三级色 + 0.5px 分隔线）。
+     */
+    function block(title, desc, body) {
+      return react.createElement('div', { key: `b-${title}`, className: 'mia-block' }, [
+        react.createElement('div', { key: 't', className: 'mia-blockTitle' }, title),
+        desc === null || desc === undefined ? null : react.createElement('div', { key: 'd', className: 'mia-desc' }, desc),
+        react.createElement('div', { key: 'b', className: 'mia-blockBody' }, body),
+      ])
+    }
+
+    /**
      * 选择丸 + 官方 Menu 下拉（V1，2026-09-26）。
      *
      * 形态逐条对照官方 `LanguageRow`：`.selector` 选择丸（h36 / r18 /
@@ -865,8 +901,44 @@ window.__ModuleLoader__.load({
       const [presets, setPresets] = react.useState(null)
       // V1：当前展开的选择丸菜单键（同时只开一个，官方 Menu 同理）。
       const [openMenu, setOpenMenu] = react.useState(null)
+      // 2026-10-08：预设清单的**元信息**（失败原因 / 能否落盘）。
+      // 旧形态把「失败」与「加载中」都收敛成 presets = null ⇒ 宿主 404 时九宫格永远停在
+      // 「预设清单加载中…」上（用户实机所见），既点不到预设也不知道该修什么。
+      // 形状是**本线自造**的 `{ error, persistent }`，不是 /presets 的响应 —— 见下方
+      // `presetList` 处的形状纪律说明（照响应形状读 state 正是上一版的 bug）。
+      // **追加在 state 队列最末**：test/client.test.js 的 stateQueue 按 useState 顺序注入，
+      // 前八项的顺序与长度都不变，本项在队列耗尽时取初值。
+      const [presetsInfo, setPresetsInfo] = react.useState({ error: null, persistent: null })
 
       const ctx = runtime === null ? null : runtime.ctx
+
+      /**
+       * 拉取应用图标预设清单（面板挂载与「重试」共用；host 侧顺带把图标幂等落进 avatars/，
+       * 因此它同时刷新了本地清单）。
+       *
+       * 失败必须**留下原因**：`presets = null` 同时表示「加载中」与「失败」，只靠它就分不清
+       * 两者——宿主半没有这条路由（404，例如进程还跑着旧版插件）时，面板会永远显示
+       * 「预设清单加载中…」。所以失败另存一句可读原因，由面板显式呈现 + 给重试。
+       */
+      const loadPresets = () => {
+        setPresetsInfo({ error: null, persistent: null })
+        return requestJson('/presets', { method: 'GET' })
+          .then(result => {
+            const list = Array.isArray(result.presets) ? result.presets : null
+            setPresets(list)
+            setPresetsInfo({
+              error: list === null ? '宿主返回的清单格式不可识别（缺少 presets 数组）' : null,
+              // host 的契约：无 dataDir 时清单为空但请求成功，`persistent:false` 是「落不了盘」的
+              // 唯一信号（host 注释写明「由面板给提示」——2026-10-08 补上，此前面板从未读它）。
+              persistent: result.persistent === true,
+            })
+            if (Array.isArray(result.local)) setAvatars({ local: result.local })
+          })
+          .catch(e => {
+            setPresets(null)
+            setPresetsInfo({ error: String(e && e.message ? e.message : e), persistent: null })
+          })
+      }
 
       const refresh = async () => {
         try {
@@ -878,13 +950,7 @@ window.__ModuleLoader__.load({
           }
           requestJson('/wallpapers', { method: 'GET' }).then(setWallpapers).catch(() => setWallpapers(null))
           requestJson('/avatars', { method: 'GET' }).then(setAvatars).catch(() => setAvatars(null))
-          // /presets 会顺带把预设图标落到 avatars/（幂等），因此它同时刷新了本地清单。
-          requestJson('/presets', { method: 'GET' })
-            .then(result => {
-              setPresets(Array.isArray(result.presets) ? result.presets : null)
-              if (Array.isArray(result.local)) setAvatars({ local: result.local })
-            })
-            .catch(() => setPresets(null))
+          void loadPresets()
           setError(null)
         } catch (e) {
           setError(String(e && e.message ? e.message : e))
@@ -1108,36 +1174,52 @@ window.__ModuleLoader__.load({
         resetRow('wallpaper'),
       ]))
 
-      // ---- 应用图标（M2.5 自定义 + M2.7 预设；V1 起「我的上传」换选择丸）
+      // ---- 应用图标（M2.5 自定义 + M2.7 预设；2026-10-08「预览化」重构）
       const avatar = state === null || state.config === null || state.config === undefined || state.config.avatar === undefined
         ? null
         : state.config.avatar
-      const presetList = presets !== null && presets !== undefined && Array.isArray(presets.presets) ? presets.presets : null
+      // ⚠ 形状纪律：`presets` state 里存的是**数组**（loadPresets 里 setPresets(result.presets)），
+      // 不是 /presets 的整个响应。这里曾照响应对象的形状去读 state（多套了一层 `.presets`）
+      // ⇒ presetList 恒为 null ⇒ 九宫格**永远显示「预设清单加载中…」**，
+      // 而 host 侧其实一切正常（avatars/ 里四个 preset-*.png 就是它幂等落盘的证据）。
+      // 同组的 wallpapers / avatars 两个 state 存的都是「整个响应」，读数分别是 `.local`——
+      // 三处只有这一处错位，而 test/client.test.js 的夹具当时注入了响应形状，于是假绿。
+      const presetList = Array.isArray(presets) ? presets : null
       const localFiles = avatars !== null && avatars !== undefined && Array.isArray(avatars.local) ? avatars.local : []
       // 「我的上传」= avatars 目录里除预设之外的文件（预设由 host 生成，不属于用户资产）。
       const myFiles = localFiles.filter(file => !file.startsWith('preset-'))
       children.push(group('应用图标', avatar === null ? [hint(state === null
         ? '配置未加载。'
         : 'Host 半尚未认识该板块（见上方契约提示）：请重启 dsh web，否则图标设置写不进去。')] : [
-        presetList === null ? hint('预设清单加载中…') : reactElementIconGrid(presetList, avatar.source, busy, save),
+        // 当前生效预览（2026-10-08）：先让用户看清「现在用的是哪个」，再谈怎么换。
+        reactElementAvatarHero(avatar.source, presetList, myFiles),
+        block('预设',
+          // 失败态下不再说「点选即用」——那时没有可点的东西（说明必须与当前能力一致）。
+          presetsInfo.error === null
+            ? '内置的四款，点选即用（图标由宿主幂等落盘到 avatars/ 目录，与上传的图同源）。'
+            : '内置四款图标由宿主半的 /appearance/api/presets 下发。',
+          presetList === null
+            ? (presetsInfo.error === null
+              ? reactElementPresetSkeleton()
+              : reactElementPresetFailure(presetsInfo.error, () => { void loadPresets() }))
+            : [
+              reactElementIconGrid(presetList, avatar.source, busy, save),
+              // 落不了盘必须说出来：host 无 dataDir 时清单为空、选了也不生效。
+              presetsInfo.persistent === false
+                ? react.createElement('div', { key: 'np', className: 'mia-presetNote' },
+                  '宿主未配置 dataDir（cordis.patch.yml 的 dataDir 为空）：图标落不了盘，点选不会生效。')
+                : null,
+            ]),
         row('自定义', '上传自己的图片（会自动转成 PNG、最长边 512），或把 PNG 放进 ~/.dsh/miasaki-appearance/avatars/ 后从下方清单里选。', [
           outlineButton('上传图片…', () => pickImageFile(uploadAvatar, setError), busy),
           ghostButton('清除', () => save({ avatar: { source: '' } }), busy || avatar.source === ''),
         ]),
-        myFiles.length === 0 ? null : row(
+        myFiles.length === 0 ? null : block(
           '我的上传',
-          '从 avatars/ 目录里已上传的图片中选（含手动放入的文件）。',
-          selectControl(
-            'avatar-source',
-            avatar.source,
-            avatarSourceOptions(myFiles),
-            id => save({ avatar: { source: id } }),
-            openMenu, setOpenMenu,
-            busy,
-          ),
+          'avatars/ 目录里的用户文件（含手动放入的）——点选即切换；文件名过长处截断，悬停看全名。',
+          reactElementUploadGrid(myFiles, avatar.source, busy, save),
         ),
         hint(
-          '点选即用：桌面端（Miasaki.exe）读同一份配置，约 1–2 秒内窗口 / 任务栏 / 托盘图标跟着变；' +
           '「清除」回退出厂图标。注意：EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标属于构建期资源，不随此处变化。',
         ),
         resetRow('avatar'),
@@ -1428,20 +1510,178 @@ window.__ModuleLoader__.load({
       return options
     }
 
+    // ------------------------------------------------- 应用图标预览（2026-10-08）
+    // 由来：用户实机看「外观 → 应用图标」时只有九宫格 + 一个纯文字选择丸，看不出
+    // 「我现在用的到底是哪一个」，反馈「应该要有预览图标，更直观地选择应用图标」。
+    // 三处改动：①「当前生效」大预览块；② 预设清单的加载中 / 失败两态显式区分；
+    // ③「我的上传」由选择丸改回缩略图网格（看图选图，而不是读文件名选图）。
+
     /**
-     * 应用图标的「我的上传」选项表：不使用 + 目录里的用户文件。
-     * 值走 `avatar.source` 的跨线契约形态（本线头像路由下的白名单路径）。
+     * 出厂图标的近似预览 URL。
+     * 出厂图标是 **EXE 内嵌位图**，设置页取不到它本身；「现行」预设正是它的同款艺术图
+     * （`src-tauri/icon-new.png`，见 assets/presets/README.md），拿它当预览最接近真相。
+     * 预设清单未就绪时返回 null——宁可不出图，也不留一个 404 的破图。
      */
-    function avatarSourceOptions(myFiles) {
-      const options = [{ id: '', label: '不使用', title: '回退出厂图标' }]
-      for (const file of myFiles) {
-        options.push({
-          id: `${AVATAR_PREFIX}${encodeURIComponent(file)}`,
-          label: file,
-          title: file,
-        })
+    function factoryPreviewUrl(presetList) {
+      if (presetList === null) return null
+      const current = presetList.find(item => item !== null && typeof item === 'object' && item.id === 'current')
+      return current === undefined || typeof current.url !== 'string' ? null : current.url
+    }
+
+    /** 从 `/appearance/avatar/<file>` 形态的 source 里取文件名；不是本线头像路由则返回 null。 */
+    function avatarFileOf(source) {
+      if (typeof source !== 'string' || !source.startsWith(AVATAR_PREFIX)) return null
+      const raw = source.slice(AVATAR_PREFIX.length)
+      if (raw === '') return null
+      try {
+        return decodeURIComponent(raw)
+      } catch {
+        return raw
       }
-      return options
+    }
+
+    /**
+     * 当前 `avatar.source` 的展示事实（名称 / 来源 / 预览 URL / 是否已失联）。
+     * hero 与文案共用这一处判定——两处各判一次必然漂移。
+     * @param {string} source - 配置里的 `avatar.source`（跨线契约：空串 = 出厂图标）。
+     * @param {Array<object>|null} presetList - 预设清单（未就绪时 null）。
+     * @param {string[]} myFiles - avatars/ 目录里的用户文件（不含预设）。
+     */
+    function describeAvatar(source, presetList, myFiles) {
+      if (typeof source !== 'string' || source === '') {
+        return {
+          kind: 'factory',
+          name: '出厂图标',
+          meta: '未使用自定义图标',
+          preview: factoryPreviewUrl(presetList),
+          missing: false,
+        }
+      }
+      const preset = presetList === null
+        ? undefined
+        : presetList.find(item => item !== null && typeof item === 'object' && item.url === source)
+      if (preset !== undefined) {
+        return { kind: 'preset', name: String(preset.label ?? preset.id ?? '预设'), meta: '预设图标', preview: source, missing: false }
+      }
+      const file = avatarFileOf(source)
+      if (file === null) {
+        return { kind: 'external', name: source, meta: '来源不可识别（不是本线 avatars/ 路由下的地址）', preview: source, missing: false }
+      }
+      const known = myFiles.includes(file)
+      return {
+        kind: 'upload',
+        name: file,
+        meta: known ? '我的上传' : '我的上传（该文件已不在 avatars/ 目录里，桌面端会继续用上一次读到的图）',
+        preview: source,
+        missing: !known,
+      }
+    }
+
+    /**
+     * 「当前生效」预览块（左大图 + 右名称 / 来源）。
+     * 预览图就是桌面壳读的那个文件（同源路由 `/appearance/avatar/…`）——面板里看到什么，
+     * 任务栏与托盘就是什么。
+     */
+    function reactElementAvatarHero(source, presetList, myFiles) {
+      const info = describeAvatar(source, presetList, myFiles)
+      const body = []
+      if (info.preview === null) {
+        // 出厂 + 预设清单未就绪：内嵌位图取不到，用文字占位而不是破图。
+        body.push(react.createElement('span', { key: 'ph', className: 'mia-avatarHeroPh' }, '出厂'))
+      } else {
+        body.push(react.createElement('img', {
+          key: 'img',
+          className: 'mia-avatarHeroImg',
+          src: info.preview,
+          alt: '',
+          // 图缺失（文件被手动删掉、预设尚未落盘）时藏起来，别留一个破图框。
+          onError: (event) => {
+            const target = event === null || event === undefined ? null : event.currentTarget
+            if (target !== null && target !== undefined && target.style !== undefined) target.style.visibility = 'hidden'
+          },
+        }))
+      }
+      body.push(react.createElement('div', { key: 'text', className: 'mia-avatarHeroText' }, [
+        react.createElement('div', { key: 'n', className: 'mia-avatarHeroName' }, `当前生效：${info.name}`),
+        react.createElement('div', { key: 'm', className: 'mia-avatarHeroMeta' }, info.kind === 'factory'
+          ? '桌面端（Miasaki.exe）读 EXE 内置图标；在下方任选一款即可替换。'
+          : `${info.meta} · 切换后约 1–2 秒内窗口 / 任务栏 / 托盘图标跟随。`),
+      ]))
+      return react.createElement('div', { key: 'avatar-hero', className: 'mia-avatarHero' }, body)
+    }
+
+    /**
+     * 预设清单加载中：四枚骨架格 + 一行文案。
+     * 骨架比一句「加载中…」更明确「这里将出现四款预设」；文案照旧保留，但**只在真的加载中**
+     * 出现（失败态由 reactElementPresetFailure 接手）——原形态让这句话在宿主 404 时永远挂着。
+     */
+    function reactElementPresetSkeleton() {
+      const cells = []
+      for (let i = 0; i < 4; i++) {
+        cells.push(react.createElement('div', { key: `sk-${i}`, className: 'mia-iconCell is-skeleton' },
+          react.createElement('span', { key: 'b', className: 'mia-iconSkeletonBox' })))
+      }
+      return [
+        react.createElement('div', {
+          key: 'preset-skeleton',
+          className: 'mia-iconGrid',
+          'aria-busy': 'true',
+        }, cells),
+        hint('预设清单加载中…'),
+      ]
+    }
+
+    /**
+     * 预设清单加载失败：**显式**给原因 + 重试（旧形态把失败显示成「加载中…」，见 loadPresets 注释）。
+     * 原因里的 `HTTP 404` 是最常见的一种：宿主进程仍跑着没有该路由的旧版插件。
+     */
+    function reactElementPresetFailure(reason, retry) {
+      return react.createElement('div', { key: 'preset-failure', className: 'mia-blockBody' }, [
+        react.createElement('div', { key: 'e', className: 'mia-error' }, `预设清单加载失败：${reason}`),
+        react.createElement('div', { key: 'h', className: 'mia-hint' },
+          '该清单由宿主半的 GET /appearance/api/presets 下发。若原因里是 404，通常是宿主进程仍跑着旧版插件'
+          + '——重启 dsh web / 桌面端后再打开本页；重试按钮只重新拉取，不会重启宿主。'),
+        react.createElement('div', { key: 'a', className: 'mia-presetRetry' }, outlineButton('重试', retry, false)),
+      ])
+    }
+
+    /**
+     * 「我的上传」缩略图网格（2026-10-08 由选择丸改回网格）。
+     *
+     * 形态回退的**理由**（V1 曾以「文件可能很多，Pill 排灾难」为由把 Pill 排换成选择丸）：
+     * 选择丸只显示文件名，而应用图标是**看图选**的东西——上传两张以上就分不清哪张是哪张
+     * （这正是用户这次反馈的问题）。网格与预设九宫格共用 `.mia-iconCell` 语言：图片即预览，
+     * 文件名只作辅助（截断 + title 全名），格子随宽度自动换行，多几个文件也不会撑破版面。
+     */
+    function reactElementUploadGrid(files, source, busy, save) {
+      return react.createElement('div', { key: 'upload-grid', className: 'mia-iconGrid' }, files.map(file => {
+        const url = `${AVATAR_PREFIX}${encodeURIComponent(file)}`
+        const active = source === url
+        return react.createElement('button', {
+          key: file,
+          type: 'button',
+          className: active === true ? 'mia-iconCell is-active' : 'mia-iconCell',
+          'aria-pressed': active === true,
+          disabled: busy === true,
+          title: file,
+          onClick: () => save({ avatar: { source: url } }),
+        }, [
+          react.createElement('img', {
+            key: 'i',
+            className: 'mia-iconImg',
+            src: url,
+            alt: '',
+            // 与 hero 同款兜底：清单是磁盘扫描来的，正常都在；但「面板打开后文件被删」
+            // 这类竞态下 img 会 404 —— 藏掉它，不留一个破图框（格子仍在，点了会落到缺失文件上，
+            // 桌面壳读不到就继续用上一次的图）。
+            onError: (event) => {
+              const target = event === null || event === undefined ? null : event.currentTarget
+              if (target !== null && target !== undefined && target.style !== undefined) target.style.visibility = 'hidden'
+            },
+          }),
+          react.createElement('span', { key: 'l', className: 'mia-iconLabel' }, file),
+        ])
+      }))
     }
 
     /** 表面不透明度四旋钮（V1：官方 models 双列字段网格规格，标签 12px/18/500）。 */

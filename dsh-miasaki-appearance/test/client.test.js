@@ -161,6 +161,37 @@ function flushAsync() {
   return new Promise(resolve => { setTimeout(resolve, 0) })
 }
 
+// --------------------------------------------------------------- 应用图标夹具
+// 2026-10-08 预览化重构后的最小夹具。**形状纪律**见 709 行用例的注释：图标板块的三个来源
+// （config.avatar / avatars 清单 / presets 清单）在 state 里的形状各不相同，夹具必须给真实形状。
+/** 面板 state（只填图标板块渲染要读的板块）。 */
+function iconState(avatarSource) {
+  return {
+    config: {
+      enabled: true,
+      theme: { skin: 'pure' },
+      wallpaper: {
+        source: '', light: '', dark: '', blur: 0, scrim: 0,
+        fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+        surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+      },
+      avatar: { source: avatarSource },
+      motion: { enabled: false, preset: 'fluid', scale: 1 },
+      conversation: { density: 'comfortable', maxWidth: 0 },
+    },
+    revision: 6,
+    persistent: true,
+  }
+}
+
+/** 四款预设的 `/presets` 清单（= host 响应里的 presets 字段，也就是 state 里存的东西）。 */
+const PRESET_FIXTURE = [
+  { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
+  { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
+  { id: 'illustration', label: '立绘', file: 'preset-illustration.png', url: '/appearance/avatar/preset-illustration.png' },
+  { id: 'current', label: '现行', file: 'preset-current.png', url: '/appearance/avatar/preset-current.png' },
+]
+
 // React stub：createElement 保留 children 便于断言；hooks 惰性化，组件可被调用一次。
 // stateQueue 非空时 useState 按序弹出初值（渲染冒烟测试用它把组件驱动到"配置已加载"
 // 的完整渲染路径——实机空白面板事故发生在该路径，state=null 路径走不到）。
@@ -706,9 +737,16 @@ test('「无可见效果」提示：纯净皮 + 全不透明 + mica 走系统材
   }
 })
 
-test('面板渲染冒烟：应用图标板块（预设 + 已设置 + 我的上传）不抛错且文案在位', () => {
-  // M2.5/M2.7 回归闸门：图标板块读 state.config.avatar、avatars 清单、presets 清单三个来源，
-  // 任一为 undefined 都会在渲染期炸掉整个面板（2026-09-12 空白面板事故的同型风险）。
+test('面板渲染冒烟：应用图标板块（当前生效预览 + 预设 + 自定义 + 我的上传网格）', () => {
+  // M2.5/M2.7 回归闸门 + 2026-10-08 预览化：图标板块读 state.config.avatar、avatars 清单、
+  // presets 清单三个来源，任一为 undefined 都会在渲染期炸掉整个面板（2026-09-12 空白面板事故的同型风险）。
+  //
+  // ⚠ **夹具形状纪律**：`presets` 这个 **state** 里存的是 loadPresets 落下的**数组**
+  // （= /presets 响应的 `presets` 字段），不是整个响应对象。2026-10-08 修掉的真 bug 就是
+  // 「照响应形状去读 state」（`Array.isArray(presets.presets)`）⇒ presetList 恒为 null ⇒
+  // 九宫格在实机上永远停在「预设清单加载中…」；而上一版夹具恰好注入 `{ presets: [...] }`
+  // （响应形状），把这处错读喂饱了，于是**测试全绿、实机全坏**。
+  // 夹具从此一律用 state 的真实形状；形状本身另有静态断言（见「state 形状契约」用例）。
   const { descriptor } = capture()
   const ctx = fakeCtx()
   descriptor.factory(requireStub).apply(ctx)
@@ -732,14 +770,12 @@ test('面板渲染冒烟：应用图标板块（预设 + 已设置 + 我的上�
     },
     null, null, false, null,
     { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png', 'preset-default.png'] },
-    {
-      presets: [
-        { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
-        { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
-        { id: 'illustration', label: '立绘', file: 'preset-illustration.png', url: '/appearance/avatar/preset-illustration.png' },
-        { id: 'current', label: '现行', file: 'preset-current.png', url: '/appearance/avatar/preset-current.png' },
-      ],
-    },
+    [
+      { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
+      { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
+      { id: 'illustration', label: '立绘', file: 'preset-illustration.png', url: '/appearance/avatar/preset-illustration.png' },
+      { id: 'current', label: '现行', file: 'preset-current.png', url: '/appearance/avatar/preset-current.png' },
+    ],
     null,
   ]
   try {
@@ -749,27 +785,47 @@ test('面板渲染冒烟：应用图标板块（预设 + 已设置 + 我的上�
     assert.equal(texts.includes('应用图标'), true, '板块标题必须渲染')
     assert.equal(texts.includes('上传图片…'), true, '上传按钮必须渲染')
     assert.equal(texts.includes('清除'), true)
-    // 预设九宫格：名称与格子数（四款：默认 / 头像 / 立绘 / 现行）
+    // ---- 当前生效预览（2026-10-08）：一眼看出「现在用的是哪个」
+    assert.equal(texts.includes('当前生效：avatar-lz3k9q-4f2a1b.png'), true,
+      'hero 必须报出当前生效的图标名（用户上传的文件名）')
+    assert.equal(texts.some(t => t.includes('我的上传')), true, 'hero 必须报出来源类别')
+    const heroImgs = collectNodes(element, node => node.type === 'img'
+      && node.props.className === 'mia-avatarHeroImg')
+    assert.equal(heroImgs.length, 1, 'hero 必须有且只有一张预览图')
+    assert.equal(heroImgs[0].props.src, '/appearance/avatar/avatar-lz3k9q-4f2a1b.png',
+      'hero 预览必须直读跨线契约的同源 URL（与桌面壳读同一个文件）')
+    // ---- 预设九宫格：名称与格子数（四款：默认 / 头像 / 立绘 / 现行）
+    assert.equal(texts.includes('预设'), true, '预设子块标题必须渲染')
     assert.equal(texts.includes('默认'), true, '预设名称必须渲染')
     assert.equal(texts.includes('头像'), true)
     assert.equal(texts.includes('立绘'), true)
     assert.equal(texts.includes('现行'), true)
-    const cells = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className.startsWith('mia-iconCell'))
-    assert.equal(cells.length, 4, '四款预设 → 四个格子')
-    // 「我的上传」V1 起走选择丸 + 官方 Menu：选项在 Menu 的 items prop 里（stub 不渲染子组件），
-    // 因此断言 items 而非文本节点。
-    const avatarMenu = collectNodes(element, node => node.type === primitivesStub.Menu
+    // ---- 「我的上传」= 缩略图网格（2026-10-08 由选择丸改回网格：图标是看图选的）
+    assert.equal(texts.includes('我的上传'), true, '子块标题必须渲染')
+    const cells = collectNodes(element, node => typeof node.props.className === 'string'
+      && node.props.className.startsWith('mia-iconCell'))
+    assert.equal(cells.length, 6, '四款预设 + 两个用户文件 → 六个格子')
+    const uploadCells = cells.filter(cell => typeof cell.props.title === 'string' && cell.props.title.startsWith('avatar-'))
+    assert.deepEqual(uploadCells.map(cell => cell.props.title), ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png'],
+      '用户文件各自一格（顺序与清单一致）')
+    // 预设文件不得混进「我的上传」（否则用户会看到一堆系统生成的条目）
+    assert.equal(cells.some(cell => typeof cell.props.title === 'string' && cell.props.title.startsWith('preset-')), false,
+      '预设文件只出现在预设网格里')
+    // 每个上传格子都带预览图（这正是本次改动的目的）
+    for (const cell of uploadCells) {
+      const img = collectNodes(cell, node => node.type === 'img')
+      assert.equal(img.length, 1, `${cell.props.title} 必须带预览图`)
+      assert.equal(img[0].props.src, `/appearance/avatar/${cell.props.title}`)
+    }
+    // 当前选中格由 avatar.source 点亮（上传网格与预设网格同一口径）
+    const active = cells.filter(cell => cell.props.className.includes('is-active'))
+    assert.equal(active.length, 1, '有且只有一个选中格')
+    assert.equal(active[0].props.title, 'avatar-lz3k9q-4f2a1b.png', '选中的必须是配置里那一个')
+    // 「我的上传」不再是选择丸：整块不需要 Menu（V1 的形态在 2026-10-08 因「看不见图」被撤回）
+    const uploadMenu = collectNodes(element, node => node.type === primitivesStub.Menu
       && Array.isArray(node.props.items)
       && node.props.items.some(item => item.id === '' && item.label === '不使用'))
-    assert.equal(avatarMenu.length, 1, '我的上传必须渲染成一个选择丸菜单')
-    const itemIds = avatarMenu[0].props.items.map(item => item.id)
-    assert.equal(itemIds.includes(''), true, '「不使用」必须在菜单里')
-    assert.equal(itemIds.includes('/appearance/avatar/avatar-lz3k9q-4f2a1b.png'), true, '用户自己的文件必须在清单里')
-    assert.equal(itemIds.includes('/appearance/avatar/avatar-other-abcdef.png'), true, '第二个用户文件也必须在')
-    // 预设文件不得混进「我的上传」（否则用户会看到一堆系统生成的条目）
-    assert.equal(itemIds.some(id => id.includes('preset-default.png')), false, '预设文件不进「我的上传」')
-    // 当前选中值同步给 Menu（官方 Menu 的 selectedId 负责勾选态）
-    assert.equal(avatarMenu[0].props.selectedId, '/appearance/avatar/avatar-lz3k9q-4f2a1b.png')
+    assert.equal(uploadMenu.length, 0, '「我的上传」不得再是纯文字选择丸（回退成读文件名选图）')
   } finally {
     react.stateQueue = null
   }
@@ -798,12 +854,10 @@ test('面板渲染冒烟：九宫格按 avatar.source 点亮选中格', () => { 
       persistent: true,
     },
     null, null, false, null, { local: [] },
-    {
-      presets: [
-        { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
-        { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: presetUrl },
-      ],
-    },
+    [
+      { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
+      { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: presetUrl },
+    ],
     null,
   ]
   try {
@@ -816,6 +870,135 @@ test('面板渲染冒烟：九宫格按 avatar.source 点亮选中格', () => { 
   } finally {
     react.stateQueue = null
   }
+})
+
+test('应用图标：当前生效预览覆盖预设 / 上传 / 出厂 / 文件失联四种来源', () => {
+  // 2026-10-08 用户反馈「应该要有预览图标，更直观地选择应用图标」⇒ 板块顶部加「当前生效」块。
+  // 这条盯四件事：名称、来源说明、预览图 URL，以及「出厂」这个取不到位图的特例。
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  const scenarios = [
+    {
+      label: '预设',
+      source: '/appearance/avatar/preset-portrait.png',
+      local: ['avatar-mine.png'],
+      wantName: '当前生效：头像',
+      wantMeta: '预设图标',
+      wantSrc: '/appearance/avatar/preset-portrait.png',
+    },
+    {
+      label: '我的上传',
+      source: '/appearance/avatar/avatar-mine.png',
+      local: ['avatar-mine.png'],
+      wantName: '当前生效：avatar-mine.png',
+      wantMeta: '我的上传',
+      wantSrc: '/appearance/avatar/avatar-mine.png',
+    },
+    {
+      // 出厂 = EXE 内嵌位图，设置页取不到它本身 ⇒ 用「现行」预设（同款艺术图）作近似预览。
+      label: '出厂',
+      source: '',
+      local: [],
+      wantName: '当前生效：出厂图标',
+      wantMeta: 'EXE 内置图标',
+      wantSrc: '/appearance/avatar/preset-current.png',
+    },
+    {
+      label: '文件失联',
+      source: '/appearance/avatar/avatar-gone.png',
+      local: ['avatar-mine.png'],
+      wantName: '当前生效：avatar-gone.png',
+      wantMeta: '已不在 avatars/ 目录里',
+      wantSrc: '/appearance/avatar/avatar-gone.png',
+    },
+  ]
+  try {
+    for (const scene of scenarios) {
+      react.stateQueue = [
+        iconState(scene.source),
+        null, null, false, null,
+        { local: scene.local },
+        PRESET_FIXTURE,
+      ]
+      const element = view()
+      const texts = collectText(element)
+      assert.equal(texts.includes(scene.wantName), true, `${scene.label}：hero 必须报出当前图标名`)
+      assert.equal(texts.some(t => t.includes(scene.wantMeta)), true, `${scene.label}：hero 必须点明来源（${scene.wantMeta}）`)
+      const heroImgs = collectNodes(element, node => node.type === 'img' && node.props.className === 'mia-avatarHeroImg')
+      assert.equal(heroImgs.length, 1, `${scene.label}：hero 有且只有一张预览图`)
+      assert.equal(heroImgs[0].props.src, scene.wantSrc, `${scene.label}：预览图必须指向真实图标 URL`)
+    }
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('应用图标：预设清单的三态显式区分（加载中 / 失败 / 空清单）', () => {
+  // 真 bug 的现场：失败与加载中都收敛成 presets = null，面板只能显示「预设清单加载中…」，
+  // 而宿主 404 时那句话会**永远**挂着（用户实机截图即此）。修完三态各自有明确形态：
+  //   ① 加载中 → 四枚骨架格 + 「加载中」文案（诚实：确实在加载）；
+  //   ② 失败  → **原因 + 重试**，绝不显示成加载中；
+  //   ③ 空清单（合法数组）→ 空网格 + 「落不了盘」提示（host 无 dataDir 的真实形态）。
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  const buttonTexts = element => collectNodes(element, node => node.type === primitivesStub.Button)
+    .map(node => node.children.join(''))
+  try {
+    // ① 加载中：presets = null 且 presetsInfo 未注入（走初值 { error: null, persistent: null }）
+    react.stateQueue = [iconState(''), null, null, false, null, { local: [] }, null]
+    const loading = view()
+    const loadingTexts = collectText(loading)
+    assert.equal(loadingTexts.includes('预设清单加载中…'), true, '加载中必须有文案')
+    const skeletons = collectNodes(loading, node => typeof node.props.className === 'string'
+      && node.props.className.includes('is-skeleton'))
+    assert.equal(skeletons.length, 4, '加载中必须给四枚骨架格（而不是一句话留白）')
+
+    // ② 失败：第九个 state（presetsInfo）注入原因
+    react.stateQueue = [
+      iconState(''), null, null, false, null, { local: [] }, null, null,
+      { error: 'HTTP 404', persistent: null },
+    ]
+    const failed = view()
+    const failedTexts = collectText(failed)
+    assert.equal(failedTexts.some(t => t.includes('预设清单加载失败：HTTP 404')), true, '失败必须显示原因')
+    assert.equal(failedTexts.includes('预设清单加载中…'), false, '失败**不得**显示成加载中（这正是原 bug 的观感）')
+    assert.equal(failedTexts.some(t => t.includes('/appearance/api/presets')), true, '失败文案必须点明是哪条路由')
+    assert.equal(failedTexts.some(t => t.includes('点选即用')), false,
+      '失败态不得再宣称「点选即用」（说明必须与当前能力一致）')
+    assert.equal(buttonTexts(failed).includes('重试'), true, '失败必须给重试入口')
+    assert.equal(collectNodes(failed, node => typeof node.props.className === 'string'
+      && node.props.className.includes('is-skeleton')).length, 0, '失败态不再显示骨架')
+
+    // ③ 空清单：真实数组 + persistent:false（host 无 dataDir）
+    react.stateQueue = [
+      iconState(''), null, null, false, null, { local: [] }, [], null,
+      { error: null, persistent: false },
+    ]
+    const empty = view()
+    const emptyTexts = collectText(empty)
+    assert.equal(emptyTexts.includes('预设清单加载中…'), false, '空清单是**已就绪**，不是加载中')
+    assert.equal(emptyTexts.some(t => t.includes('预设清单加载失败')), false, '空清单不是失败')
+    assert.equal(emptyTexts.some(t => t.includes('未配置 dataDir')), true, '落不了盘必须说出来（host 注释承诺的面板提示）')
+    assert.equal(collectNodes(empty, node => typeof node.props.className === 'string'
+      && node.props.className.startsWith('mia-iconCell')).length, 0, '空清单 → 零个格子')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('state 形状契约：presets 存数组、按数组读（2026-10-08 真 bug 的静态闸门）', () => {
+  // 行为闸门靠夹具形状把关，而**夹具写错只能靠人**（这次的假绿就是这么来的）——所以源码配对
+  // 必须自带一条静态断言：state 里存什么形状，就必须按什么形状读回来。
+  assert.match(source, /setPresets\(list\)/,
+    'loadPresets 必须把 /presets 响应的 presets 数组存进 state')
+  assert.match(source, /const presetList = Array\.isArray\(presets\) \? presets : null/,
+    '渲染侧必须按**数组**读同一个 state')
+  assert.doesNotMatch(source, /presets\.presets/,
+    '不得再照 /presets 响应对象的形状去读 state（那正是九宫格永远「加载中」的根因）')
 })
 
 test('面板渲染冒烟：host 未下发 avatar 字段时给重启提示而非崩溃', () => {

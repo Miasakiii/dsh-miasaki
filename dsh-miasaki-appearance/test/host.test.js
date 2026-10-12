@@ -412,6 +412,29 @@ test('预设路由：无 dataDir 时清单为空但请求不失败（面板给�
   assert.deepEqual(res.body.presets, [], '落不了盘就不谎报可用')
 })
 
+test('预设路由响应形状 = client 半的消费契约（2026-10-08「永远加载中」的对面闸门）', async () => {
+  // 那次的真 bug 在 client 侧（照**响应对象**的形状去读 state，多套了一层 .presets ⇒
+  // presetList 恒为 null ⇒ 九宫格永远显示「预设清单加载中…」），但**消费契约的锚点在这里**：
+  // client 半存的必须是 `body.presets` 这个**数组**，并另外读 `body.persistent` / `body.local`。
+  // host 侧一旦改键名或改成对象，这条与 client.test.js 的「state 形状契约」会同时红。
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { ICON_PRESETS } = await import('../lib/icon-presets.js')
+  const ctx = fakeCtx()
+  host.apply(ctx, { dataDir: mkdtempSync(join(tmpdir(), 'mia-presets-shape-')) })
+
+  const res = await callApi(ctx, '/appearance/api/presets')
+  assert.equal(res.status, 200)
+  assert.deepEqual(Object.keys(res.body).sort(), ['local', 'persistent', 'presets'],
+    '响应恰好这三个键（client 消费 presets / persistent / local）')
+  assert.equal(Array.isArray(res.body.presets), true, 'presets 必须是数组 —— client 把它整个存进 state')
+  assert.equal(res.body.presets.length, ICON_PRESETS.length, '清单长度必须等于预设表（少一款即静默降级）')
+  for (const preset of res.body.presets) {
+    assert.deepEqual(Object.keys(preset).sort(), ['file', 'id', 'label', 'url'],
+      '每项四键：id / label / file / url —— client 的九宫格与 hero 按这四个读数')
+  }
+})
+
 // 2026-09-26 回归闸门：写盘失败曾被吞掉却回报 200 + changed:true（用户改动静默回滚、无提示）。
 // 这两条钉死修复契约：①失败必须 500 + changed:false + 内存配置/修订号不动；②失败后 writeChain
 // 不得变成永久 rejected（否则后续任何写入都卡死 —— 表现为请求永不返回）。
