@@ -302,6 +302,55 @@ pub(crate) fn advance_drag_target(
     (base.0 + delta.0, base.1 + delta.1)
 }
 
+/* ---------------- R16：抓取热区（命中容差，纯逻辑） ---------------- */
+
+/// 局部坐标 `(x, y)` 的 `± pad` 邻域内是否存在「不透明像素」（`alpha >= alpha_min`）。
+///
+/// **背景（R16，2026-10-12）**：R2 的命中判定是**逐像素 alpha**。而桌宠立绘在窗口内只占
+/// 中间一条 —— 实机网格扫描（whale 主题）显示：窗口 286×390 里可点区只有约 **110×180
+/// （≈18%）**，左右各 ~55px 留白与角色上方/底部大片区域点上去**直接穿透到桌面** ⇒
+/// 用户报的「桌宠很难拖动 / 拖不动」。
+///
+/// **为什么是「膨胀」而不是「放宽阈值」**：把 `CLICK_THROUGH_ALPHA` 从 16 降到 8 只能多出
+/// 抗锯齿的那 1–2px —— 抓不住的根因是「角色旁边**真的没有像素**」，不是「像素太淡」。
+/// 膨胀 pad 像素才能把「贴着轮廓的空白」纳入可点区，同时**不**把远离角色的角落变成
+/// 隐形挡板（那会让桌宠挡住整块桌面的点击，比抓不住更糟）。
+///
+/// **越界即穿透**：窗口外恒 `false`，膨胀不会让桌宠吃窗口外的点击。
+///
+/// 纯逻辑（只读 `buf` 切片，不碰 Win32）⇒ 与 `pick_dock_edge` 同口径，可直编单测。
+/// `buf` 是预乘 `0xAARRGGBB`（与 `load_png` / `blit_*` / `is_transparent_at` 同源）。
+pub(crate) fn grab_hit(
+    buf: &[u32],
+    w: i32,
+    h: i32,
+    x: i32,
+    y: i32,
+    pad: i32,
+    alpha_min: u32,
+) -> bool {
+    if w <= 0 || h <= 0 || x < 0 || y < 0 || x >= w || y >= h {
+        return false;
+    }
+    if buf.len() < (w as usize) * (h as usize) {
+        return false;
+    }
+    let pad = pad.max(0);
+    let x0 = (x - pad).max(0);
+    let x1 = (x + pad).min(w - 1);
+    let y0 = (y - pad).max(0);
+    let y1 = (y + pad).min(h - 1);
+    for yy in y0..=y1 {
+        let row = (yy * w) as usize;
+        for xx in x0..=x1 {
+            if ((buf[row + xx as usize] >> 24) & 0xFF) >= alpha_min {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /* ---------------- M4.1 · 边缘停靠（吸附，纯逻辑） ---------------- */
 
 /// 屏幕边缘（M4.1）。`None` = 不贴边。
@@ -851,6 +900,49 @@ mod tests {
         let t = Some((50, 60));
         assert_eq!(advance_drag_target(t, cur, (0, 0)), (50, 60),
             "零位移必须原样返回 —— 窗口层据此跳过 MoveWindow");
+    }
+
+    /* ---------------- R16 · 抓取热区（命中容差） ---------------- */
+
+    /// R16-1：膨胀只把「贴着轮廓的空白」纳入可点，**不**吃掉远离角色的角落。
+    #[test]
+    fn grab_hit_expands_around_solid_pixels_only() {
+        let (w, h) = (5i32, 5i32);
+        let mut buf = vec![0u32; (w * h) as usize];
+        buf[(2 * w + 2) as usize] = 0xFF00_0000; // 仅中心像素不透明
+        assert!(grab_hit(&buf, w, h, 2, 2, 0, CLICK_THROUGH_ALPHA), "实心像素本身必须命中");
+        assert!(grab_hit(&buf, w, h, 4, 4, 2, CLICK_THROUGH_ALPHA), "pad=2 时对角邻域命中");
+        assert!(!grab_hit(&buf, w, h, 0, 0, 1, CLICK_THROUGH_ALPHA), "pad 之外仍是透明");
+        assert!(!grab_hit(&buf, w, h, -1, 2, 8, CLICK_THROUGH_ALPHA),
+            "窗口外恒穿透 —— 膨胀不得让桌宠吃到窗口外的点击");
+        // 阈值是判据的一部分：半透明像素在阈值之上命中、之下不命中。
+        let mut faint = vec![0u32; (w * h) as usize];
+        faint[(2 * w + 2) as usize] = 0x2000_0000; // alpha = 0x20 = 32
+        assert!(grab_hit(&faint, w, h, 2, 2, 0, 16), "alpha=32 ≥ 阈值 16 ⇒ 命中");
+        assert!(!grab_hit(&faint, w, h, 2, 2, 0, 64), "alpha=32 < 阈值 64 ⇒ 不命中");
+    }
+
+    /// R16-2：**回归口径** —— 用实测的 whale 可点区造缓冲（窗口 286×390 内 x∈[70,180]、
+    /// y∈[150,330]），钉住膨胀半径的语义：轮廓外 `pad` 内可点、`pad` 外穿透、
+    /// 窗口左右留白深处仍穿透（不出现「整窗隐形挡板」）。
+    #[test]
+    fn grab_pad_matches_measured_whale_hit_area() {
+        let (w, h) = (286i32, 390i32);
+        let mut buf = vec![0u32; (w * h) as usize];
+        for y in 150..=330 {
+            for x in 70..=180 {
+                buf[(y * w + x) as usize] = 0xFF00_0000;
+            }
+        }
+        let pad = CLICK_GRAB_PAD_PX;
+        let a = CLICK_THROUGH_ALPHA;
+        assert!(grab_hit(&buf, w, h, 70, 200, pad, a), "角色本体内可点");
+        assert!(grab_hit(&buf, w, h, 70 - pad, 200, pad, a), "轮廓外 pad 内应可点（抓取容差）");
+        assert!(!grab_hit(&buf, w, h, 70 - pad - 1, 200, pad, a), "轮廓外 pad+1 仍穿透");
+        assert!(!grab_hit(&buf, w, h, 20, 200, pad, a), "贴边留白深处仍穿透 —— 不得变成整窗挡板");
+        assert!(!grab_hit(&buf, w, h, 143, 60, pad, a), "角色上方（气泡带）仍穿透");
+        // 可见收益的量化：膨胀后 x 方向可抓带宽度 110 → 110 + 2×pad
+        assert_eq!(110 + 2 * pad, 142, "pad={pad} 时横向可抓带应为 142px（原 110px）");
     }
 
     /* ---------------- M4.1 · 边缘停靠 ---------------- */

@@ -2,6 +2,122 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-12 · 轻量重启「重启 DSH 服务」：停后端重拉、窗口不重建（三入口 + 加载画面）
+
+**触发**：用户「我觉得应该加一个重启功能，你有什么想法和建议」。调研后的结论是——
+**缺的不是"重启能力"，是"入口"与"分级"**：能力侧早已齐备（见下），入口却只藏在崩溃恢复
+对话框里。三条外部事实坐实了这个缺口不是本壳独有：
+
+| 事实 | 位置 | 含义 |
+|---|---|---|
+| 插件管理器装完只说「更改将在下次启动生效」 | `packages/client/ui-plugin-manager/src/client/locales.ts:15`（`restartNotice`） | 官方**只有提示、没有按钮** |
+| 设置项带 `applies: 'live' \| 'restart'` 语义 | `packages/settings/settings/src/types.ts:45` | 官方明知有些改动要重启 |
+| 官方桌面端只在两处重启 | `apps/desktop/src/main.ts:61`（`app.relaunch(); app.quit()`） | 仅 fatal-recovery 与更新安装；CLI **无** restart/reload 命令 |
+
+**改之前就有的资产（本轮零重造）**：`restart_app(disable_plugins)`（完整重启，含单实例锁
+交接顺序）、`stop_backend_tiered`（软杀→强杀→重试分级停机）、`start_backend_watchdog`
+（后端意外死亡自动重拉 + 页面靠持久 cookie 自行重连）、恢复对话框三选项。
+
+**用户拍板**：粒度 = **轻量重启 Host 优先**；入口 = 托盘 + 页内一键 + 桌宠右键菜单；
+附加要求 = **重启要有加载画面**。
+
+**改法**（`src-tauri/src/main.rs` / `pet_native/ffi.rs` / `pet_native/window.rs` /
+`themes/src/03-switcher.js`）：
+
+1. **`restart_backend(app, trigger)`** —— 停后端 → 等端口真空 → 自己 `spawn_dsh()` 等就绪 →
+   导航回 DSH。**窗口、标题栏、桌宠、托盘一律不动**；跑在独立线程（全程阻塞轮询，放 UI 线程
+   会把窗口冻住，那"加载画面"就成了静止画面）。
+2. **刻意不复用 `kill_spawned_dsh`** —— 它的 `Retain` 语义在「浏览器等外部客户端还连着 3080」时
+   保留后端不杀：那是"关应用"的正确行为，用在重启上就是**「点了没反应且不报错」**，
+   属最难查的一类。重启走独立的 `stop_backend_tiered` 路径。
+3. **看门狗让路用 `continue` 而非 `return`**（`RESTARTING`）—— 避免与重启流程双份 spawn
+   撞端口；重启结束后必须继续守着后端。重启失败也不怕没人管：`RESTARTING` 无论成败都在
+   `restart_backend` 里清掉，下一轮看门狗就接管兜底。
+4. **必须等端口真空** —— 看门狗的重拉判据是「pid 已死 **且** `port_ready()` 为假」；
+   端口还听着时它判成「3080 已被其他实例接管 → 转为采用」，**重启就此静默失效**。
+5. **加载画面 = 本地 `loading.html`**（与后端无关，后端全死也显示得出来）：URL 由
+   `on_page_load` 首次记录（**刻意不硬编码 `tauri.localhost`** —— dev 与生产模式本地源不同）；
+   阶段文案存 `RESTART_STATUS`、页面落地后补发（**导航途中 `set_status` 的 eval 是发给旧文档的，
+   随导航一起丢弃** —— 这条不处理，用户就只看到一张没有文案的空画面）。
+6. **重启不重放片头** —— `boot_intro_state` 在 `RESTARTING` 期间直接返回 `intro:"off"`。
+   门控放壳侧，`ui/loading.html` **一行未改**（沿用"壳说事实、页面照做"的既有分工，
+   同 `12-material.js` 口径）。冷启动放片头是仪式感，重启放片头是罚站。
+7. **失败必须有出口** —— 超时（端口真空 15s / 就绪 90s）→ 失败文案 + `__setRetry(true)`，
+   把加载页现成的「重试」与「恢复选项」放出来。**没有回退的重启功能会把"能用的应用"
+   变成"打不开的应用"**，这是本功能最需要守住的一条。
+8. **防抖 3s**（三个入口可能被连点；边界值算"可再点"，否则用户以为按钮坏了）+
+   **外部后端兜底**（`DSH_PID` 为 None 时经新增的 `parse_backend_listener_pid` 向 netstat 要
+   3080 占用者；找不到就如实报告，**绝不假装重启成功**）。
+9. **三个入口** —— 托盘「重启 DSH 服务」、桌宠右键菜单同名项、壳主题面板新增一行
+   （`data-act="restart-host"` → `petHashCmd` → 既有 hash 命令通道；本地页与远程页由此走
+   同一条路，少一处"本地能点、远程点不动"的形态差异）。文案一律点明"服务"二字，
+   避免被误当成退出应用。
+
+**闸门**：`cargo test` 新增 **3 例** —— `restart_debounce_accepts_first_and_rejects_immediate_repeat`
+（防抖边界：恰好等于窗口长度必须放行）、`parse_backend_listener_pid_only_accepts_listening_rows`
+（只认 `LISTENING`；`30801` 端口前缀误伤、ESTABLISHED 客户端行、UDP 行三种反例都钉住）、
+`restart_host_command_survives_parsing_and_heartbeat_clear`（重启命令必须活过心跳清理 ——
+命令是事件，被心跳吞掉就永久丢失）。前端注入产物经 `node scripts/build-init.mjs` 重建
+（13 片、令牌校验通过）。
+
+**回归实跑**：`cargo test` **172 例全绿**（R16 基线 169 + 本轮 3）；
+`verify-all desktop` **40/40**、`verify-all repo` **7/7**（md-links 185 文档 / 402 链接全解析，
+style 54 条基线无新增）。
+
+**范围声明**：完整重启（`restart_app`）本轮**一行未动** —— 它仍是崩溃恢复对话框的唯一出口。
+本轮只新增"轻量"这一档，两档分工写在 `restart_backend` 的文档注释里。
+
+**实机待验（归用户）**：① 三处入口各点一次 —— 都应出现加载画面、几秒后回到 DSH；
+② 重启期间**不得**重放启动片头（appearance 开着片头时才有区分度）；
+③ 改一个 host 半插件后点重启 → 改动生效且窗口未被重建（会话列表仍在）；
+④ 连点两次只应重启一次；⑤ 把插件改坏到 Host 起不来 → 应停在加载页并给出「重试 / 恢复选项」
+（**这条最该验**：它就是"重启把应用搞成打不开"的防线）。
+
+## 2026-10-12 · 桌宠拖动三修（R16）：起手过冲 / 丢 UP 卡死 / 抓取热区 —— 用户报「拖不动」
+
+**触发**：用户「桌宠很难拖动是怎么回事」，澄清后为「**拖不动**」。
+
+**诊断**（实机取证 + 真源码数值验证；探针留档 `_refs/scripts-archive/pet-drag-r16-probe-2026-10-12/`）：
+
+| 现象 | 判据 | 量化 |
+|---|---|---|
+| 一拖就窜 | `flush_drag_target` 的 `self.last_drag_tick.elapsed().min(100)`，而 `last_drag_tick` **只在 flush 内更新**、拖动起手不重置 ⇒ 起手首拍**必然**吃满 100ms | `ω·dt = 14.83 × 0.1 = 1.48 > 1` ⇒ 首拍跳到**目标位移的 2.20 倍**、峰值 2.43 倍，0.53–0.75s 才飘回（真源码 `spring_step` 数值） |
+| 抓不住 | 网格扫描读窗口 `WS_EX_TRANSPARENT` 位：whale 主题下 286×390 里可点区仅 **110×180（18%）** | 左右各 ~55px 留白 + 角色上方/底部，一点就穿透到桌面 |
+| 拖完不落盘 / 整块挡鼠标 | 实机读到 `EXSTYLE=0x8080088`（**无** `WS_EX_TRANSPARENT`）而光标在窗口外 ⇒ 只可能走了 `update_click_through` 的 `!shown \|\| dragged` 提前返回 ⇒ **`dragged` 卡 true**；`pet.json` 自 10-07 20:10 到 10-12 15:33 **未更新**，而窗口已从启动点 (1200,500) 挪到 (2250,991) | 全 `src-tauri/src` **零 `SetCapture`** ⇒ 隐式捕获丢 UP 后状态机永不复位 |
+| 位置记不住 | `pet.json` 存 `x=5269 / work=3200×2000`，当前工作区 2560×1440（本机 3 个虚拟显示适配器 + 混合分辨率） | 每次启动 `pos not visible -> default pos`（旧拓扑遗留，非本批引入） |
+
+**改法（全部落在 `pet_native/`，零 UI、零 schema 变更）**：
+
+1. **首拍不再过冲**（`window.rs` / `config.rs`）：拖动起手显式重置 `last_drag_tick`；
+   `flush_drag_target` 把任何 dt 拆成 ≤ `DRAG_SPRING_MAX_SUBSTEP_MS`(8ms) 的子步再逐段积分；
+   裸 `100` 提为具名 `DRAG_TICK_MAX_MS`（上限保留，但**不再一次积完**）。
+2. **丢 UP 兜底**（`ffi.rs` / `window.rs`）：`WM_LBUTTONDOWN` 即 `SetCapture`；
+   `WM_LBUTTONUP` 改成**标签块 + 末尾统一 `ReleaseCapture`**（漏一处 = 桌宠永久持有全系统鼠标）；
+   新增 `WM_CAPTURECHANGED` 处理「捕获被外部夺走 ⇒ UP 永不到达」这条路径，就地收尾并落盘。
+3. **抓取热区**（`model.rs` / `window.rs`）：新增纯函数 `grab_hit`（`±pad` 邻域内存在
+   `alpha ≥ CLICK_THROUGH_ALPHA` 的像素即可点），主窗命中改用它，pad = `CLICK_GRAB_PAD_PX`(16px)
+   按 DPI 换算 ⇒ 横向可抓带 110 → 142px；**窗口外恒穿透**、远离角色的角落仍穿透
+   （不新增大块隐形挡板）。
+4. **散步闸**（`window.rs`）：wander 触发补 `!self.dragged` —— 原先只闸 `docked_edge`，
+   拖动跨过 45–120s 的散步时点会与拖动抢 `pos.0`（R14 教训②的同族缺口）。
+5. **现场诊断**：拖动起手 / 结束 / 中止各一行 `pet.log`（含窗口与目标坐标、dock）；
+   `SetTimer(IDT_DRAG)` 失败、首次 `SetCapture` 未生效各写一次（「拖不动」下次可直接定位）。
+
+**闸门**：`cargo test` 新增 **4 例**，共 **169 例全绿** —— `xform` 的
+`single_100ms_step_overshoots_so_it_must_be_substepped`（**反例**：钉住「100ms 单步必然 >2× 目标」，
+任何把大 dt 一次积完的写法都会在这里变红）+ `substepped_100ms_never_overshoots_target`（**正例**：拆子步后不过冲）；
+`model` 的 `grab_hit_expands_around_solid_pixels_only` + `grab_pad_matches_measured_whale_hit_area`
+（用实测可点区做回归：pad 内可点、pad 外与留白深处仍穿透）。
+
+**口径说明**：本仓文档里 desktop `cargo test` 的最新记录是 10-05 的 **155**，落后于实际
+（本轮实跑 **169**）—— 沿用「以实跑为准」的既有纪律。
+
+**实机待验（归用户）**：① 慢拖 / 快拖各一次 —— **不得**出现「一按下去先窜出去再飘回来」；
+② 抓角色轮廓 ±16px 内按下应能抓住（原先穿透到桌面）；
+③ 拖动中把鼠标甩到别的窗口/任务栏上松手 ⇒ 桌宠**就地收尾**（不再卡成挡板、位置正常落盘）；
+④ `pet.log` 出现成对的 `drag start` / `drag end`（或 `drag aborted (capture lost)`）即链路完整；
+⑤ 装「总是可点」档（`through=always`）时整窗可拖的既有行为不受影响。
+
 ## 2026-10-08 · 启动片头第二批素材入库：dreamsea / lagoon / bubbles（4 → 7 段）
 
 **触发**：用户分享上游插件 [lxj5820/dsh-boot-animation](https://github.com/lxj5820/dsh-boot-animation)

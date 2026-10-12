@@ -34,6 +34,17 @@
     '#miasaki-theme-menu .ms-name{font-size:13px;font-weight:600;}' +
     '#miasaki-theme-menu .ms-sub{font-size:11px;opacity:.62;}' +
     '#miasaki-theme-menu .ms-tip{font-size:11px;opacity:.55;padding:3px 10px 1px;max-width:200px;}' +
+    // 壳级操作行（2026-10-12「重启 DSH 服务」）：排版规格与 .ms-opt 同源（30px 图标位 +
+    // 13/600 主行 + 11 副行），只多一条上分隔线把它与"选主题"区分开；配色一律走
+    // var(--ms-*) 并带兜底值 —— 本面板在本地页（无 DSH 令牌的环境）也要显示得出来。
+    '#miasaki-theme-menu .ms-act{display:flex;align-items:center;gap:10px;padding:7px 10px;' +
+    'border-radius:8px;cursor:pointer;margin-top:6px;box-shadow:inset 0 1px 0 var(--ms-border,#3a3346);}' +
+    '#miasaki-theme-menu .ms-act:hover{background:var(--ms-hover,#2a2434);}' +
+    '#miasaki-theme-menu .ms-act:focus-visible{outline:1.5px solid var(--ms-accent,#d9b36a);outline-offset:-1.5px;}' +
+    '#miasaki-theme-menu .ms-act .ma-ico{width:30px;height:30px;flex:none;display:flex;align-items:center;' +
+    'justify-content:center;font-size:16px;line-height:1;opacity:.85;}' +
+    '#miasaki-theme-menu .ms-act .ma-name{font-size:13px;font-weight:600;}' +
+    '#miasaki-theme-menu .ms-act .ma-sub{font-size:11px;opacity:.62;}' +
     '#miasaki-overlay{position:fixed;inset:0;z-index:99999;pointer-events:none;opacity:0;}' +
     '#miasaki-overlay.run{animation:ms-sweep .4s ease forwards;}' +
     '@keyframes ms-sweep{0%{opacity:0}45%{opacity:.85}100%{opacity:0}}' +
@@ -344,6 +355,17 @@
       try { localStorage.setItem('miasaki.bright', BRIGHT) } catch (e) { /* ignore */ }
       syncDark()
       refreshThemeMenu()
+      return
+    }
+    // 壳级操作行（2026-10-12「重启 DSH 服务」）：走 hash 通道而不是 invoke ——
+    // 本地页与远程页由此走同一条路，少一处「本地能点、远程点不动」的形态差异。
+    var act = ev.target && ev.target.closest ? ev.target.closest('.ms-act') : null
+    if (act) {
+      var actName = act.getAttribute('data-act')
+      if (actName) {
+        setThemeMenuOpen(false)
+        petHashCmd(actName)
+      }
     }
   }
 
@@ -353,7 +375,7 @@
     if (k !== 'Enter' && k !== ' ' && k !== 'Spacebar') return
     var t = ev.target
     if (!t || !t.closest) return
-    var hit = t.closest('.ms-opt') || t.closest('.mb')
+    var hit = t.closest('.ms-opt') || t.closest('.mb') || t.closest('.ms-act')
     if (!hit) return
     ev.preventDefault()
     hit.click()
@@ -408,6 +430,14 @@
       '<span class="mb" tabindex="0" data-b="light" title="浅色">\u2600</span>' +
       '<span class="mb" tabindex="0" data-b="dark" title="深色">\u263E</span>' +
       '<span class="mb" tabindex="0" data-b="system" title="跟随系统">\u{1F5A5}</span></div>'
+    // 壳级操作（2026-10-12）：官方插件管理器装完插件只说「更改将在下次启动生效」
+    // （ui-plugin-manager 的 restartNotice）却从不给按钮 —— 这一行就是那个缺掉的按钮。
+    // 走 hash 命令通道（petHashCmd）→ 壳的 restart_backend，与关闭弹窗同一条路。
+    html += '<div class="ms-act" role="menuitem" tabindex="0" data-act="restart-host"' +
+      ' title="停掉并重新拉起 DSH 服务：不关窗口、不重放片头，插件与设置改动即刻生效">' +
+      '<span class="ma-ico" aria-hidden="true">\u21BB</span>' +
+      '<div><div class="ma-name">重启 DSH 服务</div>' +
+      '<div class="ma-sub">插件 / 设置改动即刻生效</div></div></div>'
     html += '<div class="ms-tip"></div>'
     menu.innerHTML = html
     var opts = menu.querySelectorAll('.ms-opt')

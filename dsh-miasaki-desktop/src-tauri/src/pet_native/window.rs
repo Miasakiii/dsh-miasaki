@@ -322,7 +322,11 @@ impl PetWin {
             let blocked = state != PetState::Idle || fleet_running;
             // M4.1（R14 实机教训②）：停靠/探头期间必须**拦住全部位移来源**——
             // wander 是拖动之外唯一的窗口位移源，缺一处就会出现「挂着探头姿态被平移出屏」。
-            if can_walk && !blocked && self.docked_edge.is_none() {
+            // R16（2026-10-12）：**再补 `!self.dragged`** —— 原先只闸了 `docked_edge`，
+            // 于是拖动恰好跨过 45–120s 的散步时点时会出「桌宠自己横向走」：
+            // wander 每帧直接改 `self.pos.0`（`WANDER_PX_PER_FRAME`×2 处），
+            // 而拖动读的也是 `self.pos` ⇒ 两者抢同一个量。
+            if can_walk && !blocked && self.docked_edge.is_none() && !self.dragged {
                 let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
                 self.action = Some(ActionSlot {
                     action: Action::Wander { dx: dir },
@@ -927,13 +931,15 @@ impl PetWin {
         if self.through_disabled() {
             return false;
         }
-        // DPI：`buf` 是物理尺寸缓冲 ⇒ 越界判断与索引步长必须同口径。
+        // R16（2026-10-12）：判定外面再套一层「抓取热区」膨胀（`model::grab_hit`）。
+        // 原口径是逐像素 alpha，而桌宠立绘只占窗口中间一条 —— 实机扫描 whale 主题
+        // 可点区仅约 110×180 / 窗口 286×390（≈18%），抓着轮廓边上一按就穿透到桌面，
+        // 用户报「拖不动」。膨胀半径按 DPI 换算（与 `buf` 同一物理像素口径）。
+        // **越界与膨胀的边界语义**：窗口外的点恒穿透（`grab_hit` 里先做越界判断）
+        // ⇒ 不会因为容差而吃掉窗口外的点击。
         let (pw, ph) = self.win_size();
-        if x < 0 || y < 0 || x >= pw || y >= ph {
-            return true;
-        }
-        let a = (self.buf[(y * pw + x) as usize] >> 24) & 0xFF;
-        a < CLICK_THROUGH_ALPHA
+        let pad = scaled_px(CLICK_GRAB_PAD_PX, self.dpi);
+        !grab_hit(&self.buf, pw, ph, x, y, pad, CLICK_THROUGH_ALPHA)
     }
 
     /// 「总是可点」设置。每 10ms 的命中轮询会读它，故**只取一个 bool、临界区极短**；
@@ -1440,10 +1446,28 @@ impl PetWin {
                 return false;
             }
         }
-        let dt = self.last_drag_tick.elapsed().as_millis().min(100) as u32;
+        // R16（2026-10-12）：**本拍时长必须拆成安全子步再积分**。
+        //
+        // 原实现是「`elapsed().min(100)` 后一次积完」，而那个 100ms 上限恰恰是过冲的来源：
+        // 弹簧安全区是 ω·dt ≪ 1（8ms ⇒ 0.119），100ms 时 ω·dt = 1.48 > 1，半隐式欧拉会
+        // 把窗口推到**目标位移的 2.2 倍**（实测峰值 2.43 倍）再慢慢飘回来。
+        // 更糟的是它的触发条件**必然成立**：`last_drag_tick` 只在**本函数内**更新，而两次
+        // 拖动之间的空闲必然远超 100ms ⇒ 每次起手第一拍都吃满上限 ⇒ 用户看到「一拖就窜」。
+        //
+        // 两处一起改才治本：① 拖动起手重置积分时钟（`WM_MOUSEMOVE` 的分支，让首拍 ≈ 8ms）；
+        // ② 这里把任何 dt 拆成 ≤ `DRAG_SPRING_MAX_SUBSTEP_MS` 的子步（兜住挂起/低帧率）。
+        // `max(1)` 保住原注释里那条理由：`elapsed()` 取整到 0 时若整拍不积分，拖动会卡住。
+        let dt = self.last_drag_tick.elapsed().as_millis().min(DRAG_TICK_MAX_MS as u128) as u32;
         self.last_drag_tick = std::time::Instant::now();
-        let sx = spring_step(self.drag_spring_x.unwrap(), target.0 as f32, dt);
-        let sy = spring_step(self.drag_spring_y.unwrap(), target.1 as f32, dt);
+        let (mut sx, mut sy) = (self.drag_spring_x.unwrap(), self.drag_spring_y.unwrap());
+        let (tx, ty) = (target.0 as f32, target.1 as f32);
+        let mut left = dt.max(1);
+        while left > 0 {
+            let step = left.min(DRAG_SPRING_MAX_SUBSTEP_MS);
+            sx = spring_step(sx, tx, step);
+            sy = spring_step(sy, ty, step);
+            left -= step;
+        }
         // 取整后再夹回 i32：f32 → i32 的 `as` 是截断，负坐标下会差 1px（长期累积成位置漂移）。
         let nx = sx.pos.round() as i32;
         let ny = sy.pos.round() as i32;
@@ -1545,11 +1569,13 @@ impl PetWin {
             let s1 = enc("显示主窗口");
             let s2 = enc("隐藏桌宠");
             let s3 = enc("最小化主窗口");
-            let s4 = enc("退出应用");
+            let s4 = enc("重启 DSH 服务");
+            let s5 = enc("退出应用");
             AppendMenuW(m, MF_STRING, MENU_SHOW, s1.as_ptr());
             AppendMenuW(m, MF_STRING, MENU_HIDE, s2.as_ptr());
             AppendMenuW(m, MF_STRING, MENU_MIN, s3.as_ptr());
-            AppendMenuW(m, MF_STRING, MENU_EXIT, s4.as_ptr());
+            AppendMenuW(m, MF_STRING, MENU_RESTART, s4.as_ptr());
+            AppendMenuW(m, MF_STRING, MENU_EXIT, s5.as_ptr());
             // R1 兼容：`TrackPopupMenu` 要求 owner 窗口是**前台窗口**，否则「点击菜单外不关闭」。
             // 而 R1 新加的 `WS_EX_NOACTIVATE` 会让 `SetForegroundWindow` 失效，
             // 故此处临时摘掉该样式位，菜单结束后恢复，并把前台归还给原窗口。
@@ -1573,6 +1599,7 @@ impl PetWin {
                         let _ = w.minimize();
                     }
                 }
+                MENU_RESTART => crate::restart_backend(&self.app, "桌宠菜单"),
                 MENU_EXIT => crate::request_close(&self.app),
                 _ => {}
             }
@@ -1682,6 +1709,31 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             // R13:新按压序列 —— 上一轮若有残留目标（异常路径，如拖动中窗口被销毁），
             // 在这里清掉并停表，避免下一次拖动时「跳到上一轮的目标」。
             (*pet).end_drag();
+            // R16（2026-10-12）：**显式捕获鼠标**。
+            //
+            // 本仓 M1–M4 一直只依赖 Win32 的隐式捕获（「在客户区按下按钮时系统自动捕获」），
+            // 实机取证发现它会丢 UP：桌宠卡在 `dragged=true`（判据 = 光标在窗口外 +
+            // 窗口可见 + EXSTYLE 无 `WS_EX_TRANSPARENT` ⇒ 只可能走了 `update_click_through`
+            // 的 `!shown || dragged` 提前返回）。卡住后这一整块 286×390 变成吃鼠标的挡板，
+            // 而且**位置永不落盘**（pet.json 自 10/07 到 10/12 没更新过，窗口却已挪了 1000px）。
+            //
+            // 在 DOWN（而不是拖动起手）就捕获，是为了让「未越过拖动阈值的松手」也有 UP 可收：
+            // 释放点唯一（`WM_LBUTTONUP` 末尾统一 `ReleaseCapture`），另有
+            // `WM_CAPTURECHANGED` 兜底「捕获被外部夺走」这条 UP 永不到达的路径。
+            unsafe { SetCapture(hwnd) };
+            // 只在**首次**未生效时记一行（本仓有「pet.log 被高频行灌满」的前科：
+            // 设置面板同值 setter 曾让它以 1.32 行/秒写盘）。
+            static CAPTURE_WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            let capture_by = unsafe { GetCapture() };
+            if capture_by != hwnd
+                && !CAPTURE_WARNED.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                pet_log_line(&format!(
+                    "[native-pet] drag: SetCapture 未生效（GetCapture={capture_by}）—— \
+                     拖动仍可用，但丢 UP 时无捕获兜底\n"
+                ));
+            }
             // v2:指针按下即打断环境编排/挥手/散步(拖拽与动作互斥);跳跃保留不打折反馈
             let interrupt = matches!(
                 &(*pet).action,
@@ -1728,65 +1780,121 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                     GetWindowRect(hwnd, &mut r);
                     (*pet).drag_target = Some((r.left + dx, r.top + dy));
                     (*pet).press_pt = (p.x, p.y);
+                    // R16（2026-10-12）：**起手重置弹簧积分时钟**。
+                    //
+                    // `last_drag_tick` 只在 `flush_drag_target` 内更新，而两次拖动之间的空闲
+                    // 必然 ≫ 100ms ⇒ 不重置的话，首拍 dt 必然被夹到上限（100ms），
+                    // 弹簧在该步长下 ω·dt = 1.48 > 1，会把窗口推到目标位移的 **2.2 倍**
+                    // 再飘回来（数值取证见 `design/CHANGELOG.md` 2026-10-12 条）。
+                    // 重置后首拍 ≈ 8ms（`IDT_DRAG` 周期）⇒ 落在 ω·dt ≈ 0.12 的安全区。
+                    (*pet).last_drag_tick = std::time::Instant::now();
+                    // R16：捕获保险 —— DOWN 时已捕，这里再捕一次兜住「按下与起手之间被夺走」。
+                    unsafe { SetCapture(hwnd) };
                     if !(*pet).dragging_timer_on {
                         (*pet).dragging_timer_on = true;
-                        SetTimer(hwnd, IDT_DRAG, DRAG_COALESCE_MS, 0);
+                        // SetTimer 返回 0 = 挂表失败。那意味着**目标永不被消费**（窗口不动），
+                        // 而 `dragging_timer_on` 已是 true ⇒ 不会再重试。这条日志是「拖不动」
+                        // 这类偶发故障的唯一现场记录。
+                        if unsafe { SetTimer(hwnd, IDT_DRAG, DRAG_COALESCE_MS, 0) } == 0 {
+                            pet_log_line("[native-pet] drag: SetTimer(IDT_DRAG) 失败 —— 本拍不会消费目标\n");
+                        }
                     }
+                    pet_log_line(&format!(
+                        "[native-pet] drag start win=({},{}) target=({},{})\n",
+                        r.left, r.top, r.left + dx, r.top + dy
+                    ));
                 }
             }
             0
         }
         WM_LBUTTONUP => {
-            // M1.3:双击序列的第二次 UP 直接吞掉(DBLCLK 已处理,防「挥一次+跳一次」)
-            if (*pet).swallow_next_up {
-                (*pet).swallow_next_up = false;
-                return 0;
-            }
-            // R5:审批按钮命中优先于拖动/单击语义——这次点击是「决策」，不是「撸一下」。
-            // （命中区判定在角色本体范围内，故不会与透明穿透冲突：能点到就说明窗口可点。）
-            if !(*pet).dragged {
-                let mut pt = Point { x: 0, y: 0 };
-                GetCursorPos(&mut pt);
-                if let Some(allow) = (*pet).approval_hit(pt.x - (*pet).pos.0, pt.y - (*pet).pos.1) {
-                    (*pet).decide_approval(allow);
-                    return 0;
+            // R16（2026-10-12）：本分支的**所有**出口都必须释放鼠标捕获，故在末尾统一做。
+            // 用标签块而不是在每个 `return` 前各写一次：漏一处的后果是桌宠永久持有捕获
+            // （整个系统的鼠标消息都归它），比多写一行严重得多。
+            'up: {
+                // M1.3:双击序列的第二次 UP 直接吞掉(DBLCLK 已处理,防「挥一次+跳一次」)
+                if (*pet).swallow_next_up {
+                    (*pet).swallow_next_up = false;
+                    break 'up;
                 }
-            }
-            // M4.1：探头中（含缩边/退回过渡）点击 = 拉直（R14：点击 → engage 档 0.82），
-            // 不吃「撸一下」语义——用户点的是「出来」，不是「表演」。拉直态（Straightened）
-            // 的点击走原语义（跳/唤起）。
-            if !(*pet).dragged
-                && matches!(
-                    (*pet).peek.phase,
-                    PeekPhase::Peeking | PeekPhase::Entering | PeekPhase::Returning
-                )
-            {
-                peek_kick_engage(&mut (*pet).peek);
-                (*pet).last_interaction = std::time::Instant::now();
-                return 0;
-            }
-            if !(*pet).dragged {
-                // M1.3 单击语义:等待审批或主窗口不可见 → 立即唤起主窗口(保留有用语义);
-                // 否则 → 去抖 250ms 判定是否双击,到期执行「撸一下」——不再无条件抢焦点(D5)
-                let wake = (*pet).effective_waiting() || (*pet).main_needs_wake();
-                if wake {
-                    KillTimer(hwnd, IDT_SINGLE_CLICK);
-                    (*pet).click_pending = false;
-                    (*pet).focus_main();
+                // R5:审批按钮命中优先于拖动/单击语义——这次点击是「决策」，不是「撸一下」。
+                // （命中区判定在角色本体范围内，故不会与透明穿透冲突：能点到就说明窗口可点。）
+                if !(*pet).dragged {
+                    let mut pt = Point { x: 0, y: 0 };
+                    GetCursorPos(&mut pt);
+                    if let Some(allow) = (*pet).approval_hit(pt.x - (*pet).pos.0, pt.y - (*pet).pos.1) {
+                        (*pet).decide_approval(allow);
+                        break 'up;
+                    }
+                }
+                // M4.1：探头中（含缩边/退回过渡）点击 = 拉直（R14：点击 → engage 档 0.82），
+                // 不吃「撸一下」语义——用户点的是「出来」，不是「表演」。拉直态（Straightened）
+                // 的点击走原语义（跳/唤起）。
+                if !(*pet).dragged
+                    && matches!(
+                        (*pet).peek.phase,
+                        PeekPhase::Peeking | PeekPhase::Entering | PeekPhase::Returning
+                    )
+                {
+                    peek_kick_engage(&mut (*pet).peek);
+                    (*pet).last_interaction = std::time::Instant::now();
+                    break 'up;
+                }
+                if !(*pet).dragged {
+                    // M1.3 单击语义:等待审批或主窗口不可见 → 立即唤起主窗口(保留有用语义);
+                    // 否则 → 去抖 250ms 判定是否双击,到期执行「撸一下」——不再无条件抢焦点(D5)
+                    let wake = (*pet).effective_waiting() || (*pet).main_needs_wake();
+                    if wake {
+                        KillTimer(hwnd, IDT_SINGLE_CLICK);
+                        (*pet).click_pending = false;
+                        (*pet).focus_main();
+                    } else {
+                        SetTimer(hwnd, IDT_SINGLE_CLICK, SINGLE_CLICK_DEBOUNCE_MS, 0);
+                        (*pet).click_pending = true;
+                    }
                 } else {
-                    SetTimer(hwnd, IDT_SINGLE_CLICK, SINGLE_CLICK_DEBOUNCE_MS, 0);
-                    (*pet).click_pending = true;
+                    // R16：**先清 `dragged` 再收尾**。末尾的 `ReleaseCapture` 会同步派发
+                    // `WM_CAPTURECHANGED`，而那里的兜底以 `dragged` 为判据；先清掉它，
+                    // 同一次松手才不会收尾两遍（重复落盘 + 重复吸附）。
+                    (*pet).dragged = false;
+                    // R13：**先 flush 再落盘**。顺序有讲究——`save_pet_pos` 读的是 `(*pet).pos`，
+                    // 若此时目标还压在 `drag_target` 里，落盘的就是上一拍的位置（松手漂移）。
+                    (*pet).end_drag();
+                    // M4.1：松手时判定边缘停靠并推出。**在落盘之前**做——落盘要记的是吸附后的位置。
+                    let docked = (*pet).apply_dock();
+                    let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
+                    save_pet_pos((*pet).pos, hide, docked);
+                    // M1.4:拖动结束同步悬浮球(隐藏后恢复入口与桌宠位置不脱节,D6)
+                    (*pet).render_dot();
+                    pet_log_line(&format!(
+                        "[native-pet] drag end -> ({},{}) dock={:?}\n",
+                        (*pet).pos.0, (*pet).pos.1, docked
+                    ));
                 }
-            } else {
-                // R13：**先 flush 再落盘**。顺序有讲究——`save_pet_pos` 读的是 `(*pet).pos`，
-                // 若此时目标还压在 `drag_target` 里，落盘的就是上一拍的位置（松手漂移）。
+            }
+            unsafe { ReleaseCapture() };
+            0
+        }
+        WM_CAPTURECHANGED => {
+            // R16（2026-10-12）：捕获被外部夺走 —— 这是**唯一**能在「`WM_LBUTTONUP` 永不到达」
+            // 时收尾拖动状态的事件。
+            //
+            // 实机故障（本次诊断取证）：桌宠卡在 `dragged=true` ⇒ ① `update_click_through`
+            // 恒走 `!shown || dragged` 提前返回，整块 286×390 变成吃鼠标的挡板；
+            // ② 位置永不落盘（pet.json 自 10/07 到 10/12 未更新，窗口却已挪了 1000px）；
+            // ③ `IDT_DRAG` 8ms 定时器常驻。修法就是在这里把同一次收尾补完。
+            // 正常松手路径已先清 `dragged` ⇒ 本分支在正常情况下是空操作。
+            if (*pet).dragged {
+                (*pet).dragged = false;
                 (*pet).end_drag();
-                // M4.1：松手时判定边缘停靠并推出。**在落盘之前**做——落盘要记的是吸附后的位置。
                 let docked = (*pet).apply_dock();
                 let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
                 save_pet_pos((*pet).pos, hide, docked);
-                // M1.4:拖动结束同步悬浮球(隐藏后恢复入口与桌宠位置不脱节,D6)
                 (*pet).render_dot();
+                pet_log_line(&format!(
+                    "[native-pet] drag aborted (capture lost) -> ({},{}) dock={:?}\n",
+                    (*pet).pos.0, (*pet).pos.1, docked
+                ));
             }
             0
         }

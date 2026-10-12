@@ -617,4 +617,40 @@ mod tests {
         assert!(max_pos > target + 1.0,
             "对照组失效：无阻尼弹簧应明显过冲（实测最大 {max_pos} / 目标 {target}）");
     }
+
+    /// R16（2026-10-12）· **反例：单步 100ms 必然过冲** —— 这就是「一拖就窜」的数值根因。
+    ///
+    /// `window.rs` 原实现是 `elapsed().min(100)` 之后**一次积完**，而
+    /// `ω·dt = 14.83 × 0.1 = 1.48 > 1`：半隐式欧拉在该步长下把位置推到**目标位移的 2.2 倍**
+    /// （实测峰值 2.43 倍），再用 0.5–0.75s 慢慢飘回来。
+    ///
+    /// 这条锁住「该步长属于危险区」这一事实，与下一条（子步积分）配对 ——
+    /// **任何把大 dt 一次积完的写法都会在这里变红。**
+    #[test]
+    fn single_100ms_step_overshoots_so_it_must_be_substepped() {
+        let after = spring_step(DragSpring { pos: 0.0, vel: 0.0 }, 100.0, 100);
+        assert!(after.pos > 200.0,
+            "100ms 单步本应过冲（>2× 目标 = 200px），实得 {:.1}px —— 若变红说明刚度/步长口径被改过",
+            after.pos);
+    }
+
+    /// R16 · **正例：同一个 100ms 拆子步后不得过冲**。
+    ///
+    /// 这正是 `flush_drag_target` 现在的算法（逐子步推进），同时兜住两条真实路径：
+    /// 「空闲后起手首拍」与「系统挂起后恢复」—— 两者都会拿到较大的 dt。
+    #[test]
+    fn substepped_100ms_never_overshoots_target() {
+        let target = 100.0_f32;
+        let mut s = DragSpring { pos: 0.0, vel: 0.0 };
+        let mut left = 100_u32;
+        while left > 0 {
+            let step = left.min(DRAG_SPRING_MAX_SUBSTEP_MS);
+            s = spring_step(s, target, step);
+            left -= step;
+        }
+        assert!(s.pos <= target + 0.5,
+            "子步积分不得越过目标：pos={:.2}（目标 {target}）", s.pos);
+        assert!(s.pos > target * 0.3,
+            "也不得几乎不动：pos={:.2} —— 100ms 内应走完约 44% 的位移", s.pos);
+    }
 }

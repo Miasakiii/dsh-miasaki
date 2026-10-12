@@ -138,6 +138,19 @@ extern "system" {
     pub(crate) fn GetForegroundWindow() -> isize;
     pub(crate) fn PostMessageW(h: isize, m: u32, w: usize, l: isize) -> i32;
     pub(crate) fn GetModuleHandleW(n: *const u16) -> isize;
+    /// R16(2026-10-12)：**显式**鼠标捕获。
+    ///
+    /// **为什么不能再只靠系统隐式捕获**（本仓 M1–M4 一直如此）：Win32 语义是
+    /// 「在窗口客户区按下按钮时系统自动捕获」——但那条隐式捕获在本机实测的
+    /// 「高 DPI + 虚拟显示适配器（Todesk / GameViewer / MuMu）」环境下会丢 UP：
+    /// 症状是桌宠卡在 `dragged=true`（整窗吃鼠标、位置不落盘，取证见
+    /// `design/CHANGELOG.md` 2026-10-12 条）。显式声明捕获/释放是拖动类窗口的标准做法。
+    /// `SetCapture` 返回被夺走捕获的那个窗口（0 = 原本无人持有）；
+    /// `ReleaseCapture` 返回非 0 = 成功。
+    pub(crate) fn SetCapture(h: isize) -> isize;
+    pub(crate) fn ReleaseCapture() -> i32;
+    /// 诊断用：当前捕获窗口（非本窗 ⇒ 拖动已被外部夺走）。
+    pub(crate) fn GetCapture() -> isize;
 }
 
 // DPI(2026-10-05)：`GetDpiForMonitor` 在 **shcore.dll**（Win8.1+），不在 user32。
@@ -201,11 +214,22 @@ pub(crate) const WM_MOUSEMOVE: u32 = 0x0200;
 /// 不跟随新 DPI 重建窗口与 DIB 就会一直是「素材原尺寸 / 屏幕倍率」的错配。
 /// 实测（`_refs/dpi-probe/`，2026-10-05）：200% 屏上不缩放 ⇒ 桌宠只有应有逻辑尺寸的 50%。
 pub(crate) const WM_DPICHANGED: u32 = 0x02E0;
+/// R16(2026-10-12)：鼠标捕获被夺走/释放时系统发此消息。
+///
+/// **为什么要处理它**：`SetCapture` 之后，若捕获被别的窗口（系统弹窗、远程控制软件、
+/// 输入法候选窗…）夺走，本窗**再也收不到 `WM_LBUTTONUP`** —— 而拖动状态机
+/// （`dragged` / `IDT_DRAG` / `drag_target`）就永远不复位。实机症状：
+/// 桌宠整块矩形变成吃鼠标的挡板 + 位置不落盘（pet.json 长期不更新）。
+/// 这条消息是**唯一**能在「UP 永不到达」时兜住该状态的事件 ⇒ 必须收尾。
+/// 正常松手路径会先清 `dragged` 再 `ReleaseCapture`，因此本消息在正常路径下是空操作。
+pub(crate) const WM_CAPTURECHANGED: u32 = 0x0215;
 pub(crate) const MK_LBUTTON: usize = 0x0001;
 pub(crate) const MENU_HIDE: usize = 101;
 pub(crate) const MENU_MIN: usize = 102;
 pub(crate) const MENU_EXIT: usize = 103;
 pub(crate) const MENU_SHOW: usize = 104;
+/// 轻量重启（重启 DSH 服务，不重建窗口）。2026-10-12 新增，见 `main.rs::restart_backend`。
+pub(crate) const MENU_RESTART: usize = 105;
 pub(crate) const SM_CXSCREEN: i32 = 0;
 pub(crate) const SM_CYSCREEN: i32 = 1;
 /// `MonitorFromPoint` 的标志：取最近的显示器（点落在所有显示器之外时的兜底）。

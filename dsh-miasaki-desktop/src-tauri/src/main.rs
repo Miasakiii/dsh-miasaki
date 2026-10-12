@@ -46,6 +46,24 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// 据此区分「活 SPA」（DSH 前端自带指数退避重连，静候即可，无需 reload）与「从未加载
 /// 成功的错误页」（WebView2 错误页不会自行重试，必须重新导航）。
 static PAGE_UP: AtomicBool = AtomicBool::new(false);
+/// 轻量重启（重启 DSH 服务）进行位：页面已切到本地加载页、后端正在重拉。
+///
+/// **与 `SHUTTING_DOWN` 刻意分开，别合并**：那个一置位看门狗就整条任务退出；而轻量重启
+/// 恰恰要求后端在重启窗口结束后继续被守着 —— 本标志只让看门狗在这段时间**让路**
+/// （`continue`），免得它与重启流程各 spawn 一份后端（双份 spawn 会撞端口。
+/// 详见 `restart_backend`）。
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+/// 最近一次轻量重启请求时刻（防抖）。托盘 / 桌宠 / 页面三个入口可能被同时点到 ——
+/// 与 `LAST_CLOSE_REQ` 的「短时间重复 = 前端无响应」语义**不同**：这里重复请求的意思是
+/// 「用户又点了一次」，重入会把刚拉起来的后端再杀一遍，所以只认第一次。
+static LAST_RESTART_REQ: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+/// 本地唤醒页（`loading.html`）的实际 URL：窗口以 `WebviewUrl::App("loading.html")` 创建，
+/// 首次 `on_page_load` 拿到非 3080 的文档 URL 时记下。
+///
+/// 轻量重启把页面切回这张本地页当**加载画面**——本地页不依赖后端，后端最惨的时候它
+/// 也一定显示得出来。**刻意不硬编码 `tauri.localhost`**：dev 与生产模式的本地源不同，
+/// 记事实比猜规则可靠。
+static LOCAL_PAGE_URL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 /// 页面加载计数（`on_page_load` 每次触发 +1）与上一次触发时刻。
 ///
 /// **为什么要有它**：2026-09-26「刷新后无限刷新」复查时，唯一无法从静态代码判定的事实是
@@ -1463,6 +1481,42 @@ fn parse_backend_client_pids(text: &str, port: u16) -> Vec<u32> {
     pids
 }
 
+/// 纯函数：从 `netstat -ano` 文本中提取「**本地** = port 且 `LISTENING`」的 PID
+/// ——即「谁正占着这个端口」。与上一个函数互补：那个找客户端，这个找服务端本身。
+///
+/// 用途：轻量重启时若后端**不是本应用拉起的**（`DSH_PID` 为 None，壳只是"采用"了它，
+/// 见 `DSH_PID` 注释），就没有 PID 可停 —— 靠本函数把端口占用者找出来。
+/// 找不到就如实报告，绝不假装重启成功。
+fn parse_backend_listener_pid(text: &str, port: u16) -> Option<u32> {
+    let suffix = format!(":{port}");
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // 行形态：TCP  0.0.0.0:3080  0.0.0.0:0  LISTENING  pid
+        if cols.len() < 5 || !cols[0].eq_ignore_ascii_case("TCP") {
+            continue;
+        }
+        if !cols[3].eq_ignore_ascii_case("LISTENING") || !cols[1].ends_with(&suffix) {
+            continue;
+        }
+        if let Ok(pid) = cols[4].parse::<u32>() {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+/// 3080 的占用者 PID（`netstat -ano`；执行失败或非 Windows → None）。
+#[cfg(target_os = "windows")]
+fn backend_listener_pid() -> Option<u32> {
+    let out = std::process::Command::new("netstat").arg("-ano").output().ok()?;
+    parse_backend_listener_pid(&String::from_utf8_lossy(&out.stdout), BACKEND_PORT)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn backend_listener_pid() -> Option<u32> {
+    None
+}
+
 /// 纯函数：剔除本应用进程树内的 PID，剩下即「外部客户端」（浏览器、别的终端等）。
 fn pids_outside_tree(pids: &[u32], tree: &std::collections::BTreeSet<u32>) -> Vec<u32> {
     pids
@@ -1559,6 +1613,14 @@ fn start_backend_watchdog(app: &AppHandle) {
             tokio::time::sleep(Duration::from_millis(interval)).await;
             if SHUTTING_DOWN.load(Ordering::SeqCst) {
                 return;
+            }
+            // 轻量重启**让路**：这段时间后端的停与拉由 `restart_backend` 自己按节奏控制，
+            // 看门狗若同时介入就会双份 spawn（新进程撞上尚未释放的端口，双双失败）。
+            // 刻意用 `continue` 而非 `return`：重启结束后本任务必须继续守着后端。
+            // 重启失败也不怕没人管 —— `RESTARTING` 在 `restart_backend` 里无论成败都会清，
+            // 清掉之后下一轮这里就会看到「后端不在 & 端口无监听」并接管重拉。
+            if RESTARTING.load(Ordering::SeqCst) {
+                continue;
             }
             // 自拉后端进程状态（只读拷贝；确认死亡才清除 DSH_PID）
             let our_pid = *DSH_PID.lock().unwrap();
@@ -2298,6 +2360,9 @@ fn start_hash_watchdog(app: &AppHandle) {
                         "want-max" => {
                             push_max_state(&app);
                         }
+                        // 轻量重启（2026-10-12）：壳主题面板的「重启 DSH 服务」→ 停后端 +
+                        // 重拉，窗口不重建。本地页与远端 DSH 页共用这条 hash 通道。
+                        "restart-host" => restart_backend(&app, "页面"),
                         _ => {}
                     }
                 }
@@ -2343,6 +2408,13 @@ fn bootstrap_state() -> serde_json::Value {
 /// 从不为配置问题报错——加载页拿不到就静默不播（L1 纹章层接管）。
 #[tauri::command]
 fn boot_intro_state() -> serde_json::Value {
+    // 轻量重启期间**不播片头**：重启的全部价值就是快，重放几秒片头会把它抵消掉
+    // （冷启动放片头是仪式感，重启放片头是罚站）。门控刻意放在壳侧而不是改加载页 ——
+    // 「壳说事实、页面照做」是本仓既有分工（同 12-material.js 的口径），
+    // 这样 ui/loading.html 一行都不用动。
+    if RESTARTING.load(Ordering::SeqCst) {
+        return serde_json::json!({ "intro": "off", "audio": false });
+    }
     let decided = boot_intro::read_boot_intro();
     serde_json::json!({
         "intro": decided.intro.unwrap_or_else(|| "off".to_string()),
@@ -2529,6 +2601,214 @@ fn restart_app(disable_plugins: bool) {
     }
     if let Some(app) = RECOVERY_APP.get() {
         shutdown_app(app);
+    }
+}
+
+/* ---------------- 轻量重启：只换后端，不重建窗口（2026-10-12） ---------------- */
+
+/// 轻量重启的当前阶段文案。
+///
+/// **为什么要有它**：页面在**导航途中**没有文档可收 —— `set_status` 的 eval 发给的是即将
+/// 被卸载的旧文档，随导航一起丢弃。所以文案先存这里，本地加载页每次落地后由
+/// `on_page_load` 补发一次（见那里的 `RESTARTING` 分支）。
+static RESTART_STATUS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// 防抖窗口：这段时间内的重复请求只认第一次（三个入口可能被连点）。
+const RESTART_DEBOUNCE: Duration = Duration::from_secs(3);
+/// 停掉后端后等端口**真空**的上限。
+///
+/// 为什么必须等（整件事最容易翻车的地方）：看门狗的重拉判据是「pid 已死 **且**
+/// `port_ready()` 为假」。端口还听着的时候它会判成「3080 已被其他实例接管 → 转为采用」
+/// —— 重启就此静默失效，日志里还写着"已接管"，最难查的那种。
+const RESTART_VACUUM_TIMEOUT: Duration = Duration::from_secs(15);
+/// 重拉后等端口就绪的上限（与 `BACKEND_RESPAWN_TIMEOUT` 同口径：dsh 冷启动约 3~6s）。
+const RESTART_READY_TIMEOUT: Duration = Duration::from_secs(90);
+/// 重启流程自己的轮询步长。刻意不跟看门狗的 2s 周期：用户在盯着加载画面，
+/// 200ms 的粒度让"好了"来得更跟手（代价只是几十次 connect 探测）。
+const RESTART_POLL_MS: u64 = 200;
+
+/// 是否应忽略本次重启请求（防抖，纯函数，单测覆盖）。
+fn restart_should_debounce(last: Option<Instant>, now: Instant, window: Duration) -> bool {
+    match last {
+        Some(t) => now.duration_since(t) < window,
+        None => false,
+    }
+}
+
+/// 阶段文案：**先存后发**（存是为了导航途中不丢，见 `RESTART_STATUS`）。
+fn set_restart_status(app: &AppHandle, text: &str) {
+    *RESTART_STATUS.lock().unwrap() = text.to_string();
+    set_status(app, text);
+}
+
+/// 轻量重启：**停掉 DSH 后端并由本函数重新拉起 —— 窗口、标题栏、桌宠、托盘一律不动**。
+///
+/// 与 `restart_app`（完整重启）的分工：
+/// - **完整重启**覆盖「壳自身（Rust）的改动」，代价是窗口重建 + 启动片头重放 + 走一遍
+///   单实例锁交接（慢，且打断视线）；
+/// - **轻量重启**覆盖日常绝大多数场景：插件 host 半改动、profile 依赖增删、设置里
+///   `applies:'restart'` 的项、MCP 工具面重建（OpenViking 那类"服务恢复了还得新开会话"
+///   的坑，重启后端即治）。
+///
+/// 顺序与每一步的理由（**别调**）：
+/// ① 防抖 + 置 `RESTARTING`（看门狗让路）→
+/// ② 窗口摆到台前（托盘/桌宠入口触发时主窗口可能是隐藏的，否则"重启中"发生在用户看不见
+///    的地方，他只会觉得点了没反应）→
+/// ③ 页面切到本地加载页当**加载画面**（本地页与后端无关，后端全死也显示得出来）→
+/// ④ 停后端（**直接 `stop_backend_tiered`，刻意不走 `kill_spawned_dsh`**：后者的 `Retain`
+///    语义会在「浏览器等外部客户端还连着 3080」时保留后端不杀 —— 那是"关应用"的正确行为，
+///    用在重启上就是"点了没反应且不报错"）→
+/// ⑤ 等端口真空（理由见 `RESTART_VACUUM_TIMEOUT`）→
+/// ⑥ 自己 `spawn_dsh()` 并等端口就绪 →
+/// ⑦ 就绪则导航回 DSH；超时则把失败文案交给加载页，**并放出「重试 / 恢复选项」出口**。
+///
+/// **失败必须有出口**：没有回退的重启功能会把"能用的应用"变成"打不开的应用" —— 后端起不来
+/// 时（插件把 Host 启动搞崩是最常见成因）用户至少要能在画面里点重试或恢复。加载页的
+/// `retry` 与 `diag('recovery_dialog')` 两个按钮都是现成的，这里只负责把它们显示出来。
+///
+/// 跑在独立线程：全程阻塞轮询，放 UI 线程上会把窗口冻住 —— 那"加载画面"就成了静止画面。
+pub(crate) fn restart_backend(app: &AppHandle, trigger: &str) {
+    {
+        let now = Instant::now();
+        let mut last = LAST_RESTART_REQ.lock().unwrap();
+        if restart_should_debounce(*last, now, RESTART_DEBOUNCE) {
+            app_log_line(&format!(
+                "[{}] restart: 忽略重复请求（来源 {trigger}，距上次不足 {}s）\n",
+                chrono_now(),
+                RESTART_DEBOUNCE.as_secs()
+            ));
+            return;
+        }
+        *last = Some(now);
+    }
+    if RESTARTING.swap(true, Ordering::SeqCst) {
+        app_log_line(&format!(
+            "[{}] restart: 已有重启在进行中 → 忽略（来源 {trigger}）\n",
+            chrono_now()
+        ));
+        return;
+    }
+    let app = app.clone();
+    let trigger = trigger.to_string();
+    std::thread::spawn(move || {
+        let outcome = run_restart(&app, &trigger);
+        // **无论成败都要清**：这个标志不清，看门狗就永久让路，后端再死也没人管了。
+        RESTARTING.store(false, Ordering::SeqCst);
+        match outcome {
+            Ok(elapsed) => app_log_line(&format!(
+                "[{}] restart: 完成（来源 {trigger}，耗时 {:.1}s）\n",
+                chrono_now(),
+                elapsed.as_secs_f32()
+            )),
+            Err(e) => {
+                app_log_line(&format!(
+                    "[{}] restart: 失败（来源 {trigger}）：{e}\n",
+                    chrono_now()
+                ));
+                // 失败出口：文案 + 重试/恢复按钮。注意失败文案**不含**「就绪 / 正在进入」，
+                // 不会误触发加载页的 __setReady 进场回弹。
+                set_restart_status(&app, &format!("重启失败：{e}"));
+                eval_status(&app, "window.__setRetry && window.__setRetry(true)");
+            }
+        }
+    });
+}
+
+/// `restart_backend` 的同步主体（返回耗时；失败给出**面向用户**的原因）。
+fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
+    let started = Instant::now();
+    app_log_line(&format!(
+        "[{}] restart: 轻量重启开始（来源 {trigger}）—— 停后端后重拉，不重建窗口\n",
+        chrono_now()
+    ));
+    show_window_front(app);
+    navigate_to_local_page(app);
+    set_restart_status(app, "正在重启 DSH 服务…");
+
+    // —— ④ 停后端 ——
+    let target = match DSH_PID.lock().unwrap().take() {
+        Some(pid) => Some(pid),
+        None => {
+            // 后端不是本应用拉起的（壳只是"采用"了它）：没有 PID 可停，向 netstat 要。
+            let found = backend_listener_pid();
+            app_log_line(&format!(
+                "[{}] restart: 后端非本应用拉起（无 PID 记录）→ netstat 查 3080 占用者：{}\n",
+                chrono_now(),
+                found.map(|p| p.to_string()).unwrap_or_else(|| "未找到".into())
+            ));
+            found
+        }
+    };
+    match target {
+        Some(pid) => {
+            app_log_line(&format!("[{}] restart: 分级停机 pid {pid}\n", chrono_now()));
+            stop_backend_tiered(pid);
+        }
+        None => app_log_line(&format!(
+            "[{}] restart: 3080 无监听且无 PID → 视为后端已停，直接重拉\n",
+            chrono_now()
+        )),
+    }
+
+    // —— ⑤ 等端口真空 ——
+    let vacuum_deadline = Instant::now() + RESTART_VACUUM_TIMEOUT;
+    while port_ready() {
+        if Instant::now() > vacuum_deadline {
+            return Err(format!(
+                "端口 {BACKEND_PORT} 在 {}s 内未释放（另有进程占着它）",
+                RESTART_VACUUM_TIMEOUT.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(RESTART_POLL_MS));
+    }
+
+    // —— ⑥ 重拉 + 等就绪 ——
+    set_restart_status(app, "正在等待 DSH 服务就绪…");
+    spawn_dsh().map_err(|e| format!("重新拉起后端失败：{e}"))?;
+    let ready_deadline = Instant::now() + RESTART_READY_TIMEOUT;
+    while !port_ready() {
+        if Instant::now() > ready_deadline {
+            return Err(format!(
+                "后端在 {}s 内未就绪（常见成因：插件让 Host 启动失败）",
+                RESTART_READY_TIMEOUT.as_secs()
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(RESTART_POLL_MS));
+    }
+
+    // —— ⑦ 导航回 DSH ——
+    set_restart_status(app, "已就绪，正在进入…");
+    navigate_main(app).map_err(|e| format!("后端已就绪但进入失败：{e}"))?;
+    Ok(started.elapsed())
+}
+
+/// 主窗口摆到台前：重启的加载画面必须**看得见**（托盘/桌宠入口触发时窗口可能隐藏着）。
+fn show_window_front(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// 把页面切到本地加载页。取不到 URL 时只记一行日志、**不阻断重启** ——
+/// 少一个画面可以接受，因为拿不到画面就不重启才是真问题。
+fn navigate_to_local_page(app: &AppHandle) {
+    let Some(url) = LOCAL_PAGE_URL.get() else {
+        app_log_line(&format!(
+            "[{}] restart: 未记录到本地加载页 URL → 跳过加载画面（后端照常重启）\n",
+            chrono_now()
+        ));
+        return;
+    };
+    let Some(w) = app.get_webview_window("main") else { return };
+    match tauri::Url::parse(url) {
+        Ok(parsed) => {
+            let _ = w.navigate(parsed);
+        }
+        Err(e) => app_log_line(&format!(
+            "[{}] restart: 本地加载页 URL 解析失败（{e}）→ 跳过加载画面\n",
+            chrono_now()
+        )),
     }
 }
 
@@ -3008,6 +3288,19 @@ fn main() {
                 .on_page_load(|webview, payload| {
                     let _ = webview.show();
                     let url = payload.url().to_string();
+                    // 本地唤醒页（loading.html）：记下它的真实 URL 备轻量重启用（**不硬编码
+                    // tauri.localhost** —— dev 与生产模式的本地源不同，记事实比猜规则可靠）；
+                    // 若重启途中落地，补发一次阶段文案：navigate 期间发的 eval 是发给旧文档的，
+                    // 随导航一起丢了（见 RESTART_STATUS）。
+                    if !url.starts_with("http://127.0.0.1:3080") {
+                        let _ = LOCAL_PAGE_URL.set(url.clone());
+                        if RESTARTING.load(Ordering::SeqCst) {
+                            let text = RESTART_STATUS.lock().unwrap().clone();
+                            if !text.is_empty() {
+                                set_status(webview.app_handle(), &text);
+                            }
+                        }
+                    }
                     if url.starts_with("http://127.0.0.1:3080") {
                         PAGE_UP.store(true, Ordering::SeqCst);
                         record_bootstrap_up();
@@ -3192,8 +3485,13 @@ fn main() {
                 // W5 自更新降级方案：只查、只提示、只打开下载页（绝不自己下载或安装）
                 let update_item = MenuItem::with_id(app, "update", "检查更新", true, None::<&str>)
                     .expect("menu item");
+                // 轻量重启（2026-10-12）：停后端 + 重拉，**窗口不重建**。与「退出」相邻但
+                // 语义相反，文案里刻意点明"服务"二字，免得被当成退出应用。
+                let restart_item = MenuItem::with_id(app, "restart", "重启 DSH 服务", true, None::<&str>)
+                    .expect("menu item");
                 let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>).expect("menu item");
-                let menu = Menu::with_items(app, &[&toggle, &diag_item, &update_item, &quit]).expect("menu");
+                let menu = Menu::with_items(app, &[&toggle, &diag_item, &update_item, &restart_item, &quit])
+                    .expect("menu");
                 let icon = app
                     .default_window_icon()
                     .cloned()
@@ -3214,6 +3512,8 @@ fn main() {
                                 }
                             }
                         }
+                        // 轻量重启（2026-10-12）：停后端 + 重拉，窗口不重建、片头不重放。
+                        "restart" => restart_backend(app, "托盘菜单"),
                         "diag" => {
                             // 手动生成诊断报告（2026-09-25）：与自动路径同一套写入 + 轮转，
                             // 只是 source=manual。**成功与失败都要回显** —— 取证模块的唯一价值
@@ -3848,5 +4148,91 @@ mod tests {
             let _ = child.kill();
         }
         let _ = child.wait();
+    }
+
+    /// 轻量重启的防抖：短时间内的重复请求只认第一次（托盘 / 桌宠 / 页面三个入口可能被连点）。
+    /// 边界钉死 —— 恰好等于窗口长度算「已过期」（实现用 `<` 而非 `<=`）：边界属于"可再点"，
+    /// 否则用户会以为按钮坏了。
+    #[test]
+    fn restart_debounce_accepts_first_and_rejects_immediate_repeat() {
+        let window = Duration::from_secs(3);
+        let t0 = Instant::now();
+        assert!(!restart_should_debounce(None, t0, window), "无历史必须放行");
+        assert!(restart_should_debounce(Some(t0), t0, window), "刚点过必须拦下");
+        assert!(restart_should_debounce(
+            Some(t0),
+            t0 + Duration::from_millis(2999),
+            window
+        ));
+        assert!(
+            !restart_should_debounce(Some(t0), t0 + window, window),
+            "恰好到窗口边界必须放行"
+        );
+        assert!(!restart_should_debounce(
+            Some(t0),
+            t0 + Duration::from_secs(10),
+            window
+        ));
+    }
+
+    /// 3080 占用者解析：只认 `LISTENING` 行。
+    /// 与 `parse_backend_client_pids` 是一对 —— 那个找客户端（谁在连），这个找服务端本身
+    /// （谁占着端口），轻量重启在「后端非本应用拉起、没有 PID 可停」时靠它兜底。
+    #[test]
+    fn parse_backend_listener_pid_only_accepts_listening_rows() {
+        let text = "\
+活动连接\n\
+  协议  本地地址          外部地址        状态           PID\n\
+  TCP    0.0.0.0:3080     0.0.0.0:0          LISTENING     10688\n\
+  TCP    127.0.0.1:3080   127.0.0.1:52344    ESTABLISHED   10688\n\
+  TCP    127.0.0.1:52344  127.0.0.1:3080     ESTABLISHED   22100\n\
+  TCP    0.0.0.0:30801    0.0.0.0:0          LISTENING     999\n\
+  UDP    0.0.0.0:3080     *:*                               777\n";
+        assert_eq!(
+            parse_backend_listener_pid(text, 3080),
+            Some(10688),
+            "必须命中 LISTENING 那一行"
+        );
+        assert_eq!(
+            parse_backend_listener_pid(
+                "  TCP    0.0.0.0:30801    0.0.0.0:0          LISTENING     999\n",
+                3080
+            ),
+            None,
+            "端口前缀误伤：30801 不是 3080"
+        );
+        assert_eq!(
+            parse_backend_listener_pid(
+                "  TCP    127.0.0.1:52344  127.0.0.1:3080     ESTABLISHED   22100\n",
+                3080
+            ),
+            None,
+            "客户端连接不算服务端"
+        );
+        assert_eq!(
+            parse_backend_listener_pid(
+                "  UDP    0.0.0.0:3080     *:*                               777\n",
+                3080
+            ),
+            None,
+            "UDP 行不得计入"
+        );
+        assert_eq!(parse_backend_listener_pid("", 3080), None);
+    }
+
+    /// 轻量重启的命令走既有 hash 通道：`cmd=restart-host` 必须解析得出来，且**不得**被
+    /// 心跳清理逻辑吞掉 —— 命令是事件，被心跳清掉就永久丢失（P5 那条的同类）。
+    #[test]
+    fn restart_host_command_survives_parsing_and_heartbeat_clear() {
+        let mut p = parse_fragment("miasaki-theme=pure&petts=1790358021&cmd=restart-host&seq=42");
+        assert_eq!(p.cmd.as_deref(), Some("restart-host"));
+        assert_eq!(p.seq, 42);
+        clear_redraw_fields(&mut p);
+        assert_eq!(
+            p.cmd.as_deref(),
+            Some("restart-host"),
+            "重启命令必须活过心跳清理"
+        );
+        assert_eq!(p.seq, 42, "去重序号同样要保留");
     }
 }

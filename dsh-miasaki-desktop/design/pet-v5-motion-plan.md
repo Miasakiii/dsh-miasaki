@@ -455,6 +455,14 @@ const RUST_ROWS = ['idle', 'wait', 'failed', 'jump', 'wave', 'run', 'review', 'r
 3. **`clamp(1,100)` 的下界 1ms 是有意的** —— `Instant::elapsed()` 取整到 ms 可能给 0，
    原样传入则弹簧完全不动（拖动看起来卡住）。
 
+> **R16 订正（2026-10-12）**：上面第 2/3 条只说了「dt 要真实」，**漏了「dt 要小」** ——
+> 原实现 `elapsed().min(100)` 后**一次积完**，而 `last_drag_tick` 只在 `flush_drag_target` 内更新
+> ⇒ 每次起手首拍必然吃满 100ms、`ω·dt = 1.48 > 1`，半隐式欧拉把窗口推到**目标位移的 2.2 倍**
+> 再飘回（用户报「一拖就窜」）。现口径：**起手重置积分时钟 + 任何 dt 拆 ≤8ms 子步逐段推进**
+> （`DRAG_SPRING_MAX_SUBSTEP_MS` / `DRAG_TICK_MAX_MS`），两条单测钉住「单步 100ms 必过冲」与
+> 「子步不过冲」。同批还补了显式鼠标捕获与 `±16px` 抓取热区，完整诊断见
+> [`CHANGELOG.md`](CHANGELOG.md) 2026-10-12 条与 [`pet-reference-benchmark.md`](pet-reference-benchmark.md) R16。
+
 **回归**：`rustc --test` harness **28 passed / 0 failed**；`verify-all desktop` 39/40
 （唯一失败为 `cargo test` 的沙箱边界）。真仓 `cargo test` **已于同日在 MSVC link 环境确认全绿**（见 §5.4 回归）。
 
