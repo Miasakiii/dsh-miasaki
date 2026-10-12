@@ -2472,6 +2472,351 @@ fn dsh_check() -> String {
     }
 }
 
+/* ---------------- DSH 本体：检测与安装（2026-10-12） ----------------
+ *
+ * 需求原话：「桌面端应该要检测宿主机是否有 DSH 本体，没有就装一个适合的」。
+ *
+ * 与既有 `dsh_check` 的分工：那个是**给人看的现场自证**（where dsh / --version /
+ * 四项环境事实，用户点「检查 dsh」时执行）。本段是**给程序用的结构化判定** ——
+ * 回答两个问题：①这台机器上的 DSH 现在能不能用？②不能用时该装哪个版本？
+ * 并在**用户显式点击后**执行 npm 全局安装。
+ *
+ * 三条边界（2026-10-12 用户拍板）：
+ *   · **点了才装** —— 不在启动路径上静默安装（往用户机器装全局 npm 包是有副作用的动作）；
+ *   · **不装 Node** —— 宿主机没有 Node 时如实报出并引导手动安装，不擅自装运行时；
+ *   · **带版本护栏** —— 只装落在支持区间内的版本；`latest` 越界时退回区间内最高版。
+ */
+
+/// npm 包名（官方 `bin` 字段：`dsh` → `lib/bin.js`）。
+const DSH_PACKAGE: &str = "@deepseek-ai/dsh";
+
+/// 支持的 DSH 版本区间：下界含、上界不含。**取两处声明的交集** ——
+/// 各线插件 `peerDependencies` 要求 `dsh-host-webserver >=0.1.2-rc.1 <0.3.0`，
+/// 根 README 兼容表写「0.1.7 及以上」支持、0.1.5 / 0.1.6 为历史版本。
+const DSH_MIN_SUPPORTED: (u32, u32, u32) = (0, 1, 7);
+const DSH_MAX_EXCLUSIVE: (u32, u32, u32) = (0, 3, 0);
+
+/// 解析 `major.minor.patch` 三元组。
+///
+/// **刻意忽略预发布标签与构建元数据**：本仓实装版本长期停在 rc 上
+/// （`0.1.7-rc.2`、`0.2.0-rc.2`），而严格 semver 规定预发布版**小于**同号正式版
+/// ⇒ `0.1.7-rc.2 < 0.1.7` ⇒ 现役版本会被判成「低于下界」而拒装。取三元组比较既
+/// 避开这个陷阱，也与 README「0.1.7 及以上」的人话口径一致。
+fn parse_version3(v: &str) -> Option<(u32, u32, u32)> {
+    let core = v.trim().split(['-', '+']).next()?;
+    let mut it = core.split('.');
+    let major: u32 = it.next()?.trim().parse().ok()?;
+    let minor: u32 = it.next()?.trim().parse().ok()?;
+    // 三段缺一不可（semver 规范）：宽松补齐——把 `0.2` 当 `0.2.0`——会让畸形输入
+    // 静默通过区间判定，与「不认识的版本不装作支持」相悖。
+    let patch: u32 = it.next()?.trim().parse().ok()?;
+    if it.next().is_some() {
+        return None; // 四段以上不是 semver
+    }
+    Some((major, minor, patch))
+}
+
+/// 版本是否落在支持区间内。解析失败一律 false —— 不认识的版本不装作支持。
+fn version_supported(v: &str) -> bool {
+    match parse_version3(v) {
+        Some(t) => t >= DSH_MIN_SUPPORTED && t < DSH_MAX_EXCLUSIVE,
+        None => false,
+    }
+}
+
+/// 选安装目标版本（**纯函数**，单测覆盖）：优先 `latest`；它越界时退回区间内**最高**的
+/// 已发布版本；一个都没有 ⇒ `Err` —— 宁可不装，也不装一个明知不兼容的版本
+/// （`peerDependencies` 的上界 `<0.3.0` 是硬约束，装越界版等于把所有插件打成不满足）。
+///
+/// 同一三元组内的多个预发布版（`0.2.0-rc.1` / `0.2.0-rc.2`）取**较后者**：
+/// `npm view versions` 按发布顺序排列，后者即更新 —— 用 `>=` 而非 `>` 正是为此。
+fn pick_install_target(latest: &str, versions: &[String]) -> Result<String, String> {
+    if version_supported(latest) {
+        return Ok(latest.to_string());
+    }
+    let mut best: Option<String> = None;
+    let mut best_key: Option<(u32, u32, u32)> = None;
+    for v in versions {
+        if let Some(t) = parse_version3(v) {
+            if t >= DSH_MIN_SUPPORTED && t < DSH_MAX_EXCLUSIVE {
+                if best_key.map_or(true, |k| t >= k) {
+                    best_key = Some(t);
+                    best = Some(v.clone());
+                }
+            }
+        }
+    }
+    best.ok_or_else(|| {
+        format!(
+            "npm 上没有落在支持区间 [{}.{}.{}, {}.{}.{}) 内的 {DSH_PACKAGE} 版本（latest = {latest}）",
+            DSH_MIN_SUPPORTED.0, DSH_MIN_SUPPORTED.1, DSH_MIN_SUPPORTED.2,
+            DSH_MAX_EXCLUSIVE.0, DSH_MAX_EXCLUSIVE.1, DSH_MAX_EXCLUSIVE.2
+        )
+    })
+}
+
+/// npm 的 JS 入口 —— **与 `node.exe` 同目录**（Node 官方安装器把 npm 放在
+/// `<node 安装目录>\node_modules\npm\bin\npm-cli.js`；本机实测 `C:\Program Files\nodejs\`）。
+///
+/// 为什么不直接跑 `npm.cmd`：① Windows 的 `CreateProcess` **不能**执行 `.cmd`
+/// （它不是可执行映像），经 `cmd.exe /C` 又要面对含空格路径的引号转义地狱；
+/// ② 本仓 `dsh_entry_js()` 已用「node 直启」绕开同类问题，这里沿用同一思路，
+/// 且完全不依赖 PATH 里有没有 npm 目录。
+fn npm_cli_js() -> Option<PathBuf> {
+    let dir = node_exe()?.parent()?.to_path_buf();
+    let p = dir
+        .join("node_modules")
+        .join("npm")
+        .join("bin")
+        .join("npm-cli.js");
+    p.is_file().then_some(p)
+}
+
+/// 全局安装 prefix（`npm i -g` 的落点）下的 DSH 身份文件。
+///
+/// 注意与 `npm_cli_js()` 的区别：`%APPDATA%\npm` 是**全局包**的位置，
+/// 而 npm 程序本身跟 node.exe 同目录 —— 实测本机 `%APPDATA%\npm` 里**没有** npm.cmd。
+fn installed_dsh_pkg_json() -> Option<PathBuf> {
+    let p = PathBuf::from(std::env::var_os("APPDATA")?)
+        .join("npm")
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+        .join("package.json");
+    p.is_file().then_some(p)
+}
+
+/// 已装 DSH 的版本号；读不到即 `None`（不猜 —— 猜出来的版本号会误导「该不该升级」）。
+fn installed_dsh_version() -> Option<String> {
+    let text = std::fs::read_to_string(installed_dsh_pkg_json()?).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    v.get("version")?.as_str().map(str::to_string)
+}
+
+/// 结构化探测结果（`dsh_probe` 的返回；加载页按 `verdict` 决定显示哪个动作）。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DshProbe {
+    installed: bool,
+    version: Option<String>,
+    supported: bool,
+    node: Option<String>,
+    npm: Option<String>,
+    /// `ok` | `missing` | `unsupported` | `no-node` | `no-npm`
+    verdict: String,
+    detail: String,
+}
+
+/// 探测一次。命令与安装流程**共用同一份判定**，避免两条路径给出不同结论。
+fn dsh_probe_now() -> DshProbe {
+    let node = node_exe().map(|p| p.display().to_string());
+    let npm = npm_cli_js().map(|p| p.display().to_string());
+    let installed = dsh_available();
+    let version = installed_dsh_version();
+    let supported = version.as_deref().map(version_supported).unwrap_or(false);
+
+    let (verdict, detail) = if !installed {
+        if node.is_none() {
+            (
+                "no-node",
+                "宿主机找不到 node.exe —— DSH 是 Node 程序，必须先装 Node.js（建议 22.19 及以上）。\
+                 装完回到这里点「重试」即可。"
+                    .to_string(),
+            )
+        } else if npm.is_none() {
+            (
+                "no-npm",
+                "找到了 node.exe 但找不到 npm 入口（node_modules\\npm\\bin\\npm-cli.js）—— \
+                 请确认 Node.js 安装完整。"
+                    .to_string(),
+            )
+        } else {
+            (
+                "missing",
+                "未安装 DSH 本体。点「安装 DSH」走 npm 全局安装（用户级目录，不需要管理员权限）。"
+                    .to_string(),
+            )
+        }
+    } else {
+        match version.as_deref() {
+            Some(v) if !version_supported(v) => (
+                "unsupported",
+                format!(
+                    "已装 DSH {v}，但不在支持区间 0.1.7 – 0.3.0（不含）内 —— \
+                     插件可能加载失败或白屏。可点「装合适版本」换到区间内的最新版。"
+                ),
+            ),
+            Some(v) => ("ok", format!("DSH {v} 就绪。")),
+            None => (
+                "ok",
+                "已找到 DSH，但读不到版本号（可能装在非默认 prefix）。按「可用」处理；\
+                 如需确认请点「检查 dsh」。"
+                    .to_string(),
+            ),
+        }
+    };
+
+    DshProbe {
+        installed,
+        version,
+        supported,
+        node,
+        npm,
+        verdict: verdict.to_string(),
+        detail,
+    }
+}
+
+/// 结构化探测命令（加载页据此决定按钮形态：安装 DSH / 装合适版本 / 不显示）。
+#[tauri::command]
+fn dsh_probe() -> DshProbe {
+    dsh_probe_now()
+}
+
+/// 跑一次 npm 子命令（node 直启 `npm-cli.js`）。成功返回 stdout，失败把 stderr 带进 Err。
+fn npm_run(cli: &Path, args: &[&str]) -> Result<String, String> {
+    let node = node_exe().ok_or_else(|| "找不到 node.exe".to_string())?;
+    let out = std::process::Command::new(&node)
+        .arg(cli)
+        .args(args)
+        .output()
+        .map_err(|e| format!("启动 npm 失败：{e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    if out.status.success() {
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("npm 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        })
+    }
+}
+
+/// `npm view <pkg> versions --json` → 全部已发布版本。
+fn npm_view_versions(cli: &Path) -> Result<Vec<String>, String> {
+    let text = npm_run(
+        cli,
+        &["view", DSH_PACKAGE, "versions", "--json", "--fetch-timeout=30000"],
+    )?;
+    let v: serde_json::Value =
+        serde_json::from_str(text.trim()).map_err(|e| format!("解析 versions 失败：{e}"))?;
+    Ok(match v {
+        serde_json::Value::Array(a) => a
+            .into_iter()
+            .filter_map(|x| x.as_str().map(str::to_string))
+            .collect(),
+        // 只有一个版本时 npm 返回裸字符串而非数组
+        serde_json::Value::String(s) => vec![s],
+        _ => Vec::new(),
+    })
+}
+
+/// 安装 DSH —— **用户显式点击才执行**。命令立即返回，进度与结果经
+/// `window.__installState({phase, message})` 推给本地加载页。
+///
+/// 为什么不在命令里同步跑：npm 全局安装是分钟级操作（下载 + 解包 + 建 bin 链接），
+/// 同步会占住 IPC，按钮点下去像卡死 —— 与「轻量重启」同款的长任务处理方式。
+#[tauri::command]
+fn install_dsh(app: AppHandle) {
+    std::thread::spawn(move || {
+        let report = |phase: &str, msg: &str| {
+            set_status(&app, msg);
+            let payload = serde_json::json!({ "phase": phase, "message": msg }).to_string();
+            eval_status(
+                &app,
+                &format!("window.__installState && window.__installState({payload})"),
+            );
+        };
+
+        let probe = dsh_probe_now();
+        // 前置：装 DSH 需要 node + npm。缺任一个都停在这里如实报出，**不假装能装**，
+        // 也不替用户装运行时（那是比装插件重得多的动作 —— 2026-10-12 用户拍板）。
+        if probe.verdict == "no-node" || probe.verdict == "no-npm" {
+            app_log_line(&format!(
+                "[{}] install-dsh: 前置缺失（{}）\n",
+                chrono_now(),
+                probe.verdict
+            ));
+            report("failed", &probe.detail);
+            return;
+        }
+        let Some(cli) = npm_cli_js() else {
+            report("failed", "找不到 npm 入口，无法执行安装。");
+            return;
+        };
+
+        // ① 问 registry 要版本（网络；显式 fetch 超时，异常时不留无限等待）
+        report("running", "正在查询 npm 上的可用版本…");
+        let latest = match npm_run(
+            &cli,
+            &["view", DSH_PACKAGE, "dist-tags.latest", "--fetch-timeout=30000"],
+        ) {
+            Ok(s) => s.trim().trim_matches('"').to_string(),
+            Err(e) => {
+                app_log_line(&format!("[{}] install-dsh: 查询失败 {e}\n", chrono_now()));
+                report("failed", &format!("查询 npm 失败：{e}"));
+                return;
+            }
+        };
+        let versions = npm_view_versions(&cli).unwrap_or_default();
+
+        // ② 版本护栏（纯函数决策，见 pick_install_target）
+        let target = match pick_install_target(&latest, &versions) {
+            Ok(t) => t,
+            Err(e) => {
+                app_log_line(&format!("[{}] install-dsh: 无可用目标 —— {e}\n", chrono_now()));
+                report("failed", &e);
+                return;
+            }
+        };
+        let note = if target == latest {
+            format!("正在安装 DSH {target}…（首次下载，可能需要 1–3 分钟）")
+        } else {
+            format!("npm latest 是 {latest}（超出支持区间），改装区间内最高版 {target}…")
+        };
+        app_log_line(&format!(
+            "[{}] install-dsh: 目标 {target}（latest={latest}）\n",
+            chrono_now()
+        ));
+        report("running", &note);
+
+        // ③ 执行安装
+        let spec = format!("{DSH_PACKAGE}@{target}");
+        match npm_run(&cli, &["install", "-g", &spec, "--no-audit", "--no-fund"]) {
+            Ok(stdout) => {
+                for line in stdout.lines().take(200) {
+                    app_log_line(&format!("[install-dsh] {line}\n"));
+                }
+                let after = dsh_probe_now();
+                // 复检判据用 `verdict != "unsupported"` 而不是 `supported`：
+                // 装在非默认 prefix 时读不到版本号（version=None）但 DSH **确实可用** ——
+                // 按 supported 判会把一次成功的安装误报成失败。
+                if after.installed && after.verdict != "unsupported" {
+                    let v = after.version.clone().unwrap_or(target);
+                    let msg = format!("已安装 DSH {v}，正在重新启动…");
+                    app_log_line(&format!("[{}] install-dsh: 完成 —— {msg}\n", chrono_now()));
+                    report("done", &msg);
+                    // 装完直接接着启动，用户不必再点一次「重试」。
+                    retry_start(app.clone());
+                } else {
+                    let msg = format!(
+                        "安装命令已执行，但复检仍是「{}」：{}",
+                        after.verdict, after.detail
+                    );
+                    app_log_line(&format!("[{}] install-dsh: {msg}\n", chrono_now()));
+                    report("failed", &msg);
+                }
+            }
+            Err(e) => {
+                app_log_line(&format!("[{}] install-dsh: 失败 {e}\n", chrono_now()));
+                report("failed", &format!("安装失败：{e}（完整输出见日志目录）"));
+            }
+        }
+    });
+}
+
 /// 打开独立 cmd 窗口（用户手动执行 `dsh --profile <名>` / netstat 排查）。
 #[tauri::command]
 fn open_terminal() {
@@ -3227,6 +3572,8 @@ fn main() {
             bootstrap_state,
             boot_intro_state,
             dsh_check,
+            dsh_probe,
+            install_dsh,
             open_terminal,
             open_logs_dir,
             export_diagnostics,
@@ -4363,5 +4710,93 @@ mod tests {
             "重启命令必须活过心跳清理"
         );
         assert_eq!(p.seq, 42, "去重序号同样要保留");
+    }
+
+    /* ---------- DSH 本体检测与安装（2026-10-12） ---------- */
+
+    /// 版本三元组解析：预发布标签与构建元数据都被忽略，非三段一律拒绝。
+    /// **这个口径本身就是判据** —— 严格 semver 会把 `0.1.7-rc.2` 判成低于 `0.1.7`，
+    /// 从而把本仓的现役版本误判成「不支持」。
+    #[test]
+    fn version3_ignores_prerelease_and_build_metadata() {
+        assert_eq!(parse_version3("0.2.0-rc.2"), Some((0, 2, 0)));
+        assert_eq!(parse_version3("0.1.7-rc.2"), Some((0, 1, 7)));
+        assert_eq!(parse_version3("0.1.7"), Some((0, 1, 7)));
+        assert_eq!(parse_version3(" 0.1.7+build.9 "), Some((0, 1, 7)));
+        assert_eq!(parse_version3("0.1"), None, "两段不是 semver");
+        assert_eq!(parse_version3("0.1.7.1"), None, "四段不是 semver");
+        assert_eq!(parse_version3("latest"), None);
+        assert_eq!(parse_version3(""), None);
+    }
+
+    /// 支持区间是**半开**的 `[0.1.7, 0.3.0)`：下界含、上界不含；预发布不改变三元组。
+    #[test]
+    fn supported_range_is_half_open_and_accepts_rc_versions() {
+        assert!(version_supported("0.1.7-rc.2"), "现役 rc 版本必须被接受");
+        assert!(version_supported("0.2.0-rc.2"));
+        assert!(version_supported("0.1.7"));
+        assert!(version_supported("0.2.9"));
+        assert!(!version_supported("0.1.6"), "0.1.6 是历史版本（README 明写）");
+        assert!(!version_supported("0.1.5-rc.2"));
+        assert!(!version_supported("0.3.0"), "上界不含");
+        assert!(!version_supported("0.3.0-alpha.1"), "预发布不改三元组，仍越界");
+        assert!(!version_supported("1.0.0"));
+        assert!(!version_supported("不是版本"));
+    }
+
+    /// 版本护栏：`latest` 在区间内就直接装；越界时退回区间内最高版；一个都没有则明确拒绝。
+    #[test]
+    fn install_target_prefers_latest_then_falls_back_inside_range() {
+        let vs = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        // ① latest 合规 ⇒ 原样（当前 npm 实况：latest = 0.2.0-rc.2）
+        assert_eq!(
+            pick_install_target("0.2.0-rc.2", &vs(&["0.1.7", "0.2.0-rc.2", "0.3.0"])).unwrap(),
+            "0.2.0-rc.2"
+        );
+
+        // ② latest 越界 ⇒ 退回区间内最高（0.2.1-alpha.2 在区间内且最高）
+        let list = vs(&[
+            "0.1.5",
+            "0.1.7-rc.2",
+            "0.2.0-rc.2",
+            "0.2.1-alpha.2",
+            "0.3.0",
+            "0.4.1",
+        ]);
+        assert_eq!(pick_install_target("0.3.0", &list).unwrap(), "0.2.1-alpha.2");
+
+        // ③ 同三元组内取较后者（npm versions 按发布顺序，后者更新）
+        assert_eq!(
+            pick_install_target("9.9.9", &vs(&["0.2.0-rc.1", "0.2.0-rc.2"])).unwrap(),
+            "0.2.0-rc.2"
+        );
+
+        // ④ 区间内一个都没有 ⇒ 拒绝，而不是装个越界版把插件全打成 peer 不满足
+        let none = vs(&["0.1.5", "0.1.6", "0.3.0"]);
+        let err = pick_install_target("0.3.0", &none).unwrap_err();
+        assert!(
+            err.contains("0.1.7") && err.contains("0.3.0"),
+            "错误信息要写清区间：{err}"
+        );
+
+        // ⑤ 空列表（npm view 失败时的兜底）同样拒绝
+        assert!(pick_install_target("0.4.0", &[]).is_err());
+    }
+
+    /// 副作用边界（2026-10-12 用户拍板「点了才装」）：**启动路径不得自动安装 DSH**。
+    /// 用源码断言钉住 —— 否则日后一次「顺手加上自动安装」就悄悄改了这个边界。
+    #[test]
+    fn dsh_install_is_never_called_from_the_launch_path() {
+        let src = include_str!("main.rs");
+        let launch = src
+            .split("fn start_launch_sequence(")
+            .nth(1)
+            .and_then(|s| s.split("\nfn ").next())
+            .expect("找不到 start_launch_sequence 函数体（请同步本测试）");
+        assert!(
+            !launch.contains("install_dsh"),
+            "启动路径不得自动安装 DSH —— 契约是「用户点了才装」"
+        );
     }
 }

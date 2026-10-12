@@ -2,6 +2,108 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-12（续）· 失败页可一键安装 DSH 本体 —— 带版本护栏，缺 Node 如实报出
+
+**触发**：用户「要加一个小功能，桌面端应该要检测宿主机是否有 DSH 本体，没有就装一个适合的」。
+
+**先说清既有能力**：检测那一半**早就有了** —— `dsh_available()`（node 直启入口存在 或 `where dsh`
+命中）+ `dsh_env_facts()` 四项环境自证（2026-09-25），失败页也一直写着「未检测到 dsh，请安装
+DeepSeek Harness（详见 README）」。缺的只是**「装」这一步**：用户得自己去 npm 装。本轮补上，
+并把「适合的」从一句话变成机器判据。
+
+**三条边界（用户拍板）**：① **点了才装** —— 不在启动路径上静默安装（往用户机器装全局 npm 包
+是有副作用的动作）；② **不装 Node** —— 缺运行时如实报出并引导手动装，壳不替用户装运行时
+（那是比装插件重得多的动作）；③ **带版本护栏**。
+
+**「适合的」= 版本区间 `[0.1.7, 0.3.0)`**，取两处声明的交集：各线插件 `peerDependencies` 要求
+`dsh-host-webserver >=0.1.2-rc.1 <0.3.0`，根 README 写「0.1.7 及以上」支持、`0.1.5/0.1.6` 为历史版本。
+`npm` 的 `latest` 在区间内就直接装（当前 `latest = 0.2.0-rc.2`，正合适）；越界则退回**区间内最高版**；
+区间内一个都没有则**明确拒绝** —— 宁可不装，也不装一个让所有插件 peer 不满足的版本。
+**版本比较刻意忽略预发布标签**：严格 semver 规定预发布版小于同号正式版 ⇒ `0.1.7-rc.2 < 0.1.7`
+⇒ **现役版本会被自己的护栏拒装**（本仓实装长期停在 rc 上）。
+
+**实现**（`src-tauri/src/main.rs` + `ui/loading.html`）：
+
+| 处 | 做法 |
+|---|---|
+| `dsh_probe` 命令 | 结构化判定，verdict ∈ `ok` / `missing` / `unsupported` / `no-node` / `no-npm`；命令与安装流程**共用同一份 `dsh_probe_now()`**，避免两条路径给出不同结论 |
+| `install_dsh` 命令 | `std::thread::spawn` 后台跑、**立即返回**；进度经 `window.__installState({phase,message})` 推给唤醒页，完整 npm 输出落 `pet.log`（与「轻量重启」同款长任务处理） |
+| 纯函数 | `parse_version3` / `version_supported` / `pick_install_target` —— 决策与 IO 分离，单测覆盖 |
+| 唤醒页 | 动作组加「安装 DSH」（`missing`）/「装合适版本（当前 X）」（`unsupported`）；`__setRetry(true)` 时自动探测；页面初始化时对 `unsupported` **主动揭示** —— 版本越界不会让启动失败，没有失败页可依托，不揭示就只剩「插件莫名其妙不工作」 |
+
+**一处环境事实推翻了想当然**：npm **不该**走 `npm.cmd`。① Windows 的 `CreateProcess` **不能**执行
+`.cmd`（它不是可执行映像），经 `cmd.exe /C` 又要面对含空格路径的引号转义；② 更关键的是
+**`%APPDATA%\npm` 里根本没有 `npm.cmd`** —— 那里只是**全局包**的落点，npm 程序本身在
+`<node 安装目录>\node_modules\npm\bin\npm-cli.js`（本机实测 `C:\Program Files\nodejs\`）。
+最终沿用本仓既有的「node 直启」思路（同 `dsh_entry_js()`）：零 cmd 依赖，也不吃 PATH 是否含 npm 目录。
+
+**顺带修正一处误判**：复检判据最初写成 `after.installed && after.supported` —— 装在非默认 prefix 时
+读不到版本号（`version = None`）⇒ `supported = false` ⇒ **一次成功的安装会被报成失败**。改用
+`verdict != "unsupported"`（读不到版本按「可用」处理，与探测口径一致）。
+
+**验证**：`cargo check --bin miasaki --tests` 通过（仅一处既有 `dead_code` 警告）；
+单测 **174 → 178 例** —— `version3_ignores_prerelease_and_build_metadata` /
+`supported_range_is_half_open_and_accepts_rc_versions` /
+`install_target_prefers_latest_then_falls_back_inside_range` /
+`dsh_install_is_never_called_from_the_launch_path`。末条用源码断言钉住「启动路径不得调用安装」——
+否则日后一次「顺手加上自动安装」就悄悄改了这个副作用边界。
+
+**实机待验**（矩阵台账 E28）：① 未装 DSH 时失败页出现「安装 DSH」且点击后能真装上；
+② 装完自动继续启动、不必再点「重试」；③ 缺 Node 时报出的是「缺 Node」而不是笼统的「安装失败」；
+④ 版本越界时按钮文案为「装合适版本（当前 X）」且装的是区间内最高版。
+
+## 2026-10-12 · 侧边栏左上角品牌名改「DSH」（品牌补丁改版，第八处本体补丁）
+
+**触发**：用户贴出左上角现状截图（鲸鱼 + deepseek 字标 + 黑胶囊「MIASAKI」）
+要求「左上角改为 DSH」。
+
+**形态先问后做**：「改为 DSH」有三种合理读法（只换胶囊内文字 / 整块品牌名换掉 /
+连鲸鱼一起换，后者要动 `sidebar.brand.mark` 的官方 FishLogo，改动面更大）。
+用户选择 **「保留鲸鱼，整块品牌名换成 DSH」** ⇒ 左上角读作「鲸鱼 + DSH」。
+这也贴合官方原意：那一行本来就是「deepseek 字标 + HARNESS 胶囊 = DeepSeek Harness」，
+用户要的是这行读作 **DSH**（其缩写），而不是把胶囊里的词换掉。
+
+**实现**（`patches/dsh-client-ui-brand-official/patch.mjs`）：编辑 1 整块重写 ——
+删掉「复刻 8 条官方字标 path + 黑胶囊 rect + 胶囊内 `<text>`」那套 ~5 KB 产物，
+改为一个 24 单位高的 SVG 内含单个 `<text>DSH</text>`；组件名
+`MiasakiBrandName` → `DshBrandName`（幂等标记同步换）。**字号/字重/字距/颜色
+一律写成 SVG 呈现属性**（`20` / `700` / `0` / `currentColor`）—— 呈现属性优先于
+继承值，`.brandName` 的 `font-size:18px;font-weight:600;letter-spacing:.04em`
+不会串味（一旦串味，下面按 20px 推的几何全部不成立）。鲸鱼 mark 不动。
+产物 **8,286 B / `821DD9B3…` → 3,314 B / `6E9FFF1B…`**。
+
+**尺寸不是估的，是量的**：官方字标 ink `y 4.628→18.622`（高 **13.99**）、相对
+viewBox 左缘偏移 **0.95**。Edge 无头 canvas `measureText` 量 Segoe UI 700/20px 的
+「DSH」：advance **41.279**、ink `1.000→39.957`、cap 高 **14.000** ⇒ `fontSize=20`
+（cap 高与官方字标逐值同档）、基线 `18.62`、`viewBox="0 0 41.5 24"`。
+**渲染自证**（从产物抽组件代码 + stub jsx 求值 + 官方品牌行 CSS 原文，Edge 渲染）：
+排版宽 41.281 ↔ canvas 41.279 两套测量吻合；ink 右 39.957 < 41.5 **不裁切**；
+鲸鱼 ink 右 → D ink 左 **9.84 px**（官方同口径 9.79 px）；计算样式
+20px/700/`normal`/`rgb(26,26,26)` 证明继承值被正确覆盖；浅/深色主题均随
+`currentColor`，无硬编码色。
+
+**踩到并修掉一个真缺陷（apply 的 legacy 路径）**：`classify` 新增 `legacy`
+（识别 2026-09-28 版胶囊产物）后，`apply` 最初仍是「对目标就地打补丁」⇒ 对旧产物
+**必然锚点 0 命中**而失败（`dsh-brand-name-usage: 锚点必须唯一，实际命中 0 次`）：
+旧产物的 `OfficialBrandName` 已指向 `MiasakiBrandName`，与官方原版锚点不同。
+**修法**：`apply` 一律改写「由仓库 baseline 重建 + 两侧 SHA 自证」的产物，不再
+对目标就地匹配锚点 —— 写的是逐字节确定的内容，比原来更强，且顺带消掉「目标被
+第三方手改过」的风险（`original` 状态下目标与 baseline 逐字节相同，产物一致）。
+旧产物升级前另存 `<client.js>.dsh-legacy-bak` 留档；`revert` 仍回官方原版。
+
+**一次探针自伤（记录以免再犯）**：渲染探针第一版把 SVG 的 `viewBox` 按通用
+camelCase→kebab 写成 `view-box` ⇒ 浏览器不认、脚本读属性得 `null` 抛错、
+测量输出停在 `pending`。**React 的 SVG 属性名有特例**（`viewBox` /
+`preserveAspectRatio` 等保持原样），不能一律 kebab 化。
+
+**回归**：`verify` PASS（2 条编辑、两侧语法闸门）、`apply` 后 `status=patched`
+且幂等复跑跳过；本件在 `verify-all.mjs desktop` 的闸门只跑离线 `verify`。
+文档同步：补丁 `README.md` 重写（沿革表 / 尺寸依据 / apply 路线决策 / 复现命令）、
+`design/2026-09-28-miasaki-brand-wordmark.md` 追加「2026-10-12 改版」节、
+`desktop/README.md` 补丁表与历史段、`verify-all.mjs` 该项注释与名称。
+
+**待用户验收**：刷新页面看左上角（client 侧补丁，刷页面即生效、无需重启 host）。
+
 ## 2026-10-12 · 用户复验提三件：重启也播片头（跟随设置）+ 修「找不到页面要手动刷新」+ 压缩加载时间
 
 **触发**：用户用过重启后反馈「重启有点小问题，另外加载画面用已有的区别启动的动画」，

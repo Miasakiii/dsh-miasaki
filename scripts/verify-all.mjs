@@ -515,14 +515,14 @@ function planDesktop() {
     args: [join(dir, 'patches/dsh-client-ui-sidebar/patch.mjs'), 'verify'],
     cwd: dir,
   })
-  // 品牌徽标 HARNESS → miasaki 部署名补丁（2026-09-28 新建，基线 0.1.7-rc.2）的自证。
-  // 2 条 JS 编辑（插入 MiasakiBrandName 组件 + 改 OfficialBrandName 返回）+
-  // SHA 重建比对 + vm.Script 语法闸门。字标 8 path 从 primitives 官方源码
-  // 逐字节提取，胶囊 rect 几何不变，仅徽标文字 HARNESS→MIASAKI。
-  // 纯离线，升级覆盖补丁后这一项仍应 PASS。
+  // 品牌名 DSH 化补丁（2026-09-28 新建 HARNESS → MIASAKI；2026-10-12 按用户要求
+  // 改为整块「DSH」——鲸鱼 mark 不动）的自证。2 条 JS 编辑（插入 DshBrandName
+  // 组件 + 改 OfficialBrandName 返回）+ SHA 重建比对 + vm.Script 语法闸门。
+  // 字号/基线按官方字标 ink 几何对齐（Segoe UI 700/20px 的 cap 高 14.00 ↔ 官方
+  // 字标 13.99），故 DSH 与官方字标视觉同档。纯离线，升级覆盖补丁后这一项仍应 PASS。
   checks.push({
     line: 'desktop',
-    name: 'patch verify (品牌徽标 miasaki 化补丁可重建)',
+    name: 'patch verify (品牌名 DSH 化补丁可重建)',
     cmd: process.execPath,
     args: [join(dir, 'patches/dsh-client-ui-brand-official/patch.mjs'), 'verify'],
     cwd: dir,

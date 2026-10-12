@@ -1,7 +1,9 @@
-# 品牌徽标 HARNESS → miasaki 部署名补丁（第八处本体补丁）
+# 品牌徽标 HARNESS → 部署品牌名补丁（第八处本体补丁）
 
 - 日期：2026-09-28
 - 状态：已落地并实机验证（0.1.7-rc.2，`status=patched`，刷页面生效）
+- 改版：**2026-10-12 品牌名区由「deepseek 字标 + 胶囊 MIASAKI」改为整块「DSH」**
+  （见文末「2026-10-12 改版」；本文档上半部分保留 09-28 首次落地的原始记录，未改写）
 - 补丁目录：`patches/dsh-client-ui-brand-official/`
 - 统一回归：`scripts/verify-all.mjs` desktop 线 +1 项（35/35 PASS）
 
@@ -89,3 +91,60 @@ official occupant 的实现（本补丁）。
   备份 `.dsh-bak` 就位；
 - `verify-all.mjs desktop` 35/35 PASS；
 - 用户实机截图确认：胶囊内 HARNESS → MIASAKI，字标与鲸鱼不变。
+
+## 2026-10-12 改版：品牌名区整块换成「DSH」
+
+**事件**：用户贴出左上角现状截图（鲸鱼 + deepseek 字标 + 黑胶囊「MIASAKI」）
+要求「左上角改为 DSH」。形态有多种合理读法（只换胶囊文字 / 整块换 /
+连鲸鱼一起换），故先问后做；用户选择 **「保留鲸鱼，整块品牌名换成 DSH」**。
+
+**为什么是这个形态**：官方那一行的语义本来就是「deepseek 字标 + HARNESS 胶囊
+= DeepSeek Harness」，miasaki 版把胶囊换成了 MIASAKI。用户这次要的是这行读作
+**DSH**（DeepSeek Harness 的缩写）⇒ 不是「换胶囊里的词」，而是**整块品牌名
+就是 DSH**；鲸鱼是 `sidebar.brand.mark` 另一个 slot 的官方 occupant，
+不在本补丁范围，保留 ⇒ 左上角读作「鲸鱼 + DSH」。
+
+**实现（patch.mjs 重写编辑 1）**：删掉原来那套「复刻 8 条官方字标 path +
+黑胶囊 rect + 胶囊内 `<text>`」的 ~5 KB 产物，改为一个 24 单位高的 SVG，
+内含单个 `<text>DSH</text>`。组件名 `MiasakiBrandName` → `DshBrandName`
+（幂等标记与产物形态同步换）。字号/字重/字距/颜色写成 **SVG 呈现属性**
+（`20` / `700` / `0` / `currentColor`）—— 呈现属性优先于继承值，故
+`.brandName` 的 `font-size:18px;font-weight:600;letter-spacing:.04em`
+不会串味（这是硬约束：一旦串味，下面按 20px 推的几何全部不成立）。
+
+**尺寸不是估的，是量的**：官方字标 ink 为 `y 4.628→18.622`（高 **13.99**）、
+相对 viewBox 左缘偏移 **0.95**。用 Edge 无头 canvas `measureText` 量系统字体
+Segoe UI 在 700/20px 下的「DSH」：advance **41.279**、ink `1.000→39.957`、
+cap 高（D/H）**14.000** ⇒ 取 `fontSize=20`（cap 高与官方字标逐值同档）、
+基线 `y=18.62`、`viewBox="0 0 41.5 24"`（ink 右 + 1.54 余量防亚像素裁切）。
+
+**渲染自证（离线，不依赖 GUI 登录态）**：从**补丁产物**里抽出组件代码，
+用 stub `react_jsx_runtime` 求值成虚拟树 → 转 markup → 套官方品牌行 CSS
+（三条规则**从 sidebar client.js 原文抽取**，未手抄）在 Edge 里渲染：
+
+| 判据 | 实测 | 对照 |
+|---|---|---|
+| `<text>` 排版宽 | 41.281 | canvas advance 41.279（两套独立测量吻合） |
+| ink 右边界 | 39.957 | viewBox 宽 41.5 ⇒ **不裁切** |
+| 鲸鱼 ink 右 → D ink 左 | **9.84 px** | 官方同口径 **9.79 px** |
+| 计算样式 | 20px / 700 / `normal` / `rgb(26,26,26)` | 继承值被呈现属性正确覆盖 |
+| 浅色 / 深色主题 | 均跟随 `currentColor` | 无硬编码色 |
+
+**踩到并修掉的一个真缺陷（apply 的 legacy 路径）**：`classify` 加了 `legacy`
+识别后，`apply` 最初仍是「对目标就地打补丁」⇒ 对旧版 MIASAKI 产物**必然**
+锚点命中 0 次而失败（`dsh-brand-name-usage: 锚点必须唯一，实际命中 0 次`）——
+旧产物的 `OfficialBrandName` 已指向 `MiasakiBrandName`，与官方原版锚点不同。
+**修法**：`apply` 一律改为写「由仓库 baseline 重建 + 两侧 SHA 自证」的产物，
+不针对目标就地匹配锚点。这比原来更强 —— 写的是逐字节确定的内容，
+顺带消掉「目标被第三方手改过」的风险；`original` 状态下目标与 baseline
+逐字节相同，两种路径产物一致。旧产物在升级前另存 `.dsh-legacy-bak` 留档。
+
+**产物与回归**：3,314 B / `6E9FFF1BBFE8EB04…`（旧版 8,286 B / `821DD9B3…`）；
+`verify` PASS、`apply` 后 `status=patched`、幂等复跑跳过；实机侧刷页面即生效
+（client-hmr 会热推）。已知 `verify-all.mjs desktop` 的本件闸门只跑 `verify`（离线重建自证）。
+
+**一次探针自伤（记下来省得再犯）**：渲染探针第一版把 SVG 的 `viewBox`
+按通用 camelCase→kebab 规则写成了 `view-box`，浏览器不认 ⇒ 页面脚本读
+`getAttribute('viewBox')` 拿到 `null` 后抛错、测量输出停在 `pending`。
+**React 的 SVG 属性名有特例**（`viewBox` / `preserveAspectRatio` 等保持原样），
+不能一律 kebab 化 —— 探针本身也得按 React 的映射规则写。

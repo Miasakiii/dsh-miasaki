@@ -1,21 +1,32 @@
 #!/usr/bin/env
-// DSH 官方品牌徽标 HARNESS → miasaki 部署品牌名运行时补丁。
+// DSH 官方品牌徽标 → DSH 部署品牌名运行时补丁。
 //
 // 背景：侧边栏品牌行由两个 slot 组成 —— `sidebar.brand.mark`（官方
 //   FishLogo 鲸鱼）与 `sidebar.brand.name`。后者由官方插件
 //   `@deepseek-ai/dsh-client-ui-brand-official` 填充，渲染
-//   BrandWordmark{ includeMark:false }：deepseek 字标 + 黑胶囊徽标
-//   「HARNESS」（7 个转曲 path + rect 胶囊底，官方徽标区 viewBox
-//   "26 0 156 24"，胶囊 rect x=129.348 y=5.5 w=52 h=14 rx=2，
-//   字母取反色 token --dsw-alias-label-primary-inverted）。
+//   BrandWordmark{ includeMark:false }：deepseek 字标（8 个转曲 path）+
+//   黑胶囊徽标「HARNESS」（rect 胶囊 x=129.348 y=5.5 w=52 h=14 rx=2，
+//   7 个转曲字母，反色 token --dsw-alias-label-primary-inverted），
+//   徽标区 viewBox "26 0 156 24"。
 //
 // 本补丁把 `sidebar.brand.name` 的 occupant 换成部署自有实现
-//   MiasakiBrandName：deepseek 字标 8 个 path 与官方逐字节一致
-//   （视觉不变），胶囊内徽标 HARNESS → MIASAKI（SVG <text>，
-//   黑底 rect 几何不变、取官方同款反色 token）。鲸鱼 mark 不动。
-//   slot 声明见 dsh-client-ui-sidebar（single slot，后注册的
-//   occupant 胜出）；本补丁走「改 occupant 实现」而非再写一个
-//   注册插件，与既有七个本体补丁同属「不新增 profile 装载」路线。
+//   DshBrandName：品牌名区**整块显示「DSH」**（不再复刻 deepseek 字标
+//   与胶囊徽标）。鲸鱼 mark（`sidebar.brand.mark` 的 FishLogo）不动，
+//   故左上角读作「鲸鱼 + DSH」。slot 声明见 dsh-client-ui-sidebar
+//   （single slot，后注册的 occupant 胜出）；本补丁走「改 occupant 实现」
+//   而非再写一个注册插件，与其余本体补丁同属「不新增 profile 装载」路线。
+//
+// 尺寸依据（量出来的，不是估的；复现命令见 README「尺寸怎么定的」）：
+//   Edge 无头 canvas measureText，Segoe UI 700 / 20px ⇒「DSH」
+//   advance 41.28、ink 1.00→39.96、cap 高 14.00 用户单位。
+//   官方 BrandWordmark 字标 ink 为 y 4.628→18.622（高 13.99）、相对其
+//   viewBox 左边缘 0.95 —— 故 fontSize 取 20（cap 高与官方字标逐值等高）、
+//   基线 y 取 18.62（ink 底对齐）、viewBox 宽取 41.5（ink 右 39.96 + 余量，
+//   防亚像素裁切），左侧 ink 偏移 1.00 与官方 0.95 视觉同档。
+//
+// 历史：2026-09-28 首版把胶囊徽标 HARNESS → MIASAKI（deepseek 字标保留）；
+//   2026-10-12 按用户要求改为整块「DSH」（左上角读作「鲸鱼 + DSH」），
+//   旧产物由 classify 识别为 legacy 并允许 apply 直接覆盖升级。
 //
 // 代价与边界（与其余补丁同）：DSH 升级会覆盖该包，需重新应用；
 // 只改这一个包的 client 产物，不动 DSH 源码、不动其他包。
@@ -25,7 +36,7 @@
 // 用法：
 //   node patch.mjs verify            # 离线自证：baseline 原始 → 重建 → 与记录的产物 SHA 比对 + 语法闸门
 //   node patch.mjs status            # 检查已安装 bundle 的补丁状态与语法状态
-//   node patch.mjs apply [--yes]     # 备份 + 应用（幂等：已打过则跳过）
+//   node patch.mjs apply [--yes]     # 备份 + 应用（幂等：已打过则跳过；legacy 可直接升级）
 //   node patch.mjs revert            # 从 .dsh-bak 还原
 //   通用参数：--target <client.js 路径>  覆盖自动探测
 //
@@ -48,68 +59,67 @@ export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
 /** 官方原版 client.js 的 SHA-256（1863 B，与安装目录当前文件一致）。 */
 export const ORIGINAL_SHA256 = '22BB7E181A8D93372E1D14927B201612B09A02C84EA3D0F36933CFFF1DE47D71'
 /**
- * 应用本补丁后的 SHA-256。
+ * 应用本补丁后的 SHA-256（3,314 B，DSH 版）。
  *
  * 与 sidebar 补丁同：**不存 patched 全文**（产物靠重建自证），
  * verify 用「由原始 baseline 重建后的 SHA 是否等于本常量」自证。
  */
-export const PATCHED_SHA256 = '821DD9B3CA7AA6E0C16493033D47E39A9DB5EEC099B62E5730A4A6C601660F3F'
+export const PATCHED_SHA256 = '6E9FFF1BBFE8EB04D3CAC07825D06235F89F759DD992165D395D54F90E85083C'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
-const PATCH_MARKER = 'return (0, react_jsx_runtime.jsx)(MiasakiBrandName, {});'
+const PATCH_MARKER = 'return (0, react_jsx_runtime.jsx)(DshBrandName, {});'
+/**
+ * 历史补丁产物特征串：2026-09-28–2026-10-12 的「胶囊 MIASAKI」版。
+ * 识别它只为让 `apply` 能直接升级（否则会被当成 unknown 而要求 --yes）。
+ */
+const LEGACY_PATCH_MARKERS = ['MiasakiBrandName']
 
 // ---------------------------------------------------------------------------
 // 编辑规则。锚点是编译产物里的 JS 片段原文；锚点必须全文件唯一。
-// 两条编辑：①在 Brand.js region 末尾插入部署组件 MiasakiBrandName；
+// 两条编辑：①在 Brand.js region 末尾插入部署组件 DshBrandName；
 // ②OfficialBrandName 的返回改成渲染该组件。
 // ---------------------------------------------------------------------------
 const EDITS = [
   {
-    id: 'miasaki-brand-name-component',
+    id: 'dsh-brand-name-component',
     anchor: [
       '\t\t//#endregion',
       '\t\t//#region lib/types/client/index.js',
     ].join('\n'),
     replacement: [
       '\t\t//#endregion',
-      '\t\t// miasaki 部署品牌：deepseek 字标（与官方 BrandWordmark 的字母 path',
-      '\t\t// 逐字节一致）+ 黑胶囊「MIASAKI」替换官方「HARNESS」徽标。',
-      '\t\tconst MIASAKI_WORDMARK_LETTERS = [',
-      '\t\t\t"M68.416 18.2447H67.0501V16.1272H68.416C69.2619 16.1272 70.1166 15.9163 70.6671 15.3304C71.2181 14.7444 71.426 13.8455 71.426 12.9471C71.426 12.0487 71.2268 11.1498 70.6671 10.5643C70.1083 9.97831 69.2619 9.76744 68.416 9.76744C67.5701 9.76744 66.7154 9.97831 66.1639 10.5643C65.6129 11.1503 65.4049 12.0487 65.4049 12.9471V21.6435H63.009V7.6582H65.4049V8.54883H65.8442C65.8918 8.49393 65.9394 8.44728 65.9875 8.40064C66.5871 7.85353 67.5049 7.6582 68.4072 7.6582C69.8212 7.6582 71.2341 8.00998 72.1607 8.98662C73.0868 9.96325 73.4143 11.4632 73.4143 12.9558C73.4143 14.4485 73.0785 15.9406 72.1607 16.925C71.2424 17.9094 69.8212 18.2457 68.416 18.2457V18.2447Z",',
-      '\t\t\t"M31.9551 8.03497H33.3204V10.1525H31.9551C31.1087 10.1525 30.2545 10.3633 29.7035 10.9493C29.1525 11.5353 28.945 12.4342 28.945 13.3326C28.945 14.231 29.1447 15.1294 29.7035 15.7154C30.2623 16.3014 31.1087 16.5122 31.9551 16.5122C32.8015 16.5122 33.6562 16.3014 34.2072 15.7154C34.7582 15.1294 34.9657 14.231 34.9657 13.3326V4.62842H37.3611V18.6219H34.9657V17.7313H34.5264C34.4783 17.7857 34.4307 17.8329 34.3826 17.8795C33.7835 18.4261 32.8652 18.6219 31.9629 18.6219C30.5494 18.6219 29.136 18.2707 28.2099 17.294C27.2838 16.3174 26.9563 14.817 26.9563 13.3248C26.9563 11.8327 27.2916 10.34 28.2099 9.35561C29.136 8.37898 30.5494 8.03497 31.9551 8.03497Z",',
-      '\t\t\t"M49.3786 13.1431V13.9948H42.9984V12.2996H47.2305C47.1348 11.6825 46.9113 11.1043 46.5119 10.682C45.9371 10.0727 45.0503 9.85409 44.1723 9.85409C43.2943 9.85409 42.4076 10.0727 41.8328 10.682C41.258 11.2913 41.05 12.2213 41.05 13.1435C41.05 14.0658 41.2575 15.003 41.8328 15.6046C42.4076 16.2061 43.2939 16.433 44.1723 16.433C45.0508 16.433 45.9371 16.2143 46.5119 15.6046C46.5916 15.5186 46.6635 15.4248 46.7354 15.331H49.0992C48.8918 16.0657 48.5643 16.7299 48.0691 17.2454C47.111 18.2531 45.6339 18.6205 44.1723 18.6205C42.7108 18.6205 41.2337 18.2609 40.2755 17.2454C39.3174 16.2299 38.9661 14.6828 38.9661 13.1435C38.9661 11.6043 39.3096 10.0494 40.2755 9.04168C41.242 8.03396 42.7108 7.66663 44.1723 7.66663C45.6339 7.66663 47.111 8.02618 48.0691 9.04168C49.0351 10.0572 49.3786 11.6043 49.3786 13.1435V13.1431Z",',
-      '\t\t\t"M61.4045 13.1431V13.9948H55.0243V12.2996H59.2564C59.1602 11.6825 58.9372 11.1043 58.5378 10.682C57.963 10.0727 57.0762 9.85409 56.1982 9.85409C55.3202 9.85409 54.4335 10.0727 53.8587 10.682C53.2839 11.2913 53.0759 12.2213 53.0759 13.1435C53.0759 14.0658 53.2834 15.003 53.8587 15.6046C54.4335 16.2061 55.3202 16.433 56.1982 16.433C57.0762 16.433 57.963 16.2143 58.5378 15.6046C58.6179 15.5186 58.6894 15.4248 58.7608 15.331H61.1251C60.9171 16.0657 60.5897 16.7299 60.0945 17.2454C59.1364 18.2531 57.6593 18.6205 56.1982 18.6205C54.7372 18.6205 53.2596 18.2609 52.3014 17.2454C51.3432 16.2299 50.9919 14.6828 50.9919 13.1435C50.9919 11.6043 51.3355 10.0494 52.3014 9.04168C53.2678 8.03396 54.7367 7.66663 56.1982 7.66663C57.6598 7.66663 59.1364 8.02618 60.0945 9.04168C61.061 10.0572 61.4045 11.6043 61.4045 13.1435V13.1431Z",',
-      '\t\t\t"M80.242 18.6214C81.7035 18.6214 83.1801 18.4105 84.1383 17.809C85.0965 17.2075 85.4482 16.2931 85.4482 15.3869C85.4482 14.4807 85.1042 13.5585 84.1383 12.9647C83.1801 12.371 81.703 12.1518 80.242 12.1518C79.6186 12.1518 79.0438 12.0658 78.6366 11.8394C78.2294 11.6047 78.0778 11.2534 78.0778 10.9017C78.0778 10.5499 78.2216 10.1908 78.6366 9.9639C79.0438 9.72921 79.6749 9.65147 80.2973 9.65147C80.9198 9.65147 81.5509 9.73747 81.9591 9.9639C82.3663 10.1986 82.5179 10.5499 82.5179 10.9017H84.9531C84.9531 9.99499 84.6421 9.07327 83.7719 8.47951C82.9017 7.88576 81.5679 7.66663 80.2424 7.66663C78.9169 7.66663 77.5837 7.8775 76.713 8.47951C75.8427 9.08104 75.5308 9.99499 75.5308 10.9017C75.5308 11.8083 75.8423 12.73 76.713 13.3238C77.5832 13.9176 78.9165 14.1367 80.2424 14.1367C80.929 14.1367 81.688 14.2227 82.1428 14.4491C82.5985 14.676 82.7579 15.0351 82.7579 15.3869C82.7579 15.7387 82.5985 16.0977 82.1428 16.3246C81.688 16.5511 80.9931 16.6371 80.3066 16.6371C79.62 16.6371 78.9169 16.5511 78.4694 16.3246C78.0224 16.0982 77.8543 15.7387 77.8543 15.3869H75.0435C75.0435 16.2935 75.3865 17.2153 76.3534 17.809C77.3194 18.4028 78.7809 18.6214 80.2424 18.6214H80.242Z",',
-      '\t\t\t"M97.4733 13.1431V13.9948H91.0932V12.2996H95.3252C95.23 11.6825 95.006 11.1043 94.6071 10.682C94.0313 10.0727 93.1456 9.85409 92.2666 9.85409C91.3876 9.85409 90.5018 10.0727 89.927 10.682C89.3522 11.2913 89.1452 12.2213 89.1452 13.1435C89.1452 14.0658 89.3522 15.003 89.927 15.6046C90.5018 16.2061 91.3886 16.433 92.2666 16.433C93.1446 16.433 94.0313 16.2143 94.6071 15.6046C94.6863 15.5186 94.7587 15.4248 94.8301 15.331H97.1935C96.9855 16.0657 96.6585 16.7299 96.1639 17.2454C95.2057 18.2531 93.7281 18.6205 92.2666 18.6205C90.805 18.6205 89.3284 18.2609 88.3703 17.2454C87.4121 16.2299 87.0613 14.6828 87.0613 13.1435C87.0613 11.6043 87.4043 10.0494 88.3703 9.04168C89.3367 8.03396 90.806 7.66663 92.2666 7.66663C93.7272 7.66663 95.2057 8.02618 96.1639 9.04168C97.1298 10.0572 97.4729 11.6043 97.4729 13.1435L97.4733 13.1431Z",',
-      '\t\t\t"M113.5 4.62817H111.104V18.6217H113.5V4.62817Z",',
-      '\t\t\t"M117.589 12.8154L121.517 18.6208H118.554L114.625 12.8154L118.554 8.15088H121.517L117.589 12.8154Z",',
-      '\t\t];',
+      '\t\t// DSH 部署品牌：品牌名区整块渲染「DSH」字标 —— 不再复刻官方',
+      '\t\t// deepseek 字标与胶囊徽标。字号 20 / 粗体 Segoe UI 下 cap 高 14.00',
+      '\t\t// 用户单位，与官方 BrandWordmark 字标 ink 高（4.628→18.622）等高；',
+      '\t\t// 基线 18.62 与官方字标 ink 底对齐；viewBox 宽 41.5 由 Edge 实测',
+      '\t\t// （Segoe UI 700 20px：「DSH」advance 41.28、ink 1.00→39.96）推得。',
+      '\t\t// 字号/字重/字距都写成呈现属性：继承自 .brandName 的 CSS',
+      '\t\t//（font-size:18px / font-weight:600 / letter-spacing:.04em）不生效，',
+      '\t\t// 否则实测尺寸会与上面的推导不符。',
+      '\t\tconst DSH_BRAND_TEXT = "DSH";',
+      '\t\tconst DSH_BRAND_VIEWBOX_WIDTH = 41.5;',
       '\t\t/**',
-      '\t\t* Render the miasaki deployment name artwork without its independently slotted mark.',
+      '\t\t* Render the DSH deployment brand name without its independently slotted mark.',
       '\t\t* @param props - Host-supplied presentation (size, className), same contract as the official wordmark.',
-      '\t\t* @returns the deepseek wordmark with the miasaki badge.',
+      '\t\t* @returns the DSH wordmark svg.',
       '\t\t*/',
-      '\t\tfunction MiasakiBrandName({ size = 24, className }) {',
-      '\t\t\treturn (0, react_jsx_runtime.jsxs)("svg", {',
-      '\t\t\t\twidth: size * 156 / 24,',
+      '\t\tfunction DshBrandName({ size = 24, className }) {',
+      '\t\t\treturn (0, react_jsx_runtime.jsx)("svg", {',
+      '\t\t\t\twidth: size * DSH_BRAND_VIEWBOX_WIDTH / 24,',
       '\t\t\t\theight: size,',
       '\t\t\t\tclassName,',
-      '\t\t\t\tviewBox: "26 0 156 24",',
+      '\t\t\t\tviewBox: `0 0 ${DSH_BRAND_VIEWBOX_WIDTH} 24`,',
       '\t\t\t\tfill: "none",',
       '\t\t\t\t"aria-hidden": "true",',
-      '\t\t\t\tchildren: [',
-      '\t\t\t\t\t...MIASAKI_WORDMARK_LETTERS.map((d, index) => (0, react_jsx_runtime.jsx)("path", { key: `miasaki-letter-${index}`, d, fill: "currentColor" })),',
-      '\t\t\t\t\t(0, react_jsx_runtime.jsx)("rect", { x: "129.348", y: "5.5", width: "52", height: "14", rx: "2", fill: "currentColor" }),',
-      '\t\t\t\t\t(0, react_jsx_runtime.jsx)("text", {',
-      '\t\t\t\t\t\tx: "136.5",',
-      '\t\t\t\t\t\ty: "15",',
-      '\t\t\t\t\t\tfill: "var(--dsw-alias-label-primary-inverted)",',
-      '\t\t\t\t\t\tfontSize: "7.4",',
-      '\t\t\t\t\t\tfontWeight: "700",',
-      '\t\t\t\t\t\tletterSpacing: "0.2",',
-      '\t\t\t\t\t\tfontFamily: "\'Segoe UI\', system-ui, sans-serif",',
-      '\t\t\t\t\t\tchildren: "MIASAKI"',
-      '\t\t\t\t\t})',
-      '\t\t\t\t]',
+      '\t\t\t\tchildren: (0, react_jsx_runtime.jsx)("text", {',
+      '\t\t\t\t\tx: "0",',
+      '\t\t\t\t\ty: "18.62",',
+      '\t\t\t\t\tfill: "currentColor",',
+      '\t\t\t\t\tfontSize: "20",',
+      '\t\t\t\t\tfontWeight: "700",',
+      '\t\t\t\t\tletterSpacing: "0",',
+      '\t\t\t\t\tfontFamily: "\'Segoe UI\', system-ui, sans-serif",',
+      '\t\t\t\t\tchildren: DSH_BRAND_TEXT',
+      '\t\t\t\t})',
       '\t\t\t});',
       '\t\t}',
       '\t\t//#endregion',
@@ -117,7 +127,7 @@ const EDITS = [
     ].join('\n'),
   },
   {
-    id: 'miasaki-brand-name-usage',
+    id: 'dsh-brand-name-usage',
     anchor: [
       '\t\tfunction OfficialBrandName() {',
       '\t\t\treturn (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.BrandWordmark, { includeMark: false });',
@@ -125,7 +135,7 @@ const EDITS = [
     ].join('\n'),
     replacement: [
       '\t\tfunction OfficialBrandName() {',
-      '\t\t\treturn (0, react_jsx_runtime.jsx)(MiasakiBrandName, {});',
+      '\t\t\treturn (0, react_jsx_runtime.jsx)(DshBrandName, {});',
       '\t\t}',
     ].join('\n'),
   },
@@ -182,11 +192,12 @@ export function applyPatch(source) {
   return output
 }
 
-/** 判定一份 bundle 的状态：original / patched / unknown。 */
+/** 判定一份 bundle 的状态：original / patched / legacy / unknown。 */
 export function classify(text) {
   const sha = sha256(text)
   if (sha === ORIGINAL_SHA256) return { state: 'original', sha }
   if (text.includes(PATCH_MARKER)) return { state: 'patched', sha }
+  if (LEGACY_PATCH_MARKERS.some(marker => text.includes(marker))) return { state: 'legacy', sha }
   return { state: 'unknown', sha }
 }
 
@@ -258,8 +269,11 @@ async function cmdStatus(args) {
   console.log(`[patch] 状态   ${state}  (SHA-256 ${sha.slice(0, 16)}…)`)
   console.log(`[patch] 语法   ${verdict === null ? '合法' : `非法 —— ${verdict}`}`)
   console.log(`[patch] 备份   ${existsSync(backup) ? backup : '（无）'}`)
+  if (state === 'legacy') {
+    console.log('[patch] 提示   这是 2026-09-28 版（胶囊 MIASAKI）产物；apply 可原地升级为 DSH 版（无需 --yes）')
+  }
   if (state === 'unknown') {
-    console.log('[patch] 提示   该文件既非 0.1.7-rc.2 原版也非补丁版——DSH 很可能已升级，需先核对锚点再适配')
+    console.log('[patch] 提示   该文件既非登记的原版也非本补丁产物——DSH 很可能已升级，需先核对锚点再适配')
   }
 }
 
@@ -281,20 +295,43 @@ async function cmdApply(args) {
     process.exitCode = 2
     return
   }
-  const patched = applyPatch(text)
+  // 写入内容一律取「由仓库 baseline 重建」的产物，**不**对目标就地打补丁：
+  // 旧版（legacy）产物的锚点与官方原版不同 —— 它的 OfficialBrandName 已指向
+  // MiasakiBrandName，对它就地去匹配原版锚点必然命中 0 次（2026-10-12 实测踩到，
+  // 见 design/CHANGELOG.md）。重建路径写的是**逐字节确定的内容**（两侧 SHA
+  // 自证），同时消掉「目标被第三方手改过」的风险。`original` 状态下目标与
+  // baseline 逐字节相同（SHA 相等），故两种路径产物一致。
+  const original = await readFile(ORIGINAL_FILE, 'utf8')
+  const originalSha = sha256(original)
+  if (originalSha !== ORIGINAL_SHA256) {
+    console.error(`[patch] 拒绝写入：仓库 baseline 与登记 SHA 不符（${originalSha.slice(0, 16)}…）`)
+    process.exitCode = 1
+    return
+  }
+  const patched = applyPatch(original)
   const verdict = parseVerdict(patched)
   if (verdict !== null) {
     console.error(`[patch] 拒绝写入：产物语法非法 —— ${verdict}`)
     process.exitCode = 1
     return
   }
+  const patchedSha = sha256(patched)
+  if (patchedSha !== PATCHED_SHA256) {
+    console.error(`[patch] 拒绝写入：重建产物 SHA 与登记不符（${patchedSha.slice(0, 16)}…）`)
+    process.exitCode = 1
+    return
+  }
+  if (state === 'legacy') {
+    const legacyBackup = `${target}.dsh-legacy-bak`
+    if (!existsSync(legacyBackup)) await copyFile(target, legacyBackup)
+    console.log(`[patch] 旧版（胶囊 MIASAKI）产物已留档 → ${legacyBackup}`)
+  }
   const backup = `${target}.dsh-bak`
   if (!existsSync(backup)) await copyFile(target, backup)
   await writeFile(target, patched, 'utf8')
-  const sha = sha256(patched)
   console.log(`[patch] 已应用 → ${target}`)
   console.log(`[patch] 备份   ${backup}`)
-  console.log(`[patch] 结果   ${Buffer.byteLength(patched, 'utf8')} 字节，SHA-256 ${sha.slice(0, 16)}…${sha === PATCHED_SHA256 ? '（与记录一致）' : ''}`)
+  console.log(`[patch] 结果   ${Buffer.byteLength(patched, 'utf8')} 字节，SHA-256 ${patchedSha.slice(0, 16)}…（与记录一致）`)
   console.log('[patch] 提示   浏览器侧生效需刷新页面；若 DSH host 启动早于本次写入，client-hmr 会热推 rebuilt 帧')
 }
 

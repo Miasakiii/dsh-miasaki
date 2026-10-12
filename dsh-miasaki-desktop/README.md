@@ -241,7 +241,34 @@ PATH 里有没有 `%APPDATA%\npm`、`dsh.cmd` 在不在（在即「装好了」�
 | `cmd.exe：无法启动（… os error 5）` | 子进程创建被拦（安全软件 / 沙箱策略） | 给 `Miasaki.exe` 加白名单，并确认作用域内没有沙箱工具 |
 | `cmd.exe：无法启动（… os error 267）` | 当前工作目录失效（目录被删 / 网络盘卸载） | 从 `C:\ProgramData\MiasakiApp` 起步的快捷方式启动 |
 | `cmd.exe：无法启动（… os error 740）` | 系统拒绝创建命令解释器（`ERROR_ELEVATION_REQUIRED`）。**2026-09-26（晚）起壳已不再依赖 cmd.exe**：拉起后端走 node 直启（见下），探测也不再只看 PATH | 看 `pet.log` 是否出现 `spawn-dsh: node 直启后端（绕开 cmd.exe）pid …`；失败页自证新增的「node 直启：可用（node → dsh 入口）」一行会直接给出可用性。仍不行就手工在终端跑 `dsh --profile miasaki --no-open`，再回壳点「重试」（壳会采用外部后端、退出时不杀它） |
-| `dsh.cmd：不存在` | 确实没装 | 这时才需要装 DeepSeek Harness |
+| `dsh.cmd：不存在` | 确实没装 | 这时才需要装 DeepSeek Harness —— 2026-10-12 起**失败页可直接装**：点「安装 DSH」（见下） |
+
+### 失败页一键安装 DSH（2026-10-12）
+
+失败页的动作组里多了一个**「安装 DSH」**按钮，只在探测到 DSH 不可用时出现：
+
+| 探测结果 | 按钮 | 说明 |
+|---|---|---|
+| 未安装 | 「安装 DSH」 | 走 `npm install -g @deepseek-ai/dsh`（**用户级** `%APPDATA%\npm`，不需要管理员） |
+| 已装但版本越界 | 「装合适版本（当前 X）」 | 支持区间 **`[0.1.7, 0.3.0)`**，见下 |
+| 宿主机没有 Node | 仍显示「安装 DSH」 | 点了会**如实报出缺什么**并引导手动装 Node —— 壳**不替用户装运行时** |
+| 一切正常 | 不显示 | 「关掉即原生」 |
+
+**版本护栏**：区间取两处声明的交集 —— 各线插件 `peerDependencies` 要求
+`dsh-host-webserver >=0.1.2-rc.1 <0.3.0`，根 README 写「0.1.7 及以上」支持、`0.1.5/0.1.6` 为历史版本。
+`npm` 的 `latest` 落在区间内就直接装（当前 `latest = 0.2.0-rc.2`，正合适）；**越界则退回区间内最高版**
+并在日志里写明原因；区间内一个都没有则**明确拒绝** —— 宁可不装，也不装一个让所有插件 peer 不满足的版本。
+版本比较**刻意忽略预发布标签**（`0.1.7-rc.2` 按 `0.1.7` 算）：严格 semver 会把现役的 rc 版本判成
+低于下界而拒装。
+
+**三条边界**（用户 2026-10-12 拍板）：**点了才装**（不在启动路径上静默装全局 npm 包）、
+**不装 Node**（缺运行时如实报出、给出手动安装指引）、**装完自动继续启动**（不必再点一次「重试」）。
+安装是分钟级长任务：命令立即返回，进度与结果经 `window.__installState` 推给唤醒页，完整输出落 `pet.log`。
+
+> 实测口径：`npm` 走 **node 直启** `node_modules\npm\bin\npm-cli.js`（与 `dsh_entry_js()` 同款思路）——
+> Windows 的 `CreateProcess` 不能执行 `.cmd`，经 `cmd.exe /C` 又要面对含空格路径的引号转义。
+> 注意 `%APPDATA%\npm` 是**全局包**的位置，npm 程序本身跟 `node.exe` 同目录（实测本机
+> `%APPDATA%\npm` 里并没有 `npm.cmd`）。
 
 **又一类「进不去」：首屏 404 / 进去后一直刷新（2026-09-26 深夜，P10）**
 
@@ -290,7 +317,7 @@ light 的完整命令行与 stderr。
 | [`dsh-client-ui-chat`](patches/dsh-client-ui-chat/README.md) | 官方聊天区 | 同上，作用于消息气泡的「首 token 用时（TTFT）」与窗口口径兜底统计 |
 | [`dsh-client-ui-attachment`](patches/dsh-client-ui-attachment/README.md) | 官方消息图片画廊 | 多图 tile 宽高比保持：64×64 定宽 cover 方块改为按原始比例自适应（44–220）+ contain 完整显示，修「截图被裁成方块」 |
 | [`dsh-client-ui-sidebar`](patches/dsh-client-ui-sidebar/README.md) | 官方侧边栏 | 头部悬浮提示 portal 化：**5 处** Tooltip 加 `portal: true`（2026-09-29 随 rc.2 退役品牌区那条 —— 官方删掉了那个 Tooltip），气泡改挂 body（z 1100），修左上角悬停提示被中栏盖住/裁掉 |
-| [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 miasaki 化：`sidebar.brand.name` occupant 换成部署实现，deepseek 字标 8 path 逐字节保留、胶囊几何不变，徽标 HARNESS → MIASAKI |
+| [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 **DSH 化**：`sidebar.brand.name` occupant 换成部署实现，品牌名区整块显示「DSH」（cap 高与官方字标 ink 逐值等高），左上角读作「鲸鱼 + DSH」；**2026-10-12 改版**（旧版为 deepseek 字标 + 胶囊「MIASAKI」） |
 | [`dsh-client-ui-workspace`](patches/dsh-client-ui-workspace/README.md) | 官方会话浏览器 | **侧线会话不占列表**：`sessionVisible()` 的 origin 判定后追加一条「插件声明的侧线不显示」，判据是跨包声明（localStorage `miasaki-sidebar:sidechat:hidden:v1`，由 sidebar 插件写）。官方**已有**「建了但不进列表」形态（`origin === 'subagent'`）却没向插件开口，本补丁把同一个开口借给声明方；**声明缺席即官方原状**（fail-safe，2026-09-30） |
 
 > **八件全部作用于浏览器 bundle**，改完**刷新页面**即生效。
@@ -364,6 +391,16 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 > 2026-09-28 已 apply 到全局安装，status=patched，用户实机截图确认生效。
 > 目录带 `rebuild-baseline.mjs`；字标 8 path 为软依赖 primitives `BrandWordmark`
 > data，升级后需按 README 第 2 步重新提取校验）。
+>
+> **2026-10-12 本件改版（品牌名 → 整块「DSH」）**：用户要求「左上角改为 DSH」，
+> 形态由用户拍板为「保留鲸鱼、整块品牌名换成 DSH」。组件 `MiasakiBrandName` →
+> `DshBrandName`（不再复刻字标与胶囊），产物 `8286→3314`、`821DD9B3…` → `6E9FFF1B…`；
+> 字号/基线按 Segoe UI 700/20px 的 cap 高 14.00 与官方字标 ink 13.99 等高推得，
+> 渲染自证（排版宽 41.281 ↔ 实测 41.279、ink 右 39.957 < viewBox 41.5、鲸鱼→D 间距
+> 9.84 vs 官方 9.79 px）见补丁 README 与设计文档。旧产物识别为 `legacy`，
+> `apply` 可**直接原地升级**（升级前留档 `.dsh-legacy-bak`）—— 该路径顺带修掉一个
+> 真缺陷：对旧产物就地匹配原版锚点必然 0 命中，现改为「baseline 重建 + 两侧 SHA
+> 自证」写入。
 >
 > 历史基线记录（0.1.7-alpha.2 时期，2026-09-23 全量重打）：六个补丁（含 dual-model 线的图片准入
 > 补丁）当日全部重打、`EDITS` 零改：settings-models（`B2D7D445…` → `9F2F1EE8…`，probe 自动选中
