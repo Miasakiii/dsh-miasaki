@@ -70,7 +70,7 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 
 ```bash
-node ../scripts/verify-all.mjs desktop   # 40 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×8 / 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**172 例**，2026-10-12 全量实跑；旧记「100 例」是口径落后）
+node ../scripts/verify-all.mjs desktop   # 40 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×8 / 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**173 例**，2026-10-12 全量实跑；旧记「100 例」是口径落后）
 ```
 
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的

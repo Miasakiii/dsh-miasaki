@@ -705,35 +705,19 @@ fn taskkill(pid: u32, force: bool) -> TaskkillOutcome {
             .creation_flags(0x0800_0000)
             .output();
         match out {
-            Ok(o) if o.status.success() => TaskkillOutcome::Ok,
             Ok(o) => {
-                // 判据顺序（2026-09-25 修正）：Windows 控制台程序的错误串是**系统 OEM 代码页**
-                // （简体中文为 GBK），`from_utf8_lossy` 之后中文会变成 U+FFFD ⇒ **只靠文本匹配
-                // 不可靠**（本机实测：权限拒绝被误判成 `Failed`，进而让回归测试假红）。改为三条：
-                //   ① 用法错误（taskkill 的用法提示是纯 ASCII，与代码页无关）⇒ Failed，是真缺陷；
-                //   ② 文本命中 denied / 拒绝访问 ⇒ Denied；
-                //   ③ 否则以**目标进程是否仍存活**为准：仍活着 ⇒ 系统拒绝（Denied）；
-                //      已死 ⇒ 其实成功了（Ok，属竞态）。
+                // 判据搬进纯函数 `classify_taskkill`（真跑 taskkill 的结果受环境与时刻影响，
+                // 离线单测才能把「软杀无效 ≠ 权限拒绝」这条钉住）。文本先用 lossy 转小写：
+                // Windows 控制台程序的错误串是**系统 OEM 代码页**（简体中文为 GBK），
+                // `from_utf8_lossy` 之后中文会变成 U+FFFD ⇒ 中文「拒绝访问」只能靠原文命中，
+                // 认不出时由 `alive_after` 兜底。
                 let text = format!(
                     "{}{}",
                     String::from_utf8_lossy(&o.stdout),
                     String::from_utf8_lossy(&o.stderr)
                 )
                 .to_ascii_lowercase();
-                if text.contains("invalid argument")
-                    || text.contains("invalid syntax")
-                    || text.contains("error: invalid")
-                {
-                    TaskkillOutcome::Failed
-                } else if text.contains("access is denied")
-                    || text.contains("access denied")
-                    || text.contains("拒绝访问")
-                    || backend_process_alive(pid)
-                {
-                    TaskkillOutcome::Denied
-                } else {
-                    TaskkillOutcome::Ok
-                }
+                classify_taskkill(o.status.success(), &text, force, backend_process_alive(pid))
             }
             Err(_) => TaskkillOutcome::Failed,
         }
@@ -743,6 +727,44 @@ fn taskkill(pid: u32, force: bool) -> TaskkillOutcome {
         let _ = (pid, force);
         TaskkillOutcome::Unsupported
     }
+}
+
+/// `taskkill` 结局的判据（纯函数）。判据顺序：
+///   ① 用法错误（taskkill 的用法提示是纯 ASCII，与代码页无关）⇒ `Failed`，是真缺陷；
+///   ② 文本命中 denied / 拒绝访问 ⇒ `Denied`；
+///   ③ **只有强杀**后目标仍存活才判 `Denied` —— 软杀（不带 `/F`）对控制台进程（`node.exe`）
+///      本就无效（见 `stop_backend_tiered` 的注释），「软杀没杀掉」是阶梯设计的前提，
+///      不是权限问题；
+///   ④ 其余 ⇒ `Ok`（软杀发出请求即算成功，调用方随后复查存活性）。
+///
+/// **③ 里的 `force` 限定是 2026-10-12 实机验收抓到的真缺陷的修复**：旧判据不带 `force`，
+/// 于是软杀失败被判成 `Denied` ⇒ `stop_backend_tiered` 走「受限环境、继续走完阶梯也只是白等」
+/// 分支**当场放弃、永远到不了强杀**。真机取证（本机 2026-10-12，`--profile miasaki` 后端）：
+/// `taskkill /PID <node> /T` 退出码 **128**、输出
+/// 「The process can only be terminated forcefully (with /F option)」，进程仍活着 ⇒
+/// 旧判据命中 Denied ⇒ **「轻量重启」必然以「端口 3080 在 15s 内未释放」失败**。
+/// 「关闭应用」走同一条停机路径、同样失败，只因 Job Object 的 `KILL_ON_JOB_CLOSE` 兜底回收
+/// 才没被用户察觉 —— 这条缺陷因此藏了很久（分级停机的日志里其实一直写着 Access denied）。
+fn classify_taskkill(success: bool, text_lower: &str, force: bool, alive_after: bool) -> TaskkillOutcome {
+    if success {
+        return TaskkillOutcome::Ok;
+    }
+    if text_lower.contains("invalid argument")
+        || text_lower.contains("invalid syntax")
+        || text_lower.contains("error: invalid")
+    {
+        return TaskkillOutcome::Failed;
+    }
+    if text_lower.contains("access is denied")
+        || text_lower.contains("access denied")
+        || text_lower.contains("拒绝访问")
+    {
+        return TaskkillOutcome::Denied;
+    }
+    if force && alive_after {
+        return TaskkillOutcome::Denied;
+    }
+    TaskkillOutcome::Ok
 }
 
 /* ---------------- 孤儿回收：Job Object（T2.4） ---------------- */
@@ -4148,6 +4170,53 @@ mod tests {
             let _ = child.kill();
         }
         let _ = child.wait();
+    }
+
+    /// 2026-10-12 实机验收抓到的真缺陷的回归：**软杀无效不得判成权限拒绝**。
+    /// 真机取证原文（`taskkill /PID <node> /T`，退出码 128）：
+    /// `ERROR: The process with PID … could not be terminated. | Reason: This process can only be
+    /// terminated forcefully (with /F option).` —— 不含任何 denied 字样，进程仍活着，
+    /// 旧判据却据此判 `Denied` ⇒ `stop_backend_tiered` 当场放弃、永不进强杀 ⇒
+    /// 「轻量重启」必然失败（端口 15s 未释放）。这条判据现在是纯函数，离线可测。
+    #[test]
+    fn soft_kill_failure_is_not_a_permission_denial() {
+        let soft_fail = "error: the process with pid 47548 (child process of pid 46904) could not be \
+                         terminated. | reason: this process can only be terminated forcefully (with /f option).";
+        assert_eq!(
+            classify_taskkill(false, soft_fail, false, true),
+            TaskkillOutcome::Ok,
+            "软杀没杀掉是阶梯设计的前提（控制台进程收不到 WM_CLOSE），不得判成权限拒绝"
+        );
+        assert_eq!(
+            classify_taskkill(false, soft_fail, true, true),
+            TaskkillOutcome::Denied,
+            "强杀后仍存活才可能是系统拒绝"
+        );
+        assert_eq!(
+            classify_taskkill(false, soft_fail, true, false),
+            TaskkillOutcome::Ok,
+            "强杀后已死 ⇒ 成功"
+        );
+        assert_eq!(
+            classify_taskkill(false, "error: access is denied.", false, true),
+            TaskkillOutcome::Denied,
+            "文本明确命中拒绝 ⇒ 仍按受限环境处理（软杀也一样）"
+        );
+        assert_eq!(
+            classify_taskkill(false, "错误: 拒绝访问。", true, true),
+            TaskkillOutcome::Denied,
+            "中文错误串未被 lossy 破坏时同样命中"
+        );
+        assert_eq!(
+            classify_taskkill(false, "error: invalid syntax.", false, false),
+            TaskkillOutcome::Failed,
+            "用法错误是真缺陷，不得与权限问题混为一谈"
+        );
+        assert_eq!(
+            classify_taskkill(true, "", true, true),
+            TaskkillOutcome::Ok,
+            "退出码 0 即成功（目标是否已死属竞态，由调用方复查）"
+        );
     }
 
     /// 轻量重启的防抖：短时间内的重复请求只认第一次（托盘 / 桌宠 / 页面三个入口可能被连点）。

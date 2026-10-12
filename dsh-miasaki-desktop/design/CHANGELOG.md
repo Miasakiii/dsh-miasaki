@@ -2,6 +2,71 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-12 · 实机验收抓到真缺陷：轻量重启必然失败（`taskkill` 把「软杀无效」误判成权限拒绝）
+
+**触发**：用户「你执行」—— 按上一批的待验清单实机走查 **E27**（轻量重启八行）。
+
+**现象（第一次真跑就失败）**：经页面入口下发 `restart-host` 后，日志留下
+
+    restart: 轻量重启开始（来源 页面）—— 停后端后重拉，不重建窗口
+    restart: 分级停机 pid 32000
+    停机被系统拒绝：无权终止 pid 32000（Access denied）→ 记录未退出 PID 并放弃（Job Object 会在壳退出时兜底回收）
+    restart: 失败（来源 页面）：端口 3080 在 15s 内未释放（另有进程占着它）
+
+**取证链（四步，每步可复核）**：
+
+| 步 | 判据 | 结论 |
+|---|---|---|
+| ① 日志 | `停机被系统拒绝 …（Access denied）` | 表面指向权限 |
+| ② 代码 | `stop_backend_tiered` → `taskkill(pid, force)` → `Denied` ⇒ **当场放弃**（注释：「继续走完阶梯也只是白等」） | 在壳看来无可为 |
+| ③ 权限实测 | 壳 **Medium** / 后端 **Medium**（`node … --profile miasaki`，父进程 = 壳）；同会话对同一 pid 的 `OpenProcess(PROCESS_TERMINATE)` 与 `taskkill /T /F` **均成功** | **根本不是权限问题** |
+| ④ 复现软杀 | `taskkill /PID <后端> /T`（不带 `/F`）⇒ 退出码 **128** +「This process can only be terminated forcefully (with /F option)」，进程仍活着 | 命中判据 ③ ⇒ 误判 Denied ⇒ 放弃 |
+
+**真根因**：`taskkill` 判据 ③ 是「非零退出 **且目标仍存活** ⇒ `Denied`」，而**软杀（不带 `/F`）对控制台进程本就无效**
+—— 这一点同一份代码的注释里写得清清楚楚（「软杀阶段对后端实际是『尽力而为、大概率无效』，**真正生效的是强杀**」）。
+两条自相矛盾：软杀必然失败 ⇒ 必然判 `Denied` ⇒ **阶梯在第一级就放弃、永远到不了强杀**。
+
+**为什么藏了这么久**：「关闭应用」走同一条停机路径、**同样失败**，但壳退出时 **Job Object 的 `KILL_ON_JOB_CLOSE`**
+兜底回收了后端 ⇒ 用户无感（`pet.log` 里那句 Access denied 一直都在，只是没人看）。
+**轻量重启没有这个兜底**（壳不退出，Job 不关），于是它成了唯一的暴露面 —— 这也是「实机验收」的价值实证：
+单测 172 例全绿拦不住这条，因为判据的真值只在真机上才出现。
+
+**修复**：判据抽成纯函数 `classify_taskkill(success, text_lower, force, alive_after)`，`alive_after` **只对强杀生效**：
+
+    if force && alive_after { TaskkillOutcome::Denied } else { TaskkillOutcome::Ok }
+
+软杀「发出请求即算成功」（这也正是原注释里「①结构上与官方阶梯同构」的本意）。搬进纯函数是为了**可离线单测**
+——真跑 `taskkill` 的结果受环境与时刻影响，测不稳定。
+
+**闸门**：`cargo test` **172 → 173 例**，新增 `soft_kill_failure_is_not_a_permission_denial`（7 条断言：软杀失败+存活 ⇒ Ok /
+强杀失败+存活 ⇒ Denied / 强杀后已死 ⇒ Ok / 文本命中 `access is denied` ⇒ Denied / 中文「拒绝访问」⇒ Denied /
+用法错误 ⇒ Failed / 退出码 0 ⇒ Ok）。既有 `taskkill_reports_ok_denied_or_failure_but_never_silently` 只断言「≠ Failed」，不受影响。
+
+**修复后实机复验（同日、同机、同入口）**：
+
+    restart: 轻量重启开始（来源 页面）
+    restart: 分级停机 pid 40616
+    spawn-dsh: node 直启后端（绕开 cmd.exe）pid 46120
+    restart: 完成（来源 页面，耗时 7.9s）
+
+- **② 窗口不重建**：重启前后主窗 `hwnd=331204 / (192,278,1296x809)`、桌宠 `hwnd=461978 / (2274,936,286x390)`
+  **逐字段一致**（采样器每 1s 取一次窗口表）；
+- **⑤ 防抖**：页面内连点两次（间隔 600ms）⇒ 日志只有一条 `hash-cmd restart-host` + 一条「轻量重启开始」，
+  只重启一次（耗时 8.4s）；
+- 后端 pid 三次更换（40616 → 46120 → 50820），每次页面都自行回到 DSH（`doc-boot` + `hash-cmd want-max`），
+  其中一次还留下 `http-ready: 后端路由已注册 → 重新导航（首屏曾撞 404）`（新后端起得比导航慢时的重试路径）。
+
+**仍未验（归用户）**：① 三入口中的**托盘**与**桌宠右键**（本次只走页面入口，另两个需真实点击）；
+③ 片头不重放（本机 appearance 配置未启用 `boot` 板块 ⇒ 壳侧本就不播，无区分度）；
+⑦ 「关闭应用保留外部客户端后端」与重启的语义差别；⑥ 失败出口只取到日志级证据
+（`restart: 失败：端口 3080 在 15s 内未释放` + 导航到 `loading.html`），**加载页上的「重试 / 恢复选项」按钮未截图确认**。
+
+**同批副产物（环境边界，非缺陷，已留档）**：从 DSH 会话用 `Start-Process` 启动的壳，可通过
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=<n>` 打开 CDP —— 本次验收即经它下发 hash 命令
+（与页面内 `petHashCmd` **同一条通道**，不是绕过壳的旁路）；PS 5.1 向原生程序传含双引号的参数会破坏 JS 表达式
+（实测 `SyntaxError: Unexpected token '&'`），改为**从文件读表达式**（`cdp-eval.mjs eval-file`）。
+探针留档 `_refs/scripts-archive/restart-acceptance-2026-10-12/`。
+
 ## 2026-10-12 · 轻量重启「重启 DSH 服务」：停后端重拉、窗口不重建（三入口 + 加载画面）
 
 **触发**：用户「我觉得应该加一个重启功能，你有什么想法和建议」。调研后的结论是——
