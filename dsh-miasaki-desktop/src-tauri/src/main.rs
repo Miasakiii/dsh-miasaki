@@ -4,6 +4,7 @@ mod asset_source;
 mod assets;
 mod boot_intro;
 mod diag;
+mod killtree;
 mod launcher_icon;
 mod pet_native;
 mod recovery;
@@ -616,34 +617,55 @@ fn kill_spawned_dsh() {
 /// 保留它是因为①结构上与官方阶梯同构、②若将来后端带上窗口或改为 GUI 进程即自动生效、
 /// ③给「正在写盘的进程」多一次自我了断的机会。**强杀不得因为软杀存在而被裁掉。**
 fn stop_backend_tiered(pid: u32) {
-    /// 软杀后的观察窗：本机实测软杀对控制台进程**必然无效**（`taskkill /PID x /T` 不带 `/F`
-    /// 只发 WM_CLOSE，而 `node.exe` 没有窗口消息循环），等久了纯属白等。
+    /// 软杀后的观察窗：目标**真的会响应** `WM_CLOSE` 时留给它的反应时间。
+    /// 无窗口的进程（本机后端正是不带窗口的 `node.exe`）根本收不到，软杀档会被
+    /// `pid_has_top_level_window` 判据整档跳过 —— 这段等待因此只发生在「有窗口」的罕见路径上。
     ///
-    /// **2026-10-12：1s → 300ms**（用户实机反馈「加载时间长」）。两次软杀因此从 ~2.6s 压到 ~1.2s；
-    /// **强杀阶段不受影响**（`FORCE_GRACE` 仍是 1s —— 那一档才是真生效的，值得留足）。
+    /// **2026-10-12：1s → 300ms**（用户实机反馈「加载时间长」）。**强杀阶段不受影响**
+    /// （`FORCE_GRACE` 仍是 1s —— 那一档才是真生效的，值得留足）。
     const SOFT_GRACE: Duration = Duration::from_millis(300);
     /// 强杀后的观察窗（强杀理论上立即生效，留余量给进程表刷新）。
+    ///
+    /// **2026-10-12 晚：由「固定 sleep」改为「轮询上限」**（用户实机反馈「退出和重启都有点慢」）。
+    /// 本机实测 `TerminateProcess` 返回时目标已不再存活（`GetExitCodeProcess` 立刻翻牌，
+    /// 0–3µs）⇒ 常见路径**首次检查即命中、零等待**；只有异常路径才会用满这个上限。
     const FORCE_GRACE: Duration = Duration::from_secs(1);
-    // 软杀档位 **1 次**（原 2 次）：软杀对控制台进程（`node.exe`）**必然无效** —— 上方的
-    // 实测结论与 `SOFT_GRACE` 的注释都写着这一点，第 2 次软杀只是把同一个无效动作再做一遍，
-    // 净代价约 1s。保留 1 次是为了表意完整（与官方 `SIGTERM→SIGKILL` 阶梯同构、给正在写盘的
-    // 进程一次自我了断的机会、后端将来若变成 GUI 进程即自动生效）；**真正生效的强杀档位
-    // 仍是 2 次，一个字没动**。2026-10-12 用户反馈「加载时间长」时压缩。
-    let mut machine = recovery::ShutdownMachine::new(1);
+    /// 停机轮询步长：好得快就是快，10ms 粒度对「退出」这种要求即时反馈的场景足够。
+    const KILL_POLL: Duration = Duration::from_millis(10);
+
+    // —— 软杀档发不发，由**判据**决定，不由习惯决定 ——
+    // `taskkill` 不带 `/F` 等价于发 `WM_CLOSE`：只有带顶层窗口的进程收得到。本机后端是直启的
+    // `node.exe`（无窗口），实测每次净花 630–780ms、换来一句
+    // `can only be terminated forcefully`，进程照旧活着 —— 这恰恰是 `ShutdownMachine` 的注释
+    // 早就写明的既定前提（「软杀大概率无效、真正生效的是强杀」），只是此前一直照发不误。
+    // 判据为真时（后端将来变成 GUI 进程、或带上控制台窗口）软杀档**自动回来**，无需改这里。
+    let soft_stage = killtree::pid_has_top_level_window(pid);
+    let started = Instant::now();
+    app_log_line(&format!(
+        "[{}] 停机 pid {pid}：{}（强杀走 Win32 树终止，失败回落 taskkill）\n",
+        chrono_now(),
+        if soft_stage {
+            "目标有顶层窗口 → 保留软杀档"
+        } else {
+            "目标无顶层窗口 → 跳过软杀档（WM_CLOSE 收不到，必然无效）"
+        }
+    ));
+
+    let mut machine = recovery::ShutdownMachine::new(u32::from(soft_stage));
     loop {
         match machine.tick(backend_process_alive(pid)) {
             recovery::KillAction::Done => {
                 app_log_line(&format!(
-                    "[{}] 后端 pid {pid} 已退出（软杀 {} 次 / 强杀 {} 次）\n",
+                    "[{}] 后端 pid {pid} 已退出（软杀 {} 次 / 强杀 {} 次，停机共 {}ms）\n",
                     chrono_now(),
                     machine.soft_attempts(),
-                    machine.force_attempts()
+                    machine.force_attempts(),
+                    started.elapsed().as_millis()
                 ));
                 return;
             }
-            recovery::KillAction::Run(stage) => {
-                let force = matches!(stage, recovery::KillStage::Force);
-                let outcome = taskkill(pid, force);
+            recovery::KillAction::Run(recovery::KillStage::Soft) => {
+                let outcome = taskkill(pid, false);
                 if outcome == TaskkillOutcome::Denied {
                     // 令牌权限不足（受限环境）：继续走完阶梯也只是白等，直接记录并放弃
                     app_log_line(&format!(
@@ -653,17 +675,47 @@ fn stop_backend_tiered(pid: u32) {
                     ));
                     return;
                 }
-                // 发完信号先给一小段反应时间再复查（省掉一整轮等待）
-                std::thread::sleep(Duration::from_millis(300));
-                if !backend_process_alive(pid) {
+                // 发出软杀请求后**按事实复查**（不再固定睡满）：真响应了 WM_CLOSE 就立刻收工。
+                let _ = wait_process_gone(pid, SOFT_GRACE, KILL_POLL);
+            }
+            recovery::KillAction::Run(recovery::KillStage::Force) => {
+                // —— 快速通道：Win32 逐进程终止整棵树（见 killtree.rs 的实测对照表）——
+                // 本机实测 2 进程树 208µs，而同树的 `taskkill /T /F` 要 680ms；两者是**同一个
+                // 内核动作**（`TerminateProcess`），差别只在「拉不拉起一个 taskkill.exe 子进程」。
+                // 停机阶梯原先要发两次 `taskkill`（1.2–1.6s），是「退出/重启慢」的最大单项。
+                let begin = Instant::now();
+                let report = killtree::terminate_tree(pid);
+                app_log_line(&format!(
+                    "[{}] 强杀 pid {pid}：Win32 树终止 {}/{} 个进程（{}ms，根进程{}）{}\n",
+                    chrono_now(),
+                    report.terminated,
+                    report.targets.len(),
+                    begin.elapsed().as_millis(),
+                    if report.root_terminated(pid) {
+                        "已终止"
+                    } else {
+                        "未能终止 → 将回落"
+                    },
+                    if report.failures.is_empty() {
+                        String::new()
+                    } else {
+                        format!("；被拒：{:?}", report.failures)
+                    }
+                ));
+                if wait_process_gone(pid, FORCE_GRACE, KILL_POLL) {
+                    continue; // 下一拍 tick 看到 Done 并落「已退出」日志
+                }
+                // —— 回落：Win32 没能让它退出（权限/未知）→ 既有 `taskkill /T /F`，最坏不劣化 ——
+                let outcome = taskkill(pid, true);
+                if outcome == TaskkillOutcome::Denied {
                     app_log_line(&format!(
-                        "[{}] 后端 pid {pid} 已响应{}信号\n",
-                        chrono_now(),
-                        if force { "强杀" } else { "软杀" }
+                        "[{}] 停机被系统拒绝：无权终止 pid {pid}（Access denied）→ \
+                         记录未退出 PID 并放弃（Job Object 会在壳退出时兜底回收）\n",
+                        chrono_now()
                     ));
                     return;
                 }
-                std::thread::sleep(if force { FORCE_GRACE } else { SOFT_GRACE });
+                let _ = wait_process_gone(pid, FORCE_GRACE, KILL_POLL);
             }
             recovery::KillAction::GiveUp => {
                 app_log_line(&format!(
@@ -676,6 +728,25 @@ fn stop_backend_tiered(pid: u32) {
                 return;
             }
         }
+    }
+}
+
+/// 轮询等待进程退出：命中即返回 `true`，最多等 `budget`。
+///
+/// **为什么不是固定 `sleep`**（2026-10-12 用户反馈「退出和重启都有点慢」时改）：本机实测
+/// `TerminateProcess` 返回时目标已不再存活（`GetExitCodeProcess` 立刻翻牌）⇒ 首次检查即命中，
+/// 常见路径**零等待**。原先「睡满 300ms 再查」的写法把每一次停机都钉死在 0.3–0.9s，
+/// 而那段睡眠买不到任何东西 —— 进程早就没了。
+fn wait_process_gone(pid: u32, budget: Duration, step: Duration) -> bool {
+    let deadline = Instant::now() + budget;
+    loop {
+        if !backend_process_alive(pid) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(step);
     }
 }
 
@@ -1447,9 +1518,6 @@ fn start_launch_sequence(app: &AppHandle) {
 const BACKEND_POLL_MS: u64 = 2000;
 /// 重拉后等待端口就绪的上限：dsh 后端冷启动约 3~6s，90s 与 BOOTSTRAP_TIMEOUT 同口径。
 const BACKEND_RESPAWN_TIMEOUT: Duration = Duration::from_secs(90);
-/// `GetExitCodeProcess` 对仍活着的进程返回的退出码（Win32 STILL_ACTIVE）。
-#[cfg(target_os = "windows")]
-const STILL_ACTIVE: u32 = 259;
 /// 自拉后端「进程活着但端口没起来」（启动中/僵死）的日志降频：每 15 个周期（约 30s）一行。
 const BACKEND_BOOTWAIT_LOG_EVERY: u32 = 15;
 
@@ -1458,31 +1526,12 @@ fn backend_fail_backoff_ms(streak: u32) -> u64 {
     (BACKEND_POLL_MS << streak.min(4)).min(30_000)
 }
 
-/// 进程是否仍活着：`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` +
-/// `GetExitCodeProcess == STILL_ACTIVE`。进程不存在 → OpenProcess 返回 NULL → false。
-/// 零 crate、零子进程拉起（比轮询 tasklist 轻一个量级）。
-#[cfg(target_os = "windows")]
+/// 进程是否仍活着：判据的**唯一实现**在 `killtree::process_alive`
+/// （`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess == STILL_ACTIVE`）。
+/// 保留本名与这层转发，是因为停机阶梯、运行期看门狗、诊断快照三处都按「后端存活」读它 ——
+/// 判据只有一份，改动只需改一处（2026-10-12 停机提速时去重）。
 fn backend_process_alive(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut code: u32 = 0;
-        let ok = GetExitCodeProcess(handle, &mut code);
-        let _ = CloseHandle(handle);
-        ok != 0 && code == STILL_ACTIVE
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn backend_process_alive(pid: u32) -> bool {
-    let _ = pid;
-    true
+    killtree::process_alive(pid)
 }
 
 /// 纯函数：从 `netstat -ano` 文本中提取「**对端端口** = port 且 ESTABLISHED」的连接所属
@@ -1564,42 +1613,21 @@ fn pids_outside_tree(pids: &[u32], tree: &std::collections::BTreeSet<u32>) -> Ve
 #[cfg(target_os = "windows")]
 fn our_process_tree() -> std::collections::BTreeSet<u32> {
     use std::collections::BTreeSet;
-    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
+    // 快照实现与停机杀树共用一份（`killtree`）：两者都是「拿到 (pid, ppid) 表」，重复实现
+    // 只会让两处对 Toolhelp 的处理各自漂移。快照失败 → 空表 → 闭包结果退化为「只有自己」，
+    // 与改造前「快照失败即只返回自身 pid」的语义一致。
+    let all = killtree::snapshot_process_pairs();
     let mut tree: BTreeSet<u32> = BTreeSet::new();
     tree.insert(std::process::id());
-    unsafe {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snap.is_null() || snap == INVALID_HANDLE_VALUE {
-            return tree;
-        }
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as _;
-        let mut all: Vec<(u32, u32)> = Vec::with_capacity(256);
-        if Process32FirstW(snap, &mut entry) != 0 {
-            loop {
-                let pid = entry.th32ProcessID;
-                let ppid = entry.th32ParentProcessID;
-                all.push((pid, ppid));
-                if Process32NextW(snap, &mut entry) == 0 {
-                    break;
-                }
+    loop {
+        let before = tree.len();
+        for (pid, ppid) in &all {
+            if tree.contains(ppid) {
+                tree.insert(*pid);
             }
         }
-        let _ = CloseHandle(snap);
-        loop {
-            let before = tree.len();
-            for (pid, ppid) in &all {
-                if tree.contains(ppid) {
-                    tree.insert(*pid);
-                }
-            }
-            if tree.len() == before {
-                break;
-            }
+        if tree.len() == before {
+            break;
         }
     }
     tree
@@ -3000,7 +3028,11 @@ const RESTART_VACUUM_TIMEOUT: Duration = Duration::from_secs(15);
 const RESTART_READY_TIMEOUT: Duration = Duration::from_secs(90);
 /// 重启流程自己的轮询步长。刻意不跟看门狗的 2s 周期：用户在盯着加载画面，
 /// 200ms 的粒度让"好了"来得更跟手（代价只是几十次 connect 探测）。
-const RESTART_POLL_MS: u64 = 200;
+///
+/// **2026-10-12 晚：200 → 100ms**（用户实机反馈「重启有点慢」）。一次探测就是一次
+/// `TcpStream::connect_timeout`（微秒级），把步长减半后「后端好了」最多晚 100ms 才被看见，
+/// 换来的是平均少等 100ms —— 加载页前的每一百毫秒用户都看得见。
+const RESTART_POLL_MS: u64 = 100;
 
 /// 是否应忽略本次重启请求（防抖，纯函数，单测覆盖）。
 fn restart_should_debounce(last: Option<Instant>, now: Instant, window: Duration) -> bool {
@@ -3101,6 +3133,7 @@ fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
     set_restart_status(app, "正在重启 DSH 服务…");
 
     // —— ④ 停后端 ——
+    let stop_begin = Instant::now();
     let target = match DSH_PID.lock().unwrap().take() {
         Some(pid) => Some(pid),
         None => {
@@ -3124,8 +3157,10 @@ fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
             chrono_now()
         )),
     }
+    let stop_ms = stop_begin.elapsed().as_millis();
 
     // —— ⑤ 等端口真空 ——
+    let vacuum_begin = Instant::now();
     let vacuum_deadline = Instant::now() + RESTART_VACUUM_TIMEOUT;
     while port_ready() {
         if Instant::now() > vacuum_deadline {
@@ -3136,6 +3171,7 @@ fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
         }
         std::thread::sleep(Duration::from_millis(RESTART_POLL_MS));
     }
+    let vacuum_ms = vacuum_begin.elapsed().as_millis();
 
     // —— ⑥ 重拉 + 等就绪 ——
     //
@@ -3146,6 +3182,7 @@ fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
     // 首次启动路径自 **P10**（2026-09-26 404 事故，见 `start_launch_sequence` 的注释）起就是这个
     // 口径，重启路径此前漏了 —— 本批补齐，并加一条源码契约测试钉住，防它再退化回去。
     set_restart_status(app, "正在等待 DSH 服务就绪…");
+    let boot_begin = Instant::now();
     spawn_dsh().map_err(|e| format!("重新拉起后端失败：{e}"))?;
     let ready_deadline = Instant::now() + RESTART_READY_TIMEOUT;
     while !backend_http_ready() {
@@ -3157,15 +3194,24 @@ fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
         }
         std::thread::sleep(Duration::from_millis(RESTART_POLL_MS));
     }
+    let boot_ms = boot_begin.elapsed().as_millis();
 
     // —— ⑦ 导航回 DSH ——
     set_restart_status(app, "已就绪，正在进入…");
+    let nav_begin = Instant::now();
     navigate_main(app).map_err(|e| format!("后端已就绪但进入失败：{e}"))?;
     // 与首次启动同款的兜底：即便上面已按应用层判据把门，后端仍可能在**导航之后**才完成路由注册
     // （上一次残留实例刚退出、插件树加载抖动）⇒ 文档停在 404，而 `on_page_load` 命中 3080 会把
     // `PAGE_UP` 置真、运行期看门狗那条「文档从未就绪 → 重新导航」因此不再触发。该兜底只允许
     // 一个任务在飞，路由一就绪立刻重新导航（最多等 60s）。
     schedule_renavigate_when_ready(app);
+    // 阶段分解：用户反馈「慢」时，这一行就能回答「慢在哪一段」，不必再靠秒级时间戳猜。
+    app_log_line(&format!(
+        "[{}] restart: 阶段耗时 —— 停机 {stop_ms}ms / 端口真空 {vacuum_ms}ms / \
+         后端起 {boot_ms}ms / 导航 {}ms\n",
+        chrono_now(),
+        nav_begin.elapsed().as_millis()
+    ));
     Ok(started.elapsed())
 }
 
@@ -3901,7 +3947,9 @@ fn main() {
                                 }
                             }
                         }
-                        // 轻量重启（2026-10-12）：停后端 + 重拉，窗口不重建、片头不重放。
+                        // 轻量重启（2026-10-12）：停后端 + 重拉，窗口不重建；加载画面照走本地
+                        // loading 页、片头跟随「设置 → 外观 → 启动」（原「片头不重放」的判断
+                        // 已被用户否掉 —— 两个不同的加载画面反而分不清状态）。
                         "restart" => restart_backend(app, "托盘菜单"),
                         "diag" => {
                             // 手动生成诊断报告（2026-09-25）：与自动路径同一套写入 + 轮转，
@@ -4623,6 +4671,60 @@ mod tests {
         assert!(
             !intro_body.contains("RESTARTING.load"),
             "重启应播片头（跟随「启动」设置），不得再按 RESTARTING 关掉片头"
+        );
+    }
+
+    /// 2026-10-12 用户实机反馈「**退出和重启都有点慢**」的三条判据钉死（根因实测对照表见
+    /// `killtree.rs` 头部）：
+    /// ① **软杀档由判据决定**：目标无顶层窗口 ⇒ `WM_CLOSE` 收不到 ⇒ 整档跳过，不再无差别照发
+    ///    （单次 `taskkill` 本机实测 630–780ms，是停机耗时的大头）；
+    /// ② **观察窗改为轮询**：`TerminateProcess` 返回时目标已死，固定 `sleep` 买不到任何东西，
+    ///    却把每一次停机钉死 0.3–1.3s；
+    /// ③ **快路径不得吃掉回落**：Win32 树终止被系统拒绝时，`taskkill /T /F` 必须还在 ——
+    ///    最坏不得劣化于旧实现。
+    #[test]
+    fn shutdown_is_fast_but_never_loses_its_fallback() {
+        let src = include_str!("main.rs");
+        let body = src
+            .split("fn stop_backend_tiered(")
+            .nth(1)
+            .and_then(|s| s.split("fn wait_process_gone").next())
+            .expect("找不到 stop_backend_tiered 函数体（函数名或后续函数名变了，请同步本测试）");
+        assert!(
+            body.contains("killtree::pid_has_top_level_window"),
+            "软杀档必须由「目标有没有顶层窗口」这条判据决定，不得无差别照发"
+        );
+        assert!(
+            body.contains("ShutdownMachine::new(u32::from(soft_stage))"),
+            "软杀档次数必须来自判据（0 = 整档跳过），否则判据形同虚设"
+        );
+        assert!(
+            body.contains("killtree::terminate_tree"),
+            "强杀必须先走 Win32 树终止快路径（本机实测 208µs vs taskkill 680ms）"
+        );
+        assert!(
+            body.contains("taskkill(pid, true)"),
+            "taskkill /T /F 的回落不得被删：快路径被拒时它是最后一道保险"
+        );
+        assert!(
+            body.contains("wait_process_gone"),
+            "观察窗必须走轮询（好得快就是快）"
+        );
+        assert!(
+            !body.contains("std::thread::sleep(FORCE_GRACE)")
+                && !body.contains("std::thread::sleep(Duration::from_millis(300))"),
+            "不得回潮成固定睡眠：实测 300ms 睡下去时进程早就没了"
+        );
+
+        // 判活判据只有一份实现（停机轮询 / 看门狗 / 诊断快照共用），避免两处各自漂移。
+        let alive = src
+            .split("fn backend_process_alive(")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("找不到 backend_process_alive 函数体（请同步本测试）");
+        assert!(
+            alive.contains("killtree::process_alive"),
+            "判活必须转发到 killtree::process_alive（唯一实现）"
         );
     }
 

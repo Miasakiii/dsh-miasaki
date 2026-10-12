@@ -434,7 +434,7 @@
     // （ui-plugin-manager 的 restartNotice）却从不给按钮 —— 这一行就是那个缺掉的按钮。
     // 走 hash 命令通道（petHashCmd）→ 壳的 restart_backend，与关闭弹窗同一条路。
     html += '<div class="ms-act" role="menuitem" tabindex="0" data-act="restart-host"' +
-      ' title="停掉并重新拉起 DSH 服务：不关窗口、不重放片头，插件与设置改动即刻生效">' +
+      ' title="停掉并重新拉起 DSH 服务：不关窗口，插件与设置改动即刻生效">' +
       '<span class="ma-ico" aria-hidden="true">\u21BB</span>' +
       '<div><div class="ma-name">重启 DSH 服务</div>' +
       '<div class="ma-sub">插件 / 设置改动即刻生效</div></div></div>'

@@ -1,28 +1,32 @@
-# DSH 官方品牌徽标 → DSH 部署品牌名运行时补丁
+# DSH 官方品牌徽标 → 部署品牌名运行时补丁
 
 > 侧边栏品牌行的 `sidebar.brand.name` slot 由官方插件
 > `@deepseek-ai/dsh-client-ui-brand-official` 填充：渲染
 > `BrandWordmark{ includeMark: false }`（primitives 包的唯一实现，
 > `lib/index.js`）—— deepseek 字标（8 个字母 path）+ 黑胶囊徽标
 > 「HARNESS」（rect 胶囊 `x=129.348 y=5.5 w=52 h=14 rx=2` +
-> 7 个转曲字母 path，反色 `var(--dsw-alias-label-primary-inverted)`）。
-> 本补丁把该 occupant 换成部署自有实现 **DshBrandName**：品牌名区
-> **整块渲染「DSH」**（不再复刻 deepseek 字标与胶囊徽标）。鲸鱼 mark
-> （`sidebar.brand.mark` 的 FishLogo）不动 —— 左上角读作「鲸鱼 + DSH」。
+> 7 个转曲字母 path，反色 `var(--dsw-alias-label-primary-inverted)`），
+> 徽标区 `viewBox "26 0 156 24"`、宽 `size * 156 / 24`。
+> 本补丁把该 occupant 换成部署自有实现 **DshMiasakiBrandName**：
+> **「DSH」字标 + 黑胶囊「MIASAKI」**。鲸鱼 mark（`sidebar.brand.mark`
+> 的 FishLogo）不动 —— 左上角读作「鲸鱼 + DSH + MIASAKI 徽标」。
 
 `BrandWordmark` 全局仅本包一处在用（客户端 exports 亦只有本包），
 补丁影响面 = 仅侧边栏品牌名；会话主视觉的鱼是声明包自带 animated
 fallback，不受影响。
 
-## 沿革（两次形态，一次 legacy 升级路径）
+## 沿革（三个形态，两条 legacy 升级路径）
 
 | 版本 | 品牌名区 | 产物 |
 |---|---|---|
 | 2026-09-28 – 2026-10-12 | deepseek 字标（8 path **逐字节保留**）+ 黑胶囊徽标「MIASAKI」 | 8,286 B / `821DD9B3…` |
-| **2026-10-12 起** | **整块「DSH」**（鲸鱼 mark 不变） | 3,314 B / `6E9FFF1B…` |
+| 2026-10-12 白天 | 整块「DSH」（胶囊被去掉） | 3,314 B / `6E9FFF1B…` |
+| **2026-10-12 晚起** | **「DSH」字标 + 黑胶囊「MIASAKI」**（鲸鱼 mark 不变） | 3,927 B / `250CAF78…` |
 
-旧产物由 `classify` 识别为 `legacy`：`apply` 可**直接原地升级**（不需要
-`--yes`），升级前把旧文件另存 `<client.js>.dsh-legacy-bak` 留档。
+两个历史形态都由 `classify` 识别为 `legacy`（标记分别是
+`const MIASAKI_WORDMARK_LETTERS = [` 与 `const DSH_BRAND_VIEWBOX_WIDTH`）
+⇒ `apply` 可**直接原地升级**（不需要 `--yes`），并各留一份档：
+最老形态 → `<client.js>.dsh-legacy-bak`、上一形态 → `<client.js>.dsh-prev-bak`。
 `revert` 仍回到官方原版（`.dsh-bak` 是 2026-09-29 存的 0.1.7-rc.2 原版）。
 
 ## 为什么是「运行时补丁」而不是插件
@@ -43,12 +47,12 @@ fallback，不受影响。
 
 | 文件 | 作用 |
 |---|---|
-| `patch.mjs` | **补丁规范**：2 条锚点编辑（①插入 DshBrandName 组件定义 ②OfficialBrandName 改渲染它）+ CLI（verify / status / apply / revert） |
+| `patch.mjs` | **补丁规范**：2 条锚点编辑（①插入 DshMiasakiBrandName 组件定义 ②OfficialBrandName 改渲染它）+ CLI（verify / status / apply / revert） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/、不改常量） |
 | `baseline/client.original.js` | DSH **0.1.7-rc.2** 官方原版 client.js（1,863 B，SHA-256 `22BB7E18…`） |
 
 > 与其他补丁一致：**不存 patched 全文**。产物以 `PATCHED_SHA256`
-> 常量记录（3,314 B），`verify` 用「由原始 baseline 重建出的 SHA
+> 常量记录（3,927 B），`verify` 用「由原始 baseline 重建出的 SHA
 > 是否等于该常量」自证——SHA 相等即逐字节相等，锚点失配时仍会
 > 响亮报错；另有一道语法闸门（`vm.Script` 经典脚本目标），产物
 > 必须是合法 JS 才允许落盘。
@@ -59,37 +63,60 @@ fallback，不受影响。
 
 | # | 编辑 | 锚点 |
 |---|---|---|
-| 1 | 在 Brand.js region 末尾插入 `DshBrandName` 组件（一个 24 单位高的 SVG，内含 `<text>DSH</text>`） | `//#endregion` + `//#region lib/types/client/index.js` 两行 |
-| 2 | `OfficialBrandName` 的返回由 `BrandWordmark{includeMark:false}` 改为 `DshBrandName` | `function OfficialBrandName() {` + return 行 + `}` 三行 |
+| 1 | 在 Brand.js region 末尾插入 `DshMiasakiBrandName` 组件（一个 24 单位高的 SVG：`<text>DSH</text>` + 胶囊 `<rect>` + 胶囊内 `<text>MIASAKI</text>`） | `//#endregion` + `//#region lib/types/client/index.js` 两行 |
+| 2 | `OfficialBrandName` 的返回由 `BrandWordmark{includeMark:false}` 改为 `DshMiasakiBrandName` | `function OfficialBrandName() {` + return 行 + `}` 三行 |
 
 要点：
 
 - **组件签名与官方对齐**（`{ size = 24, className }`，高 `size`、
-  宽 `size * 41.5 / 24`），sidebar 的 `.brandName` 容器无需任何变化；
+  宽 `size * 100.44 / 24`），sidebar 的 `.brandName` 容器无需任何变化；
 - **字号/字重/字距写成 SVG 呈现属性**（`font-size:20` / `font-weight:700` /
   `letter-spacing:0` / `fill:currentColor`）—— 呈现属性优先于继承值，
   故 `.brandName` 的 `font-size:18px;font-weight:600;letter-spacing:.04em`
-  不会串味（否则实测几何与下面的推导不符）；`fill:currentColor`
-  让颜色跟随侧边栏文字令牌，浅色/深色主题自动解析；
+  不会串味（否则实测几何与下面的推导不符）；
+- **胶囊取官方几何原样**：`rect` 宽 52 / 高 14 / `y 5.5` / `rx 2`、
+  `fill currentColor`（浅色主题下即黑胶囊），内文用官方同款反色 token
+  `var(--dsw-alias-label-primary-inverted)`；
 - **不引第三方资源**：系统字体栈 `'Segoe UI', system-ui, sans-serif`，
   无网络字体、无图片。
 
-## 尺寸怎么定的（量出来的，不是估的）
+## 几何怎么定的（量出来的，不是估的）
+
+### 字标「DSH」
 
 官方字标的几何取自 primitives 的 path 数据：ink 为 `y 4.628→18.622`
-（高 **13.99**）、相对其 viewBox 左边缘 `26` 偏移 **0.95**。于是我们要求
-「DSH」的 cap 高与之等高、基线与之 ink 底对齐。用 Edge 无头 canvas
-`measureText` 量 Segoe UI（Windows 系统字体，确定性）：
+（高 **13.99**）。用 Edge 无头 canvas `measureText` 量 Segoe UI
+（Windows 系统字体，确定性）：
 
 | 字体规格 | advance | ink 左 | ink 右 | cap 高（D/H） |
 |---|---|---|---|---|
 | **700 / 20px（采用）** | **41.279** | **1.000** | **39.957** | **14.000** |
 
 ⇒ 取 `fontSize=20`（cap 高 14.00 与官方字标 13.99 逐值同档）、
-基线 `y=18.62`（官方 ink 底 18.622）、`viewBox="0 0 41.5 24"`
-（ink 右 39.957 + 1.54 余量，防亚像素裁切）。
+基线 `y=18.62`（官方 ink 底 18.622）。
 
-复现命令（任意 Edge/Chromium 无头）：
+### 黑胶囊「MIASAKI」
+
+胶囊 rect 的几何**原样取自官方 HARNESS 徽标**（宽 52、高 14、`y 5.5`、
+`rx 2`），只做横向平移：官方胶囊左 **129.348**，其左侧是官方字标
+ink 右 **121.517** ⇒「字标 ink 右 → 胶囊左」间距 **7.831**；viewBox 右缘
+余量 **0.652**（官方 viewBox 宽 156、胶囊右 181.348 相对 26 起点即 155.348）。
+DSH 的 ink 右为 **39.957** ⇒
+
+| 量 | 取值 |
+|---|---|
+| 胶囊左 `x` | 39.957 + 7.831 = **47.788** |
+| 胶囊中心 | 47.788 + 26 = **73.788**（内文 `text-anchor:middle` 落点） |
+| viewBox 宽 | 47.788 + 52 + 0.652 = **100.44** |
+
+内文用 `text-anchor:middle` 居中，**不依赖字体 advance 的估算**
+（旧版是固定 `x = 胶囊左 + 7.152`，逐字对齐官方 HARNESS 的起始内边距，
+但两者字宽不同 ⇒ 视觉偏左）。
+
+### 自证
+
+复现命令（任意 Edge/Chromium 无头；**注意：本会话环境拦了
+`msedge.exe` / `chrome.exe`**——见下节）：
 
 ```powershell
 $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
@@ -102,24 +129,28 @@ $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
 # 期望：41.279 -1.000 39.957 14.000
 ```
 
-**渲染自证（2026-10-12 实测）**：从补丁产物里抽出组件代码、用 stub
-`react_jsx_runtime` 求值后，套官方品牌行 CSS（`.brandIdentity` /
-`.brandMark` / `.brandName` 原文）在 Edge 里渲染，量得——
+**2026-10-12 晚实测（两条路径）**：
 
-| 判据 | 实测 | 期望 |
+| 判据 | 实测 | 期望 / 对照 |
 |---|---|---|
-| `<text>` 排版宽 | 41.281 | ↔ canvas advance 41.279（两套独立测量吻合） |
-| ink 右边界 | 39.957 < viewBox 宽 41.5 | **不裁切** |
-| 鲸鱼 ink 右 → D ink 左 | **9.84 px** | 官方同口径 **9.79 px**（视觉同档） |
-| `getComputedStyle` | 20px / 700 / `normal` / `rgb(26,26,26)` | 继承的 18px/600/.04em 被正确覆盖，颜色随文字令牌 |
+| DSH advance（Pillow + `segoeuib.ttf`） | **41.000** | 浏览器 41.279（两套光栅器差 0.7%，同档） |
+| MIASAKI advance @8px / @7px（7.4px 上下界） | **36.2 / 31.2** | 按 7.4px ≈ **33.5** ⇒ 胶囊 52 宽居中后左右各余 ≈9.3，**不贴边不裁切** |
+| 近似效果图（浅 / 深底，4×） | 比例、间距、反色 token 正常 | 目视复核通过 |
+| **浏览器渲染自证** | **缺席**（环境拦了无头浏览器） | 留给实机：刷页面即见 |
+
+> **环境边界（记下以免误判）**：本会话里 `msedge.exe --version` 与
+> `chrome.exe --version` **都无任何输出**、`--dump-dom` 得到 0 字节文件
+> —— 与本仓既有的「`cmd.exe` 被会话环境拒绝 spawn」同族，属环境边界，
+> **不是**补丁缺陷。故本次没有浏览器侧渲染自证，改用 Pillow 度量
+> 交叉验证 + 实机可见性确认。
 
 ## apply 为什么不「就地打补丁」
 
 `apply` 写入的内容**一律**取「由仓库 baseline 重建 + 两侧 SHA 自证」的产物，
-不对目标文件就地去匹配锚点。原因是 2026-10-12 实测踩到的一条：**legacy
-（旧版 MIASAKI 胶囊）产物的锚点与官方原版不同** —— 它的 `OfficialBrandName`
-已经指向 `MiasakiBrandName`，对它就地去匹配原版锚点必然命中 0 次
-（`dsh-brand-name-usage: 锚点必须唯一，实际命中 0 次`）。重建路径写的是
+不对目标文件就地去匹配锚点。原因是 2026-10-12 实测踩到的一条：**历史
+形态产物的锚点与官方原版不同** —— 它们的 `OfficialBrandName` 已经指向
+`MiasakiBrandName` / `DshBrandName`，对它就地去匹配原版锚点必然命中 0 次
+（`dsh-miasaki-brand-name-usage: 锚点必须唯一，实际命中 0 次`）。重建路径写的是
 **逐字节确定的内容**，顺带消掉「目标被第三方手改过」的风险；`original`
 状态下目标与 baseline 逐字节相同（SHA 相等），故两种路径产物一致。
 
@@ -129,6 +160,17 @@ $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
 node patch.mjs revert   # 从 client.js.dsh-bak 还原官方原版，刷页面即生效
 ```
 
+磁盘上会同时存在三份档（形态从新到旧）：
+
+| 文件 | 内容 |
+|---|---|
+| `<client.js>.dsh-bak` | 官方原版（2026-09-29 存） |
+| `<client.js>.dsh-legacy-bak` | 最老形态：deepseek 字标 + 胶囊 MIASAKI（8,286 B） |
+| `<client.js>.dsh-prev-bak` | 上一形态：整块「DSH」（3,314 B） |
+
+想回到某个历史形态：`git checkout <该形态所在提交> -- patch.mjs`
+后用 `--target` 指向目标文件跑 `apply`。
+
 ## 用法
 
 ```powershell
@@ -136,7 +178,7 @@ cd dsh-miasaki-desktop/patches/dsh-client-ui-brand-official
 
 node patch.mjs verify            # 离线自检：baseline 原始 → 重建 → 与记录 SHA 比对 + 语法闸门
 node patch.mjs status            # 检查已安装 bundle 的状态（original / patched / legacy / unknown）与语法
-node patch.mjs apply             # 备份 + 应用（幂等：已打过则跳过；legacy 可直接升级）
+node patch.mjs apply             # 备份 + 应用（幂等：已打过则跳过；两个历史形态可直接升级）
 node patch.mjs revert            # 从 .dsh-bak 还原
 node rebuild-baseline.mjs        # 升级后：用当前安装的官方原版重建 baseline
 
@@ -162,9 +204,8 @@ node ..\..\..\scripts\verify-all.mjs desktop
 1. `node patch.mjs status` —— 若显示 `unknown`，说明安装的是新版本，补丁已被覆盖；
 2. 用 `baseline/client.original.js` ↔ 新版 client.js 做 diff，核对 2 条锚点是否仍在
    （`patch.mjs` 会在锚点缺失或多重命中时明确报错，不会静默改错）；
-   另需确认 primitives 的 `BrandWordmark` 字标 ink 几何未变（本补丁的
-   字号/基线是按「与官方字标 ink 等高对齐」推的，官方字标若漂移，
-   DSH 的视觉大小就不再与之同档——这是唯一的"软"依赖）；
+   另需确认 primitives 的 `BrandWordmark` 字标 ink 几何与胶囊 rect 是否漂移
+   （本补丁的字号/基线/横向排布都是按它们推的 —— 这是唯一的"软"依赖）；
 3. 锚点漂移则更新 `EDITS` 与 baseline，再跑 `node rebuild-baseline.mjs`
    取新常量、`node patch.mjs verify` 自证；
 4. `node patch.mjs apply` 重新应用，刷新页面生效。

@@ -2,8 +2,9 @@
 
 - 日期：2026-09-28
 - 状态：已落地并实机验证（0.1.7-rc.2，`status=patched`，刷页面生效）
-- 改版：**2026-10-12 品牌名区由「deepseek 字标 + 胶囊 MIASAKI」改为整块「DSH」**
-  （见文末「2026-10-12 改版」；本文档上半部分保留 09-28 首次落地的原始记录，未改写）
+- 改版：**2026-10-12 两次改版 —— 白天由「deepseek 字标 + 胶囊 MIASAKI」改为整块「DSH」，
+  晚间按用户点名定为「DSH 字标 + 黑胶囊 MIASAKI」**（见文末两段；本文档上半部分保留
+  09-28 首次落地的原始记录，未改写）
 - 补丁目录：`patches/dsh-client-ui-brand-official/`
 - 统一回归：`scripts/verify-all.mjs` desktop 线 +1 项（35/35 PASS）
 
@@ -148,3 +149,45 @@ cap 高（D/H）**14.000** ⇒ 取 `fontSize=20`（cap 高与官方字标逐值�
 `getAttribute('viewBox')` 拿到 `null` 后抛错、测量输出停在 `pending`。
 **React 的 SVG 属性名有特例**（`viewBox` / `preserveAspectRatio` 等保持原样），
 不能一律 kebab 化 —— 探针本身也得按 React 的映射规则写。
+
+## 2026-10-12 晚 · 第三次改版：「DSH 字标 + 黑胶囊 MIASAKI」
+
+**事件**：整块「DSH」落地后，黑胶囊随之消失；用户说「右上角黑色胶囊MIASAKI不要删了」
+（随后更正位置为左上角），澄清后给出目标形态：**「DSH字标加黑胶囊MIASAKI」**
+—— 保留 DSH 字标，把 2026-09-28 那版的黑胶囊徽标（内文 MIASAKI）放回来。
+
+**几何**：三段各自有出处，横向排布复刻官方。
+
+| 件 | 取值 | 出处 |
+|---|---|---|
+| DSH 字标 | Segoe UI 700 / 20px、基线 `y 18.62`、`x 0`、`fill currentColor` | 与上一版同参（cap 高 14.00 ↔ 官方字标 ink 13.99） |
+| 胶囊 rect | `x 47.788` `y 5.5` `w 52` `h 14` `rx 2`、`fill currentColor` | 官方 HARNESS 徽标几何原样，只平移 x |
+| 胶囊内文 | MIASAKI、`x 73.788`（= 胶囊中心）、`y 15`、7.4 / 700 / ls 0.2、**`text-anchor:middle`** | 旧版字号字距 + 本次改居中 |
+| viewBox | `0 0 100.44 24`（宽 = `size * 100.44 / 24`） | 47.788 + 52 + 0.652（官方右缘余量） |
+
+**间距怎么来的（量出来的）**：官方 `BrandWordmark{includeMark:false}` = `width size*156/24`
++ `viewBox "26 0 156 24"`；字标 ink 右 **121.517**（k 的最后一笔）、胶囊左 **129.348**
+⇒「字标 ink 右 → 胶囊左」= **7.831**、viewBox 右缘余量 **0.652**。DSH 的 ink 右为
+**39.957**（Edge canvas 实测）⇒ 胶囊左 **47.788**、胶囊中心 **73.788**、viewBox 宽 **100.44**。
+
+**为什么改居中**：旧版把 MIASAKI 的 x 定在「胶囊左 + 7.152」（对齐官方 HARNESS 的起始
+内边距），但 HARNESS 是 7 个转曲 path（≈38 单位宽）、MIASAKI 是 `<text>`（7.4px 下 ≈33.5）
+⇒ 逐字对齐会让文字视觉偏左。改 `text-anchor:middle` 后，居中由渲染器按 advance 完成，
+**不依赖字体度量**；`letterSpacing 0.2` 使尾部多 0.2 单位 advance、视觉重心偏左 0.1 单位
+（≈0.1px），可忽略。
+
+**度量与自证（本次没有浏览器渲染自证 —— 环境边界）**：本会话 `msedge.exe` / `chrome.exe`
+**都无法执行**（`--version` 无输出、`--dump-dom` 得到 0 字节文件），与本仓既有的
+「`cmd.exe` 被会话环境拒绝 spawn」同族，属环境边界而非缺陷。替代路径：
+
+- Pillow + `C:\Windows\Fonts\segoeuib.ttf` 交叉验证：DSH @20px advance **41.000**
+  （浏览器实测 41.279 —— 两套光栅器差 0.7%，同档，故既有几何结论继续成立）；
+  MIASAKI 在 8px / 7px（7.4px 的上下界）advance **36.2 / 31.2** ⇒ 按 7.4px 约 **33.5**
+  ⇒ 胶囊 52 宽居中后左右各余 **≈9.3 单位**（不贴边、不裁切）；
+- 浅 / 深底近似效果图（4× 放大）目视复核：字标与胶囊比例、间距、反色 token 解析正常；
+- **浏览器渲染自证缺席** ⇒ 实机可见性由用户刷页面确认（client-hmr 会热推 rebuilt 帧）。
+
+**产物与回归**：`3,927 B / 250CAF785F449B9C…`；`verify` PASS（2 条编辑 + 两侧语法闸门）；
+实机 `apply`：目标当时是上一版（整块 DSH）产物 ⇒ `classify` 判 `legacy`（新扩的历史标记
+`const DSH_BRAND_VIEWBOX_WIDTH` 命中）⇒ 直接升级、上一版另存 `.dsh-prev-bak`、最老形态仍在
+`.dsh-legacy-bak`，升级后 `status=patched`、幂等复跑跳过。

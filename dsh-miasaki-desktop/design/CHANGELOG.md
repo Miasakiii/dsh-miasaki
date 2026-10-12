@@ -2,6 +2,122 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-12（续三）· 退出与重启提速 —— 慢在「两次 taskkill」，不在后端启动
+
+**触发**：用户「退出和重启都有点慢」。
+
+**先量化再动手**（`pet.log` 实测）：
+- 「退出」：`shutdown confirmed` → 后端确认死亡 **2–3s**（点确认后窗口迟迟不消失）；
+- 「轻量重启」：`restart: 完成（耗时 …）` 最近三次 **5.8 / 6.5 / 7.0s**。
+
+**根因（硬数据；探针与壳内同一调用方式 `std::process::Command::output()`，本机 2026-10-12）**：
+
+| 动作 | 耗时 |
+|---|---|
+| `cmd /C exit`（纯进程创建基线） | **13 ms** |
+| `taskkill /PID <node> /T`（软杀，结局必然是 `can only be terminated forcefully`） | **630–780 ms** |
+| `taskkill /PID <node> /T /F`（强杀） | **540–800 ms** |
+| `netstat -ano`（关闭前的外部客户端探测） | 20 ms |
+
+停机阶梯要发**两次** `taskkill` ⇒ 光"杀进程"就 **1.2–1.6s**；再叠加三处固定睡眠
+（软杀后 300ms + `SOFT_GRACE` 300ms + 强杀后 300ms）= **0.9s** —— 两项相加正是用户感知的
+2–3s。**不是后端启动慢，也不是机器慢**：同机 `cmd /C exit` 只要 13ms。
+
+**三处改动**：
+
+① **新模块 `src-tauri/src/killtree.rs`**：Toolhelp 快照（实测 **9ms** / 367 进程）→ 按 `ppid` 闭包推子树
+   → **叶到根**逐个 `TerminateProcess`（实测 2 进程树 **208µs**，同树 `taskkill /T /F` 680ms）。
+   与 `taskkill /F` 是**同一个内核动作** —— 现状真正生效的本来就是强杀（软杀对控制台进程必然无效，
+   这条早已写在 `stop_backend_tiered` 的注释里），所以这不是"用更粗暴的方式换速度"，
+   而是同一条路径换一个更小的代价。**被系统拒绝时回落 `taskkill /T /F`**，最坏不劣化。
+② **软杀档改判据驱动**：`taskkill` 不带 `/F` 等价于发 `WM_CLOSE`，只有**带顶层窗口**的进程收得到。
+   新判据 `pid_has_top_level_window`（`EnumWindows` + `GetWindowThreadProcessId`），本机实测两例：
+   与壳内同样以 `CREATE_NO_WINDOW`（`spawn_dsh` 两条路径都用它）起的 `node.exe` → **0 个顶层窗口**
+   （判据为假 ⇒ 整档跳过）；对照组（带隐藏控制台窗口的进程）→ **1 个**（判据为真 ⇒ 保留软杀档）。
+   接入方式是 `ShutdownMachine::new(u32::from(soft_stage))` —— **状态机一个字没改**，
+   只是软杀档次数由判据给（0 = 整档跳过）。后端将来变成 GUI 进程，软杀档自动回来。
+③ **观察窗从固定睡眠改为轮询**（`wait_process_gone`，10ms 步长）：`TerminateProcess` 返回时目标已不再
+   存活（实测 `try_wait` 立即为真，0–3µs）⇒ 首次检查即命中、**常见路径零等待**；那段睡眠买不到任何东西。
+   顺带把 `RESTART_POLL_MS` 由 200 → **100ms**（重启时用户盯着加载画面，每一百毫秒都看得见）。
+
+**可观测性（下次报"慢"时先读它）**：`run_restart` 新增一行阶段分解
+`restart: 阶段耗时 —— 停机 …ms / 端口真空 …ms / 后端起 …ms / 导航 …ms`；停机新增
+`停机 pid …：目标无顶层窗口 → 跳过软杀档`、`强杀 pid …：Win32 树终止 N/M 个进程（…ms，根进程已终止）`
+与 `已退出（软杀 x 次 / 强杀 y 次，停机共 …ms）`。
+
+**保留项（刻意，别在后续清理里当冗余删掉）**：`ShutdownMachine` 的两档语义与 `GiveUp` 判据、
+`classify_taskkill`（2026-10-12 实机验收抓到的真缺陷修复）、`taskkill` 回落、
+Job Object 的 `KILL_ON_JOB_CLOSE` 兜底、关闭前的「外部客户端」探测（2026-09-23 断线事故修复）。
+另有两处顺手去重：`backend_process_alive` 转发到 `killtree::process_alive`（判据从此只有一份实现，
+停机轮询 / 看门狗 / 诊断快照共用），`our_process_tree` 复用 `killtree::snapshot_process_pairs`
+（Toolhelp 文本处理不再有两份）。
+
+**判据与回归**：`cargo test` **187 例全绿**（较改动前 +9：`killtree` 8 例 + 停机契约 1 例）。
+契约测试 `shutdown_is_fast_but_never_loses_its_fallback` 钉死四件事 —— 软杀档必须由判据给、
+强杀必须先走 Win32 快路径、`taskkill(pid, true)` 的回落必须在、观察窗不得回潮成固定 `sleep`。
+`killtree` 的纯函数（`descendants_of` / `terminate_order` / 根终止判据）与真机杀子进程各有一组单测，
+含自环 / 假环等脏快照输入。`verify-all desktop` **40/40**。
+
+**待实机（归用户）**：重建并重启桌面端后，退出与轻量重启各跑一次，对照 `pet.log` 的
+「停机共 …ms」与「阶段耗时」两行 —— 预期停机 ~0.1s、重启总计 ~3.5s（余下几乎全是 DSH 后端
+启动硬成本：Host + 插件树 ≈3s，不属本线）。
+
+**同批订正 —— 「片头不重放」旧口径的四处残留**：2026-10-12 用户否掉「重启不播片头」之后，
+上一次订正只覆盖了根 `README.md` 与验收矩阵；本轮收尾复查又抓到**同一族遗漏四处**，
+其中**两处是用户可见的**：
+
+| 位置 | 原文（失真） | 订正为 |
+|---|---|---|
+| `themes/src/03-switcher.js`（主题面板「重启 DSH 服务」行 **tooltip，用户可见**） | 「不关窗口、**不重放片头**，插件与设置改动即刻生效」 | 「不关窗口，插件与设置改动即刻生效」 |
+| `src-tauri/src/main.rs`（托盘菜单分支注释） | 「窗口不重建、**片头不重放**」 | 「窗口不重建；加载画面照走本地 loading 页、片头跟随设置（原判断已被用户否掉）」 |
+| `docs/ENGINEERING.md` §桌面端线表 | 「窗口 / 标题栏 / 桌宠 / 托盘一律不动、**启动片头不重放**」 | 「……一律不动」（片头照播、跟随设置，见同段 ①） |
+| `docs/ENGINEERING.md` §轻量重启实现记录 | 「**重启不重放片头**（`boot_intro_state` 在 `RESTARTING` 期间直接返回 `intro:"off"`）」 | 「**重启照播片头**……那条门控已被用户否掉并删除」 |
+
+**教训（与「迁移漏登记」同族）**：一条口径被推翻时，残留会散在**文档、注释、用户可见文案**三层，
+而 `grep` 一次就能收齐 —— 上次只改了两处文档就收工，等于把「已订正」写成了「全面订正」。
+**推翻了行为就全文搜一遍旧口径的措辞再收工**（本次的搜索词：`片头不重放` / `不重放片头`）。
+tooltip 那处要**重建壳 + 重新部署**才在实机生效（`build-init` → `cargo build --release` →
+`deploy-local.ps1`）；它不影响任何测试判据（无断言引用该文案），属纯文案订正。
+
+## 2026-10-12（续二）· 左上角定为「DSH 字标 + 黑胶囊 MIASAKI」（品牌补丁第三版）
+
+**触发**：上一版把品牌名区做成整块「DSH」后，那个黑胶囊就没了；用户说
+「右上角黑色胶囊MIASAKI不要删了」（随后更正位置为左上角），澄清后给出目标形态：
+**「DSH字标加黑胶囊MIASAKI」**。
+
+**形态**：`DSH` 字标（沿用上一版几何）+ **官方 HARNESS 徽标的黑胶囊原样回来**
+（rect 52×14、y 5.5、rx 2、fill `currentColor`、内文反色 token），胶囊里写 **MIASAKI**。
+
+**排布复刻官方**：官方 `BrandWordmark{includeMark:false}` = `width size*156/24` +
+`viewBox "26 0 156 24"`；字标 ink 右 **121.517** → 胶囊左 **129.348**，间距 **7.831**，
+viewBox 右缘余量 **0.652**。⇒ 胶囊左 = DSH ink 右 39.957 + 7.831 = **47.788**，
+viewBox 宽 **100.44**，胶囊中心 **73.788**。
+
+**一处刻意改进**：胶囊内 MIASAKI 改用 `text-anchor:middle` 落在胶囊中心，**不再依赖
+字体 advance 的估算**。旧版是固定 `x = 胶囊左 + 7.152`（对齐官方 HARNESS 的起始内边距），
+但 HARNESS 是 7 个转曲 path（≈38 单位宽）、MIASAKI 是 `<text>`（7.4px 下 ≈33.5）⇒ 逐字
+对齐会让文字视觉偏左。居中后由渲染器按 advance 完成，`letterSpacing 0.2` 带来的重心偏移
+0.1 单位（≈0.1px）可忽略。
+
+**实现**（`patches/dsh-client-ui-brand-official/patch.mjs`）：编辑 1 重写；组件名
+`DshBrandName` → `DshMiasakiBrandName`；`LEGACY_PATCH_MARKERS` 扩成**两个历史形态**
+（`const MIASAKI_WORDMARK_LETTERS = [` = 09-28 版；`const DSH_BRAND_VIEWBOX_WIDTH` = 10-12 版），
+两者都能 `apply` 直接升级。`apply` 顺带补一档留档：`legacy-bak` 已存在时把当前目标另存
+`<client.js>.dsh-prev-bak` —— 三版产物在磁盘上各留一份（官方原版 `.dsh-bak`、
+最老形态 `.dsh-legacy-bak`、上一形态 `.dsh-prev-bak`），`revert` 仍回官方原版。
+
+**度量与自证**（本会话**无头浏览器被环境拦**：`msedge.exe` / `chrome.exe` 均无输出、
+`--dump-dom` 得到空文件 —— 与本仓既有的「`cmd.exe` 被会话环境拒绝 spawn」同族，属环境边界，
+不是缺陷）：改用 **Pillow + `segoeuib.ttf`** 交叉验证 —— DSH @20px advance **41.000**
+（浏览器实测 41.279，两套光栅器差 0.7%，同档）；MIASAKI 在 8px / 7px 上下界 advance
+**36.2 / 31.2** ⇒ 按 7.4px 约 **33.5** ⇒ 胶囊 52 宽居中后左右各余 **≈9.3 单位**
+（不贴边、不裁切）；另生成浅 / 深底近似效果图目视复核（比例、间距、反色 token 均正常）。
+**浏览器渲染自证缺席**，留给实机：刷页面即见。
+
+**产物与回归**：`3,927 B / 250CAF785F449B9C…`（上一版 3,314 B / `6E9FFF1B…`；
+最老版 8,286 B / `821DD9B3…`）。`verify` PASS（2 条编辑 + 两侧语法闸门）、实机 `apply` 后
+`status=patched`（升级路径实测走通 legacy 识别）、幂等复跑跳过。
+
 ## 2026-10-12（续）· 失败页可一键安装 DSH 本体 —— 带版本护栏，缺 Node 如实报出
 
 **触发**：用户「要加一个小功能，桌面端应该要检测宿主机是否有 DSH 本体，没有就装一个适合的」。

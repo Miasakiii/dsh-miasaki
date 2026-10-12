@@ -317,7 +317,7 @@ light 的完整命令行与 stderr。
 | [`dsh-client-ui-chat`](patches/dsh-client-ui-chat/README.md) | 官方聊天区 | 同上，作用于消息气泡的「首 token 用时（TTFT）」与窗口口径兜底统计 |
 | [`dsh-client-ui-attachment`](patches/dsh-client-ui-attachment/README.md) | 官方消息图片画廊 | 多图 tile 宽高比保持：64×64 定宽 cover 方块改为按原始比例自适应（44–220）+ contain 完整显示，修「截图被裁成方块」 |
 | [`dsh-client-ui-sidebar`](patches/dsh-client-ui-sidebar/README.md) | 官方侧边栏 | 头部悬浮提示 portal 化：**5 处** Tooltip 加 `portal: true`（2026-09-29 随 rc.2 退役品牌区那条 —— 官方删掉了那个 Tooltip），气泡改挂 body（z 1100），修左上角悬停提示被中栏盖住/裁掉 |
-| [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 **DSH 化**：`sidebar.brand.name` occupant 换成部署实现，品牌名区整块显示「DSH」（cap 高与官方字标 ink 逐值等高），左上角读作「鲸鱼 + DSH」；**2026-10-12 改版**（旧版为 deepseek 字标 + 胶囊「MIASAKI」） |
+| [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 **「DSH」字标 + 黑胶囊「MIASAKI」**：`sidebar.brand.name` occupant 换成部署实现，字标 cap 高与官方字标 ink 逐值等高，胶囊取官方 HARNESS 几何（内文 MIASAKI 居中），左上角读作「鲸鱼 + DSH + MIASAKI 徽标」；**2026-10-12 两次改版**（白天曾整块「DSH」，更早为 deepseek 字标 + 胶囊「MIASAKI」） |
 | [`dsh-client-ui-workspace`](patches/dsh-client-ui-workspace/README.md) | 官方会话浏览器 | **侧线会话不占列表**：`sessionVisible()` 的 origin 判定后追加一条「插件声明的侧线不显示」，判据是跨包声明（localStorage `miasaki-sidebar:sidechat:hidden:v1`，由 sidebar 插件写）。官方**已有**「建了但不进列表」形态（`origin === 'subagent'`）却没向插件开口，本补丁把同一个开口借给声明方；**声明缺席即官方原状**（fail-safe，2026-09-30） |
 
 > **八件全部作用于浏览器 bundle**，改完**刷新页面**即生效。
@@ -392,15 +392,21 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 > 目录带 `rebuild-baseline.mjs`；字标 8 path 为软依赖 primitives `BrandWordmark`
 > data，升级后需按 README 第 2 步重新提取校验）。
 >
-> **2026-10-12 本件改版（品牌名 → 整块「DSH」）**：用户要求「左上角改为 DSH」，
-> 形态由用户拍板为「保留鲸鱼、整块品牌名换成 DSH」。组件 `MiasakiBrandName` →
-> `DshBrandName`（不再复刻字标与胶囊），产物 `8286→3314`、`821DD9B3…` → `6E9FFF1B…`；
-> 字号/基线按 Segoe UI 700/20px 的 cap 高 14.00 与官方字标 ink 13.99 等高推得，
-> 渲染自证（排版宽 41.281 ↔ 实测 41.279、ink 右 39.957 < viewBox 41.5、鲸鱼→D 间距
-> 9.84 vs 官方 9.79 px）见补丁 README 与设计文档。旧产物识别为 `legacy`，
-> `apply` 可**直接原地升级**（升级前留档 `.dsh-legacy-bak`）—— 该路径顺带修掉一个
-> 真缺陷：对旧产物就地匹配原版锚点必然 0 命中，现改为「baseline 重建 + 两侧 SHA
-> 自证」写入。
+> **2026-10-12 本件两次改版（品牌名区形态定稿）**：① 白天按用户「左上角改为 DSH」，
+> 形态拍板为「保留鲸鱼、整块品牌名换成 DSH」—— 组件 `MiasakiBrandName` → `DshBrandName`
+> （不再复刻字标与胶囊），产物 `8286→3314`、`821DD9B3…` → `6E9FFF1B…`；
+> ② 当日晚用户点名「DSH字标加黑胶囊MIASAKI」（那个黑胶囊不能删）⇒ **第三版**：
+> `DSH` 字标 + 官方 HARNESS 徽标的黑胶囊（内文 MIASAKI 居中），组件名
+> `DshMiasakiBrandName`，产物 `3314→3927`、`6E9FFF1B…` → `250CAF78…`。
+> 字标字号/基线仍按 Segoe UI 700/20px 的 cap 高 14.00 与官方字标 ink 13.99 等高推得
+> （渲染自证：排版宽 41.281 ↔ 实测 41.279、ink 右 39.957 < viewBox 41.5、鲸鱼→D 间距
+> 9.84 vs 官方 9.79 px）；胶囊几何取官方原样（52×14 / y 5.5 / rx 2），横向间距复刻官方
+> 「字标 ink 右 → 胶囊左」7.831 ⇒ 胶囊左 47.788、viewBox 宽 100.44、胶囊中心 73.788。
+> **两个历史形态**都识别为 `legacy`，`apply` 可**直接原地升级**（最老形态留档
+> `.dsh-legacy-bak`、上一形态留档 `.dsh-prev-bak`）—— 该路径顺带修掉一个真缺陷：
+> 对旧产物就地匹配原版锚点必然 0 命中，现改为「baseline 重建 + 两侧 SHA 自证」写入。
+> 本次无头浏览器被会话环境拦（`msedge` / `chrome` 均无输出），渲染自证改用 Pillow 度量
+> 交叉验证，浏览器侧留给实机刷页面确认；详见补丁 README 与设计文档。
 >
 > 历史基线记录（0.1.7-alpha.2 时期，2026-09-23 全量重打）：六个补丁（含 dual-model 线的图片准入
 > 补丁）当日全部重打、`EDITS` 零改：settings-models（`B2D7D445…` → `9F2F1EE8…`，probe 自动选中
@@ -971,7 +977,18 @@ probeModel 存储档案解析接线 2），已并入 `node scripts/verify-all.mj
   用户**手动启动**、或端口已就绪时接入的 DSH 服务不会被停止（非本应用 spawn 的后端不触碰）。
   重复触发关闭请求仅重新显示确认弹窗；仅 Alt+F4 连击（前端无响应）时兜底强制退出、后端保持运行。
 - **轻量重启「重启 DSH 服务」（2026-10-12）**：停掉 DSH 后端并由壳重新拉起 ——
-  **窗口不重建、标题栏/桌宠/托盘不动**，几秒后自动回到 DSH 界面（实测 **7.0s**：停机 3s + 后端启动 4s）。
+  **窗口不重建、标题栏/桌宠/托盘不动**，几秒后自动回到 DSH 界面。
+  **耗时（2026-10-12 晚提速后）**：停机段 **约 0.1s**（提速前 2–3s）、总计 **约 3.5s**
+  （提速前实测 5.8 / 6.5 / 7.0s）；剩下的**几乎全是 DSH 后端的启动硬成本**（Host + 插件树 ≈3s，
+  不属本线）。每段的真实耗时都落进 `%LOCALAPPDATA%\miasaki\pet.log` 的一行
+  `restart: 阶段耗时 —— 停机 … / 端口真空 … / 后端起 … / 导航 …`，下次报"慢"时先看它。
+  **「退出」走同一条停机阶梯、同样受益**：点确认到窗口消失由 2–3s 降到**一瞬**。
+  提速**没有拿掉任何一层保险**：软杀档不是被删掉，而是改由「目标有没有顶层窗口」这条判据决定
+  （`taskkill` 不带 `/F` 就是发 `WM_CLOSE`，只有带顶层窗口的进程收得到；后端是
+  `CREATE_NO_WINDOW` 起的 `node.exe`，实测 **0 个顶层窗口** ⇒ 发了也收不到、白等 1s）；
+  强杀改走 **Win32 快照 + 逐进程 `TerminateProcess`**（与 `taskkill /F` 是同一个内核动作，
+  实测树终止 208µs vs 同树 `taskkill /T /F` 680ms），**被系统拒绝时仍回落 `taskkill /T /F`**，
+  Job Object 的兜底回收一字未动。根因取证与逐项实测见 `design/CHANGELOG.md` 2026-10-12（续三）。
   **加载画面与冷启动同源**：一样走本地 loading 页，**片头动画跟随「设置 → 外观 → 启动」里选的那一段**
   （2026-10-12 订正 —— 原先刻意在重启时不播片头，用户否掉了那条判断：两个不同的加载画面反而分不清状态；
   片头点击可跳过、「已就绪」即淡出）。
