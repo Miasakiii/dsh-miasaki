@@ -616,11 +616,20 @@ fn kill_spawned_dsh() {
 /// 保留它是因为①结构上与官方阶梯同构、②若将来后端带上窗口或改为 GUI 进程即自动生效、
 /// ③给「正在写盘的进程」多一次自我了断的机会。**强杀不得因为软杀存在而被裁掉。**
 fn stop_backend_tiered(pid: u32) {
-    /// 软杀后的观察窗：本机实测软杀对控制台进程无效，等久了只是白等（关窗体感变慢）。
-    const SOFT_GRACE: Duration = Duration::from_secs(1);
+    /// 软杀后的观察窗：本机实测软杀对控制台进程**必然无效**（`taskkill /PID x /T` 不带 `/F`
+    /// 只发 WM_CLOSE，而 `node.exe` 没有窗口消息循环），等久了纯属白等。
+    ///
+    /// **2026-10-12：1s → 300ms**（用户实机反馈「加载时间长」）。两次软杀因此从 ~2.6s 压到 ~1.2s；
+    /// **强杀阶段不受影响**（`FORCE_GRACE` 仍是 1s —— 那一档才是真生效的，值得留足）。
+    const SOFT_GRACE: Duration = Duration::from_millis(300);
     /// 强杀后的观察窗（强杀理论上立即生效，留余量给进程表刷新）。
     const FORCE_GRACE: Duration = Duration::from_secs(1);
-    let mut machine = recovery::ShutdownMachine::new(2);
+    // 软杀档位 **1 次**（原 2 次）：软杀对控制台进程（`node.exe`）**必然无效** —— 上方的
+    // 实测结论与 `SOFT_GRACE` 的注释都写着这一点，第 2 次软杀只是把同一个无效动作再做一遍，
+    // 净代价约 1s。保留 1 次是为了表意完整（与官方 `SIGTERM→SIGKILL` 阶梯同构、给正在写盘的
+    // 进程一次自我了断的机会、后端将来若变成 GUI 进程即自动生效）；**真正生效的强杀档位
+    // 仍是 2 次，一个字没动**。2026-10-12 用户反馈「加载时间长」时压缩。
+    let mut machine = recovery::ShutdownMachine::new(1);
     loop {
         match machine.tick(backend_process_alive(pid)) {
             recovery::KillAction::Done => {
@@ -2430,13 +2439,12 @@ fn bootstrap_state() -> serde_json::Value {
 /// 从不为配置问题报错——加载页拿不到就静默不播（L1 纹章层接管）。
 #[tauri::command]
 fn boot_intro_state() -> serde_json::Value {
-    // 轻量重启期间**不播片头**：重启的全部价值就是快，重放几秒片头会把它抵消掉
-    // （冷启动放片头是仪式感，重启放片头是罚站）。门控刻意放在壳侧而不是改加载页 ——
-    // 「壳说事实、页面照做」是本仓既有分工（同 12-material.js 的口径），
-    // 这样 ui/loading.html 一行都不用动。
-    if RESTARTING.load(Ordering::SeqCst) {
-        return serde_json::json!({ "intro": "off", "audio": false });
-    }
+    // **重启也播片头，跟随「启动」设置**（2026-10-12 用户订正：「重启动画跟随启动动画设置的」）。
+    //
+    // 原实现刻意在 `RESTARTING` 期间返 `"off"`，理由是「冷启动放片头是仪式感，重启放片头是罚站」——
+    // 那条判断被用户否掉：重启的加载画面**就该与冷启动长得一样**（同一套设置驱动），否则用户
+    // 看到两个不同的加载画面反而分不清状态。代价也可控：片头**点击可跳过**、「已就绪」即淡出
+    // （`__setReady` 由 ⑦ 的「已就绪，正在进入…」触发），不构成额外等待。
     let decided = boot_intro::read_boot_intro();
     serde_json::json!({
         "intro": decided.intro.unwrap_or_else(|| "off".to_string()),
@@ -2785,10 +2793,17 @@ fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
     }
 
     // —— ⑥ 重拉 + 等就绪 ——
+    //
+    // **判据必须是应用层**（`GET /` 不再是 404 = 路由已注册），不能只等 TCP 端口：
+    // DSH 的 webserver **激活即监听、路由晚注册**，只等 `port_ready()` 就会在路由还没上时导航，
+    // 撞进 fallback 的 404 —— WebView2 上就是**「找不到此 127.0.0.1 页」+ 必须手动刷新**
+    // （用户 2026-10-12 实机反馈的正是这个现象）。
+    // 首次启动路径自 **P10**（2026-09-26 404 事故，见 `start_launch_sequence` 的注释）起就是这个
+    // 口径，重启路径此前漏了 —— 本批补齐，并加一条源码契约测试钉住，防它再退化回去。
     set_restart_status(app, "正在等待 DSH 服务就绪…");
     spawn_dsh().map_err(|e| format!("重新拉起后端失败：{e}"))?;
     let ready_deadline = Instant::now() + RESTART_READY_TIMEOUT;
-    while !port_ready() {
+    while !backend_http_ready() {
         if Instant::now() > ready_deadline {
             return Err(format!(
                 "后端在 {}s 内未就绪（常见成因：插件让 Host 启动失败）",
@@ -2801,6 +2816,11 @@ fn run_restart(app: &AppHandle, trigger: &str) -> Result<Duration, String> {
     // —— ⑦ 导航回 DSH ——
     set_restart_status(app, "已就绪，正在进入…");
     navigate_main(app).map_err(|e| format!("后端已就绪但进入失败：{e}"))?;
+    // 与首次启动同款的兜底：即便上面已按应用层判据把门，后端仍可能在**导航之后**才完成路由注册
+    // （上一次残留实例刚退出、插件树加载抖动）⇒ 文档停在 404，而 `on_page_load` 命中 3080 会把
+    // `PAGE_UP` 置真、运行期看门狗那条「文档从未就绪 → 重新导航」因此不再触发。该兜底只允许
+    // 一个任务在飞，路由一就绪立刻重新导航（最多等 60s）。
+    schedule_renavigate_when_ready(app);
     Ok(started.elapsed())
 }
 
@@ -4216,6 +4236,46 @@ mod tests {
             classify_taskkill(true, "", true, true),
             TaskkillOutcome::Ok,
             "退出码 0 即成功（目标是否已死属竞态，由调用方复查）"
+        );
+    }
+
+    /// 2026-10-12 用户实机反馈的两个问题的回归：**① 重启等就绪不得回潮成「TCP 端口可连」**
+    /// （「加载结束后报找不到页面，要手动刷新」的根因）、**② 重启也播片头，跟随「启动」设置**
+    /// （用户「重启动画跟随启动动画设置的」）。
+    ///
+    /// ① 的因果链（真机取证）：`run_restart` 原先 `while !port_ready()` ⇒ 端口一听就导航 ⇒
+    /// 此时 DSH 的路由**还没注册** ⇒ WebView2 显示「找不到此 127.0.0.1 页 / HTTP ERROR 404」。
+    /// 首次启动路径早在 **P10**（2026-09-26 404 事故）就改成了应用层判据，重启路径漏了 ——
+    /// 这类「同一口径两条路径只改了一条」的缺口，靠人工 review 抓不住，所以直接读源码断言。
+    #[test]
+    fn restart_waits_for_application_level_readiness_and_keeps_intro() {
+        let src = include_str!("main.rs");
+        let body = src
+            .split("fn run_restart(")
+            .nth(1)
+            .and_then(|s| s.split("fn show_window_front").next())
+            .expect("找不到 run_restart 函数体（函数名或后续函数名变了，请同步本测试）");
+        assert!(
+            body.contains("while !backend_http_ready()"),
+            "重启等就绪必须用应用层判据（GET / 不再是 404）；只等 TCP 会撞进 fallback 的 404"
+        );
+        assert!(
+            !body.contains("while !port_ready()"),
+            "不得回潮成只等 TCP 端口：DSH 的 webserver 激活即监听、路由晚注册"
+        );
+        assert!(
+            body.contains("schedule_renavigate_when_ready"),
+            "导航后必须挂上 404 兜底重导航（后端可能在导航之后才注册路由）"
+        );
+
+        let intro_body = src
+            .split("fn boot_intro_state(")
+            .nth(1)
+            .and_then(|s| s.split("fn dsh_check").next())
+            .expect("找不到 boot_intro_state 函数体（请同步本测试）");
+        assert!(
+            !intro_body.contains("RESTARTING.load"),
+            "重启应播片头（跟随「启动」设置），不得再按 RESTARTING 关掉片头"
         );
     }
 
