@@ -91,6 +91,27 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
 > 网格同时解决了两件事：图片即预览；格子按 `minmax(104px,1fr)` 自动换行，比 Pill 排更耐多文件。
 > **「不使用」也不再与文件并列** —— 它不是一个可选的图标，而是「取消选择」，由「清除」按钮承担
 > （原判断保留，只是换了个承载者）。决策与验证见 `CHANGELOG.md` 2026-10-08 条。
+>
+> **2026-10-12 订正（九宫格那一行 + hero 卡）**：用户「设计风格语言又偏了」+「图标预览太大了」。
+> ① 九宫格图 **56 → 48px**、圆角 12 → 8px、`cover → contain`、格宽 `minmax(104px) → minmax(88px)`
+> —— 官方缩略图的可比值是 `ui-attachment/MessageImage` 的 thumbnail 变体（**48×48 / r8 /
+> 0.5px 细描边 / 轻底 / contain**），`cover` 还把预览修了形（任务栏显示的是 PNG 原图）；
+> ② 2026-10-08 新增的「当前生效」**hero 大卡（r16 + module 底 + 64px 图）整类退场**，
+> 收敛为**官方行式 + 控件位 48px 缩略图** —— 官方三页（general / models / plugins）都是行式列表，
+> 唯一的视觉选择卡先例 `AppearanceRow.themeCube` 也是**透明底**（hover / 选中才出底），
+> 常驻填充卡是官方没有的语言。决策与验证见 `CHANGELOG.md` 2026-10-12 条。
+>
+> **2026-10-13 订正（同两处的第二次收敛）**：用户「外观页显示有问题，图标预览显示问题太大。
+> 设置页设计风格语言要统一」。上一条只**降像素**（64 → 48）没改**量级** —— 48px 仍高于官方
+> 设置页任何控件（选择丸 / 步进器 h36、`Button.sm` h28、Switch 36×20）。本次按**控件位口径**：
+> ① 「当前生效」缩略图与九宫格预览图统一 **32px**（< 行文本块 42px ⇒ 行高回到文字决定的 76px）、
+> 格宽 `minmax(88px) → minmax(64px)`、`padding 10/6/8 → 8/4/6`、`gap 8 → 6`；
+> ② 九宫格/预览圆角改走官方令牌；预览图加 0.5px `border-l4` 描边 —— **深色底预设图标在深色
+> 主题下与面板底同色**（用户"显示有问题"的一条硬证据）；
+> ③ 同批订正三处"照官方抄了却改了一个值"的规格硬伤：选择丸 `r18 → radius-md` 且
+> `padding 0 6px 0 14px → 0 14px`、步进器 `r18 → radius-md`、箭头 `3px → radius-xs`；
+> ④ 图标格选中态由 `--dsw-static-neutral-bluish-400`（固定色阶）改走官方
+> `button-ghost-active-*` alias 令牌。决策与验证见 `CHANGELOG.md` 2026-10-13 条。
 
 ## 3. V1 视觉统一方案（行为逻辑零变化）
 
@@ -102,6 +123,13 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
                                 //  （已对实装 seed 核对存在，见 §6）
 .mia-menu                      // 官方 Menu primitive 直出；selectedId 高亮；align="end" portal
 ```
+
+> **2026-10-13 订正**：上面写的 `r18` 是**错的** —— 官方 `LanguageRow.selector` 是
+> `border-radius:var(--dsw-radius-md)`（12px 圆角矩形）+ `padding:0 14px`，本线却做成了
+> 18px 胶囊 + `padding:0 6px 0 14px`。同一个控件在官方是圆角矩形、在本页是胶囊，
+> 这正是用户「设置页设计风格语言要统一」的可见来源。同类偏差还有步进器（官方
+> `FontSizeRow.stepper` 也是 `radius-md`，本线写 18px）与箭头（官方 `radius-xs`，本线 3px）。
+> 已在 `client.js` 的 `PANEL_CSS` 全部订正，并由风格契约的**圆角纯度**断言钉死。
 
 - **复用官方 `Menu`**（primitives 已导出，键盘 ↑/↓/Home/End/Esc 全自带），不自研下拉。
 - 四个选择器统一走它：皮肤 / 壁纸图源 / 玻璃档位 / 应用图标（含「不使用」与「我的上传」合并为
@@ -116,6 +144,16 @@ padding:16px 0; border-bottom:0.5px solid var(--dsw-alias-border-l2)`；
   （对齐 models `rowCard` 圆角与描边；图 56px 保留，`border-radius:14px` → 12px 与卡统一）。
 - 选中态不变（`bg-module-platform` + `neutral-bluish-400` 边，与 `themeCube` 同语言）。
 - 网格：`repeat(auto-fill,minmax(104px,1fr))` 保留（四格一行刚好）；组间距 8px。
+- **2026-10-12 订正**：图 56 → **48px**、圆角 12 → **8px**、`cover → contain`、
+  格宽 `minmax(104px) → minmax(88px)`、格内 padding `12 6 10 → 10 6 8` ——
+  缩略图取值改照官方 `ui-attachment/MessageImage` thumbnail 规格（48×48 / r8 / contain），
+  理由与验证见 §2 的 2026-10-12 订正块与 `CHANGELOG.md` 2026-10-12 条。
+- **2026-10-13 订正**：图 48 → **32px**、格宽 `minmax(88px) → minmax(64px)`、
+  padding → `8 4 6`、gap → 6px、圆角改走 `var(--dsw-radius-lg)`（格）/ `-sm`（图），
+  并给预览图加 0.5px 描边（深色主题下深色底图标会与面板底同色）。
+  **选中态同步改令牌**：`bg-module-platform` + `neutral-bluish-400` 边（后者是色阶原始值、
+  不随明暗解析）→ 官方 `Pill.active` 的 `button-ghost-active-fill` + `-border`。
+  理由与验证见 §2 的 2026-10-13 订正块与 `CHANGELOG.md` 2026-10-13 条。
 
 ### 3.3 M3/M4 占位与运行信息
 

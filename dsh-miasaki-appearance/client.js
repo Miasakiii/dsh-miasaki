@@ -305,21 +305,28 @@ window.__ModuleLoader__.load({
 .mia-group>.mia-row:last-child{border-bottom:none}
 .mia-rowText{flex-direction:column;flex:1;gap:4px;min-width:0;padding-right:48px;display:flex}
 .mia-title{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}
-.mia-desc{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400;line-height:18px}
+.mia-desc{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:400;line-height:18px}
 .mia-control{align-items:center;gap:8px;display:inline-flex}
-/* 选择丸：官方 LanguageRow.selector 规格（h36 / r18 / module 底 / gap12 / 右缀 chevron）。
-   单选设置行的官方标准控件——取代 M2.6 的 Pill 排（Pill 在官方是 view switcher/filter 用语）。 */
-.mia-select{box-sizing:border-box;border:none;font:inherit;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-module-platform);cursor:pointer;border-radius:18px;align-items:center;gap:12px;height:36px;max-width:280px;padding:0 6px 0 14px;display:inline-flex}
+/* 选择丸：官方 LanguageRow.selector 规格（h36 / radius-md / module 底 / gap12 /
+   padding 0 14px / 右缀 chevron）。单选设置行的官方标准控件——取代 M2.6 的 Pill 排
+   （Pill 在官方是 view switcher/filter 用语）。
+   2026-10-13 订正：此处原为 **18px 胶囊 + padding 0 6px 0 14px**，而官方 selector 的
+   border-radius 是 var(--dsw-radius-md)（12px 圆角矩形）、内边距 0 14px 两侧对称
+   ——形状与官方不是同一个（用户「设置页设计风格语言要统一」）。 */
+.mia-select{box-sizing:border-box;border:none;font:inherit;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-module-platform);cursor:pointer;border-radius:var(--dsw-radius-md);align-items:center;gap:12px;height:36px;max-width:280px;padding:0 14px;display:inline-flex}
 .mia-select:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .mia-select:disabled{cursor:default;opacity:.5}
 .mia-selectLabel{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
-.mia-selectChevron{flex:none;color:var(--dsw-alias-label-caption)}
+.mia-selectChevron{flex:none}
 .mia-unit{color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}
-.mia-stepper{background:var(--dsw-alias-bg-module-platform);border-radius:18px;justify-content:center;align-items:center;min-width:72px;height:36px;display:inline-flex;position:relative}
+/* 步进器：官方 FontSizeRow.stepper 逐条一致（h36 / radius-md / module 底 / min-width 72）。
+   2026-10-13 订正：border-radius 原为 **18px 胶囊**，官方是 var(--dsw-radius-md)；
+   箭头圆角原为 **3px**，官方是 var(--dsw-radius-xs)（4px）——整页控件圆角只走官方令牌层级。 */
+.mia-stepper{background:var(--dsw-alias-bg-module-platform);border-radius:var(--dsw-radius-md);justify-content:center;align-items:center;min-width:72px;height:36px;display:inline-flex;position:relative}
 .mia-value{text-align:center;font-variant-numeric:tabular-nums;min-width:18px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px}
 .mia-arrows{opacity:0;flex-direction:column;gap:2px;display:flex;position:absolute;right:8px}
 .mia-stepper:hover .mia-arrows,.mia-stepper:focus-within .mia-arrows{opacity:1}
-.mia-arrow{background:color-mix(in srgb, var(--dsw-alias-bg-layer-1) 75%, transparent);width:17px;height:12px;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;border-radius:3px;justify-content:center;align-items:center;padding:0;display:inline-flex}
+.mia-arrow{background:color-mix(in srgb, var(--dsw-alias-bg-layer-1) 75%, transparent);width:17px;height:12px;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;border-radius:var(--dsw-radius-xs);justify-content:center;align-items:center;padding:0;display:inline-flex}
 .mia-arrow:hover:not(:disabled){background:var(--dsw-alias-bg-layer-1)}
 .mia-arrow:disabled{color:var(--dsw-alias-label-caption);cursor:default}
 /* 表面不透明度四旋钮：官方 models fieldLabel（12px/18/500 secondary）+ modelAdvanced 双列网格 */
@@ -331,15 +338,17 @@ window.__ModuleLoader__.load({
 .mia-hint{color:var(--dsw-alias-label-tertiary);margin:0;font-size:12px;line-height:18px}
 /* P4「恢复默认」行：与行内说明同边距、官方 linkButton 观感（次操作，h28/r14/12px tertiary）。 */
 .mia-resetRow{display:flex;justify-content:flex-end;padding:4px 0 8px}
-/* 应用图标「当前生效」预览（2026-10-08）：左大图 + 右名称 / 来源。
-   由来：原形态只有九宫格 + 纯文字选择丸，用户看不出「我现在用的到底是哪一个」
-   （用户实机反馈「应该要有预览图标，更直观地选择应用图标」）。 */
-.mia-avatarHero{border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-module-platform);border-radius:16px;align-items:center;gap:14px;margin:16px 0 4px;padding:14px 16px;display:flex}
-.mia-avatarHeroImg{border-radius:14px;flex:none;width:64px;height:64px;object-fit:cover;display:block}
-.mia-avatarHeroPh{border-radius:14px;flex:none;width:64px;height:64px;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;display:flex}
-.mia-avatarHeroText{flex-direction:column;flex:1;gap:4px;min-width:0;display:flex}
-.mia-avatarHeroName{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px;overflow-wrap:anywhere}
-.mia-avatarHeroMeta{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;overflow-wrap:anywhere}
+/* 应用图标「当前生效」预览（2026-10-13 收敛为**行内控件级**缩略图）。
+   由来：2026-10-08 是 r16 + module 底 + 64px 大图的「hero 卡」→ 2026-10-12 收到行式
+   48px → 用户 2026-10-13 仍点名「图标预览显示问题太大」。两次都只降尺寸、没动**量级**：
+   48px 仍**高于官方设置页任何控件**（选择丸/步进器 h36、sm 按钮 h28、Switch 36×20），
+   行里唯一一个越级元素，改多少像素都还是越级。本次改按**控件位口径**取值——
+   **32px**：等于官方 Button.sm 与行文本块（title 20 + gap 4 + desc 18 = 42px）之间的
+   安全值，既不撑高行高（32 < 42，行高回到纯文字决定的 76px），也不越控件级。
+   圆角走 var(--dsw-radius-sm) 令牌（官方 sm 按钮同款），不再硬编码 8px。 */
+.mia-avatarPreview{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-interactive-bg-hover);border-radius:var(--dsw-radius-sm);flex:none;justify-content:center;align-items:center;width:32px;height:32px;padding:1px;display:flex}
+.mia-avatarPreviewImg{width:100%;height:100%;object-fit:contain;display:block}
+.mia-avatarPreviewPh{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 /* 子块（预设 / 我的上传）：与官方行式同规格（0.5px 分隔线 + 16px 行距），
    但控件铺满下一行——九宫格塞不进 `.mia-row` 右侧的控件位。 */
 .mia-block{border-bottom:.5px solid var(--dsw-alias-border-l2);flex-direction:column;gap:4px;padding:16px 0;display:flex}
@@ -348,16 +357,28 @@ window.__ModuleLoader__.load({
 .mia-presetRetry{padding:8px 0 0}
 /* 落不了盘的提示（host 无 dataDir）：warn 着色，与契约条同一取色。 */
 .mia-presetNote{color:var(--dsw-alias-state-warn-label);padding:8px 0 0;font-size:12px;line-height:18px}
-/* 应用图标九宫格：官方卡片语言（models rowCard：border-l4 / r16 / pad 12 14 收敛为图标格）。
-   预设与「我的上传」共用同一套格子——两者对用户是同一件事（挑一张图当图标）。 */
-.mia-iconGrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:8px;display:grid}
-.mia-iconCell{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:0 0;border-radius:16px;flex-direction:column;align-items:center;gap:8px;padding:12px 6px 10px;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;display:flex}
-.mia-iconCell:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+/* 应用图标九宫格：官方卡片语言（models rowCard：card-fill / border-l4 / 令牌圆角）。
+   预设与「我的上传」共用同一套格子——两者对用户是同一件事（挑一张图当图标）。
+   尺寸（2026-10-13 二次收敛，用户「图标预览显示问题太大」）：图 48 → **32px**（与
+   「当前生效」缩略图同尺寸——同一个东西在页面上出现两次，尺寸必须一致），格宽
+   minmax 88 → **64px**（一屏 7–8 格，回到「选择器」而不是「画廊」量级），格内边距
+   10/6/8 → 8/4/6、格间距 8 → 6px。
+   圆角改走官方令牌（不再硬编码 16px / 8px）；**图片加 0.5px 描边**：预设「默认」是
+   深色底图标，在深色主题下与面板底几乎同色、只剩图形可见（正是一处「显示问题」），
+   描边让它在两种明暗下都有明确边界。 */
+.mia-iconGrid{grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:8px;display:grid}
+.mia-iconCell{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-settings-card-fill);border-radius:var(--dsw-radius-lg);flex-direction:column;align-items:center;gap:6px;padding:8px 4px 6px;font:inherit;color:var(--dsw-alias-label-secondary);cursor:pointer;display:flex}
+.mia-iconCell:hover:not(:disabled):not(.is-active){background:var(--dsw-alias-interactive-bg-hover)}
 .mia-iconCell:disabled{cursor:default;opacity:.5}
-.mia-iconCell.is-active{border-color:var(--dsw-static-neutral-bluish-400);background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-primary)}
+/* 选中态照官方 Pill.active 令牌组合（fill + 内描边 + 前景提级）：原写法用
+   --dsw-static-neutral-bluish-400 直接取**色阶原始值**（#adb2b8 固定），不随明暗解析；
+   官方选中态一律走 --dsw-alias-button-ghost-active-* 语义层（浅色 bluish-100/500、
+   深色 bluish-750/600），主题切换自动跟随。描边改由 inset box-shadow 画（同官方 Pill），
+   0.5px 边框保留但透明——尺寸与未选中格完全一致，不产生 1px 抖动。 */
+.mia-iconCell.is-active{border-color:transparent;background:var(--dsw-alias-button-ghost-active-fill);color:var(--dsw-alias-label-primary);box-shadow:inset 0 0 0 1px var(--dsw-alias-button-ghost-active-border)}
 .mia-iconCell.is-skeleton{cursor:default}
-.mia-iconImg{border-radius:12px;width:56px;height:56px;object-fit:cover;background:0 0;display:block}
-.mia-iconSkeletonBox{border-radius:12px;width:56px;height:56px;background:var(--dsw-alias-bg-layer-2);display:block}
+.mia-iconImg{border-radius:var(--dsw-radius-sm);width:32px;height:32px;object-fit:contain;background:0 0;outline:.5px solid var(--dsw-alias-border-l4);outline-offset:0;display:block}
+.mia-iconSkeletonBox{border-radius:var(--dsw-radius-sm);width:32px;height:32px;background:var(--dsw-alias-bg-layer-2);display:block}
 /* 文件名可能很长（avatar-<时间戳>-<随机>.png）——格子内截断，title 给全名。 */
 .mia-iconLabel{text-align:center;font-size:12px;line-height:18px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 /* 运行信息：面板底部一行三级说明（不再独占组标题） */
@@ -1191,8 +1212,9 @@ window.__ModuleLoader__.load({
       children.push(group('应用图标', avatar === null ? [hint(state === null
         ? '配置未加载。'
         : 'Host 半尚未认识该板块（见上方契约提示）：请重启 dsh web，否则图标设置写不进去。')] : [
-        // 当前生效预览（2026-10-08）：先让用户看清「现在用的是哪个」，再谈怎么换。
-        reactElementAvatarHero(avatar.source, presetList, myFiles),
+        // 当前生效预览（2026-10-08 立、2026-10-12 收敛为行式）：先让用户看清
+        // 「现在用的是哪个」，再谈怎么换。
+        reactElementAvatarCurrent(avatar.source, presetList, myFiles),
         block('预设',
           // 失败态下不再说「点选即用」——那时没有可点的东西（说明必须与当前能力一致）。
           presetsInfo.error === null
@@ -1513,8 +1535,14 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------- 应用图标预览（2026-10-08）
     // 由来：用户实机看「外观 → 应用图标」时只有九宫格 + 一个纯文字选择丸，看不出
     // 「我现在用的到底是哪一个」，反馈「应该要有预览图标，更直观地选择应用图标」。
-    // 三处改动：①「当前生效」大预览块；② 预设清单的加载中 / 失败两态显式区分；
+    // 三处改动：①「当前生效」预览；② 预设清单的加载中 / 失败两态显式区分；
     // ③「我的上传」由选择丸改回缩略图网格（看图选图，而不是读文件名选图）。
+    //
+    // 2026-10-12 形态订正（用户「设计页设计风格语言又偏了」+「图标预览太大了」）：
+    // ① 「当前生效」由 r16 + module 底 + 64px 大图的 **hero 卡**收敛为**官方行式 +
+    //    48px 缩略图**——官方设置页没有「大图预览卡」语言，行式列表里唯一一张填充卡
+    //    因此突兀；缩略图规格照官方 ui-attachment MessageImage thumbnail（48/r8/contain）；
+    // ② 九宫格图 56 → 48px、格宽 104 → 88px、cover → contain（预览即真相，不裁图）。
 
     /**
      * 出厂图标的近似预览 URL。
@@ -1542,7 +1570,7 @@ window.__ModuleLoader__.load({
 
     /**
      * 当前 `avatar.source` 的展示事实（名称 / 来源 / 预览 URL / 是否已失联）。
-     * hero 与文案共用这一处判定——两处各判一次必然漂移。
+     * 「当前生效」行与文案共用这一处判定——两处各判一次必然漂移。
      * @param {string} source - 配置里的 `avatar.source`（跨线契约：空串 = 出厂图标）。
      * @param {Array<object>|null} presetList - 预设清单（未就绪时 null）。
      * @param {string[]} myFiles - avatars/ 目录里的用户文件（不含预设）。
@@ -1578,20 +1606,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 「当前生效」预览块（左大图 + 右名称 / 来源）。
+     * 「当前生效」行（2026-10-12 由 hero 大卡收敛为官方行式）。
+     *
+     * 形态：标题 = `当前生效：<名称>`（14px/22/400），说明 = 来源与切换时效，
+     * 控件位 = 一枚 **48px 缩略图**（官方 MessageImage thumbnail 规格：r8 / 细描边 /
+     * 轻底 / contain）——与选择丸、步进器同侧同级，整页回归同一套行式语言。
      * 预览图就是桌面壳读的那个文件（同源路由 `/appearance/avatar/…`）——面板里看到什么，
      * 任务栏与托盘就是什么。
      */
-    function reactElementAvatarHero(source, presetList, myFiles) {
+    function reactElementAvatarCurrent(source, presetList, myFiles) {
       const info = describeAvatar(source, presetList, myFiles)
-      const body = []
-      if (info.preview === null) {
+      const preview = info.preview === null
         // 出厂 + 预设清单未就绪：内嵌位图取不到，用文字占位而不是破图。
-        body.push(react.createElement('span', { key: 'ph', className: 'mia-avatarHeroPh' }, '出厂'))
-      } else {
-        body.push(react.createElement('img', {
+        ? react.createElement('span', { key: 'ph', className: 'mia-avatarPreviewPh' }, '出厂')
+        : react.createElement('img', {
           key: 'img',
-          className: 'mia-avatarHeroImg',
+          className: 'mia-avatarPreviewImg',
           src: info.preview,
           alt: '',
           // 图缺失（文件被手动删掉、预设尚未落盘）时藏起来，别留一个破图框。
@@ -1599,15 +1629,14 @@ window.__ModuleLoader__.load({
             const target = event === null || event === undefined ? null : event.currentTarget
             if (target !== null && target !== undefined && target.style !== undefined) target.style.visibility = 'hidden'
           },
-        }))
-      }
-      body.push(react.createElement('div', { key: 'text', className: 'mia-avatarHeroText' }, [
-        react.createElement('div', { key: 'n', className: 'mia-avatarHeroName' }, `当前生效：${info.name}`),
-        react.createElement('div', { key: 'm', className: 'mia-avatarHeroMeta' }, info.kind === 'factory'
+        })
+      return row(
+        `当前生效：${info.name}`,
+        info.kind === 'factory'
           ? '桌面端（Miasaki.exe）读 EXE 内置图标；在下方任选一款即可替换。'
-          : `${info.meta} · 切换后约 1–2 秒内窗口 / 任务栏 / 托盘图标跟随。`),
-      ]))
-      return react.createElement('div', { key: 'avatar-hero', className: 'mia-avatarHero' }, body)
+          : `${info.meta} · 切换后约 1–2 秒内窗口 / 任务栏 / 托盘图标跟随。`,
+        react.createElement('span', { key: 'p', className: 'mia-avatarPreview' }, preview),
+      )
     }
 
     /**
@@ -1671,7 +1700,7 @@ window.__ModuleLoader__.load({
             className: 'mia-iconImg',
             src: url,
             alt: '',
-            // 与 hero 同款兜底：清单是磁盘扫描来的，正常都在；但「面板打开后文件被删」
+            // 与「当前生效」行同款兜底：清单是磁盘扫描来的，正常都在；但「面板打开后文件被删」
             // 这类竞态下 img 会 404 —— 藏掉它，不留一个破图框（格子仍在，点了会落到缺失文件上，
             // 桌面壳读不到就继续用上一次的图）。
             onError: (event) => {

@@ -352,11 +352,59 @@ test('面板挂载官方「通用设置」页风格：mia-* 行式 + 官方 toke
     assert.ok(weightOf(groupRule) >= weightOf(rowRule),
       '组标题字重不得低于行标题（否则标题回退成正文观感）')
   }
-  assert.match(PANEL_CSS_SOURCE, /\.mia-desc\{[^}]*var\(--dsw-alias-label-tertiary\)/)
+  // 行说明配色（2026-10-13 订正）：原为 label-tertiary（照 FontSizeRow.desc），但本页说明
+  // 是 2–4 行长文案，tertiary 在大段文字下对比度不足、整页发灰；官方行式说明在
+  // settings-general 的 SettingsRow.description 与 primitives 的 fields.help 都用 secondary。
+  assert.match(PANEL_CSS_SOURCE, /\.mia-desc\{[^}]*var\(--dsw-alias-label-secondary\)/)
   assert.match(PANEL_CSS_SOURCE, /\.mia-stepper\{[^}]*var\(--dsw-alias-bg-module-platform\)/)
-  // 选择丸：官方 LanguageRow.selector 规格（h36 / r18 / module 底）
-  assert.match(PANEL_CSS_SOURCE, /\.mia-select\{[^}]*border-radius:18px/)
+  // 控件圆角（2026-10-13 订正）：选择丸/步进器曾自写 18px 胶囊、箭头 3px，而官方
+  // LanguageRow.selector 与 FontSizeRow.stepper 都是 var(--dsw-radius-md)（12px 圆角矩形）、
+  // FontSizeRow.arrow 是 var(--dsw-radius-xs) —— 同一个「设置行控件」在官方是圆角矩形，
+  // 本页却是胶囊（用户「设置页设计风格语言要统一」）。
+  assert.match(PANEL_CSS_SOURCE, /\.mia-select\{[^}]*border-radius:var\(--dsw-radius-md\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-select\{[^}]*padding:0 14px/)
   assert.match(PANEL_CSS_SOURCE, /\.mia-select\{[^}]*var\(--dsw-alias-bg-module-platform\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-stepper\{[^}]*border-radius:var\(--dsw-radius-md\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-arrow\{[^}]*border-radius:var\(--dsw-radius-xs\)/)
+  {
+    // 规则文本（剥掉注释——注释里会引述旧取值，不该被当成规则命中）。
+    const rulesOnly = PANEL_CSS_SOURCE.replace(/\/\*[\s\S]*?\*\//g, '')
+    // 整页圆角**只能**走官方令牌层级（4/8/12/16/20/28px，随主题与产品形态解析）——
+    // 禁止再手写像素：硬编码正是上一轮「胶囊 vs 圆角矩形」分家的成因。
+    const radii = [...rulesOnly.matchAll(/border-radius:([^;}]+)/g)].map(match => match[1].trim())
+    assert.ok(radii.length >= 5, `面板应有多个圆角声明，实得 ${radii.length}`)
+    for (const value of radii) {
+      assert.match(value, /^var\(--dsw-radius-[a-z]+\)$/,
+        `圆角必须走官方令牌（实得 ${value}）——硬编码会让控件形状与官方设置页分家`)
+    }
+    // 配色纯度：只走 --dsw-alias-* 语义层。直接取 --dsw-static-* 色阶原始值是**固定值**
+    // （bluish-400 = #adb2b8），不随明暗解析 —— 深色主题下会停在浅色取值。
+    // 图标格选中态曾是这种写法，2026-10-13 改走官方 Pill 的 button-ghost-active-* 令牌。
+    const staticRefs = [...rulesOnly.matchAll(/--dsw-static-[a-z0-9-]+/g)].map(match => match[0])
+    assert.deepEqual(staticRefs, [], `面板 CSS 不得直接引用色阶原始值：${staticRefs.join(', ')}`)
+  }
+  assert.match(PANEL_CSS_SOURCE, /\.mia-iconCell\.is-active\{[^}]*var\(--dsw-alias-button-ghost-active-fill\)/,
+    '选中态须走官方 alias 语义层（Pill.active 令牌组合），不得取固定色阶')
+  assert.match(PANEL_CSS_SOURCE, /\.mia-selectChevron\{flex:none\}/,
+    '选择丸 chevron 与官方 LanguageRow.chevron 同规格（只 flex:none，颜色继承 label-primary）')
+  // 应用图标预览（2026-10-13 二次收敛，用户「图标预览显示问题太大」）：
+  // 一次收敛（2026-10-12）把 hero 卡 64 → 48px，但 48px 仍**高于官方设置页任何控件**
+  // （选择丸 / 步进器 h36、sm 按钮 h28、Switch 36×20）——行里唯一一个越级元素，
+  // 只降像素不改量级就还是越级。本次改按**控件位口径**：32px（< 行文本块 42px，不撑高行高）。
+  assert.match(PANEL_CSS_SOURCE, /\.mia-avatarPreview\{[^}]*width:32px;height:32px/,
+    '「当前生效」预览须为控件级 32px（48px 高于官方任何控件）')
+  assert.match(PANEL_CSS_SOURCE, /\.mia-avatarPreview\{[^}]*border-radius:var\(--dsw-radius-sm\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-avatarPreviewImg\{[^}]*object-fit:contain/,
+    '预览图不得裁切（任务栏显示的就是原图）')
+  assert.match(PANEL_CSS_SOURCE, /\.mia-iconImg\{[^}]*width:32px;height:32px/,
+    '九宫格预览图与「当前生效」同尺寸（同一个东西在页面上出现两次，尺寸必须一致）')
+  assert.match(PANEL_CSS_SOURCE, /\.mia-iconImg\{[^}]*object-fit:contain/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-iconImg\{[^}]*outline:\.5px solid var\(--dsw-alias-border-l4\)/,
+    '预览图须带 0.5px 描边：深色底图标在深色主题下与面板底同色，无描边即不可辨')
+  assert.match(PANEL_CSS_SOURCE, /\.mia-iconGrid\{[^}]*minmax\(64px,1fr\)/,
+    '格宽收敛到 64px（一屏 7–8 格：是「选择器」而不是「画廊」）')
+  assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-avatarHero\{/,
+    'hero 大卡（r16 + module 底 + 64px）整类退场——官方设置页没有大图预览卡语言')
   // M3/M4 占位（V1）：官方 models dashed 规格——M4 落地后占位整类退场（无消费者）
   assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-dashed\{/, 'M4 面板落地后 dashed 占位样式必须删除')
   assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-cube\{/, '明暗立方样式必须随去重移除')
@@ -785,15 +833,22 @@ test('面板渲染冒烟：应用图标板块（当前生效预览 + 预设 + �
     assert.equal(texts.includes('应用图标'), true, '板块标题必须渲染')
     assert.equal(texts.includes('上传图片…'), true, '上传按钮必须渲染')
     assert.equal(texts.includes('清除'), true)
-    // ---- 当前生效预览（2026-10-08）：一眼看出「现在用的是哪个」
+    // ---- 当前生效预览（2026-10-08 立；2026-10-12 收敛为行式）：一眼看出「现在用的是哪个」
     assert.equal(texts.includes('当前生效：avatar-lz3k9q-4f2a1b.png'), true,
-      'hero 必须报出当前生效的图标名（用户上传的文件名）')
-    assert.equal(texts.some(t => t.includes('我的上传')), true, 'hero 必须报出来源类别')
-    const heroImgs = collectNodes(element, node => node.type === 'img'
-      && node.props.className === 'mia-avatarHeroImg')
-    assert.equal(heroImgs.length, 1, 'hero 必须有且只有一张预览图')
-    assert.equal(heroImgs[0].props.src, '/appearance/avatar/avatar-lz3k9q-4f2a1b.png',
-      'hero 预览必须直读跨线契约的同源 URL（与桌面壳读同一个文件）')
+      '「当前生效」行必须报出当前图标名（用户上传的文件名）')
+    assert.equal(texts.some(t => t.includes('我的上传')), true, '「当前生效」行必须报出来源类别')
+    const previewImgs = collectNodes(element, node => node.type === 'img'
+      && node.props.className === 'mia-avatarPreviewImg')
+    assert.equal(previewImgs.length, 1, '「当前生效」行必须有且只有一张预览图')
+    assert.equal(previewImgs[0].props.src, '/appearance/avatar/avatar-lz3k9q-4f2a1b.png',
+      '预览必须直读跨线契约的同源 URL（与桌面壳读同一个文件）')
+    // 形态闸门（2026-10-12）：预览必须落在官方行式（.mia-row）里，而不是自创的 hero 大卡
+    // （用户「设计风格语言又偏了」——官方设置页没有大图预览卡语言）。
+    const rowNodes = collectNodes(element, node => typeof node.props.className === 'string'
+      && node.props.className === 'mia-row')
+    assert.equal(rowNodes.some(rowNode => collectNodes(rowNode, node => node.type === 'img'
+      && node.props.className === 'mia-avatarPreviewImg').length === 1), true,
+      '「当前生效」预览必须嵌在 .mia-row 行式节点内（控件位与选择丸同侧同级）')
     // ---- 预设九宫格：名称与格子数（四款：默认 / 头像 / 立绘 / 现行）
     assert.equal(texts.includes('预设'), true, '预设子块标题必须渲染')
     assert.equal(texts.includes('默认'), true, '预设名称必须渲染')
@@ -873,7 +928,7 @@ test('面板渲染冒烟：九宫格按 avatar.source 点亮选中格', () => { 
 })
 
 test('应用图标：当前生效预览覆盖预设 / 上传 / 出厂 / 文件失联四种来源', () => {
-  // 2026-10-08 用户反馈「应该要有预览图标，更直观地选择应用图标」⇒ 板块顶部加「当前生效」块。
+  // 2026-10-08 用户反馈「应该要有预览图标，更直观地选择应用图标」⇒ 板块首行加「当前生效」。
   // 这条盯四件事：名称、来源说明、预览图 URL，以及「出厂」这个取不到位图的特例。
   const { descriptor } = capture()
   const ctx = fakeCtx()
@@ -924,11 +979,11 @@ test('应用图标：当前生效预览覆盖预设 / 上传 / 出厂 / 文件�
       ]
       const element = view()
       const texts = collectText(element)
-      assert.equal(texts.includes(scene.wantName), true, `${scene.label}：hero 必须报出当前图标名`)
-      assert.equal(texts.some(t => t.includes(scene.wantMeta)), true, `${scene.label}：hero 必须点明来源（${scene.wantMeta}）`)
-      const heroImgs = collectNodes(element, node => node.type === 'img' && node.props.className === 'mia-avatarHeroImg')
-      assert.equal(heroImgs.length, 1, `${scene.label}：hero 有且只有一张预览图`)
-      assert.equal(heroImgs[0].props.src, scene.wantSrc, `${scene.label}：预览图必须指向真实图标 URL`)
+      assert.equal(texts.includes(scene.wantName), true, `${scene.label}：「当前生效」行必须报出当前图标名`)
+      assert.equal(texts.some(t => t.includes(scene.wantMeta)), true, `${scene.label}：「当前生效」行必须点明来源（${scene.wantMeta}）`)
+      const previewImgs = collectNodes(element, node => node.type === 'img' && node.props.className === 'mia-avatarPreviewImg')
+      assert.equal(previewImgs.length, 1, `${scene.label}：「当前生效」行有且只有一张预览图`)
+      assert.equal(previewImgs[0].props.src, scene.wantSrc, `${scene.label}：预览图必须指向真实图标 URL`)
     }
   } finally {
     react.stateQueue = null

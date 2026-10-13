@@ -2,6 +2,94 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-10-13 · 外观页对齐官方控件规格 + 图标预览按「控件位口径」二次收敛（48 → 32px）
+
+- **触发**：用户「外观页显示有问题，图标预览显示问题太大。设置页设计风格语言要统一。」
+- **为什么两次收敛后"还是太大"**：2026-10-08 立预览（hero 卡 64px 大图）→ 2026-10-12
+  收敛到行式 48px + 九宫格 48px。两次都只**降像素**、没动**量级** —— 48px 仍高于官方
+  设置页**任何**控件（选择丸 / 步进器 h36、`Button.sm` h28、Switch 36×20），在行里始终是
+  唯一一个越级元素，只降数值不改口径就永远越级。本次改按**控件位口径**取值：
+  「当前生效」缩略图与九宫格预览图**统一 32px**（< 行文本块 42px ⇒ 行高回到纯文字决定的
+  76px，与官方行 75.5px 重合，不再被图撑高）；格宽 `minmax(88px → 64px)`（一屏 7–8 格：
+  回到「选择器」而不是「画廊」）；`padding 10/6/8 → 8/4/6`、`gap 8 → 6`。
+- **「设计语言不统一」的三处硬伤 —— 都是"照官方抄了、却改了其中一个值"**：
+
+  | 位置 | 本线原值 | 官方原值（逐字出处） |
+  |---|---|---|
+  | 选择丸圆角 | `border-radius:18px`（**胶囊**） | `dsh-client-locale` LanguageRow.selector = `var(--dsw-radius-md)`（12px **圆角矩形**） |
+  | 选择丸内边距 | `padding:0 6px 0 14px` | 同上 = `0 14px`（两侧对称） |
+  | 步进器圆角 | `border-radius:18px` | `dsh-client-ui-theme` FontSizeRow.stepper = `var(--dsw-radius-md)` |
+  | 步进器箭头圆角 | `border-radius:3px` | FontSizeRow.arrow = `var(--dsw-radius-xs)`（4px） |
+  | 选择丸 chevron 色 | `color:var(--dsw-alias-label-caption)` | LanguageRow.chevron = 只有 `flex:none`（颜色继承 selector 的 `label-primary`） |
+  | 图标格选中态 | `border-color:var(--dsw-static-neutral-bluish-400)`（**色阶原始值**，固定 `#adb2b8`，不随明暗解析） | 官方选中态一律走 alias 语义层：`Pill.active` = `button-ghost-active-fill` + `button-ghost-active-border`（浅色 bluish-100/500、深色 bluish-750/600） |
+  | 九宫格 / 预览圆角 | 硬编码 `16px` / `8px` | 官方全程走 `var(--dsw-radius-*)` 令牌层级（4/8/12/16/20/28px） |
+
+  **同一个控件在官方是圆角矩形、在本页是胶囊** —— 这就是「设计风格语言不统一」的可见来源。
+- **一处真「显示问题」**（用户"外观页显示有问题"的一条硬证据）：预设**「默认」是深色底图标**
+  （`preset-default.png`），在深色主题下与面板底（`bg-layer-2`）几乎同色、只剩图形可见，
+  看起来像"图标缺了一块"。修法：预览图加 `outline:.5px solid var(--dsw-alias-border-l4)`
+  —— 两种明暗下都有明确边界（实测浅色 `rgba(0,0,0,.16)`、深色 `rgba(255,255,255,.2)`）。
+- **行说明配色**：`label-tertiary` → `label-secondary`。FontSizeRow.desc 确实是 tertiary，
+  但那是**一行短句**的场景；本页说明是 2–4 行长文案，tertiary 下整页发灰、读起来吃力。
+  官方行式说明在 `SettingsRow.description` 与 primitives 的 `fields.help` 都用 secondary。
+- **顺带把选中态与 hover 解耦**：改为 `.mia-iconCell:hover:not(:disabled):not(.is-active)`
+  —— 原写法下 hover 会盖掉选中底色（选择器具体度更高），悬停时看不出哪个是当前项。
+- **新增闸门（`test/client.test.js` 风格契约组，三项）**：
+  ① **圆角纯度**：面板 CSS 里每一处 `border-radius` 都必须是 `var(--dsw-radius-*)`
+     —— 硬编码正是本轮「胶囊 vs 圆角矩形」分家的成因；
+  ② **配色纯度**：不得直接引用 `--dsw-static-*` 色阶原始值（固定值不随明暗解析）；
+  ③ 选择丸圆角/内边距、chevron 规格、选中态令牌、预览尺寸 + 描边 + 格宽逐条钉死。
+  **实现细节**：检测前先**剥离 CSS 注释** —— 注释里会引述旧取值（本轮就写了
+  「原为 18px 胶囊」），不剥离会把注释当成规则命中。
+- **形态纪律（本轮踩到的坑，值得记住）**：`PANEL_CSS` 是**模板字符串**，其注释里
+  **不能出现反引号** —— 第一次改写把官方的 `border-radius` 写成带反引号的 Markdown 行内码，
+  模板字符串当场提前闭合，`node --check` 报 `Unexpected identifier 'border'`。
+  本线 `npm run build`（`node --check`）会拦住，改完必须跑。
+- 影响面：**纯表现层 + 注释/文档**，零配置 schema 变更、零 host 改动、零跨线契约变更，
+  单测 157 例（client 48 例含新增三条契约）。
+- **取证方式（可复用）**：本机无法直接截取运行中的 GUI（`dsh web` 有 token 门），
+  改用**离线复刻渲染**：真实 `PANEL_CSS` + 官方 `design-platform.css` 全量令牌 +
+  官方设置外壳规格（面板 800 / 导航 188 / 内容 `padding 0 24 24` ⇒ **可用宽 564px**）
+  + 真实 `avatars/*.png`，用 Playwright 渲染并量化元素盒子。取证脚本与改前/改后对比图
+  归档在 `_refs/scripts-archive/appearance-2026-10-13-audit/`（本地留档，不入库）。
+
+## 2026-10-12 · 应用图标板块形态收敛：hero 大卡 → 官方行式 + 48px 缩略图
+
+- **触发**：用户「设计页设计风格语言又偏了，优化一下」+「图标预览太大了」。
+  落点即 2026-10-08 预览化时新加的两处自创形态：「当前生效」hero 卡与 56px 九宫格预览。
+- **为什么偏（官方取证，三条逐字对照）**：
+  1. **hero 卡是官方没有的语言**。`ui-settings-general` / `ui-settings-models` /
+     `ui-settings-plugins` 三页的通状是**行式列表**（`FontSizeRow.row`：0.5px 分隔线 +
+     pad 16 0，控件右置）；官方唯一的「视觉选择卡」是 `ui-theme/AppearanceRow` 的
+     `themeCube`（border-l4 / **r20 / 透明底**、hover 才出 `interactive-bg-hover`、
+     选中才出 `bg-module-platform` + `neutral-bluish-400` 边）。而 hero 卡是一张
+     **常驻 module 底 + r16 描边 + 64px 大图**的填充卡，插在行式列表里是整页唯一一张
+     「实心块」——官方设置页从无此形态，`img` 在官方设置域里零先例。
+  2. **预览尺寸超规格**。官方缩略图的唯一可比值是 `ui-attachment/MessageImage` 的
+     thumbnail 变体：**48×48 / r8 / 0.5px 细描边 / 轻底 / object-fit:contain**；
+     tile 变体 64px 属会话附件域。设置页里 56px 起步的预览无官方对应。
+  3. **图被圆角裁了**。`object-fit:cover` + 12px 圆角把预览修了形——任务栏 / 托盘显示的
+     就是 PNG 原图，预览必须 contain 不裁（host 上传时已中心裁方，contain 与 cover 等效
+     但语义正确）。
+- **改法（行为零变化，只换形态）**：
+  1. 「当前生效」由 hero 卡**收敛为官方行式**：标题 `当前生效：<名称>`（14/22/400）+
+     来源说明（12/18 tertiary）+ 控件位一枚 **48px 缩略图**（r8 / border-l4 /
+     `interactive-bg-hover` 轻底 / contain，出厂取不到位图时给文字占位）。
+     `.mia-avatarHero*` 六条规则整类删除。
+  2. 九宫格收敛：图 **56 → 48px**、圆角 **12 → 8px**、`cover → contain`、格宽
+     `minmax(104px) → minmax(88px)`（一屏 6–7 格）、格内 padding `12 6 10 → 10 6 8`；
+     骨架格同步。格子描边 / r16 / 选中态不动（已对齐 models `rowCard` + `themeCube` 选中态）。
+  3. 「当前生效」的四种来源口径、`onError` 破图兜底、`describeAvatar` 判定**全部不变**。
+- **闸门**：`test/client.test.js` 风格契约组新增 6 条（48×48 / r8 / contain ×2、
+  88px 格宽、`.mia-avatarHero{` 整类退场）；冒烟用例新增**形态断言**——预览必须落在
+  `.mia-row` 子树内（自创大卡复活即红）。单测 **157 例全绿**（例数不变，断言换靶），
+  `verify-all appearance` **18/18**。
+- **教训（入纪律同族）**：2026-10-08 那次「预览化」只顾把功能做出来（用户要预览 ⇒ 加大图），
+  没有先问「官方有没有这个形态」——**新增任何视觉元素前先查官方三页（general / models /
+  plugins）有没有同语言**，没有就取最近先例的取值（缩略图 ⇒ MessageImage thumbnail），
+  而不是自行发明。「又偏了」的「又」字说明这是复发形态：2026-09-26 V1 统一过一轮规格
+  （九宫格圆角/描边当时就记了「⚠️ 全不对」），2026-10-08 加 hero 时再次绕过那条纪律。
+
 ## 2026-10-12 · 分发就绪订正：npm 元数据补全 + `files` 白名单收敛
 
 **背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——
