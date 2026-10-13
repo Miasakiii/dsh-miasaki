@@ -224,7 +224,8 @@ fn crop_square(rgba: &[u8], width: u32, side: u32, ox: u32, oy: u32) -> Vec<u8> 
 }
 
 /// 盒式平均降采样（面积平均，比最近邻少锯齿；头像尺寸小，开销可忽略）。
-fn downsample_box(src: &[u8], side: u32, target: u32) -> Vec<u8> {
+/// `pub(crate)`：`shortcut_icon` 的 ICO 编码复用同一套缩放口径（两处各写一份必然漂移）。
+pub(crate) fn downsample_box(src: &[u8], side: u32, target: u32) -> Vec<u8> {
     let mut out = vec![0u8; (target as usize) * (target as usize) * 4];
     for ty in 0..target {
         let y0 = ((ty as u64) * (side as u64) / (target as u64)) as u32;
@@ -274,6 +275,15 @@ fn apply_default(app: &AppHandle) -> bool {
         return false;
     };
     set_icons(app, icon);
+    // 2026-10-14：快捷方式图标也回退出厂态（清掉 IconLocation ⇒ 用目标程序自身图标）。
+    // `changed == 0` 是常态（没有指向本程序的快捷方式 / 本来就是干净的），不写日志。
+    let cleared = crate::shortcut_icon::clear();
+    if cleared > 0 {
+        crate::app_log_line(&format!(
+            "[{}] launcher-icon: 快捷方式图标已回退出厂态（{cleared} 个 .lnk）\n",
+            crate::chrono_now()
+        ));
+    }
     if let Ok(mut slot) = LAST_APPLIED.lock() {
         *slot = Some(DEFAULT_KEY.to_string());
     }
@@ -327,6 +337,19 @@ pub fn apply(app: &AppHandle) -> bool {
     };
     match square_rgba(&bytes) {
         Ok((rgba, side)) => {
+            // 2026-10-14（用户「选择后桌面启动图标没变」）：快捷方式图标也要跟随。
+            // 分工是清楚的 —— `set_icons` 管**运行中的**主窗口与托盘；`.lnk` 文件里那个
+            // IconLocation 字段运行期改不到，归 `shortcut_icon`（写 ICO + 改写 .lnk +
+            // 通知 shell 刷图标缓存）。先做快捷方式（要借用像素），再交给窗口/托盘（要所有权）。
+            // 失败只记一行日志：快捷方式不改，绝不影响头像本身生效。
+            let shortcut_changed = match dsh_home() {
+                Some(home) => crate::shortcut_icon::apply(&home, &rgba, side),
+                None => 0,
+            };
+            crate::app_log_line(&format!(
+                "[{}] launcher-icon: 应用 {name}（{side}px）；快捷方式改写 {shortcut_changed} 个\n",
+                crate::chrono_now()
+            ));
             set_icons(app, Image::new_owned(rgba, side, side));
             if let Ok(mut slot) = LAST_APPLIED.lock() {
                 *slot = Some(key);

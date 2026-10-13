@@ -8,6 +8,7 @@ mod killtree;
 mod launcher_icon;
 mod pet_native;
 mod recovery;
+mod shortcut_icon;
 mod update;
 
 use std::{

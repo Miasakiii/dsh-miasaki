@@ -35,7 +35,14 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Registry",
     "Win32_Globalization",
     # W5 自更新降级方案：ShellExecuteW 打开下载页（交给系统默认浏览器）。
+    # 2026-10-14 起还用于快捷方式图标跟随（shortcut_icon.rs）：IShellLinkW 的 CLSID、
+    # SHChangeNotify 的 SHCNE_*/SHCNF_* 都在这个模块。
     "Win32_UI_Shell",
+    # 快捷方式图标跟随（shortcut_icon.rs，2026-10-14）：CoCreateInstance /
+    # CoInitializeEx 起 COM 拿 IShellLinkW + IPersistFile 改写 .lnk 的 IconLocation。
+    # windows-sys 只给 FFI 与常量，接口的 vtable 由本仓照官方生成代码逐字段定义
+    # （见 shortcut_icon.rs 顶部的对照说明）。
+    "Win32_System_Com",
 ] }
 
 [profile.release]

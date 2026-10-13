@@ -2,6 +2,55 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-14 · 桌面 / 开始菜单快捷方式图标跟随（`shortcut_icon.rs`）—— 用户「选择后桌面启动图标没变」
+
+**触发**：用户在外观页选完图标后报「桌面启动图标没变」，追问确认指的是**桌面快捷方式**，
+并明确「要，做成跟随」。
+
+**先划清此前的边界**：`launcher_icon` 改的是**运行中的**主窗口与托盘（任务栏 / 窗口左上角 /
+托盘随之更新）；**快捷方式自己的图标**是 `.lnk` 里的一个字段（`IShellLinkW::SetIconLocation`），
+运行期改窗口图标动不到它 —— 这才是「没变」的原因，与「配置没写进去」无关
+（实机核对：用户选的 `preset-portrait` 已正确落在 `config.json` 的 `avatar.source`）。
+
+**新增 `src/shortcut_icon.rs`**：头像变化时把 PNG 包成 **ICO** 写到
+`<dshHome>/miasaki-appearance/launcher-icon.ico`，再改写**所有指向本程序**的 `.lnk` 的
+图标位置，最后 `SHChangeNotify(SHCNE_ASSOCCHANGED | SHCNF_FLUSH)` 让 shell 刷图标缓存。
+
+* **只动指向本程序的快捷方式**：逐个 `GetPath`（`SLGP_RAWPATH`）取真实目标、与
+  `current_exe()` **大小写不敏感**比对；别人的快捷方式一个都不碰。
+* **枚举四个位置**：用户桌面 / 公共桌面 / 用户开始菜单 / 全局开始菜单（递归限 4 层）。
+* **ICO 全部用 BMP/DIB 条目**（不是 PNG-in-ICO）：16 / 32 / 48 / 256 四档，小尺寸在资源
+  管理器、任务栏、开始菜单各处的兼容性最好。DIB 自下而上 + BGRA 重排，复用
+  `launcher_icon::downsample_box`（改成 `pub(crate)`，两处各写一份必然漂移）。
+* **失败只让这一步退化**：COM 起不来 / 权限不足 / 文件被占 ⇒ 返回 0 + 一行日志，
+  快捷方式保持原样，**头像本身照常生效**（与「坏头像绝不拖住启动」同一条纪律）。
+* **可撤销**：「清除」按钮 ⇒ `shortcut_icon::clear()` 把图标位置清空（回退到目标程序自身图标）。
+* **幂等**：不做去重，只在图标内容真的变化时被调用（`launcher_icon` 的 `LAST_APPLIED` 把关），
+  不会每 1.5 秒重写磁盘。
+
+**为什么手写 COM vtable（而不是加 `windows` crate）**：本仓 desktop 线用 `windows-sys`
+（纯 FFI），它只给常量与函数、**不提供接口定义**；加 `windows` 会引入一整棵生成代码
+（编译时间与产物体积都涨），而这里只要**两个接口的三个方法**。按官方生成代码
+（`windows-0.58.0` 的 `IShellLinkW_Vtbl` / `IPersistFile_Vtbl`）逐字段对照后手写，
+两个 IID 也照抄（`IShellLinkW = 000214f9-…`、`IPersistFile = 0000010b-…`）。
+⚠ 模块头部写明了「**改这两张表前必须重新对照一次官方生成代码** —— 顺序错一位不是编译错误，
+是 UB」。
+
+**闸门（`cargo test` 193 → 199 例，+6）**：
+* ICO 编码 5 例纯函数（头字段 / 四档尺寸与偏移不重叠不越界 / DIB 高度 = 2×边长 /
+  **像素确认是自下而上的 BGRA** / 空输入拒绝）；
+* **1 例端到端 vtable 校验**（`shortcut_round_trip_on_temporary_file`）：在 `target/test-tmp/`
+  造一张指向 notepad 的**临时** `.lnk`（不碰用户任何快捷方式），`SetPath` + `SetIconLocation`
+  写一遍、新建对象 `Load` 读回 —— 索引 3 / 5 / 6 / 16 / 17 / 20 全部被覆盖，
+  **任何一位错都会在这里崩溃或断言失败，而不是等到实机**。
+
+**一处环境坑（记下来）**：临时文件原本落在 `%TEMP%`，Rust 侧写它会 `os error 5（拒绝访问）`，
+而**同一个路径用 PowerShell 写是通的** ⇒ 是进程级限制而非权限问题；改到 `target/test-tmp/`
+（cargo 自己的地盘）后正常。
+
+**待用户实机**：重启桌面端 ⇒ 外观页选一张图 ⇒ 桌面与开始菜单的 Miasaki 快捷方式图标
+应在 1.5 秒内跟随；点「清除」⇒ 跟随回退出厂图标。（本轮已构建 + 部署，判据入矩阵 **D20**。）
+
 ## 2026-10-13（续）· 桌宠「点一下就消失」—— R16 的捕获保险自伤：同一窗口重复 `SetCapture` 触发系统重发 `WM_CAPTURECHANGED`
 
 **触发**：用户报障「桌宠点一下就消失了，拖到屏幕边缘也消失了」。**与同日 E30 是同一次报障的两层**

@@ -450,19 +450,20 @@ node patch.mjs seal         # 同上（api-session-controller 的该命令名为
 > 专门写一条「与球重叠为 0」的判据）。**整体退役**，切换能力并入窗控组里那颗**同源**的
 > 16px 主题徽章（升格为 26px 按钮）。详见 `design/CHANGELOG.md` 2026-10-07 条。
 
-## 软件头像（启动器图标）
+## 应用图标（启动器图标）
 
-**在 DSH 页面的「设置 → 外观 → 软件头像」里换掉本应用在任务栏 / 窗口 / 托盘上的图标**，
-无需重建 EXE（2026-09-21 落地，appearance 线跨线消费端）。
+**在 DSH 页面的「设置 → 外观 → 应用图标」里换掉本应用在任务栏 / 窗口 / 托盘 /
+桌面与开始菜单快捷方式上的图标**，无需重建 EXE（2026-09-21 落地窗口与托盘；
+**2026-10-14 起快捷方式也跟随**，appearance 线跨线消费端）。
 
 | 项 | 说明 |
 |---|---|
-| 入口 | DSH 页面 设置 → **外观** → 「软件头像」→ 上传图片 / 从清单里选 / 清除（appearance 线提供） |
+| 入口 | DSH 页面 设置 → **外观** → 「应用图标」→ 上传图片 / 从清单里选 / 删除 / 清除（appearance 线提供） |
 | 存储 | 图片归一化成 **PNG** 落在 `~/.dsh/miasaki-appearance/avatars/`，配置记在 `~/.dsh/miasaki-appearance/config.json` 的 `avatar.source` |
-| 生效面 | 主窗口图标（**任务栏**随之）+ **托盘**图标；改完 1.5s 巡检内跟随 |
-| 实现 | `src-tauri/src/launcher_icon.rs` —— 读配置 → PNG 解码（`png` crate，零新依赖）→ 中心裁方 + 盒式降采样（≤256px）→ `window.set_icon` + `tray.set_icon` |
-| 失败姿态 | 配置损坏 / 文件缺失 / 解码失败 → 一行日志 + 回退出厂图标，不阻断启动 |
-| **不含** | EXE 内嵌图标、桌面 / 开始菜单快捷方式的静态图标（构建期资源，只有重跑 `make-icons.mjs` + `npx tauri icon` 才能改）、页面 favicon |
+| 生效面 | ① 主窗口图标（**任务栏**随之）+ **托盘**图标；② **桌面 / 开始菜单快捷方式**的图标（写 ICO + 改写 `.lnk` 的 IconLocation + 通知 shell 刷缓存）；改完 1.5s 巡检内跟随 |
+| 实现 | ① `src-tauri/src/launcher_icon.rs` —— 读配置 → PNG 解码（`png` crate，零新依赖）→ 中心裁方 + 盒式降采样（≤256px）→ `window.set_icon` + `tray.set_icon`；② `src-tauri/src/shortcut_icon.rs` —— 同一份像素包成多尺寸 ICO → 改写**只指向本程序**的 `.lnk` → `SHChangeNotify` |
+| 失败姿态 | 配置损坏 / 文件缺失 / 解码失败 → 一行日志 + 回退出厂图标，不阻断启动；快捷方式那一步失败**只让这一步退化**（头像与窗口/托盘照常） |
+| **不含** | EXE 内嵌图标（构建期资源，只有重跑 `make-icons.mjs` + `npx tauri icon` 才能改）、页面 favicon |
 
 契约（配置路径 / 文件名白名单 / 目录）见
 [`../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md`](../dsh-miasaki-shared-docs/cross/appearance-launcher-icon-2026-09-21.md)；
@@ -794,7 +795,8 @@ desktop/
 ├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
 └─ src-tauri/
    ├─ src/main.rs            # 启动器：单实例/探活 3080/拉起 dsh 后端（专属 profile miasaki）/导航 + 后端存活看门狗 + fleet 脉冲看门狗
-   ├─ src/launcher_icon.rs   # 软件头像 → 窗口/托盘图标（读 appearance 线配置，1.5s 巡检跟随）
+   ├─ src/launcher_icon.rs   # 应用图标 → 窗口/托盘图标（读 appearance 线配置，1.5s 巡检跟随）
+   ├─ src/shortcut_icon.rs   # 应用图标 → 桌面/开始菜单快捷方式（ICO + 改写 .lnk + 通知 shell，2026-10-14）
    ├─ src/boot_intro.rs      # 启动片头 → 加载页 L2 层（同读 appearance 配置 `boot` 板块，启动最早读一次、不轮询）
    ├─ src/pet_native.rs      # 桌宠 facade（共享类型 + NativePet API；实现见 pet_native/ 子模块）
    ├─ src/pet_native/xform.rs # 绘制变换与动效相位（纯逻辑、无 Win32 依赖；pet-v5 M1–M3 的数学层）
