@@ -111,5 +111,8 @@ dsh-miasaki-fleet/tests/m3-acp/logs/
 .edge-test-profile
 .workbuddy/
 .workbuddy-ai/
+# 外部 agent 工具的私有状态目录（与 .openclaw/.cluster/.monkeycode 同族；
+# 2026-10-13 出现在根目录 —— 不是本项目产物，不入库）
+.stepcode/
 Thumbs.db
 Desktop.ini
