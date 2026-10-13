@@ -419,6 +419,22 @@ pub(crate) fn pick_dock_edge(role: Rect, work: Rect, margin: i32) -> Option<Dock
 
 /// 把已吸附的窗口位置沿指定边**推出**工作区，使角色可见区域与边缘的距离恰为 `DOCK_MARGIN_PX`。
 ///
+/// **契约（2026-10-13 订正，实机障故 E30）**：
+/// · `role` 是角色可见区域的**绝对（屏幕）矩形**（调用方 `pos + 局部矩形` 得到），
+///   **不是**窗口局部矩形 —— 局部口径下本函数对工作区的交集检查会恒真、失去保护意义；
+/// · 返回值是**目标窗口位置**（左上角），**不是**位移。
+///
+/// 旧实现把返回值写成 `pos + dx`，而 `dx` 本身已是「目标窗口坐标」⇒ 旧 `pos` 被**多加一份**，
+/// 贴边松手时窗口被整体推飞一个「旧坐标」的量：Right 边横向飞出 ≈ 旧 x、Bottom 边纵向
+/// 飞出 ≈ 旧 y。实机日志两例与公式逐像素吻合（`design/CHANGELOG.md` 2026-10-13 条）：
+/// 松手点 (2257,917) 判 Right ⇒ 落盘 (4513,917)（= 2257 + (2560−18−286)，飞出主屏右侧）；
+/// 松手点 (2241,1036) 判 Bottom ⇒ 落盘 (2241,2068)（= 1036 + (1440−18−390)，整窗出屏）。
+/// 飞出后光标够不着、运行中无兜底 ⇒ 用户体感「一碰边缘就消失、回不来」。
+///
+/// **为什么旧单测全绿**：四条 `dock_push_out` 单测**一律用 `pos = (0,0)`** ——
+/// 该基准下「目标位置」与「位移」恒等，夹具把缺陷喂饱了全部绿灯
+/// （与 appearance 线「夹具喂饱了 bug」同族；判据必须能在**非零基准**上区分两种语义）。
+///
 /// **为什么是「恰好等于」而不是「至少」**：贴边后若仍有多余外移量，角色会明显悬在屏幕外
 /// （用户看到的是"桌宠有一截在屏外"，而 R3 的 `pos_visible` 只按**角色区域**判可见，
 /// 不会把它拉回来）。
@@ -426,7 +442,7 @@ pub(crate) fn pick_dock_edge(role: Rect, work: Rect, margin: i32) -> Option<Dock
 /// **依赖 `pick_dock_edge` 的不变量**：调用方必须先判过边 —— 本函数只负责「推出多少」，
 /// 不判断「该不该推」（混在一起会让「角落同时贴两边」的情形无法表达）。
 ///
-/// 返回 `None` 表示 `role` 不在该边的工作区内（推出去会跑错屏）——调用方应保持原位。
+/// 返回 `None` 表示 `role` 与该工作区无交集（推出去会跑错屏）——调用方应保持原位。
 ///
 /// DPI(2026-10-05)：`margin` 语义同 `pick_dock_edge`（物理像素，由调用方按 DPI 换算）。
 pub(crate) fn dock_push_out(
@@ -442,21 +458,19 @@ pub(crate) fn dock_push_out(
     {
         return None;
     }
-    let dx = match edge {
-        // 角色左边要距工作区左边 m ⇒ 窗口 x = work.left + m - role.left（role 是相对窗口的偏移）
-        DockEdge::Left => work.left + margin - role.left,
-        DockEdge::Right => work.right - margin - role.right,
-        DockEdge::Top | DockEdge::Bottom => 0,
+    // role 是绝对矩形 ⇒ 减出「角色在窗口内的偏移」，再据边求**目标窗口坐标**
+    let lx = role.left - pos.0;
+    let rx = role.right - pos.0;
+    let ty = role.top - pos.1;
+    let by = role.bottom - pos.1;
+    let target = match edge {
+        // 角色左边要距工作区左边 m ⇒ 窗口 x = work.left + m − 角色在窗内的左偏移
+        DockEdge::Left => (work.left + margin - lx, pos.1),
+        DockEdge::Right => (work.right - margin - rx, pos.1),
+        DockEdge::Top => (pos.0, work.top + margin - ty),
+        DockEdge::Bottom => (pos.0, work.bottom - margin - by),
     };
-    let dy = match edge {
-        DockEdge::Top => work.top + margin - role.top,
-        DockEdge::Bottom => work.bottom - margin - role.bottom,
-        DockEdge::Left | DockEdge::Right => 0,
-    };
-    if dx == 0 && dy == 0 {
-        return Some(pos);
-    }
-    Some((pos.0 + dx, pos.1 + dy))
+    Some(target)
 }
 
 /* ---------------- M4.1 · 边缘探头（peek）状态机 ---------------- */
@@ -1045,6 +1059,91 @@ mod tests {
         let pos = (0, 0);
         assert_eq!(dock_push_out(pos, role, work, DockEdge::Left, DOCK_MARGIN_PX), Some(pos),
             "已精确贴边时必须原样返回（否则贴边会抖）");
+    }
+
+    /* ---------------- E30（2026-10-13）· 非零基准：推出量判据 ---------------- */
+
+    /// E30-1：**Right 边、非零松手点** —— 实机障故的逐像素复盘。
+    ///
+    /// 旧四条单测一律 `pos = (0,0)`：该基准下「目标窗口位置」与「位移」恒等，
+    /// 于是 `pos + dx`（把目标当位移叠加）这类缺陷被喂成全绿。本例用实机同款几何
+    /// （工作区 2560×1440、窗口 286×390、松手点 x=2257 ⇒ 角色右边距右缘 17px ≤ 18 判 Right）。
+    #[test]
+    fn dock_push_right_from_nonzero_baseline() {
+        let work = rect(0, 0, 2560, 1440);
+        let m = DOCK_MARGIN_PX;
+        let pos = (2257, 917); // 实机日志：drag aborted (capture lost) -> (4513,917) dock=Some(Right)
+        // 角色区域 = 窗口 + 局部矩形（绝对口径，与 apply_dock 的 role 同构）
+        let role = rect(pos.0, pos.1 + 118, pos.0 + 286, pos.1 + 390);
+        let p = dock_push_out(pos, role, work, DockEdge::Right, m).expect("应可推出");
+        // 推出后角色右边恰为 work.right - m（2542）⇒ 窗口 x = 2542 - 286 = 2256
+        assert_eq!(p, (2256, 917),
+            "Right 边推出后角色右边应顶到 work.right - m，实得 {:?}", p);
+        // 旧缺陷（把目标当位移叠加）会得到 pos + 2256 = 4513 —— 实机日志里的出屏坐标
+        assert_ne!(p, (pos.0 + (work.right - m - 286), pos.1),
+            "返回值是目标位置而非位移 —— 旧实现正是在这里把桌宠推出屏幕");
+    }
+
+    /// E30-2：**Bottom 边、非零松手点** —— 实机障故的逐像素复盘。
+    /// 松手点 y=1036（角色底 1426，距工作区底 14px ≤ 18 判 Bottom）：
+    /// 正确推出 = 上移 4px 让间距恰为 18；旧缺陷 = 下移 1032px 整窗出屏（日志 (2241,2068)）。
+    #[test]
+    fn dock_push_bottom_from_nonzero_baseline() {
+        let work = rect(0, 0, 2560, 1440);
+        let m = DOCK_MARGIN_PX;
+        let pos = (2241, 1036); // 实机日志：drag aborted (capture lost) -> (2241,2068) dock=Some(Bottom)
+        let role = rect(pos.0, pos.1 + 118, pos.0 + 286, pos.1 + 390);
+        let p = dock_push_out(pos, role, work, DockEdge::Bottom, m).expect("应可推出");
+        // 推出后角色底恰为 work.bottom - m（1422）⇒ 窗口 y = 1422 - 390 = 1032
+        assert_eq!(p, (2241, 1032),
+            "Bottom 边推出后角色底应顶到 work.bottom - m，实得 {:?}", p);
+        assert_ne!(p, (2241, 2068),
+            "旧缺陷把窗口推到 2068（工作区底 1440 之外）—— 这正是实机出屏坐标");
+    }
+
+    /// E30-3：**Left 边、非零松手点** —— 与 Right 对称，防「只修了一条边」。
+    /// 松手点 x=612（角色左边距 612 > 18 ⇒ 本不判 Left；此处直接验推出几何）：
+    /// 推出后角色左边恰为 work.left + m ⇒ 窗口 x = 18 - 0 = 18。
+    #[test]
+    fn dock_push_left_from_nonzero_baseline() {
+        let work = rect(0, 0, 2560, 1440);
+        let m = DOCK_MARGIN_PX;
+        let pos = (612, 400);
+        let role = rect(pos.0, pos.1 + 118, pos.0 + 286, pos.1 + 390);
+        let p = dock_push_out(pos, role, work, DockEdge::Left, m).expect("应可推出");
+        assert_eq!(p, (work.left + m, 400),
+            "Left 边推出后角色左边应顶到 work.left + m，实得 {:?}", p);
+        assert_ne!(p, (pos.0 + (work.left + m), pos.1), "不得把目标位置当位移叠加");
+    }
+
+    /// E30-4：推出结果**必然使角色贴边**（不变量，对全部四条边 × 非零基准成立）。
+    /// 这条是「目标 vs 位移」语义的完整定义：无论从哪起步，推出后角色与边缘的距离
+    /// 必须恰为 `margin`；旧实现在 pos≠0 时会把角色推出工作区（相交面积塌到 0）。
+    #[test]
+    fn dock_push_always_lands_role_exactly_on_edge_from_any_baseline() {
+        let work = rect(0, 0, 2560, 1440);
+        let m = DOCK_MARGIN_PX;
+        for &(pos, edge) in &[
+            ((2257, 917), DockEdge::Right),
+            ((2241, 1036), DockEdge::Bottom),
+            ((612, 400), DockEdge::Left),
+            ((900, 250), DockEdge::Top),
+        ] {
+            let role = rect(pos.0, pos.1 + 118, pos.0 + 286, pos.1 + 390);
+            let p = dock_push_out(pos, role, work, edge, m).expect("应可推出");
+            let g = rect(p.0 + 0, p.1 + 118, p.0 + 286, p.1 + 390);
+            let (dl, dr, dt, db) =
+                (g.left - work.left, work.right - g.right, g.top - work.top, work.bottom - g.bottom);
+            match edge {
+                DockEdge::Left => assert_eq!(dl, m, "Left: 推出后左边距应为 m"),
+                DockEdge::Right => assert_eq!(dr, m, "Right: 推出后右边距应为 m"),
+                DockEdge::Top => assert_eq!(dt, m, "Top: 推出后上边距应为 m"),
+                DockEdge::Bottom => assert_eq!(db, m, "Bottom: 推出后下边距应为 m"),
+            }
+            // 推出后角色必须仍与工作区有交（不出屏）—— 这是「回不来」故障的直接判据
+            assert!(g.right > work.left && g.left < work.right && g.bottom > work.top && g.top < work.bottom,
+                "推出后角色出屏：pos={:?} edge={:?} -> {:?}", pos, edge, p);
+        }
     }
 
     /* ---------------- M4.1 · 边缘探头（peek）状态机 ---------------- */

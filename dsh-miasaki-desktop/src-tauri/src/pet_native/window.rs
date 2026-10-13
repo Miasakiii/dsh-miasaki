@@ -1542,12 +1542,35 @@ impl PetWin {
                 // 拖到屏幕中间 ⇒ 脱离停靠（必须清，否则显隐切换会把旧 dock 写回去）
                 self.docked_edge = None;
                 peek_reset(&mut self.peek);
+                // E30（2026-10-13）兜底：**完全拖出所有工作区** ⇒ 拉回默认位置。
+                // 两条来路：① 捕获拖动中 `GetCursorPos` 可返回越界坐标（光标抵住屏幕边缘后
+                //   继续外推，桌宠被带出屏外）；② 旧版 `dock_push_out` 推出 bug 的遗留位置。
+                // 判据与 R3 启动兜底**同口径**（`pos_visible`：角色与任一工作区交集 ≥25%）——
+                // 贴边/半出屏/peek 缩边都不会误伤，只有「整块角色在任何工作区外」才拉回。
+                // 没有这道兜底时，出屏的桌宠光标够不着、点不到、拖不回，用户只能重启
+                // （实机日志：出屏后 100+ 次 5px 步进的微拖挣扎全程记录在案）。
+                if !pos_visible(self.pos) {
+                    let hide = self.shared.lock().map(|s| s.hide).unwrap_or(false);
+                    let p = default_pos();
+                    let (ww, wh) = self.win_size();
+                    unsafe { MoveWindow(self.hwnd, p.0, p.1, ww, wh, 1) };
+                    self.pos = p;
+                    self.dock_base = p;
+                    save_pet_pos(p, hide, None);
+                    self.render_dot();
+                    pet_log_line(&format!(
+                        "[native-pet] drag end pos fully offscreen -> default {},{} (dock cleared)\n",
+                        p.0, p.1
+                    ));
+                }
                 return None;
             }
         };
-        // 推出：以**窗口位置**为基准（`dock_push_out` 内部把 role 的偏移换算回窗口位移）
+        // 推出：以**窗口位置**为基准。`role` 必须是**绝对矩形**（E30：旧实现传窗口局部矩形，
+        // 且 `dock_push_out` 内部把目标位置当位移叠加 ⇒ 推出量 = 旧 pos，Right/Bottom 边
+        // 直接把整窗推出屏幕。契约见 `model::dock_push_out` 注释）。
         self.docked_edge = Some(edge);
-        if let Some((nx, ny)) = dock_push_out(self.pos, local, work, edge, self.dock_margin()) {
+        if let Some((nx, ny)) = dock_push_out(self.pos, role, work, edge, self.dock_margin()) {
             if (nx, ny) != self.pos {
                 // DPI(2026-10-05)：尺寸取**当前 DPI 下的物理窗尺寸**（`win_size()` 是唯一换算入口
                 // —— MoveWindow / DIB / Size 三处必须同源，否则 ULW 会静默拉伸）。
@@ -1720,7 +1743,14 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             // 在 DOWN（而不是拖动起手）就捕获，是为了让「未越过拖动阈值的松手」也有 UP 可收：
             // 释放点唯一（`WM_LBUTTONUP` 末尾统一 `ReleaseCapture`），另有
             // `WM_CAPTURECHANGED` 兜底「捕获被外部夺走」这条 UP 永不到达的路径。
-            unsafe { SetCapture(hwnd) };
+            //
+            // R17（2026-10-13）：与起手处同一口径 —— **只在确实没持有捕获时才捕**。
+            // 无脑重捕会给同一窗口重发 `WM_CAPTURECHANGED`（取证见起手处注释）。
+            // 此处 `dragged` 刚被清成 false，重发只是无谓消息、无功能影响；判据化是为了让
+            // 「本文件不存在第二次对同一窗口的 SetCapture」这条不变量成立，从而可被源码契约测试钉住。
+            if unsafe { GetCapture() } != hwnd {
+                unsafe { SetCapture(hwnd) };
+            }
             // 只在**首次**未生效时记一行（本仓有「pet.log 被高频行灌满」的前科：
             // 设置面板同值 setter 曾让它以 1.32 行/秒写盘）。
             static CAPTURE_WARNED: std::sync::atomic::AtomicBool =
@@ -1789,7 +1819,20 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                     // 重置后首拍 ≈ 8ms（`IDT_DRAG` 周期）⇒ 落在 ω·dt ≈ 0.12 的安全区。
                     (*pet).last_drag_tick = std::time::Instant::now();
                     // R16：捕获保险 —— DOWN 时已捕，这里再捕一次兜住「按下与起手之间被夺走」。
-                    unsafe { SetCapture(hwnd) };
+                    //
+                    // R17（2026-10-13 实机障故）：**必须加 `GetCapture() != hwnd` 前缀**，
+                    // 不能无条件重捕。对**已持有捕获**的窗口再次调用 `SetCapture`，Windows 会
+                    // 向**同一窗口**重发 `WM_CAPTURECHANGED`（本机探针实测：第二次调用后收到
+                    // 1 条，且收到时 `GetCapture()` 仍是本窗口 —— 对应 user32 一致性测试
+                    // `test_DoubleSetCapture` 的既有行为；留档 `_refs/pet-capture-probe/`）。
+                    // 而本窗口过程把该消息当作「捕获被外部夺走」，判据又是 `dragged` ——
+                    // **它刚被上面第 1793 行置成 true** ⇒ 起手瞬间自我收尾
+                    // （`end_drag` + `apply_dock` + 落盘），拖动完全无法进行：
+                    // 实机 `pet.log` 里 `drag aborted` 733 次 / `drag end` **0 次**，
+                    // 且 `aborted` 行恒排在对应 `drag start` 行**之前**（同步重入的签名）。
+                    if unsafe { GetCapture() } != hwnd {
+                        unsafe { SetCapture(hwnd) };
+                    }
                     if !(*pet).dragging_timer_on {
                         (*pet).dragging_timer_on = true;
                         // SetTimer 返回 0 = 挂表失败。那意味着**目标永不被消费**（窗口不动），
@@ -1884,7 +1927,17 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             // ② 位置永不落盘（pet.json 自 10/07 到 10/12 未更新，窗口却已挪了 1000px）；
             // ③ `IDT_DRAG` 8ms 定时器常驻。修法就是在这里把同一次收尾补完。
             // 正常松手路径已先清 `dragged` ⇒ 本分支在正常情况下是空操作。
-            if (*pet).dragged {
+            //
+            // R17（2026-10-13）：**但「收到本消息」≠「捕获真丢了」**。对已持有捕获的窗口
+            // 重复 `SetCapture`，Windows 会向同一窗口重发本消息（探针实测见
+            // `_refs/pet-capture-probe/`）—— 那是「自我重发」，收尾就是自伤。
+            // 判据 = 收到本消息时捕获是否仍在本窗口（实测双向有效）：
+            //   · 同一窗口重复 SetCapture ⇒ `GetCapture() == hwnd` ⇒ 不是丢失，直接忽略；
+            //   · 被别的窗口真夺走 ⇒ `GetCapture() != hwnd` ⇒ 按原语义收尾。
+            // 缺这道判据的后果正是用户报障的「点一下就消失」：起手分支的捕获保险
+            // 把该分支自己刚置上的 `dragged=true` 打回去，鼠标一动就收尾一次，
+            // 而收尾里的 `apply_dock` 在停靠边把整窗推出屏外（E30）。
+            if (*pet).dragged && unsafe { GetCapture() } != hwnd {
                 (*pet).dragged = false;
                 (*pet).end_drag();
                 let docked = (*pet).apply_dock();
@@ -2309,5 +2362,67 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// R17（2026-10-13 实机障故）：**每一次 `SetCapture` 都必须带「确实没持有捕获」的判据**。
+    ///
+    /// 为什么这条不能用普通单测表达：它约束的是「系统在什么条件下会重发 `WM_CAPTURECHANGED`」，
+    /// 而那是 Win32 的真机行为 —— 探针取证留档 `_refs/pet-capture-probe/`（本机实测）：
+    /// 对**已持有捕获**的窗口再次调用 `SetCapture`，系统会向**同一窗口**重发一条
+    /// `WM_CAPTURECHANGED`，且收到时 `GetCapture()` **仍是本窗口**（对应 user32 一致性测试
+    /// `test_DoubleSetCapture` 的既有行为）。而本窗口过程把该消息当作「捕获被外部夺走」⇒
+    /// 起手分支的捕获保险会把该分支刚置上的 `dragged = true` 打回去：**每次起手都自我收尾**，
+    /// 拖动完全无法进行（实机 `pet.log`：`drag aborted` **733** 次 / `drag end` **0** 次，
+    /// 且 `aborted` 行恒排在对应 `drag start` 行**之前** —— 同步重入的签名），
+    /// 收尾里的 `apply_dock` 再把整窗推出屏外 ⇒ 用户体感「点一下就消失」。
+    ///
+    /// 断言口径：源码里每处 `SetCapture(hwnd)` 的前 240 字符内必须出现判据
+    /// `GetCapture() } != hwnd` —— 比「数一数有几个 if」更难被绕过（新增一处无判据的捕获即红）。
+    #[test]
+    fn every_setcapture_is_guarded_by_getcapture_check() {
+        let src = include_str!("window.rs");
+        // 只看生产代码：本测试模块自身含有 `SetCapture(hwnd)` 字面量（`needle` 变量），
+        // 不排除的话会自我命中（本契约第一次运行就是这么红的 —— 留作教训）。
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let needle = "SetCapture(hwnd)";
+        let guard = "GetCapture() } != hwnd";
+        let mut hits = 0usize;
+        for (i, _) in src.match_indices(needle) {
+            hits += 1;
+            let ctx = &src[i.saturating_sub(240)..i];
+            assert!(
+                ctx.contains(guard),
+                "第 {hits} 处 `{needle}` 之前 240 字符内没有 `{guard}` 判据 —— \
+                 无条件重捕会让系统向同一窗口重发 WM_CAPTURECHANGED，\
+                 本窗口过程会把它当成「捕获被夺走」⇒ 起手瞬间自我收尾（见本测试注释）"
+            );
+        }
+        assert!(
+            hits >= 2,
+            "捕获点应至少有两处（`WM_LBUTTONDOWN` 与拖动起手），实得 {hits} 处 —— \
+             函数被改名/重构时请同步本契约"
+        );
+    }
+
+    /// R17：`WM_CAPTURECHANGED` 的收尾必须**同时**受 `dragged` 与「捕获真的不在本窗口」约束。
+    ///
+    /// 缺后者 ⇒ 系统的自我重发被当成捕获丢失（起手即收尾，拖动不可用）；
+    /// 缺前者 ⇒ 正常松手路径末尾那句 `ReleaseCapture` 会二次收尾（重复落盘 + 重复吸附，R16 已修）。
+    #[test]
+    fn capturechanged_settles_only_when_capture_is_really_gone() {
+        let src = include_str!("window.rs");
+        let body = src
+            .split("WM_CAPTURECHANGED => {")
+            .nth(1)
+            .and_then(|s| s.split("WM_LBUTTONDBLCLK =>").next())
+            .expect("找不到 WM_CAPTURECHANGED 分支（分支名或后续分支名变了，请同步本契约）");
+        assert!(
+            body.contains("(*pet).dragged && unsafe { GetCapture() } != hwnd"),
+            "收尾判据必须同时是 `dragged && GetCapture() != hwnd`：\
+             只看 dragged 会把系统对「同一窗口重复 SetCapture」的自我重发当成捕获丢失"
+        );
     }
 }

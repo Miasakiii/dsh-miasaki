@@ -70,7 +70,7 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 
 ```bash
-node ../scripts/verify-all.mjs desktop   # 40 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×8 / 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**174 例**，2026-10-12 全量实跑；旧记「100 例」是口径落后）
+node ../scripts/verify-all.mjs desktop   # 40 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×8 / 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**193 例**，2026-10-13 实跑；旧记「174 例」「100 例」是口径落后）
 ```
 
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
@@ -650,6 +650,16 @@ appearance 配置。
   `WM_CAPTURECHANGED` 兜底）—— 此前全仓零 `SetCapture`，隐式捕获丢 UP 会让 `dragged` 卡 true
   （整块矩形变成吃鼠标的挡板 + 位置永不落盘）；③ 散步触发补 `!dragged` 闸（原先只闸 `docked_edge`）。
   拖动起手 / 结束 / 中止各写一行 `pet.log`，偶发故障可现场定位。判据见 §3.2.4。
+  **同批两处实机障故修复（2026-10-13，用户报「点一下就消失了，拖到屏幕边缘也消失了」）**：
+  ① **边缘推飞**（E30）—— `model::dock_push_out` 原把**目标窗口位置**当**位移**叠加（`pos + dx`，
+  而 `dx` 本身已是目标坐标）、且三处调用点全传**窗口局部矩形** ⇒ 吸附时窗口被多推一份「旧坐标」
+  （Right 边飞出 ≈ 旧 x、Bottom 边 ≈ 旧 y，实测松手 (2241,1036) ⇒ 落盘 (2241,2068) 整窗出屏），
+  现已统一为「`role` = 绝对矩形、返回目标窗口位置」，四条单测改用**非零基准**（旧四条全 `pos=(0,0)`，
+  该基准下「目标」与「位移」恒等 ⇒ 夹具喂饱了缺陷），并新增「完全拖出所有工作区 ⇒ 拉回默认位置」兜底；
+  ② **起手自失**（E31）—— R16 的「捕获保险」无条件重复 `SetCapture(hwnd)`，而 Windows 对**已持有捕获**
+  的同一窗口会**重发 `WM_CAPTURECHANGED`** ⇒ 收尾判据 `if dragged` 刚被置 true ⇒ 起手瞬间自我收尾
+  （实测 `drag aborted` 733 次 / `drag end` **0** 次，拖动实际不可用）。现两处 `SetCapture` 均加
+  `GetCapture() != hwnd` 判据、收尾判据改为 `dragged && GetCapture() != hwnd`（探针实测该判据双向有效）。
 - **设置入口**：DSH「设置 → 桌宠」面板（`plugins/dsh-pet-panel/`）提供：
   显示/隐藏开关、位置重置（屏幕外找回）、状态回显（面板挂载时经
   `cmd=pet-state` 请求，桌面端 eval `miasaki-pet-state` 事件回推）。

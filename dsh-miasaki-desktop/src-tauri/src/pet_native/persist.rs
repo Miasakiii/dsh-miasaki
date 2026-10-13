@@ -252,15 +252,20 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
                     // `dock_margin()` 再走一遍（那里已是真实 DPI 口径）。
                     // 判据出处：`model.rs` 的 `dock_push_out` / `peek_advance` 注释均写明
                     // 「margin 必须与 role 同源」——混轴会让吸附留白错一倍。
-                    if let Some((dx, dy)) = crate::pet_native::model::dock_push_out(
+                    // E30（2026-10-13）：`dock_push_out` 的 `role` 是**绝对矩形**契约
+                    //（旧实现传局部 `c`，恢复路径与 `apply_dock` 同犯「多推一份旧坐标」⇒
+                    // 推出去后 `pos_visible` 失败 ⇒ 桌宠回默认位置且停靠记忆丢失）。
+                    // 返回值命名 `nx/ny` 而非 `dx/dy`：它是**目标窗口位置**、不是位移 ——
+                    // E30 的缺陷正是「把目标当位移叠加」（`pos + dx`），名字留错就是留同一个陷阱。
+                    if let Some((nx, ny)) = crate::pet_native::model::dock_push_out(
                         (x, y),
-                        c,
+                        character_global_rect((x, y)),
                         w,
                         edge,
                         crate::pet_native::model::DOCK_MARGIN_PX,
                     ) {
-                        x = dx;
-                        y = dy;
+                        x = nx;
+                        y = ny;
                     }
                 }
                 if pos_visible((x, y)) {
@@ -282,15 +287,17 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
                         .into_iter()
                         .find(|r| ccx >= r.left && ccx < r.right && ccy >= r.top && ccy < r.bottom)
                     {
-                        // 同上：`c` 仍是基准口径，margin 取基准值（物理口径校准交建窗后的 `apply_dock`）
-                        if let Some((dx, dy)) = crate::pet_native::model::dock_push_out(
+                        // 同上：margin 取基准值（物理口径校准交建窗后的 `apply_dock`）；
+                        // E30（2026-10-13）：`role` 必须是**绝对矩形**（契约见 `dock_push_out`）；
+                        // 返回值是**目标窗口位置**（`nx/ny` 命名，见上一处注释）。
+                        if let Some((nx, ny)) = crate::pet_native::model::dock_push_out(
                             pos,
-                            c,
+                            character_global_rect(pos),
                             w,
                             edge,
                             crate::pet_native::model::DOCK_MARGIN_PX,
                         ) {
-                            pos = (dx, dy);
+                            pos = (nx, ny);
                         }
                     }
                 }
