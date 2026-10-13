@@ -21,12 +21,12 @@
 // 本文件不含任何第三方依赖：配置模型与判定规则在 lib/config.js（纯逻辑、可单测），
 // 持久化在 lib/store.js，围栏在 lib/fence.js，预设图标在 lib/icon-presets.js。
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, basename, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildSurfaceTokens, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
 import { buildSplashHtml, buildSplashScript, buildSplashStyle } from './lib/splash.js'
-import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
+import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, avatarFileFromSource, isUserAvatarName, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
 import { ICON_PRESETS, presetAssetPath, presetFileName, presetUrl, renderPresetPng } from './lib/icon-presets.js'
 import { AppearanceStore } from './lib/store.js'
 import { buildTrustedHosts, fenceCheck } from './lib/fence.js'
@@ -369,6 +369,78 @@ export function apply(ctx, config) {
         file,
         url: `${AVATAR_URL_PREFIX}${file}`,
         bytes: parsed.bytes.length,
+        local: listLocalAvatars(),
+      })
+    }
+
+    // M2.8（2026-10-14 用户「可以添加也应该有删除选项」）：删除一张**用户上传**的图标。
+    // 只开这一个出口（判据见 lib/avatar.js 的 isUserAvatarName）：文件名过同一条白名单
+    // 防穿越闸门，且不得是 `preset-*` —— 预设是 host 幂等落盘的系统资产，删了下次
+    // GET /presets 又会重新生成，「删除预设」这个语义不成立，显式拒绝而不是静默照做。
+    // 删掉的若是**当前选中项**，顺带清空 avatar.source 回退出厂图标：否则配置会指向一个
+    // 已不存在的文件（面板虽有「该文件已不在 avatars/ 目录里」的兜底，但那是诊断不是状态）。
+    if (path === `${API_PREFIX}avatar/delete` && req.method === 'POST') {
+      if (avatarDir === null) {
+        return sendJson(res, 503, { error: 'no-datadir', message: '未配置 dataDir，无文件可删' })
+      }
+      let body = null
+      try {
+        body = await readJson(req)
+      } catch (error) {
+        return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      }
+      const file = body?.file
+      if (!isUserAvatarName(file)) {
+        return sendJson(res, 400, {
+          error: 'invalid-file',
+          message: '只能删除 avatars/ 目录里的用户上传图片（预设图标由宿主生成，不可删）',
+        })
+      }
+      const target = join(avatarDir, file)
+      if (!existsSync(target)) {
+        return sendJson(res, 404, { error: 'not-found', message: `avatars/${file} 已经不在目录里` })
+      }
+      try {
+        await rm(target)
+      } catch (error) {
+        ctx.logger?.error?.(error instanceof Error ? error : new Error(String(error)))
+        return sendJson(res, 500, { error: 'delete-failed', message: '删除失败（文件可能正被占用）' })
+      }
+      // 被删的是当前选中项 ⇒ 清空 source（复用与 /config 同一条写盘链，避免并发写盘交叉）。
+      let clearedSource = false
+      if (avatarFileFromSource(current.avatar?.source) === file) {
+        const next = sanitizeConfig({ ...current, avatar: { ...(current.avatar ?? {}), source: '' } })
+        let saveError = null
+        writeChain = writeChain.then(async () => {
+          try {
+            current = await store.save(next)
+            revision += 1
+          } catch (error) {
+            saveError = error
+            throw error
+          }
+        }).catch(error => {
+          ctx.logger?.error?.(error instanceof Error ? error : new Error(String(error)))
+        })
+        await writeChain
+        if (saveError !== null) {
+          // 文件已经删掉了、配置却没清干净 —— 如实说，别报成功（面板会按 avatar.source 显示「已失联」）。
+          return sendJson(res, 500, {
+            error: 'persist-failed',
+            message: `图片已删除，但配置清理失败：${saveError instanceof Error ? saveError.message : String(saveError)}`,
+            deleted: file,
+            clearedSource: false,
+            config: current,
+            revision,
+          })
+        }
+        clearedSource = true
+      }
+      return sendJson(res, 200, {
+        deleted: file,
+        clearedSource,
+        config: current,
+        revision,
         local: listLocalAvatars(),
       })
     }

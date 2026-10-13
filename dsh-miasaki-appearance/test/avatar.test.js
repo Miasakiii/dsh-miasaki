@@ -8,11 +8,14 @@ import {
   AVATAR_MAX_BYTES,
   AVATAR_NAME_RE,
   AVATAR_URL_PREFIX,
+  PRESET_FILE_PREFIX,
   avatarFileFromSource,
   isPng,
+  isUserAvatarName,
   makeAvatarName,
   parseAvatarDataUrl,
 } from '../lib/avatar.js'
+import { ICON_PRESETS, presetFileName } from '../lib/icon-presets.js'
 
 /** 一个只有魔数 + 尾部字节的最小 PNG 载荷（校验只看魔数，不解码）。 */
 function pngBytes(tail = 4) {
@@ -101,4 +104,35 @@ test('makeAvatarName：时间戳 + 随机后缀，可注入以便确定性断言
   // 边界随机值不越界（1.0 会被夹到 0xfffffe）
   assert.equal(AVATAR_NAME_RE.test(makeAvatarName(0, () => 1)), true)
   assert.equal(AVATAR_NAME_RE.test(makeAvatarName(0, () => 0)), true)
+})
+
+test('isUserAvatarName：用户资产可删，预设与非法名一律拒（M2.8 删除围栏）', () => {
+  // 2026-10-14 用户「可以添加也应该有删除选项」：新增 POST /avatar/delete 时的唯一出口判据。
+  // 两条判据缺一不可 —— ① 过文件名白名单（与**读取路径同一条**，删除不享有更宽的门）；
+  // ② 不是预设（preset-* 由 host 幂等落盘，删了下次 GET /presets 又会重新生成，
+  //    「删除预设」这个语义本身不成立，面板的「我的上传」也从不列它们）。
+  assert.equal(isUserAvatarName('avatar-lz3k9q-4f2a1b.png'), true)
+  assert.equal(isUserAvatarName('My_Avatar-2.PNG'), true, '扩展名大小写不敏感（与白名单同口径）')
+  assert.equal(isUserAvatarName('A_b-c.9.png'), true)
+
+  assert.equal(isUserAvatarName('preset-default.png'), false, '预设是系统资产，不可删')
+  assert.equal(isUserAvatarName('preset-current.png'), false)
+  assert.equal(isUserAvatarName('PRESET-default.png'), true,
+    '前缀判定是大小写敏感的 —— 白名单允许大写开头的用户文件，别把用户文件误伤成预设')
+
+  for (const bad of ['', '.png', 'a.jpg', 'a b.png', 'sub/a.png', 'sub\\a.png', '../config.json', 'a%2Fb.png',
+    `${'x'.repeat(90)}.png`, null, undefined, 42, {}]) {
+    assert.equal(isUserAvatarName(bad), false, `${String(bad)} 必须被拒`)
+  }
+
+  // **跨模块对账**：ICON_PRESETS 生成的每一个预设文件名都必须
+  // ① 命中文件名白名单（否则桌面壳根本读不到它）；② 被删除围栏拒绝。
+  // 这一条把 `icon-presets.js` 的命名与 `avatar.js` 的删除围栏绑在一起，防前缀漂移
+  // —— 任何一侧改了命名规则，这里立刻转红。
+  for (const preset of ICON_PRESETS) {
+    const file = presetFileName(preset.id)
+    assert.equal(file.startsWith(PRESET_FILE_PREFIX), true, `${file} 必须命中预设前缀契约`)
+    assert.equal(AVATAR_NAME_RE.test(file), true, `${file} 应命中文件名白名单（否则壳侧读不到）`)
+    assert.equal(isUserAvatarName(file), false, `${file} 是预设，必须不可删`)
+  }
 })

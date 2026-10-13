@@ -387,6 +387,21 @@ window.__ModuleLoader__.load({
 .mia-iconSkeletonBox{border-radius:var(--dsw-radius-sm);width:32px;height:32px;background:var(--dsw-alias-bg-layer-2);display:block}
 /* 文件名可能很长（avatar-<时间戳>-<随机>.png）——格子内截断，title 给全名。 */
 .mia-iconLabel{text-align:center;font-size:12px;line-height:18px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* 「我的上传」的删除入口（M2.8，2026-10-14 用户「可以添加也应该有删除选项」）。
+   HTML **不允许 button 嵌套 button**，所以格子外层是定位容器 .mia-uploadCell，
+   删除按钮与 .mia-iconCell **平级**、绝对定位在右上角。
+   默认 opacity:0 + pointer-events:none（保留键盘可达：容器 focus-within 时显形），
+   悬停或键盘聚焦才出现 —— 与官方「悬停才露次级操作」的语汇一致（步进器箭头同款）。
+   disabled 用 :not(:disabled) 排除在悬停显形之外，否则写入中仍会露出一个点不动的按钮。
+   圆角走官方令牌；悬停切错误色（这是破坏性操作，取色与官方错误态一致）。
+   ⚠ 本块在 PANEL_CSS 模板字符串内部：注释里**不得出现反引号**（见上方同名警告）。 */
+.mia-uploadCell{position:relative;display:flex;min-width:0}
+.mia-uploadCell>.mia-iconCell{width:100%}
+.mia-iconDelete{border:.5px solid var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);cursor:pointer;border-radius:var(--dsw-radius-xs);justify-content:center;align-items:center;width:18px;height:18px;padding:0;display:inline-flex;position:absolute;top:-6px;right:-6px;opacity:0;pointer-events:none;transition:opacity 120ms ease}
+.mia-uploadCell:hover .mia-iconDelete:not(:disabled),.mia-uploadCell:focus-within .mia-iconDelete:not(:disabled){opacity:1;pointer-events:auto}
+.mia-iconDelete:hover{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
+.mia-iconDelete:disabled{cursor:default}
+@media (prefers-reduced-motion:reduce){.mia-iconDelete{transition:none}}
 /* 运行信息：面板底部一行三级说明（不再独占组标题） */
 .mia-runinfo{color:var(--dsw-alias-label-tertiary);margin:24px 0 0;font-size:12px;line-height:18px}
 `
@@ -1050,6 +1065,39 @@ window.__ModuleLoader__.load({
           .finally(() => setBusy(false))
       }
 
+      /**
+       * 删除一张上传的图标（M2.8，2026-10-14 用户「可以添加也应该有删除选项」）。
+       *
+       * 语义边界：这是**真删文件**，与「清除」按钮不同 —— 后者只是把 avatar.source 置空
+       * 回退出厂图标、文件一个字节都不动。删错不可恢复，所以**必须二次确认**
+       * （与 P5 导入配置同款，走 window.confirm；弹不出确认框就取消，不冒进）。
+       * 删掉的若是当前选中项，host 会顺带清空 avatar.source 并回带新 config ——
+       * 这里直接采用服务端结果而不是自己拼一个（形状必须与 /state 一致，拼错会静默丢字段，
+       * 例如 defaults 丢了「恢复默认」行就废了）。
+       */
+      const removeAvatar = (file) => {
+        if (state === null) return Promise.resolve()
+        if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+          setError('当前环境无法弹出确认框，已取消删除（删除文件不可恢复，必须先确认一次）。')
+          return Promise.resolve()
+        }
+        const ok = window.confirm(
+          `删除 avatars/${file}？\n\n这会真的删掉文件，无法恢复。`
+          + '如果它正是当前使用的图标，会一并回退出厂图标。')
+        if (ok !== true) return Promise.resolve()
+        setBusy(true)
+        return requestJson('/avatar/delete', { method: 'POST', body: { file } })
+          .then(result => {
+            if (Array.isArray(result.local)) setAvatars({ local: result.local })
+            if (result.config !== undefined && result.config !== null) {
+              setState(prev => (prev === null ? prev : { ...prev, config: result.config, revision: result.revision }))
+            }
+            setError(null)
+          })
+          .catch(e => setError(String(e && e.message ? e.message : e)))
+          .finally(() => setBusy(false))
+      }
+
       const children = []
 
       // ---- 契约状态条（官方 notice 规格：12px/18，warn / success 着色）
@@ -1244,8 +1292,8 @@ window.__ModuleLoader__.load({
         ]),
         myFiles.length === 0 ? null : block(
           '我的上传',
-          'avatars/ 目录里的用户文件（含手动放入的）——点选即切换；文件名过长处截断，悬停看全名。',
-          reactElementUploadGrid(myFiles, avatar.source, busy, save),
+          'avatars/ 目录里的用户文件（含手动放入的）——点选即切换，格角的图标可删除该文件；文件名过长处截断，悬停看全名。',
+          reactElementUploadGrid(myFiles, avatar.source, busy, save, removeAvatar),
         ),
         hint(
           '「清除」回退出厂图标。注意：EXE 文件自身、桌面 / 开始菜单快捷方式的静态图标属于构建期资源，不随此处变化。',
@@ -1685,36 +1733,58 @@ window.__ModuleLoader__.load({
      *
      * 形态回退的**理由**（V1 曾以「文件可能很多，Pill 排灾难」为由把 Pill 排换成选择丸）：
      * 选择丸只显示文件名，而应用图标是**看图选**的东西——上传两张以上就分不清哪张是哪张
-     * （这正是用户这次反馈的问题）。网格与预设九宫格共用 `.mia-iconCell` 语言：图片即预览，
+     * （这正是用户那次反馈的问题）。网格与预设九宫格共用 `.mia-iconCell` 语言：图片即预览，
      * 文件名只作辅助（截断 + title 全名），格子随宽度自动换行，多几个文件也不会撑破版面。
+     *
+     * 2026-10-14（用户「可以添加也应该有删除选项」）：每格右上角加**删除**入口。
+     * HTML **不允许 button 嵌套 button**，所以外壳从按钮换成定位容器 `.mia-uploadCell`，
+     * 主体仍是原来的 `.mia-iconCell` 按钮，删除是它的**平级**小按钮、绝对定位在角上
+     * （默认可聚焦但不占视觉，悬停 / 键盘聚焦时出现）。
+     *
+     * @param {string[]} files - avatars/ 目录里的用户文件。
+     * @param {string} source - 当前 avatar.source。
+     * @param {boolean} busy - 写入中（所有入口禁用）。
+     * @param {(patch: object) => Promise<void>} save - 写配置（选中这张图）。
+     * @param {(file: string) => Promise<void>} remove - 删除文件（内含二次确认）。
      */
-    function reactElementUploadGrid(files, source, busy, save) {
+    function reactElementUploadGrid(files, source, busy, save, remove) {
       return react.createElement('div', { key: 'upload-grid', className: 'mia-iconGrid' }, files.map(file => {
         const url = `${AVATAR_PREFIX}${encodeURIComponent(file)}`
         const active = source === url
-        return react.createElement('button', {
-          key: file,
-          type: 'button',
-          className: active === true ? 'mia-iconCell is-active' : 'mia-iconCell',
-          'aria-pressed': active === true,
-          disabled: busy === true,
-          title: file,
-          onClick: () => save({ avatar: { source: url } }),
-        }, [
-          react.createElement('img', {
-            key: 'i',
-            className: 'mia-iconImg',
-            src: url,
-            alt: '',
-            // 与「当前生效」行同款兜底：清单是磁盘扫描来的，正常都在；但「面板打开后文件被删」
-            // 这类竞态下 img 会 404 —— 藏掉它，不留一个破图框（格子仍在，点了会落到缺失文件上，
-            // 桌面壳读不到就继续用上一次的图）。
-            onError: (event) => {
-              const target = event === null || event === undefined ? null : event.currentTarget
-              if (target !== null && target !== undefined && target.style !== undefined) target.style.visibility = 'hidden'
-            },
-          }),
-          react.createElement('span', { key: 'l', className: 'mia-iconLabel' }, file),
+        return react.createElement('div', { key: file, className: 'mia-uploadCell' }, [
+          react.createElement('button', {
+            key: 'cell',
+            type: 'button',
+            className: active === true ? 'mia-iconCell is-active' : 'mia-iconCell',
+            'aria-pressed': active === true,
+            disabled: busy === true,
+            title: file,
+            onClick: () => save({ avatar: { source: url } }),
+          }, [
+            react.createElement('img', {
+              key: 'i',
+              className: 'mia-iconImg',
+              src: url,
+              alt: '',
+              // 与「当前生效」行同款兜底：清单是磁盘扫描来的，正常都在；但「面板打开后文件被删」
+              // 这类竞态下 img 会 404 —— 藏掉它，不留一个破图框（格子仍在，点了会落到缺失文件上，
+              // 桌面壳读不到就继续用上一次的图）。
+              onError: (event) => {
+                const target = event === null || event === undefined ? null : event.currentTarget
+                if (target !== null && target !== undefined && target.style !== undefined) target.style.visibility = 'hidden'
+              },
+            }),
+            react.createElement('span', { key: 'l', className: 'mia-iconLabel' }, file),
+          ]),
+          react.createElement('button', {
+            key: 'del',
+            type: 'button',
+            className: 'mia-iconDelete',
+            disabled: busy === true,
+            title: `删除 ${file}`,
+            'aria-label': `删除 ${file}`,
+            onClick: () => remove(file),
+          }, react.createElement(primitives.IconTrashOutlineRegular, { key: 'i', size: 12 })),
         ])
       }))
     }

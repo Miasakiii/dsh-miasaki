@@ -219,12 +219,18 @@ const react = {
 // IconChevronDownOutlineRegular——两名字均已从**本机实装** seed 冻结表
 // （dsh-web-frontend dist/assets/index-*.js 的 qb=Object.freeze(...)）逐名核实存在。
 // react stub 的 createElement 只把组件当 type 记录、不会真调用，占位即可。
+// 2026-10-14 M2.8：「我的上传」加删除入口，stub 增补 IconTrashOutlineRegular ——
+// 同样从**本机实装** seed 冻结表逐名核实：
+//   dsh-web-frontend/dist/assets/index-5SrrfWpU.js 的 seed 表里
+//   `IconTrashOutlineMedium:vy,IconTrashOutlineRegular:gy,IconTreeCornerMedium:iC,…`
+//   （与既有的 IconChevronDownOutlineRegular 同表，2026-09-23 那次事故的纪律照做）。
 const primitivesStub = {
   Button: 'Button',
   Switch: 'Switch',
   Menu: 'Menu',
   IconChevronUpOutlineRegular: 'IconChevronUpOutlineRegular',
   IconChevronDownOutlineRegular: 'IconChevronDownOutlineRegular',
+  IconTrashOutlineRegular: 'IconTrashOutlineRegular',
 }
 const requireStub = name => {
   if (name === 'react') return react
@@ -412,6 +418,17 @@ test('面板挂载官方「通用设置」页风格：mia-* 行式 + 官方 toke
   assert.doesNotMatch(PANEL_CSS_SOURCE, /\.mia-knobGrid\{/, '自绘旋钮网格换成官方双列字段网格')
   // 注入去重标记与官方插件同构（data-plugin-css）。
   assert.match(source, /data-plugin-css/)
+  // PANEL_CSS 是**模板字符串**：其内部注释不得出现反引号 —— 反引号会提前闭合模板字符串，
+  // 让整段 CSS 变成「字符串属性访问 − 标签模板」这种**合法但求值 NaN** 的表达式
+  // （2026-10-14 的真实事故：注入的 style 只有 3 个字符 "NaN"、0 条规则，潜伏 6 天）。
+  // 这一条是**源码级**的，比端到端闸门失败得更早、报错更直指原因；两者都要有：
+  // 它挡不住"注释外的"其它求值错误，端到端那条挡不住"写的时候就错了"的定位速度。
+  {
+    const raw = PANEL_CSS_SOURCE
+    const body = raw.slice(raw.indexOf('`') + 1, raw.lastIndexOf('`'))
+    assert.doesNotMatch(body, /`/,
+      'PANEL_CSS 模板字符串内部不得出现反引号（会提前闭合 ⇒ 注入值变 NaN，见 CHANGELOG 2026-10-14）')
+  }
 })
 
 test('样式注入闸门：注入进页面的 CSS 必须是字符串且有实体（模板字符串内混入反引号会静默求值成 NaN）', () => {
@@ -915,6 +932,108 @@ test('面板渲染冒烟：应用图标板块（当前生效预览 + 预设 + �
       && Array.isArray(node.props.items)
       && node.props.items.some(item => item.id === '' && item.label === '不使用'))
     assert.equal(uploadMenu.length, 0, '「我的上传」不得再是纯文字选择丸（回退成读文件名选图）')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('M2.8：「我的上传」每格一个删除入口 —— 预设不给出口，确认取消就一个请求都不发', async () => {
+  // 2026-10-14 用户「可以添加也应该有删除选项」。
+  // 三条判据：① 删除按钮**只**出现在「我的上传」的格子上（预设是 host 幂等落盘的系统资产，
+  // 删了下次 /presets 又会回来，「删除预设」语义不成立 ⇒ 不给出口）；
+  // ② 确认框说「取消」⇒ **一个请求都不发**（与 P5 导入二次确认同款纪律）；
+  // ③ 确认 ⇒ 发 POST /avatar/delete，body 带的是**纯文件名**（不是 URL）。
+  const render = () => {
+    const { descriptor } = capture({ confirm: () => false })
+    const ctx = fakeCtx()
+    descriptor.factory(requireStub).apply(ctx)
+    const view = ctx.registered[0].view
+    react.stateQueue = [
+      {
+        config: {
+          enabled: true,
+          theme: { skin: 'pure' },
+          wallpaper: {
+            source: '', light: '', dark: '', blur: 0, scrim: 0,
+            fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+            surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+          },
+          avatar: { source: '/appearance/avatar/avatar-lz3k9q-4f2a1b.png' },
+          motion: { enabled: false, preset: 'fluid', scale: 1 },
+          conversation: { density: 'comfortable', maxWidth: 0 },
+        },
+        revision: 6,
+        persistent: true,
+      },
+      null, null, false, null,
+      { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png', 'preset-default.png'] },
+      [
+        { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
+        { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
+      ],
+      null,
+    ]
+    return { view, ctx }
+  }
+
+  const { view } = render()
+  const element = view()
+  const delButtons = collectNodes(element, node => node.props.className === 'mia-iconDelete')
+  assert.equal(delButtons.length, 2, '两个用户文件 → 两个删除入口（预设格不得有）')
+  for (const btn of delButtons) {
+    assert.equal(btn.type, 'button', '删除入口必须是真按钮（可聚焦 / 回车触发）')
+    assert.equal(typeof btn.props['aria-label'], 'string')
+    assert.match(btn.props['aria-label'], /^删除 avatar-/, 'aria-label 要指出删的是哪个文件')
+  }
+  // HTML 不允许 button 嵌套 button：删除按钮必须与 .mia-iconCell **平级**（同一层容器里）。
+  // 注：react stub 的 createElement 是 `(type, props, ...children)`，传数组时会收成嵌套数组，
+  // 所以这里 flat() 一层再判 —— 直接读 children 会拿到数组本身。
+  const wraps = collectNodes(element, node => node.props.className === 'mia-uploadCell')
+  assert.equal(wraps.length, 2, '每个上传格一个定位容器')
+  for (const wrap of wraps) {
+    const direct = wrap.children.flat().filter(child => child !== null && child !== undefined)
+    const names = direct.map(child => child.props.className)
+    assert.equal(names.length, 2, `容器里恰好两个直接子节点（主体 + 删除），实得 ${JSON.stringify(names)}`)
+    assert.equal(names.includes('mia-iconDelete'), true, '删除按钮与主体格子平级')
+    assert.equal(names.some(name => String(name).startsWith('mia-iconCell')), true, '主体格子仍在容器内')
+  }
+
+  // ② 取消 ⇒ 一个请求都不发
+  const cancelCap = capture({ confirm: () => false })
+  const cancelCtx = fakeCtx()
+  cancelCap.descriptor.factory(requireStub).apply(cancelCtx)
+  react.stateQueue = [
+    { config: { enabled: true, theme: { skin: 'pure' }, wallpaper: { source: '', surface: {} }, avatar: { source: '' }, motion: { enabled: false }, conversation: {} }, revision: 1, persistent: true },
+    null, null, false, null, { local: ['avatar-lz3k9q-4f2a1b.png'] }, [], null,
+  ]
+  try {
+    const btn = collectNodes(cancelCtx.registered[0].view(),
+      node => node.props.className === 'mia-iconDelete')[0]
+    assert.notEqual(btn, undefined)
+    await btn.props.onClick()
+    assert.equal(cancelCap.fetches.some(f => f.url.includes('/avatar/delete')), false,
+      '确认框说取消 ⇒ 不得发出删除请求（删文件不可恢复，取消必须是真的取消）')
+  } finally {
+    react.stateQueue = null
+  }
+
+  // ③ 确认 ⇒ 发 POST，body 是纯文件名
+  const okCap = capture({ confirm: () => true })
+  const okCtx = fakeCtx()
+  okCap.descriptor.factory(requireStub).apply(okCtx)
+  react.stateQueue = [
+    { config: { enabled: true, theme: { skin: 'pure' }, wallpaper: { source: '', surface: {} }, avatar: { source: '' }, motion: { enabled: false }, conversation: {} }, revision: 1, persistent: true },
+    null, null, false, null, { local: ['avatar-lz3k9q-4f2a1b.png'] }, [], null,
+  ]
+  try {
+    const btn = collectNodes(okCtx.registered[0].view(),
+      node => node.props.className === 'mia-iconDelete')[0]
+    await btn.props.onClick()
+    const call = okCap.fetches.find(f => f.url.includes('/avatar/delete'))
+    assert.notEqual(call, undefined, '确认后必须发删除请求')
+    assert.equal(call.method, 'POST')
+    assert.deepEqual(JSON.parse(call.body), { file: 'avatar-lz3k9q-4f2a1b.png' },
+      'body 带纯文件名（不是 /appearance/avatar/… 的 URL）—— host 侧白名单按文件名判')
   } finally {
     react.stateQueue = null
   }

@@ -64,6 +64,28 @@ export function avatarFileFromSource(source) {
 }
 
 /**
+ * 预设图标文件名前缀（跨模块契约：`lib/icon-presets.js` 的 `presetFileName` 必须命中它，
+ * `test/icon-presets.test.js` 有对账用例；client 半的「我的上传」也按同一前缀过滤）。
+ */
+export const PRESET_FILE_PREFIX = 'preset-'
+
+/**
+ * 判定一个文件名是不是**用户资产**（即「删除」这个出口该不该给它）。
+ *
+ * 两条判据缺一不可：
+ *  ① 过文件名白名单 —— 与读取路径**同一条**，防穿越的最终闸门不因"删除"而放宽；
+ *  ② 不是预设图标 —— 预设由 host 幂等落盘、是**系统资产**：删了下次 `GET /presets`
+ *     又会重新生成，而"删除预设"这个语义本身不成立（面板的「我的上传」也从不列它们）。
+ * @param {unknown} name - 待判定的文件名（纯 basename，不含目录）。
+ * @returns {boolean} 是否可删除。
+ */
+export function isUserAvatarName(name) {
+  if (typeof name !== 'string') return false
+  if (!AVATAR_NAME_RE.test(name)) return false
+  return !name.startsWith(PRESET_FILE_PREFIX)
+}
+
+/**
  * 解析浏览器发来的 PNG data URL。
  *
  * 只接受 `data:image/png;base64,…`：client 半用 canvas 把任意格式重编码成 PNG 后上传，
