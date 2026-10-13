@@ -414,6 +414,40 @@ test('面板挂载官方「通用设置」页风格：mia-* 行式 + 官方 toke
   assert.match(source, /data-plugin-css/)
 })
 
+test('样式注入闸门：注入进页面的 CSS 必须是字符串且有实体（模板字符串内混入反引号会静默求值成 NaN）', () => {
+  // 真实事故（2026-10-08 引入 → 2026-10-14 才定位）：`PANEL_CSS` 模板字符串**内部**的注释
+  // 把 `.mia-row` 写成了行内码（一对反引号）。JS 于是把它解析成
+  //      const PANEL_CSS = `…塞不进 `.mia` - row`…`
+  // ——「字符串属性访问 - 标签模板」，**合法 JS**：`node --check` 通过、本文件全部用例通过、
+  // 静态断言照样能在这段源码文本里 match 到每个选择器。但求值是 **NaN** ⇒
+  // `tag.textContent = NaN` ⇒ 注入的 style 只有 3 个字符、**0 条 CSS 规则** ⇒
+  // 外观页完全没有自己的样式，只剩别的插件（dsh-pet-panel）同名 `.mia-*` 规则撑场：
+  // 图片按 512px 原始尺寸渲染（用户「图标预览太大了」）、九宫格不成网格（「布局错乱」）、
+  // 控件退回浏览器默认外观（「跟官方设置页不像一家」）。**潜伏 6 天，只有实机可见。**
+  //
+  // 本闸门刻意做成**端到端**：真执行 factory、读注入元素的 textContent ——
+  // 不解析源码文本，因此对「合法但求值错误」这一类缺陷有效（源码文本断言对它无效）。
+  const env = capture()
+  env.descriptor.factory(requireStub)
+  const injected = env.created.filter(el => el.tagName === 'STYLE')
+  const byId = id => injected.find(el => el.dataset.pluginCss === id)
+
+  // panel.css 在 factory 顶层注入（另两个经 apply 的 sync* 协程，此处只覆盖顶层这一处；
+  // 三者的注入式同构，本用例的判据对它们同样适用）。
+  const panel = byId('@miasaki/dsh-appearance/panel.css')
+  assert.notEqual(panel, undefined, 'factory 必须注入 panel.css')
+  assert.equal(typeof panel.textContent, 'string',
+    `panel.css 的注入值必须是字符串（实得 ${typeof panel.textContent}：${String(panel.textContent)}）`
+    + ' —— 模板字符串里混入反引号会让它静默求值成 NaN')
+  assert.ok(panel.textContent.length > 2000,
+    `panel.css 不得是空壳（实得 ${panel.textContent.length} 字符）`)
+  // 关键选择器必须真的在**求值结果**里（这是"规则可被浏览器解析"的最低保证）。
+  for (const marker of ['.mia-iconImg', '.mia-iconGrid', '.mia-avatarPreview', '.mia-select', '.mia-stepper']) {
+    assert.ok(panel.textContent.includes(marker),
+      `求值后的 panel.css 必须包含 ${marker}`)
+  }
+})
+
 test('V1：单选设置行走官方选择丸 + Menu， Pill 排整类退场', () => {
   // 2026-09-26 V1 闸门：官方设置行的单选标准控件是「选择丸 + Menu」（LanguageRow /
   // PermissionRow），Pill 在官方是 view switcher/filter 用语。本闸门盯三件事：

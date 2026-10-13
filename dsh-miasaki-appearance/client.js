@@ -350,7 +350,13 @@ window.__ModuleLoader__.load({
 .mia-avatarPreviewImg{width:100%;height:100%;object-fit:contain;display:block}
 .mia-avatarPreviewPh{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 /* 子块（预设 / 我的上传）：与官方行式同规格（0.5px 分隔线 + 16px 行距），
-   但控件铺满下一行——九宫格塞不进 `.mia-row` 右侧的控件位。 */
+   但控件铺满下一行——九宫格塞不进 .mia-row 右侧的控件位。
+   ⚠ 本块位于 PANEL_CSS 模板字符串**内部**：注释里**不得出现反引号** ——
+   反引号会提前闭合模板字符串，让整段 CSS 变成「字符串属性访问 - 标签模板」这种
+   **合法但求值为 NaN** 的表达式（node --check 抓不到语法错）：注入页面的
+   style 标签只剩 3 个字符 "NaN"、0 条 CSS 规则，外观页全靠别的插件同名 .mia-* 规则
+   撑场（2026-10-08 → 2026-10-14 的真实事故，判据见 test/client.test.js 的
+   「PANEL_CSS 求值必须是字符串」用例）。 */
 .mia-block{border-bottom:.5px solid var(--dsw-alias-border-l2);flex-direction:column;gap:4px;padding:16px 0;display:flex}
 .mia-blockTitle{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}
 .mia-blockBody{padding:8px 0 0}
