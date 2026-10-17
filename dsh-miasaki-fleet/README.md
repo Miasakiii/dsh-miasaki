@@ -92,7 +92,7 @@ node workers/bus/bus-apply.mjs --patch p.json --check  # 只校验不写入
 node workers/bus/bus-apply.mjs --patch p.json          # 提交一个超步
 npm test                                               # 本线单测入口（142 例：F3 判活 9 / G0 契约与总线 58 / G1 图与就绪度 13 / G2 能力图 17 / G4 验证者 29 / fleet-monitor 信任围栏 16）
                                                        # ⚠️ 派单器侧两组（dispatch-state 9 / dispatch-gate 26）**不在** npm test 链上，只在 `verify-all` 的 fleet 类别里跑
-                                                       # ⇒ 全线用例 **177 例**（142 + 35），逐文件实测口径见回归矩阵 §1
+                                                       # ⇒ 全线用例 **197 例**（2026-10-17 实测：9+26+16+17+13+17+29+26+9+35），逐文件口径见回归矩阵 §1
 ```
 
 > **写入纪律（G0 起）**：总线文件（`state/*.jsonl`、`agents/*/capability.json`、
@@ -230,7 +230,7 @@ pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0003 -Agent claude -Chec
 | 判定来源 | 复用 `workers/graph/task-ready.mjs --explain <id> --json`（**不重复实现**，与能力闸门同纪律） |
 | G1 闸门 | `ready=false` → 打印**全部** reasons → **拒绝派单 exit 2**；并纳入 `-CheckOnly` |
 | assignee 一致性 | `-Agent` ≠ 台账 `assignee` → 拒绝，提示「改派走 `reassign` 补丁（带 reason），勿用命令行硬塞」 |
-| 闸门顺序 | 档案 → 开关 → 预算 → **G1 可派** → G2 能力（先廉价后昂贵；前者拒了就不跑后者） |
+| 闸门顺序 | 档案 → 开关 → 日预算 → **并发上限** → **G1 可派** → G2 能力 → G4 验证 → **任务级 token 预算**（先廉价后昂贵；前者拒了就不跑后者） |
 | 事件留痕 | `task.started`（CLI 启动**前**）+ 终态 `task.completed` / `failure.detected`，经 `bus-apply` 唯一入口 |
 | 事件不阻断 | applier 报错（如并发超步冲突 exit 3）**只告警、不阻断派单** —— 事件是审计不是闸门 |
 | 退出码 | **不动**既有 0/2/3/4；新闸门一律用 2 = 拒绝派单，原因靠打印文案区分 |
@@ -382,7 +382,9 @@ curl -s "http://127.0.0.1:<port>/api/events?limit=5"
 > `FAIL fleet: 20/21`、还原 21/21。
 >
 > **尚未做（P2 候选）**：§8.4 的四条告警规则（心跳丢失 / 预算 ≥80% / 任务硬超时 /
-> 开关与进程不一致）—— 面板不告警就只是图表页。**口径冲突已裁决**（2026-10-05 用户拍板）：
+> 开关与进程不一致）—— 面板不告警就只是图表页。**其中「任务硬超时」的判定已落地**
+> （2026-10-17：`manifest.limits.timeout_ms` 成为派单器执行点，超时 kill 进程树并记 error），
+> 缺的只是**面板告警**这一层。**口径冲突已裁决**（2026-10-05 用户拍板）：
 > 「连续失败」按 `events.jsonl` 的事件流计数（N 次内 M 次失败），**不**按 `status.json` 的 error 态
 > 连续计数 —— 后者会与事件流形成两份真相。
 > 形态决策：**保留独立 server 作数据层**；将来若要进 DSH GUI，加一个 thin 插件壳复用同一份 `/api/*`。
@@ -496,14 +498,40 @@ node ../scripts/verify-all.mjs fleet
 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §4。
 
 > 已知边界：判活针对「status 文件级的陈旧」；desktop 侧另有 pulse 文件级 stale 检查
-> （防发布器自身死亡），两层各管一段。worker 的调度级生命周期（超时 / 重试 /
-> orphan 回收）尚无自动化覆盖。
+> （防发布器自身死亡），两层各管一段。worker 的**调度级生命周期已落地（2026-10-17，
+> gap 文档 §4② P1）**：超时 kill 进程树 + 只在超时重试一次（`RetriesOnTimeout`，默认 1）、
+> `max_concurrent_tasks` 并发闸门、`max_tokens_per_task` 任务级预算熔断；**仍未做**：
+> 进程托管器（跨会话常驻监督）、自动重启、面板告警。
 
 ## 变更记录
 
 设计决策与协议变更记录在
 [docs/multi-agent-cli-orchestrator-design.md](docs/multi-agent-cli-orchestrator-design.md)
 头部「变更记录」。
+
+### 2026-10-17 · 调度级生命周期落地（fleet gap 文档 §4② P1）
+
+`manifest.limits` 的 `timeout_ms` / `max_concurrent_tasks` / `max_tokens_per_task` 此前是
+**纸面字段**（8 个 agent 档案里四个字段齐全、零消费点）。本批把它们变成执行点，全部走
+`dispatch-task.ps1` 单点：
+
+- **硬超时**：`-TimeoutMs`（0 = 取 `manifest.limits.timeout_ms` → brief「超时：M 分钟」→ 不限）。
+  执行改用 `ProcessStartInfo.ArgumentList`（PS7/.NET 逐参数传递，prompt 引号不二次切分），
+  超时 `Kill(entireProcessTree)`，**只在超时时重试一次**（`-RetriesOnTimeout`，默认 1；
+  普通失败不重试，避免掩盖真实错误与重复花钱）。超时对外记 `exit 3`，`status.last_error`
+  含「超时（Nms）」，不再永久占住 Commander 会话。
+- **并发上限**：`-MaxConcurrent`（0 = 取 `manifest.limits.max_concurrent_tasks`）。该 agent
+  已有 `running`/`draining` 且**心跳新鲜**（3×`heartbeat_ms`，与 `liveness.cjs` 同口径）即拒绝
+  `exit 2`，并给出 `-ResetStatus` 出口；心跳过龄的僵尸仍交给 G1 判活。
+- **任务级 token 预算**：取 brief「预算：N tokens」（优先）> `manifest.limits.max_tokens_per_task`。
+  派单前累计该任务历史 usage，达到上限即 `exit 4`（防重试/续跑无限烧钱）；运行后超限只告警
+  （钱已花，阻断会掩盖）。
+- **已知坑（写进 `Test-HeartbeatFresh` 注释）**：PS7 的 `ConvertFrom-Json` 把
+  `2026-10-17T13:08:52Z` 转成 **Kind=Local 且数值不变**的 DateTime，`ToUniversalTime()`
+  会再减本地偏移 ⇒ 新鲜心跳被误判 stale；改为从**原始 JSON 文本**用 `DateTimeOffset.Parse` 解析。
+- **判据**：`dispatch-gate` 26 → **35 例**（超时 kill / 超时重试成功 / 普通失败不重试 /
+  并发拒绝 / 僵尸不由并发拒 / 任务预算熔断 / brief 超时与预算解析 / manifest 优先级），
+  fleet 全线 **197 例**；`-CheckOnly` 同步输出生效超时与预算（预检与派单同口径）。
 
 ### 2026-09-26 · 死代码清理（零行为变更）
 

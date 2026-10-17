@@ -1199,6 +1199,20 @@ ICO 内容级幂等闸门），用户选中头像后由 `launcher_icon` 巡检�
 矩阵台账分母 **128 → 129**（E33，勾选 72/129）；`repo/md-links` 3 处暂态断链（未入库的 `2026-10-17-pet-drag-sprint.md`）随本批提交转绿。
 **待实机**：E33 拖动判据、0.2.1 升级后九线页面走查（设置页模型区 / 右栏 tab / 辅助对话 / 会话布 / SSH / 运维浮窗 / 外观）。
 
+**2026-10-17（续）· Fleet 调度级生命周期落地（gap 文档 §4② P1）**`[实测]`：
+`manifest.limits` 的 `timeout_ms` / `max_concurrent_tasks` / `max_tokens_per_task` 此前是纸面字段
+（8 个 agent 档案里齐全、零消费点）。本批把三个字段变成 `dispatch-task.ps1` 的执行点：
+① 硬超时（`-TimeoutMs` 优先级 manifest > brief「超时：M 分钟」）—— 执行改用
+`ProcessStartInfo.ArgumentList`（PS7 逐参数传递，prompt 引号不二次切分），超时
+`Kill(entireProcessTree)`，**只在超时重试一次**（普通失败不重试）；② 并发上限
+（`running`/`draining` + 心跳新鲜 3×`heartbeat_ms` ⇒ exit 2，心跳过龄僵尸交给 G1）；
+③ 任务级 token 预算（brief 预算 > manifest 上限；派单前累计历史 usage 达上限 exit 4，
+运行后超限仅告警）。**踩坑入注释**：PS7 `ConvertFrom-Json` 把 ISO 时间转成 Kind=Local
+且数值不变 ⇒ `ToUniversalTime()` 再减本地偏移，新鲜心跳误判 stale；改为原始 JSON 文本 +
+`DateTimeOffset.Parse`。**判据**：`dispatch-gate` 26 → **35 例**（超时 kill / 超时重试成功 /
+普通失败不重试 / 并发拒绝 / 僵尸不由并发拒 / 任务预算熔断 / brief 解析 / manifest 优先级），
+fleet 全线 **197 例**全绿、`verify-all fleet` 21/21。**未做**：进程托管器、自动重启、面板告警。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

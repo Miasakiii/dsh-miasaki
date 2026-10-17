@@ -13,11 +13,21 @@
 #   声明了风险时，派单结束后生成 tasks/<id>/verify-brief.md（**不自动派发**验证任务）。
 # 事件留痕（G0，2026-09-30）：派单开始与终态各写一条机器事件（task.started / task.completed /
 #   failure.detected），经 workers/bus/bus-apply.mjs 唯一入口；事件是审计不是闸门，写失败只告警不阻断。
-# 闸门顺序（先廉价后昂贵）：档案 → 开关 → 预算 → G1 可派 → G2 能力。前者拒了就不跑后者。
+# 闸门顺序（先廉价后昂贵）：档案 → 开关 → 日预算 → 并发上限 → G1 可派 → G2 能力 → G4 验证 → 任务级 token 预算。
+#   前者拒了就不跑后者。
+# 调度级生命周期（2026-10-17，gap 文档 §4② P1）：agent manifest 的 limits.timeout_ms /
+#   max_concurrent_tasks / max_tokens_per_task 此前是**纸面字段**（无任何消费点）——
+#   本批把它们变成执行点：
+#     · timeout_ms：超时后 kill **进程树**（.NET Kill(entireProcessTree)），**只在超时**时重试
+#       （RetriesOnTimeout 默认 1）；普通失败不重试 —— 避免掩盖真实错误与重复花钱；
+#     · max_concurrent_tasks：该 agent 已有 running/draining 且心跳新鲜时拒绝派单（exit 2）；
+#     · max_tokens_per_task：派单前累计该任务历史 usage token，达到上限即熔断（exit 4），
+#       防止重试/续跑无限烧钱；运行后超限写事件 task.budget.exceeded（只告警，不改终态）。
+#   优先级：显式参数 > manifest.limits.* > brief 的文字约束（「超时：M 分钟」/「预算：N tokens」）> 不限。
 # 验证模式：-CheckOnly（只跑预检，不派单也不写总线）/-ParseOnly（只跑 usage 解析，打印将要写入的 usage.jsonl 行）
 # 运维入口：-ResetStatus（清除崩溃残留的 status.json，见下）
-# 退出码：0 成功；2 拒绝派单（开关未开/无模板/无能力候选/选择器不可用/任务不可派）
-#         /3 CLI 执行失败；4 预算熔断拒绝；127 CLI 不存在（记在 worker 日志与事件流里）
+# 退出码：0 成功；2 拒绝派单（开关未开/无模板/无能力候选/选择器不可用/任务不可派/并发上限）
+#         /3 CLI 执行失败（含超时 kill）；4 预算熔断拒绝（日成本或任务级 token）；127 CLI 不存在
 # 协议：status.json 由派单器代理写；stdout 存 logs/<task>-stdout.log；usage.jsonl 按 metering_source 解析；transcript.md 追加；tasks.jsonl 由 Commander 另写。
 # 记忆隔离：spawn worker 进程时注入 OPENVIKING_RECALL_PEER_SCOPE=actor（§12.2 OpenViking 记忆层），进程结束后恢复原值。
 # 运行环境：PowerShell 7+（脚本使用 ?? 运算符）；本机 PS7 路径 %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe（可能不在 PATH，where pwsh 找不到）。
@@ -37,7 +47,11 @@ param(
   # 运维入口（2026-09-30，t-0010 独立复核 F1）：status.json 的唯一写者就是本脚本，脚本被 Ctrl-C /
   # 断电打断时它会**永停 running** ⇒ 90s 后判活判 stale ⇒ G1 闸门**永久硬拒**该 agent，
   # 而此前没有任何重置入口（只能手工改文件）。本开关给出一条留痕的恢复路径。
-  [switch]$ResetStatus
+  [switch]$ResetStatus,
+  # 调度级生命周期覆盖（2026-10-17，0 = 用 manifest.limits.* 或 brief 文字约束）：
+  [int]$TimeoutMs = 0,          # 单条命令超时（ms）；0 = 取 manifest.limits.timeout_ms → brief「超时：M 分钟」→ 不设限
+  [int]$RetriesOnTimeout = 1,   # 超时后重试次数（默认 1 次；普通失败不重试）
+  [int]$MaxConcurrent = 0       # 并发上限覆盖；0 = 取 manifest.limits.max_concurrent_tasks → 不设限
 )
 
 $ErrorActionPreference = 'Continue'
@@ -89,6 +103,123 @@ function Test-Budget([string]$AgentDir, $manifest) {
     Write-Host "[budget] 预检通过：当日 cost $('{0:N4}' -f $dayCost) / 预算 $budget"
   }
   return $true
+}
+
+# --- 调度级生命周期（2026-10-17）---------------------------------------------
+# 下面四个纯函数把 brief 的文字约束解析成机器判据；两个执行函数把 manifest.limits 落到
+# 闸门与进程执行。刻意保持**纯函数 + 显式入参**，便于 -CheckOnly 与单测断言。
+
+# brief 里的「超时：15 分钟」→ ms；「超时：无」/缺省 → 0（不限）。
+function Resolve-BriefTimeoutMs([string]$BriefText) {
+  if (-not $BriefText) { return 0 }
+  $m = [regex]::Match($BriefText, '超时[：:]\s*(\d+(?:\.\d+)?)\s*(毫秒|ms|分钟|min|m)\b',
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (-not $m.Success) { return 0 }
+  $n = [double]$m.Groups[1].Value
+  $unit = $m.Groups[2].Value
+  if ($unit -match '^(毫秒|ms)$') { return [int]$n }
+  return [int]($n * 60 * 1000)
+}
+
+# brief 里的「预算：50K tokens 以内」→ tokens；必须显式带 tokens 字样（防「预算：2 元」被误读）。
+function Resolve-BriefTokenBudget([string]$BriefText) {
+  if (-not $BriefText) { return 0 }
+  $m = [regex]::Match($BriefText, '预算[：:]\s*(\d+(?:\.\d+)?)\s*([KkMm]?)\s*tokens?\b',
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (-not $m.Success) { return 0 }
+  $n = [double]$m.Groups[1].Value
+  switch -Regex ($m.Groups[2].Value) {
+    '^[Kk]$' { $n *= 1000 }
+    '^[Mm]$' { $n *= 1000000 }
+  }
+  return [int]$n
+}
+
+# 生效超时：显式 -TimeoutMs > manifest.limits.timeout_ms > brief 文字 > 0（不限）。
+function Get-EffectiveTimeoutMs([int]$ExplicitMs, $Manifest, [string]$BriefText) {
+  if ($ExplicitMs -gt 0) { return $ExplicitMs }
+  if ($Manifest -and $Manifest.limits -and $Manifest.limits.timeout_ms) { return [int]$Manifest.limits.timeout_ms }
+  return (Resolve-BriefTimeoutMs $BriefText)
+}
+
+# 生效任务级 token 预算：brief 显式声明 > manifest.limits.max_tokens_per_task > 0（不限）。
+function Get-EffectiveTokenBudget($Manifest, [string]$BriefText) {
+  $briefBudget = Resolve-BriefTokenBudget $BriefText
+  if ($briefBudget -gt 0) { return $briefBudget }
+  if ($Manifest -and $Manifest.limits -and $Manifest.limits.max_tokens_per_task) { return [int]$Manifest.limits.max_tokens_per_task }
+  return 0
+}
+
+# 该任务在 agent usage.jsonl 里的历史 token 累计（重试/续跑前预检用；损坏行跳过，§10 容错）。
+function Get-TaskTokens([string]$AgentDir, [string]$TaskId) {
+  $usageFile = Join-Path $AgentDir 'usage.jsonl'
+  if (-not (Test-Path $usageFile)) { return 0 }
+  $sum = 0
+  foreach ($line in Get-Content $usageFile) {
+    try {
+      $row = $line | ConvertFrom-Json
+      if ([string]$row.task -ne $TaskId) { continue }
+      $sum += ([int]$row.input_tokens + [int]$row.output_tokens)
+    } catch { }
+  }
+  return $sum
+}
+
+# 心跳新鲜 = now - heartbeat_at < 3 × heartbeat_ms（与 workers/liveness.cjs 的 stale 口径一致）。
+# 入参是 status.json 的**原始文本**，不是 ConvertFrom-Json 的结果 —— 实测（2026-10-17）：
+# PS7 的 ConvertFrom-Json 会把 `2026-10-17T13:08:52Z` 转成 **Kind=Local 且数值不变** 的
+# DateTime（13:08:52 Local），此时 ToUniversalTime() 会再减一次本地偏移（-8h）⇒ 新鲜心跳被
+# 误判成 stale。用 DateTimeOffset.Parse 解析原始字符串才能按真实 UTC 比较。
+# 已知双实现（PS 侧与 node 侧各一份）—— 口径写在这里，改动必须两边同步。
+function Test-HeartbeatFresh([string]$StatusJson, $Manifest) {
+  if (-not $StatusJson) { return $false }
+  $m = [regex]::Match($StatusJson, '"heartbeat_at"\s*:\s*"([^"]+)"')
+  if (-not $m.Success) { return $false }
+  $heartbeatMs = 30000
+  if ($Manifest -and $Manifest.limits -and $Manifest.limits.heartbeat_ms) { $heartbeatMs = [int]$Manifest.limits.heartbeat_ms }
+  try {
+    $beat = [System.DateTimeOffset]::Parse($m.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+    $ageMs = ((Get-Date).ToUniversalTime() - $beat.UtcDateTime).TotalMilliseconds
+    return ($ageMs -lt (3 * $heartbeatMs))
+  } catch { return $false }
+}
+
+# 带超时的 worker 进程执行（2026-10-17）。为什么不用 `& $exe @args`：它是同步阻塞，
+# worker 挂死会永久占住 Commander 会话（gap 文档 §4② 实测形态）。
+# 为什么用 ArgumentList：PS7/.NET 逐参数传递，prompt 里的引号/空格/换行不会被二次切分
+# （`Start-Process -ArgumentList` 在 Windows 上仍是拼接字符串，会破坏参数边界）。
+# 输出语义变化：由「实时 Tee」改为「结束后整块写日志 + 控制台回显」—— 超时控制必须异步等待，
+# 牺牲实时性换可中断性；日志文件内容仍与旧实现同源（stdout+stderr 合并）。
+function Invoke-WorkerProcess([string]$Exe, [string[]]$Argv, [string]$OutFile, [int]$TimeoutMs) {
+  $psi = [System.Diagnostics.ProcessStartInfo]::new()
+  $psi.FileName = $Exe
+  foreach ($a in $Argv) { $psi.ArgumentList.Add([string]$a) }
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  $psi.WorkingDirectory = (Get-Location).Path
+  $p = [System.Diagnostics.Process]::Start($psi)
+  $outTask = $p.StandardOutput.ReadToEndAsync()
+  $errTask = $p.StandardError.ReadToEndAsync()
+  $exited = if ($TimeoutMs -gt 0) { $p.WaitForExit($TimeoutMs) } else { $p.WaitForExit(); $true }
+  $timedOut = -not $exited
+  if ($timedOut) {
+    # Kill(entireProcessTree) 是 .NET Core 3.0+（PS7 满足）；旧框架回落成只杀主进程。
+    try { $p.Kill($true) } catch { try { $p.Kill() } catch { } }
+    try { $p.WaitForExit(5000) | Out-Null } catch { }
+  }
+  $stdout = ''
+  $stderr = ''
+  try { $stdout = $outTask.GetAwaiter().GetResult() } catch { }
+  try { $stderr = $errTask.GetAwaiter().GetResult() } catch { }
+  $text = [string]$stdout + [string]$stderr
+  if ($text) {
+    $text | Add-Content -Path $OutFile -Encoding UTF8
+    Write-Host $text
+  }
+  if ($timedOut) { return @{ exitCode = 124; timedOut = $true } }  # 124 是内部超时标记，对外映射 exit 3
+  return @{ exitCode = $p.ExitCode; timedOut = $false }
 }
 
 # --- G1 可派闸门（2026-09-30 接线）-------------------------------------------
@@ -636,6 +767,20 @@ if ($CheckOnly) {
   if (-not $manifest) { Write-Host "[budget] agent $Agent 无档案"; exit 2 }
   $ok = Test-Budget $agentDir $manifest
   if (-not $ok) { exit 4 }
+  # 闸门 0.5：并发上限（与派单路径同口径；2026-10-17）
+  $maxConc = if ($MaxConcurrent -gt 0) { $MaxConcurrent }
+    elseif ($manifest.limits -and $manifest.limits.max_concurrent_tasks) { [int]$manifest.limits.max_concurrent_tasks }
+    else { 0 }
+  if ($maxConc -gt 0) {
+    $statusPath = Join-Path $agentDir 'status.json'
+    $selfStatus = Read-JsonFile $statusPath
+    $selfActive = $selfStatus -and ($selfStatus.state -eq 'running' -or $selfStatus.state -eq 'draining')
+    $selfRaw = if (Test-Path $statusPath) { Get-Content $statusPath -Raw } else { '' }
+    if ($selfActive -and (Test-HeartbeatFresh $selfRaw $manifest)) {
+      Write-Host "[concurrency] 拒绝派单：$Agent 已有任务在跑（state=$($selfStatus.state)，心跳新鲜，max_concurrent_tasks=$maxConc）；若确认是残留，用 -ResetStatus"
+      exit 2
+    }
+  }
   # 闸门顺序与派单路径一致：G1 可派（这个任务该不该派）→ G2 能力（派给谁合适）。
   # 两者都纳入 -CheckOnly，使之成为「能不能派」的完整判定（2026-09-11 的能力闸门同理）。
   $controlForGate = Read-JsonFile (Join-Path $agentDir 'control.json')
@@ -644,6 +789,15 @@ if ($CheckOnly) {
   if (-not (Test-DispatchableGate $TaskId $Agent $localEnabled $true)) { exit 2 }
   # 能力闸门也纳入预检：让 -CheckOnly 成为"能不能派"的完整判定
   $briefText = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+  # 闸门 1.5：任务级 token 预算（与派单路径同口径；2026-10-17）
+  $coTaskBudget = Get-EffectiveTokenBudget $manifest $briefText
+  if ($coTaskBudget -gt 0) {
+    $coUsed = Get-TaskTokens $agentDir $TaskId
+    if ($coUsed -ge $coTaskBudget) {
+      Write-Host "[budget] 任务级 token 预算熔断：任务 $TaskId 已用 $coUsed >= 上限 $coTaskBudget（拒绝重试/续跑）"
+      exit 4
+    }
+  }
   $reqCaps = Resolve-RequiredCaps $briefText
   if ($reqCaps) {
     if (-not (Test-CapabilityGate $reqCaps $Agent)) { exit 2 }
@@ -662,6 +816,12 @@ if ($CheckOnly) {
   } else {
     Write-Host '[verifier] brief 未声明 risk / 需要验证，跳过验证闸门（零行为变更）'
   }
+  # 调度级解析结果（2026-10-17）：让 -CheckOnly 也能看到「超时 / 任务 token 预算」的实际取值，
+  # 测试据此断言「manifest 字段与 brief 文字约束真的被消费」。
+  $coTimeout = Get-EffectiveTimeoutMs $TimeoutMs $manifest $briefText
+  $coTokenBudget = Get-EffectiveTokenBudget $manifest $briefText
+  Write-Host "[timeout] 生效超时：$coTimeout ms（0 = 不设限）"
+  Write-Host "[budget] 任务级 token 预算：$coTokenBudget（0 = 不设限）"
   exit 0
 }
 
@@ -672,12 +832,43 @@ if (-not $control -or $control.enabled -ne $true) { Write-Host "[dispatch] agent
 if ($manifest.preflight) { Write-Host "[dispatch] preflight 提示：$($manifest.preflight)" }
 if (-not (Test-Budget $agentDir $manifest)) { exit 4 }
 
+# 闸门 0.5：并发上限（manifest.limits.max_concurrent_tasks 的执行点，2026-10-17）。
+# 该 agent 已有 running/draining 且心跳新鲜 ⇒ 视为上一个任务仍在本机跑，拒绝重入。
+# 心跳过龄的僵尸不在这里拒（交给 G1 判活并提供 -ResetStatus 恢复路径），避免两处口径各说各话。
+$maxConc = if ($MaxConcurrent -gt 0) { $MaxConcurrent }
+  elseif ($manifest.limits -and $manifest.limits.max_concurrent_tasks) { [int]$manifest.limits.max_concurrent_tasks }
+  else { 0 }
+if ($maxConc -gt 0) {
+  $statusPath = Join-Path $agentDir 'status.json'
+  $selfStatus = Read-JsonFile $statusPath
+  $selfActive = $selfStatus -and ($selfStatus.state -eq 'running' -or $selfStatus.state -eq 'draining')
+  $selfRaw = if (Test-Path $statusPath) { Get-Content $statusPath -Raw } else { '' }
+  if ($selfActive -and (Test-HeartbeatFresh $selfRaw $manifest)) {
+    Write-Host "[concurrency] 拒绝派单：$Agent 已有任务在跑（state=$($selfStatus.state)，心跳新鲜，max_concurrent_tasks=$maxConc）；若确认是残留，用 -ResetStatus"
+    exit 2
+  }
+}
+
 # 闸门 1：可派性（G1 task-ready）—— 任务状态 / 依赖满足 / assignee 一致性。
 # 到这里开关与预算都已确认通过，故 LocalEnabled / LocalBudgetOk 均为 $true（与 G1 判定做口径分歧检测）。
 if (-not (Test-DispatchableGate $TaskId $Agent $true $true)) { Write-Host "[dispatch] 可派闸门未通过，拒绝派单"; exit 2 }
 
 # 闸门 2：能力候选（G2 agent-pick）。brief 未声明 requires 时零行为变更。
 $briefForCaps = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+
+# 闸门 1.5：任务级 token 预算（manifest.limits.max_tokens_per_task / brief「预算：N tokens」的执行点，
+# 2026-10-17）。派单前累计该任务历史 usage（重试/续跑会复用同一 task_id），达到上限即熔断 ——
+# 防止「失败重试」把同一任务反复烧钱。运行后超限由 task.budget.exceeded 事件告警（见派单后段）。
+$taskTokenBudget = Get-EffectiveTokenBudget $manifest $briefForCaps
+if ($taskTokenBudget -gt 0) {
+  $usedTokens = Get-TaskTokens $agentDir $TaskId
+  if ($usedTokens -ge $taskTokenBudget) {
+    Write-Host "[budget] 任务级 token 预算熔断：任务 $TaskId 已用 $usedTokens >= 上限 $taskTokenBudget（拒绝重试/续跑）"
+    exit 4
+  }
+  Write-Host "[budget] 任务级 token 预算：已用 $usedTokens / 上限 $taskTokenBudget"
+}
+
 $reqCaps = Resolve-RequiredCaps $briefForCaps
 if ($reqCaps) {
   if (-not (Test-CapabilityGate $reqCaps $Agent)) { Write-Host "[dispatch] 能力闸门未通过，拒绝派单"; exit 2 }
@@ -705,6 +896,11 @@ if ($verifyRaw) {
 $brief = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -ErrorAction SilentlyContinue
 $context = Get-Content (Join-Path $Workspace "tasks\$TaskId\context.md") -Raw -ErrorAction SilentlyContinue
 $prompt = (($brief ?? '') + "`n`n## 上下文`n" + ($context ?? '')).Trim()
+
+# 调度级超时（2026-10-17）：显式参数 > manifest.limits.timeout_ms > brief「超时：M 分钟」> 0（不限）。
+# 0 表示沿用旧行为（无超时）—— 但 8 个 agent 的 manifest 都已声明 900000，故实际默认 15 分钟。
+$timeoutMs = Get-EffectiveTimeoutMs $TimeoutMs $manifest $brief
+Write-Host "[timeout] 生效超时：$timeoutMs ms（0 = 不设限；超时后 kill 进程树）"
 
 # 命令构造分两条路径，**刻意不共用切分逻辑**（2026-09-30 实测踩坑后拆开）：
 #   · `cmd:` 行 = 显式命令行（命令型任务），沿用简单的空格/引号切分；
@@ -776,6 +972,7 @@ $outFile = Join-Path $logDir "$TaskId-stdout.log"
 "" | Set-Content $outFile
 
 $exitCode = 0
+$lastTimedOut = $false   # 终态文案用：最后一次执行是否为超时 kill（2026-10-17）
 # OpenViking 记忆隔离（§12.2，2026-08-24）：worker 会话按 cwd 派生 actor peer 作用域（actor =
 # 仅检索本 workspace 记忆），防止多项目/多 worker 并存时记忆串味；同一 workspace 内各任务共享
 # 经验记忆（跨任务复用收益）。无 OpenViking 集成的 CLI 不读此变量，注入无害。
@@ -805,8 +1002,22 @@ try {
       if ($exitCode -eq 0) { $exitCode = 127 }
       continue
     }
-    & $exe @args 2>&1 | Tee-Object -FilePath $outFile -Append
-    if ($LASTEXITCODE -ne 0) { $exitCode = $LASTEXITCODE }
+    # 调度级执行（2026-10-17）：带超时的进程执行 + **只在超时**时重试（普通失败不重试）。
+    # 旧实现 `& $exe @args` 同步阻塞、无超时 —— worker 挂死会永久占住 Commander 会话。
+    $attempt = 0
+    while ($true) {
+      $run = Invoke-WorkerProcess -Exe $exe -Argv $args -OutFile $outFile -TimeoutMs $timeoutMs
+      if (-not $run.timedOut) { $lastTimedOut = $false; $code = [int]$run.exitCode; break }
+      $lastTimedOut = $true
+      if ($attempt -ge $RetriesOnTimeout) {
+        "[dispatch] 超时（${timeoutMs}ms）且重试 ${RetriesOnTimeout} 次已用尽 ⇒ 记执行失败（exit 3）" | Tee-Object -FilePath $outFile -Append
+        $code = 3
+        break
+      }
+      $attempt++
+      "=== 超时（${timeoutMs}ms）：已 kill 进程树，重试第 $attempt 次 / 最多 $RetriesOnTimeout 次 ===" | Tee-Object -FilePath $outFile -Append
+    }
+    if ($code -ne 0) { $exitCode = $code }
   }
 } finally {
   Pop-Location
@@ -840,6 +1051,16 @@ if ($null -eq $usageRow) {
 }
 Write-UsageRow $usageRow $Agent
 
+# 任务级 token 预算的事后检查（2026-10-17）：运行后累计超限只在日志/transcript 留痕，
+# 刻意**不新增事件类型**（graph-event.schema.json 的 enum 是收紧的，扩类型要同步 bus-contract
+# 与面板消费方；预算超限属告警而非状态变更，先走日志，等事件模型扩展时再升级）。
+if ($taskTokenBudget -gt 0) {
+  $taskTokensAfter = Get-TaskTokens $agentDir $TaskId
+  if ($taskTokensAfter -gt $taskTokenBudget) {
+    Write-Host "[budget] ⚠ 任务级 token 预算超限：$TaskId 已用 $taskTokensAfter > 上限 $taskTokenBudget（钱已花；仅告警）"
+  }
+}
+
 # status 终态（K4，2026-09-30）：判据单点在 workers/dispatch/final-state.ps1 ——
 # 「CLI exit 0」不等于「健康空闲」：worker 自述受阻的载体是交付契约
 # tasks/<id>/result.json 的 status（blocked/failed），过去被一律记成 idle，
@@ -860,11 +1081,13 @@ try {
 }
 $state = if ($finalFailed) { 'error' } elseif ($final -and $final.state) { $final.state } elseif ($exitCode -eq 0) { 'idle' } else { 'error' }
 $stepText = if ($finalFailed) { "派单完成（exit $exitCode）：终态判定器调用失败，未判定" }
+  elseif ($lastTimedOut) { "派单完成（exit $exitCode）：超时（${timeoutMs}ms）已 kill 进程树（重试 $RetriesOnTimeout 次后仍失败）" }
   elseif ($final -and $final.reason) { "派单完成（exit $exitCode，$($final.source)）：$($final.reason)" }
   else { "派单完成（exit $exitCode）" }
 $status.state = $state; $status.current_task = $null; $status.progress = 1.0; $status.step = $stepText; $status.heartbeat_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 if ($state -ne 'idle') {
   $status.last_error = if ($finalFailed) { 'final-state.ps1 调用失败，终态未判定（保守记 error）' }
+    elseif ($lastTimedOut) { "CLI 超时（${timeoutMs}ms），已 kill 进程树（重试 $RetriesOnTimeout 次后仍失败）" }
     elseif ($final -and $final.reason) { $final.reason }
     elseif ($state -eq 'blocked') { 'worker 自述受阻（result.json status=blocked）' }
     else { "CLI exit $exitCode" }

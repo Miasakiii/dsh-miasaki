@@ -73,6 +73,8 @@ function fixture(t, opts = {}) {
     corruptLedger = false,
     risk = null,
     briefExtra = '',
+    limits = null,       // 追加/覆盖 manifest.limits（调度级用例：timeout_ms / max_concurrent_tasks / max_tokens_per_task）
+    usageTokens = null,  // 写一条本任务的 usage.jsonl（任务级 token 预算用例）
   } = opts
 
   const dir = mkdtempSync(join(tmpdir(), 'fleet-gate-'))
@@ -114,7 +116,8 @@ function fixture(t, opts = {}) {
     mkdirSync(adir, { recursive: true })
     writeFileSync(join(adir, 'manifest.json'), JSON.stringify({
       id,
-      limits: { budget_per_day: 2.0, heartbeat_ms: 30000 },
+      // 默认只给最小集（不改变既有用例语义）；调度级用例显式传 limits 追加字段
+      limits: { budget_per_day: 2.0, heartbeat_ms: 30000, ...(limits ?? {}) },
       cli: { invoke: `${id} -p {prompt}` },
       metering_source: 'unknown',
     }, null, 2), 'utf8')
@@ -183,6 +186,14 @@ function fixture(t, opts = {}) {
       + briefExtra,
     'utf8',
   )
+
+  // ---- 任务级 token 预算夹具：usage.jsonl 里该任务的历史累计 ----
+  if (usageTokens != null) {
+    writeFileSync(join(dir, 'agents', assignee, 'usage.jsonl'), JSON.stringify({
+      ts: NOW, task: taskId, input_tokens: usageTokens, output_tokens: 0,
+      cache_read_tokens: 0, cache_write_tokens: 0, cost: 0, step: 1, takeover: 0, model: 'cli-default',
+    }) + '\n', 'utf8')
+  }
 
   return dir
 }
@@ -479,4 +490,122 @@ test('派单器语法闸门（含新增的 Test-DispatchableGate / Write-BusEven
   const r = spawnSync(PWSH, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', cmd], { stdio: 'ignore' })
   const detail = existsSync(errFile) ? readFileSync(errFile, 'utf8').trim() : '(无详情)'
   assert.equal(r.status, 0, `PowerShell 语法错误：\n${detail}`)
+})
+
+// ===========================================================================
+// 调度级生命周期（2026-10-17，fleet gap 文档 §4② P1 落地）
+// manifest.limits 的 timeout_ms / max_concurrent_tasks / max_tokens_per_task
+// 此前是「纸面字段」（无任何消费点），本批变成执行点。用例分三层：
+//   ① -CheckOnly 断言解析取值（brief 文字约束也被消费）；
+//   ② 并发 / 任务级 token 预算闸门拒绝；
+//   ③ 真执行：超时 kill 进程树 + 只在超时重试（普通失败不重试）。
+// ===========================================================================
+
+test('调度级：-CheckOnly 解析 manifest.limits.timeout_ms（900000ms）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { limits: { timeout_ms: 900000 } })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 0, `应放行；实际：\n${r.text}`)
+  assert.match(r.text, /\[timeout\] 生效超时：900000 ms/)
+})
+
+test('调度级：brief「超时：5 分钟」在 manifest 未声明时生效（300000ms）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { briefExtra: '- 超时：5 分钟\n' })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 0, `应放行；实际：\n${r.text}`)
+  assert.match(r.text, /\[timeout\] 生效超时：300000 ms/)
+})
+
+test('调度级：brief「预算：8K tokens」被解析为任务级预算 8000', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { briefExtra: '- 预算：8K tokens 以内\n' })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 0, `应放行；实际：\n${r.text}`)
+  assert.match(r.text, /\[budget\] 任务级 token 预算：8000/)
+})
+
+test('调度级：并发上限（running + 心跳新鲜）→ 拒绝 exit 2，并给出 -ResetStatus 出口', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { liveness: 'running-fresh', limits: { max_concurrent_tasks: 1 } })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 2, `已有任务在跑时应拒绝；实际：\n${r.text}`)
+  assert.match(r.text, /\[concurrency\] 拒绝派单/)
+  assert.match(r.text, /-ResetStatus/)
+})
+
+test('调度级：僵尸 running（心跳过龄）不由并发闸门拒 —— 交给 G1 判活口径', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { liveness: 'running-stale', limits: { max_concurrent_tasks: 1 } })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 2, '僵尸仍应被拒（G1 判活），但不是因为并发')
+  assert.doesNotMatch(r.text, /\[concurrency\] 拒绝派单/)
+  assert.match(r.text, /判活失败/)
+})
+
+test('调度级：任务级 token 预算熔断（历史 usage 已超 max_tokens_per_task）→ exit 4', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { limits: { max_tokens_per_task: 50000 }, usageTokens: 60000 })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 4, `已超任务预算应熔断；实际：\n${r.text}`)
+  assert.match(r.text, /任务级 token 预算熔断/)
+})
+
+// ---- 真执行：超时 kill 与「只在超时重试」 ---------------------------------
+
+function writeFakeCli(fix, body) {
+  const p = join(fix, 'fake-cli.mjs')
+  writeFileSync(p, body, 'utf8')
+  return p
+}
+
+test('调度级：worker 挂死 → 超时 kill 进程树，记 exit 3 且 status=error（last_error 含超时）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const fake = writeFakeCli(fix, 'setTimeout(() => {}, 60000)\n')
+  // brief 的 cmd: 行优先于 manifest 的 invoke 模板
+  writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
+    `# 夹具任务 t-9001\n\n## 约束\n- 夹具：不声明 requires（跳过能力闸门）\ncmd: node "${fake}"\n`, 'utf8')
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-TimeoutMs', '500', '-RetriesOnTimeout', '0'])
+  assert.equal(r.status, 3, `超时耗尽应记执行失败 exit 3；实际：\n${r.text}`)
+  assert.match(r.text, /超时（500ms）/)
+  const status = JSON.parse(readFileSync(join(fix, 'agents', 'alpha', 'status.json'), 'utf8'))
+  assert.equal(status.state, 'error')
+  assert.match(status.last_error ?? '', /超时/)
+})
+
+test('调度级：超时后重试一次，第二次成功 → exit 0', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const cnt = join(fix, 'attempts.txt')
+  const fake = writeFakeCli(fix, [
+    "import { existsSync, readFileSync, writeFileSync } from 'node:fs'",
+    `const f = ${JSON.stringify(cnt)}`,
+    "const n = existsSync(f) ? Number(readFileSync(f, 'utf8')) : 0",
+    "writeFileSync(f, String(n + 1))",
+    "if (n === 0) { setTimeout(() => {}, 60000) } else { process.exit(0) }",
+  ].join('\n'))
+  writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
+    `# 夹具任务 t-9001\n\n## 约束\n- 夹具：不声明 requires（跳过能力闸门）\ncmd: node "${fake}"\n`, 'utf8')
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-TimeoutMs', '500', '-RetriesOnTimeout', '1'])
+  assert.equal(r.status, 0, `重试后成功应 exit 0；实际：\n${r.text}`)
+  assert.match(r.text, /重试第 1 次/)
+  assert.equal(readFileSync(cnt, 'utf8').trim(), '2', '应恰好执行两次（首跑超时 + 一次重试）')
+})
+
+test('调度级：普通失败（exit 1）不触发重试（避免掩盖真实错误与重复花钱）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const cnt = join(fix, 'attempts.txt')
+  const fake = writeFakeCli(fix, [
+    "import { appendFileSync } from 'node:fs'",
+    `appendFileSync(${JSON.stringify(cnt)}, 'x')`,
+    'process.exit(1)',
+  ].join('\n'))
+  writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
+    `# 夹具任务 t-9001\n\n## 约束\n- 夹具：不声明 requires（跳过能力闸门）\ncmd: node "${fake}"\n`, 'utf8')
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-TimeoutMs', '5000', '-RetriesOnTimeout', '1'])
+  assert.equal(r.status, 1, `普通失败沿用 CLI 退出码透传（非超时映射 3）；实际：\n${r.text}`)
+  assert.doesNotMatch(r.text, /重试第/)
+  assert.equal(readFileSync(cnt, 'utf8').trim().length, 1, '普通失败只跑一次')
 })

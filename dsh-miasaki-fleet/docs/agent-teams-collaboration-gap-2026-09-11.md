@@ -44,8 +44,8 @@
 | 形态 | **能力路由 + 文件总线的编排系统**，Orchestrator-Worker 模式 | 主协议 §2 唯一路由规则 |
 | Worker 可见性 | **明文互不可见、不可通信** | 主协议 §2：「你不感知其他 worker 的存在，也无法与其通信」 |
 | 派单载荷 | brief + context + priority，**无模型 / 无能力要求 / 无预算规格 / 无线限规格** | §7.0；图工程 §4.4「brief 无此字段，v2 再做」 |
-| 已落地 | 总线 + 11 类 schema + applier（CAS/确定性排序/超步版本）；派单器（预算熔断/全源计量）；F3 判活；pulse；G1/G2/G4 判定层；verify-all fleet 14/14 | README + 图工程 §8 |
-| 仅纸面 | `timeout_ms` 硬超时、`max_tokens_per_task`、`max_concurrent_tasks`、进程托管器、自动重启、交付期校验、fold 实体化、**G3 全部** | 图工程 §8；本轮 `grep` 实证四个 limits 字段中仅 `heartbeat_ms` 被消费 |
+| 已落地 | 总线 + 11 类 schema + applier（CAS/确定性排序/超步版本）；派单器（预算熔断/全源计量）；F3 判活；pulse；G1/G2/G4 判定层；**调度级生命周期（2026-10-17：硬超时 kill 树 + 只在超时重试 / 并发上限 / 任务级 token 预算熔断）**；verify-all fleet 21/21 | README + 图工程 §8 |
+| 仅纸面 | 进程托管器（跨会话常驻监督）、自动重启、交付期校验、fold 实体化、**G3 全部** | 图工程 §8；`timeout_ms` / `max_tokens_per_task` / `max_concurrent_tasks` 已于 2026-10-17 成为执行点 |
 | 真实台账 | 9 任务；`depends_on` 全空、无 `graph` 字段；**`result.json`/`verdict.json`/`capability.json` 零文件** | `glob` 实证 |
 | 机器事件流 | **本轮首次真实写入**（此前 `graph-events.jsonl` 不存在，总线版本 0） | 本轮执行记录 §5 |
 
@@ -232,7 +232,7 @@ G3 **完全未实现**，且卡在数据前提：`t-0001~t-0008` 全部真实任
 | **P0** | status / usage 经 `dispatcher` 代理写入总线 | ✅ **已落地（2026-09-30，B5）**：`usage.jsonl` 登记白名单（仅 `append`）并经 applier 落盘（t-0011 实测：superstep 的 `paths` 命中该路径）。**`status.json` 刻意豁免** —— 它是**派生态缓存**（真值在 `result.json` + 事件流，写频 2 次/派单，全仓无周期性心跳写者），理由写进契约。**原「仍已知未收敛」三项已于 2026-10-05 第二批收口**（设计文档 v0.28）：`control.json`（monitor toggle 经 applier，500/409 不回退）、`manifest.json`/`registry.json`（扫描器 N+1 补丁一次超步） |
 | **P1** | brief 加 `requires: [cap:*]`；manifest 加 `model` 真值 | ⏳ 待做（激活能力级 confidence 与 G4 的 model 级异构判定） |
 | **P1** | 任务书加 `limits: { max_cost, deadline }`（§4①） | ⏳ 待做 |
-| **P1** | 派单器加超时/重试/orphan 回收（§4②） | ⏳ 待做 |
+| **P1** | 派单器加超时/重试/orphan 回收（§4②） | ✅ **已落地（2026-10-17）**：`manifest.limits.timeout_ms` 硬超时 + `Kill(entireProcessTree)` + 只在超时重试一次；`max_concurrent_tasks` 并发闸门；`max_tokens_per_task` 任务级预算熔断。**orphan 回收** = 超时/失败后终态记 `error`（而非 `running`）+ 既有 `-ResetStatus` 恢复入口 + G1 判活拦僵尸。判据：`dispatch-gate` 26 → 35 例 |
 | **P2** | 集体复盘资产化 → 先策展 `collective-memory.md`（已 25 天未更新） | ⏳ 待做 |
 | **P3** | G3 失败归因 | ⏳ 阻塞于失败样本不足 |
 | **P3** | EvoAgentX 式结构自演化 | 🟢 远期（撞不做清单） |
