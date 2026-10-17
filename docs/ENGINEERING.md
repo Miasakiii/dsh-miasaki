@@ -1222,6 +1222,26 @@ fleet 全线 **197 例**全绿、`verify-all fleet` 21/21。**未做**：进程�
 **判据**：源码契约 `drag_follows_cursor_directly_without_spring_lag`（+1 例），`cargo test` **212 → 213 例**全绿。
 **待实机**：构建 + 部署（外部终端）+ E33 判据⑦–⑨ 手感走查。
 
+**2026-10-17（续三）· cot 残留清理 + 上游社区插件适配补丁迁入并首次入闸门**`[实测]`：
+用户报 miasaki 启动 `Failed to load plugins / @deepseek-ai/dsh-experimental-client-ui-cot-translation`
+（`web boot: 1 entry did not activate`），随后「实在不行我们可以脱离上游自己适配」。两件事：
+① **cot 残留**（profile 侧，不属于本仓代码）：报错来自 miasaki 桌面端 21:47 的启动 ——
+`~/.dsh/profiles/miasaki` 的 `bundles` 仍声明 `@deepseek-ai/dsh-experimental-cot-translation-bundle`
+（官方桌面端 profile 在 18:18 的 cotclean 已清干净，miasaki 是漏网）；已备份并移除，
+`dsh --profile miasaki --dump-config` 复核组合树无 cot / translation 条目。
+② **`@yeesy369/dsh-browser-playwright` 双半适配补丁迁入 `dsh-miasaki-desktop/patches/`**（用户拍板
+「固化到 desktop/patches」）：该补丁 2026-09-23 落地时放在 `dsh-miasaki-shared-docs/dsh-platform/patches/`，
+只有 `patch-live-audit.mjs` 的 live 审计、**没有离线闸门**（离线 verify 恒绿而 live unknown 的盲区）。
+本批整体迁移（`patch.mjs` 40 KB + `baseline/` 四文件，**字节与 SHA 常量未变**），并在
+`verify-all desktop` 新增 `patch verify (上游 browser-playwright 适配)` ⇒ **desktop 41 → 42、全量 183 → 184**；
+`patch-live-audit.mjs` 退役 shared-docs 专用根（由 desktop 根自动发现）、`style-baseline.json` 两条 noEof
+与 `silent-guard-baseline.json` 四条 key 路径同步、旧目录保留迁移说明 README 作历史入口。
+**回归**：全量 **184 项**（desktop **42/42** / repo **7/7**），`cargo test` **213 例**，
+`patch-live-audit` 12 目标 / 11 件在册补丁全 patched。顺带排除两处「旧日志误判」：
+`server.log` 里的 `settings.register is not a function` 与 `openviking 0.5.8 不兼容` 都是 9 月记录 ——
+当前 browser-playwright 已打双轨补丁、openviking 实际为 0.5.26（兼容 0.2.1-rc.2）；临时启动 miasaki
+后端 22 秒复核实测**零「entries did not activate」警告**。**待用户**：重启 miasaki 确认 cot 报错消失。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

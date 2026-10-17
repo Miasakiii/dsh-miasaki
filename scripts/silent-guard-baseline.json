@@ -399,40 +399,40 @@
       "reason": "未挂验证器的任务没有 verdict.json 是正常的"
     },
     {
-      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R2|const clientPatched = await readFile(join(BASELINE, 'client.patched.js'), 'utf8').catch(() => null)",
+      "key": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs|R2|const clientPatched = await readFile(join(BASELINE, 'client.patched.js'), 'utf8').catch(() => null)",
       "rule": "R2",
-      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "file": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs",
       "line": 697,
       "snippet": "const clientPatched = await readFile(join(BASELINE, 'client.patched.js'), 'utf8').catch(() => null)",
       "count": 1,
-      "reason": "（待补：触碰该文件时补理由）"
+      "reason": "live 审计读 patched 基线失败时降级为 unknown（不崩、逐半独立判定）；baseline 缺失本身由 patch.mjs verify 的离线 SHA 闸门兜住"
     },
     {
-      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R2|const hostPatched = await readFile(join(BASELINE, 'index.patched.js'), 'utf8').catch(() => null)",
+      "key": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs|R2|const hostPatched = await readFile(join(BASELINE, 'index.patched.js'), 'utf8').catch(() => null)",
       "rule": "R2",
-      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "file": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs",
       "line": 698,
       "snippet": "const hostPatched = await readFile(join(BASELINE, 'index.patched.js'), 'utf8').catch(() => null)",
       "count": 1,
-      "reason": "（待补：触碰该文件时补理由）"
+      "reason": "live 审计读 patched 基线失败时降级为 unknown（不崩、逐半独立判定）；baseline 缺失本身由 patch.mjs verify 的离线 SHA 闸门兜住"
     },
     {
-      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R1|if (!existsSync(target)) { console.log(`[${half.key}] 目标不存在: ${target}`); continue }",
+      "key": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs|R1|if (!existsSync(target)) { console.log(`[${half.key}] 目标不存在: ${target}`); continue }",
       "rule": "R1",
-      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "file": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs",
       "line": 735,
       "snippet": "if (!existsSync(target)) { console.log(`[${half.key}] 目标不存在: ${target}`); continue }",
       "count": 1,
-      "reason": "（待补：触碰该文件时补理由）"
+      "reason": "status 遍历 profile 时，未装该插件的 profile 跳过是正常形态；装了但文件缺失会落入 unknown 分支并显式报告"
     },
     {
-      "key": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs|R1|if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }",
+      "key": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs|R1|if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }",
       "rule": "R1",
-      "file": "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs",
+      "file": "dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs",
       "line": 757,
       "snippet": "if (!existsSync(target)) { console.log(`[${half.key}] 跳过（目标不存在）`); continue }",
       "count": 2,
-      "reason": "（待补：触碰该文件时补理由）"
+      "reason": "apply/revert 遍历 profile 时，未装该插件的 profile 跳过是正常形态；本补丁的缺省探测本来就会跨多个 profile 尝试"
     },
     {
       "key": "dsh-miasaki-usage/lib/index.js|R1|if (!fs.existsSync(legacyLedger)) return;",

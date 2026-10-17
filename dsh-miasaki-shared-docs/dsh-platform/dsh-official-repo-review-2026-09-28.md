@@ -190,7 +190,7 @@ compare API：`deepseek-ai:477b4f4...deepseek-ai:4878cda`
 | desktop | `dsh-client-ui-trajectory` | `@deepseek-ai/dsh-client-ui-trajectory` | `lib/client.js` |
 | desktop | `dsh-cordis-host-runner` | `@deepseek-ai/dsh-cordis-host-runner` | `lib/index.js` |
 | dual-model | `dsh-api-session-controller` | `@deepseek-ai/dsh-api-session-controller` | `lib/index.js` |
-| shared-docs | `dsh-browser-playwright`（双半） | `@yeesy369/dsh-browser-playwright` | 见该补丁 `LIVE_TARGETS` |
+| desktop（2026-10-17 迁入；此前在 shared-docs） | `dsh-browser-playwright`（双半） | `@yeesy369/dsh-browser-playwright` | 见该补丁 `LIVE_TARGETS` |
 
 `BASELINE_DSH_VERSION` 逐件核对均为 `'0.1.7-rc.2'`（`patch.mjs` 常量）。**升级必须重打全部十件**；
 逐件在 0.2.0-rc.1 真实产物上的锚点命中结果见配套评估文档。

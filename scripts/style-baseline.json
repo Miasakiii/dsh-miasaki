@@ -54,8 +54,8 @@
     "dsh-miasaki-desktop/preset-sources/whale.persona.txt",
     "dsh-miasaki-desktop/ui/pets/frames.json",
     "dsh-miasaki-fleet/tasks/t-0002/result/result-t-0002.md",
-    "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/baseline/index.original.js",
-    "dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/baseline/index.patched.js",
+    "dsh-miasaki-desktop/patches/dsh-browser-playwright/baseline/index.original.js",
+    "dsh-miasaki-desktop/patches/dsh-browser-playwright/baseline/index.patched.js",
     "dsh-miasaki-ssh/cordis.patch.yml",
     "dsh-miasaki-ssh/pnpm-workspace.yaml",
     "dsh-miasaki-ssh/test/store.test.js"

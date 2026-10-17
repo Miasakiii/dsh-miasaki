@@ -356,7 +356,7 @@ web UI 正常、「浏览器窗口」卡片在插件面板完整渲染可交互�
 3. 检查 `~/.dsh/settings.yaml` 的导入结果（§7.8 表格逐项）。
 4. **先跑回归矩阵里的补丁 verify**（`node scripts/verify-all.mjs` 全覆盖 dual-model ×1 + desktop ×5）——
    六个 `patch.mjs verify` 若报 `unknown`（锚点探测无变体命中）即为第一信号，停下按补丁 README 增补变体，不要继续升。
-   **另跑 profile 侧第三方补丁**：`node dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/patch.mjs status`
+   **另跑 profile 侧第三方补丁**：`node dsh-miasaki-desktop/patches/dsh-browser-playwright/patch.mjs status`（2026-10-17 迁入 desktop 补丁目录）
    （期望 client/host 双 PATCHED；若插件升过版变 UNKNOWN，先 `rebuild-baseline` 再 `apply`，§7.11）。
 5. 七条线逐条 `node scripts/verify-all.mjs <line>`。
 6. 补丁机械流程（settings-models 已双代适配，`EDITS` 零改）：逐个 `rebuild-baseline.mjs` → 同步常量 → `verify` → `apply` → **刷页面确认「思考强度」「测试连通性」两个控件在位**。

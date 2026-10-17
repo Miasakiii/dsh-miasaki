@@ -553,6 +553,20 @@ function planDesktop() {
     args: [join(dir, 'patches/dsh-client-ui-workspace/patch.mjs'), 'verify'],
     cwd: dir,
   })
+  // 上游社区插件 `@yeesy369/dsh-browser-playwright`（0.8.1）的 DSH 0.1.7+/0.2.x 兼容适配补丁。
+  // 与其余补丁不同：目标是 **profile 里装的上游插件**，不是 DSH 本体 —— 上游没跟进
+  // 「设置即 profile entry 的 cordis 配置」契约（`settings.register` 已移除），在 0.2.1-rc.2
+  // 下原版会在启动时报 `TypeError: settings.register is not a function` 且整条不激活。
+  // 契约与本体补丁相同：baseline 上游原版 → 重建 → SHA 比对 + ESM 语法闸门 + 行为自证
+  // （host 侧 apply() 双轨分支 3 例 / client 侧 writeSetting 批量写 3 例）。纯离线，
+  // 插件升级或 pnpm 重装覆盖补丁后这一项仍应 PASS（它证明规则与基线自洽）。
+  checks.push({
+    line: 'desktop',
+    name: 'patch verify (上游 browser-playwright 适配)',
+    cmd: process.execPath,
+    args: [join(dir, 'patches/dsh-browser-playwright/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
   // 「测试连通性 v2」的 host 侧能力（plugins/dsh-model-probe）：语法检查 +
   // 探测判定表单测（URL 规则 / 两段式档案 / 分类表 / 脱敏 / 截断）。全部是纯逻辑，
   // 不发起任何网络请求——真实探测属实机项，见 smoke-test-matrix.md。

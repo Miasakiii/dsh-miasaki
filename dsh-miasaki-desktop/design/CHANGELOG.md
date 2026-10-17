@@ -2,6 +2,36 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-17（续二）· 上游社区插件适配补丁迁入本线并首次入回归（browser-playwright）
+
+**触发**：用户报「HARNESS / Failed to load plugins / `@deepseek-ai/dsh-experimental-client-ui-cot-translation` /
+web boot: 1 entry did not activate」，随后拍板「实在不行我们可以脱离上游自己适配」。
+
+**① 报错来源与 cot 残留清理（profile 侧，不在本仓代码）**：报错来自 miasaki 桌面端 21:47 的启动
+（`~/.dsh/profiles/miasaki` 的 `bundles` 仍声明 `@deepseek-ai/dsh-experimental-cot-translation-bundle`；
+官方桌面端 profile 在 18:18 的 cotclean 已清干净，miasaki 是漏网）。已备份并移除该条目，
+`dsh --profile miasaki --dump-config` 复核组合树无 cot / translation。顺带排除两类误判：
+旧 `~/.dsh/logs`/`server.log` 里 9 月的 `settings.register is not a function`、`openviking 0.5.8 不兼容`
+都是**历史记录**——当前 `browser-playwright` 已在 2026-09-23 打过双轨适配补丁、`openviking` 实际装的是
+0.5.26（兼容 0.2.1-rc.2）；临时启动 miasaki 后端 22 秒复核：stdout 仅 inspector + web URL、stderr 空、
+**零「entries did not activate」警告**（宿主机上两份安装副本 `miasaki` / `web` 均 `patched`）。
+
+**② `dsh-browser-playwright` 适配补丁迁入 `patches/` 并首次进离线回归**：该补丁此前固化在
+`dsh-miasaki-shared-docs/dsh-platform/patches/`（2026-09-23 落地、09-26 补「遍历所有 profile」探测），
+但**没有离线闸门**（只有 `patch-live-audit.mjs` 的 live 审计，离线 `verify` 恒绿而 live `unknown` 的盲区
+仍在）。本批整体迁移到 `dsh-miasaki-desktop/patches/dsh-browser-playwright/`（`patch.mjs` 40 KB +
+`baseline/` 四文件，**字节与 SHA 常量未变**），`node patch.mjs verify` 的 **32 项双世界断言**全绿；
+`verify-all.mjs` 新增一项 `patch verify (上游 browser-playwright 适配)`（desktop **41 → 42**）。
+配套改动：`patch-live-audit.mjs` 退役 shared-docs 专用根（由 desktop 根自动发现，12 目标 / 11 件在册补丁
+全 patched）、`style-baseline.json` 两条 noEof 路径与 `silent-guard-baseline.json` 四条 key 同步更新
+（reason 一并具化）、旧目录保留迁移说明 README 作历史入口。
+
+**验证**：`verify-all desktop 42/42 PASS`（`cargo test` **213 例**）、`verify-all repo 7/7 PASS`
+（style 54 条基线 / md-links 189 文档 419 链接全通）、`patch-live-audit.mjs` 全 patched。
+
+**边界**：本补丁作用于 profile 里安装的上游插件（硬链），重装/升级该插件会冲掉，需
+`node patch.mjs apply` 重打；上游发兼容版后整件退役（README 已写退役流程）。
+
 ## 2026-10-17（续）· 桌面端拖动直跟手（R19）：修「拖拽还是有点粘滞感」
 
 **触发**：用户「另外，拖拽桌宠还是有点粘滞感」（R18 已实装：19:36 构建的 exe 含悬浮球拖动 + 反馈 + 滑停）。

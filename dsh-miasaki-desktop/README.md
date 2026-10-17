@@ -70,7 +70,7 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 
 ```bash
-node ../scripts/verify-all.mjs desktop   # 40 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×8 / 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**193 例**，2026-10-13 实跑；旧记「174 例」「100 例」是口径落后）
+node ../scripts/verify-all.mjs desktop   # 42 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×9（其中第 9 件为**上游社区插件** `dsh-browser-playwright` 的适配补丁，2026-10-17 迁入并首次入闸门）/ 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**213 例**，2026-10-17 实跑；旧记「193」「174」「100」例是口径落后）
 ```
 
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
@@ -329,8 +329,9 @@ light 的完整命令行与 stderr。
 
 ## DSH 运行时补丁（本体例外）
 
-`patches/` 存放**八处**「修改 DSH 本体」的补丁——都改写已安装包的编译产物，
-**DSH 升级会被覆盖、需重新应用**；补丁规则与基线文件均已入库，可重建/可校验/可回退。
+`patches/` 存放**九处**「修改已安装包产物」的补丁——其中**八处是 DSH 本体**（改写官方包编译产物），
+**第九处是上游社区插件**（`@yeesy369/dsh-browser-playwright`，改写 profile 里安装的第三方包）。
+两者共同点：**包里更新/重装会被覆盖、需重新应用**；补丁规则与基线文件均已入库，可重建/可校验/可回退。
 
 | 补丁 | 目标包 | 做什么 |
 |---|---|---|
@@ -342,8 +343,14 @@ light 的完整命令行与 stderr。
 | [`dsh-client-ui-sidebar`](patches/dsh-client-ui-sidebar/README.md) | 官方侧边栏 | 头部悬浮提示 portal 化：**5 处** Tooltip 加 `portal: true`（2026-09-29 随 rc.2 退役品牌区那条 —— 官方删掉了那个 Tooltip），气泡改挂 body（z 1100），修左上角悬停提示被中栏盖住/裁掉 |
 | [`dsh-client-ui-brand-official`](patches/dsh-client-ui-brand-official/README.md) | 官方品牌徽标 | 侧边栏品牌名 **「DSH」字标 + 黑胶囊「MIASAKI」**：`sidebar.brand.name` occupant 换成部署实现，字标 cap 高与官方字标 ink 逐值等高，胶囊取官方 HARNESS 几何（内文 MIASAKI 居中），左上角读作「鲸鱼 + DSH + MIASAKI 徽标」；**2026-10-12 两次改版**（白天曾整块「DSH」，更早为 deepseek 字标 + 胶囊「MIASAKI」） |
 | [`dsh-client-ui-workspace`](patches/dsh-client-ui-workspace/README.md) | 官方会话浏览器 | **侧线会话不占列表**：`sessionVisible()` 的 origin 判定后追加一条「插件声明的侧线不显示」，判据是跨包声明（localStorage `miasaki-sidebar:sidechat:hidden:v1`，由 sidebar 插件写）。官方**已有**「建了但不进列表」形态（`origin === 'subagent'`）却没向插件开口，本补丁把同一个开口借给声明方；**声明缺席即官方原状**（fail-safe，2026-09-30） |
+| [`dsh-browser-playwright`](patches/dsh-browser-playwright/README.md) | **上游社区插件** `@yeesy369/dsh-browser-playwright` 0.8.1（host + client 双半） | **脱离上游自己适配**（2026-09-23 首次手改、2026-10-17 从 `dsh-miasaki-shared-docs/dsh-platform/patches/` 迁入本目录并首次入回归）：上游未跟进 DSH 0.1.7+ 的设置契约 ⇒ 原版在 0.2.1-rc.2 下启动即 `TypeError: settings.register is not a function`、整条不激活、浏览器工具全灭。补丁把 host `apply()` 与 client 设置卡片都改成**双轨**（新 `configForms`/`plugins.item` 优先、旧 `settingsScope` 回退，缺服务安静降级）；`patch.mjs verify` 含 **32 项双世界断言** + SHA 重建 + ESM 语法闸门 |
 
-> **八件全部作用于浏览器 bundle**，改完**刷新页面**即生效。
+> **八件本体补丁全部作用于浏览器 bundle**，改完**刷新页面**即生效。
+> 第九件（`dsh-browser-playwright`）改的是 **profile 里安装的上游插件**（host + client 双半）：
+> 每个装了该插件的 profile 各有一份安装副本（本机 `miasaki` 与 `web` 两份），
+> `apply` 默认遍历全部 profile、`--target-dir` 可锁单个；改完需**重启 dsh 后端 + 刷新页面**。
+> 该插件的 `lib/*.js` 与 npm/pnpm store 是**硬链**：重装/升级该插件会冲掉补丁，
+> 用 `node patch.mjs status` 复核（`patch-live-audit.mjs` 的 live 审计也会逐半判回归）。
 > 原第八件 [`dsh-cordis-host-runner`](patches/dsh-cordis-host-runner/README.md)（本线唯一的 host 侧补丁）
 > **已于 2026-09-29 退役**：官方 `0.2.0-rc.2` 自行实现了同一修复且更完整（`pending.failure ??=`
 > 记录拒绝原因、`clientQueryTimeoutMs` 可配超时、无活动页面时立刻失败），本补丁 4 条锚点在 rc.2 上

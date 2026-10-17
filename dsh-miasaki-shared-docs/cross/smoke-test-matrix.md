@@ -21,13 +21,26 @@ node scripts/verify-all.mjs            # 九线 + 仓库级治理闸门全量
 node scripts/verify-all.mjs sidebar    # 只跑一条线（sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / free-model / repo）
 ```
 
-**全量基线**（**九线 + 仓库级治理闸门**；**静态全量 2026-10-17 口径 183 项全 PASS** —— 提交前
-`repo/md-links` 报 3 处暂态断链（链接指向未入库的 `2026-10-17-pet-drag-sprint.md`），随本批提交转绿；
+**全量基线**（**九线 + 仓库级治理闸门**；**静态全量 2026-10-17（续）口径 184 项全 PASS** ——
+`repo/md-links` 189 文档 / 419 链接全通、`style` 54 条基线零新增；
 sidebar 13 / canvas **14** / **fleet 21** /
-desktop **41** / ssh 31 / **dual-model 15** / appearance 18 / **usage 7** / **free-model 16** /
+desktop **42** / ssh 31 / **dual-model 15** / appearance 18 / **usage 7** / **free-model 16** /
 **repo 7**；**内核基线 DSH `0.2.1-rc.2`**（2026-10-17 升级）；**Node v24.15.0 本机实跑**
 （CI 的 v22.19.0 同源跑同一条命令）。下表各项标注的是建表时的快照；上一版基线为 2026-10-12 实测 182 项、
-2026-10-08 起分母 182 → 2026-10-17 起 **183** —— **项数列已对齐现行值**）：
+2026-10-08 起分母 182 → 2026-10-17 起 **183** → **184**（本批新增 1 项 desktop 补丁自证）—— **项数列已对齐现行值**）：
+
+> **2026-10-17（续）上游社区插件适配补丁迁入并首次入闸门：desktop 41 → 42、全量 183 → 184** ——
+> 用户「实在不行我们可以脱离上游自己适配」：`@yeesy369/dsh-browser-playwright`（0.8.1，host + client 双半）
+> 的双轨兼容补丁从 `dsh-miasaki-shared-docs/dsh-platform/patches/` 迁入
+> `dsh-miasaki-desktop/patches/dsh-browser-playwright/`（仓库唯一补丁住处；**字节与 SHA 常量未变**），
+> 新增离线闸门 `patch verify (上游 browser-playwright 适配)`（32 项双世界断言 + SHA 重建 + ESM 语法）。
+> 起因是 miasaki 启动报 `Failed to load plugins / @deepseek-ai/dsh-experimental-client-ui-cot-translation` ——
+> 该报错实为 **miasaki profile 的 cot bundle 未被 18:18 的 cotclean 清到**（已移除并复核组合树），
+> 顺带实测该浏览插件在 0.2.1-rc.2 下可用（临时启动 miasaki 后端 22s：stdout 仅 inspector + web URL、
+> stderr 空、零「entries did not activate」）。实跑：`verify-all desktop` = **42/42 PASS**
+> （cargo test **213 例**）、`repo` **7/7**、`patch-live-audit.mjs` 12 目标 / 11 件在册补丁全 patched。
+> 另：`patch-live-audit.mjs` 退役 shared-docs 专用根（由 desktop 根自动发现）、
+> `style-baseline.json` / `silent-guard-baseline.json` 路径同步、旧目录保留迁移说明 README 作历史入口。
 
 > **2026-10-17 部署脚本自宿主防护：desktop 40 → 41、全量 182 → 183** —— 用户「miasaki 桌面端
 > 莫名其妙闪退两次」。实机取证：**不是壳自身崩溃**，而是 miasaki 里那个开发会话的 agent 在

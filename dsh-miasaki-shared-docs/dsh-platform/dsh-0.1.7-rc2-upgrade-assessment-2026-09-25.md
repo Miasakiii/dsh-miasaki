@@ -143,7 +143,7 @@
 
 ## 7. 第三方插件补丁：browser-playwright `[实测]`
 
-`dsh-miasaki-shared-docs/dsh-platform/patches/dsh-browser-playwright/` 针对
+`dsh-miasaki-desktop/patches/dsh-browser-playwright/`（2026-10-17 由 shared-docs 迁入） 针对
 `@yeesy369/dsh-browser-playwright@0.8.1`（host + client 两半），修的是 0.1.7 设置机制重写导致的
 **整个 web UI 停在启动屏**（client 半 `settingsScope` 服务消失 → 纤维 pending → 前端 boot 审计直接抛错）。
 

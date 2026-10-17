@@ -88,7 +88,7 @@ node <线>\patches\<补丁>\patch.mjs apply --target <副本文件> --yes
 | `dsh-client-ui-trajectory` | desktop | 421,649 B | 423,513 B / `2BBC3E662EE1A5EA…` | 0 | **逐字节未变**（产物 SHA = live） |
 | `dsh-cordis-host-runner` | desktop | 102,835 B | 103,592 B / `D3126110630D4755…` | 0 | **逐字节未变**（产物 SHA = live） |
 | `dsh-api-session-controller` | dual-model | 124,151 B | 124,896 B / `40A032EF7123CA97…` | 0 | **逐字节未变**（产物 SHA = live） |
-| `dsh-browser-playwright`（双半） | shared-docs | — | — | 不适用 | 目标属第三方包，**DSH 升级不触及** |
+| `dsh-browser-playwright`（双半） | desktop（2026-10-17 迁入；此前在 shared-docs） | — | — | 不适用 | 目标属第三方包，**DSH 升级不触及** |
 
 > **「逐字节未变」的判据**：补丁产物 SHA-256 与本机 0.1.7-rc.2 上已打补丁的 live 产物**完全一致**；
 > `applyPatch` 是确定性纯函数（同一输入必得同一输出），故输入文件相同。

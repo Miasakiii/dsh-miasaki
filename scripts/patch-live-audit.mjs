@@ -31,9 +31,9 @@
 // （补丁的 CLI 都有 `import.meta.url` 守卫，被 import 时不执行）。受限沙箱下
 // 捕获子进程 stdio 会 EPERM，纯进程内实现没有这个问题。
 // 目标契约：单目标补丁导出 TARGET_PACKAGE + TARGET_RELATIVE + classify；**双半**补丁
-// （shared-docs 的 `dsh-browser-playwright`）改导出 `LIVE_TARGETS`——每半一个目标文件、
-// 各自成行、各自判回归（2026-09-24 三轮复审补入该件：它原本是审计盲区，而它被打回
-// 原版会让 web UI 连启动屏都过不去）。profile 布局探测含每个 profile 的
+// （`dsh-browser-playwright`，2026-10-17 起随补丁目录在 desktop 线）改导出 `LIVE_TARGETS`——
+// 每半一个目标文件、各自成行、各自判回归（2026-09-24 三轮复审补入该件：它原本是审计盲区，
+// 而它被打回原版会让 web UI 连启动屏都过不去）。profile 布局探测含每个 profile 的
 // `~/.dsh/profiles/<name>/node_modules`（第三方插件不装在 CLI 树里）。
 
 import { existsSync, readdirSync } from 'node:fs'
@@ -44,13 +44,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** 补丁目录：桌面端六件 + dual-model 一件 + shared-docs 一件（第三方插件，双半）。 */
+/** 补丁目录：桌面端七件（含第三方 `dsh-browser-playwright` 双半）+ dual-model 一件。 */
 const PATCH_ROOTS = [
   { dir: join(ROOT, 'dsh-miasaki-desktop', 'patches'), label: 'desktop' },
   { dir: join(ROOT, 'dsh-miasaki-dual-model', 'patches'), label: 'dual-model' },
-  // 2026-09-24 三轮复审补入：`@yeesy369/dsh-browser-playwright` 双半补丁原在审计之外，
-  // 而它被打回原版会让 web UI 连启动屏都过不去——离线全绿 + live 全 unknown 的盲区重现。
-  { dir: join(ROOT, 'dsh-miasaki-shared-docs', 'dsh-platform', 'patches'), label: 'shared-docs' },
+  // 2026-10-17：`@yeesy369/dsh-browser-playwright` 双半补丁从
+  // `dsh-miasaki-shared-docs/dsh-platform/patches` 迁移到 `dsh-miasaki-desktop/patches`
+  // （仓库唯一的补丁住处），由上面的 desktop 根自动发现；shared-docs 专用根随之退役
+  // （该目录只剩迁移说明 README，无 patch.mjs）。它被打回原版会让 web UI 连启动屏都
+  // 过不去——离线全绿 + live 全 unknown 的盲区仍由本审计兜住。
   // 2026-09-30 补入：free-model 的**上游插件补丁**（`dsh-our-free-model`）原本完全在审计之外 ——
   // 它改的是本机安装副本，而上游的**应用内升级必覆盖**清单内文件 ⇒ 那栏悄悄退化成上游原样
   // （公告中心与首启弹窗回来了），本线却不崩不报错、离线自证照常全绿（静默失效第 6 位；
