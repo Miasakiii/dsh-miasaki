@@ -1554,6 +1554,39 @@ impl PetWin {
             self.drag_spring_x = Some(DragSpring { pos: self.pos.0 as f32, vel: 0.0 });
             self.drag_spring_y = Some(DragSpring { pos: self.pos.1 as f32, vel: 0.0 });
         }
+        // R19（2026-10-17 续，用户报「拖拽还是有点粘滞」）：**拖动期内直跟手**。
+        //
+        // 为什么推翻 M4 的弹簧尾随：临界阻尼二阶系统对**匀速斜坡输入**的稳态滞后是
+        // `2ζ/ω · v`（k=220 ⇒ ω≈14.8，系数≈0.135 s）：慢拖 300px/s 落后 40px、
+        // 800px/s 落后 108px、快速甩 2000px/s 落后 270px —— 实机读感是「拖着一团
+        // 有惯性的东西」。R18 的松手滑停又把这截滞后「补滑」出去，用户感知为二次粘滞。
+        // 参考实现（Coopanion / GarfieldZhung）主进程拖动均为直跟手；R18 已把悬浮球
+        // 做成直跟手，主窗统一同一口径。
+        //
+        // 弹簧实现**保留**：滑停收尾（`drag_settling`）与异常路径仍走下面的旧分支；
+        // 直跟手时把弹簧状态同步成「已在目标上、速度 0」⇒ 松手首拍 `drag_settle_tick`
+        // 立即判到位并收尾（松手即停，不再补滑）。
+        if self.dragged && !self.drag_settling {
+            let dt_s = self.last_drag_tick.elapsed().as_millis().max(1) as f32 / 1000.0;
+            self.last_drag_tick = std::time::Instant::now();
+            let (tx, ty) = (target.0 as f32, target.1 as f32);
+            let (px, py) = (self.pos.0 as f32, self.pos.1 as f32);
+            // 拖动反馈（R18 倾斜/拉伸）要的是窗口速度：直跟手时它等于光标速度。
+            // 一阶平滑压掉逐事件抖动（形变抖比位置迟滞更显眼）。
+            self.drag_vel = (
+                self.drag_vel.0 * 0.6 + (tx - px) / dt_s * 0.4,
+                self.drag_vel.1 * 0.6 + (ty - py) / dt_s * 0.4,
+            );
+            self.drag_spring_x = Some(DragSpring { pos: tx, vel: 0.0 });
+            self.drag_spring_y = Some(DragSpring { pos: ty, vel: 0.0 });
+            if target == self.pos {
+                return false;
+            }
+            let (ww, wh) = self.win_size();
+            unsafe { MoveWindow(self.hwnd, target.0, target.1, ww, wh, 1) };
+            self.pos = target;
+            return true;
+        }
         // 已有目标且弹簧已到位 ⇒ 本拍不动（省一次 MoveWindow）。
         if let (Some(sx), Some(sy)) = (self.drag_spring_x, self.drag_spring_y) {
             if spring_at_target(sx, target.0 as f32) && spring_at_target(sy, target.1 as f32) {
@@ -2772,5 +2805,33 @@ mod tests {
         assert!(body.contains("ball_pos_visible"), "必须有出屏判据（球心在工作区内）");
         assert!(body.contains("default_pos()"), "出屏 ⇒ 回默认位");
         assert!(body.contains("save_pet_pos"), "收尾必须落盘（否则重启位置丢）");
+    }
+
+    /// R19（2026-10-17 续，用户报「拖拽还是有点粘滞」）：拖动期内必须**直跟手**
+    /// （窗口位置 = 最新目标），不得再走弹簧尾随；松手后由 `drag_settle_tick` 当拍收尾。
+    /// 判据用源码契约（该分支依赖 hwnd，纯函数测不了）：直跟手分支必须存在、必须直接
+    /// MoveWindow 到 target，且必须排在「弹簧到位早退」**之前**（否则弹簧同步后会被早退吞掉）。
+    #[test]
+    fn drag_follows_cursor_directly_without_spring_lag() {
+        let src = include_str!("window.rs");
+        let body = src
+            .split("fn flush_drag_target")
+            .nth(1)
+            .and_then(|s| s.split("fn end_drag").next())
+            .expect("找不到 flush_drag_target（函数名变了，请同步本契约）");
+        let follow = body
+            .find("if self.dragged && !self.drag_settling")
+            .expect("缺少拖动直跟手分支：会退回 M4 弹簧尾随（稳态滞后 2ζ/ω·v，用户报粘滞）");
+        assert!(
+            body.contains("MoveWindow(self.hwnd, target.0, target.1"),
+            "直跟手分支必须把窗口直接移到最新目标"
+        );
+        let spring_early_exit = body
+            .find("if spring_at_target(sx, target.0 as f32)")
+            .expect("找不到弹簧到位早退（结构变了，请同步本契约）");
+        assert!(
+            follow < spring_early_exit,
+            "直跟手分支必须排在弹簧早退之前，否则位置同步会被早退吞掉"
+        );
     }
 }

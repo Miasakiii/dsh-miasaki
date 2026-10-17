@@ -301,3 +301,21 @@ WM_LBUTTONUP（dragged）
 wander 触发补过 `!self.dragged`；滑停把 `dragged` 提前清零 ⇒ 同一道闸在滑停的
 300ms 内失效。补 `!self.drag_settling` 时才想清楚：**任何「提前清 `dragged`」的
 改动，都要回头问一遍「R16 那批闸门还成立吗」**。
+
+## 8. R19 修订（2026-10-17 续）：主窗拖动改直跟手
+
+> 触发：用户实机反馈「拖拽桌宠还是有点粘滞感」（R18 已实装，19:36 构建的 exe）。
+
+- **根因**：M4 临界阻尼弹簧对**匀速斜坡输入**的稳态滞后 `2ζ/ω·v`（k=220 ⇒ 0.135 s × 光标速度）——
+  慢拖 300 px/s 落后 40 px、中速 800 px/s 落后 108 px、快甩 2000 px/s 落后 270 px；
+  R18 的松手滑停再把这段滞后「补滑」出去（弹簧追目标 250ms），二次放大粘滞感。
+  参考实现（Coopanion / GarfieldZhung）主进程拖动均直跟手；R18 的悬浮球也刻意直跟手（§2.3）。
+- **改法**：`window.rs::flush_drag_target` 增加拖动期直跟手分支（放在弹簧到位早退之前）：
+  `self.dragged && !self.drag_settling` ⇒ `MoveWindow(target)` + `pos = target`，弹簧状态同步为
+  「已在目标、速度 0」；松手后 `drag_settle_tick` 首拍判到位即收尾 ⇒ **松手即停，不再补滑**。
+  拖动反馈速度输入改为「光标位移/拍」一阶平滑（直跟手时窗口速度 = 光标速度）。
+- **保留**：弹簧实现完整保留（滑停收尾与异常收敛路径），`config.rs` 的 `DRAG_SPRING_K` 注释
+  已标明「R19 后 k 不再影响拖动跟手度」；回退方式 = 关掉该分支即恢复 M4 行为。
+- **契约**：源码测试 `drag_follows_cursor_directly_without_spring_lag`（分支存在 / 直接 MoveWindow /
+  排在弹簧早退之前）。
+- **验证**：`cargo test --release` 212 → **213 例**（+1 契约）；实机手感待用户部署后走查（E33 判据⑦–⑨）。
