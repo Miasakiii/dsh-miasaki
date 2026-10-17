@@ -72,6 +72,15 @@ check(!!(fork && fork.config.agentOptions), 'tool-subagent-fork 保留 agentOpti
 const web = byId('tool-web')
 check(!!web && web.config.fetch === false, 'tool-web.fetch 保持 false（本仓库自定义）')
 
+// DSH 0.2.1（v0.2.1-alpha.1/subagent-activations）起 dsh-tool-subagent 删除
+// backgroundMode/enableRunInBackground：保留即 fail-loud 拒绝整行配置。
+for (const id of ['tool-subagent', 'tool-subagent-fork', 'tool-subagent-codex', 'tool-subagent-claude-code']) {
+  const row = delegation && delegation.config.find(r => r.id === id)
+  if (!row) continue
+  check(!('backgroundMode' in (row.config ?? {})), `${id} 不含退役键 backgroundMode（0.2.1 必删）`)
+  check(!('enableRunInBackground' in (row.config ?? {})), `${id} 不含退役键 enableRunInBackground（0.2.1 必删）`)
+}
+
 // 0.1.5 底座新增项
 check(!!byId('command-goal'), 'command-goal 行存在（0.1.5 新增）')
 check(!!byId('present'), 'present 行存在（0.1.5 新增）')

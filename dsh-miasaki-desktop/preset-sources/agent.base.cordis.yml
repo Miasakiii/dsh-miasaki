@@ -187,7 +187,6 @@
         provider: spawn
         toolName: subagent
         modelSelectionSettings: true
-        backgroundMode: continuable
         # 本仓库自定义（沿用 0.1.2 侧配置）：子代理固定走 openrouter 免费模型。
         agentOptions:
           provider: openrouter
@@ -203,7 +202,6 @@
       config:
         provider: fork
         toolName: subagent_fork
-        backgroundMode: continuable
         # 本仓库自定义：fork 分支同样固定免费模型。注意 0.1.5 底座刻意不给
         # fork 配 agentOptions（fork 继承父模型才能复用 KV Cache）；保留本项
         # 即放弃该优化，换取子代理免费。
@@ -222,7 +220,6 @@
       config:
         provider: codex
         toolName: subagent_codex
-        backgroundMode: one-shot
         maxDepth: provider-managed
 
     - id: tool-subagent-claude-code
@@ -231,7 +228,6 @@
       config:
         provider: claude-code
         toolName: subagent_claude_code
-        backgroundMode: one-shot
         maxDepth: provider-managed
 
     - id: workflow-worker-thread

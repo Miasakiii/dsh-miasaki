@@ -54,6 +54,17 @@
 > （2026-09-28 起该插件已迁出本线更名 `@miasaki/dsh-free-model`，路径见
 > [`../../../dsh-miasaki-free-model/lib/client.js`](../../../dsh-miasaki-free-model/lib/client.js)）。
 
+> **2026-10-17（v4）：随 DSH 0.2.1-rc.2 升级「缩减重写」。** 官方 0.2.1 已原生内置
+> 「推理等级编辑」（`ModelReasoningEfforts.tsx`：开关 + 逐级 level/value + 校验），
+> 与本补丁的「思考强度下拉」意图重叠。按「官方吸收后不硬改锚点、避免双写」的既有范式：
+> **退役**思考强度下拉（`REASONING_LEVELS` / `reasoningChoice` / `reasoningPatch` /
+> `reasoningInheritLabel`）、继承值解析器（`reasoningDefaultOf`）与 4 条相关 locale 词条；
+> **保留**逐模型「测试连通性」/「测试全部」/ 能力徽标 / 无 Key 引导。
+> 编辑数 14 → 13 条（旧锚点 12/14 原样命中；`ModelInputTypes` 插入点因官方把
+> `}, field)),` 与 `ModelInputTypes` 拆成两行而改用 `insertBefore`）。
+> 产物 **223,216 B / `883942A3…`**；`verify` 三行 PASS、`apply` patched、语法合法。
+> 实测：0.2.1 原版 211,258 B / `190498E1…`。
+
 ## 为什么是「运行时补丁」而不是插件
 官方设置页刻意不提供逐模型思考强度控件，也不做逐模型连通性测试——上游取向是
 「effort 是 per-MODEL 能力，放在对话模型选择器里」。而本机没有 pnpm 全量重建链路
@@ -72,10 +83,10 @@
 
 | 文件 | 作用 |
 |---|---|
-| `patch.mjs` | **补丁规范**：13 条锚点编辑规则（其中 **#5 分两代变体**，见下文「双代变体」）+ CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
+| `patch.mjs` | **补丁规范**：13 条锚点编辑规则 + CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建两份 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
-| `baseline/client.original.js` | DSH **0.2.0-rc.1** 官方原版 client.js（186,641 B，SHA-256 `7674ED0B…`）。与安装目录的 `client.js.dsh-bak` 逐字节一致 |
-| `baseline/client.patched.js` | 应用补丁后的产物（202,112 B，SHA-256 `9AF06957…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
+| `baseline/client.original.js` | DSH **0.2.1-rc.2** 官方原版 client.js（211,258 B，SHA-256 `190498E1…`）。与安装目录的 `client.js.dsh-bak` 逐字节一致 |
+| `baseline/client.patched.js` | 应用补丁后的产物（223,216 B，SHA-256 `883942A3…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
 
 > 两份 baseline 是第三方产物而非本项目源码，但它们是不可再生的重建依据
 > （`vendor/` 不入库、安装目录会被升级覆盖），故随补丁规则一并版本化。
@@ -90,6 +101,9 @@
 > 变体 probe 在 0.1.7 原版上自动选中 0.1.6+ 分支，legacy 分支退为历史形态）。
 > → `0.2.0-rc.1`（2026-09-28 升级重打，`7674ED0B…` / `9AF06957…`；**`EDITS` 改了 1 处** ——
 > 官方去掉了插入点的尾逗号，旧的 `insertAfterOffset` 踩了 ASI 陷阱，见下文「ASI 陷阱」）。
+> → `0.2.1-rc.2`（2026-10-17 升级重打 + **缩减重写 v4**：`190498E1…` / `883942A3…`；
+> 退役思考强度下拉与继承值解析器、删 inline 变体与 4 条 locale 词条；13 条编辑，
+> `ModelInputTypes` 插入点改 `insertBefore`。**`EDITS` 语义变更见文首 v4 说明**）。
 > 旧基线见 git 历史。
 
 ## 用法
@@ -299,6 +313,19 @@ SHA 与常量一致、产物却是坏的）。`verify` 同时校验 `PATCHED_SHA
 >
 > **一条待办（未动，属产品决策）**：`思考强度` / `测试连通性` 挂在**模型行**的容量区里，而现有
 > provider 都走「模型目录」模式（`models` 数组为空）⇒ 这两项控件**在用户当前配置下看不到**。
+
+> **实操记录（2026-10-17，实装 0.2.1-rc.2 后重打 + 缩减重写 v4）**：官方 0.2.1 把模型行
+> 结构大改（新增 `ModelReasoningEfforts` / `ApiKeyInput` / `CustomProviderCard` 等），旧锚点
+> `}, field)), (0, react_jsx_runtime.jsx)(ModelInputTypes, {` **0 命中**（官方已拆成两行）。
+> 逐锚点探测结果：14 条旧锚点中 **12 条仍唯一命中**（含 `editCapacity(index, "maxTokens", text)`、
+> `inputLoading: catalogProvider…`、locale 字典、`askable` 等）。按用户拍板的**缩减方案**重写：
+> 删除思考强度下拉相关 helpers / 解析器 / 词条、删除 inline 变体（0.1.5 历史路径），
+> `model-row-prop` 的 `reasoningRow` 改为 `testRow`（只含能力徽标 + 测试按钮），
+> `model-row-slot` 改 `insertBefore '(0, react_jsx_runtime.jsx)(ModelInputTypes, {'`。
+> `rebuild` → 产物 223,216 B / `883942A3…` → 回填常量 → `verify` 三行 PASS →
+> `apply` 成功（语法合法）→ `patch-live-audit` 12/12 patched。产物自查：
+> `testRow`/`testModel`/`testResults`/`capabilities` 均在位，`REASONING_LEVELS`/`reasoningChoice`/
+> `modelReasoningEffort` **全部 0 命中**（退役干净）。
 
 ### ASI 陷阱（写插入类编辑必读）
 

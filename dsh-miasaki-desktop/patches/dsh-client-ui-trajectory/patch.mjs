@@ -52,9 +52,9 @@ const ORIGINAL_FILE = join(BASELINE, 'client.original.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-trajectory'
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
+export const BASELINE_DSH_VERSION = '0.2.1-rc.2'
 /** 官方原版 client.js 的 SHA-256（安装目录中该文件尚无 .dsh-bak，即从未被改过）。 */
-export const ORIGINAL_SHA256 = '71FA00F0C3E92278E54E9203A819305F5ABF7103D5B32114AD52AFD467BB3B9C'
+export const ORIGINAL_SHA256 = 'B11426F89D3B4302964B491D7826A29FE3DE390BE4BBFAE325375F54FE6919AD'
 /**
  * 应用本补丁后的 SHA-256。
  *
@@ -62,7 +62,7 @@ export const ORIGINAL_SHA256 = '71FA00F0C3E92278E54E9203A819305F5ABF7103D5B32114
  * 改存产物 SHA —— `verify` 用「由原始 baseline 重建后的 SHA 是否等于本常量」自证，
  * 与逐字节比对等价（SHA 相等即逐字节相等），锚点失配时仍会响亮报错。
  */
-export const PATCHED_SHA256 = '2BBC3E662EE1A5EA0E4F68D117F4E064EE089C583ACC5E9D1D4B242EBC7C4A76'
+export const PATCHED_SHA256 = 'E9439E5A63BAF44F20B8F6FC7C687B706289C6F3995FD3BFB9779BF8381762E0'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = 'dshPatchedFirstTokenTime'
 

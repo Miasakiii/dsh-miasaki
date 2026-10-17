@@ -60,7 +60,7 @@ const ORIGINAL_FILE = join(BASELINE, 'client.original.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-brand-official'
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
+export const BASELINE_DSH_VERSION = '0.2.1-rc.2'
 /** 官方原版 client.js 的 SHA-256（1863 B，与安装目录当前文件一致）。 */
 export const ORIGINAL_SHA256 = '22BB7E181A8D93372E1D14927B201612B09A02C84EA3D0F36933CFFF1DE47D71'
 /**

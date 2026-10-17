@@ -42,9 +42,9 @@ const PATCHED_FILE = join(BASELINE, 'client.patched.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-settings-models'
 /** DSH 版本基线：锚点文本与两份 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.2.0-rc.1'
+export const BASELINE_DSH_VERSION = '0.2.1-rc.2'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '7674ED0BA2EEF60FA7DB91B4BF8CEA4DC23E1F0A2F3DD1E6A2A67AD4C0D005FA'
+export const ORIGINAL_SHA256 = '190498E15358BCD3FE6810FE6368023A20B0403E3EA493BC979ECA9BDB593B28'
 /**
  * 应用本补丁后的 SHA-256（v2 连通性探测 + locale 尾逗号修复，2026-09-19 起的状态）。
  *
@@ -53,13 +53,22 @@ export const ORIGINAL_SHA256 = '7674ED0BA2EEF60FA7DB91B4BF8CEA4DC23E1F0A2F3DD1E6
  * 产物语法错误且让整份 client bundle 不注册。它之所以能通过 `verify` 并被打进生产，
  * 是因为当时的 `verify` 只做逐字节比对（可复现 ≠ 合法）——`assertParses` 因此加入。
  */
-export const PATCHED_SHA256 = '9AF06957826A9E7551A1D98C3D594449D47DBE41169DDB2B223D567C9DA3898B'
+export const PATCHED_SHA256 = '883942A39F90CBABE3A9CB2192A9D7A53DBFE95456C719431F1E5DC8F7AB5F4D'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
-const PATCH_MARKER = 'const REASONING_LEVELS = '
+const PATCH_MARKER = 'const [testing, setTesting] = '
 
 // ---------------------------------------------------------------------------
-// 编辑规则（7 条）。lines 为该编辑插入/替换的完整行，缩进已按目标文件写定；
+// 编辑规则（**0.2.1-rc.2 缩减版**）。lines 为该编辑插入/替换的完整行，缩进已按目标文件写定；
 // anchor 按「trim 后全等」匹配，必须唯一。
+//
+// 2026-10-17 缩减决策（用户拍板）：官方 0.2.1 已原生内置「推理等级编辑」
+// （ModelReasoningEfforts.tsx：开关 + 逐级 level/value + 校验），比本补丁原来的
+// 「思考强度下拉」更完整。按「官方吸收后不硬改锚点、避免双写」的既有范式，本版：
+//   · 退役：思考强度下拉（REASONING_LEVELS / reasoningChoice / reasoningPatch /
+//     reasoningInheritLabel）、继承值解析器（reasoningDefaultOf）、相关 locale 词条；
+//   · 保留：逐模型「测试连通性」（host 探测六分类 + 目录探测降级）、「测试全部」、
+//     能力徽标（视觉/推理）、无 Key 引导（行 tooltip + 卡片提示）。
+// 规则数从 14 条缩至 10 条；产物不再包含思考强度控件（官方控件已接管该能力）。
 // ---------------------------------------------------------------------------
 const EDITS = [
   {
@@ -67,34 +76,6 @@ const EDITS = [
     mode: 'insertBefore',
     anchor: "/** A row's text field, or the empty string when unset or not a string. */",
     lines: [
-      '\t\t/** Reasoning levels a model row may declare, ordered by intensity. */',
-      '\t\tconst REASONING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];',
-      '\t\t/** The chooser value for one row: an explicit level, "disabled", or "inherit". */',
-      '\t\tfunction reasoningChoice(model) {',
-      '\t\t\tconst val = model["reasoningEfforts"];',
-      '\t\t\tif (val === false) return "disabled";',
-      '\t\t\tif (typeof val !== "object" || val === null || Array.isArray(val)) return "inherit";',
-      '\t\t\tconst chosen = REASONING_LEVELS.find((level) => Object.prototype.hasOwnProperty.call(val, level));',
-      '\t\t\treturn chosen === void 0 ? "inherit" : chosen;',
-      '\t\t}',
-      '\t\t/** The reasoningEfforts value one chooser choice writes. */',
-      '\t\tfunction reasoningPatch(choice) {',
-      '\t\t\tif (choice === "inherit") return void 0;',
-      '\t\t\tif (choice === "disabled") return false;',
-      '\t\t\treturn { off: null, [choice]: choice };',
-      '\t\t}',
-      '\t\t/**',
-      '\t\t * The inherit option\'s label, naming what inherit currently resolves to',
-      '\t\t * for this row. The resolver comes from the card (the resolved namespace',
-      '\t\t * value); an absent resolver or an absent declaration renders as "none",',
-      '\t\t * because guessing a default the user cannot see is the bug this avoids.',
-      '\t\t */',
-      '\t\tfunction reasoningInheritLabel(model, props, t) {',
-      '\t\t\tconst resolved = props.reasoningDefaultOf === void 0 ? "inherit" : props.reasoningDefaultOf(textOf(model, "id"));',
-      '\t\t\tif (resolved === "disabled") return `${t("modelReasoningInherit")}（${t("modelReasoningDisabled")}）`;',
-      '\t\t\tif (resolved === "inherit") return `${t("modelReasoningInherit")}（${t("modelReasoningNone")}）`;',
-      '\t\t\treturn `${t("modelReasoningInherit")}（${resolved}）`;',
-      '\t\t}',
       '\t\t/** CSS class for one connectivity result: the success or error tone. */',
       '\t\tfunction testResultClass(ok, stylesRef) {',
       '\t\t\treturn ok ? stylesRef["savedNotice"] : stylesRef["error"];',
@@ -253,61 +234,13 @@ const EDITS = [
     id: 'reasoning-ui',
     variants: [
       {
-        probe: 'editCapacity(index, "maxTokens", event.target.value);',
-        edits: [
-          {
-            id: 'reasoning-ui@inline-jsx',
-            mode: 'insertAfterOffset',
-            anchor: 'editCapacity(index, "maxTokens", event.target.value);',
-            offset: 2,
-            expect: '})]',
-            lines: [
-              '\t\t\t\t\t\t\t}),',
-              '\t\t\t\t\t\t\tcapabilities.get(textOf(model, "id")) === void 0 ? null : (0, react_jsx_runtime.jsxs)("span", {',
-              '\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelField"],',
-              '\t\t\t\t\t\t\t\tchildren: [',
-              '\t\t\t\t\t\t\t\t\tcapabilities.get(textOf(model, "id")).image === true ? (0, react_jsx_runtime.jsx)("span", { className: `${ModelsSection_module_css_default["rowTag"]}`, title: t("capVisionTitle"), children: t("capVision") }) : null,',
-              '\t\t\t\t\t\t\t\t\tcapabilities.get(textOf(model, "id")).reasoning === true ? (0, react_jsx_runtime.jsx)("span", { className: `${ModelsSection_module_css_default["rowTag"]}`, title: t("capReasoningTitle"), children: t("capReasoning") }) : null',
-              '\t\t\t\t\t\t\t\t]',
-              '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("label", {',
-              '\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelField"],',
-              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {',
-              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelFieldLabel"],',
-              '\t\t\t\t\t\t\t\t\tchildren: t("modelReasoningEffort")',
-              '\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("select", {',
-              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["input"],',
-              '\t\t\t\t\t\t\t\t\tvalue: reasoningChoice(model),',
-              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("modelReasoningEffort")} ${index + 1}`,',
-              '\t\t\t\t\t\t\t\t\tdisabled,',
-              '\t\t\t\t\t\t\t\t\tonChange: (event) => {',
-              '\t\t\t\t\t\t\t\t\t\tconst next = reasoningPatch(event.target.value);',
-              '\t\t\t\t\t\t\t\t\t\tif (next === void 0) patch(index, { reasoningEfforts: void 0 });',
-              '\t\t\t\t\t\t\t\t\t\telse patch(index, { reasoningEfforts: next });',
-              '\t\t\t\t\t\t\t\t\t},',
-              '\t\t\t\t\t\t\t\t\tchildren: [...REASONING_LEVELS.map((level) => (0, react_jsx_runtime.jsx)("option", { key: level, value: level, children: level })), (0, react_jsx_runtime.jsx)("option", { value: "inherit", children: reasoningInheritLabel(model, props, t) }), (0, react_jsx_runtime.jsx)("option", { value: "disabled", children: t("modelReasoningDisabled") })]',
-              '\t\t\t\t\t\t\t\t})]',
-              '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("span", {',
-              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("button", {',
-              '\t\t\t\t\t\t\t\t\ttype: "button",',
-              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["secondaryButton"],',
-              '\t\t\t\t\t\t\t\t\tdisabled: disabled || testing.has(index) || textOf(model, "id").trim().length === 0,',
-              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("testModel")} ${index + 1}`,',
-              '\t\t\t\t\t\t\t\t\tonClick: () => { testModel(index, model); },',
-              '\t\t\t\t\t\t\t\t\tchildren: testing.has(index) ? t("testing") : t("testModel")',
-              '\t\t\t\t\t\t\t\t}), testResults.has(index) ? (0, react_jsx_runtime.jsx)("span", {',
-              '\t\t\t\t\t\t\t\t\tclassName: testResultClass(testResults.get(index).ok === true, ModelsSection_module_css_default),',
-              '\t\t\t\t\t\t\t\t\tchildren: testResults.get(index).message',
-              '\t\t\t\t\t\t\t\t}) : null]',
-            ],
-          },
-        ],
-      },
-      {
         probe: 'editCapacity(index, "maxTokens", text);',
         edits: [
           {
-            // Editor 侧：把两块 UI 渲染成一个 ReactNode 交给 ModelRow。闭包在这里，
-            // testing / testResults / testModel / patch / t / disabled 全部可见。
+            // Editor 侧：把测试 UI（能力徽标 + 连通性按钮）渲染成一个 ReactNode 交给
+            // ModelRow。闭包在这里，testing / testResults / testModel / t / disabled
+            // 全部可见。0.2.1 缩减版：原「思考强度下拉」已随官方 ModelReasoningEfforts
+            // 退役，这里只剩测试相关控件。
             //
             // 锚点刻意不选 `onFieldChange`：ModelRow 被**两个编辑器**共用（本包与
             // DeepSeekModelsEditor/CustomProviderCard），那个锚点在 bundle 里命中 2 次，
@@ -317,62 +250,44 @@ const EDITS = [
             mode: 'insertBefore',
             anchor: 'inputLoading: catalogProvider !== void 0 && catalog === void 0,',
             lines: [
-              '\t\t\t\t\t\t\treasoningRow: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [',
+              '\t\t\t\t\t\t\ttestRow: (0, react_jsx_runtime.jsxs)(react_jsx_runtime.Fragment, { children: [',
               '\t\t\t\t\t\t\t\tcapabilities.get(textOf(model, "id")) === void 0 ? null : (0, react_jsx_runtime.jsxs)("span", {',
               '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelField"],',
               '\t\t\t\t\t\t\t\t\tchildren: [',
               '\t\t\t\t\t\t\t\t\t\tcapabilities.get(textOf(model, "id")).image === true ? (0, react_jsx_runtime.jsx)("span", { className: `${ModelsSection_module_css_default["rowTag"]}`, title: t("capVisionTitle"), children: t("capVision") }) : null,',
               '\t\t\t\t\t\t\t\t\t\tcapabilities.get(textOf(model, "id")).reasoning === true ? (0, react_jsx_runtime.jsx)("span", { className: `${ModelsSection_module_css_default["rowTag"]}`, title: t("capReasoningTitle"), children: t("capReasoning") }) : null',
               '\t\t\t\t\t\t\t\t\t]',
-              '\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("label", {',
-              '\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelField"],',
-              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("span", {',
-              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["modelFieldLabel"],',
-              '\t\t\t\t\t\t\t\t\tchildren: t("modelReasoningEffort")',
-              '\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsx)("select", {',
-              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["input"],',
-              '\t\t\t\t\t\t\t\t\tvalue: reasoningChoice(model),',
-              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("modelReasoningEffort")} ${index + 1}`,',
-              '\t\t\t\t\t\t\t\t\tdisabled,',
-              '\t\t\t\t\t\t\t\t\tonChange: (event) => {',
-              '\t\t\t\t\t\t\t\t\t\tconst next = reasoningPatch(event.target.value);',
-              '\t\t\t\t\t\t\t\t\t\tif (next === void 0) patch(index, { reasoningEfforts: void 0 });',
-              '\t\t\t\t\t\t\t\t\t\telse patch(index, { reasoningEfforts: next });',
-              '\t\t\t\t\t\t\t\t\t},',
-              '\t\t\t\t\t\t\t\t\tchildren: [...REASONING_LEVELS.map((level) => (0, react_jsx_runtime.jsx)("option", { key: level, value: level, children: level })), (0, react_jsx_runtime.jsx)("option", { value: "inherit", children: reasoningInheritLabel(model, props, t) }), (0, react_jsx_runtime.jsx)("option", { value: "disabled", children: t("modelReasoningDisabled") })]',
-              '\t\t\t\t\t\t\t\t})]',
-              '\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("span", {',
-              '\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("button", {',
-              '\t\t\t\t\t\t\t\t\ttype: "button",',
-              '\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["secondaryButton"],',
-              '\t\t\t\t\t\t\t\t\tdisabled: disabled || testing.has(index) || textOf(model, "id").trim().length === 0,',
-              '\t\t\t\t\t\t\t\t\t"aria-label": `${t("testModel")} ${index + 1}`,',
-              '\t\t\t\t\t\t\t\t\tonClick: () => { testModel(index, model); },',
-              '\t\t\t\t\t\t\t\t\tchildren: testing.has(index) ? t("testing") : t("testModel")',
-              '\t\t\t\t\t\t\t\t}), testResults.has(index) ? (0, react_jsx_runtime.jsx)("span", {',
-              '\t\t\t\t\t\t\t\t\tclassName: testResultClass(testResults.get(index).ok === true, ModelsSection_module_css_default),',
-              '\t\t\t\t\t\t\t\t\tchildren: testResults.get(index).message',
-              '\t\t\t\t\t\t\t\t}) : null]',
-              '\t\t\t\t\t\t\t})] }),',
+              '\t\t\t\t\t\t\t\t}), (0, react_jsx_runtime.jsxs)("span", {',
+              '\t\t\t\t\t\t\t\t\tchildren: [(0, react_jsx_runtime.jsx)("button", {',
+              '\t\t\t\t\t\t\t\t\t\ttype: "button",',
+              '\t\t\t\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["secondaryButton"],',
+              '\t\t\t\t\t\t\t\t\t\tdisabled: disabled || testing.has(index) || textOf(model, "id").trim().length === 0,',
+              '\t\t\t\t\t\t\t\t\t\t"aria-label": `${t("testModel")} ${index + 1}`,',
+              '\t\t\t\t\t\t\t\t\t\tonClick: () => { testModel(index, model); },',
+              '\t\t\t\t\t\t\t\t\t\tchildren: testing.has(index) ? t("testing") : t("testModel")',
+              '\t\t\t\t\t\t\t\t\t}), testResults.has(index) ? (0, react_jsx_runtime.jsx)("span", {',
+              '\t\t\t\t\t\t\t\t\t\tclassName: testResultClass(testResults.get(index).ok === true, ModelsSection_module_css_default),',
+              '\t\t\t\t\t\t\t\t\t\tchildren: testResults.get(index).message',
+              '\t\t\t\t\t\t\t\t\t}) : null]',
+              '\t\t\t\t\t\t\t\t})] }),',
             ],
           },
           {
-            // ModelRow 侧：把它摆到两个容量字段之后（map 结果与 ModelInputTypes 之间），
-            // 与 inline-jsx 变体的视觉位置一致。
+            // ModelRow 侧：把 props.testRow 摆到容量字段之后、ModelInputTypes 之前。
             //
-            // 用 replaceLine 而不是 insertBefore：这一行**行内**同时装着上一项的收尾
-            // （`.map(...)` 的 `)`）与下一项的开头（ModelInputTypes），插不进独立一行 ——
-            // 在它之前插入会落进 `.map()` 的参数里，在它之后插入会落进 ModelInputTypes
-            // 的 props 里，两者都是语法错误（都实测撞过 applyPatch 出口的语法闸门）。
-            // 整行重写把我们的节点放在两者之间，正是那个 children 数组的第二项。
+            // 0.2.1 结构变化：官方把这处拆成了**两行** ——
+            //   `}, field)),`（容量 map 收尾，独占一行）
+            //   `(0, react_jsx_runtime.jsx)(ModelInputTypes, {`（下一项）
+            // 因此不再需要旧版的 replaceLine + ASI 防呆（旧结构里两者挤在同一行）；
+            // 直接 insertBefore ModelInputTypes 行，新行自带尾逗号，children 数组结构不变。
             //
-            // 另一处 ModelRow 调用点（DeepSeekModelsEditor）不传 `reasoningRow`，
+            // 另一处 ModelRow 调用点（DeepSeekModelsEditor）不传 `testRow`，
             // 值为 undefined —— React 对 undefined 子节点不渲染任何东西，安全。
             id: 'reasoning-ui@model-row-slot',
-            mode: 'replaceLine',
-            anchor: '}, field)), (0, react_jsx_runtime.jsx)(ModelInputTypes, {',
+            mode: 'insertBefore',
+            anchor: '(0, react_jsx_runtime.jsx)(ModelInputTypes, {',
             lines: [
-              '\t\t\t\t\t\t}, field)), props.reasoningRow, (0, react_jsx_runtime.jsx)(ModelInputTypes, {',
+              '\t\t\t\t\t\t\tprops.testRow,',
             ],
           },
         ],
@@ -385,9 +300,6 @@ const EDITS = [
     anchor: 'keyRequired: "Enter an API key to continue."',
     lines: [
       '\t\t\tkeyRequired: "Enter an API key to continue.",',
-      '\t\t\tmodelReasoningEffort: "Reasoning effort",',
-      '\t\t\tmodelReasoningInherit: "Inherit provider default",',
-      '\t\t\tmodelReasoningDisabled: "No reasoning",',
       '\t\t\ttestModel: "Test connectivity",',
       '\t\t\ttesting: "Testing…",',
       '\t\t\ttestSuccess: "Reachable · listed",',
@@ -409,7 +321,6 @@ const EDITS = [
       '\t\t\ttestCatalogFallback: " (probe service unavailable — fell back to the catalog)",',
       '\t\t\tcredentialMissingHint: "No API key configured — enter one above, or set the environment variable ",',
       '\t\t\tcredentialMissingTail: " before launch. Without it this provider\'s models are unusable, and a connectivity test fails for lack of a credential.",',
-      '\t\t\tmodelReasoningNone: "none declared",',
       '\t\t\ttestAllModels: "Test all",',
       '\t\t\ttestingAll: "Testing…",',
       '\t\t\tcapVision: "vision",',
@@ -424,9 +335,6 @@ const EDITS = [
     anchor: 'keyRequired: "请输入 API 密钥后继续。"',
     lines: [
       '\t\t\tkeyRequired: "请输入 API 密钥后继续。",',
-      '\t\t\tmodelReasoningEffort: "思考强度",',
-      '\t\t\tmodelReasoningInherit: "继承提供方默认",',
-      '\t\t\tmodelReasoningDisabled: "不支持思考",',
       '\t\t\ttestModel: "测试连通性",',
       '\t\t\ttesting: "测试中…",',
       '\t\t\ttestSuccess: "可达 · 已在目录中列出",',
@@ -448,7 +356,6 @@ const EDITS = [
       '\t\t\ttestCatalogFallback: "（探测服务未就绪，已回退目录探测）",',
       '\t\t\tcredentialMissingHint: "未配置 API Key —— 请在上方填写，或在启动前设置环境变量 ",',
       '\t\t\tcredentialMissingTail: " 。未配置时该提供方下的模型不可用，「测试连通性」也会因缺少凭据而失败。",',
-      '\t\t\tmodelReasoningNone: "未声明",',
       '\t\t\ttestAllModels: "测试全部",',
       '\t\t\ttestingAll: "测试中…",',
       '\t\t\tcapVision: "视觉",',
@@ -480,21 +387,6 @@ const EDITS = [
       '\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["advancedHint"],',
       '\t\t\t\t\t\t\tchildren: `${t("credentialMissingHint")}${keyRef}${t("credentialMissingTail")}`',
       '\t\t\t\t\t\t}) : null,',
-    ],
-  },
-  {
-    // D 思考强度细化（数据侧）：catalogProps 增加 reasoningDefaultOf 解析器 ——
-    // 按模型 id 在**解析后的**命名空间值里找同 id 条目，返回其声明的等级。
-    // 「继承」因此能回答「继承到什么」而不是一句空话。
-    id: 'reasoning-default-resolver',
-    mode: 'insertBefore',
-    anchor: 'onReset: () => {',
-    lines: [
-      '\t\t\t\t\treasoningDefaultOf: (id) => {',
-      '\t\t\t\t\t\tconst route = namespace !== void 0 && namespace.value !== void 0 && namespace.value.providers !== void 0 ? namespace.value.providers[props.provider] : void 0;',
-      '\t\t\t\t\t\tconst found = route !== void 0 && Array.isArray(route.models) ? route.models.find((entry) => entry !== void 0 && entry !== null && entry.id === id) : void 0;',
-      '\t\t\t\t\t\treturn found === void 0 ? "inherit" : reasoningChoice(found);',
-      '\t\t\t\t\t},',
     ],
   },
   {
