@@ -26,6 +26,12 @@ fn gen_assets() {
     // R5(2026-09-16):审批气泡（240x84，含「拒绝 / 允许一次」两按钮）——
     // 帧高与 22 帧精灵表不同，故独立文件；此处显式登记（本函数是显式清单，不扫 pets/ 根）。
     add("pets/approval.png", &mut files);
+    // R20-b(2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §3.2)：程序化音效
+    // —— scripts/gen-sfx.mjs 构建期合成，一致性闸门见同脚本 --check 模式。
+    // 显式登记而非扫目录：漏登记 = 运行时静默无声（与图集通道同族纪律）。
+    for name in ["jump", "land", "wave", "grab", "drop", "alert", "done", "tick"] {
+        add(&format!("pets/sfx/{name}.wav"), &mut files);
+    }
     let pngs = |dir: &std::path::Path, prefix: &str, files: &mut Vec<String>| {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         let mut names: Vec<String> = rd

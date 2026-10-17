@@ -96,6 +96,12 @@ pub(crate) const DRAG_THRESHOLD: i32 = 4;
 /// R18：悬浮球拖动合帧定时器 id（主窗 `IDT_DRAG` 给桌宠；球是另一个 hwnd，
 /// 另起一个 id 让 `pet.log` 与契约测试的归属清晰）。节拍复用 `DRAG_COALESCE_MS`。
 pub(crate) const IDT_DOT_DRAG: usize = 6;
+/// R20-a（2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §2.2）：全屏覆盖
+/// 轮询定时器 id。节拍 250ms（与 `IDT_PEEK` 同频不同责）——参考实现 Coopanion 用
+/// 200ms；全屏判定是「状态切换」不是连续动画，250ms 的进入延迟不可感知，
+/// 再快只是白烧轮询（`GetForegroundWindow` + 几次矩形查询）。
+pub(crate) const IDT_FULLSCREEN: usize = 7;
+pub(crate) const FULLSCREEN_POLL_MS: u32 = 250;
 
 /// M4（2026-10-05）：拖动尾随的临界阻尼弹簧刚度（1/s²）。
 ///

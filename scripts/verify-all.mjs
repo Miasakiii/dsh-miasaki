@@ -338,6 +338,18 @@ function planDesktop() {
     args: [join(dir, 'scripts', 'check-deploy-guard.mjs')],
     cwd: dir,
   })
+  // R20-b 音效闸门（design/2026-10-17-pet-fullscreen-sfx-sprint.md §3.1）：
+  // ui/pets/sfx/ 八个 WAV 必须与 gen-sfx.mjs 的合成结果**逐字节一致**（确定性合成，
+  // 生成器即台账）。手工替换 / 半截写入 / 改了参数没重跑，都会在这里红；
+  // 修复 = `node scripts/gen-sfx.mjs`（无 --check）。Rust 侧的登记契约
+  // （SFX_NAMES ↔ build.rs）由 sfx.rs 的单测钉住，两侧互补。
+  checks.push({
+    line: 'desktop',
+    name: 'sfx (程序化音效产物与合成器一致)',
+    cmd: process.execPath,
+    args: [join(dir, 'scripts', 'gen-sfx.mjs'), '--check'],
+    cwd: dir,
+  })
   // 拖拽上传安全网（design/drag-drop-attachment-upload.md）：09-dropguard.js 分片登记 /
   // 生成产物含片 / 三判据（dragover 阻止、只认 Files、defaultPrevented 放行）/ 自包含形态。
   checks.push({

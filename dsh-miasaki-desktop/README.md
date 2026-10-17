@@ -70,7 +70,7 @@ npm run tauri build         # 产出 Windows 安装包/EXE（src-tauri/target/re
 静态回归（令牌完备性 + 令牌漂移 + 运行时补丁自证）已并入仓库级统一入口：
 
 ```bash
-node ../scripts/verify-all.mjs desktop   # 42 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×9（其中第 9 件为**上游社区插件** `dsh-browser-playwright` 的适配补丁，2026-10-17 迁入并首次入闸门）/ 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**213 例**，2026-10-17 实跑；旧记「193」「174」「100」例是口径落后）
+node ../scripts/verify-all.mjs desktop   # 43 项：gen-init / tokens:diff / 注入脚本语法 + cookie 兜底链 + hash 字段级读写 + hash 同步判重（2026-09-26 含命令保真复查）+ 启动页 S4a 视觉层契约 + 桌宠资产链完整性 / patch verify ×9（其中第 9 件为**上游社区插件** `dsh-browser-playwright` 的适配补丁，2026-10-17 迁入并首次入闸门）/ 程序化音效产物与合成器一致（`gen-sfx.mjs --check`，R20-b）/ 插件单测 + computer-use 产物语法 ×5（`node --check`，见「bundles」）/ cargo test（**222 例**，2026-10-17 实跑；旧记「213」「193」「174」「100」例是口径落后）
 ```
 
 `npm run verify`（`scripts/verify-themes.mjs`）**不在该脚本内**——它需要附着运行中的
@@ -583,6 +583,21 @@ appearance 配置。
   桌宠直接出现在球的当前位置。拖出工作区有兜底（回默认位并落盘——球是隐藏态唯一入口，
   没有托盘/面板兜底它）。捕获 / 收尾判据与主窗 R16/R17 完全同构，`pet.log` 有
   `dot drag start/end` 成对行。设计见 [design/2026-10-17-pet-drag-sprint.md](design/2026-10-17-pet-drag-sprint.md)
+- **全屏自动隐藏（R20-a，2026-10-17）**：游戏 / 视频 / 演示**真全屏**盖住桌宠所在显示器时，
+  桌宠自动藏起来，退出全屏回原位置出现（`pet.log` 有 `fullscreen: auto-hidden` /
+  `restored` 成对行）。判据五条（`model::foreground_is_fullscreen_cover`，照搬 Coopanion
+  已验证口径）：前台有效非自己、**无标题栏**（最大化的浏览器不算——防误判的核心）、
+  非桌面本身（Progman/WorkerW）、同显示器、四边覆盖。瞬态规则：**不落盘、不碰 hide 标志**，
+  全屏期间手动隐藏/显示以用户为准（手动显示后规则下一拍重新生效，逃逸出口 = 设置面板
+  「全屏时隐藏」开关，默认开）。
+- **程序化音效（R20-b，2026-10-17）**：8 个音效全部由 `scripts/gen-sfx.mjs` 在**构建期合成**
+  （振荡器 + 噪声 + 包络 + 颤音 + 双二阶滤波，种子 PRNG 确定性，共 ~53KB，**零音频资产**——
+  调音只改参数表），编译期内嵌、winmm `PlaySound(SND_MEMORY|ASYNC)` 播放。触发点：
+  单击跳（jump/land 成对）、双击挥（wave）、拎起/放下（grab/drop 成对，主窗与悬浮球各有）、
+  审批到来（alert 叮咚）、任务完成（done 琶音）、审批按钮点击（tick 确认）。连打后响替换
+  前响不叠音；总开关在设置面板「音效」（默认开）。产物一致性由 `gen-sfx.mjs --check`
+  进静态回归，`SFX_NAMES ↔ build.rs` 登记契约由单测钉住。设计见
+  [design/2026-10-17-pet-fullscreen-sfx-sprint.md](design/2026-10-17-pet-fullscreen-sfx-sprint.md)
 - **桌宠内联审批（R5 / M3.2，2026-09-16）**：审批等待时气泡升级为**含「拒绝 / 允许一次」两个按钮**
   的交互气泡（`ui/pets/approval.png`，240×84，构建期 `gen-bubbles.ps1` 出图、运行时零字体调用；
   两按钮间留 8px 间隙防误触）。点按钮 → 桌面端记单调 `seq` 并经 `eval` 派发

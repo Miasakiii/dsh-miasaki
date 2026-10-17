@@ -217,6 +217,10 @@
             if (ppSet.pet != null) psSegs.push('pspet=' + encodeURIComponent(String(ppSet.pet)))
             if (ppSet.through != null) psSegs.push('psthrough=' + encodeURIComponent(String(ppSet.through)))
             if (ppSet.tray != null) psSegs.push('pstray=' + encodeURIComponent(String(ppSet.tray)))
+            // R20-a/b（2026-10-17）：两个 bool 开关。bool 用 `!= null` 判（false 是合法值，
+            // 写成 truthy 会把「关」当成「没报」—— 那 Setting 就永远关不掉）。
+            if (ppSet.fs != null) psSegs.push('psfs=' + (ppSet.fs ? '1' : '0'))
+            if (ppSet.sound != null) psSegs.push('psnd=' + (ppSet.sound ? '1' : '0'))
             if (psSegs.length > 0) psPart = '&' + psSegs.join('&')
           }
         } catch (e) { /* ignore */ }
@@ -249,6 +253,7 @@
                   key === 'pet' || key === 'pettool' || key === 'petts' || key === 'petkey' ||
                   key === 'psmo' || key === 'psbubble' || key === 'psalpha' ||
                   key === 'pspet' || key === 'psthrough' || key === 'pstray' ||
+                  key === 'psfs' || key === 'psnd' ||
                   key === 'bg' || key === 'diag') continue
               keep.push(seg)
             }

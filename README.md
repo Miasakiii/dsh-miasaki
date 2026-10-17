@@ -16,8 +16,8 @@
 > dsh plugin --profile web add @miasaki/dsh-canvas
 > ```
 >
-> **进度如实说**：静态回归 **184 项**全绿、分发包 **7/7** 实测可打包、依赖声明与脱敏逐项核过；
-> 但[实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 是 **72 / 127 项**
+> **进度如实说**：静态回归 **185 项**全绿、分发包 **7/7** 实测可打包、依赖声明与脱敏逐项核过；
+> 但[实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 是 **72 / 130 项**
 > （勾选口径 = 日常使用确认；需刻意构造或特殊环境的项仍留空）——
 > 装机遇到问题请[开 issue](https://github.com/Miasakiii/dsh-miasaki/issues)，别自己扛。
 

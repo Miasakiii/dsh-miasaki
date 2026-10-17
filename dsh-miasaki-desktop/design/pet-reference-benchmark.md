@@ -657,4 +657,53 @@ Rust 改了而面板没改是这类改动的典型漏半边，本批已用测试
 的表述下其实是**一个断链 + 一个反馈空白**，处置因此分成 P0（球拖动从 0 到 1）
 与 P1（主窗反馈 + 滑停）两档，见 sprint 文档。
 
+---
+
+## 10. R20 · 拖动之外的对标：全屏隐藏 / 程序化音效 / 背景 halo（2026-10-17）
+
+> 触发：用户「这几个仓库还有其他好的可借鉴的点吗？有趣的点呢？」→ 从四个仓库里
+> 筛出三项值得做的，R20-a/b 已实施、R20-c 留候选。落地：
+> [`2026-10-17-pet-fullscreen-sfx-sprint.md`](2026-10-17-pet-fullscreen-sfx-sprint.md)。
+
+**R20-1 全屏自动隐藏（Coopanion `electron-main.cjs:184-219` + `:386-391`）**：
+`fullscreen(own)` 五条判据（前台非自己 / 无 `WS_CAPTION` / 类名非 Progman·WorkerW /
+同显示器 / 四边覆盖 rcMonitor）+ 200ms 轮询 + `hideWhenFullscreen` 设置 +
+`releaseAutoHidden` 所有权语义（用户手动显隐解除规则所有权）。
+**采纳**：判据全盘照搬（抽成 `model::foreground_is_fullscreen_cover` 纯函数 + 6 例）；
+轮询改 250ms（状态切换非连续动画）；**所有权语义照抄**（用户手动显隐以用户为准，
+手动显示后规则下一拍重新生效——与「设置是常驻命令」的心智一致，逃逸出口是开关）。
+**我方增益**：把判据从「散在轮询里的 Win32 调用」提成可单测纯函数，并补了
+**逐条件 load-bearing 反例**（每条判据打穿都必须观察到 false）——参考实现的判据
+本身没有这层测试保护。
+
+**R20-2 程序化音效（Coopanion `web/sound.js` 全文 + `kit/body.js` 的 `play(...)` 调用点）**：
+全部音效 Web Audio 现场合成（`tone`：振荡器+频率斜坡+包络+颤音+低通；
+`noise`：双二阶带通）；六类可分别静音（move/touch/face/snore/talk/ui）；
+`document.hidden` 时不播；音量/主开关持久化。
+**采纳**：合成器与「零音频资产」路线（落到构建期 `gen-sfx.mjs` + 内嵌 + winmm 播放）；
+「动作/交互各配合成音」的触发点映射。
+**不采纳**：分类静音（v1 只做总开关——产品复杂度留给真实需求）；运行期合成
+（我方 Win32 线程无 Web Audio，且构建期生成可走哈希闸门，确定性更强）。
+**我方增益**：种子 PRNG 让合成**确定性**可重放 ⇒ `--check` 内存重建逐字节比对，
+生成器即台账；这与 intro-clips 的「上游快照需 SHA 台账」是两种形态，两头注释互注防混淆。
+
+**R20-3 背景对比 halo（Coopanion `pet-app.js:1476-1545` + `sampleBackdrop`）**：
+GDI `StretchBlt` 把桌面降采样到 ≤1500 点，OKLab 色差统计「与身体同色的背景占比」，
+带回差防抖；身体融进背景时加浅灰 halo。其注释记了性能教训：halo 用 CSS filter
+整窗模糊，Mac 上常开把 GPU 占到 60–90%。
+**候选（未实施）**：路径已探明（GDI 采样四件套 FFI + 构建期预渲染环 PNG + 单次
+blit，规避其 GPU 教训），但视觉阈值需实机调；判据从宽，超预算整项顺延。
+**不采纳**：OKLab 逐像素统计（对我方 Sprite 桌宠，「身体平均色 vs 桌面平均色」
+一锅端足够；且采样本身有 ~1ms 成本，2s 一次是可接受上限）。
+
+**R20-4 明确不采纳的其余项（留档，防重复调研）**：骨骼 rig（`kit/rig.js`，
+pivot 变换 + 双纹理 crossfade——Sprite 架构做不到，L2 素材层）、本地 ASR
+（`src/asr/sherpa.ts`，sherpa-onnx FunASR/Whisper + 边说边解码——重量级依赖，
+破零依赖铁律）、throw 物理（L2）、形象包沙箱（`src/packs.ts` + `body-host.js` 的
+containment 规则——架构级，但其「防吞点击的 BOX_MAX / 防伪造触摸的 TOUCH_MS」
+将来做素材扩展时值钱）、OBS 导出（`host/overlay.cjs`——运营向，社区主播场景）、
+交互响应模式三档（README_zh:188——产品层）、consent 两级自改设置（`src/self.ts`——
+信任设计，与 hash 命令通道相关，若将来让 agent 改桌宠设置可捡起）、
+`stage.js` 的「合成层只动 transform」纪律（可借鉴的无形态成本）。
+
 

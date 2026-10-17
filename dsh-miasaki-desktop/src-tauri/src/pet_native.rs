@@ -17,6 +17,8 @@ pub(crate) mod model;
 pub(crate) mod persist;
 #[path = "pet_native/settings.rs"]
 pub(crate) mod settings;
+#[path = "pet_native/sfx.rs"]
+pub(crate) mod sfx;
 #[path = "pet_native/window.rs"]
 pub(crate) mod window;
 #[path = "pet_native/xform.rs"]

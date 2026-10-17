@@ -163,7 +163,7 @@ window.__ModuleLoader__.load({
 		 * 值会和壳里的真实值不一样，用户一改反而把真实值覆盖成"面板以为的默认"）。
 		 * 这只是**回推到达之前**的占位；`pet-state` 一到就被真实值替换。
 		 */
-		const SHELL_SETTINGS_DEFAULTS = { motion: 1.0, bubbleMs: 3000, alpha: 100, pet: "", through: "auto", tray: "dot" };
+		const SHELL_SETTINGS_DEFAULTS = { motion: 1.0, bubbleMs: 3000, alpha: 100, pet: "", through: "auto", tray: "dot", fs: true, sound: true };
 		const PET_CHOICES = [["", "跟随主题"], ["whale", "鲸鱼娘"], ["kurumi", "狂三"], ["inverse", "反转狂三"]];
 		const THROUGH_CHOICES = [["auto", "自动（透明处点得到下层）"], ["always", "总是可点（不穿透）"]];
 		const TRAY_CHOICES = [["dot", "头像悬浮球"], ["tray", "只留托盘"], ["both", "两者都要"]];
@@ -184,7 +184,8 @@ window.__ModuleLoader__.load({
 			const [err, setErr] = react.useState(null);
 			// ② ③ 的初值取持久值；`panelSettings`（模块级）是心跳真正读的那份，改设置要同步它。
 			const [settings, setSettings] = react.useState(() => readPanelSettings());
-			// 壳侧六项：初值是占位默认，`pet-state` 一到就被真实值替换（见 SHELL_SETTINGS_DEFAULTS）。
+			// 壳侧八项：初值是占位默认，`pet-state` 一到就被真实值替换（见 SHELL_SETTINGS_DEFAULTS）。
+			// R20-a/b：`fs` / `sound` 两个 bool 开关同路径（psfs / psnd）。
 			const [shell, setShell] = react.useState(SHELL_SETTINGS_DEFAULTS);
 
 			const isDesktop = typeof window.__MIASAKI_BOOTED__ === "boolean" && window.__MIASAKI_BOOTED__;
@@ -324,6 +325,12 @@ window.__ModuleLoader__.load({
 						segmentCtl("pet-through", shell.through, THROUGH_CHOICES, v => applyShell({ through: v }), "鼠标穿透", !isDesktop)),
 					row("隐藏后", "桌宠隐藏后从哪里找回来。",
 						segmentCtl("pet-tray", shell.tray, TRAY_CHOICES, v => applyShell({ tray: v }), "隐藏后", !isDesktop)),
+					// R20-a/b（2026-10-17）：全屏自动隐藏 + 音效总开关。
+					// 与 Rust `PetSettings::default()` 的 fs_hide / sound 对应（默认都开）。
+					row("全屏时隐藏", "游戏 / 视频 / 演示真全屏时，桌宠自动藏起来，退出全屏回到原位置。最大化的普通窗口不算全屏。",
+						switchCtl(shell.fs !== false, () => applyShell({ fs: shell.fs === false }), "全屏时隐藏", !isDesktop)),
+					row("音效", "跳跃、挥手、拎起放下、审批到来、任务完成的提示音。",
+						switchCtl(shell.sound !== false, () => applyShell({ sound: shell.sound === false }), "音效", !isDesktop)),
 				]),
 
 				// ③ 状态呈现（纯客户端，localStorage）
@@ -633,7 +640,7 @@ window.__ModuleLoader__.load({
 		//
 		// **两套设置的权威来源不同**，合并后才上报：
 		//   · 客户端两项（states / followTheme）—— 权威在 localStorage（`panelSettings`）；
-		//   · 壳侧六项（motion / bubbleMs / alpha / pet / through / tray）—— 权威在 Rust 的
+		//   · 壳侧八项（motion / bubbleMs / alpha / pet / through / tray / fs / sound）—— 权威在 Rust 的
 		//     `pet-settings.json`，面板经 `pet-state` 回推拿到（`shellSettings`），
 		//     **本插件不回存**（两边都存会漂移，而壳是真正生效的那一边）。
 		petPanel.settings = null;

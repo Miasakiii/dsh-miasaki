@@ -1242,6 +1242,38 @@ fleet 全线 **197 例**全绿、`verify-all fleet` 21/21。**未做**：进程�
 当前 browser-playwright 已打双轨补丁、openviking 实际为 0.5.26（兼容 0.2.1-rc.2）；临时启动 miasaki
 后端 22 秒复核实测**零「entries did not activate」警告**。**待用户**：重启 miasaki 确认 cot 报错消失。
 
+**2026-10-17（续四）· 桌宠专项 R20：全屏自动隐藏 + 程序化音效**`[实测]`：
+用户对四个参考仓库（Coopanion / GarfieldZhung / fornarwhal / TreapGoGo，浅克隆留档 `_refs/`）问
+「这几个仓库还有其他好的可借鉴的点吗」→ 对标后拍板「按你建议，先把计划定下来」。
+**① R20-a 全屏自动隐藏**（桌宠线此前完全没有）：判据照搬 Coopanion `electron-main.cjs:184-219`
+已验证的五条（前台有效非自己 / **无标题栏**——`GWL_STYLE & WS_CAPTION == 0`，最大化的浏览器不算全屏、
+这是防误判核心 / 类名非 Progman·WorkerW / 同显示器 / 四边覆盖 rcMonitor），抽成纯函数
+`model::foreground_is_fullscreen_cover`（6 例，含**逐条件 load-bearing 反例**——每条判据打穿都必须观察到
+false，参考实现本身没有这层保护）。窗口层：`IDT_FULLSCREEN` 250ms 轮询 + `fs_hidden` **瞬态**
+（不落盘、不碰 `shared.hide`，否则退出全屏会停在用户没要的隐藏态）+ 日志
+`fullscreen: auto-hidden` / `restored` 成对 + `update_click_through` 隐藏期早退。**实施期抓到真问题**：
+规则隐藏期 `shown` 影子状态仍为 true，compose 显隐分支的 `want_hide == shown` 判据会把用户的「显示」
+**吞掉**（面板点了没反应）⇒ 分支条件补 `fs_hidden && !want_hide`；用户手动显示后规则下一拍重新生效
+（与参考实现同口径，逃逸出口 = 设置开关，**关闭路径是硬契约**）。
+**② R20-b 程序化音效**（桌宠此前完全没声音）：`scripts/gen-sfx.mjs` 构建期合成 8 个 WAV
+（振荡器+噪声+包络+颤音+双二阶滤波，种子 PRNG 保证确定性，共 ~53KB）——零音频资产、调音只改参数表；
+`--check` 内存重建**逐字节比对**（生成器即台账，与 intro-clips 的「上游快照需 SHA 台账」是两种形态，
+两头注释互注防混淆）。播放 `pet_native/sfx.rs` + winmm `PlaySoundW(SND_MEMORY|SND_ASYNC)`，
+缓冲区是 `assets::find()` 的 `&'static [u8]` ⇒ 异步播放无悬挂指针；连打后响替换前响不叠音。
+8 个触发点：jump（单击跳）/ land（落地定格）/ wave（双击挥）/ grab×2（主窗+悬浮球拎起）/
+drop×2（两处收尾）/ alert（审批·告警出现）/ done（完成庆祝）/ tick（审批按钮点击——设计稿的「备用」位，
+实施时落到 `decide_approval`）。设置：`fs_hide` / `sound` 两字段（默认 true，`psfs` / `psnd` hash +
+面板两行 switch），**两个关闭路径都是硬契约**（关不掉比没有更糟）。
+**③ R20-c 背景对比 halo**（参考实现 OKLab 背景采样 + 回差防抖）：**候选未做**——视觉阈值与三主题观感
+需实机调，路径已探明（GDI StretchBlt 采样 + 预渲染环 PNG + 单次 blit，规避其「CSS filter 整窗模糊
+占 60–90% GPU」的教训），列 R21。
+**判据**：`cargo test` **213 → 222 例全绿**（fullscreen 6 + settings 1 + sfx 2，其余为在役文件内增量）；
+`verify-all desktop` 新增 `sfx` 闸门（`gen-sfx.mjs --check`）⇒ **42 → 43/43**、全量 **184 → 185**；
+三类判据缺陷反向验证精确转红（去 `WS_CAPTION` / 去桌面类名 / 覆盖「与」改「或」——后者三条同时红）。
+**文档**：设计 `2026-10-17-pet-fullscreen-sfx-sprint.md`、desktop CHANGELOG（续三）、根 README 桌宠段、
+矩阵 **E34**（分母 129 → 130）、`pet-reference-benchmark.md` §10（参考证据与「明确不采纳」清单）。
+**待用户**：MSVC 构建 + 签名 + **外部终端** `deploy-local.ps1 -Force` + 重启后按 E34 十二条判据实机走查。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

@@ -70,6 +70,11 @@ pub(crate) struct PetSettings {
     pub(crate) through: String,
     /// `dot` / `tray` / `both`。
     pub(crate) tray: String,
+    /// R20-a（2026-10-17）：全屏时自动隐藏桌宠。默认 true。
+    /// 关闭路径是硬契约——「关不掉比没有更糟」。
+    pub(crate) fs_hide: bool,
+    /// R20-b（2026-10-17）：音效总开关（跳跃/挥手/拎起/审批/庆祝）。默认 true。
+    pub(crate) sound: bool,
 }
 
 impl Default for PetSettings {
@@ -82,6 +87,8 @@ impl Default for PetSettings {
             pet_override: PET_OVERRIDE_FOLLOW.to_string(),
             through: THROUGH_AUTO.to_string(),
             tray: TRAY_DOT.to_string(),
+            fs_hide: true,
+            sound: true,
         }
     }
 }
@@ -192,6 +199,8 @@ mod tests {
         assert_eq!(d.pet_override, PET_OVERRIDE_FOLLOW);
         assert_eq!(d.through, THROUGH_AUTO);
         assert_eq!(d.tray, TRAY_DOT);
+        assert!(d.fs_hide, "R20-a：全屏隐藏默认开");
+        assert!(d.sound, "R20-b：音效默认开");
         assert!((BUBBLE_MS_MIN..=BUBBLE_MS_MAX).contains(&d.bubble_ms));
     }
 
@@ -315,10 +324,31 @@ mod tests {
             pet_override: "whale".into(),
             through: THROUGH_ALWAYS.into(),
             tray: TRAY_TRAY.into(),
+            fs_hide: false,
+            sound: false,
             ..Default::default()
         };
         let txt = serde_json::to_string(&s).unwrap();
         let back: PetSettings = serde_json::from_str(&txt).unwrap();
         assert_eq!(back, s);
+    }
+
+    /// R20：两个 bool 开关必须能「显式 false」存、读、往返 —— 缺字段时回默认 true
+    /// （旧文件 + 新字段的兼容路径，`#[serde(default)]` 负责；false 与「没写」因此可区分）。
+    #[test]
+    fn r20_switches_survive_explicit_false_round_trip() {
+        // 旧文件（缺两个字段）⇒ 默认全 true
+        let old: PetSettings = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(old.fs_hide && old.sound, "缺字段回默认 true");
+        // 显式 false 必须存活（serde(default) 不得把 false 覆盖成 true）
+        let off: PetSettings =
+            serde_json::from_str(r#"{"version":1,"fsHide":false,"sound":false}"#).unwrap();
+        assert!(!off.fs_hide && !off.sound, "显式 false 不得被默认值覆盖");
+        let back: PetSettings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert!(!back.fs_hide && !back.sound, "往返后仍为 false");
+        // normalize 不碰合法 bool
+        let mut z = off.clone();
+        assert!(!z.normalize(), "合法 bool 不应被报告改动");
+        assert!(!z.fs_hide && !z.sound);
     }
 }

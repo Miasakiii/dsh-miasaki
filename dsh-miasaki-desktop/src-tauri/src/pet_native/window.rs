@@ -143,6 +143,9 @@ pub(crate) struct PetWin {
     dot_hover: bool,
     /// 悬浮球窗口当前是否已置位穿透（与主窗 `click_through` 各自独立——两个 hwnd 各自持有样式）。
     dot_click_through: bool,
+    /// R20-a（2026-10-17）：全屏规则是否当前持有隐藏（瞬态，不落盘）。
+    /// `true` = 桌宠因「前台全屏覆盖本显示器」被规则藏起来，退出全屏即还原。
+    fs_hidden: bool,
 }
 impl PetWin {
     fn compose(&mut self) {
@@ -209,7 +212,14 @@ impl PetWin {
                     ));
                 }
             }
-            if want_hide == self.shown {
+            // R20-a（2026-10-17）：全屏规则隐藏期（`fs_hidden`）用户要求显示 ⇒ 也要走
+            // 切换分支。原条件 `want_hide == self.shown` 在这种情形下恒为 false
+            // （影子状态 shown=true 而 want_hide=false，布尔相等判断认为「无需切换」），
+            // 用户的「显示」会被规则态**吞掉**——面板点了没反应。补上
+            // `fs_hidden && !want_hide` 后分支执行：ShowWindow + 清规则态。
+            // 注意语义：清规则态不等于规则失效——下一拍 fs_poll 若仍覆盖会重新隐藏
+            // （参考实现 Coopanion 同口径：设置是常驻命令；要常驻请关「全屏时隐藏」）。
+            if want_hide == self.shown || (self.fs_hidden && !want_hide) {
                 unsafe {
                     if want_hide {
                         // M4.1：隐藏前先回吸附位——悬浮球按 pos 定位，peek 外移量会让
@@ -229,6 +239,8 @@ impl PetWin {
                     } else {
                         ShowWindow(self.dot_hwnd, SW_HIDE);
                         ShowWindow(self.hwnd, SW_SHOW);
+                        // R20-a：用户（或规则解除）在这里显示主窗 ⇒ 规则态让位
+                        self.fs_hidden = false;
                     }
                 }
                 self.dot_shown = want_hide && self.dot_enabled();
@@ -283,6 +295,8 @@ impl PetWin {
             // L1(v5) M3:庆祝起手挤压一次 —— whale 图集没有 review 行（Done 按回退链落 idle，
             // 见 image.rs 的 whale_row_shares_fallback_chain），挤压脉冲正是给它的零素材庆祝表达。
             self.squash_start = Some(now);
+            // R20-b：完成庆祝琶音（与挤压脉冲同一拍，视听同庆）
+            self.sfx("done");
             dirty = true;
         } else if state != PetState::Done {
             self.done_celebrated = false;
@@ -302,6 +316,8 @@ impl PetWin {
                         });
                         // L1(v5) M3:落地挤压一次（与 Done 庆祝共用同一脉冲通道）。
                         self.squash_start = Some(now);
+                        // R20-b：落地「噗」（与起跳音成对；用户感知为一次完整的跳）
+                        self.sfx("land");
                     }
                     Action::Wander { .. } => {
                         // M1.4:散步自然结束同步悬浮球,隐藏后恢复入口不脱节
@@ -569,6 +585,12 @@ impl PetWin {
                     _ => {}
                 }
                 if let Some(next) = apply {
+                    // R20-b：审批(0)/fleet 告警(1)这类**需要用户行动**的气泡出现时叮咚一声
+                    // ——状态气泡(2)/台词(3)不响（那是不用行动的通知，响了就是噪音）。
+                    // Done 庆祝有自己的音（在挂 review 槽处），不走这条。
+                    if next.as_ref().map_or(false, |a| a.priority <= ALERT_PRI_ALERT) {
+                        self.sfx("alert");
+                    }
                     self.alert = next;
                     self.alert_shown_at = now;
                     // 帧更新块末尾已无条件置脏（见下方 `dirty = true`），此处不重复赋值
@@ -1003,13 +1025,123 @@ impl PetWin {
             .unwrap_or(true)
     }
 
+    /// R20-b（2026-10-17）：音效播放的**设置门** + 一行式调用。
+    ///
+    /// 门读 `settings.sound`（默认 true）；取不到锁按 `true` —— 与 `dot_enabled()`
+    /// 的失败方向一致（读不到设置不该让桌宠突然变哑，除非用户明确关过）。
+    /// 播放本体在 `sfx::play`（未知名/缺素材静默 + 首缺留痕）。
+    fn sfx(&self, name: &str) {
+        let on = self
+            .shared
+            .lock()
+            .map(|s| s.settings.sound)
+            .unwrap_or(true);
+        if on {
+            super::sfx::play(name);
+        }
+    }
+
+    /// R20-a（2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §2.2）：
+    /// 全屏覆盖轮询（`IDT_FULLSCREEN` 250ms）。
+    ///
+    /// 状态机（`fs_hidden` = 「规则当前持有隐藏」）：
+    /// - 覆盖中且规则未隐藏且用户要显示 ⇒ 隐藏 + 置位 + 日志；
+    /// - 规则已隐藏：覆盖解除或用户已手动隐藏 ⇒ 解除规则态（仅当 `shown` 才 show 回来）；
+    /// - 用户在全屏期间**手动显示** ⇒ 由 compose 显隐分支清规则态（见其处注释），
+    ///   下一拍规则重新生效（**参考实现同口径**：设置是常驻命令，规则所有权；
+    ///   要桌宠在全屏应用上常驻，请关「全屏时隐藏」设置）。
+    ///
+    /// **不落盘、不碰 `shared.hide`**：这是瞬态规则，退出全屏即还原；
+    /// 写进 `hide` 会让桌宠停在用户没要过的隐藏态（悬浮球常驻）。
+    fn fs_poll(&mut self) {
+        let fs_hide = self
+            .shared
+            .lock()
+            .map(|s| s.settings.fs_hide)
+            .unwrap_or(true);
+        // 设置关闭时规则不参与；已隐藏的残留直接解除（用户可能在全屏中关设置）
+        if !fs_hide {
+            if self.fs_hidden {
+                self.fs_hidden = false;
+                if self.shown {
+                    unsafe { ShowWindow(self.hwnd, SW_SHOW) };
+                    pet_log_line("[native-pet] fullscreen: restored (setting off)\n");
+                }
+            }
+            return;
+        }
+        let cover = self.fullscreen_covers();
+        if !self.fs_hidden {
+            if cover && self.shown {
+                unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+                self.fs_hidden = true;
+                pet_log_line("[native-pet] fullscreen: auto-hidden (foreground covers pet monitor)\n");
+            }
+            return;
+        }
+        // 已被规则隐藏
+        if !cover || !self.shown {
+            self.fs_hidden = false;
+            if self.shown {
+                unsafe { ShowWindow(self.hwnd, SW_SHOW) };
+                pet_log_line("[native-pet] fullscreen: restored\n");
+            }
+            // !shown：用户手动隐藏了 —— 只清规则态，不 show（用户所有权优先）
+        }
+    }
+
+    /// R20-a：取 Win32 事实（前台/样式/类名/矩形/显示器）喂给纯函数
+    /// `model::foreground_is_fullscreen_cover`（判据本身在那里单测）。
+    ///
+    /// 覆盖判据用显示器的 **rcMonitor**（不是工作区）：全屏游戏确实盖住任务栏那条，
+    /// 而按工作区判会漏掉「任务栏边上还差几像素」的真全屏窗口。
+    fn fullscreen_covers(&self) -> bool {
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg == 0 || fg == self.hwnd {
+                return false;
+            }
+            let own_mon = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            let fg_mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+            let same = own_mon != 0 && own_mon == fg_mon;
+            let style = GetWindowLongPtrW(fg, GWL_STYLE) as u32;
+            let mut cls = [0u16; 64];
+            let n = GetClassNameW(fg, cls.as_mut_ptr(), cls.len() as i32);
+            let class = if n > 0 {
+                String::from_utf16_lossy(&cls[..n as usize])
+            } else {
+                String::new()
+            };
+            let mut fr = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+            GetWindowRect(fg, &mut fr);
+            let mut info = MonitorInfo {
+                cb_size: std::mem::size_of::<MonitorInfo>() as u32,
+                rc_monitor: Rect { left: 0, top: 0, right: 0, bottom: 0 },
+                rc_work: Rect { left: 0, top: 0, right: 0, bottom: 0 },
+                dw_flags: 0,
+            };
+            if own_mon == 0 || GetMonitorInfoW(own_mon, &mut info) == 0 {
+                return false; // 取不到显示器几何 ⇒ 不猜（宁可不隐藏）
+            }
+            foreground_is_fullscreen_cover(
+                fg,
+                self.hwnd,
+                same,
+                style,
+                &class,
+                fr,
+                info.rc_monitor,
+            )
+        }
+    }
     /// R2:按光标位置切换 `WS_EX_TRANSPARENT`（由 10ms 轮询定时器驱动）。
     /// **必须轮询**：一旦置位穿透，本窗口收不到鼠标消息，「何时恢复可点击」无从由事件得知。
     /// 规则：隐藏 / 拖拽中恒不穿透（保证跟手与恢复入口可用），其余按命中结果切换。
     /// R18：滑停（松手后 ≤300ms 的自然滑行）也算「拖拽中」——那期间窗口还在动，
     /// 穿透态切换与移动叠在一起没有意义，且用户可能立刻再次按下。
+    /// R20-a：全屏规则隐藏期同样早退——窗口都藏了，10ms 光标轮询是纯浪费。
     fn update_click_through(&mut self) {
-        if !self.shown || self.dragged || self.drag_settling {
+        if !self.shown || self.dragged || self.drag_settling || self.fs_hidden {
             self.set_click_through(false);
             return;
         }
@@ -1164,6 +1296,8 @@ impl PetWin {
         }
         self.dot_drag_target = None;
         save_pet_pos(self.pos, hide, None);
+        // R20-b：放下「嗒」（球版 grab/drop 成对；出屏兜底那下也响——放置行为本身完成了）
+        self.sfx("drop");
         if keepable {
             pet_log_line(&format!(
                 "[native-pet] dot drag end -> ({},{})\n",
@@ -1337,6 +1471,9 @@ impl PetWin {
             "[native-pet] approval decision sent -> {decision} seq={seq} key_len={}\n",
             key.len()
         ));
+        // R20-b：按钮点击的确认「嗒」——决策要走后端往返，这声先给用户「点到了」的反馈
+        // （与 alert 的「叮咚」分工：那个说「有事」，这个说「收到」）
+        self.sfx("tick");
     }
 
     /// DPI(2026-10-05)：当前 DPI 下的**窗口物理尺寸**。
@@ -1496,6 +1633,8 @@ impl PetWin {
         // 但**压不过审批**(0)：审批气泡必须常驻到 resolved（v3 M3 的硬约束）。
         self.alert = Some(Alert::timed("quote:click", idx, ALERT_PRI_ALERT, bubble_ms));
         self.alert_shown_at = std::time::Instant::now();
+        // R20-b：起跳音（落地音在 JumpHold 转定格处，见 compose 动作槽清理）
+        self.sfx("jump");
     }
 
     /// v2 双击挥手:播 wave 行(约 500ms 内容,余量 1300ms 收尾)。
@@ -1508,6 +1647,8 @@ impl PetWin {
         });
         self.frame_idx = 0;
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        // R20-b：挥手的「咻」
+        self.sfx("wave");
     }
 
     /// v2 决策1:主窗口最小化/隐藏时双击=唤起(do_wave 的替代路径)
@@ -1702,6 +1843,8 @@ impl PetWin {
         let hide = self.shared.lock().map(|s| s.hide).unwrap_or(false);
         save_pet_pos(self.pos, hide, docked);
         self.render_dot();
+        // R20-b：放下「嗒」（与起手 grab 成对；R19 直跟手下松手即停，这声就是「放置成功」）
+        self.sfx("drop");
         pet_log_line(&format!(
             "[native-pet] drag end -> ({},{}) dock={:?}\n",
             self.pos.0, self.pos.1, docked
@@ -1951,6 +2094,10 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                 // M4.1:peek 边界检测（静置到期 / 光标压上）；动画推进在 compose 节拍
                 (*pet).peek_poll();
                 0
+            } else if wp == IDT_FULLSCREEN {
+                // R20-a：全屏覆盖轮询（规则瞬态隐藏/恢复，不落盘）
+                (*pet).fs_poll();
+                0
             } else {
                 (*pet).compose();
                 0
@@ -2084,6 +2231,8 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                         "[native-pet] drag start win=({},{}) target=({},{})\n",
                         r.left, r.top, r.left + dx, r.top + dy
                     ));
+                    // R20-b：拎起「啵」（松手音在 finish_drag_settle 收尾处）
+                    (*pet).sfx("grab");
                 }
             }
             0
@@ -2206,6 +2355,7 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             KillTimer(hwnd, IDT_HIT); // R2:光标轮询随窗口一起停
             KillTimer(hwnd, IDT_DRAG); // R13:合帧定时器同理（销毁时可能仍挂着）
             KillTimer(hwnd, IDT_PEEK); // M4.1:peek 边界轮询同理
+            KillTimer(hwnd, IDT_FULLSCREEN); // R20-a:全屏覆盖轮询同理
             PostQuitMessage(0);
             0
         }
@@ -2283,6 +2433,8 @@ unsafe extern "system" fn dot_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) 
                         (*pet).pos.0 + dx,
                         (*pet).pos.1 + dy
                     ));
+                    // R20-b：拎起球的「啵」（松手音在 end_dot_drag 处）
+                    (*pet).sfx("grab");
                 }
             }
             0
@@ -2576,6 +2728,7 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             dot_theme: theme0,
             dot_hover: false,
             dot_click_through: false,
+            fs_hidden: false,
         });
         let pet_ptr = &mut *pet as *mut PetWin;
         let inst = GetModuleHandleW(std::ptr::null());
@@ -2637,6 +2790,9 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         // M4.1:peek 边界检测轮询（静置到期 / 光标压上）——独立低频定时器，
         // 不搭 10ms 的 IDT_HIT（那是两个窗口各挂一份的高频轮询，且 dot 窗也会触发）
         SetTimer(hwnd, IDT_PEEK, PEEK_POLL_MS, 0);
+        // R20-a：全屏覆盖轮询（前台真全屏盖住本显示器 ⇒ 规则瞬态隐藏；退出恢复）。
+        // 独立低频定时器，判据在 model::foreground_is_fullscreen_cover（纯函数）。
+        SetTimer(hwnd, IDT_FULLSCREEN, FULLSCREEN_POLL_MS, 0);
         // 2026-09-24:悬浮球自己的命中轮询（悬停放大 + 透明处穿透）——与主窗同频的独立定时器，
         // 挂在 dot 窗口上，由 dot_proc 消费
         SetTimer(dot_hwnd, IDT_HIT, HIT_POLL_MS, 0);

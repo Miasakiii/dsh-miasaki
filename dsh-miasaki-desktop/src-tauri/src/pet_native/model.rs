@@ -4,7 +4,8 @@ use super::PetState;
 use super::ffi::rand_u32;
 // M4.1：吸附判定要用 `Rect`。它是 `#[repr(C)]` 的纯数据（无 extern 块、无 Win32 符号），
 // 引入它不会让本文件失去「可 `rustc --test` 直编」的资格 —— 这是把判定放 model.rs 的前提。
-use super::ffi::Rect;
+// R20-a：全屏判据还要 `WS_CAPTION`（同为纯常量，不是 Win32 调用）。
+use super::ffi::{Rect, WS_CAPTION};
 /* ---------------- 窗口状态 ---------------- */
 
 /// M1.1:一次性/环境动作统一为单一枚举槽位（v3 前是 hop/hop_hold/wave/ambient/wander
@@ -313,6 +314,53 @@ pub(crate) fn advance_drag_target(
 #[inline]
 pub(crate) fn drag_should_start(delta: (i32, i32), threshold: i32) -> bool {
     delta.0.abs() + delta.1.abs() > threshold
+}
+
+/* ---------------- R20：全屏覆盖判据（纯逻辑） ---------------- */
+
+/// R20（2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §2.2）：前台窗口是否
+/// 「真全屏」覆盖了桌宠所在显示器。
+///
+/// **五条判据逐条对应 Coopanion**（`electron-main.cjs:184-219` 的 `fullscreen()`，
+/// 快照 `_refs/coopanion/`）——它把「最大化窗口被误判成全屏」这个经典坑用
+/// `WS_CAPTION` 判据堵掉，是本条 worth-copy 的核心：
+/// ① 前台有效且不是自己；② 无标题栏（`WS_CAPTION`）——带标题栏的普通窗口不算，
+///    否则桌宠会在用户最大化浏览器时消失；③ 类名不是桌面本身（Progman / WorkerW）——
+///    它们覆盖整个显示器但不是应用；④ 与桌宠同显示器（`same_monitor` 由调用方比好
+///    HMONITOR 再传入——显示器句柄不进纯函数）；⑤ 四边**覆盖**显示器矩形。
+///
+/// Win32 依赖（取前台/样式/类名/矩形）全部留在窗口层，本函数只吃「已经取到的事实」，
+/// 与 `classify_taskkill`（停机判据）同一分层先例。
+pub(crate) fn foreground_is_fullscreen_cover(
+    fg: isize,
+    own: isize,
+    same_monitor: bool,
+    fg_style: u32,
+    fg_class: &str,
+    fg_rect: Rect,
+    own_mon: Rect,
+) -> bool {
+    // ① 前台无效或是自己 ⇒ 不覆盖
+    if fg == 0 || fg == own {
+        return false;
+    }
+    // ② 带标题栏 ⇒ 普通窗口（最大化也算），不是全屏
+    if fg_style & WS_CAPTION != 0 {
+        return false;
+    }
+    // ③ 桌面本身的窗口（覆盖屏幕但不是应用）
+    if fg_class == "Progman" || fg_class == "WorkerW" {
+        return false;
+    }
+    // ④ 不同显示器 ⇒ 与「桌宠所在屏被盖」无关
+    if !same_monitor {
+        return false;
+    }
+    // ⑤ 四边覆盖（少一边都不算——贴边的视频窗口不算全屏）
+    fg_rect.left <= own_mon.left
+        && fg_rect.top <= own_mon.top
+        && fg_rect.right >= own_mon.right
+        && fg_rect.bottom >= own_mon.bottom
 }
 
 /* ---------------- R16：抓取热区（命中容差，纯逻辑） ---------------- */
@@ -951,6 +999,91 @@ mod tests {
         assert!(drag_should_start((0, 5), 4));
         // 单轴大幅也越（沿屏幕边拖的场景）
         assert!(drag_should_start((0, -100), 4));
+    }
+
+    /* ---------------- R20 · 全屏覆盖判据 ---------------- */
+
+    /// R20 的夹具：2560×1440 显示器，无标题栏前台窗四边覆盖它。
+    fn mon() -> Rect {
+        Rect { left: 0, top: 0, right: 2560, bottom: 1440 }
+    }
+
+    /// R20-1：无标题栏 + 四边覆盖 ⇒ 算全屏（真游戏/视频全屏的主路径）。
+    #[test]
+    fn fullscreen_cover_matches_captionless_full_rect() {
+        let fg = Rect { left: 0, top: 0, right: 2560, bottom: 1440 };
+        assert!(foreground_is_fullscreen_cover(77, 66, true, 0, "UnityWndClass", fg, mon()));
+    }
+
+    /// R20-2：**带标题栏不算**——这条是防「最大化浏览器时桌宠消失」的核心判据。
+    #[test]
+    fn maximized_window_with_caption_is_not_fullscreen() {
+        // 最大化窗口的矩形通常也覆盖整屏，差别就在 WS_CAPTION
+        let fg = Rect { left: 0, top: 0, right: 2560, bottom: 1440 };
+        assert!(!foreground_is_fullscreen_cover(
+            77, 66, true, WS_CAPTION, "Chrome_WidgetWin_1", fg, mon()
+        ));
+        // 对照：同矩形去掉 caption 位就算（证明是 caption 在起作用，不是矩形）
+        assert!(foreground_is_fullscreen_cover(
+            77, 66, true, 0, "Chrome_WidgetWin_1", fg, mon()
+        ));
+    }
+
+    /// R20-3：桌面本身的窗口（Progman / WorkerW）不算——它们覆盖屏幕但不是应用。
+    #[test]
+    fn desktop_windows_are_not_fullscreen_apps() {
+        let fg = Rect { left: 0, top: 0, right: 2560, bottom: 1440 };
+        assert!(!foreground_is_fullscreen_cover(77, 66, true, 0, "Progman", fg, mon()));
+        assert!(!foreground_is_fullscreen_cover(77, 66, true, 0, "WorkerW", fg, mon()));
+    }
+
+    /// R20-4：前台是自己 / 无效 / 不同显示器 / 部分覆盖，全部不算。
+    #[test]
+    fn self_invalid_other_monitor_and_partial_rect_are_not_cover() {
+        let full = Rect { left: 0, top: 0, right: 2560, bottom: 1440 };
+        assert!(!foreground_is_fullscreen_cover(66, 66, true, 0, "Game", full, mon()), "自己不算");
+        assert!(!foreground_is_fullscreen_cover(0, 66, true, 0, "Game", full, mon()), "前台无效不算");
+        assert!(!foreground_is_fullscreen_cover(77, 66, false, 0, "Game", full, mon()), "不同显示器不算");
+        // 贴边视频窗：差 2px 覆盖不到顶 ⇒ 不算（少一边都不行）
+        let partial = Rect { left: 0, top: 2, right: 2560, bottom: 1440 };
+        assert!(!foreground_is_fullscreen_cover(77, 66, true, 0, "Video", partial, mon()));
+    }
+
+    /// R20-5：副屏几何（负坐标显示器）同样成立——虚拟桌面左置副屏是常见布局。
+    #[test]
+    fn cover_works_on_negative_coordinate_monitors() {
+        let m = Rect { left: -2560, top: 0, right: 0, bottom: 1440 };
+        let fg = Rect { left: -2560, top: 0, right: 0, bottom: 1440 };
+        assert!(foreground_is_fullscreen_cover(77, 66, true, 0, "Game", fg, m));
+        // 右缘差 2px 没够到显示器右边（0）⇒ 不算（首版把 right 写成 +2，那其实覆盖得更满）
+        let partial = Rect { left: -2560, top: 0, right: -2, bottom: 1440 };
+        assert!(!foreground_is_fullscreen_cover(77, 66, true, 0, "Game", partial, m));
+    }
+
+    /// R20-6：**反向验证**：把五条判据逐条「打穿」都必须能观察到 false
+    /// （防将来有人合并/弱化条件——每条的存在性都由这条钉住）。
+    #[test]
+    fn each_cover_condition_is_load_bearing() {
+        let full = Rect { left: 0, top: 0, right: 2560, bottom: 1440 };
+        let m = mon();
+        // 条件①：fg == own
+        assert!(!foreground_is_fullscreen_cover(66, 66, true, 0, "Game", full, m));
+        // 条件②：caption
+        assert!(!foreground_is_fullscreen_cover(77, 66, true, WS_CAPTION, "Game", full, m));
+        // 条件③：桌面类名
+        assert!(!foreground_is_fullscreen_cover(77, 66, true, 0, "Progman", full, m));
+        // 条件④：同显示器
+        assert!(!foreground_is_fullscreen_cover(77, 66, false, 0, "Game", full, m));
+        // 条件⑤：四边覆盖（每边各打穿一次）
+        for edge in [
+            Rect { left: 1, top: 0, right: 2560, bottom: 1440 },
+            Rect { left: 0, top: 1, right: 2560, bottom: 1440 },
+            Rect { left: 0, top: 0, right: 2559, bottom: 1440 },
+            Rect { left: 0, top: 0, right: 2560, bottom: 1439 },
+        ] {
+            assert!(!foreground_is_fullscreen_cover(77, 66, true, 0, "Game", edge, m),
+                "少覆盖一边也不算全屏：{edge:?}");
+        }
     }
 
     /* ---------------- R16 · 抓取热区（命中容差） ---------------- */

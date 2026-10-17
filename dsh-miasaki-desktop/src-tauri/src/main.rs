@@ -2044,6 +2044,10 @@ struct FragmentParts {
     ps_pet: Option<String>,
     ps_through: Option<String>,
     ps_tray: Option<String>,
+    /// R20-a/b（2026-10-17）：`psfs` = 全屏时隐藏（`1`/`0`）；`psnd` = 音效（`1`/`0`）。
+    /// 同样只存原样字符串，归一化在 `PetSettings::normalize()`（bool 解析只有一处）。
+    ps_fs: Option<String>,
+    ps_sound: Option<String>,
 }
 
 /// percent-decode（encodeURIComponent 产物；'+' 不转空格——encode 不产生 '+'）。
@@ -2088,6 +2092,8 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         ps_pet: None,
         ps_through: None,
         ps_tray: None,
+        ps_fs: None,
+        ps_sound: None,
     };
     for part in fragment.split('&') {
         if let Some(v) = part.strip_prefix("miasaki-theme=") {
@@ -2149,6 +2155,9 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         if let Some(v) = part.strip_prefix("pspet=") { p.ps_pet = Some(v.to_string()); }
         if let Some(v) = part.strip_prefix("psthrough=") { p.ps_through = Some(v.to_string()); }
         if let Some(v) = part.strip_prefix("pstray=") { p.ps_tray = Some(v.to_string()); }
+        // R20-a/b：两个 bool 开关（`1`/`0`；解析与夹取在 settings 侧统一）
+        if let Some(v) = part.strip_prefix("psfs=") { p.ps_fs = Some(v.to_string()); }
+        if let Some(v) = part.strip_prefix("psnd=") { p.ps_sound = Some(v.to_string()); }
     }
     p
 }
@@ -2201,13 +2210,15 @@ fn pet_mode_for(theme: &str) -> &'static str {
 /// 2026-09-29：**同时回推壳侧设置**（动效/气泡/透明度/宠物/穿透/托盘）—— 面板初始化
 /// 需要它才能显示当前值；否则面板只能显示默认值，用户一改就把真实设置覆盖掉。
 /// 字段名与 hash 的 `ps*` 一一对应（`psmo` ↔ `motion` …），改一处要同改两处。
+/// R20-a/b（2026-10-17）：追加 `fs`（全屏时隐藏）/ `sound`（音效）两个 bool，
+/// 对应 `psfs` / `psnd`。
 fn push_pet_state(app: &AppHandle) {
     let pet = app.state::<pet_native::NativePet>();
     let hidden = pet.is_hidden();
     let s = pet.settings_snapshot();
     let js = format!(
-        "window.dispatchEvent && window.dispatchEvent(new CustomEvent('miasaki-pet-state',{{detail:{{hidden:{hidden},settings:{{motion:{},bubbleMs:{},alpha:{},pet:\"{}\",through:\"{}\",tray:\"{}\"}}}}}}))",
-        s.motion, s.bubble_ms, s.alpha, s.pet_override, s.through, s.tray
+        "window.dispatchEvent && window.dispatchEvent(new CustomEvent('miasaki-pet-state',{{detail:{{hidden:{hidden},settings:{{motion:{},bubbleMs:{},alpha:{},pet:\"{}\",through:\"{}\",tray:\"{}\",fs:{},sound:{}}}}}}}))",
+        s.motion, s.bubble_ms, s.alpha, s.pet_override, s.through, s.tray, s.fs_hide, s.sound
     );
     eval_status(app, &js);
 }
@@ -2548,7 +2559,8 @@ fn start_hash_watchdog(app: &AppHandle) {
             // 此时把用户已存的值抹掉是更坏的选择；`update_settings` 里的 normalize 兜底夹取。
             let ps_seen = parts.ps_motion.is_some() || parts.ps_alpha.is_some()
                 || parts.ps_bubble.is_some() || parts.ps_pet.is_some()
-                || parts.ps_through.is_some() || parts.ps_tray.is_some();
+                || parts.ps_through.is_some() || parts.ps_tray.is_some()
+                || parts.ps_fs.is_some() || parts.ps_sound.is_some();
             if ps_seen {
                 let mut next = pet.settings_snapshot();
                 if let Some(v) = parts.ps_motion.as_deref() {
@@ -2563,6 +2575,11 @@ fn start_hash_watchdog(app: &AppHandle) {
                 if let Some(v) = parts.ps_pet.as_deref() { next.pet_override = v.to_string() }
                 if let Some(v) = parts.ps_through.as_deref() { next.through = v.to_string() }
                 if let Some(v) = parts.ps_tray.as_deref() { next.tray = v.to_string() }
+                // R20-a/b：`1` = 开；其余（含 `0` 与任何脏值）都按「关」处理 ——
+                // 与既有 `motion` 等的「解析失败不改动」不同，bool 的未命中值必须收敛到
+                // 一个确定态，否则「传了但看不懂」会静默保留上一态。
+                if let Some(v) = parts.ps_fs.as_deref() { next.fs_hide = v == "1" }
+                if let Some(v) = parts.ps_sound.as_deref() { next.sound = v == "1" }
                 if pet.update_settings(next) {
                     // 宠物钉选可能刚变了 ⇒ **立即**重算 mode，不等下一次主题上报。
                     // 主题取 `LAST_THEME`（页面每次 syncHash 都带，这里读最近一次即可）：

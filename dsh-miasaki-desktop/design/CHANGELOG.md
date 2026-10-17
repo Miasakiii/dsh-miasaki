@@ -2,6 +2,51 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-17（续三）· 桌宠专项 R20：全屏自动隐藏 + 程序化音效（E34）
+
+**触发**：用户对四个参考仓库（Coopanion / GarfieldZhung / fornarwhal / TreapGoGo，
+浅克隆留档 `_refs/`）问「还有其他好的可借鉴的点吗」→ 对标后拍板「按你建议，先把计划定下来」。
+设计与判据：[`2026-10-17-pet-fullscreen-sfx-sprint.md`](2026-10-17-pet-fullscreen-sfx-sprint.md)。
+
+**R20-a 全屏自动隐藏**（桌宠线此前完全没有的能力）：
+
+- 判据照搬 Coopanion 已验证的五条（`electron-main.cjs:184-219`，快照 `_refs/coopanion/`），
+  抽成纯函数 `model::foreground_is_fullscreen_cover`（6 例单测，含**逐条件 load-bearing
+  反例**）：前台有效非自己 / **无标题栏**（`WS_CAPTION`——最大化浏览器不算全屏，
+  这条是防误判的核心）/ 非桌面本身（Progman/WorkerW）/ 与桌宠同显示器 / 四边覆盖 rcMonitor。
+- 窗口层：`IDT_FULLSCREEN` 250ms 轮询 + `fs_hidden` 瞬态（**不落盘、不碰 `shared.hide`**）
+  + 日志 `fullscreen: auto-hidden` / `restored` 成对；`update_click_through` 隐藏期早退。
+- 一个实施期发现的真问题：规则隐藏期 `shown` 影子状态仍为 true，compose 显隐分支的
+  `want_hide == shown` 判据会把用户的「显示」**吞掉**（面板点了没反应）⇒ 分支条件补
+  `fs_hidden && !want_hide`；用户手动显示后规则下一拍重新生效（Coopanion 同口径，
+  逃逸出口 = 面板开关）。
+- 设置：`fs_hide`（默认 true，`psfs` hash + 面板「全屏时隐藏」switch）。**关闭路径是硬契约**。
+
+**R20-b 程序化音效**（桌宠此前完全没声音）：
+
+- `scripts/gen-sfx.mjs` 构建期合成 8 个 WAV（振荡器+噪声+包络+颤音+双二阶滤波，
+  种子 PRNG 保证确定性；共 ~53KB）：jump/land/wave/grab/drop/alert/done/tick。
+  **零音频资产**——调音只改参数表；`--check` 模式内存重建逐字节比对（生成器即台账，
+  不外抄 SHA 表——与 intro-clips 的「上游快照」形态区别，两头都写了注释防混淆）。
+- 播放：`pet_native/sfx.rs` + winmm `PlaySoundW(SND_MEMORY|SND_ASYNC)`；
+  缓冲区是 `assets::find()` 的 `&'static [u8]`，异步播放无悬挂指针；未知名/缺素材静默
+  + 首缺留痕；连打后响替换前响不叠音。
+- 8 个触发点：jump（单击跳）/ land（落地定格）/ wave（双击挥）/ grab×2（主窗+悬浮球
+  拎起）/ drop×2（两处收尾）/ alert（审批·告警出现）/ done（完成庆祝）/
+  tick（审批按钮点击确认——设计稿的「备用」位，实施时落到 `decide_approval`）。
+- 设置：`sound` 总开关（默认 true，`psnd` hash + 面板「音效」switch）。
+- 闸门：`verify-all.mjs` desktop 类新增 `sfx` 项（`gen-sfx.mjs --check`）；
+  Rust 侧 `SFX_NAMES ↔ build.rs` 登记契约由 sfx.rs 单测钉住（漏登记 = 那个音效永远不响，
+  而功能测试抓不到——这类「静默失踪」正是闸门存在的理由）。
+
+**R20-c 背景对比 halo**：**未做**（候选位，视觉调参不确定；若用户实机后觉得「宠物融进
+桌面」再立项，路径已探明：GDI StretchBlt 采样 + 预渲染环 PNG + 单次 blit）。
+
+**验证**：`cargo test` **213 → 222 例全绿**（fullscreen 6 + settings 1 + sfx 2）；
+三类判据缺陷反向验证精确转红（去 caption / 去桌面类名 / 覆盖「与」改「或」——
+后者三条测试同时红）；`verify-all desktop` **43/43**（含新 sfx 闸门）。
+**待用户**：外部终端构建 + 部署 + 实机走查（矩阵 E34 十二条判据）。
+
 ## 2026-10-17（续二）· 上游社区插件适配补丁迁入本线并首次入回归（browser-playwright）
 
 **触发**：用户报「HARNESS / Failed to load plugins / `@deepseek-ai/dsh-experimental-client-ui-cot-translation` /

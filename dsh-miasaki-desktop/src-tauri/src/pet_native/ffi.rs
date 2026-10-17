@@ -34,7 +34,7 @@ pub(crate) struct Size {
 /// 语义上就是值类型；而 M4.1 的吸附判定要按值传 `work`（几何运算全部只读它）。
 /// 不加则复用同一个 `work` 会报 `use of moved value`（该错误在 harness 里先暴露过）。
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Rect {
     pub(crate) left: i32,
     pub(crate) top: i32,
@@ -125,6 +125,13 @@ extern "system" {
         data: isize,
     ) -> i32;
     pub(crate) fn GetMonitorInfoW(mon: isize, info: *mut MonitorInfo) -> i32;
+    /// R20（2026-10-17）：前台窗口所在显示器的句柄——全屏覆盖判据的「同显示器」比较用
+    /// （`model::foreground_is_fullscreen_cover` 的 same_monitor 由它比出）。
+    /// `MONITOR_DEFAULTTONEAREST = 2`：窗口完全出屏时也返回最近的显示器（不返回 0）。
+    pub(crate) fn MonitorFromWindow(h: isize, flags: u32) -> isize;
+    /// R20：取窗口类名（UTF-16）。全屏判据用它排除桌面本身（Progman / WorkerW）——
+    /// 那两个窗口覆盖整个显示器但不是应用。
+    pub(crate) fn GetClassNameW(h: isize, buf: *mut u16, max: i32) -> i32;
     /// DPI(2026-10-05)：取**指定点所在显示器**的 DPI —— 建窗前就要用（`buf` 分配与
     /// `CreateWindowExW` 的尺寸都得先知道 DPI，而 `GetDpiForWindow` 要 hwnd ⇒ 循环依赖）。
     /// `MonitorFromPoint` 属 user32；`GetDpiForMonitor` 属 **shcore**（Win8.1+）。
@@ -172,6 +179,21 @@ extern "system" {
     pub(crate) fn CreateDIBSection(h: isize, bmi: *const BmiHeader, usage: u32, bits: *mut *mut c_void, section: isize, offset: u32) -> isize;
 }
 
+// R20-b（2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §3.2）：程序化音效播放。
+// 注：此处刻意用 `//` 而非 `///` —— rustdoc 不为 `extern` 块生成文档，会报 unused_doc_comments。
+//
+// `PlaySoundW` 的用法契约：`SND_MEMORY` 时缓冲区必须在**播放期间**保持有效 ——
+// 本仓的音效是 `assets::find()` 出来的 `&'static [u8]`（编译期内嵌），
+// 生命周期天然覆盖异步播放（`SND_ASYNC`），无悬挂指针风险。
+// 不用 `SND_NOSTOP`：连打时后一声替换前一击，不叠音不爆音。
+#[link(name = "winmm")]
+extern "system" {
+    pub(crate) fn PlaySoundW(sound: *const u8, hmod: isize, flags: u32) -> i32;
+}
+/// PlaySoundW flags：内存缓冲 + 异步播放（不等声音结束就返回）。
+pub(crate) const SND_MEMORY: u32 = 0x0004;
+pub(crate) const SND_ASYNC: u32 = 0x0001;
+
 pub(crate) const WS_POPUP: u32 = 0x8000_0000;
 pub(crate) const WS_EX_LAYERED: u32 = 0x0008_0000;
 pub(crate) const WS_EX_TOPMOST: u32 = 0x0000_0008;
@@ -187,6 +209,12 @@ pub(crate) const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
 pub(crate) const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
 /// Get/SetWindowLongPtrW 的扩展样式索引（64 位下必须用 Ptr 版本）。
 pub(crate) const GWL_EXSTYLE: i32 = -20;
+/// R20（2026-10-17）：窗口**普通**样式索引 —— 全屏覆盖判据读 `WS_CAPTION` 用。
+pub(crate) const GWL_STYLE: i32 = -16;
+/// R20：标题栏位（`WS_CAPTION = WS_BORDER | WS_DLGFRAME`）。**全屏判据的核心**：
+/// 带它的前台窗口是普通窗口（最大化也算），不是全屏应用 —— Coopanion 同款判据，
+/// 没有它，用户最大化浏览器时桌宠就会消失（`_refs/coopanion` electron-main.cjs:198）。
+pub(crate) const WS_CAPTION: u32 = 0x00C0_0000;
 pub(crate) const CS_HREDRAW: u32 = 0x0002;
 pub(crate) const CS_VREDRAW: u32 = 0x0001;
 pub(crate) const CS_DBLCLKS: u32 = 0x0008;
