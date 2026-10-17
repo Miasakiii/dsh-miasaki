@@ -115,9 +115,9 @@ test('isUserAvatarName：用户资产可删，预设与非法名一律拒（M2.8
   assert.equal(isUserAvatarName('My_Avatar-2.PNG'), true, '扩展名大小写不敏感（与白名单同口径）')
   assert.equal(isUserAvatarName('A_b-c.9.png'), true)
 
-  assert.equal(isUserAvatarName('preset-default.png'), false, '预设是系统资产，不可删')
+  assert.equal(isUserAvatarName('preset-portrait.png'), false, '预设是系统资产，不可删')
   assert.equal(isUserAvatarName('preset-current.png'), false)
-  assert.equal(isUserAvatarName('PRESET-default.png'), true,
+  assert.equal(isUserAvatarName('PRESET-portrait.png'), true,
     '前缀判定是大小写敏感的 —— 白名单允许大写开头的用户文件，别把用户文件误伤成预设')
 
   for (const bad of ['', '.png', 'a.jpg', 'a b.png', 'sub/a.png', 'sub\\a.png', '../config.json', 'a%2Fb.png',

@@ -2,6 +2,36 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-10-14 · 退役程序化「默认」预设（用户「预设的这个图标删掉」）
+
+**触发**：用户贴出「默认」预设图标（`preset-default.png`，深色底 + 几何徽记）说「预设的这个图标删掉」。
+
+**改动**：预设表从四款收敛为**三款位图**（头像 / 立绘 / 现行）——`lib/icon-presets.js` 的
+`ICON_PRESETS` 删掉 `default` 项，`index.js` 的 `presetBytes` 收敛为**只读插件自带资源**
+（删掉 `renderPresetPng` 分支与 `PRESET_ICON_SIZE` 常量）。
+
+**连带删除整条程序化渲染链**（SDF 距离场 / 解析式抗锯齿 / alpha-over 合成 / 手写 PNG 编码：
+`renderPreset` / `renderPresetPng` / `encodePng` 及 `MARK` / `CANVAS` / 颜色编译）。
+**判据 = 消费者**：那条链唯一的消费者就是「默认」——位图预设走 `asset` 读 PNG，从不绘制。
+留着一套没人调用的光栅器，比删掉更危险：下一个改预设的人要先读懂它，才知道改动会不会踩雷。
+删除决策与当日渲染管线的历史记录留在 `design/2026-09-21-appearance-icon-presets-design.md`
+（git 历史可取回实现）。
+
+**行为变化（用户可见）**：① 面板预设九宫格与骨架格 4 → **3**，文案「内置四款」→「内置三款」；
+② host 不再幂等生成 `avatars/preset-default.png`，**已落盘的旧文件不会自动清除**
+（不自动删是为了不误伤 —— `preset-` 前缀对"手动放进目录"的用户文件同样合法），
+可手动删除，无任何功能影响；③ 旧配置里 `avatar.source` 指向 `preset-default.png` 时，
+面板「当前生效」按既有「文件失联」分支显示（文件若已手动删掉）或显示为普通文件
+（文件若还在）—— `presetIdFromUrl` 对退役 URL 返回 `null`，它**不再是预设**。
+
+**测试**：`icon-presets.test.js` 重写（8 → 3 例：渲染 / 编码 / 尺寸钳制用例随链路退场，
+保留预设表不变量 / 命名 URL 往返 / 位图资源 512 方图，**新增两条退役断言** ——
+`presetIdFromUrl('/appearance/avatar/preset-default.png')` 与 `presetById('default')`
+必须为 null，防"删了款但旧 URL 还被当成在役预设"）；`host.test.js` 落盘同源与幂等判据
+从 `preset-default` 换到 `preset-portrait`；`client.test.js` 夹具去 default、格子数 6 → 5、
+骨架 4 → 3；`avatar.test.js` 删除围栏样例换用 `preset-portrait.png`。
+单测 **160 → 155 例**，`verify-all appearance` **18/18**。
+
 ## 2026-10-14 · M2.8「我的上传」加删除入口（用户「可以添加也应该有删除选项」）
 
 **触发**：用户「好了，但是选择后，桌面启动图标没变，然后可以添加也应该有删除选项」。

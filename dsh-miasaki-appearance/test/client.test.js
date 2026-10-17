@@ -184,9 +184,8 @@ function iconState(avatarSource) {
   }
 }
 
-/** 四款预设的 `/presets` 清单（= host 响应里的 presets 字段，也就是 state 里存的东西）。 */
+/** 三款预设的 `/presets` 清单（= host 响应里的 presets 字段，也就是 state 里存的东西）。 */
 const PRESET_FIXTURE = [
-  { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
   { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
   { id: 'illustration', label: '立绘', file: 'preset-illustration.png', url: '/appearance/avatar/preset-illustration.png' },
   { id: 'current', label: '现行', file: 'preset-current.png', url: '/appearance/avatar/preset-current.png' },
@@ -868,9 +867,8 @@ test('面板渲染冒烟：应用图标板块（当前生效预览 + 预设 + �
       persistent: true,
     },
     null, null, false, null,
-    { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png', 'preset-default.png'] },
+    { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png', 'preset-portrait.png'] },
     [
-      { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
       { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
       { id: 'illustration', label: '立绘', file: 'preset-illustration.png', url: '/appearance/avatar/preset-illustration.png' },
       { id: 'current', label: '现行', file: 'preset-current.png', url: '/appearance/avatar/preset-current.png' },
@@ -900,9 +898,8 @@ test('面板渲染冒烟：应用图标板块（当前生效预览 + 预设 + �
     assert.equal(rowNodes.some(rowNode => collectNodes(rowNode, node => node.type === 'img'
       && node.props.className === 'mia-avatarPreviewImg').length === 1), true,
       '「当前生效」预览必须嵌在 .mia-row 行式节点内（控件位与选择丸同侧同级）')
-    // ---- 预设九宫格：名称与格子数（四款：默认 / 头像 / 立绘 / 现行）
+    // ---- 预设九宫格：名称与格子数（三款：头像 / 立绘 / 现行）
     assert.equal(texts.includes('预设'), true, '预设子块标题必须渲染')
-    assert.equal(texts.includes('默认'), true, '预设名称必须渲染')
     assert.equal(texts.includes('头像'), true)
     assert.equal(texts.includes('立绘'), true)
     assert.equal(texts.includes('现行'), true)
@@ -910,7 +907,7 @@ test('面板渲染冒烟：应用图标板块（当前生效预览 + 预设 + �
     assert.equal(texts.includes('我的上传'), true, '子块标题必须渲染')
     const cells = collectNodes(element, node => typeof node.props.className === 'string'
       && node.props.className.startsWith('mia-iconCell'))
-    assert.equal(cells.length, 6, '四款预设 + 两个用户文件 → 六个格子')
+    assert.equal(cells.length, 5, '三款预设 + 两个用户文件 → 五个格子')
     const uploadCells = cells.filter(cell => typeof cell.props.title === 'string' && cell.props.title.startsWith('avatar-'))
     assert.deepEqual(uploadCells.map(cell => cell.props.title), ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png'],
       '用户文件各自一格（顺序与清单一致）')
@@ -966,9 +963,8 @@ test('M2.8：「我的上传」每格一个删除入口 —— 预设不给出�
         persistent: true,
       },
       null, null, false, null,
-      { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png', 'preset-default.png'] },
+      { local: ['avatar-lz3k9q-4f2a1b.png', 'avatar-other-abcdef.png', 'preset-portrait.png'] },
       [
-        { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
         { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' },
       ],
       null,
@@ -1063,7 +1059,6 @@ test('面板渲染冒烟：九宫格按 avatar.source 点亮选中格', () => { 
     },
     null, null, false, null, { local: [] },
     [
-      { id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' },
       { id: 'portrait', label: '头像', file: 'preset-portrait.png', url: presetUrl },
     ],
     null,
@@ -1146,7 +1141,7 @@ test('应用图标：当前生效预览覆盖预设 / 上传 / 出厂 / 文件�
 test('应用图标：预设清单的三态显式区分（加载中 / 失败 / 空清单）', () => {
   // 真 bug 的现场：失败与加载中都收敛成 presets = null，面板只能显示「预设清单加载中…」，
   // 而宿主 404 时那句话会**永远**挂着（用户实机截图即此）。修完三态各自有明确形态：
-  //   ① 加载中 → 四枚骨架格 + 「加载中」文案（诚实：确实在加载）；
+  //   ① 加载中 → 三枚骨架格 + 「加载中」文案（诚实：确实在加载）；
   //   ② 失败  → **原因 + 重试**，绝不显示成加载中；
   //   ③ 空清单（合法数组）→ 空网格 + 「落不了盘」提示（host 无 dataDir 的真实形态）。
   const { descriptor } = capture()
@@ -1163,7 +1158,7 @@ test('应用图标：预设清单的三态显式区分（加载中 / 失败 / �
     assert.equal(loadingTexts.includes('预设清单加载中…'), true, '加载中必须有文案')
     const skeletons = collectNodes(loading, node => typeof node.props.className === 'string'
       && node.props.className.includes('is-skeleton'))
-    assert.equal(skeletons.length, 4, '加载中必须给四枚骨架格（而不是一句话留白）')
+    assert.equal(skeletons.length, 3, '加载中必须给三枚骨架格（而不是一句话留白）')
 
     // ② 失败：第九个 state（presetsInfo）注入原因
     react.stateQueue = [
@@ -1464,7 +1459,7 @@ test('渲染树无 undefined/null 元素类型（空白色事故的直接签名�
           fit: 'cover', focus: 'center', glass: 'frost', vignette: 0,
           surface: { sidebar: 75, conversation: 70, composer: 80, overlay: 90 },
         },
-        avatar: { source: '/appearance/avatar/preset-default.png' },
+        avatar: { source: '/appearance/avatar/preset-portrait.png' },
         motion: { enabled: false, preset: 'fluid', scale: 1 },
         conversation: { density: 'comfortable', maxWidth: 0 },
       },
@@ -1472,7 +1467,7 @@ test('渲染树无 undefined/null 元素类型（空白色事故的直接签名�
       persistent: true,
     },
     null, null, false, null, { local: [] },
-    { presets: [{ id: 'default', label: '默认', file: 'preset-default.png', url: '/appearance/avatar/preset-default.png' }] },
+    { presets: [{ id: 'portrait', label: '头像', file: 'preset-portrait.png', url: '/appearance/avatar/preset-portrait.png' }] },
     null,
   ]
   try {

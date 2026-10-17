@@ -1256,7 +1256,7 @@ window.__ModuleLoader__.load({
       // ⚠ 形状纪律：`presets` state 里存的是**数组**（loadPresets 里 setPresets(result.presets)），
       // 不是 /presets 的整个响应。这里曾照响应对象的形状去读 state（多套了一层 `.presets`）
       // ⇒ presetList 恒为 null ⇒ 九宫格**永远显示「预设清单加载中…」**，
-      // 而 host 侧其实一切正常（avatars/ 里四个 preset-*.png 就是它幂等落盘的证据）。
+      // 而 host 侧其实一切正常（avatars/ 里三个 preset-*.png 就是它幂等落盘的证据）。
       // 同组的 wallpapers / avatars 两个 state 存的都是「整个响应」，读数分别是 `.local`——
       // 三处只有这一处错位，而 test/client.test.js 的夹具当时注入了响应形状，于是假绿。
       const presetList = Array.isArray(presets) ? presets : null
@@ -1272,8 +1272,8 @@ window.__ModuleLoader__.load({
         block('预设',
           // 失败态下不再说「点选即用」——那时没有可点的东西（说明必须与当前能力一致）。
           presetsInfo.error === null
-            ? '内置的四款，点选即用（图标由宿主幂等落盘到 avatars/ 目录，与上传的图同源）。'
-            : '内置四款图标由宿主半的 /appearance/api/presets 下发。',
+            ? '内置的三款，点选即用（图标由宿主幂等落盘到 avatars/ 目录，与上传的图同源）。'
+            : '内置三款图标由宿主半的 /appearance/api/presets 下发。',
           presetList === null
             ? (presetsInfo.error === null
               ? reactElementPresetSkeleton()
@@ -1694,13 +1694,13 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 预设清单加载中：四枚骨架格 + 一行文案。
-     * 骨架比一句「加载中…」更明确「这里将出现四款预设」；文案照旧保留，但**只在真的加载中**
+     * 预设清单加载中：三枚骨架格 + 一行文案。
+     * 骨架比一句「加载中…」更明确「这里将出现三款预设」；文案照旧保留，但**只在真的加载中**
      * 出现（失败态由 reactElementPresetFailure 接手）——原形态让这句话在宿主 404 时永远挂着。
      */
     function reactElementPresetSkeleton() {
       const cells = []
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < 3; i++) {
         cells.push(react.createElement('div', { key: `sk-${i}`, className: 'mia-iconCell is-skeleton' },
           react.createElement('span', { key: 'b', className: 'mia-iconSkeletonBox' })))
       }

@@ -376,8 +376,8 @@ test('预设路由：GET /presets 幂等落盘到 avatars/，且能经头像文�
   const res = await callApi(ctx, '/appearance/api/presets')
   assert.equal(res.status, 200)
   assert.equal(res.body.persistent, true)
-  assert.equal(res.body.presets.length, 4, '预设共四款：默认 + 三款鲸鱼娘位图')
-  assert.deepEqual(res.body.presets.map(p => p.id), ['default', 'portrait', 'illustration', 'current'], '默认款在首位，位图 preset 随后')
+  assert.equal(res.body.presets.length, 3, '预设共三款位图（2026-10-14 删掉程序化「默认」后）')
+  assert.deepEqual(res.body.presets.map(p => p.id), ['portrait', 'illustration', 'current'], '三款鲸鱼娘位图')
   // 每款文件名都必须命中跨线契约的白名单（桌面壳据此在 avatars 目录里找）
   for (const preset of res.body.presets) {
     assert.match(preset.file, /^[\w][\w.-]{0,80}\.png$/, `${preset.file} 必须过白名单`)
@@ -385,16 +385,16 @@ test('预设路由：GET /presets 幂等落盘到 avatars/，且能经头像文�
     assert.equal(existsSync(join(dir, 'avatars', preset.file)), true, `${preset.file} 必须真的落盘`)
   }
   // 落盘内容与面板预览同源：文件路由取回的字节 == 磁盘字节
-  const defaultFile = join(dir, 'avatars', 'preset-default.png')
-  const got = await callFile(ctx, '/appearance/avatar/preset-default.png')
+  const portraitFile = join(dir, 'avatars', 'preset-portrait.png')
+  const got = await callFile(ctx, '/appearance/avatar/preset-portrait.png')
   assert.equal(got.status, 200)
   assert.equal(got.headers['content-type'], 'image/png')
-  assert.deepEqual(Buffer.from(got.body), readFileSync(defaultFile))
-  // 幂等：重复请求不改写磁盘（渲染是确定性的 + 落地前先比字节）
-  const before = readFileSync(defaultFile)
+  assert.deepEqual(Buffer.from(got.body), readFileSync(portraitFile))
+  // 幂等：重复请求不改写磁盘（位图资源是仓库常量 + 落地前先比字节）
+  const before = readFileSync(portraitFile)
   const again = await callApi(ctx, '/appearance/api/presets')
   assert.equal(again.status, 200)
-  assert.deepEqual(readFileSync(defaultFile), before)
+  assert.deepEqual(readFileSync(portraitFile), before)
   assert.deepEqual(again.body.local, res.body.local, '清单稳定')
   // 位图预设来自插件资源：三款鲸鱼娘（头像 / 立绘 / 现行）都必须落盘
   for (const id of ['portrait', 'illustration', 'current']) {

@@ -1,32 +1,22 @@
-// M2.7 应用图标预设：绘制器 / PNG 编码 / 预设表的一致性。
+// M2.7 应用图标预设：预设表 / 命名 / URL / 位图资源的一致性。
 //
-// 这套断言的意义在于「预设图标是**算出来的**」事实：没有二进制资源可比对，
-// 所以只能把不变量钉死 —— 圆角外必须透明、圆角内必须不透明、同一 id 必须字节可复现、
-// PNG 容器必须合法（签名 + IHDR 尺寸 + IEND）。位图预设（portrait / illustration /
-// current）则断言它们走另一条路。
+// 2026-10-14：程序化「默认」款退役（用户「预设的这个图标删掉」），随之删除的还有
+// 渲染与 PNG 编码两条链（它们唯一的消费者就是「默认」）—— 当时钉渲染不变量的用例
+// （圆角外透明 / 两次渲染逐字节一致 / PNG 容器合法 / 尺寸钳制）一并退场。
+// 本文件收敛为：**三款位图预设**的不变量 + 命名 / URL 往返 + 退役 id 不得复活。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
-import { inflateSync } from 'node:zlib'
 import {
   ICON_PRESETS,
-  encodePng,
   presetAssetPath,
   presetById,
   presetFileName,
   presetIdFromUrl,
   presetUrl,
-  renderPreset,
-  renderPresetPng,
 } from '../lib/icon-presets.js'
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-
-/** 取 RGBA 画布上某点的四通道。 */
-function pixel(rgba, size, x, y) {
-  const i = (y * size + x) * 4
-  return [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
-}
 
 /** 拆出 PNG 的 chunk 列表（类型 + 数据），顺带验证长度字段自洽。 */
 function chunksOf(png) {
@@ -44,8 +34,8 @@ function chunksOf(png) {
   return chunks
 }
 
-test('预设表：四款（默认 / 头像 / 立绘 / 现行），id 唯一、标签非空，且每款要么可渲染要么有位图资源', () => {
-  assert.equal(ICON_PRESETS.length, 4, '预设共四款（2026-09-23 用户拍板三款鲸鱼娘图标全进预设）')
+test('预设表：三款位图（头像 / 立绘 / 现行），id 唯一、标签非空、每款都带资源', () => {
+  assert.equal(ICON_PRESETS.length, 3, '2026-10-14 删掉程序化「默认」后，只剩三款位图')
   const ids = new Set()
   for (const preset of ICON_PRESETS) {
     assert.match(preset.id, /^[a-z][a-z0-9-]*$/, `${preset.id} 必须是合法 id（文件名要过白名单）`)
@@ -53,11 +43,10 @@ test('预设表：四款（默认 / 头像 / 立绘 / 现行），id 唯一、�
     ids.add(preset.id)
     assert.equal(typeof preset.label, 'string')
     assert.notEqual(preset.label.trim(), '')
-    const renderable = preset.base !== undefined && preset.mark !== undefined
-    assert.equal(renderable || typeof preset.asset === 'string', true, `${preset.id} 既不能渲染也没有资源`)
+    // 程序化渲染（base / mark）已随「默认」退役：每款必须是位图预设
+    assert.equal(typeof preset.asset, 'string', `${preset.id} 必须带 asset 资源路径`)
   }
-  // 「默认」在首位（九宫格的第一格），三款鲸鱼娘位图紧随其后（头像 / 立绘 / 现行）
-  assert.deepEqual(ICON_PRESETS.map(p => p.id), ['default', 'portrait', 'illustration', 'current'])
+  assert.deepEqual(ICON_PRESETS.map(p => p.id), ['portrait', 'illustration', 'current'])
 })
 
 test('预设文件名与 URL 往返：都落在跨线契约的白名单形态里', () => {
@@ -68,87 +57,13 @@ test('预设文件名与 URL 往返：都落在跨线契约的白名单形态里
     assert.equal(presetIdFromUrl(presetUrl(preset.id)), preset.id, 'URL 必须能反查回 id')
   }
   assert.equal(presetIdFromUrl('/appearance/avatar/avatar-abc.png'), null, '用户上传的图不是预设')
-  assert.equal(presetIdFromUrl('https://example.com/preset-default.png'), null)
+  assert.equal(presetIdFromUrl('https://example.com/preset-portrait.png'), null, '非同源路由不是预设')
+  // 2026-10-14：「默认」已退役 —— 旧配置 / 旧截图里的 preset-default.png 不得再被
+  // 识别成预设（否则面板会把一个不存在的款当成在役预设显示）。
+  assert.equal(presetIdFromUrl('/appearance/avatar/preset-default.png'), null, '已退役的预设 URL 不得反查出 id')
+  assert.equal(presetById('default'), null, '已退役的 id 取不到预设')
   assert.equal(presetIdFromUrl(undefined), null)
   assert.equal(presetById('nope'), null)
-})
-
-test('renderPreset：圆角外透明、圆角内不透明、徽记真的画上了', () => {
-  const size = 128
-  const preset = presetById('default')
-  const { width, height, rgba } = renderPreset(preset, size)
-  assert.equal(width, size)
-  assert.equal(height, size)
-  // 四个角在圆角外 → 全透明（否则图标会带四个硬角）
-  for (const [x, y] of [[0, 0], [size - 1, 0], [0, size - 1], [size - 1, size - 1]]) {
-    assert.equal(pixel(rgba, size, x, y)[3], 0, `(${x},${y}) 必须在圆角外`)
-  }
-  // 顶边中点与中心在圆角内 → 不透明
-  assert.equal(pixel(rgba, size, size >> 1, 0)[3], 255)
-  assert.equal(pixel(rgba, size, size >> 1, size >> 1)[3], 255)
-  // 徽记：中央圆点处应比同行的底色更亮（default 是深底浅图案）
-  const markPixel = pixel(rgba, size, Math.round(size * 0.5), Math.round(size * 0.365))
-  const basePixel = pixel(rgba, size, Math.round(size * 0.5), Math.round(size * 0.18))
-  assert.equal(markPixel[0] > basePixel[0], true, '中央圆点应当比底色亮')
-})
-
-test('renderPreset：同一 id 两次渲染逐字节一致（可复现，便于落盘幂等）', () => {
-  const a = renderPresetPng('default', 64)
-  const b = renderPresetPng('default', 64)
-  assert.deepEqual(a, b, '渲染必须是确定性的，否则每次请求都会重写磁盘')
-})
-
-test('renderPresetPng：合法 PNG（签名 / IHDR 尺寸 / IEND），尺寸受钳制', () => {
-  const png = renderPresetPng('default', 64)
-  assert.deepEqual(png.subarray(0, 8), PNG_MAGIC)
-  const chunks = chunksOf(png)
-  assert.deepEqual(chunks.map(c => c.type), ['IHDR', 'IDAT', 'IEND'])
-  assert.equal(chunks[0].data.readUInt32BE(0), 64)
-  assert.equal(chunks[0].data.readUInt32BE(4), 64)
-  assert.equal(chunks[0].data[8], 8, '8 位深')
-  assert.equal(chunks[0].data[9], 6, 'RGBA 色彩类型')
-  // IDAT 能解开，且长度 = 高 × (1 + 宽 × 4)（每行一个 filter 字节）
-  const raw = inflateSync(chunks[1].data)
-  assert.equal(raw.length, 64 * (1 + 64 * 4))
-  // 尺寸钳制：过小/过大都不崩，落在 [16, 2048]
-  assert.equal(chunksOf(renderPresetPng('default', 1))[0].data.readUInt32BE(0), 16)
-  assert.equal(chunksOf(renderPresetPng('default', 99999))[0].data.readUInt32BE(0), 2048)
-  assert.equal(renderPresetPng('nope', 64), null, '未知 id 不产字节')
-})
-
-test('encodePng：CRC 与 zlib 流自洽（无第三方编码器可依赖，这条是唯一防线）', () => {
-  const rgba = new Uint8ClampedArray(4 * 2 * 2)
-  rgba.set([255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 0])
-  const png = encodePng(rgba, 2, 2)
-  const chunks = chunksOf(png)
-  // CRC 自查：重算每个 chunk 的 CRC 必须与文件里写的一致
-  const table = (() => {
-    const t = new Int32Array(256)
-    for (let n = 0; n < 256; n += 1) {
-      let c = n
-      for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
-      t[n] = c
-    }
-    return t
-  })()
-  const crc32 = (buf) => {
-    let c = 0xffffffff
-    for (let i = 0; i < buf.length; i += 1) c = table[(c ^ buf[i]) & 0xff] ^ (c >>> 8)
-    return (c ^ 0xffffffff) >>> 0
-  }
-  let offset = 8
-  for (const chunk of chunks) {
-    const declared = png.readUInt32BE(offset + 8 + chunk.data.length)
-    const typeAndData = png.subarray(offset + 4, offset + 8 + chunk.data.length)
-    assert.equal(declared, crc32(typeAndData), `${chunk.type} 的 CRC 必须正确`)
-    offset += 12 + chunk.data.length
-  }
-  // 像素顺序保持不变：每行前缀一个 filter 字节（0），其余原样
-  const raw = inflateSync(chunks.find(c => c.type === 'IDAT').data)
-  assert.deepEqual([...raw], [
-    0, 255, 0, 0, 255, 0, 255, 0, 255, // filter + 第一行两个像素
-    0, 0, 0, 255, 255, 255, 255, 255, 0, // filter + 第二行两个像素
-  ])
 })
 
 test('位图预设：走资源不走绘制器，且资源确实在仓库里（512 方图 + 标准 PNG 容器）', () => {
@@ -156,7 +71,6 @@ test('位图预设：走资源不走绘制器，且资源确实在仓库里（51
   const bitmap = { portrait: 'assets/presets/portrait.png', illustration: 'assets/presets/illustration.png', current: 'assets/presets/current.png' }
   for (const [id, asset] of Object.entries(bitmap)) {
     assert.equal(presetAssetPath(id), asset)
-    assert.equal(renderPresetPng(id, 64), null, `位图预设 ${id} 不参与程序化渲染`)
     const full = new URL(`../${asset}`, import.meta.url)
     assert.equal(existsSync(full), true, `位图预设 ${id} 的资源必须入库`)
     const bytes = readFileSync(full)
@@ -165,16 +79,7 @@ test('位图预设：走资源不走绘制器，且资源确实在仓库里（51
     assert.equal(chunks[0].data.readUInt32BE(0), 512, `${id} 资源必须是 512 宽`)
     assert.equal(chunks[0].data.readUInt32BE(4), 512, `${id} 资源必须是 512 高`)
   }
-  assert.equal(presetAssetPath('default'), null)
-})
-
-test('renderPreset：位图预设与缺 mark 的预设都响亮拒绝，不得静默画黑徽记（2026-09-23 复审 P3）', () => {
-  // 旧行为：直调 renderPreset(位图预设) → compileFill(undefined) 落到末行兜底 [0,0,0]
-  // → 画出一张「黑徽记」脏图（公开入口 renderPresetPng 已提前 return null，只有直调可达）。
-  // 现契约：越过公开入口的直调必须抛错 —— 静默画错比崩溃更难发现。
-  for (const id of ['portrait', 'illustration', 'current']) {
-    assert.throws(() => renderPreset(presetById(id), 64), /位图预设/, `${id} 必须拒绝程序化渲染`)
-  }
-  assert.throws(() => renderPreset({ id: 'broken', base: '#123456' }, 64), /mark/, '缺 mark 必须拒绝而非画黑')
-  assert.throws(() => renderPreset(null, 64), TypeError, '非预设对象必须拒绝')
+  // 退役 id 与未知 id 一视同仁：没有资源路径
+  assert.equal(presetAssetPath('default'), null, '已退役的「默认」不得再有资源路径')
+  assert.equal(presetAssetPath('nope'), null)
 })

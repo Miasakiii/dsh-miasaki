@@ -10,7 +10,7 @@
 //   GET  /appearance/api/wallpapers      壁纸图源清单（内置 id + local 目录扫描）
 //   GET  /appearance/api/avatars         头像清单（avatars 目录扫描；M2.5）
 //   POST /appearance/api/avatar          上传头像（PNG data URL → avatars/<新文件名>.png；M2.5）
-//   GET  /appearance/api/presets         应用图标预设清单（按需生成/复制到 avatars/；M2.7）
+//   GET  /appearance/api/presets         应用图标预设清单（复制到 avatars/；M2.7）
 //   GET  /appearance/wallpaper/local/…   本地壁纸文件（白名单目录 + 文件名白名单，防穿越）
 //   GET  /appearance/avatar/…            头像文件（同上；桌面壳不经 HTTP，直读磁盘）
 //
@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url'
 import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildSurfaceTokens, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
 import { buildSplashHtml, buildSplashScript, buildSplashStyle } from './lib/splash.js'
 import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, avatarFileFromSource, isUserAvatarName, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
-import { ICON_PRESETS, presetAssetPath, presetFileName, presetUrl, renderPresetPng } from './lib/icon-presets.js'
+import { ICON_PRESETS, presetAssetPath, presetFileName, presetUrl } from './lib/icon-presets.js'
 import { AppearanceStore } from './lib/store.js'
 import { buildTrustedHosts, fenceCheck } from './lib/fence.js'
 import { meta as zafkielMeta, tokens as zafkielTokens } from './lib/skins/zafkiel.js'
@@ -71,8 +71,6 @@ const MAX_BODY_BYTES = 32 * 1024
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 /** 插件根目录：位图预设（`assets/presets/*.png`）以它为基准解析。 */
 const PLUGIN_ROOT = fileURLToPath(new URL('.', import.meta.url))
-/** 预设图标生成尺寸：与面板上传归一化的上限一致（桌面壳最大用到 256）。 */
-const PRESET_ICON_SIZE = 512
 const API_PREFIX = '/appearance/api/'
 
 function sendJson(res, status, body) {
@@ -227,20 +225,18 @@ export function apply(ctx, config) {
   }
 
   /**
-   * 取一款预设图标的 PNG 字节：位图预设读插件自带资源，其余即时渲染。
+   * 取一款预设图标的 PNG 字节：读插件自带资源（`assets/presets/*.png`）。
    * @param {string} id - 预设 id。
    * @returns {Buffer|null} 字节；资源缺失或未知 id 返回 null。
    */
   function presetBytes(id) {
     const asset = presetAssetPath(id)
-    if (asset !== null) {
-      try {
-        return readFileSync(join(PLUGIN_ROOT, asset))
-      } catch {
-        return null
-      }
+    if (asset === null) return null
+    try {
+      return readFileSync(join(PLUGIN_ROOT, asset))
+    } catch {
+      return null
     }
-    return renderPresetPng(id, PRESET_ICON_SIZE)
   }
 
   /**
