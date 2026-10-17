@@ -435,6 +435,24 @@ pub fn apply(home: &Path, rgba: &[u8], side: u32) -> usize {
             return 0;
         }
     }
+    // 【幂等闸门】2026-10-14 新增：**ICO 内容没变就整体跳过**（写盘 + 改写 .lnk + 通知 shell）。
+    //
+    // 为什么必须有这道闸门：上游 `launcher_icon::apply` 的去重位 `LAST_APPLIED` 是
+    // **进程内**静态量，新进程必然是 None ⇒ 只要配置了头像，**每次启动**都会走到这里，
+    // 无条件 `fs::write` + `rewrite_shortcuts`（COM 逐个改写 .lnk 并 Save）+
+    // `SHChangeNotify(SHCNF_FLUSH)`（等 shell 处理，最贵的一步）。
+    // 实测这一串 1~7 秒，且**全程跑在启动路径上** —— 2026-10-13/10-14 三次「WebView2
+    // 初始化失败」误报，根因就是它把主线程堵到了 2.6s 判定之后（真机日志：三次
+    // `launcher-icon:` 落盘与三次误报一一对应）。而其中绝大多数启动，头像根本没变 ——
+    // 白写盘、白改快捷方式、白让资源管理器刷一遍图标缓存。
+    //
+    // 判据取「ICO 字节一致」：它由头像像素唯一决定，一致 ⇒ 结果已经是要的样子，重做无收益。
+    //
+    // **已知边界（刻意接受）**：若用户手工改掉了 `.lnk` 的图标位置，本函数不再自动纠正
+    // （原实现每次启动都会纠正）。恢复路径：在外观面板重新选一次头像即可。
+    if fs::read(&path).map(|old| old == ico).unwrap_or(false) {
+        return 0;
+    }
     if fs::write(&path, &ico).is_err() {
         return 0;
     }
@@ -591,6 +609,67 @@ mod tests {
         println!("ICO   : {}（{} 字节）", ico.display(), fs::metadata(&ico).map(|m| m.len()).unwrap_or(0));
         println!("改写  : {changed} 个快捷方式");
         assert!(changed > 0, "本机应至少有一个指向 {exe_text} 的快捷方式");
+    }
+
+    /// 2026-10-14 幂等闸门：同一个头像连跑两次，第二次必须**整体跳过**。
+    ///
+    /// 回归背景：上游去重位 `LAST_APPLIED` 是**进程内**的，新进程必然为 None ⇒ 只要配置了
+    /// 头像，**每次启动**都会走到 `apply` 并重写 ICO + 改写 .lnk + 通知 shell（实测 1~7 秒）。
+    /// 三次「WebView2 初始化失败」误报的 `launcher-icon:` 日志与三次误报一一对应 ——
+    /// 就是这条路径把主线程堵到了 2.6s 判定之后。这里钉死「内容没变 ⇒ 一个字节都不写」，
+    /// 并反向钉死「真变了必须写」（闸门不得把真实变更一起吃掉）。
+    #[test]
+    fn apply_skips_everything_when_the_ico_is_unchanged() {
+        // 目录刻意放 `target/` 下（构建产物区，已 gitignore）：`%TEMP%` 在受限沙箱里
+        // 写不进去（本仓既有 EPERM/os error 5 一族记录），工作区内没有这个边界。
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("ico-idem-test");
+        let _ = fs::remove_dir_all(&dir);
+        let px = solid(64, [10, 20, 30, 255]);
+
+        // 首次：文件不存在 ⇒ 必须落盘。
+        // 注意 `changed` 在测试进程里恒为 0（`current_exe()` 是测试二进制，匹配不到
+        // 任何真实快捷方式）—— 所以「有没有重做」只能看文件本身，不能看返回值。
+        let _ = apply(&dir, &px, 64);
+        let path = ico_path(&dir);
+        assert!(path.is_file(), "首次必须落盘 ICO：{}", path.display());
+        let first_bytes = fs::read(&path).expect("读回 ICO");
+        let first_mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("首次 ICO 必须有 mtime");
+
+        // 第二次（同一份像素）：内容一致 ⇒ 走「跳过」分支。判据取 mtime —— 即便写回
+        // 完全相同的字节也算一次重写，mtime 会推后。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = apply(&dir, &px, 64);
+        let second_mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("第二次 ICO 必须有 mtime");
+        assert_eq!(second, 0, "ICO 未变时不得报告改写了任何快捷方式");
+        assert_eq!(
+            first_mtime, second_mtime,
+            "ICO 未变时不得重写文件 —— 这正是「每次启动白干 1~7 秒」的那一步"
+        );
+        assert_eq!(fs::read(&path).expect("读回 ICO"), first_bytes);
+
+        // 反向：像素真的变了，必须重新落盘。
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let _ = apply(&dir, &solid(64, [200, 100, 50, 255]), 64);
+        let third_mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .expect("第三次 ICO 必须有 mtime");
+        assert_ne!(
+            second_mtime, third_mtime,
+            "头像像素变了必须重新落盘：闸门只该吃掉「无变化」，不该吃掉真实变更"
+        );
+        assert_ne!(
+            fs::read(&path).expect("读回 ICO"),
+            first_bytes,
+            "新像素生成的 ICO 必须与旧的逐字节不同"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -48,6 +48,28 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// 据此区分「活 SPA」（DSH 前端自带指数退避重连，静候即可，无需 reload）与「从未加载
 /// 成功的错误页」（WebView2 错误页不会自行重试，必须重新导航）。
 static PAGE_UP: AtomicBool = AtomicBool::new(false);
+/// **WebView2 已被证明在工作**：`on_page_load` 每触发一次就置位。
+///
+/// 与 `PAGE_UP`（3080 文档就绪）**不是一回事、也不可互相顶替**：这里回答的是
+/// 「宿主窗口 + WebView2 环境到底有没有跑起来」，因此**任何 URL 都算** —— 恰恰包括
+/// 后端还没起来时的本地 `loading.html`，它是那段窗口期里唯一的健康证据。
+///
+/// **为什么必须有它**（2026-10-14 三次误报的教训）：启动失败判定原来只看「2.6 秒那一瞬间
+/// 窗口可见吗」。而 `is_visible()` 不是直接读窗口状态，是走 `WindowMessage` 通道**同步
+/// 请求主线程**（`tauri-runtime-wry` 的 `window_getter!`）—— 主线程只要被同步活占住
+/// （实测：ICO 生成 + 桌面 `.lnk` 改写 + shell 通知，3~7 秒），可见性快照就必然拿到
+/// 「还没 show」的旧值，把正常启动判成「WebView2 初始化失败」。有了这条与可见性正交的
+/// 事实，「WebView2 明明在工作」就不再依赖时序运气。
+static WEBVIEW_ALIVE: AtomicBool = AtomicBool::new(false);
+/// **可见性轮询是否已上岗**：在 `build()` 返回后、轮询任务 spawn 前一刻置位。
+///
+/// 建窗看门狗用它判断「`build()` 到底返回了没有」—— **不能用「窗口对象是否存在」
+/// （`get_webview_window`）**：2026-10-14 失败注入实测（WebView2 用户数据目录不可写），
+/// 窗口对象**已经注册**（`WebviewWindowBuilder::build()` 内部是先建窗口、后建 webview），
+/// 于是「窗口存在」判据会误以为一切正常而退场，而真正接管的可见性轮询还没上岗
+/// ⇒ 两条判据之间留缝，用户侧依旧是「双击后什么都没有」。
+/// 这条标志直接回答「接管逻辑上岗了没有」，没有中间态。
+static BOOT_VISIBILITY_WATCH_ARMED: AtomicBool = AtomicBool::new(false);
 /// 轻量重启（重启 DSH 服务）进行位：页面已切到本地加载页、后端正在重拉。
 ///
 /// **与 `SHUTTING_DOWN` 刻意分开，别合并**：那个一置位看门狗就整条任务退出；而轻量重启
@@ -192,6 +214,216 @@ fn port_ready_on(port: u16) -> bool {
     match format!("127.0.0.1:{port}").parse() {
         Ok(addr) => TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok(),
         Err(_) => false,
+    }
+}
+
+/* ---------------- 启动期主窗可见性：等待预算与判定 ---------------- */
+
+/// 主窗可见性的等待预算（毫秒）。
+///
+/// **取值依据不是拍脑袋**：2026-10-13/10-14 三次误报现场实测，主线程被
+/// `launcher-icon` 的快捷方式改写堵住 3 / 3 / 7 秒；窗口在阻塞解除后立刻可见。
+/// 预算取 12s = 实测最坏值 + 70% 余量，既能扛住杀软全盘扫描时的进一步劣化，
+/// 又不会让真故障的用户干等太久。
+///
+/// **注意**：本预算只约束「窗口露出来」这件事的等待 —— 真故障（WebView2 环境创建失败）
+/// 有更快的确定性判据（句柄被回收），根本走不到预算耗尽，见 `boot_visible_verdict`。
+const BOOT_VISIBLE_BUDGET_MS: u64 = 12_000;
+/// 可见性轮询间隔（毫秒）。250ms 是人眼「几乎同时」的量级：窗口一露出来就结束等待，
+/// 既不空转（一次查询就是一次跨线程消息），也不会让日志与判定迟钝。
+const BOOT_VISIBLE_POLL_MS: u64 = 250;
+/// 启动器图标的延后上限（毫秒）：等主窗可见，但最多等这么久（见 `setup` 里的调用点）。
+const LAUNCHER_ICON_READY_CAP_MS: u64 = 12_000;
+/// 建窗看门狗的预算（毫秒）：`build()` 多久没返回就算「卡死」。
+///
+/// **取值依据**：正常建窗 **< 1 秒**（2026-10-14 实机：主窗 361ms 即可见）；而 WebView2
+/// 环境创建受阻时，本机失败注入实测 `build()` **200+ 秒仍未返回** —— 20s 是「宽裕到不会
+/// 误报、又不至于让用户对着空屏幕等到放弃」的分界。
+const BOOT_WINDOW_BUILD_WATCHDOG_MS: u64 = 20_000;
+
+/// 启动期「主窗可见性」轮询的判定结果（纯函数，单测覆盖判定矩阵）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootVisible {
+    /// 已可见：启动成功，停止轮询，**不弹任何东西**。
+    Visible,
+    /// 还没可见但仍在预算内：继续等（顺带补一次兜底 `show()`）。
+    Wait,
+    /// **WebView2 初始化失败**：句柄被回收，或预算耗尽且从未观察到任何文档加载事实。
+    FailedNoWebview,
+    /// WebView2 已证明在工作，但窗口在预算内仍未露出来。
+    ///
+    /// **刻意与上一条分开**：两者的处置南辕北辙 —— 前者要换启动位置 / 加白名单，
+    /// 后者 WebView2 好得很，托盘「显示 / 隐藏主窗口」即可恢复。把后者也叫「初始化失败」，
+    /// 等于把用户往错的方向支（2026-10-14 现场就是这样：弹窗说 WebView2 挂了，
+    /// 而同一秒的日志里 loading.html 已经加载完成）。
+    FailedInvisible,
+}
+
+/// 主窗可见性的一次判定（纯函数 —— 时序与跨线程的坑都在调用方，判定本身可穷举测试）。
+///
+/// 判据顺序即优先级，三条互不重叠：
+/// ① **已可见**：成功。放在最前，因为它是唯一「不需要再解释」的事实。
+/// ② **句柄被回收** ⇒ 真故障，立刻判。这是 WebView2 环境创建失败的**实测特征**
+///    （`WebviewWindowBuilder::build()` 仍返回 Ok，但 `hwnd()` 随即报
+///    "the underlying handle is not available"）。见到即判 = 真故障不浪费预算。
+/// ③ **预算耗尽**：再由「WebView2 有没有工作过」分流成两类失败（见 `BootVisible`）。
+///
+/// @param elapsed_ms - 已等待毫秒数。
+/// @param visible - 本轮读到的可见性；`None` = 查询报错（窗口多半已销毁）。
+/// @param hwnd_alive - 窗口句柄是否仍可用。
+/// @param webview_alive - 是否观察到过任何 `on_page_load`（`WEBVIEW_ALIVE`）。
+fn boot_visible_verdict(
+    elapsed_ms: u64,
+    visible: Option<bool>,
+    hwnd_alive: bool,
+    webview_alive: bool,
+) -> BootVisible {
+    if visible == Some(true) {
+        return BootVisible::Visible;
+    }
+    if !hwnd_alive {
+        return BootVisible::FailedNoWebview;
+    }
+    if elapsed_ms < BOOT_VISIBLE_BUDGET_MS {
+        return BootVisible::Wait;
+    }
+    if webview_alive {
+        BootVisible::FailedInvisible
+    } else {
+        BootVisible::FailedNoWebview
+    }
+}
+
+/// 「WebView2 初始化失败」给用户看的文案 —— **两条失败路径共用**。
+///
+/// 两条路径：① **主窗压根没建出来**（`build()` 卡住不返回，判据见建窗看门狗）；
+/// ② **建出来了但始终不显示 / 句柄被回收**（判据见 `finish_boot_invisible`）。
+/// 成因同源（WebView2 环境建不起来），处置也是同一套（换启动位置 / 加白名单 / 重启 / 退出 /
+/// 停用第三方插件）—— 写成两份必然漂移，所以只留这一处。
+///
+/// @param why - 一句话交代「我们等了什么、等了多久」；两条路径的现场不同，只有这句分开写。
+fn webview_boot_failure_message(why: &str) -> String {
+    // 【文案分流】2026-09-25 本机实测：用户可写目录（%USERPROFILE% 之下，含桌面 /
+    // 文档 / %LOCALAPPDATA% / 仓库内 dist）里的 exe 一律被降权到 Low 完整性级别，
+    // 写不了 EBWebView 用户数据目录 —— 这才是本机「只剩桌宠」的主因。此时
+    // 「加安全软件白名单」是无效建议，必须点名正确的启动入口；反之（exe 已在
+    // 系统目录）保留原来的安全软件排查方向。
+    let exe_path = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "?".into());
+    let exe_lower = exe_path.to_lowercase();
+    let user_profile = std::env::var("USERPROFILE").unwrap_or_default().to_lowercase();
+    let in_user_dir = !user_profile.is_empty() && exe_lower.starts_with(&user_profile);
+    let head = if in_user_dir {
+        "直接原因（本机实测）：程序从「用户可写目录」启动会被系统降权到低完整性\n\
+         级别，写不了 %LOCALAPPDATA%\\com.miasaki.desktop，WebView2 因此起不来。\n\
+         加安全软件白名单、换文件名、换副本都无效，必须换到系统目录运行。\n\n\
+         请改用这个入口重新打开：\n\
+         C:\\ProgramData\\MiasakiApp\\Miasaki.exe\n\
+         （桌面上的「Miasaki 桌面端」快捷方式即指向它）\n\n"
+    } else {
+        "最常见原因：安全软件或「受控文件夹访问」拦截了本程序对\n\
+         %LOCALAPPDATA%\\com.miasaki.desktop 的写入。\n\n\
+         处理建议：把 Miasaki.exe 加入安全软件白名单后重新打开。\n\n"
+    };
+    format!(
+        "Miasaki 主界面无法创建：WebView2 初始化失败。\n\n{}\
+         下一步：\n\
+         1. 先在任务管理器结束所有 Miasaki 进程（残留实例会让新实例直接退出）；\n\
+         2. 双击桌面「Miasaki 桌面端」重新打开；\n\
+         3. 若下方日志为空：被降权时进程写不进日志，属正常现象。\n\n\
+         {why}\n\
+         启动位置：{exe_path}\n\
+         日志：{}\n\
+         日志目录：{}",
+        head,
+        log_dir().join("pet.log").display(),
+        log_dir().display()
+    )
+}
+
+/// 启动期「主窗在预算内仍未可见」的收尾：落盘日志 + 报告 + 按类型给出**正确**的下一步。
+///
+/// 两类失败的文案与动作刻意不同（理由见 `BootVisible::FailedInvisible`）：
+/// * `FailedNoWebview`：沿用既有的「WebView2 初始化失败」错误弹窗 + 恢复对话框
+///   （换启动位置 / 加白名单 / 重启 / 退出 / 停用第三方插件）；
+/// * `FailedInvisible`：只弹一条**信息**提示（不接恢复对话框）—— 后端与 WebView2 都活着，
+///   让用户去重启是纯粹的误导。同时补一次 `show()` 并把托盘入口指出来。
+///
+/// 本函数在**异步任务**里被调用，绝不阻塞事件循环。
+fn finish_boot_invisible(
+    wv: &tauri::WebviewWindow,
+    verdict: BootVisible,
+    elapsed_ms: u64,
+    hwnd_alive: bool,
+    webview_alive: bool,
+) {
+    let ts = chrono_now();
+    match verdict {
+        BootVisible::FailedInvisible => {
+            app_log_line(&format!(
+                "[{ts}] boot: 主窗 {elapsed_ms}ms 内始终不可见（WebView2 已加载过页面）\
+                 → 不判「初始化失败」；补 show() 并把托盘出口告诉用户\n"
+            ));
+            let _ = wv.show();
+            // 落盘一份现场：这类「WebView2 正常但窗口没露出来」是另一类缺陷，
+            // 需要与「环境创建失败」分开统计，否则永远分不清谁在复发。
+            let _ = diag::report(
+                diag::Source::WebBoot,
+                "主窗超时未显示（WebView2 已工作）",
+                &format!(
+                    "main window still invisible after {elapsed_ms}ms, but WebView2 had loaded a document\n\
+                     hwnd alive: {hwnd_alive}\nexe: {}\nlog dir: {}\n",
+                    std::env::current_exe()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "?".into()),
+                    log_dir().display()
+                ),
+            );
+            // **弹窗必须在独立线程**：`show_info` 是阻塞的 `MessageBoxW`（等人点确定），
+            // 而本函数的调用方跑在异步执行器上 —— 就地弹会把一个 worker 线程钉在弹窗上。
+            // 与 `show_native_error_then_recover` 同一条纪律，只是这里没有恢复对话框要接。
+            let text = format!(
+                "主窗口在 {elapsed_ms}ms 内没有显示出来，但 WebView2 已正常加载页面\n\
+                 （后端与界面本身没有失败，因此不提供「重启 / 停用插件」）。\n\n\
+                 请先试这个：右键任务栏右下角的托盘图标 → 「显示 / 隐藏主窗口」。\n\
+                 若仍不显示，再用托盘「生成诊断报告」，报告目录：\n{}\n\n\
+                 日志：{}",
+                diag::reports_dir().display(),
+                log_dir().join("pet.log").display()
+            );
+            std::thread::spawn(move || {
+                recovery::show_info("Miasaki · 主窗口未显示", &text);
+            });
+        }
+        _ => {
+            app_log_line(&format!(
+                "[{ts}] boot: 主窗 {elapsed_ms}ms 内始终不可见，且 WebView2 无任何加载事实\
+                 （句柄可用={hwnd_alive}，已加载过页面={webview_alive}）→ 判定 WebView2 初始化失败\n"
+            ));
+            // T2.1：WebView2 初始化失败也要留现场（web-boot 源）。
+            // 注意：被降权到 Low 完整性时可能连日志目录都写不了 —— 报告失败无所谓，
+            // 用户可见的那条弹窗仍然给出处置路径。
+            let _ = diag::report(
+                diag::Source::WebBoot,
+                "WebView2 初始化失败（主窗超时仍不可见且无加载事实）",
+                &format!(
+                    "main window still invisible after {elapsed_ms}ms; no document load observed\n\
+                     hwnd alive: {hwnd_alive}\nexe: {}\nlog dir: {}\n",
+                    std::env::current_exe()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "?".into()),
+                    log_dir().display()
+                ),
+            );
+            // 【文案分流】已抽进 `webview_boot_failure_message`（与建窗看门狗共用一份）。
+            let msg = webview_boot_failure_message(&format!(
+                "等待时长：{elapsed_ms}ms（已超过 {BOOT_VISIBLE_BUDGET_MS}ms 预算，\
+                 期间未观察到任何页面加载）"
+            ));
+            // T2.3：错误弹窗关掉后接恢复对话框（三按钮），失败路径不再是死胡同。
+            show_native_error_then_recover(wv.app_handle(), &msg);
+        }
     }
 }
 
@@ -3698,6 +3930,58 @@ fn main() {
             } else {
                 tauri::utils::config::Color(0, 0, 0, 0)
             };
+            // 【建窗看门狗】2026-10-14 新增 —— 与上面那套可见性轮询是**同一批修复的两半**。
+            //
+            // 为什么必须有它：`finish_boot_invisible` 的判据**必须等 `build()` 返回**才可能
+            // 运行（它 spawn 在建窗之后、拿的是 webview 句柄）。而 WebView2 环境创建受阻时
+            // `build()` 会**长时间不返回** —— 失败注入实测（把 `WEBVIEW2_USER_DATA_FOLDER`
+            // 指到不可写路径）：主线程卡在建窗里 **200+ 秒**，桌宠不做、主窗不做，`pet.log`
+            // 里只剩运行期看门狗的 `hash poll url() failed xN` 在涨，**用户侧零提示**
+            // —— 就是「双击后什么都没有」。
+            // 这正是 2026-09-25「启动失败可见化」要消灭的形态，当时只覆盖了「build 返回 Ok
+            // 但句柄被回收」那一半，卡在半路的另一半一直没人管。
+            //
+            // 判据取「可见性轮询**上岗了没有**」（`BOOT_VISIBILITY_WATCH_ARMED`，在 `build()`
+            // 返回后、轮询 spawn 前一刻置位）—— **刻意不用「窗口对象是否存在」**：失败注入
+            // 实测（WebView2 用户数据目录不可写）窗口对象**已经注册**、而 `build()` 仍未返回，
+            // 用「窗口存在」当判据会让本看门狗误以为一切正常而退场，两条判据之间留缝。
+            // 「存在但不可见」归上面那套轮询管：本看门狗只在**轮询没上岗**时说话，窗口一建出来
+            // 标志就置位、看门狗退场，不会重复弹。
+            {
+                let app_watch = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(BOOT_WINDOW_BUILD_WATCHDOG_MS)).await;
+                    if BOOT_VISIBILITY_WATCH_ARMED.load(Ordering::SeqCst) {
+                        return; // `build()` 已返回、轮询已上岗 ⇒ 后续归它管，本看门狗退场
+                    }
+                    let ts = chrono_now();
+                    app_log_line(&format!(
+                        "[{ts}] boot: 建窗 {BOOT_WINDOW_BUILD_WATCHDOG_MS}ms 后 \
+                         WebviewWindowBuilder::build() 仍未返回（可见性轮询未上岗，\
+                         主线程被 WebView2 建环境卡住）→ 判定 WebView2 初始化失败\n"
+                    ));
+                    let _ = diag::report(
+                        diag::Source::WebBoot,
+                        "WebView2 初始化失败（建窗未返回）",
+                        &format!(
+                            "main window was never created after {BOOT_WINDOW_BUILD_WATCHDOG_MS}ms; \
+                             WebviewWindowBuilder::build() had not returned\n\
+                             exe: {}\nlog dir: {}\n",
+                            std::env::current_exe()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_else(|_| "?".into()),
+                            log_dir().display()
+                        ),
+                    );
+                    let msg = webview_boot_failure_message(&format!(
+                        "等待时长：{BOOT_WINDOW_BUILD_WATCHDOG_MS}ms（窗口始终没有建出来，\
+                         说明卡在 WebView2 建环境那一步）"
+                    ));
+                    // T2.3：与另一条失败路径同一出口（错误弹窗 → 三按钮恢复对话框）。
+                    show_native_error_then_recover(&app_watch, &msg);
+                });
+            }
+
             let webview = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("loading.html".into()))
                 .title("Miasaki · DSH")
                 // 拖拽上传附件到会话（design/drag-drop-attachment-upload.md §4.1）：
@@ -3722,6 +4006,13 @@ fn main() {
                 .background_color(window_bg)
                 .initialization_script(&init)
                 .on_page_load(|webview, payload| {
+                    // 【先置位，再看 URL】能跑到这个回调就证明宿主窗口 + WebView2 环境都活着
+                    // —— 启动失败判定据此**永不**把「慢启动」误判成「初始化失败」（见下面
+                    // 可见性轮询与 `boot_visible_verdict`）。
+                    // 刻意放在 `show()` 与 URL 分流**之前**、且不筛 URL：本地 loading.html
+                    // 恰恰是后端还没起来那段窗口期里唯一的健康证据（`PAGE_UP` 只认 3080，
+                    // 那时它必然还是 false）。
+                    WEBVIEW_ALIVE.store(true, Ordering::SeqCst);
                     let _ = webview.show();
                     let url = payload.url().to_string();
                     // 本地唤醒页（loading.html）：记下它的真实 URL 备轻量重启用（**不硬编码
@@ -3784,123 +4075,111 @@ fn main() {
                 .build()
                 .expect("failed to build main window");
 
-            // 【可见性兜底】窗口以 visible(false) 建出，正常路径靠 on_page_load 回调 show()。
-            // 但 WebView2 对不可见宿主有可见性优化：窗口隐藏时可能根本不加载首帧页面，
-            // 于是 on_page_load 永不触发 → show() 永不执行 → 主窗口永久不可见（打不开）。
-            // 判据必须是「窗口当前是否可见」本身：不可借用 PAGE_UP——后者语义是
-            //「3080 文档加载成功」（on_page_load 命中远程 URL 才置位），后端冷启动要 3~6s，
-            // 800ms 时必然为 false，会让兜底每次都误触发、观测数据失真。
-            // 兜底只补一次 show()：WebView2 一旦可见即恢复加载，on_page_load 随后照常走原流程；
-            // 正常路径下 loading.html 已 show 过 → 判据为 false → 不动作，天然幂等。
+            // 走到这里说明 `WebviewWindowBuilder::build()` **已经返回** ⇒ 宣告「可见性轮询
+            // 即将上岗」：建窗看门狗（20s 后仍在等的那位）据此退场，把窗口交给下面这套判据。
+            BOOT_VISIBILITY_WATCH_ARMED.store(true, Ordering::SeqCst);
+
+            // 【主窗可见性等待 + 启动失败判定】（2026-10-14 重写；前身是「800ms 兜底 show()
+            //  + 2.6s 快照复查判失败」两段一次性快照。）
+            //
+            // 为什么必须有等待：窗口以 visible(false) 建出，正常路径靠 on_page_load 回调
+            // show()；而 WebView2 对不可见宿主有可见性优化 —— 窗口隐藏时可能根本不加载首帧
+            // 页面，于是 on_page_load 永不触发、show() 永不执行、主窗永久不可见。兜底不可省。
+            //
+            // **为什么旧的两段快照都得废掉**（2026-10-13 ×2 / 2026-10-14 ×1；pet.log 与
+            // crash-*-web-boot.log 三次现场完全同构，逐条见设计记录）：
+            //   · 三次恰好都是 `launcher-icon: … 快捷方式改写 N 个` **真正执行**的那几次 ——
+            //     生成 ICO + 改写桌面 .lnk + 通知 shell 刷图标缓存，实测 3 / 3 / 7 秒，
+            //     且全程**同步跑在 setup 的主线程上**；
+            //   · `is_visible()` 与 `show()` 都不是直读状态，而是走 `WindowMessage` 通道
+            //     **同步请求主线程**（`tauri-runtime-wry` 的 `window_getter!`）。主线程被
+            //     占住 ⇒ 两个定时器一起卡在通道上，主线程一空闲**同时**返回、且都读到
+            //     「还没 show」⇒ 800ms 与 2600ms 的日志落在同一秒 —— 而同一秒的
+            //     `doc-boot #1` 已经打出了 loading.html，**WebView2 好得很**。
+            //   · 后果：弹「WebView2 初始化失败」+ 恢复对话框。用户以为坏了、反复重启，
+            //     而每次重启都会再走一遍同一条路（三次故障正是这样首尾相接来的）。
+            //
+            // 判据的真值不是「2.6 秒这一瞬间可见吗」，而是**WebView2 到底有没有在工作**。
+            // 所以改成轮询，并把两条与可见性正交的事实接进来：
+            //   · `WEBVIEW_ALIVE`（`on_page_load` 触发过，任何 URL 都算，含本地 loading 页）
+            //     ⇒ 宿主窗口与 WebView2 环境都活着，此后**永不**判「初始化失败」；
+            //   · `hwnd()` 可用性 ⇒ WebView2 环境创建失败的实测特征是句柄被回收
+            //     （`build()` 仍返回 Ok），真故障的确定性判据 —— 见到即判，不让用户白等预算。
+            // 判定矩阵见 `boot_visible_verdict`，两类失败的处置见 `finish_boot_invisible`。
             {
-                let wv_fb = webview.clone();
+                let wv_watch = webview.clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(800)).await;
-                    // 三态分明（2026-09-23 复审 P3）：`is_visible()` 的 Err 与 Ok(false) 是两件事。
-                    // 原来用 `unwrap_or(false)` 把 Err 归到「仍不可见」，用户 800ms 内关窗时
-                    // 会留下一条「on_page_load 未触发？」的误导日志（其 show() 同样 Err 且被吞）。
-                    // 两分支都仍尝试 show()（兜底目的不变、幂等无害），只是日志各说各的。
-                    match wv_fb.is_visible() {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            app_log_line(&format!(
-                                "[{}] boot: 800ms 窗口仍不可见（on_page_load 未触发？）→ 兜底 show()\n",
-                                chrono_now()
-                            ));
-                            let _ = wv_fb.show();
-                        }
-                        Err(e) => {
-                            app_log_line(&format!(
-                                "[{}] boot: 800ms 可见性查询失败（{e}）→ 仍尝试兜底 show()（窗口多半已关闭）\n",
-                                chrono_now()
-                            ));
-                            let _ = wv_fb.show();
+                    let started = Instant::now();
+                    // 「进入等待」只记一次：正常启动（窗口 1 秒内可见）不该在 pet.log 里留噪音；
+                    // 而一旦真的等了，等待时长与兜底次数就是排查的关节数据。
+                    let mut waited_logged = false;
+                    let mut fallback_shows = 0u32;
+                    loop {
+                        let elapsed_ms = started.elapsed().as_millis() as u64;
+                        // 三态分明（保留 2026-09-23 复审 P3 的口径）：`is_visible()` 的 Err
+                        // 与 Ok(false) 是两件事 —— Err 归 None 交判定函数单独处置，不再用
+                        // `unwrap_or(false)` 把「窗口已销毁」混进「还没显示」。
+                        let visible = wv_watch.is_visible().ok();
+                        let hwnd_alive = wv_watch.hwnd().is_ok();
+                        let webview_alive = WEBVIEW_ALIVE.load(Ordering::SeqCst);
+                        match boot_visible_verdict(elapsed_ms, visible, hwnd_alive, webview_alive) {
+                            BootVisible::Visible => {
+                                if waited_logged {
+                                    app_log_line(&format!(
+                                        "[{}] boot: 主窗已可见（等待 {elapsed_ms}ms，兜底 show() {fallback_shows} 次）→ 正常启动\n",
+                                        chrono_now()
+                                    ));
+                                }
+                                return;
+                            }
+                            BootVisible::Wait => {
+                                if !waited_logged {
+                                    waited_logged = true;
+                                    app_log_line(&format!(
+                                        "[{}] boot: {elapsed_ms}ms 主窗仍不可见（WebView2 已加载过页面={webview_alive}）→ 每 {BOOT_VISIBLE_POLL_MS}ms 复查并补 show()\n",
+                                        chrono_now()
+                                    ));
+                                }
+                                // 兜底 show() **每轮都补**：单次投递可能正好排在被占住的
+                                // 主线程消息队列里，补到窗口真的露出来为止（show 幂等）。
+                                let _ = wv_watch.show();
+                                fallback_shows += 1;
+                                tokio::time::sleep(Duration::from_millis(BOOT_VISIBLE_POLL_MS)).await;
+                            }
+                            verdict => {
+                                // 判失败前**再复查一次**：上一轮的 `is_visible()` 是在主线程
+                                // 繁忙期拿到的快照，可能早于兜底 show() 真正生效。这一查消掉
+                                // 最后一类误报 ——「弹窗说启动失败，而界面其实已经出来了」。
+                                if wv_watch.is_visible().unwrap_or(false) {
+                                    app_log_line(&format!(
+                                        "[{}] boot: 复查转可见（等待 {elapsed_ms}ms）→ 撤销启动失败判定\n",
+                                        chrono_now()
+                                    ));
+                                    return;
+                                }
+                                finish_boot_invisible(
+                                    &wv_watch,
+                                    verdict,
+                                    elapsed_ms,
+                                    hwnd_alive,
+                                    webview_alive,
+                                );
+                                return;
+                            }
                         }
                     }
                 });
             }
 
-            // 【启动失败可见化】2026-09-25 排查「桌面端打不开」时新增。
-            // 现象：桌宠正常出现，主界面窗口却永远不出现，且全程无任何提示。
-            // 机理：WebView2 环境创建失败时（典型诱因是进程写不了
+            // 【启动失败可见化】（2026-09-25 引入，2026-10-14 并入上面的轮询）
+            // 现象与机理保留在此备查：WebView2 环境创建失败时（典型诱因是进程写不了
             // %LOCALAPPDATA%\com.miasaki.desktop\EBWebView 这个用户数据目录——被安全软件
             // 或「受控文件夹访问」拦截时正是如此），`WebviewWindowBuilder::build()`
             // 仍返回 Ok，但窗口句柄随即被回收（实测 `hwnd()` 报
-            // "the underlying handle is not available"）：主窗既不显示，上面的兜底
-            // show() 也只能静默失败。用户侧看到的就是「双击后什么都没有」。
-            // 处置：兜底之后复查一次，仍不可见即判定初始化失败 → 落盘 + 原生弹窗，
-            // 把原因与排查方向摆到用户面前，杜绝这类哑巴失败。
-            {
-                let wv_check = webview.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(2600)).await;
-                    let failed = match wv_check.is_visible() {
-                        Ok(visible) => !visible,
-                        Err(_) => true,
-                    };
-                    if !failed {
-                        return;
-                    }
-                    let ts = chrono_now();
-                    app_log_line(&format!(
-                        "[{ts}] boot: 主窗 2.6s 后仍不可见 → 判定 WebView2 初始化失败（进程写不了 EBWebView 用户数据目录？）\n"
-                    ));
-                    // T2.1：WebView2 初始化失败也要留现场（web-boot 源）。
-                    // 注意：被降权到 Low 完整性时可能连日志目录都写不了 —— 报告失败无所谓，
-                    // 用户可见的那条弹窗仍然给出处置路径。
-                    let _ = diag::report(
-                        diag::Source::WebBoot,
-                        "WebView2 初始化失败（主窗 2.6s 仍不可见）",
-                        &format!(
-                            "main window still invisible after 2600ms\nexe: {}\nlog dir: {}\n",
-                            std::env::current_exe()
-                                .map(|p| p.display().to_string())
-                                .unwrap_or_else(|_| "?".into()),
-                            log_dir().display()
-                        ),
-                    );
-                    // 【文案分流】2026-09-25 本机实测：用户可写目录（%USERPROFILE% 之下，含桌面 /
-                    // 文档 / %LOCALAPPDATA% / 仓库内 dist）里的 exe 一律被降权到 Low 完整性级别，
-                    // 写不了 EBWebView 用户数据目录 —— 这才是本机「只剩桌宠」的主因。此时
-                    // 「加安全软件白名单」是无效建议，必须点名正确的启动入口；反之（exe 已在
-                    // 系统目录）保留原来的安全软件排查方向。
-                    let exe_path = std::env::current_exe()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|_| "?".into());
-                    let exe_lower = exe_path.to_lowercase();
-                    let user_profile = std::env::var("USERPROFILE").unwrap_or_default().to_lowercase();
-                    let in_user_dir =
-                        !user_profile.is_empty() && exe_lower.starts_with(&user_profile);
-                    let head = if in_user_dir {
-                        "直接原因（本机实测）：程序从「用户可写目录」启动会被系统降权到低完整性\n\
-                         级别，写不了 %LOCALAPPDATA%\\com.miasaki.desktop，WebView2 因此起不来。\n\
-                         加安全软件白名单、换文件名、换副本都无效，必须换到系统目录运行。\n\n\
-                         请改用这个入口重新打开：\n\
-                         C:\\ProgramData\\MiasakiApp\\Miasaki.exe\n\
-                         （桌面上的「Miasaki 桌面端」快捷方式即指向它）\n\n"
-                    } else {
-                        "最常见原因：安全软件或「受控文件夹访问」拦截了本程序对\n\
-                         %LOCALAPPDATA%\\com.miasaki.desktop 的写入。\n\n\
-                         处理建议：把 Miasaki.exe 加入安全软件白名单后重新打开。\n\n"
-                    };
-                    let msg = format!(
-                        "Miasaki 主界面无法创建：WebView2 初始化失败。\n\n{}\
-                         下一步：\n\
-                         1. 先在任务管理器结束所有 Miasaki 进程（残留实例会让新实例直接退出）；\n\
-                         2. 双击桌面「Miasaki 桌面端」重新打开；\n\
-                         3. 若下方日志为空：被降权时进程写不进日志，属正常现象。\n\n\
-                         启动位置：{}\n\
-                         日志：{}\n\
-                         日志目录：{}",
-                        head,
-                        exe_path,
-                        log_dir().join("pet.log").display(),
-                        log_dir().display()
-                    );
-                    // T2.3：错误弹窗关掉后接恢复对话框（三按钮），失败路径不再是死胡同。
-                    show_native_error_then_recover(wv_check.app_handle(), &msg);
-                });
-            }
+            // "the underlying handle is not available"）：主窗既不显示，兜底 show()
+            // 也只能静默失败，用户侧看到的就是「双击后什么都没有」。
+            // **判定搬到 `boot_visible_verdict`（轮询 + 句柄/加载事实双判据），
+            // 处置搬到 `finish_boot_invisible`（落盘 + 原生弹窗 + 恢复对话框）。**
 
             // Win11 Mica 材质：成功 → 主题半透明面板与标题栏共享同一材质（融为一体）；
             // 失败（Win10/禁用）→ 回退实色主题底（页面半透明处不露出默认白底）。
@@ -4024,11 +4303,41 @@ fn main() {
             }
 
             // 软件头像 → 启动器图标（appearance 线的桌面消费端，2026-09-12）：
-            // 窗口与托盘都在位后才能设图标；此处先按当前配置应用一次，随后交给巡检跟随变化。
-            // 出厂未设置时是 no-op（apply 内部回退出厂图标并去重），不影响既有外观。
-            let icon_app = app.handle().clone();
-            launcher_icon::apply(&icon_app);
-            launcher_icon::spawn_watcher(icon_app);
+            // 窗口与托盘都在位后才能设图标，随后交给巡检跟随变化。出厂未设置时是 no-op
+            // （apply 内部回退出厂图标并去重），不影响既有外观。
+            //
+            // **2026-10-14：整段延后到「主窗可见之后」再执行**（原为就地同步调用）。
+            // 这不是顺手优化，而是上面那条启动失败误报的**根因之一**：`apply()` 一旦真需要
+            // 动手，就会生成 ICO、改写桌面 .lnk、再通知 shell 刷图标缓存 —— 实测
+            // 3 / 3 / 7 秒（三次故障的时长），而 `setup` 跑在主线程。这期间窗口消息队列整体
+            // 停摆，`show()` 与 `is_visible()` 都得排在它后面（`WindowMessage` 通道是同步的），
+            // 窗口于是「迟迟不显示」，2.6s 快照就判成了 WebView2 挂了。
+            // 延后之后用户先看到界面、图标随后到位 —— 正常启动窗口 1 秒内可见，感知上只是
+            // 「图标晚半拍」，远好于对着空屏幕等 3~7 秒。
+            // 上限与可见性预算同档；窗口即使始终没露出来也照做（图标是外观，不该被卡住）。
+            {
+                let icon_app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let deadline = Instant::now() + Duration::from_millis(LAUNCHER_ICON_READY_CAP_MS);
+                    loop {
+                        let visible = icon_app
+                            .get_webview_window("main")
+                            .and_then(|w| w.is_visible().ok())
+                            .unwrap_or(false);
+                        if visible || Instant::now() >= deadline {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(BOOT_VISIBLE_POLL_MS)).await;
+                    }
+                    // `apply` 要调 Tauri 的窗口/托盘 API，必须回主线程；但此刻它已不再与
+                    // 首帧竞争（窗口已可见），阻塞的只是图标更新本身。
+                    let h = icon_app.clone();
+                    let _ = icon_app.run_on_main_thread(move || {
+                        launcher_icon::apply(&h);
+                        launcher_icon::spawn_watcher(h);
+                    });
+                });
+            }
 
             // 原生分层窗口桌宠（与主窗同进程，零 IPC 同步）
             app.manage(pet_native::NativePet::spawn(app.handle().clone()));
@@ -4105,6 +4414,183 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 启动期主窗可见性判定矩阵（2026-10-13/10-14 三次误报的回归钉）。
+    ///
+    /// 现场（pet.log + crash-*-web-boot.log 三次完全同构）：主线程被 `launcher-icon` 的
+    /// 快捷方式改写堵住 3 / 3 / 7 秒，而 `is_visible()`/`show()` 都排在 `WindowMessage`
+    /// 通道上同步等主线程，于是「800ms 与 2600ms 两个定时器在同一秒返回、都读到不可见」，
+    /// 同一秒 `doc-boot #1` 却已经把 loading.html 打出来了 —— 正常启动被判成
+    /// 「WebView2 初始化失败」，用户反复重启、每次都再撞一遍。
+    ///
+    /// 判据的真值必须是「WebView2 到底有没有在工作」，不是「2.6 秒那一瞬间可见吗」。
+    #[test]
+    fn boot_visibility_verdict_never_mistakes_slow_start_for_a_dead_webview() {
+        // ① 可见即成功 —— 优先于其它一切判据。
+        assert_eq!(
+            boot_visible_verdict(300, Some(true), true, false),
+            BootVisible::Visible
+        );
+        // ② 窗口还没露出来：**预算内一律只是「继续等」**。这正是旧实现判失败的那一格
+        //    （2600ms / 不可见）—— 现在必须不再是失败。
+        assert_eq!(
+            boot_visible_verdict(2_600, Some(false), true, false),
+            BootVisible::Wait,
+            "2.6s 那一瞬间不可见只是「还没到」，不是故障：三次误报都发生在这里"
+        );
+        assert_eq!(
+            boot_visible_verdict(7_500, Some(false), true, true),
+            BootVisible::Wait
+        );
+        // ③ 句柄被回收 = WebView2 环境创建失败的实测特征 ⇒ 立刻判，不耗预算。
+        assert_eq!(
+            boot_visible_verdict(120, None, false, false),
+            BootVisible::FailedNoWebview
+        );
+        // ④ 预算耗尽 + 从未观察到任何文档加载 ⇒ 真故障。
+        assert_eq!(
+            boot_visible_verdict(BOOT_VISIBLE_BUDGET_MS, Some(false), true, false),
+            BootVisible::FailedNoWebview
+        );
+        // ⑤ 预算耗尽 + WebView2 已加载过页面 ⇒ **不得**判「初始化失败」：窗口没露出来是
+        //    另一件事，处置也不同（托盘恢复，而不是换启动位置 / 加白名单）。
+        assert_eq!(
+            boot_visible_verdict(BOOT_VISIBLE_BUDGET_MS, Some(false), true, true),
+            BootVisible::FailedInvisible
+        );
+        // ⑥ 边界：恰好等于预算才算耗尽（实现用 `<`），前 1ms 仍在等。
+        assert_eq!(
+            boot_visible_verdict(BOOT_VISIBLE_BUDGET_MS - 1, Some(false), true, true),
+            BootVisible::Wait
+        );
+    }
+
+    /// 源码契约：**建窗卡死也得有提示**（2026-10-14 补上的另一半）。
+    ///
+    /// 现场（失败注入实测）：把 `WEBVIEW2_USER_DATA_FOLDER` 指到不可写路径 ⇒ WebView2 建环境
+    /// 卡住 ⇒ `WebviewWindowBuilder::build()` **200+ 秒不返回**，桌宠不做、主窗不做、零提示，
+    /// `pet.log` 里只有运行期看门狗的 `hash poll url() failed xN` 在涨。
+    /// 而上面那套可见性判据**必须等 `build()` 返回**才可能运行 ⇒ 必须有在建窗**之前**就架好的
+    /// 看门狗，且判据只能是「窗口**是否存在**」：可见性查询要走 `WindowMessage` 通道，
+    /// 主线程卡着就永远问不出结果 —— 那等于没有判据。
+    #[test]
+    fn window_build_watchdog_runs_before_the_window_is_built() {
+        let src = include_str!("main.rs");
+        let build_at = src
+            .find("let webview = WebviewWindowBuilder::new(")
+            .expect("找不到建窗语句（结构变了，请同步本测试）");
+        let watchdog_at = src
+            .find("// 【建窗看门狗】")
+            .expect("找不到建窗看门狗 —— 卡死路径会重新变成「双击后什么都没有」的哑巴失败");
+        assert!(
+            watchdog_at < build_at,
+            "看门狗必须在**建窗之前**架好：它要防的正是 `build()` 不返回"
+        );
+        let watchdog = &src[watchdog_at..build_at];
+        assert!(
+            watchdog.contains("BOOT_VISIBILITY_WATCH_ARMED"),
+            "判据必须是「可见性轮询**上岗了没有**」—— 那条标志直接回答接管逻辑是否就位，没有中间态"
+        );
+        assert!(
+            !watchdog.contains("get_webview_window(\"main\").is_some()"),
+            "不得用「窗口对象存在」当判据：失败注入实测（WebView2 用户数据目录不可写）窗口**已经注册**\
+             而 `build()` 仍未返回 —— 该判据会误以为一切正常而退场，两条判据之间留缝"
+        );
+        assert!(
+            !watchdog.contains("is_visible()"),
+            "建窗看门狗不得借用可见性：那要走 WindowMessage 通道，主线程卡着就永远问不出结果"
+        );
+        // 置位必须在 `build()` **之后**（它宣告的正是「build 已返回」这件事）。
+        let armed_at = src
+            .find("BOOT_VISIBILITY_WATCH_ARMED.store(true")
+            .expect("找不到置位点 —— 看门狗会永远以为轮询没上岗");
+        assert!(
+            armed_at > build_at,
+            "上岗标志必须在 build() 返回之后才置位，否则看门狗永远退不了场、每次启动都误报"
+        );
+        assert!(
+            watchdog.contains("show_native_error_then_recover"),
+            "卡死路径要与另一条失败路径同一出口（错误弹窗 → 三按钮恢复对话框）"
+        );
+        assert!(
+            watchdog.contains("BOOT_WINDOW_BUILD_WATCHDOG_MS"),
+            "预算必须走具名常量（便于与轮询预算区分，也便于按实测调整）"
+        );
+        assert!(
+            watchdog.contains("diag::report"),
+            "卡死路径也要留现场（web-boot 报告）"
+        );
+    }
+
+
+    ///
+    /// 源码契约：上面那套判据必须**真的接在启动路径上**，且不得回潮成一次性快照。
+    ///
+    /// 纯函数单测全绿也可能整条链根本没接线（本仓「夹具喂饱了 bug」的同族教训），
+    /// 所以这里直接读源码断言接线与形态。
+    #[test]
+    fn boot_visibility_probe_is_wired_and_launcher_icon_stays_off_the_boot_path() {
+        let src = include_str!("main.rs");
+
+        // ① on_page_load 必须**无条件**置位 WEBVIEW_ALIVE，且在 URL 分流之前 ——
+        //    本地 loading.html 也算，它是后端还没起来时唯一的健康证据。
+        let page_load = src
+            .split(".on_page_load(|webview, payload| {")
+            .nth(1)
+            .and_then(|s| s.split("if url.starts_with(\"http://127.0.0.1:3080\")").next())
+            .expect("找不到 on_page_load 回调体（回调结构变了，请同步本测试）");
+        assert!(
+            page_load.contains("WEBVIEW_ALIVE.store(true"),
+            "on_page_load 必须在 URL 分流之前置位 WEBVIEW_ALIVE（不能只认 3080 文档）"
+        );
+
+        // ② 可见性等待必须是**轮询**，判定走纯函数，处置走统一的收尾函数。
+        let watch = src
+            .split("let wv_watch = webview.clone();")
+            .nth(1)
+            .and_then(|s| s.split("// 【启动失败可见化】").next())
+            .expect("找不到可见性轮询块（结构变了，请同步本测试）");
+        assert!(
+            watch.contains("boot_visible_verdict("),
+            "可见性判定必须走 boot_visible_verdict（纯函数、单测可穷举）"
+        );
+        assert!(
+            watch.contains("Duration::from_millis(BOOT_VISIBLE_POLL_MS)"),
+            "必须是轮询复查，不是一次性快照"
+        );
+        assert!(
+            !watch.contains("Duration::from_millis(2600)"),
+            "不得回潮成 2.6s 一次性快照判定 —— 那正是三次误报的形态"
+        );
+        assert!(
+            watch.contains("finish_boot_invisible("),
+            "失败处置必须走 finish_boot_invisible（两类失败文案不同）"
+        );
+        assert!(
+            watch.contains("WEBVIEW_ALIVE.load(Ordering::SeqCst)"),
+            "轮询必须把「WebView2 已加载过页面」这条正交事实喂给判定"
+        );
+
+        // ③ 启动器图标不得再出现在 setup 的同步路径上：它是那三次故障的阻塞源
+        //    （生成 ICO + 改写 .lnk + 通知 shell，实测 3~7 秒）。
+        let icon_block = src
+            .split("let icon_app = app.handle().clone();")
+            .nth(1)
+            .and_then(|s| s.split("// 原生分层窗口桌宠").next())
+            .expect("找不到 launcher_icon 装配块（结构变了，请同步本测试）");
+        assert!(
+            !icon_block.contains("launcher_icon::apply(&icon_app)"),
+            "launcher_icon::apply 不得就地同步调用：会把主线程连同窗口消息队列一起堵住"
+        );
+        assert!(
+            icon_block.contains("run_on_main_thread"),
+            "延后执行必须回主线程调 Tauri 窗口/托盘 API（launcher_icon::apply 需要主线程）"
+        );
+        assert!(
+            icon_block.contains("is_visible()"),
+            "延后条件必须是「主窗已可见」，而不是盲目 sleep 一个固定时长"
+        );
+    }
 
     /// P9（2026-09-26 晚，os error 740 事故）：壳只允许用**绝对路径**调命令解释器。
     /// 裸名会让 CreateProcess 去搜（应用目录 → 当前目录 → System32 → PATH），而本机
