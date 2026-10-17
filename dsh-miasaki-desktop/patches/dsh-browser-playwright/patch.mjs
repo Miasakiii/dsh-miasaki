@@ -47,6 +47,10 @@
 //
 // 用法：
 //   node patch.mjs verify            # 离线自检：两半 baseline 重建 SHA 比对 + 语法 + 双世界行为断言
+//                                    #   注：host 半行为自证要 import 本机 profile 里的真实
+//                                    #   schemastery / dsh-browser ⇒ 干净 checkout（CI）上
+//                                    #   显式跳过（输出 ⏭ 并说明原因），离线断言照常全跑；
+//                                    #   本机（有 profile）必须完整跑，⏭ 不得出现在本机输出里。
 //   node patch.mjs status            # 查看所有 profile 里两个目标 bundle 的当前状态
 //   node patch.mjs apply [--yes]     # 备份 + 应用（幂等；覆盖全部已安装 profile）
 //   node patch.mjs revert            # 从 .dsh-bak 还原
@@ -560,8 +564,24 @@ export async function smokeHost(patchedSource) {
   const check = (name, ok, detail) => results.push({ half: 'host', name, ok, detail })
 
   // 2026-09-26：探测改为多 profile 后取首个（各 profile 装的是同一插件版本，任一皆可）。
+  //
+  // 2026-10-18（CI 首跑抓红）：host 行为自证要 import **真实的** schemastery 与 dsh-browser
+  // （Config 打标与 BrowserRuntime 基类必须是真的，stub 会失去自证价值）⇒ 依赖本机 profile
+  // 的安装副本。干净 checkout（CI）上没有 profile，这里**显式跳过并说明原因**，不抛错——
+  // 与 `repo/message-sources` 的「本机体检在 CI 跳过（打印原因）」同口径；离线断言
+  // （两半 baseline 重建 SHA + ESM 语法）不依赖它，仍是每个环境都跑的硬闸门。
+  // 判据：本机（有 profile）必须完整跑；输出里出现 ⏭ 只允许是无 profile 的干净环境。
   const realLib = targetDirs[0]
-  if (!realLib) throw new Error('smokeHost 需要可探测的 profile 安装目录')
+  if (!realLib) {
+    results.push({
+      half: 'host',
+      name: '双世界行为自证',
+      ok: true,
+      skipped: true,
+      detail: '无本机 profile 安装副本（CI / 干净 checkout 常态）——离线断言（SHA 重建 + 语法）已覆盖产物一致性',
+    })
+    return results
+  }
 
   const dir = await mkdtemp(join(tmpdir(), 'dsh-bp-host-'))
   // 裸导入重写：playwright 用 stub（仅运行期 launch 才用到）；schemastery / dsh-browser
@@ -701,7 +721,9 @@ async function cmdVerify() {
     if (!r.ok) ok = false
   }
   if (hostPatched) for (const r of await smokeHost(hostPatched)) {
-    console.log(`${r.ok ? '✓' : '✗'} [${r.half}] ${r.name}${r.detail ? ` — ${r.detail}` : ''}`)
+    // 显式跳过（无 profile 的干净环境）打 ⏭ 并保留原因；它与 ✓ 都不影响退出码。
+    const mark = r.skipped ? '⏭' : r.ok ? '✓' : '✗'
+    console.log(`${mark} [${r.half}] ${r.name}${r.detail ? ` — ${r.detail}` : ''}`)
     if (!r.ok) ok = false
   }
 

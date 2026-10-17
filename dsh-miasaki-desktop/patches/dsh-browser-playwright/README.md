@@ -7,6 +7,13 @@
 > 全绿；同时纳入 `scripts/verify-all.mjs` 的 desktop 回归（此前只有 live 审计、没有离线闸门）。
 > 旧目录保留一份迁移说明作为历史入口。
 >
+> **2026-10-18 CI 首跑抓红并修复**：desktop 回归在干净 checkout（无 profile）上第一次跑就
+> exit 1 —— `verify` 的 host 双世界行为自证要 import 本机 profile 里的**真实**
+> `@deepseek-ai/schemastery` 与 `@yeesy369/dsh-browser`（stub 就失去自证价值），无 profile
+> 时直接抛错。修法 = 无 profile 时**显式跳过**该组断言（打印 `⏭` 与原因，不静默、不失败），
+> 离线断言（两半 SHA 重建 + ESM 语法）在 CI 照常全跑；`repo/message-sources` 的「本机体检
+> 在 CI 跳过」同口径。**判据：本机（有 profile）输出不得出现 ⏭**。
+>
 > 2026-09-23。本机 DSH 升到 0.1.7-alpha.2 后，web UI 停在启动屏：
 >
 > ```

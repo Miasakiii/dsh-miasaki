@@ -1242,6 +1242,18 @@ fleet 全线 **197 例**全绿、`verify-all fleet` 21/21。**未做**：进程�
 当前 browser-playwright 已打双轨补丁、openviking 实际为 0.5.26（兼容 0.2.1-rc.2）；临时启动 miasaki
 后端 22 秒复核实测**零「entries did not activate」警告**。**待用户**：重启 miasaki 确认 cot 报错消失。
 
+**2026-10-18 · 本批 CI 首跑抓红并修复（闸门依赖了本机环境）**`[实测]`：push 后 CI run
+`39050012898` 唯一红 = `[desktop] patch verify (上游 browser-playwright 适配)` exit 1 ——
+该补丁 `verify` 的 host 双世界行为自证要 import 本机 profile 里的真实
+`@deepseek-ai/schemastery` / `@yeesy369/dsh-browser`（stub 就没有自证价值），干净 checkout
+没有 `~/.dsh/profiles` ⇒ `smokeHost` 抛「需要可探测的 profile 安装目录」。**与 2026-10-05
+`intro-clips` 事故同族：闸门依赖了未入库事实（本机 profile），本机假绿、CI 恒红。**
+修法：无 profile 时**显式跳过** host 自证组（`⏭` + 原因，不静默、不失败——与
+`repo/message-sources` 的「本机体检在 CI 跳过」同口径），离线断言（两半 SHA 重建 + ESM 语法 +
+client 侧 19 例）照常全跑。**双向自证**：本机 32 项全绿无 `⏭`；`USERPROFILE` 指空目录模拟
+CI ⇒ `⏭ [host] 双世界行为自证` + `VERIFY PASS` exit 0。补丁 README / `verify-all.mjs` 注释 /
+desktop CHANGELOG 同步记录。**
+
 **2026-10-17（续四）· 桌宠专项 R20：全屏自动隐藏 + 程序化音效**`[实测]`：
 用户对四个参考仓库（Coopanion / GarfieldZhung / fornarwhal / TreapGoGo，浅克隆留档 `_refs/`）问
 「这几个仓库还有其他好的可借鉴的点吗」→ 对标后拍板「按你建议，先把计划定下来」。

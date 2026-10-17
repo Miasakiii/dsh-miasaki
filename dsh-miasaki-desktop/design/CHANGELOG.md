@@ -77,6 +77,18 @@ web boot: 1 entry did not activate」，随后拍板「实在不行我们可以�
 **边界**：本补丁作用于 profile 里安装的上游插件（硬链），重装/升级该插件会冲掉，需
 `node patch.mjs apply` 重打；上游发兼容版后整件退役（README 已写退役流程）。
 
+**2026-10-18 CI 首跑抓红并修复（这批改动第一次进 CI 就红了）**：run `39050012898` 上
+`[desktop] patch verify (上游 browser-playwright 适配)` exit 1 —— 根因是 `verify` 的 host
+双世界行为自证要 import 本机 profile 里的**真实** `@deepseek-ai/schemastery` 与
+`@yeesy369/dsh-browser`（stub 就失去「Config 打标 / BrowserRuntime 基类是真的」这层自证价值），
+而干净 checkout（CI）没有 `~/.dsh/profiles` ⇒ `smokeHost` 直接抛「需要可探测的 profile 安装目录」。
+**这正是 2026-10-05 记下的纪律「闸门只能依赖入库事实」的同族**：本机（有 profile）假绿、CI 恒红。
+修法 = 无 profile 时**显式跳过** host 自证组（打印 `⏭` 与原因，不静默、不失败，与
+`repo/message-sources` 的「本机体检在 CI 跳过」同口径）；离线断言（两半 baseline 重建 SHA +
+ESM 语法 + client 侧 19 例纯离线行为断言）在每个环境照常全跑。**判据**：本机（有 profile）
+输出不得出现 `⏭`；本地双向实测——本机 32 项全绿、模拟无 profile（`USERPROFILE` 指空目录）
+`⏭ [host] 双世界行为自证` + `VERIFY PASS` exit 0。补丁 README 与 `verify-all.mjs` 注释同步记下边界。
+
 ## 2026-10-17（续）· 桌面端拖动直跟手（R19）：修「拖拽还是有点粘滞感」
 
 **触发**：用户「另外，拖拽桌宠还是有点粘滞感」（R18 已实装：19:36 构建的 exe 含悬浮球拖动 + 反馈 + 滑停）。

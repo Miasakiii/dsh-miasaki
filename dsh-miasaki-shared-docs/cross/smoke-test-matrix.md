@@ -51,6 +51,9 @@ desktop **43** / ssh 31 / **dual-model 15** / appearance 18 / **usage 7** / **fr
 > 顺带实测该浏览插件在 0.2.1-rc.2 下可用（临时启动 miasaki 后端 22s：stdout 仅 inspector + web URL、
 > stderr 空、零「entries did not activate」）。实跑：`verify-all desktop` = **42/42 PASS**
 > （cargo test **213 例**）、`repo` **7/7**、`patch-live-audit.mjs` 12 目标 / 11 件在册补丁全 patched。
+> **2026-10-18 CI 首跑抓红并修复**：`verify` 的 host 双世界行为自证要 import 本机 profile 里的
+> 真实 `schemastery` / `dsh-browser` ⇒ 干净 checkout（无 profile）上改为**显式跳过**该组
+> （`⏭` + 原因，不静默不失败；离线 SHA/语法断言照常全跑）。**判据：本机输出不得出现 `⏭`**。
 > 另：`patch-live-audit.mjs` 退役 shared-docs 专用根（由 desktop 根自动发现）、
 > `style-baseline.json` / `silent-guard-baseline.json` 路径同步、旧目录保留迁移说明 README 作历史入口。
 

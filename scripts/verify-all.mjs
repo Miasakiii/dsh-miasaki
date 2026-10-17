@@ -570,8 +570,11 @@ function planDesktop() {
   // 「设置即 profile entry 的 cordis 配置」契约（`settings.register` 已移除），在 0.2.1-rc.2
   // 下原版会在启动时报 `TypeError: settings.register is not a function` 且整条不激活。
   // 契约与本体补丁相同：baseline 上游原版 → 重建 → SHA 比对 + ESM 语法闸门 + 行为自证
-  // （host 侧 apply() 双轨分支 3 例 / client 侧 writeSetting 批量写 3 例）。纯离线，
-  // 插件升级或 pnpm 重装覆盖补丁后这一项仍应 PASS（它证明规则与基线自洽）。
+  // （client 侧 writeSetting 批量写等纯离线断言照常全跑；host 侧 apply() 双轨分支要 import
+  //  本机 profile 里的**真实** schemastery / dsh-browser ⇒ **干净 checkout（CI）上显式跳过**
+  //  并打印 ⏭ 与原因，不静默不失败；本机（有 profile）输出不得出现 ⏭ —— 见该补丁
+  //  patch.mjs 头部「2026-10-18 CI 首跑抓红」）。插件升级或 pnpm 重装覆盖补丁后这一项
+  // 仍应 PASS（它证明规则与基线自洽）。
   checks.push({
     line: 'desktop',
     name: 'patch verify (上游 browser-playwright 适配)',
