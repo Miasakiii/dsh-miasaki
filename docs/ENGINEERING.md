@@ -1173,6 +1173,32 @@ CDP 探针在 `loading.html` 上实测到 `★ 片头层在场` + `video.src = i
 **一句方法论（本批两次都栽在同一处）**：taskkill 判据、就绪判据 —— 两处都是**同一条链的冷启动 /
 重启两个分支**，都只在一处改对了。**凡「只在一处改对」的修复，都该顺手问一句「另一条路径呢」**。
 
+**2026-10-14 · 外观 M2.8 + 桌面/开始菜单快捷方式图标跟随 + 启动误报「WebView2 初始化失败」修复**`[实测]`：
+用户三件报障：「可以添加也应该有删除选项」「选择后桌面启动图标没变（要，做成跟随）」与两次「WebView2 初始化失败」弹窗。
+① **外观 M2.8**：「我的上传」悬停出现删除入口；同批修掉真根因 —— `PANEL_CSS` 模板字符串被注释里的反引号提前闭合、
+整套样式注入成 `NaN`（外观页控件规格与图标预览按控件位口径收敛到 32px）；appearance 单测 **155 例**、静态 18/18。
+② **快捷方式图标跟随**：新增 `src-tauri/src/shortcut_icon.rs`（手写 COM vtable 改写桌面/开始菜单 `.lnk`，零新依赖；
+ICO 内容级幂等闸门），用户选中头像后由 `launcher_icon` 巡检跟随。③ **E32 启动误报**：旧判据是 2.6s **一次性快照**
+（`is_visible()` 走 `WindowMessage` 同步问主线程，而启动期主线程被 ICO 生成 + 快捷方式改写占住 3~7 秒 ⇒ 快照读到「还没 show」）；
+修复 = 轮询 + 多判据纯函数 `boot_visible_verdict` / `launcher_icon::apply` 延后到主窗可见之后 / `shortcut_icon` 幂等 /
+建窗看门狗（`build()` 失败注入实测 200+ 秒不返回）。`cargo test` 200 → **204 例**。台账新增 **D18/D19/D20/E32**（分母 125 → 128）。
+
+**2026-10-17 · DSH 本体升级 0.2.1-rc.2（九件补丁重打/重写）+ 桌宠拖动 R18 + 部署脚本自宿主防护**`[实测]`：
+本机内核 **0.2.0-rc.2 → 0.2.1-rc.2**（npm `next` 已指向 rc.2；变更量 1925 commits / 36 条迁移指南）。
+① **九件在役补丁全部重打**（desktop 8 + dual-model 1）：8 件锚点零适配；`dsh-client-ui-settings-models` **缩减重写 v4** ——
+官方 0.2.1 原生内置推理等级编辑（`ModelReasoningEfforts.tsx`），按「官方吸收后不硬改锚点、避免双写」范式**退役思考强度下拉与
+继承值解析器**，保留测试连通性 / 能力徽标 / 无 Key 引导，编辑 14 → 13 条、产物 223,216 B；9 件 `patch.mjs verify` 全 PASS、
+`patch-live-audit` **12 目标 / 11 件在册全 patched（0 未生效 / 0 未安装）**。② **预设 `backgroundMode` 退役键迁移**（0.2.1 必删）：
+`agent.base.cordis.yml` 删 4 行（`tool-subagent` / `-fork` / `-codex` / `-claude-code`），`verify-presets.cjs` 补两条/行判据。
+③ **桌宠拖动 R18**（E33）：悬浮球 `dot_proc` 此前零拖动代码（硬断链：按住拖球不动、松手桌宠在原位弹出）⇒ 补齐悬浮球拖动 +
+拖动反馈（姿态随速度/方向变化）+ 松手滑停；桌宠主窗拖动不重工（R16/R17/E30/E31 已修且 10-14 部署版日志证明可用）。
+④ **部署防呆**（用户报「莫名闪退两次」）：根因是在 miasaki 会话里跑 `deploy-local.ps1 -Force` —— `Stop-Process` 杀掉
+「正跑着目标 exe 的实例」即宿主壳，壳的 `KILL_ON_JOB_CLOSE` Job 连带回收后端与部署脚本自身（19:39 / 19:58 两次，复制永不执行）；
+修复 = 自宿主防护（祖先链 ∩ 占用实例 ⇒ 在任何 `Stop-Process` 之前 abort）+ `-ProbeOnly` + `check-deploy-guard.mjs` 源码契约闸门
+（verify-all desktop 40 → **41**，全量 182 → **183**）。**回归**：全量 **183 项**（desktop 41；其余不变），`cargo test` **212 例**，
+矩阵台账分母 **128 → 129**（E33，勾选 72/129）；`repo/md-links` 3 处暂态断链（未入库的 `2026-10-17-pet-drag-sprint.md`）随本批提交转绿。
+**待实机**：E33 拖动判据、0.2.1 升级后九线页面走查（设置页模型区 / 右栏 tab / 辅助对话 / 会话布 / SSH / 运维浮窗 / 外观）。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

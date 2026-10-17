@@ -11,12 +11,22 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -FixShortcuts
 #   powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -Force -FixShortcuts
+#   powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -ProbeOnly   # 只看判定,不改动
 #
 # 参数:
 #   -Source  <dir>  构建产物目录,默认 <desktop 线>\dist
 #   -Target  <dir>  安装目录,默认 C:\ProgramData\MiasakiApp
 #   -Force          自动结束正跑着目标 exe 的实例(否则文件被锁,复制失败)
 #   -FixShortcuts   把桌面上仍指向用户目录的 Miasaki 快捷方式改指向 -Target
+#   -ProbeOnly      只打印「自宿主防护」判定并退出(0=安全 / 1=正从 miasaki 内部运行),
+#                   不做任何复制、不结束任何进程;排查部署链时先跑它。
+#
+# 自宿主防护(2026-10-17,两次「莫名闪退」事故的补丁):
+#   `-Force` 会 Stop-Process 结束「正跑着目标 exe 的实例」。如果这条命令是从
+#   miasaki 桌面端自己的会话里发出的,那个实例就是**宿主壳本身** —— 壳的
+#   KILL_ON_JOB_CLOSE Job 会立刻回收后端与**本脚本自身**,复制永远走不到;
+#   用户看到的是「窗口莫名闪退 + 部署未生效」。脚本因此在结束任何进程**之前**
+#   探测本进程的祖先链:命中则直接 abort,并指路外部终端。-ProbeOnly 复用同一判据。
 [CmdletBinding()]
 param(
   # 注意：**不要在 param 默认值里用 `$PSScriptRoot`** —— 用 `-File` 调用时该变量在
@@ -26,7 +36,8 @@ param(
   [string]$Source,
   [string]$Target = 'C:\ProgramData\MiasakiApp',
   [switch]$Force,
-  [switch]$FixShortcuts
+  [switch]$FixShortcuts,
+  [switch]$ProbeOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,6 +62,78 @@ $dstExe = Join-Path $Target 'Miasaki.exe'
 Write-Host "源(构建产物): $Source"
 Write-Host "目标(安装位置): $Target"
 Write-Host ""
+
+# ---------- 0b. 自宿主防护（2026-10-17 两次「莫名闪退」事故） ----------
+# 事故链：agent 在 miasaki 桌面端自己的会话里执行本脚本的 -Force → Stop-Process 杀掉
+# 「正跑着目标 exe 的实例」= 宿主壳 → 壳的 KILL_ON_JOB_CLOSE Job 立刻回收后端与
+# **本脚本自身** → 复制永远走不到。用户看到两次「窗口莫名闪退」，而安装目录的 exe
+# 仍是旧版（部署未生效）。判据：本进程的祖先链里出现 $blocking 的某个 PID ⇒ 必自杀。
+# 因此这里把「占用判定」提前：探针模式与真实部署共用同一份判据。
+function Get-AncestorPids {
+  # 一次拉全表再内存回溯（逐层 Get-CimInstance 会慢一个量级）；WMI 不可用时返回
+  # 只含自己的链 —— 调用方按「无法判定 ⇒ 不阻断」处理（外部终端部署是常态场景）。
+  $table = @{}
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {
+      $table[[int]$_.ProcessId] = [int]$_.ParentProcessId
+    }
+  } catch {}
+  $ids = New-Object System.Collections.Generic.List[int]
+  $cur = $PID
+  $guard = 0
+  while ($cur -gt 0 -and -not $ids.Contains($cur) -and $guard -lt 64) {
+    $ids.Add($cur)
+    if (-not $table.ContainsKey($cur)) { break }
+    $cur = $table[$cur]
+    $guard++
+  }
+  return $ids
+}
+
+# 目标 exe 是否被运行中的实例占用。判据精准到「跑的就是 $dstExe」：
+# 跑在别处的 Miasaki（旧副本 / 构建目录）不挡路，也不参与自宿主判定。
+$running = @(Get-Process -Name 'Miasaki' -ErrorAction SilentlyContinue)
+$blocking = @($running | Where-Object {
+    $p = try { $_.Path } catch { $null }
+    $p -and ([string]::Equals([System.IO.Path]::GetFullPath($p), $dstExe, 'OrdinalIgnoreCase'))
+  })
+$selfHost = @()
+if ($blocking.Count -gt 0) {
+  $ancestors = Get-AncestorPids
+  $selfHost = @($blocking | Where-Object { $ancestors.Contains($_.Id) })
+}
+
+if ($ProbeOnly) {
+  Write-Host "=== 部署自宿主探针（-ProbeOnly：只判定，不做任何改动）==="
+  Write-Host "目标安装位置 : $dstExe"
+  if ($selfHost.Count -gt 0) {
+    Write-Host "判定         : SELF-HOST（本进程运行在目标 Miasaki 实例自己的会话里）"
+    Write-Host "自宿主 PID   : $($selfHost.Id -join ', ')"
+    Write-Host "结论         : -Force 会杀掉宿主并连带杀死本脚本，部署必然中断。"
+    Write-Host "               请改在【外部终端】运行，或先托盘退出 Miasaki。"
+    exit 1
+  }
+  if ($blocking.Count -gt 0) {
+    Write-Host "判定         : SAFE（目标实例在跑，但不在本进程的祖先链里）"
+    Write-Host "目标实例 PID : $($blocking.Id -join ', ')"
+    Write-Host "结论         : 从外部终端 -Force 部署安全；结束该实例是预期行为。"
+    exit 0
+  }
+  Write-Host "判定         : SAFE（没有正在运行的目标实例）"
+  exit 0
+}
+
+if ($selfHost.Count -gt 0) {
+  Write-Host ""
+  Write-Host "abort: 检测到本次部署运行在 Miasaki 桌面端自己的会话里（宿主机 PID $($selfHost.Id -join ', ')）。"
+  Write-Host "       -Force 会先结束这个宿主，然后本脚本随壳的 Job 一起被回收 —— 复制永远无法完成。"
+  Write-Host "       2026-10-17 连续两次「窗口莫名闪退、部署却未生效」正是这条路径。"
+  Write-Host ""
+  Write-Host "       改在【外部终端】执行（Windows Terminal / VSCode / 官方 DSH 桌面端），"
+  Write-Host "       或先在托盘退出 Miasaki 后重跑。自检：加 -ProbeOnly 只打印判定、不改动任何东西。"
+  Write-Host ""
+  exit 1
+}
 
 # ---------- 1. 前置检查 ----------
 if (-not (Test-Path -LiteralPath $srcExe)) {
@@ -77,13 +160,7 @@ if ($introMissing.Count -gt 0) {
 Check '启动片头素材齐备(7 段)' $true 'ui\intro\intro-{brand,cyberpunk,awakening,startup,dreamsea,lagoon,bubbles}.mp4'
 
 # ---------- 2. 目标 exe 是否被运行中的实例占用 ----------
-# 判据精准到「跑的就是 $dstExe」:跑在别处的 Miasaki(旧副本/构建目录)不挡路,
-# 只有目标位置的那个实例会锁住文件、让覆盖失败。
-$running = @(Get-Process -Name 'Miasaki' -ErrorAction SilentlyContinue)
-$blocking = @($running | Where-Object {
-    $p = try { $_.Path } catch { $null }
-    $p -and ([string]::Equals([System.IO.Path]::GetFullPath($p), $dstExe, 'OrdinalIgnoreCase'))
-  })
+# 占用判定已提前到 0b（自宿主防护复用同一份 $running/$blocking）。
 if ($blocking.Count -gt 0) {
   if ($Force) {
     $blocking | Stop-Process -Force -ErrorAction SilentlyContinue

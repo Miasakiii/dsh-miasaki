@@ -16,7 +16,7 @@
 > dsh plugin --profile web add @miasaki/dsh-canvas
 > ```
 >
-> **进度如实说**：静态回归 **182 项**全绿、分发包 **7/7** 实测可打包、依赖声明与脱敏逐项核过；
+> **进度如实说**：静态回归 **183 项**全绿、分发包 **7/7** 实测可打包、依赖声明与脱敏逐项核过；
 > 但[实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 是 **72 / 127 项**
 > （勾选口径 = 日常使用确认；需刻意构造或特殊环境的项仍留空）——
 > 装机遇到问题请[开 issue](https://github.com/Miasakiii/dsh-miasaki/issues)，别自己扛。
@@ -122,9 +122,10 @@ dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
 
 | DSH 版本 | 状态 |
 |---|---|
-| **0.1.7 及以上** | 支持（canvas 已按 0.1.7 的 `uiWorkspace` 契约适配） |
-| **0.2.0-rc.2** | 已复验（当前实装版本：桌面端**八件**补丁已重打，`patch-live-audit` 10/10 patched） |
+| **0.2.1-rc.2** | **当前实装**（2026-10-17 升级：九件补丁已重打/重写、预设 `backgroundMode` 已迁移；两个第三方插件已升级/豁免，见桌面端 CHANGELOG） |
+| **0.2.0-rc.2** | 已复验（上一实装版本：八件补丁已重打，`patch-live-audit` 10/10 patched） |
 | **0.2.0-rc.1** | 已复验 |
+| **0.1.7 及以上** | 支持（canvas 已按 0.1.7 的 `uiWorkspace` 契约适配） |
 | 0.1.5 / 0.1.6 | 历史版本，双模型等插件做了新旧事件双轨兼容 |
 
 装到不匹配的 DSH 上通常表现为**插件整包加载失败或白屏**——升级 DSH 后请一并升级插件。

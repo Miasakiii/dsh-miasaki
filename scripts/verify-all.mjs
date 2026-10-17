@@ -326,6 +326,18 @@ function planDesktop() {
     args: [join(dir, 'scripts', 'extract-intro-clips.mjs'), '--check'],
     cwd: dir,
   })
+  // 部署脚本的自宿主防护（2026-10-17 两次「窗口莫名闪退 + 部署未生效」事故）：
+  // `deploy-local.ps1 -Force` 会 Stop-Process 结束正跑着目标 exe 的实例；若部署命令
+  // 本身是从 miasaki 桌面端自己的会话里发出的（脚本进程的祖先链含目标 PID），
+  // 杀宿主会连带把脚本自己（后端 Job）一起回收 ⇒ 复制永远不执行。闸门钉住
+  // 「祖先链探测 / 交集判定 / -ProbeOnly / 拦截先于 Stop-Process」，防防护被顺手删。
+  checks.push({
+    line: 'desktop',
+    name: 'deploy guard (部署脚本自宿主防护源码契约)',
+    cmd: process.execPath,
+    args: [join(dir, 'scripts', 'check-deploy-guard.mjs')],
+    cwd: dir,
+  })
   // 拖拽上传安全网（design/drag-drop-attachment-upload.md）：09-dropguard.js 分片登记 /
   // 生成产物含片 / 三判据（dragover 阻止、只认 Files、defaultPrevented 放行）/ 自包含形态。
   checks.push({

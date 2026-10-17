@@ -2,6 +2,281 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-17 · 部署脚本自宿主防护：修「莫名闪退两次 + 部署始终未生效」
+
+**触发**：用户「miasaki 桌面端莫名其妙闪退两次」。实机取证确认**不是壳自身崩溃**。
+
+**根因（工具链自杀）**：miasaki 里那个开发会话的 agent 在 **19:39:40** 与 **19:58:09** 两次执行
+`deploy-local.ps1 -Force` 部署新构建。脚本的 `Stop-Process` 结束「正跑着目标 exe 的实例」——
+当时正在运行的就是 **miasaki 宿主壳本身**；壳的 `KILL_ON_JOB_CLOSE` Job 立刻回收后端与
+**部署脚本自身** ⇒ 复制永远执行不到。用户看到两次窗口瞬间消失，安装目录 exe 至今仍是
+10-14 旧版（两次部署都没生效）。**无 WER / 无 panic 报告 / 无正常退出日志**——`Stop-Process`
+是静默 `TerminateProcess`，这正是「莫名其妙」的来源。
+
+**证据链**：`pet.log` 两次启动段均无 `shutdown` 记录；miasaki profile 会话
+`session-bc0a4eb5` 的 job 注册时间（19:39:40 / 19:58:09）与两次进程消失精确对应；
+`dist\Miasaki.exe` 的 LastAccessTime 19:57:04 与会话内检查命令时间戳逐毫秒吻合；
+EBWebView 19:58:11 清理写盘 = 壳在第二次部署中被杀。
+
+**改动**：
+
+| 文件 | 内容 |
+|---|---|
+| `scripts/deploy-local.ps1` | 新增**自宿主防护**：占用判定提前，`Get-AncestorPids` 探测本进程祖先链并与 `$blocking` 求交；命中则**在 Stop-Process 之前** abort 并指路外部终端。新增 `-ProbeOnly` 诊断（只判定、零改动：SAFE = exit 0 / SELF-HOST = exit 1）。 |
+| `scripts/check-deploy-guard.mjs`（新增） | 源码契约闸门：钉住「探测 / 交集 / 探针 / 拦截先于 Stop-Process」四项结构 + 两条顺序契约，防防护被顺手删或挪成死代码。 |
+| `scripts/verify-all.mjs` | desktop 线新增 `deploy guard` 一项（**40 → 41**）。 |
+| `README.md` | 「构建后必做」段补事故警示与正确部署姿势（外部终端 / 先托盘退出）。 |
+
+**验证**：`check-deploy-guard.mjs` PASS；`-ProbeOnly` 在外部终端 → SAFE / exit 0；
+用 cmd.exe 副本冒充 Miasaki 构造真实进程树 → `-ProbeOnly` 与**真实 `-Force`** 均返回
+SELF-HOST / exit 1 且**宿主未被杀**（行为自证，复现方式见脚本注释）。`node scripts/verify-all.mjs desktop`
+→ **41/41 PASS**（新增项计入分母）。
+
+**关联**：同日桌宠拖动专项（R18）的「待构建部署 + 用户实机走查」两次卡在部署环节；
+本修复落地后，新版仍需**从外部终端**部署一次（`npm run deploy` 或直接跑脚本）。
+
+## 2026-10-17 · 桌宠拖动专项：悬浮球拖动从 0 到 1 + 拖动反馈与松手滑停（R18）
+
+**触发**：用户「桌宠拖动和悬浮球拖动是最近发现的明显问题」+ 四个参考仓库
+（Coopanion / GarfieldZhung 鲸鱼娘 / fornarwhal 图标 / TreapGoGo 素材库，浅克隆留档 `_refs/`）。
+设计与判据：[`2026-10-17-pet-drag-sprint.md`](2026-10-17-pet-drag-sprint.md)。
+
+**诊断先行（两条链路的状态完全不同，不能一起修）**：
+
+- **悬浮球拖动是硬断链**：`dot_proc` 此前只处理 `WM_LBUTTONUP`（恢复桌宠）与 `IDT_HIT`
+  （悬停/穿透轮询）——没有任何拖动代码、没有独立位置。用户按住球拖 ⇒ 球不动；松手 ⇒
+  桌宠在**原位**弹出。本轮从 0 到 1 补上。
+- **桌宠主窗拖动的崩溃类缺陷已全部修复且有日志证据**（R13 合帧 / M4 弹簧 / R16 三修 /
+  R17 捕获判据 / E30+E31 推出量；10-14 部署版 `pet.log` 最近 10 次拖动全部
+  `drag start`→`drag end` 成对、733 次 `aborted` 全部停留在 R17 修复前的历史段）。
+  本轮**不重工**，只补反馈空白与手感：拖动时姿态零变化（参考实现都有专属拖动态）、
+  松手瞬间前跳（`end_drag` 直接对齐目标，快速甩动后弹簧残余滞后被一步抹掉）。
+
+**改动（R18，六个文件）**：
+
+| 项 | 内容 |
+|---|---|
+| 悬浮球拖动 | `dot_proc` 六个消息分支（DOWN 捕获 / 阈值起手 6px / 8ms 合帧直跟手**无弹簧** / UP 分流 / CAPTURECHANGED 兜底）；UP 分流契约 = **拖过留在新点并落盘、没拖过才恢复桌宠**（用户拍板）；`update_dot_hit` 拖动闸；`dot drag start/end` 日志 |
+| 球位置持久化 | `persist.rs` 存/恢复两侧切换为**球心锚点**（球会被拖到角色矩形放不下的屏幕底角；不切则重启时球被搬回默认位——E30 一族「位置丢失」的新形态）；`ball_pos_visible`（球心在工作区内即可见）；出屏兜底回默认位（球是隐藏态唯一入口，没有托盘/面板兜底） |
+| 拖动反馈 | `xform::drag_lean`（新纯函数）：窗口速度 → 向运动方向倾斜 ≤2.5° + 沿运动方向拉伸/压缩 + 拎起微抬升 6px；`compose` 两处 xf 站点接入，lean **顶替**摇摆（叠加会越窗，有单测钉住）；`drag_vel` 字段由 `flush_drag_target` 每拍写入 |
+| 松手滑停 | `release_drag` / `finish_drag_settle` / `drag_settle_tick`：松手不 snap、不当拍落盘，`IDT_DRAG` 续跑到弹簧双轴到位才收尾（≤300ms 残余 <1px）；新不变量「落盘 = 用户看到的停止位置」；捕获丢失兜底路径保持立即收尾（R16 语义不动） |
+| 连带闸门 | wander 触发补 `!self.drag_settling`（滑停 300ms 内 `dragged` 已清零，不补则两个位移源抢 `self.pos`——R16 同型）；`update_click_through` 滑停早退 |
+| 常量 | `DRAG_THRESHOLD`(4) / `DOT_DRAG_THRESHOLD`(6) / `IDT_DOT_DRAG` / `DRAG_LEAN_*` / `DRAG_LIFT_PX`；拖动起手的魔数 `4` 抽常量（注释早已引用一个不存在的同名常量——漂移订正） |
+
+**验证**：
+
+- `cargo test --bin miasaki`：**203 → 212 例全绿**（`drag_lean` 4 + `drag_should_start` 2 +
+  源码契约 3；契约含逐 DPI「最坏情况不越窗」）。
+- **反向验证**：注入三类旧缺陷（去 dot 捕获判据 / 收尾只凭 `dot_dragged` / 倾斜角放到 8°）
+  ⇒ 三条判据精确转红、其余 209 例不受影响。
+- `node scripts/verify-all.mjs desktop`：**40/40 PASS**。
+- 实机走查判据（11 条）已入设计文档 §4，**待构建部署后归用户**（矩阵 E33）。
+
+**两条实施教训**（详见设计文档 §7）：
+
+1. **判据要形态无关**：第一版契约把 needle 写死成 `SetCapture(dot_hwnd)`，而 `dot_proc`
+   实际写窗口过程形参 `SetCapture(hwnd)`（语义正确）⇒ 0 命中被自己的契约抓红。判据写窄了
+   比没有判据更危险（虚假安全感）。
+2. **提前清 `dragged` 的改动要复查 R16 那批闸门**：滑停让 `dragged` 提前清零，wander 的
+   `!self.dragged` 闸在同区间失效——补 `drag_settling` 时才想清楚。
+
+## 2026-10-17 · DSH 本体升级 0.2.1-rc.2：8 件补丁重打 + 预设退役键迁移
+
+**触发**：用户「开始升级」。全局 `@deepseek-ai/dsh` `0.2.0-rc.2` → **`0.2.1-rc.2`**
+（2026-10-17 16:54 npm 发布收尾后安装；此前 16:46 首试因官方**分批发布** ETARGET 失败，
+且失败未破坏安装 —— 详见 `_refs/upgrade-prep-0.2.1/logs/stage1-20261017.md`）。
+
+**本体与补丁**：
+
+- 全局安装：0.2.1-rc.2（`added 99 / removed 25 / changed 514`，1 分钟；304 个子包）。
+- **8 件零适配补丁全部重打**（`verify` 三行 PASS + `apply` patched + 语法合法；产物 SHA 与
+  rc.1 产物干跑一致）：
+  brand-official `250CAF78…` / chat `7C933AB6…` / conversation `5C481C82…` /
+  sidebar `01D016C2…` / trajectory `E9439E5A…` / workspace `3A26910C…` /
+  attachment `446D73B6…` / session-controller `8A97C9BE…`。
+  其中 6 件用 `rebuild-baseline.mjs`（新增辅助脚本 `_refs/upgrade-prep-0.2.1/refit-patch.mjs`
+  做「重建 → 回填三常量 → verify → apply」流水）；attachment 与 session-controller 无该脚本，
+  按 README 手动换 `baseline/*.original.js` + `rebuild`/`seal` 后回填。
+- `settings-models` 补丁**已缩减重写**（用户拍板）：官方 0.2.1 原生内置推理等级编辑
+  （`ModelReasoningEfforts`），故退役思考强度下拉 / 继承值解析器 / 4 条 locale 词条与 inline 变体，
+  保留「测试连通性 / 测试全部 / 能力徽标 / 无 Key 引导」；编辑 14 → 13 条，产物
+  `883942A3…`（223,216 B）；`verify` 三行 PASS + `apply` patched + 产物自查
+  （`REASONING_LEVELS` / `reasoningChoice` / `modelReasoningEffort` 全部 0 命中）。
+- `dsh-cordis-host-runner` 已退役，不重打。
+
+**预设迁移（0.2.1 硬性要求）**：
+
+- `preset-sources/agent.base.cordis.yml` 删除 `backgroundMode` **4 行**
+  （`tool-subagent` / `tool-subagent-fork` 的 `continuable`，`tool-subagent-codex` /
+  `tool-subagent-claude-code` 的 `one-shot`）。依据官方迁移指南
+  `v0.2.1-alpha.1/subagent-activations`：`dsh-tool-subagent` 删除该键，保留即 fail-loud。
+- `preset-sources/verify-presets.cjs` 新增 **8 条判据**（4 行 × `backgroundMode` /
+  `enableRunInBackground` 两个退役键），防止回退；`apply-presets.ps1` 重跑三套预设
+  （whale / kurumi / inverse），`verify-presets` 全部通过。
+
+**验证**：
+
+- `node scripts/verify-all.mjs`：**182 项 / 十类全 PASS**（desktop 40/40，含 8 件 patch verify 离线自证）。
+- `node scripts/patch-live-audit.mjs`：**12 patched / 0 未生效 / 0 未安装**（settings-models 重写后）。
+- web 端（`dsh --profile web --no-open`）冒烟：页面 HTTP 200、83 个插件 bundle 可获取、
+  brand 补丁特征 `MIASAKI` 出现在线上 bundle、九线无 loader/槽位错误。
+
+**第三方插件处置（用户拍板「升级 + 豁免」）**：
+
+- `@openviking/dsh-memory-plugin`：web 与 miasaki profile 均升级 `0.5.8 → 0.5.26`
+  （上游 peer 已放宽到 `>=0.1.0-rc.6 <1.0.0-0`，兼容 0.2.1）。
+- `@yeesy369/dsh-tool-browser@0.7.0`：上游未更新（peer 上界仍 `<0.2.0`），按官方新机制加
+  **exact-version exemption**（`dsh plugin --profile <p> allow-version … --dsh-version 0.2.1-rc.2 --accept-risk`），
+  web 与 miasaki 各一条。
+- 重启后两个插件**均正常加载**、启动日志无 `skipping` 告警。
+
+**启动验证**：
+
+- web 端：页面 HTTP 200、83 个插件 bundle、settings-models 补丁特征在线、无 skip。
+- miasaki 桌面端：`Miasaki.exe` 启动 → 后端 `node … bin.js --profile miasaki --no-open`（0.2.1-rc.2）、
+  3080 监听、页面 HTTP 200、**88 个插件 bundle**、尾部 skip 0。
+- **实机 UI 走查（设置页模型区 / 右栏 tab / 会话布 / SSH / 用量 / 外观）仍归用户** ——
+  本批只做机器可验部分。
+
+**已知遗留（非阻塞）**：
+
+1. `@deepseek-ai/dsh-settings` 在 0.2.1 中**不再导出 `settingsNamespace`** —— web profile 里有一个
+   **历史残留**插件 `@yeesy369/dsh-web-permission`（不在 package.json 依赖/bundles 中、不会加载）
+   会因此失败；若以后要装它，需等上游适配。
+2. 官方桌面端（0.2.1-rc.1，独立 runtime，nightly 通道）未动，作为观察窗口。
+
+## 2026-10-14（续二）· 启动误报「WebView2 初始化失败」—— 判据是 2.6s 一次性快照，而主线程被快捷方式图标改写堵了 3~7 秒
+
+**触发**：用户贴两张弹窗截图报障（「修复问题」）—— ① `Miasaki · 启动失败：主界面无法创建：
+WebView2 初始化失败`；② 紧随其后的 `Miasaki · 主界面无响应`（重启 / 退出 / 停用第三方插件三按钮）。
+**而主界面其实正常出来了**：两个弹窗都在说谎。
+
+**现场取证**（`%LOCALAPPDATA%\miasaki\pet.log` 161534 行 + 三份 `crash-*-web-boot.log`）：
+三次故障（10-13 01:44 / 10-13 01:54 / 10-14 19:56，`判定 WebView2 初始化失败` 全文件仅 **3** 次）
+**完全同构**：
+
+* `[Ts] boot: 800ms 窗口仍不可见（on_page_load 未触发？）→ 兜底 show()` 与
+  `[Ts] boot: 主窗 2.6s 后仍不可见 → 判定 WebView2 初始化失败` **打印在同一个秒** `Ts` 里 ——
+  可这两个定时器相隔 1.8 秒，只有「两次调用一起被卡住」才会同秒落盘；
+* 同一秒还有 `doc-boot #1 http://tauri.localhost/loading.html` —— **WebView2 已经把加载页跑完了**；
+* 紧接着 `page-load #1/#2 http://127.0.0.1:3080/`、后端 pid 正常拉起 —— 整条链**没有一处失败**；
+* `[native-pet] window created` 出现在判定失败**之后**（主线程到那时才腾出手）。
+
+⇒ **「WebView2 初始化失败」是误报**，WebView2 全程正常。用户侧的真实体验是：
+界面稍后其实出来了，人却被两个弹窗按在「重启 / 退出 / 停用插件」的三选一里反复重启 ——
+而每次重启都会再撞一遍同一条路（三次故障正是这样首尾相接）。
+
+**根因（两条叠加，缺一不可）**：
+
+① **判据的形态错了**：`is_visible()` / `show()` 都不是直读窗口状态，而是走
+   `WindowMessage` 通道**同步请求主线程**（`tauri-runtime-wry` 的 `window_getter!`）。
+   主线程一被占住，800ms 与 2600ms 两个定时器就**一起卡在通道上**，等主线程空闲后同时返回、
+   且都读到「还没 show」—— 判据拿到的是一份**陈旧快照**，而它被当成了事实。
+
+② **谁在占主线程**：`setup` 是**同步**的，其中 `launcher_icon::apply` 一旦真动手，就会
+   生成 ICO → 改写桌面 `.lnk`（COM）→ `SHChangeNotify(SHCNE_ASSOCCHANGED | SHCNF_FLUSH)`，
+   **实测 3 / 3 / 7 秒**。三条独立证据指认它：
+   * `pet.log` 里 `launcher-icon:` 日志**全文件只有 3 行**，与三次误报一一对应；
+   * `launcher-icon.ico` 的 mtime 正是 `2026-10-14 19:56:52`（那次启动的时刻）；
+   * 三次的 `asset-server → launcher-icon` 间隔 = **3 / 3 / 7 秒**。
+
+**上一批那条「幂等」结论被实测推翻**（见下一条 CHANGELOG 的「幂等」要目，已就地订正）：
+
+> 幂等：不做去重，只在图标内容真的变化时被调用（`launcher_icon` 的 `LAST_APPLIED` 把关）
+
+`LAST_APPLIED` 是**进程内** `Mutex<Option<String>>`（`launcher_icon.rs:49`），新进程必然为
+`None` ⇒ 只要配置了头像（本机 `avatar.source = preset-portrait.png`），**每次启动**都会走到
+`shortcut_icon::apply`：无条件写 ICO + COM 改写所有匹配 `.lnk` + 通知 shell 刷图标缓存。
+「把关」只在**同一进程内**成立，跨进程等于没有 —— 这才是「每次启动白干 1~7 秒」的来源，
+也是三次误报为什么只在「耗时越过 2.6s」时暴露（其余启动同样慢，只是没越线）。
+
+**三处修复**：
+
+1. **可见性判定：一次性快照 → 轮询 + 多判据**（新纯函数 `boot_visible_verdict`）
+   * 轮询间隔 `BOOT_VISIBLE_POLL_MS = 250ms`、预算 `BOOT_VISIBLE_BUDGET_MS = 12s`
+     （= 实测最坏 7s + 70% 余量）；等待期间**每轮**补一次幂等 `show()`；
+   * 两条与可见性**正交**的事实接管判定：`WEBVIEW_ALIVE`（`on_page_load` 触发过，
+     **任何 URL 都算** —— 本地 loading 页恰恰是后端还没起来时唯一的健康证据）⇒ 此后
+     **永不**判「初始化失败」；`hwnd()` 可用性 ⇒ WebView2 环境创建失败的**确定性判据**
+     （`build()` 仍返回 Ok 但句柄被回收），见到即判、不耗预算；
+   * 判失败前**再复查一次**可见性：消掉「弹窗说失败、界面其实已经出来」这最后一类误报；
+   * 失败分**两类**：`FailedNoWebview`（沿用原「初始化失败」弹窗 + 恢复对话框）与
+     `FailedInvisible`（WebView2 明明在工作、只是窗口没露出来）—— 后者不再冒充初始化失败，
+     改为一条信息提示 + 指向托盘「显示 / 隐藏主窗口」。两者的处置方向本就不同，
+     不该把用户往「换启动位置 / 加白名单」支；
+   * `on_page_load` 回调**第一行**置位 `WEBVIEW_ALIVE`（在 `show()` 与 URL 分流之前）。
+2. **`launcher_icon::apply` 移出启动关键路径**：整段延后到「主窗可见之后」再执行
+   （上限同 12s，超时也照做；用 `run_on_main_thread` 回主线程调 Tauri 窗口/托盘 API）。
+   用户先看到界面、图标随后到位 —— 正常启动窗口 1 秒内可见，感知上只是「图标晚半拍」。
+3. **`shortcut_icon::apply` 加幂等闸门**：ICO 字节与现有文件一致 ⇒ **整体跳过**
+   （不写盘、不改 `.lnk`、不通知 shell）。判据取内容而非时间戳：ICO 由头像像素唯一决定，
+   一致即「结果已经是想要的样子」。
+   * 已知边界（刻意接受）：用户手工改掉 `.lnk` 的图标位置时不再自动纠正（原实现每次启动都纠正）；
+     恢复方式是在外观面板重新选一次头像。
+4. **建窗看门狗（同一批的另一半，收尾时补上）**：上面三处都默认「`build()` 会返回」——
+   而失败注入实测（把 `WEBVIEW2_USER_DATA_FOLDER` 指到不可写路径）发现它**可能 200+ 秒不返回**：
+   主线程卡在建窗里，桌宠不做、主窗不做，`pet.log` 只剩运行期看门狗的 `hash poll url() failed xN`
+   在涨，**用户侧零提示** —— 正是 2026-09-25「启动失败可见化」要消灭的「双击后什么都没有」，
+   当时只覆盖了「`build()` 返回 Ok 但句柄被回收」那一半，卡在半路的另一半一直没人管。
+   现于**建窗之前**架一个 20s 看门狗（正常建窗 < 1 秒，宽裕到不会误报），
+   判据取 **`BOOT_VISIBILITY_WATCH_ARMED`**（`build()` 返回后、轮询上岗前一刻置位）——
+   这条直接回答「接管逻辑上岗了没有」。
+   **中途踩到一个判据缝隙（已修，值得记）**：第一版判据用「窗口对象是否存在」
+   （`get_webview_window("main")`），注入实测它**返回 Some** —— 窗口对象在建环境**之前**
+   就注册好了 ⇒ 看门狗以为一切正常而退场、可见性轮询又还没上岗 ⇒ **依旧哑巴失败**。
+   换成上岗标志后两条判据严丝合缝（不存在中间态）。
+
+**闸门（`cargo test` 200 → 204 例，+4；desktop 静态回归 40/40 不动）**：
+* `boot_visibility_verdict_never_mistakes_slow_start_for_a_dead_webview`：判定矩阵六格
+  （可见即成功 / 2.6s 不可见必须仍是「继续等」/ 句柄回收立刻判 / 预算耗尽按有无加载事实分流 /
+  边界取 `<`）；
+* `boot_visibility_probe_is_wired_and_launcher_icon_stays_off_the_boot_path`：**源码契约** ——
+  判据接线（`boot_visible_verdict` / 轮询间隔常量 / `WEBVIEW_ALIVE` 入参 / 统一收尾）、
+  `on_page_load` 无条件置位、`launcher_icon::apply` 不得回到同步路径。防的是「纯函数单测全绿、
+  整条链却没接线」；
+* `apply_skips_everything_when_the_ico_is_unchanged`：幂等**双向** —— 同一像素第二次调用
+  必须一个字节都不写（判据取 mtime 不变），像素真变了必须重写（闸门不得吞掉真实变更）；
+* `window_build_watchdog_runs_before_the_window_is_built`：**源码契约** —— 看门狗必须在建窗
+  **之前**架好、判据只能是「轮询上岗了没有」（显式断言**不得**退回 `get_webview_window` 与
+  `is_visible()`：前者有上述缝隙，后者走的正是被卡死的那条通道）、上岗标志必须在 `build()`
+  **之后**才置位（否则看门狗永远退不了场、每次正常启动都误报）；
+* **双向注入验证**（照本线纪律「缺陷要能被打红」）：把预算判据改回 `2_600` ⇒ 矩阵测试红；
+  把轮询间隔改成 `2600` ⇒ 契约测试红。两条都能精确打红，随后复原。
+
+**顺带记录（本批未改）**：`pet.log` 每条启动都有
+`[native-pet] SetProcessDpiAwarenessContext(PMv2) 返回 0：进程已有窗口或已被设过 awareness，
+本次调用未生效（桌宠尺寸将偏小）` —— 调用点在主窗/桌宠窗口创建**之后**，这次调用必然无效。
+桌宠尺寸的实际口径由 tao 在主窗创建时设的 awareness 决定。本批不动它：涉及全局 DPI 语义
+（主窗与桌宠的坐标换算共用），需单独评估 + 实机走查，不与本次修复混批。
+
+**会话内实机验证已完成（2026-10-14；判据入矩阵 E32）**：构建 → 签名（`CN=Miasaki Dev`，
+签名 Valid）→ 部署（`deploy-local.ps1` **10/10**，安装目录 exe 21:22 / 21:58 两次）、
+并用**字符串常量**核对产物（6 条新日志文案在位、2 条旧文案 `boot: 800ms …` / `boot: 主窗 2.6s …`
+已不存在），随后在本机真跑三轮：
+
+* **正常启动**：主窗 **361ms** 可见 —— `boot: 主窗已可见（等待 361ms，兜底 show() 1 次）→ 正常启动`；
+  全程**无弹窗**、无新增 crash 报告；Win32 窗口枚举确认 `Miasaki · DSH`（1296×809）
+  `IsWindowVisible = True`（截图留档 `_refs/verify-20261014/`）；
+* **幂等闸门**：`launcher-icon.ico` 的 mtime 在启动前后**一字未动**（19:56:52 → 19:56:52），
+  日志为 `launcher-icon: 应用 preset-portrait.png（256px）；快捷方式改写 0 个` —— 不再每次启动
+  重写 ICO + 改 `.lnk` + 让资源管理器刷图标缓存；
+* **真故障（刻意注入，两次形态各触发一条判据）**：
+  ① `build()` 返回但窗口始终不可见 ⇒ 可见性轮询判失败，报告
+  `reason = WebView2 初始化失败（主窗超时仍不可见且无加载事实）`；
+  ② `build()` 卡死不返回 ⇒ 看门狗在 **20s** 准点报出（`建窗 20000ms 后
+  WebviewWindowBuilder::build() 仍未返回…`），报告 `reason = WebView2 初始化失败（建窗未返回）`；
+  两种形态都弹出「Miasaki · 启动失败」错误框，**关掉后正确接上**「Miasaki · 主界面无响应」
+  三按钮恢复对话框（实测用 `WM_CLOSE` 关错误框 → 恢复框即出现）—— 即用户截图里的那两个框，
+  只是这次是**真故障**、它们说的是实话。
+  注入产生的 4 份 `crash-2026-10-14T13-*` 报告已清理；用户的历史故障报告
+  （10-12 ×3 watchdog / 10-13 ×2、10-14 ×1 web-boot）**原样保留**。
+  注入现场（`WEBVIEW2_USER_DATA_FOLDER` 指向不可写路径）已复原，无残留进程、3080 无监听。
+
+**仍需你过一眼的**：日常使用体感（启动是否顺畅、桌面快捷方式图标是否**只在换头像时**更新）；
+以及 E32 里需要长期观察的两条（误报签名不再出现 / 不再产生 `crash-*-web-boot.log`）。
+判据正文在矩阵 **E32**（**编号注意：E31 已被同日的「桌宠拖动起手自失」占用**，不可复用 ——
+这是 2026-10-12 立下的规矩）。
+
 ## 2026-10-14 · 桌面 / 开始菜单快捷方式图标跟随（`shortcut_icon.rs`）—— 用户「选择后桌面启动图标没变」
 
 **触发**：用户在外观页选完图标后报「桌面启动图标没变」，追问确认指的是**桌面快捷方式**，
@@ -25,8 +300,13 @@
 * **失败只让这一步退化**：COM 起不来 / 权限不足 / 文件被占 ⇒ 返回 0 + 一行日志，
   快捷方式保持原样，**头像本身照常生效**（与「坏头像绝不拖住启动」同一条纪律）。
 * **可撤销**：「清除」按钮 ⇒ `shortcut_icon::clear()` 把图标位置清空（回退到目标程序自身图标）。
-* **幂等**：不做去重，只在图标内容真的变化时被调用（`launcher_icon` 的 `LAST_APPLIED` 把关），
-  不会每 1.5 秒重写磁盘。
+* **幂等**：~~不做去重，只在图标内容真的变化时被调用（`launcher_icon` 的 `LAST_APPLIED` 把关），
+  不会每 1.5 秒重写磁盘。~~
+  **⚠ 2026-10-14 订正（同日续二实测推翻）**：`LAST_APPLIED` 是 `launcher_icon.rs` 里的
+  **进程内** `Mutex<Option<String>>`，跨进程无效 —— 只要配置了头像，**每次启动**都会真的
+  重做一遍（写 ICO + COM 改写 `.lnk` + 通知 shell，实测 1~7 秒），「把关」只对同一进程内的
+  巡检（每 1.5s）成立。这正是同日「启动误报 WebView2 初始化失败」的根因之一，
+  内容级幂等闸门见下一条 CHANGELOG。
 
 **为什么手写 COM vtable（而不是加 `windows` crate）**：本仓 desktop 线用 `windows-sys`
 （纯 FFI），它只给常量与函数、**不提供接口定义**；加 `windows` 会引入一整棵生成代码

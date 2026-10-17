@@ -165,9 +165,23 @@ $pwd  = ConvertTo-SecureString -String "<导出密码>" -Force -AsPlainText
    在本机一律被降权，换名字、换签名、换副本都没用。
 2. **先结束所有残留 Miasaki 进程**：它持有单实例锁，会让新实例**静默退出**——表现同样是
    「双击没反应」。任务管理器里搜 `Miasaki` 全部结束即可。
-3. **看弹窗与日志**：2026-09-25 起，启动 2.6s 后主窗仍不可见会弹原生「Miasaki · 启动失败」
-   对话框并写明原因与指引；日志在 `%LOCALAPPDATA%\miasaki\pet.log`，其中
+3. **看弹窗与日志**：**判据 2026-10-14 改版** —— 主窗不可见时不再「2.6 秒一票判死」，改为
+   **轮询等待**（每 250ms 复查、预算 12s，期间每轮补一次 `show()`）。只有两种情况才判失败并弹
+   原生「Miasaki · 启动失败」：① 窗口句柄被回收（WebView2 环境创建失败的实测特征，见到即判）；
+   ② 预算耗尽**且从未观察到任何页面加载**。若 WebView2 已被确认工作过（页面加载过）而窗口仍
+   没露出来，弹的是一条**信息提示**（指向托盘「显示 / 隐藏主窗口」）—— 不再冒充「初始化失败」。
+   日志在 `%LOCALAPPDATA%\miasaki\pet.log`：等待与成功各有一行
+   （`boot: …ms 主窗仍不可见…→ 每 250ms 复查并补 show()` / `boot: 主窗已可见（等待 …ms…）→ 正常启动`）；
    `bootstrap.json` 的 `phase` 为 `up` 表示页面已成功加载。
+   > **为什么改**：旧的一次性快照会误报 —— `is_visible()` 走 `WindowMessage` 通道**同步问主线程**，
+   > 而启动期主线程可能正被 ICO 生成 + 快捷方式改写占住 3~7 秒，快照于是拿到「还没 show」的旧值。
+   > 三次误报的现场与根因见 `design/CHANGELOG.md` 2026-10-14（续二）。
+   >
+   > **建窗看门狗兜另一半**：`WebviewWindowBuilder::build()` 在 WebView2 建环境受阻时可能
+   > **长时间不返回**（本机失败注入实测 200+ 秒 —— 那时主线程卡死，连桌宠都不出现），
+   > 上面那套轮询**还没上岗**、等于没有判据。看门狗在建窗**之前**架好，**20s** 后按
+   > 「可见性轮询上岗了没有」判定，报出 `boot: 建窗 20000ms 后 WebviewWindowBuilder::build()
+   > 仍未返回…` 并弹同样的失败框。两条判据互斥（不存在 vs 存在且不可见）、都不要求主线程空闲。
 
 > 判据速查：任务管理器「详细信息」标签页加一列**「完整性级别」**——显示`低`即命中本问题；
 > 正常应为`中`。
@@ -180,6 +194,15 @@ $pwd  = ConvertTo-SecureString -String "<导出密码>" -Force -AsPlainText
 npm run deploy                                                                   # → C:\ProgramData\MiasakiApp
 powershell -ExecutionPolicy Bypass -File scripts\deploy-local.ps1 -FixShortcuts   # 顺带修正桌面旧快捷方式
 ```
+
+> **2026-10-17 事故：部署命令必须在 miasaki「之外」执行**。`deploy-local.ps1 -Force` 会
+> `Stop-Process` 结束「正跑着目标 exe 的实例」——如果这条命令是从 miasaki 桌面端
+> **自己的会话**里发出的（agent 在 miasaki 里执行 `npm run deploy` 或直接调脚本），被杀的就是
+> **宿主壳本身**；壳的 `KILL_ON_JOB_CLOSE` Job 随即回收后端与**部署脚本自身**，复制永远不执行。
+> 用户看到「窗口莫名闪退」，而安装目录的 exe 还是旧版（两次都如此）。脚本现已加**自宿主防护**
+> （命中即在 `Stop-Process` 之前 abort；`-ProbeOnly` 可先判定、零改动），但**正确姿势仍是**：
+> 在外部终端（Windows Terminal / VSCode / 官方 DSH 桌面端）跑部署，或先托盘退出 Miasaki。
+> 在 miasaki 会话里让 agent 重试部署属于已知自伤路径，不要做。
 
 > **改完源码必须重新构建（2026-09-26 实测教训）**：`themes/src/*.js` 的注入产物与 Rust 侧
 > **都编译进 exe** —— 只重开应用会继续跑旧行为，界面表现与修复前**逐帧一致**，极易误判成
@@ -547,6 +570,12 @@ appearance 配置。
   命中判据 = 球面合成缓冲的 alpha（阈值 16，与 R2 同范式，独立 10ms 轮询）——方窗四角与发光外沿
   照样穿透，球放大后不会长出一片「隐形挡板」；`hide` 仍持久化于 `pet.json`，位置仍随桌宠拖动同步
   （M1.4 不变）。素材缺失 / 主题未知 → 回落为主题色实心球，绝不空白
+- **悬浮球可拖动（R18，2026-10-17）**：按住球拖过 6px 阈值 ⇒ 球跟手移动（8ms 合帧、**直跟手无弹簧**——
+  56px 入口要指哪打哪；参考实现 GarfieldZhung 同款直设位置），松手后球**留在新点**并落盘
+  （`pet.json` 隐藏态改按**球心**存比例，球拖到屏幕底角重启也不搬位）；**单击（不拖）仍是恢复桌宠**，
+  桌宠直接出现在球的当前位置。拖出工作区有兜底（回默认位并落盘——球是隐藏态唯一入口，
+  没有托盘/面板兜底它）。捕获 / 收尾判据与主窗 R16/R17 完全同构，`pet.log` 有
+  `dot drag start/end` 成对行。设计见 [design/2026-10-17-pet-drag-sprint.md](design/2026-10-17-pet-drag-sprint.md)
 - **桌宠内联审批（R5 / M3.2，2026-09-16）**：审批等待时气泡升级为**含「拒绝 / 允许一次」两个按钮**
   的交互气泡（`ui/pets/approval.png`，240×84，构建期 `gen-bubbles.ps1` 出图、运行时零字体调用；
   两按钮间留 8px 间隙防误触）。点按钮 → 桌面端记单调 `seq` 并经 `eval` 派发
@@ -790,6 +819,7 @@ desktop/
 ├─ scripts/diff-tokens.mjs   # 令牌漂移报告（`npm run tokens:diff`，只告警不阻塞）
 ├─ scripts/smoke-test.ps1    # 冒烟测试（§0b 启动失败三用例预检：dsh 未安装/端口占用/单实例）
 ├─ scripts/deploy-local.ps1  # 构建产物同步到系统目录（`npm run deploy`；用户目录下的 exe 在本机必被降权）
+├─ scripts/check-deploy-guard.mjs # 部署脚本自宿主防护契约闸门（2026-10-17 两次闪退事故；verify-all desktop 项）
 ├─ scripts/extract-intro-clips.mjs # 片头素材提取与台账校验（`--check` = 字节数 + SHA256 前 16 位逐段比对）
 ├─ scripts/make-icons.mjs    # 主题徽章 + 应用图标生成（app 图标为圆角 24% 边长，重生成后跑 `npx tauri icon src-tauri/app-icon-source.png`）
 ├─ scripts/gen-bubbles.ps1   # 气泡位图：台词精灵表 `bubbles.png` + 审批气泡 `approval.png`（预渲染，规避 GDI 字体崩溃）
@@ -1047,10 +1077,15 @@ deepseek-harness-desktop 启动恢复 + 健康标记 + 可靠性矩阵思路）�
 
 **启动链容错加固（2026-09-23）**：
 
-- **主窗口可见性兜底**：窗口以 `visible(false)` 建出、由 `on_page_load` 回调 `show()` 显示；
-  若 WebView2 对不可见宿主的加载优化导致回调始终不触发，窗口将永不显示。现于建窗后 800ms
-  检查一次「窗口是否可见」（判据是 `is_visible()` 本身，**不是**页面就绪位 `PAGE_UP`），
-  仍不可见则补一次 `show()` 并写 `pet.log`；正常路径判据为假、不动作，天然幂等；
+- **主窗口可见性等待与失败判定**（**2026-10-14 改版**）：窗口以 `visible(false)` 建出、由
+  `on_page_load` 回调 `show()` 显示；若 WebView2 对不可见宿主的加载优化导致回调始终不触发，
+  窗口将永不显示。原实现「建窗后 800ms 补一次 `show()` + 2.6s 复查判失败」**已被真机推翻**：
+  两次快照都走 `is_visible()`（走 `WindowMessage` 通道**同步问主线程**），主线程一忙
+  （启动期 ICO 生成 + 桌面 `.lnk` 改写，实测 3~7 秒）就双双拿到陈旧值，把正常启动判成
+  「WebView2 初始化失败」并弹出恢复对话框（2026-10-13/14 共三次）。现在改为**轮询**：
+  每 250ms 复查、预算 12s、每轮补一次幂等 `show()`；判失败只看两条**确定性**事实 ——
+  窗口句柄被回收，或预算耗尽**且从未观察到任何页面加载**（`WEBVIEW_ALIVE`，任何 URL 都算）；
+  判定前再复查一次可见性，撤销「快照早于 `show()` 生效」的最后这类误判；
 - **导航失败不再静默**：`MIASAKI_REMOTE` 非法或 WebView 拒绝导航时，原实现（`expect` / `let _ =`）
   会让 release 直接 abort（`Cargo.toml` 的 `panic = "abort"`）、或让加载页永远停在
   「已就绪，正在进入…」。现统一走容错分支：落盘 + 状态栏可见反馈 + 放出「重试」按钮
@@ -1068,8 +1103,9 @@ deepseek-harness-desktop 启动恢复 + 健康标记 + 可靠性矩阵思路）�
 - **401 熔断**：`sessionStorage` 跨文档计数，最多 reload 3 次，超限**停止重载**并在页面上
   显示可见提示（原因 + 处理指引）；到上限前先清掉已失效的 cookie，给兜底签名最后一次
   自愈机会；计数只在确认到达非 401 文档时复位；
-- **兜底日志三态**：`is_visible()` 的 `Err`（窗口已销毁，如 800ms 内关窗）不再被记成
-  「仍不可见」，消除误导归因；
+- **兜底日志三态**：`is_visible()` 的 `Err`（窗口已销毁）与 `Ok(false)`（真不可见）不再混为一谈
+  —— 2026-10-14 起 `Err` 以 `None` 进入判定（`boot_visible_verdict`），「窗口已销毁」与
+  「窗口还没显示」各自处置，消除误导归因；
 - **token-monitor 刷新时间戳**：全局浮窗「更新于」只在刷新**成功**后推进（失败不再谎称
   刚更新过）；
 - **新增语法闸门**：`verify-all desktop` 现含 `syntax injected/theme-init.js`（注入脚本是
