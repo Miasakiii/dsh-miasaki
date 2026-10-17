@@ -302,6 +302,19 @@ pub(crate) fn advance_drag_target(
     (base.0 + delta.0, base.1 + delta.1)
 }
 
+/* ---------------- R18：拖动起手阈值判定（纯逻辑） ---------------- */
+
+/// 位移是否越过拖动起手阈值（**Manhattan 距离和**，严格大于）。
+///
+/// 主窗与悬浮球共用同一判定形（窗口层各传常量：`DRAG_THRESHOLD` /
+/// `DOT_DRAG_THRESHOLD`）。抽成纯函数的理由：阈值比较是最容易写错边界的比较
+/// （`>` 还是 `>=`、曼哈顿和还是欧氏距离），且 R18 起有两个调用点 ——
+/// 口径分叉会让「球比桌宠难起手」这类差异无从解释。
+#[inline]
+pub(crate) fn drag_should_start(delta: (i32, i32), threshold: i32) -> bool {
+    delta.0.abs() + delta.1.abs() > threshold
+}
+
 /* ---------------- R16：抓取热区（命中容差，纯逻辑） ---------------- */
 
 /// 局部坐标 `(x, y)` 的 `± pad` 邻域内是否存在「不透明像素」（`alpha >= alpha_min`）。
@@ -914,6 +927,30 @@ mod tests {
         let t = Some((50, 60));
         assert_eq!(advance_drag_target(t, cur, (0, 0)), (50, 60),
             "零位移必须原样返回 —— 窗口层据此跳过 MoveWindow");
+    }
+
+    /* ---------------- R18 · 拖动起手阈值 ---------------- */
+
+    /// R18-1：阈值比较是**严格大于**的曼哈顿和——和恰等于阈值时不算起手
+    /// （「轻点手抖」与「开始拖」的分界必须可预测）。
+    #[test]
+    fn drag_should_start_uses_strict_manhattan_sum() {
+        assert!(!drag_should_start((2, 2), 4), "和=4 恰等于阈值 ⇒ 未越");
+        assert!(drag_should_start((2, 3), 4), "和=5 ⇒ 已越");
+        assert!(!drag_should_start((0, 0), 4), "零位移恒不越");
+        // 与悬浮球阈值（6）同形工作
+        assert!(!drag_should_start((3, 3), 6), "球：和=6 恰等于阈值 ⇒ 未越");
+        assert!(drag_should_start((3, 4), 6), "球：和=7 ⇒ 已越");
+    }
+
+    /// R18-2：方向无关（负轴同样按绝对值计），且两个调用点共用一形。
+    #[test]
+    fn drag_should_start_is_direction_agnostic() {
+        assert!(!drag_should_start((-2, -2), 4));
+        assert!(drag_should_start((-5, 0), 4));
+        assert!(drag_should_start((0, 5), 4));
+        // 单轴大幅也越（沿屏幕边拖的场景）
+        assert!(drag_should_start((0, -100), 4));
     }
 
     /* ---------------- R16 · 抓取热区（命中容差） ---------------- */

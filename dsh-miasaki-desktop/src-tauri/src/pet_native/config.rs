@@ -33,6 +33,12 @@ pub(crate) const DOT_SPEC_R: f32 = 0.52;
 pub(crate) const DOT_SHADOW_ALPHA: f32 = 72.0;
 /// 落影圆心下移量（球心坐标系，随悬停倍率缩放）。
 pub(crate) const DOT_SHADOW_DY: f32 = 1.8;
+/// R18（2026-10-17，design/2026-10-17-pet-drag-sprint.md §2.5）：悬浮球拖动起手阈值
+/// （Manhattan 距离和，px）。
+///
+/// **比主窗 `DRAG_THRESHOLD`（4）保守**：球的单击 = 恢复桌宠，是比「撸一下」更重的语义，
+/// 误触代价更高；口径对齐 Coopanion 参考实现的 6px 起拖。
+pub(crate) const DOT_DRAG_THRESHOLD: i32 = 6;
 // 预渲染气泡帧:生成于 scripts/gen-bubbles.ps1(系统字体在构建期出图,
 // 运行时只做像素叠加 —— 规避 Win11 多线程 GDI 字体堆损坏导致 CreateFontW 崩溃)
 pub(crate) const BUBBLE_W: i32 = 240;
@@ -81,6 +87,15 @@ pub(crate) const HIT_POLL_MS: u32 = 10;
 /// 8ms 在「跟手」与「省调用」之间；参考实现用的是同一量级。
 pub(crate) const IDT_DRAG: usize = 4;
 pub(crate) const DRAG_COALESCE_MS: u32 = 8;
+/// R18（2026-10-17）：拖动起手阈值（Manhattan 距离和，px）。
+///
+/// 位移超过它才算「开始拖动」；没超过就是手抖的点击（走单击语义：撸一下 / 唤起主窗）。
+/// **抽常量的理由**：原实现是 `WM_MOUSEMOVE` 分支里的字面量 `4`，而同处注释早已引用一个
+/// **不存在的** `DRAG_THRESHOLD` —— 注释漂移（说有你没有），补上常量让引用为真。
+pub(crate) const DRAG_THRESHOLD: i32 = 4;
+/// R18：悬浮球拖动合帧定时器 id（主窗 `IDT_DRAG` 给桌宠；球是另一个 hwnd，
+/// 另起一个 id 让 `pet.log` 与契约测试的归属清晰）。节拍复用 `DRAG_COALESCE_MS`。
+pub(crate) const IDT_DOT_DRAG: usize = 6;
 
 /// M4（2026-10-05）：拖动尾随的临界阻尼弹簧刚度（1/s²）。
 ///
@@ -210,6 +225,26 @@ pub(crate) const SQUASH_MS: u64 = 220;
 /// M3 挤压峰值：横向拉伸 10%、纵向压缩 15%（参数取自参考实现实测）。
 pub(crate) const SQUASH_DX: f32 = 0.10;
 pub(crate) const SQUASH_DY: f32 = 0.15;
+
+// —— R18（2026-10-17，design/2026-10-17-pet-drag-sprint.md §3.1）：拖动反馈（零素材）——
+/// 拖动倾斜峰值（度）。**2.5° 是横向不越窗的硬上限区间**：角色宽 ≈249px 在 286px 窗内，
+/// 单侧余量 ≈18.4px；旋转吃掉 `CELL_H·sinθ`（270·sin2.5° ≈ 11.8px），再叠加拉伸
+/// `DRAG_LEAN_DX` 的 ≈5px ⇒ 合计 ≈16.8px，留 ≈1.6px 安全边际。
+/// 不变量由 `xform::drag_lean` 的 worst-case 单测逐 DPI 钉死——调这三个数之前先跑它。
+pub(crate) const DRAG_LEAN_MAX_DEG: f32 = 2.5;
+/// 拖动中的「拎起」微抬升（px，向上；以负 bob 送进 `blit_center_bottom`）。
+/// 两个作用：① 读作「被拎起来」；② 给倾斜腾出底部余量（倾斜底角下沉 ≈6.5px，
+/// 由 2px 底留白 + `sway_layout_margin` + 本值共同覆盖）。
+pub(crate) const DRAG_LIFT_PX: f32 = 6.0;
+/// 达到全幅倾斜的速度参考（px/s）。参考实现一甩上千 px/s，取 1400 为「快拖常见区」。
+pub(crate) const DRAG_LEAN_VREF: f32 = 1400.0;
+/// 倾斜死区（px/s）：低于此不出形变。慢拖与悬停微动的速度噪声大，
+/// 出形变会读作「端着发抖」——比没有反馈更糟。
+pub(crate) const DRAG_LEAN_VDEAD: f32 = 120.0;
+/// 沿运动方向的拉伸峰值（`DRAG_LEAN_VREF` 满速时）。
+pub(crate) const DRAG_LEAN_DX: f32 = 0.04;
+/// 垂直运动方向的压缩峰值（与 `DRAG_LEAN_DX` 共同构成「沿运动方向被拉长」的读感）。
+pub(crate) const DRAG_LEAN_DY: f32 = 0.06;
 /// 变换缩放的夹取边界。存在的硬理由：逆变换要除以 `sx`/`sy`，0 或 NaN 会污染整帧缓冲。
 /// 上限 2.0 远宽于任何动效需求（`SQUASH_DX` 峰值仅 1.10），只作为「上游算错时的最后一道闸」。
 pub(crate) const XF_MIN_SCALE: f32 = 0.5;
@@ -219,4 +254,9 @@ pub(crate) const XF_MAX_SCALE: f32 = 2.0;
 /// （小写命名遵 Rust 惯例；它不参与常量折叠，只在绘制与布局各算一次）。
 pub(crate) fn sway_max_rad() -> f32 {
     SWAY_MAX_DEG.to_radians()
+}
+
+/// R18 拖动倾斜峰值（弧度）。同 `sway_max_rad` 的理由（`to_radians` 非 const fn）。
+pub(crate) fn drag_lean_max_rad() -> f32 {
+    DRAG_LEAN_MAX_DEG.to_radians()
 }

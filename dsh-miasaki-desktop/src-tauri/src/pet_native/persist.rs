@@ -203,6 +203,24 @@ pub(crate) fn pos_visible(pos: (i32, i32)) -> bool {
     ws.iter().any(|m| overlap_area(&ch, m) >= need)
 }
 
+/// R18（2026-10-17）：悬浮球位置可见性——**球心在工作区内**即可见。
+///
+/// **为什么不复用 `pos_visible`（角色矩形 25% 口径）**：球是 56px 的隐藏态入口，
+/// 用户会把它拖到角色矩形（286×390 的底部带）放不下的合法位置——屏幕底角、副屏顶端。
+/// 用角色口径判，这些位置会被误判「不可见」⇒ 重启时球被搬回默认位（E30 一族
+/// 「位置丢失」的新形态）。球小且可抓，「球心在屏内」就是充分的可见性判据。
+pub(crate) fn ball_pos_visible(pos: (i32, i32)) -> bool {
+    let cx = pos.0 + DOT_SIZE / 2;
+    let cy = pos.1 + DOT_SIZE / 2;
+    let ws = monitor_workspaces();
+    if ws.is_empty() {
+        let (sw, sh) = screen_size();
+        return cx >= 0 && cx < sw && cy >= 0 && cy < sh;
+    }
+    ws.iter()
+        .any(|r| cx >= r.left && cx < r.right && cy >= r.top && cy < r.bottom)
+}
+
 /// 角色可见区域中心所在的工作区（找不到 → None，调用方兜底主屏）。
 fn containing_work(cx: i32, cy: i32) -> Option<WorkRect> {
     monitor_workspaces()
@@ -224,9 +242,20 @@ fn containing_work(cx: i32, cy: i32) -> Option<WorkRect> {
 pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::model::DockEdge>) {
     match load_pet_state() {
         Some(LoadedPetState::V2(s)) => {
-            let c = character_local_rect();
-            let cx_off = (c.left + c.right) / 2;
-            let cy_off = (c.top + c.bottom) / 2;
+            // R18（2026-10-17）：隐藏态的持久化锚点是**球心**——悬浮球会被拖到角色矩形
+            // （286×390 的底部带）放不下的合法位置（屏幕底角 / 副屏顶端），若仍按角色
+            // 中心求比例与可见性，重启时球会被搬到别处（「位置丢失」的新形态）。
+            // 锚点矩形：隐藏态 = 球（56×56，窗口左上角）；显示态 = 角色带（现状）。
+            // 连带口径：隐藏态 `dock` 不生效（球不停靠；球拖动落盘时也恒写 None）。
+            let hide = s.hide;
+            let anchor = if hide {
+                Rect { left: 0, top: 0, right: DOT_SIZE, bottom: DOT_SIZE }
+            } else {
+                character_local_rect()
+            };
+            let cx_off = (anchor.left + anchor.right) / 2;
+            let cy_off = (anchor.top + anchor.bottom) / 2;
+            let visible = |p: (i32, i32)| if hide { ball_pos_visible(p) } else { pos_visible(p) };
             // ① 同一块屏（工作区几何完全一致）→ 比例还原
             if let Some(w) = monitor_workspaces().into_iter().find(|w| {
                 w.left == s.work.left && w.top == s.work.top
@@ -236,15 +265,15 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
                 let cy = w.top as f64 + s.ry * (w.bottom - w.top).max(1) as f64;
                 let mut x = cx as i32 - cx_off;
                 let mut y = cy as i32 - cy_off;
-                // clamp：角色区域尽量落在工作区内（工作区比窗口小时以左上对齐兜底）
-                let x_lo = w.left - c.left;
-                let x_hi = (w.right - c.right).max(x_lo);
-                let y_lo = w.top - c.top;
-                let y_hi = (w.bottom - c.bottom).max(y_lo);
+                // clamp：锚点区域尽量落在工作区内（工作区比窗口小时以左上对齐兜底）
+                let x_lo = w.left - anchor.left;
+                let x_hi = (w.right - anchor.right).max(x_lo);
+                let y_lo = w.top - anchor.top;
+                let y_hi = (w.bottom - anchor.bottom).max(y_lo);
                 x = x.clamp(x_lo, x_hi);
                 y = y.clamp(y_lo, y_hi);
                 // M4.1：peek 位置经比例还原 + clamp 后停在「半出屏」处，这里推回吸附位
-                if let Some(edge) = s.dock {
+                if let Some(edge) = s.dock.filter(|_| !hide) {
                     // DPI(2026-10-05)：`c` 是 `character_local_rect()`（**基准 96 DPI 口径**，
                     // 未按 DPI 缩放）⇒ margin 必须与 role **同源**，这里用基准 `DOCK_MARGIN_PX`。
                     // 物理口径的吸附位校准不在此层：恢复期拿不到 hwnd（`GetDpiForWindow` 需要它），
@@ -268,7 +297,7 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
                         y = ny;
                     }
                 }
-                if pos_visible((x, y)) {
+                if visible((x, y)) {
                     pet_log_line(&format!(
                         "[native-pet] pet.json v2 restored by ratio rx={:.3} ry={:.3} -> {},{} (dock={:?})\n",
                         s.rx, s.ry, x, y, s.dock
@@ -277,12 +306,12 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
                 }
             }
             // ② 工作区已变 → 绝对坐标兜底
-            if pos_visible((s.x, s.y)) {
+            if visible((s.x, s.y)) {
                 let mut pos = (s.x, s.y);
-                // M4.1：绝对兜底也要吸附（按角色中心所在工作区算边；找不到就不推，保持原位）
-                if let Some(edge) = s.dock {
-                    let ccx = pos.0 + (c.left + c.right) / 2;
-                    let ccy = pos.1 + (c.top + c.bottom) / 2;
+                // M4.1：绝对兜底也要吸附（按锚点中心所在工作区算边；找不到就不推，保持原位）
+                if let Some(edge) = s.dock.filter(|_| !hide) {
+                    let ccx = pos.0 + cx_off;
+                    let ccy = pos.1 + cy_off;
                     if let Some(w) = monitor_workspaces()
                         .into_iter()
                         .find(|r| ccx >= r.left && ccx < r.right && ccy >= r.top && ccy < r.bottom)
@@ -335,14 +364,21 @@ pub(crate) fn initial_pet_state() -> (i32, i32, bool, Option<crate::pet_native::
 }
 
 /// R3：保存——按「角色可见区域中心」求比例与屏幕身份；同时写入绝对坐标作兜底。
+///
+/// R18（2026-10-17）：`hide = true` 时改按**球心**求比例——悬浮球会被拖到角色矩形
+/// 放不下的位置（屏幕底角等），按角色中心存会把球的位置在重启时搬到别处。
+/// 与 `initial_pet_state` 的锚点切换必须同批（存/恢复两侧口径一致才能 round-trip）。
 pub(crate) fn save_pet_pos(
     pos: (i32, i32),
     hide: bool,
     dock: Option<crate::pet_native::model::DockEdge>,
 ) {
-    let c = character_local_rect();
-    let cx = pos.0 + (c.left + c.right) / 2;
-    let cy = pos.1 + (c.top + c.bottom) / 2;
+    let (cx, cy) = if hide {
+        (pos.0 + DOT_SIZE / 2, pos.1 + DOT_SIZE / 2)
+    } else {
+        let c = character_local_rect();
+        (pos.0 + (c.left + c.right) / 2, pos.1 + (c.top + c.bottom) / 2)
+    };
     let (work, rx, ry) = match containing_work(cx, cy) {
         Some(w) => {
             let ww = w.width().max(1) as f64;

@@ -158,6 +158,36 @@ pub(crate) fn squash_scales(p: f32, scale: f32) -> (f32, f32) {
     (1.0 + SQUASH_DX * k, 1.0 - SQUASH_DY * k)
 }
 
+/* ---------------- R18 · 拖动反馈（速度驱动形变） ---------------- */
+
+/// R18（2026-10-17，design/2026-10-17-pet-drag-sprint.md §3.1）：拖动中的
+/// 「被拎着走」形变——**窗口速度** → 向运动方向倾斜 + 沿运动方向拉伸/压缩。
+///
+/// 与 `sway_angle` 的分工：摇摆是**时间相位**驱动（静置时也有），lean 是**速度**驱动
+/// （只有拖动/滑停时有）。`compose` 里 `dragged || settling` 时 lean **顶替** sway，
+/// 两者不同时出现 ⇒ 不叠加、不需互相避让（叠加会突破横向余量，见 worst-case 单测）。
+///
+/// 三个刻意的设计：
+/// ① **死区** `DRAG_LEAN_VDEAD`：慢拖/悬停微动的速度噪声大，出形变会「端着发抖」；
+/// ② **倾斜方向取 `vx` 符号**（正向 = 顶部右倾，见 `DrawXform::forward_offset`）——
+///    竖直运动时 `dir_x ≈ 0` 自动不出旋转，只保留拉伸；
+/// ③ **沿运动方向拉伸、垂直方向压缩**（`DX·ax − DY·ay` 的轴分解）——对角运动时两轴
+///    相抵 ≈ 无形变，只留倾斜，不会出现「斜着拉还顺带压扁」的复合违和感。
+pub(crate) fn drag_lean(vx: f32, vy: f32, scale: f32) -> DrawXform {
+    let speed = (vx * vx + vy * vy).sqrt();
+    if !speed.is_finite() || speed < DRAG_LEAN_VDEAD {
+        return DrawXform::IDENTITY;
+    }
+    // t ∈ [0,1]：速度 → 幅度归一（VREF 处满幅；超过也不越限，clamp 兜住）
+    let t = ((speed - DRAG_LEAN_VDEAD) / (DRAG_LEAN_VREF - DRAG_LEAN_VDEAD)).clamp(0.0, 1.0);
+    let (ax, ay) = ((vx / speed).abs(), (vy / speed).abs());
+    let rot = (vx / speed).clamp(-1.0, 1.0) * t * drag_lean_max_rad() * scale;
+    // 沿运动方向拉伸 DX、垂直方向压缩 DY；对角时两轴相抵
+    let sx = 1.0 + t * scale * (DRAG_LEAN_DX * ax - DRAG_LEAN_DY * ay);
+    let sy = 1.0 + t * scale * (DRAG_LEAN_DX * ay - DRAG_LEAN_DY * ax);
+    DrawXform::new(rot, sx, sy)
+}
+
 /* ---------------- M4 · 拖动尾随（弹簧插值） ---------------- */
 
 /// 拖动尾随的一维弹簧状态。
@@ -213,6 +243,8 @@ pub(crate) fn spring_at_target(s: DragSpring, target: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // R18 的最坏情况复算要走 DPI 换算（它们住在 model 模块，xform 本身不依赖它）
+    use crate::pet_native::model::{dpi_scale, scaled_window_size};
     // 动效强度的上限（`sway_layout_margin` 按它算余量，见下方那条测试）。
     use crate::pet_native::settings::MOTION_MAX;
 
@@ -652,5 +684,102 @@ mod tests {
             "子步积分不得越过目标：pos={:.2}（目标 {target}）", s.pos);
         assert!(s.pos > target * 0.3,
             "也不得几乎不动：pos={:.2} —— 100ms 内应走完约 44% 的位移", s.pos);
+    }
+
+    /* ---------------- R18 · drag_lean（拖动反馈） ---------------- */
+
+    /// R18-1：零速与死区内必须回中性——「端着发抖」比没有反馈更糟。
+    #[test]
+    fn drag_lean_is_neutral_at_rest_and_below_deadzone() {
+        assert_eq!(drag_lean(0.0, 0.0, 1.0), DrawXform::IDENTITY);
+        // 死区边界内（含边界值）不出形变
+        assert_eq!(drag_lean(DRAG_LEAN_VDEAD - 1.0, 0.0, 1.0), DrawXform::IDENTITY);
+        assert_eq!(drag_lean(0.0, -(DRAG_LEAN_VDEAD - 1.0), 1.0), DrawXform::IDENTITY);
+        assert_eq!(drag_lean(DRAG_LEAN_VDEAD, 0.0, 1.0), DrawXform::IDENTITY);
+        // 非有限值不得打穿（NaN 速度 ⇒ 中性，而不是污染整帧）
+        assert_eq!(drag_lean(f32::NAN, 0.0, 1.0), DrawXform::IDENTITY);
+        assert_eq!(drag_lean(f32::INFINITY, 0.0, 1.0), DrawXform::IDENTITY);
+    }
+
+    /// R18-2：方向性 + 限幅。倾斜符号跟随水平速度；拉伸沿运动方向；
+    /// 竖直运动不出旋转；`scale=0`（用户关动效）时全归零。
+    #[test]
+    fn drag_lean_is_bounded_and_directional() {
+        let v = DRAG_LEAN_VREF * 2.0; // 超参考速度 ⇒ 必须被 clamp 在限幅内
+        // 向右快拖：顶部右倾（rot > 0）、横向拉伸、纵向压缩
+        let right = drag_lean(v, 0.0, 1.0);
+        assert!(right.rot_rad > 0.0, "向右拖应右倾，实得 {}", right.rot_rad);
+        assert!(right.sx > 1.0 && right.sy < 1.0, "水平运动应横拉纵压：{:?}", right);
+        // 向左：镜像
+        let left = drag_lean(-v, 0.0, 1.0);
+        assert!(left.rot_rad < 0.0 && left.sx > 1.0 && left.sy < 1.0);
+        // 竖直运动：不出旋转，只纵拉横压
+        let down = drag_lean(0.0, v, 1.0);
+        assert_eq!(down.rot_rad, 0.0, "竖直运动不应出旋转（dir_x≈0）");
+        assert!(down.sy > 1.0 && down.sx < 1.0, "竖直运动应纵拉横压：{:?}", down);
+        // 限幅：|rot| ≤ DRAG_LEAN_MAX_DEG，缩放在 XF 夹取内
+        assert!(right.rot_rad <= drag_lean_max_rad() + 1e-6, "倾斜越限：{}", right.rot_rad);
+        assert!((right.sx - 1.0).abs() <= DRAG_LEAN_DX + 1e-6);
+        assert!((right.sy - 1.0).abs() <= DRAG_LEAN_DY + 1e-6);
+        // scale=0 ⇒ 全中性（动效强度关闭时拖动无反馈）
+        assert_eq!(drag_lean(v, v, 0.0), DrawXform::IDENTITY);
+    }
+
+    /// R18-3：**最坏情况不越窗**（横向是硬约束——角色宽 ≈249px 在 286px 窗内，
+    /// 单侧仅 ≈18px 余量；旋转 + 拉伸同时吃它）。
+    ///
+    /// 逐 DPI 复算 `blit_center_bottom` 的真实几何（含 `sway_layout_margin` 与拖动
+    /// 拎起 `DRAG_LIFT_PX` 的负 bob），断言变换后包围盒完整落在窗口内。
+    /// **调 `DRAG_LEAN_MAX_DEG` / `DRAG_LEAN_DX` / `DRAG_LEAN_DY` 之前先跑这条**——
+    /// 它红就意味着高速拖动时角色会被窗口边缘切掉。
+    #[test]
+    fn drag_lean_worst_case_stays_inside_window() {
+        // 逐 DPI 档位复算（含分数档——取整误差只在物理像素上差 <1px）
+        for dpi in [96_u32, 120, 144, 168, 192, 240] {
+            let dpr = dpi_scale(dpi);
+            let (pw, ph) = scaled_window_size(WIN_W, WIN_H, dpi);
+            let cell_h = (CELL_H as f32 * dpr).round() as i32;
+            // 最宽实用帧的宽高比（whale / kurumi 图集格 192×208）
+            let fw = (192.0_f32 / 208.0 * cell_h as f32) as i32;
+            let fh = cell_h;
+            let (fw, fh) = (fw as f32, fh as f32);
+            let x0 = (pw as f32 - fw) / 2.0;
+            // 拖动中的 y0：底部 2px 留白 + 摇摆余量 + 拎起上移（负 bob）
+            let y0 = ph as f32 - fh - 2.0 * dpr - sway_layout_margin(fw) * dpr - DRAG_LIFT_PX * dpr;
+            let v = DRAG_LEAN_VREF * 3.0; // 远超参考速度 = 最坏情况
+            for (vx, vy) in [(v, 0.0), (-v, 0.0), (0.0, v), (0.0, -v), (v, v), (-v, -v)] {
+                let xf = drag_lean(vx, vy, 1.0);
+                let (l, t, r, b) = xf.bounds(fw, fh);
+                let (left, top, right, bottom) = (x0 + l, y0 + t, x0 + r, y0 + b);
+                assert!(left >= 0.0 && right <= pw as f32,
+                    "dpi={dpi} v=({vx},{vy})：横向越窗 [{left:.1}, {right:.1}] vs 窗宽 {pw}");
+                assert!(top >= 0.0 && bottom <= ph as f32,
+                    "dpi={dpi} v=({vx},{vy})：纵向越窗 [{top:.1}, {bottom:.1}] vs 窗高 {ph}");
+            }
+        }
+    }
+
+    /// R18-4：与摇摆**不叠加**的契约在 compose 侧执行（dragged/settling 时 lean 顶替
+    /// sway）；这里钉住数学侧的事实：两者若叠加，最坏情况必越窗——即「顶替」不是风格
+    /// 选择，是几何必需。
+    #[test]
+    fn lean_plus_sway_would_overflow_so_they_are_exclusive() {
+        let dpr = dpi_scale(96);
+        let (pw, _ph) = scaled_window_size(WIN_W, WIN_H, 96);
+        let cell_h = (CELL_H as f32 * dpr).round() as i32;
+        let fw = (192.0_f32 / 208.0 * cell_h as f32) as i32 as f32;
+        let fh = cell_h as f32;
+        let x0 = (pw as f32 - fw) / 2.0;
+        // 摆动到右极值 + 同向右快拖的 lean 叠加（合成角 = 两者之和）
+        let combined = DrawXform::new(
+            sway_max_rad() + drag_lean(DRAG_LEAN_VREF * 2.0, 0.0, 1.0).rot_rad,
+            drag_lean(DRAG_LEAN_VREF * 2.0, 0.0, 1.0).sx,
+            drag_lean(DRAG_LEAN_VREF * 2.0, 0.0, 1.0).sy,
+        );
+        let (_l, _t, r, _b) = combined.bounds(fw, fh);
+        assert!(x0 + r > pw as f32,
+            "叠加后本应越窗（实测右沿 {:.1} vs {}）—— 若不再越窗，说明 lean/摇摆参数被改小，\
+             本条的前提失效，应同步复核 compose 的「顶替」逻辑是否还需要",
+            x0 + r, pw);
     }
 }

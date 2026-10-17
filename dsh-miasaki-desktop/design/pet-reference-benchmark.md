@@ -596,4 +596,65 @@ Rust 改了而面板没改是这类改动的典型漏半边，本批已用测试
 | **L1 M4 拖动尾随** | v5-motion-plan §6 待拍板第 3 条（含前置 R13 拖动合帧） |
 | **M4.1 边缘停靠** | 用户核心诉求，R3 已先行铺好 `pos_visible` 判据 |
 
+---
+
+## 9. R18 · 社区新参考对标：Coopanion / GarfieldZhung 的拖动（2026-10-17）
+
+> 触发：用户「桌宠拖动和悬浮球拖动是最近发现的明显问题」并给出四个仓库。
+> 证据：四个仓库的浅克隆留档 `_refs/{coopanion,garfield-whale,whale-icon,whale-resources}/`
+> （一次性档案，已 ignore；本文引用均为仓库原文，`文件:行号` 可回溯）。
+> 落地： [`2026-10-17-pet-drag-sprint.md`](2026-10-17-pet-drag-sprint.md)（R18）。
+
+**四个仓库的实质（先分流，别把资源库当代码抄）**：
+
+| 仓库 | 语言/形态 | 与拖动的相关性 |
+|---|---|---|
+| `Pal-AI-Lab/Coopanion`（351★，10-17 仍活跃） | TypeScript + Electron，桌宠 World 在 `packages/cortico-world-desktop-pet/` | **最相关**：完整的拖动/持有/反馈链路 |
+| `GarfieldZhung/DeepSeek-Whale-Girl`（9★） | JavaScript + Electron 鲸鱼娘 | 相关：最简可跑的拖动实现 |
+| `fornarwhal/deepseek-whale-girl-icon`（281★） | 纯图标资产（ico/png） | **无关**（DSH 的 whale 品牌图标，我方已有 `shortcut_icon.rs`） |
+| `TreapGoGo/deepseek-whale-girl`（412★） | HTML 素材资源库 | **无关**（角色参考图/提示词，无代码） |
+
+**R18-1 鼠标租约（Coopanion `host/mouse-lease.cjs`，全文 56 行）**：
+桌宠窗口覆盖**整个工作区**（`electron-main.cjs:333` 的 `width/height = 工作区`），
+常态 `setIgnoreMouseEvents(true, { forward: true })` 全局让穿；页面逐帧命中自检后经
+`pet:interactive` IPC **申报持有**，租约 1500ms、每次光标报告续租、停止报告即失效，
+ verdict 每 2000ms 重断言一次（注释写明：「X 输入形状不随窗口映射存活」）。
+**向我方的迁移判据**：我方是**角色尺寸小窗 + 10ms 命中轮询**（R2），
+光标在窗外时窗口本来就收不到消息 —— 租约要解决的「大窗让穿」问题在我方**不存在**。
+⇒ **不迁移**（P2 架构收敛时再说，见 sprint §1）。
+
+**R18-2 起拖阈值与拎起反馈（Coopanion `web/kit/body.js:731`）**：
+`if (press && pet.mode !== 'drag' && Math.hypot(p.x - press.x, p.y - press.y) > 6) grab()`
+—— 6px **欧氏**起拖；`grab()`（`:705`）进入 `drag` 态：身体从**抓取点（后颈皮）垂下**、
+`stretch` 插值到 1（`:556`）、换 `dragged` 表情（被拎起 >_<）、禁止其他动作
+（`busy()`：drag/air/crouch 期间拒播动作）。松手分 `drop`（原地落下）与 `throw`
+（按指针速度抛出手，进 `air` 态受重力）。
+**采纳**：6px 阈值口径（悬浮球 `DOT_DRAG_THRESHOLD = 6`；我方主窗 4 是曼哈顿和、
+沿用现状）；「拖动态必须有专属反馈」的理念（我方 `xform::drag_lean` 的零素材对应物）。
+**不采纳**：后颈皮垂挂（需骨骼 rig，我方是 Sprite 图集）、throw 物理（L2）。
+
+**R18-3 跨屏跟随（Coopanion `electron-main.cjs:449` `pet:followCursor`）**：
+拖到窗口外 ⇒ 页面经 IPC 问主进程，主进程把**整窗搬到光标所在显示器**并回传新坐标系
+下的光标偏移（`dx/dy`），页面把拖拽目标平移过去。
+**向我方的迁移判据**：我方窗口是**角色尺寸小窗**、拖动直接 `MoveWindow` 到绝对坐标，
+跨屏天然成立（`WM_DPICHANGED` 另有 `apply_dpi` 处理缩放）⇒ **不需要**该机制
+（它是「大窗覆盖单屏」架构的必需件，对我方是空转）。
+
+**R18-4 直设位置（GarfieldZhung `electron/main.cjs:410-421`）**：
+长按 **360ms** 起拖（与点击/抚摸解手势）⇒ 渲染进程 `beginDrag` ⇒ 主进程记
+`{cursor, bounds}` 锚点，**16ms 定时器读光标直设位置**（`setPosition(anchor + cursor − anchorCursor)`）。
+拖动态换「放我下来！」表情 + `translateY/rotate` 摇摆动画（`styles.css:18-26`）。
+**采纳**：直设位置（**悬浮球无弹簧直跟手**的同构先例——球要精确放置）；
+「拖动态换表情/动画」再次确认反馈必要性。
+**不采纳**：长按 360ms（我方 4px 位移阈值更直接，且球的单击是重语义、
+用 6px 阈值而非长按来防误触）。
+
+**R18-5 对我方两条链路的状态认定（本轮诊断的一手证据）**：
+`pet.log`（10-14 部署版）：最近 10 次拖动全部 `drag start`→`drag end` 成对、
+停靠正常（`dock=Some(Right)` 等）；733 次 `drag aborted` **全部**停留在 R17 修复前的
+历史段。⇒ 主窗拖动的崩溃类缺陷（R13/M4/R16/R17/E30/E31）已修完，
+**悬浮球拖动才是硬断链**（`dot_proc` 此前零拖动代码）。「两条都是明显问题」
+的表述下其实是**一个断链 + 一个反馈空白**，处置因此分成 P0（球拖动从 0 到 1）
+与 P1（主窗反馈 + 滑停）两档，见 sprint 文档。
+
 

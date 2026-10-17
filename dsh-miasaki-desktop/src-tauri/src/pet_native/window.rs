@@ -92,6 +92,25 @@ pub(crate) struct PetWin {
     last_peek_tick: std::time::Instant,
     dragging_timer_on: bool,
     dragged: bool,
+    /// R18（2026-10-17）：松手滑停中——`WM_LBUTTONUP` 不清目标、不 snap，
+    /// `IDT_DRAG` 续跑到弹簧双轴到位后由 `drag_settle_tick` 收尾落盘。
+    /// 存在理由：快速甩动后弹簧还剩几十 px 残余滞后，旧实现松手瞬间 `MoveWindow`
+    /// 到目标 = 可见前跳。
+    drag_settling: bool,
+    /// R18：弹簧当前速度（px/s，x/y）——`flush_drag_target` 每拍写入，compose 据此算
+    /// 拖动倾斜/拉伸（`xform::drag_lean`）。未拖动/滑停收尾后恒 `(0,0)`。
+    drag_vel: (f32, f32),
+    /// R18：悬浮球拖动合帧的最新绝对目标（球**无弹簧**、直跟手；合帧只为省 MoveWindow）。
+    dot_drag_target: Option<(i32, i32)>,
+    /// R18：悬浮球是否已越过拖动阈值——`WM_LBUTTONUP` 的分流判据：
+    /// 拖过 ⇒ `end_dot_drag` 落盘留在新点；未拖过 ⇒ `show_self` 恢复桌宠（原语义）。
+    dot_dragged: bool,
+    /// R18：悬浮球拖动的按下点（屏幕坐标）。与主窗 `press_pt` 分立——两个 hwnd
+    /// 不会同时收到鼠标消息（球可见时主窗隐藏），但共用一个 `PetWin`，必须分开存。
+    dot_press_pt: (i32, i32),
+    /// R18：`IDT_DOT_DRAG` 是否已挂（同主窗 `dragging_timer_on`：只挂一次，
+    /// 逐事件重挂会把节拍永远往后推 ⇒ 合帧失效）。
+    dot_dragging_timer_on: bool,
     pos: (i32, i32),
     /// 主窗口当前实际显示状态（与 shared.hide 同步；show/hide 切换由 compose 单线程执行）。
     shown: bool,
@@ -326,7 +345,15 @@ impl PetWin {
             // 于是拖动恰好跨过 45–120s 的散步时点时会出「桌宠自己横向走」：
             // wander 每帧直接改 `self.pos.0`（`WANDER_PX_PER_FRAME`×2 处），
             // 而拖动读的也是 `self.pos` ⇒ 两者抢同一个量。
-            if can_walk && !blocked && self.docked_edge.is_none() && !self.dragged {
+            // R18（2026-10-17）：**再补 `!self.drag_settling`** —— 松手滑停的 ≤300ms 内
+            // `dragged` 已清零，但 `IDT_DRAG` 还在按弹簧推窗口；此时起 wander 就是
+            // 「两个位移源抢 `self.pos`」（与 R16 同型，只是窗口从起手换成了滑停）。
+            if can_walk
+                && !blocked
+                && self.docked_edge.is_none()
+                && !self.dragged
+                && !self.drag_settling
+            {
                 let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
                 self.action = Some(ActionSlot {
                     action: Action::Wander { dx: dir },
@@ -439,6 +466,9 @@ impl PetWin {
             // （`is_transparent_at` 查的就是本段写出的 `buf`，无需任何配套改动；订正说明见 xform.rs 头部）。
             // 相位函数都是纯函数（入参只有毫秒数），此处只负责取时刻与推进脉冲状态。
             let t_ms = now_ms();
+            // R18：拖动拎起抬升按物理像素折算（与 `blit_center_bottom` 里
+            // `sway_layout_margin(fw) * dpr` 同一口径——mix 逻辑/物理会差一个缩放）。
+            let dpr = dpi_scale(self.dpi);
             // M3 挤压脉冲：Done 庆祝 / jump 落地各起一次，`SQUASH_MS` 内推进；**到期即清**。
             let squash_p = match self.squash_start {
                 Some(t0) => {
@@ -575,16 +605,23 @@ impl PetWin {
                     // 死图，「反转狂三是一张不会动的画」说的正是这条。立绘分支**不看动作槽**：
                     // 动作槽在这条分支上没有任何视觉表达（inverse 不可散步、ambient 行也不被消费），
                     // 看它只会让呼吸莫名其妙地停一拍。
-                    let bob = breath_offset(t_ms, BREATH_PX_STATES, motion);
+                    let mut bob = breath_offset(t_ms, BREATH_PX_STATES, motion);
                     // L1(v5) M2：摇摆给 idle / work —— inverse 因此第一次真正「活起来」。
                     // deep 档**只呼吸不摇摆**：那是深度推理档，取「凝神」语义，与 whale deep
                     // 保留立绘覆盖同一取舍（强度档优先表达档位，不再叠姿态噪声）。
-                    let sway = if can_sway && matches!(key, "idle" | "work") {
+                    // R18：拖动中 lean **顶替**摇摆 + 拎起微抬升（零素材反馈，见
+                    // `drag_lean_now` / `xform::drag_lean`；不叠加的理由见该函数注释）。
+                    let (lean_xf, lifting) =
+                        if can_sway { self.drag_lean_now(motion) } else { (DrawXform::IDENTITY, false) };
+                    let sway = if can_sway && !lifting && matches!(key, "idle" | "work") {
                         sway_angle(t_ms, motion)
                     } else {
                         0.0
                     };
-                    let xf = DrawXform::new(sway, sq_sx, sq_sy);
+                    if lifting {
+                        bob -= DRAG_LIFT_PX * dpr;
+                    }
+                    let xf = if lifting { lean_xf } else { DrawXform::new(sway, sq_sx, sq_sy) };
                     if list.len() > 1 {
                         // v2:帧序列状态(idle.gif 拆帧),6fps 循环 + bob
                         self.anim_ms = 1000 / 6;
@@ -637,16 +674,22 @@ impl PetWin {
                     // 有动作槽（jump/wave/ambient/wander）时不呼吸：动作本身已经在动，
                     // 且此时的 `bob` 会与帧内位移叠加成抖。
                     let calm = self.action.is_none();
-                    let bob = if calm { breath_offset(t_ms, BREATH_PX_ROW, motion) } else { 0.0 };
+                    let mut bob = if calm { breath_offset(t_ms, BREATH_PX_ROW, motion) } else { 0.0 };
                     // L1(v5) M2：摇摆给 idle（长静置）与 run（打字时轻微起伏）；
                     // 其余是限时动作/事件帧（jump/wave/failed/wait/runRight/runLeft），
                     // 帧内自带位移，再叠旋转会与动作打架，故不接。
-                    let sway = if can_sway && calm && matches!(row.as_str(), "idle" | "run") {
+                    // R18：拖动中 lean 顶替摇摆 + 拎起微抬升（同立绘分支口径）。
+                    let (lean_xf, lifting) =
+                        if can_sway { self.drag_lean_now(motion) } else { (DrawXform::IDENTITY, false) };
+                    let sway = if can_sway && !lifting && calm && matches!(row.as_str(), "idle" | "run") {
                         sway_angle(t_ms, motion)
                     } else {
                         0.0
                     };
-                    let xf = DrawXform::new(sway, sq_sx, sq_sy);
+                    if lifting {
+                        bob -= DRAG_LIFT_PX * dpr;
+                    }
+                    let xf = if lifting { lean_xf } else { DrawXform::new(sway, sq_sx, sq_sy) };
                     self.blit_center_bottom(&list[idx % list.len()], bob, 1.0, &xf);
                 }
             }
@@ -963,8 +1006,10 @@ impl PetWin {
     /// R2:按光标位置切换 `WS_EX_TRANSPARENT`（由 10ms 轮询定时器驱动）。
     /// **必须轮询**：一旦置位穿透，本窗口收不到鼠标消息，「何时恢复可点击」无从由事件得知。
     /// 规则：隐藏 / 拖拽中恒不穿透（保证跟手与恢复入口可用），其余按命中结果切换。
+    /// R18：滑停（松手后 ≤300ms 的自然滑行）也算「拖拽中」——那期间窗口还在动，
+    /// 穿透态切换与移动叠在一起没有意义，且用户可能立刻再次按下。
     fn update_click_through(&mut self) {
-        if !self.shown || self.dragged {
+        if !self.shown || self.dragged || self.drag_settling {
             self.set_click_through(false);
             return;
         }
@@ -1068,6 +1113,70 @@ impl PetWin {
         blit_dot(self.dot_hwnd, self.pos, &self.dot_buf);
     }
 
+    /* ---------------- R18（2026-10-17）：悬浮球拖动 ---------------- */
+
+    /// R18：球拖动合帧消费——把球（与隐藏中的主窗）移到最新目标。返回是否真的移动了。
+    ///
+    /// **球不叠弹簧**（与主窗 M4 的刻意分歧）：56px 功能入口要「指哪打哪」的精确放置，
+    /// 弹簧滞后在小球上读作发飘；合帧只为省 `MoveWindow`（1000Hz 鼠标 = 每秒千次重定位）。
+    /// 参考侧同口径：GarfieldZhung 主进程 16ms 光标轮询直设位置，无弹簧。
+    ///
+    /// **为什么主窗也要一起动**：显隐切换只 `ShowWindow` 不移动（`compose` 显隐分支）。
+    /// 球拖到新点后若主窗停在旧位，单击恢复时桌宠会出现在旧位置——「球与桌宠脱节」。
+    fn flush_dot_drag_target(&mut self) -> bool {
+        let target = match self.dot_drag_target {
+            Some(t) => t,
+            None => return false,
+        };
+        if target == self.pos {
+            return false;
+        }
+        let (ww, wh) = self.win_size();
+        unsafe {
+            MoveWindow(self.dot_hwnd, target.0, target.1, DOT_SIZE, DOT_SIZE, 0);
+            MoveWindow(self.hwnd, target.0, target.1, ww, wh, 0);
+        }
+        self.pos = target;
+        true
+    }
+
+    /// R18：球松手收尾——停表 + 出屏兜底 + 落盘。
+    ///
+    /// `dock = None`：球**不停靠**（停靠/peek 是桌宠的空间语义；且 `save_pet_pos`
+    /// 在 `hide = true` 时按**球心**存比例，见 persist.rs R18 段）。
+    /// 出屏兜底（E30 教训）：球心不在任何工作区 ⇒ 回默认位——球是隐藏态**唯一**入口，
+    /// 出屏 = 用户弄不回来（主窗还有托盘/面板兜底，球没有）。
+    fn end_dot_drag(&mut self) {
+        if self.dot_dragging_timer_on {
+            unsafe { KillTimer(self.dot_hwnd, IDT_DOT_DRAG) };
+            self.dot_dragging_timer_on = false;
+        }
+        let hide = self.shared.lock().map(|s| s.hide).unwrap_or(true);
+        let keepable = ball_pos_visible(self.pos);
+        if !keepable {
+            let p = default_pos();
+            self.pos = p;
+            let (ww, wh) = self.win_size();
+            unsafe {
+                MoveWindow(self.dot_hwnd, p.0, p.1, DOT_SIZE, DOT_SIZE, 0);
+                MoveWindow(self.hwnd, p.0, p.1, ww, wh, 0);
+            }
+        }
+        self.dot_drag_target = None;
+        save_pet_pos(self.pos, hide, None);
+        if keepable {
+            pet_log_line(&format!(
+                "[native-pet] dot drag end -> ({},{})\n",
+                self.pos.0, self.pos.1
+            ));
+        } else {
+            pet_log_line(&format!(
+                "[native-pet] dot drag end -> default {},{} (offscreen fallback)\n",
+                self.pos.0, self.pos.1
+            ));
+        }
+    }
+
     /// 悬浮球局部坐标处是否「透明」（= 让鼠标穿透到下层窗口）。
     /// 判据与 R2 主窗同口径（查最终合成缓冲 / 阈值 `CLICK_THROUGH_ALPHA`）——56px 方窗的
     /// 四角与发光外沿因此不吃点击，球从 30px 紫点放大后不会长出一片「隐形挡板」。
@@ -1083,10 +1192,15 @@ impl PetWin {
     ///
     /// 规则：桌宠可见（球隐藏）恒不穿透——不留一个看不见却吃点击的方窗；
     /// 球可见时按命中切换穿透，并用**同一命中**更新悬停态（悬停 → 放大 + 光晕增强）。
+    /// R18：球拖动中恒不穿透且**冻结悬停态**——光标「拿着」球，此时若按命中轮询
+    /// 切换穿透，快速拖动会把球设成穿透态（与主窗 `update_click_through` 的
+    /// `dragged` 早退同构）。
     fn update_dot_hit(&mut self) {
-        if self.shown {
+        if self.shown || self.dot_dragged {
             self.set_dot_click_through(false);
-            self.dot_hover = false; // 球不可见：清态即可，不必重绘
+            if self.shown {
+                self.dot_hover = false; // 球不可见：清态即可，不必重绘
+            }
             return;
         }
         let mut p = Point { x: 0, y: 0 };
@@ -1473,6 +1587,10 @@ impl PetWin {
         let ny = sy.pos.round() as i32;
         self.drag_spring_x = Some(sx);
         self.drag_spring_y = Some(sy);
+        // R18：把弹簧速度暴露给 compose——拖动倾斜/拉伸（`xform::drag_lean`）的输入。
+        // 用弹簧速度而非光标速度：形变要反映**窗口真实运动**（松手滑停时光标已停，
+        // 但窗口还在滑，形变应随窗口衰减而不是随光标突停）。
+        self.drag_vel = (sx.vel, sy.vel);
         if nx == self.pos.0 && ny == self.pos.1 {
             return false; // 亚像素级移动 ⇒ 不惊动窗口
         }
@@ -1488,7 +1606,17 @@ impl PetWin {
     /// （渐近逼近），而落盘位置必须**精确等于**用户看到的目标 —— 否则
     /// 「松手后桌宠停在离光标 0.4px 处」看着没事，但下次启动位置就偏了。
     /// ⇒ 松手走「直接对齐 + 速度清零」，不继续积分。
+    ///
+    /// **R18（2026-10-17）修订**：正常松手路径已改为 `release_drag`（滑停，见其注释），
+    /// 本函数现在只服务两条**立即收尾**路径：① `WM_LBUTTONDOWN` 的残留清理；
+    /// ② `WM_CAPTURECHANGED` 的捕获丢失兜底（失败路径优先 robustness，不追加滑停复杂度）。
+    /// 另一处新增行为：滑停中被再次按下 ⇒ 先 `finish_drag_settle` 落盘再清状态
+    /// （否则窗口停在新位置而 pet.json 还是旧值，下次启动桌宠跳回旧位）。
     fn end_drag(&mut self) {
+        if self.drag_settling {
+            self.finish_drag_settle();
+            return; // finish 已清空目标/弹簧/定时器/滑停标志
+        }
         if self.dragging_timer_on {
             unsafe { KillTimer(self.hwnd, IDT_DRAG) };
             self.dragging_timer_on = false;
@@ -1501,6 +1629,80 @@ impl PetWin {
         self.drag_target = None;
         self.drag_spring_x = None;
         self.drag_spring_y = None;
+        self.drag_vel = (0.0, 0.0);
+    }
+
+    /// R18（2026-10-17）：松手（正常路径）——**不强制对齐目标、不当拍落盘**。
+    ///
+    /// 旧实现在 `WM_LBUTTONUP` 里直接 `end_drag()`（`MoveWindow` 到 `drag_target`）：
+    /// 快速甩动后弹簧还剩几十 px 残余滞后 ⇒ 松手瞬间**前跳**（参考实现同款做法是
+    /// 「扔出去」——GarfieldZhung 直跟手无此问题、Coopanion 有 throw 物理；我方取
+    /// 「滑停」这条中间路线：不引入抛掷物理，但消除前跳）。
+    ///
+    /// 机制：目标与弹簧保留，`IDT_DRAG` 续跑，弹簧自然收敛（k=220 时 250ms 内
+    /// 残余 <1px），由 `drag_settle_tick` 在双轴到位时收尾。慢拖/点一下（松手时
+    /// 已到位）首拍即收尾，行为与旧版无差异。
+    /// 异常态（目标/弹簧已清）⇒ 立即按现状收尾，不留半拖状态。
+    fn release_drag(&mut self) {
+        self.dragged = false;
+        if self.drag_target.is_some() && self.drag_spring_x.is_some() && self.drag_spring_y.is_some() {
+            self.drag_settling = true;
+            return;
+        }
+        self.finish_drag_settle();
+    }
+
+    /// R18：滑停收尾——停表、清拖动状态、停靠判定 + 落盘。
+    /// 新不变量：「**落盘位置 = 用户看到的停止位置**」（取代 R13 的「落盘 = 逻辑目标」，
+    /// 两者差 ≤1px，但滑停无前跳）。`apply_dock` 在落盘**之前**——落盘要记吸附后的位置。
+    fn finish_drag_settle(&mut self) {
+        if self.dragging_timer_on {
+            unsafe { KillTimer(self.hwnd, IDT_DRAG) };
+            self.dragging_timer_on = false;
+        }
+        self.drag_settling = false;
+        self.drag_target = None;
+        self.drag_spring_x = None;
+        self.drag_spring_y = None;
+        self.drag_vel = (0.0, 0.0);
+        let docked = self.apply_dock();
+        let hide = self.shared.lock().map(|s| s.hide).unwrap_or(false);
+        save_pet_pos(self.pos, hide, docked);
+        self.render_dot();
+        pet_log_line(&format!(
+            "[native-pet] drag end -> ({},{}) dock={:?}\n",
+            self.pos.0, self.pos.1, docked
+        ));
+    }
+
+    /// R18：滑停节拍检查（`IDT_DRAG` 每拍调）——弹簧双轴到位即收尾。
+    /// 与 `flush_drag_target` 分工：那个管「移动」，这个管「何时结束」。
+    fn drag_settle_tick(&mut self) {
+        if !self.drag_settling {
+            return;
+        }
+        let settled = match (self.drag_target, self.drag_spring_x, self.drag_spring_y) {
+            (Some(t), Some(sx), Some(sy)) => {
+                spring_at_target(sx, t.0 as f32) && spring_at_target(sy, t.1 as f32)
+            }
+            _ => true, // 目标/弹簧已清（异常路径）⇒ 按现状收尾
+        };
+        if settled {
+            self.finish_drag_settle();
+        }
+    }
+
+    /// R18：拖动反馈值（`compose` 两个绘制分支共用，见 `xform::drag_lean`）。
+    ///
+    /// 返回 `(xf, lifting)`：`lifting = true` 表示本帧处于拖动/滑停，调用方据此
+    /// **关掉摇摆**（lean 顶替、不叠加——叠加会突破横向余量，由 `xform.rs` 的
+    /// `lean_plus_sway_would_overflow_so_they_are_exclusive` 钉住）并加拎起抬升。
+    fn drag_lean_now(&self, motion: f32) -> (DrawXform, bool) {
+        if self.dragged || self.drag_settling {
+            (drag_lean(self.drag_vel.0, self.drag_vel.1, motion), true)
+        } else {
+            (DrawXform::IDENTITY, false)
+        }
     }
 
     /// M4.1：松手时判定边缘停靠，把窗口沿命中的边推出，返回该边（未命中则 `None`）。
@@ -1708,6 +1910,9 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                 if (*pet).flush_drag_target() {
                     (*pet).render_dot();
                 }
+                // R18：滑停节拍——松手后续跑到弹簧双轴到位才收尾落盘（消前跳）。
+                // 不在拖动也不在滑停时是零开销早退。
+                (*pet).drag_settle_tick();
                 0
             } else if wp == IDT_PEEK {
                 // M4.1:peek 边界检测（静置到期 / 光标压上）；动画推进在 compose 节拍
@@ -1795,8 +2000,8 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                         ));
                         (*pet).press_pt = (p.x, p.y);
                     }
-                } else if dx.abs() + dy.abs() > 4 {
-                    // —— 阈值判定为「开始拖动」（沿用既有 `DRAG_THRESHOLD` 口径）
+                } else if drag_should_start((dx, dy), DRAG_THRESHOLD) {
+                    // —— 阈值判定为「开始拖动」（口径见 `model::drag_should_start`）
                     (*pet).dragged = true;
                     // M4.1（R14 教训②）：拖动即脱离 peek/停靠——探头期间的全部位移来源
                     // 都要让位给拖动目标；松手后 `apply_dock` 按新位置重新判定吸附。
@@ -1899,20 +2104,10 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                     // R16：**先清 `dragged` 再收尾**。末尾的 `ReleaseCapture` 会同步派发
                     // `WM_CAPTURECHANGED`，而那里的兜底以 `dragged` 为判据；先清掉它，
                     // 同一次松手才不会收尾两遍（重复落盘 + 重复吸附）。
-                    (*pet).dragged = false;
-                    // R13：**先 flush 再落盘**。顺序有讲究——`save_pet_pos` 读的是 `(*pet).pos`，
-                    // 若此时目标还压在 `drag_target` 里，落盘的就是上一拍的位置（松手漂移）。
-                    (*pet).end_drag();
-                    // M4.1：松手时判定边缘停靠并推出。**在落盘之前**做——落盘要记的是吸附后的位置。
-                    let docked = (*pet).apply_dock();
-                    let hide = (*pet).shared.lock().map(|s| s.hide).unwrap_or(false);
-                    save_pet_pos((*pet).pos, hide, docked);
-                    // M1.4:拖动结束同步悬浮球(隐藏后恢复入口与桌宠位置不脱节,D6)
-                    (*pet).render_dot();
-                    pet_log_line(&format!(
-                        "[native-pet] drag end -> ({},{}) dock={:?}\n",
-                        (*pet).pos.0, (*pet).pos.1, docked
-                    ));
+                    // R18：收尾本体 = `release_drag`（滑停：不 snap、不当拍落盘，
+                    // IDT_DRAG 续跑到弹簧到位由 `drag_settle_tick` 收尾）——它内部
+                    // 先清 `dragged` 再起滑停，R16 的排序纪律不变。
+                    (*pet).release_drag();
                 }
             }
             unsafe { ReleaseCapture() };
@@ -1985,10 +2180,15 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
     }
 }
 
-/// 悬浮球窗口过程。
+/// 悬浮球窗口过程（R18，2026-10-17 起支持拖动）。
 ///
-/// - 左键抬起 = 恢复桌宠（只写 `shared.hide`，显隐与落盘由 compose 在窗口线程统一执行）；
+/// - 左键**抬起**的分流（`WM_LBUTTONUP`）：拖过阈值 ⇒ `end_dot_drag`（球留在新点并落盘）；
+///   没拖过 ⇒ `show_self`（恢复桌宠——原语义，只写 `shared.hide`，显隐与落盘由 compose
+///   在窗口线程统一执行）；
+/// - `WM_LBUTTONDOWN` / `WM_MOUSEMOVE` = 拖动（判据全部照主窗 R16/R17 同款：DOWN 捕获、
+///   阈值起手、合帧消费、`WM_CAPTURECHANGED` 兜底，见各分支注释）；
 /// - `IDT_HIT` 定时器 = 悬停 / 穿透轮询（R2 范式：命中球面即放大，透明处即穿透）；
+/// - `IDT_DOT_DRAG` 定时器 = 拖动合帧消费（8ms，直跟手无弹簧）；
 /// - 其余消息交默认处理（`WM_PAINT` 无意义——内容全由 ULW 推送）。
 unsafe extern "system" fn dot_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) -> isize {
     let pet = get_pet(hwnd);
@@ -1996,20 +2196,106 @@ unsafe extern "system" fn dot_proc(hwnd: isize, msg: u32, wp: usize, lp: isize) 
         return DefWindowProcW(hwnd, msg, wp, lp);
     }
     match msg {
+        WM_LBUTTONDOWN => {
+            // R18：拖动起点——捕获 + 记按下点。不碰任何主窗状态（球可见时主窗隐藏，
+            // 两个 hwnd 不会同时交互；字段仍分立，见 PetWin::dot_press_pt 注释）。
+            (*pet).last_interaction = std::time::Instant::now();
+            let mut p = Point { x: 0, y: 0 };
+            GetCursorPos(&mut p);
+            (*pet).dot_press_pt = (p.x, p.y);
+            (*pet).dot_dragged = false;
+            // R17 同款判据：**只在确实没持有捕获时才捕**。无脑重捕会给本窗口重发
+            // `WM_CAPTURECHANGED`（同一窗口重复 SetCapture 的系统行为，主窗 10-13 实测），
+            // 而下面的兜底分支以 `dot_dragged` 为判据——自我重发会把刚置上的 true 打回去。
+            if unsafe { GetCapture() } != hwnd {
+                unsafe { SetCapture(hwnd) };
+            }
+            0
+        }
+        WM_MOUSEMOVE => {
+            if wp & MK_LBUTTON != 0 {
+                let mut p = Point { x: 0, y: 0 };
+                GetCursorPos(&mut p);
+                let dx = p.x - (*pet).dot_press_pt.0;
+                let dy = p.y - (*pet).dot_press_pt.1;
+                if (*pet).dot_dragged {
+                    // 已在拖动中：增量推进到逻辑目标（纯函数见 `model::advance_drag_target`
+                    // ——基准用「上一逻辑目标」而不是窗口实时位置，合帧下不丢位移）
+                    if dx != 0 || dy != 0 {
+                        (*pet).dot_drag_target = Some(advance_drag_target(
+                            (*pet).dot_drag_target,
+                            (*pet).pos,
+                            (dx, dy),
+                        ));
+                        (*pet).dot_press_pt = (p.x, p.y);
+                    }
+                } else if drag_should_start((dx, dy), DOT_DRAG_THRESHOLD) {
+                    // 起手：绝对目标 = 当前位置 + 本事件增量（与主窗同口径）
+                    (*pet).dot_dragged = true;
+                    (*pet).dot_drag_target =
+                        Some(((*pet).pos.0 + dx, (*pet).pos.1 + dy));
+                    (*pet).dot_press_pt = (p.x, p.y);
+                    if !(*pet).dot_dragging_timer_on {
+                        (*pet).dot_dragging_timer_on = true;
+                        if unsafe { SetTimer(hwnd, IDT_DOT_DRAG, DRAG_COALESCE_MS, 0) } == 0 {
+                            pet_log_line(
+                                "[native-pet] dot drag: SetTimer(IDT_DOT_DRAG) 失败 —— 本拍不会消费目标\n",
+                            );
+                        }
+                    }
+                    pet_log_line(&format!(
+                        "[native-pet] dot drag start pos=({},{}) target=({},{})\n",
+                        (*pet).pos.0,
+                        (*pet).pos.1,
+                        (*pet).pos.0 + dx,
+                        (*pet).pos.1 + dy
+                    ));
+                }
+            }
+            0
+        }
         WM_LBUTTONUP => {
-            (*pet).show_self();
+            // R18：**所有出口统一释放捕获**（标签块而非每个 return 前各写一次——
+            // 漏一处的后果是球永久持有捕获，整个系统的鼠标消息都归它）。
+            'up: {
+                if (*pet).dot_dragged {
+                    // 拖过 ⇒ 留在新点（落盘），**不**恢复桌宠
+                    (*pet).dot_dragged = false;
+                    (*pet).end_dot_drag();
+                    break 'up;
+                }
+                // 没拖过 ⇒ 单击恢复（原语义）
+                (*pet).show_self();
+            }
+            unsafe { ReleaseCapture() };
             0
         }
         WM_TIMER => {
             if wp == IDT_HIT {
                 (*pet).update_dot_hit();
                 0
+            } else if wp == IDT_DOT_DRAG {
+                (*pet).flush_dot_drag_target();
+                0
             } else {
                 DefWindowProcW(hwnd, msg, wp, lp)
             }
         }
+        WM_CAPTURECHANGED => {
+            // R17 同款兜底：`WM_LBUTTONUP` 永不到达（捕获被外部夺走）时唯一的收尾路径。
+            // 判据必须同时含 `dot_dragged` 与「捕获真的不在本窗口」——对已持有捕获的窗口
+            // 重复 SetCapture 会向同一窗口重发本消息（自我重发），那时 `GetCapture() == hwnd`，
+            // 按丢失收尾就是自伤（主窗 10-13 实测：733 次 aborted / 0 次 end）。
+            if (*pet).dot_dragged && unsafe { GetCapture() } != hwnd {
+                (*pet).dot_dragged = false;
+                (*pet).end_dot_drag();
+                pet_log_line("[native-pet] dot drag aborted (capture lost)\n");
+            }
+            0
+        }
         WM_DESTROY => {
             KillTimer(hwnd, IDT_HIT); // 命中轮询随本窗口一起停
+            KillTimer(hwnd, IDT_DOT_DRAG); // R18:拖动合帧同理（销毁时可能仍挂着）
             0
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
@@ -2230,6 +2516,12 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             last_peek_tick: std::time::Instant::now(),
             dragging_timer_on: false,
             dragged: false,
+            drag_settling: false,
+            drag_vel: (0.0, 0.0),
+            dot_drag_target: None,
+            dot_dragged: false,
+            dot_press_pt: (0, 0),
+            dot_dragging_timer_on: false,
             pos: (x, y),
             shown: !restore_hide,
         // 冷启动即恢复隐藏态时，悬浮球是否可见取决于托盘档位。
@@ -2384,11 +2676,15 @@ mod tests {
     #[test]
     fn every_setcapture_is_guarded_by_getcapture_check() {
         let src = include_str!("window.rs");
-        // 只看生产代码：本测试模块自身含有 `SetCapture(hwnd)` 字面量（`needle` 变量），
-        // 不排除的话会自我命中（本契约第一次运行就是这么红的 —— 留作教训）。
+        // 只看生产代码：本测试模块自身含有 `SetCapture(` 字面量，不排除会自我命中
+        // （本契约第一次运行就是这么红的 —— 留作教训）。
         let src = src.split("#[cfg(test)]").next().expect("源码非空");
-        let needle = "SetCapture(hwnd)";
         let guard = "GetCapture() } != hwnd";
+        // R18：**形态无关**——扫生产代码里每一处 `SetCapture(`（主窗 DOWN / 主窗起手 /
+        // 悬浮球 DOWN 共三处，都写窗口过程的 `hwnd` 形参，不写 dot_hwnd）。第一版曾把
+        // needle 写死成 `SetCapture(dot_hwnd)`，而 dot_proc 用的是 `hwnd`（与主窗同形）
+        // ⇒ 0 命中被自己抓出来：判据要覆盖「将来可能出现的形态」，不是枚举今天的形态。
+        let needle = "SetCapture(";
         let mut hits = 0usize;
         for (i, _) in src.match_indices(needle) {
             hits += 1;
@@ -2401,8 +2697,8 @@ mod tests {
             );
         }
         assert!(
-            hits >= 2,
-            "捕获点应至少有两处（`WM_LBUTTONDOWN` 与拖动起手），实得 {hits} 处 —— \
+            hits >= 3,
+            "捕获点应至少三处（主窗 DOWN / 主窗起手 / 悬浮球 DOWN），实得 {hits} 处 —— \
              函数被改名/重构时请同步本契约"
         );
     }
@@ -2424,5 +2720,57 @@ mod tests {
             "收尾判据必须同时是 `dragged && GetCapture() != hwnd`：\
              只看 dragged 会把系统对「同一窗口重复 SetCapture」的自我重发当成捕获丢失"
         );
+    }
+    /// R18：`dot_proc` 的 `WM_CAPTURECHANGED` 兜底判据同构（`dot_dragged` + 捕获归属）。
+    #[test]
+    fn dot_capturechanged_settles_only_when_capture_is_really_gone() {
+        let src = include_str!("window.rs");
+        let body = src
+            .split("unsafe extern \"system\" fn dot_proc")
+            .nth(1)
+            .and_then(|s| s.split("fn now_ms").next())
+            .expect("找不到 dot_proc（函数名变了，请同步本契约）");
+        assert!(
+            body.contains("(*pet).dot_dragged && unsafe { GetCapture() } != hwnd"),
+            "dot_proc 的收尾判据必须同时是 `dot_dragged && GetCapture() != hwnd`\
+             （与主窗 R17 同构，理由见 every_setcapture_is_guarded_by_getcapture_check）"
+        );
+    }
+
+    /// R18：球 `WM_LBUTTONUP` 的**分流契约**——拖过走 `end_dot_drag`（落盘留新点）、
+    /// 没拖过走 `show_self`（恢复桌宠，原语义），且所有出口统一 `ReleaseCapture()`
+    /// （漏一处的后果是球永久持有捕获，整个系统的鼠标消息都归它）。
+    #[test]
+    fn dot_up_splits_drag_from_click_and_always_releases_capture() {
+        let src = include_str!("window.rs");
+        let body = src
+            .split("unsafe extern \"system\" fn dot_proc")
+            .nth(1)
+            .and_then(|s| s.split("fn now_ms").next())
+            .expect("找不到 dot_proc");
+        let up = body
+            .split("WM_LBUTTONUP => {")
+            .nth(1)
+            .and_then(|s| s.split("WM_TIMER => {").next())
+            .expect("找不到 dot_proc 的 WM_LBUTTONUP 分支");
+        assert!(up.contains("(*pet).dot_dragged"), "UP 必须先看是否拖过阈值");
+        assert!(up.contains("(*pet).end_dot_drag()"), "拖过 ⇒ 落盘留在新点");
+        assert!(up.contains("(*pet).show_self()"), "没拖过 ⇒ 恢复桌宠（原语义）");
+        assert!(up.contains("ReleaseCapture()"), "UP 的所有出口必须统一释放捕获");
+    }
+
+    /// R18：球拖动必须有出屏兜底与持久化（`end_dot_drag`）——球是隐藏态唯一入口，
+    /// 出屏 = 用户弄不回来（主窗还有托盘/面板兜底，球没有）。
+    #[test]
+    fn dot_drag_end_persists_and_never_leaves_the_ball_offscreen() {
+        let src = include_str!("window.rs");
+        let body = src
+            .split("fn end_dot_drag")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .expect("end_dot_drag 函数体解析失败");
+        assert!(body.contains("ball_pos_visible"), "必须有出屏判据（球心在工作区内）");
+        assert!(body.contains("default_pos()"), "出屏 ⇒ 回默认位");
+        assert!(body.contains("save_pet_pos"), "收尾必须落盘（否则重启位置丢）");
     }
 }
