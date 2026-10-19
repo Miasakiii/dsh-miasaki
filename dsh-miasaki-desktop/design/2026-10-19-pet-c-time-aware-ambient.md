@@ -30,7 +30,7 @@
 
 | 做 | 不做（记录去向） |
 |---|---|
-| `TimeBand` 纯函数 + 边界对齐睡眠段 | 节日/时节切换 → **A 批**（需形象资产） |
+| `TimeBand` 纯函数 + 边界对齐睡眠段 | 节日/时节切换 → **后续形象批次**（需形象资产；A 只搭架构，未实现节日） |
 | `row_weight` 时段修正（深夜降压/安静行抬升） | 表情帧入池 → **否**（§0.4 代码判据） |
 | `ambient_wants_emote` 深夜不跳舞 | emote 概率随时段调整 → 不做（概率门保持心情单源） |
 | 窗口层接线（ambient 点火处现取时段） | kurumi/inverse 专属时段池 → 不需要（池按主题已分流，修正按行名命中即生效） |
@@ -139,10 +139,10 @@ compose 的 ambient 点火块内现取：`let time = time_band(local_hour());`
 
 | 项 | 文件 | 验证 |
 |---|---|---|
-| 时段档纯函数 | `model.rs`（`TimeBand` / `time_band`）+ `config.rs`（`EVENING_START_HOUR`） | 3 例新测（含越界分支——首实现漏写被测试当场抓住） |
-| 行权重时段修正 | `model.rs`（`row_weight` 第三入参） | `row_weight_calms_down_at_night`（含「不为 0」全量扫描） |
+| 时段档纯函数 | `model.rs`（`TimeBand` / `time_band`）+ `config.rs`（`EVENING_START_HOUR`） | `time_band_splits_day_evening_night`（Day/Evening/Night 三档边界 + 越界按正午——首实现漏写越界分支被测试当场打红） |
+| 行权重时段修正 | `model.rs`（`row_weight` 第三入参） | `row_weight_follows_band_and_keeps_variants_neutral`（Day 档零修正 / 变体权重恒中性）+ `row_weight_calms_down_at_night`（含「不为 0」全量扫描） |
 | emote 时段修正 | `model.rs`（`ambient_wants_emote` 第三入参） | `ambient_wants_emote_never_dances_at_night` |
 | 窗口层接线 | `window.rs`（ambient 点火块现取时段） | 既有源码契约不受影响（接线点是既有调用点） |
 
 **回归证据**：`cargo test --bin miasaki` 294 → **298 例**（297 passed + 1 ignored 手动项；
-净增 3 例新测，3 个既有测随签名迁移不增例）；越界分支修复后复跑全绿。
+**新增 4 例**：时段边界 1 + 行权重 2 + 深夜不跳舞 1；3 个既有测随签名迁移不增例）；越界分支修复后复跑全绿。

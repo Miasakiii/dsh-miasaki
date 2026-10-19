@@ -143,15 +143,16 @@ pub(crate) fn pick_ambient_choice(
 | 文件 | 例 | 判据 |
 |---|---|---|
 | `settings.rs` | +3 | `appearance` 默认 "default"；白名单越界回落；roundtrip 保留 |
-| `image.rs` | +4 | 烘焙分流（default/variant/缺失回落+留痕）；非 whale 忽略 appearance；加载键二元组 |
+| `image.rs` | +1 | `appearance_key_resolves_default_and_variant`（7 形断言：default / 空 / 合法 variant / 缺失回落 / 非法字符 / 大写 / 空格） |
 | `model.rs` | +2 | 池过滤（有 has 时只返存在的行）；过滤空 → 回落未过滤池 |
 | `window.rs` 源码契约 | +2 | 重载块含 appearance 比对；ambient 传 has 闭包 |
-| `main.rs` | +2 | `psapr=` 解析；`push_pet_state` 回推含 appearance |
+| `main.rs` | +0 | `psapr=` 解析与 `push_pet_state` 回推由 `themes/test/hash-sync.test.js` 的 2 例覆盖（main.rs 无新增 `#[test]`） |
 | 面板 `panel-settings.test.js` | +3 | `APPEARANCE_CHOICES` 与 Rust 白名单镜像；条件渲染（≤1 不渲染）；默认值含 `appearance:"default"` |
 
 ## 6. 验收判据（实施后入回归矩阵 E42）
 
-1. **架构就位（工程）**：`cargo test` 全绿（新增 16 例左右）；`verify-all desktop` PASS；
+1. **架构就位（工程）**：`cargo test` 全绿（**新增 8 例，298 → 306**；面板契约组另 3 例、
+   `hash-sync` 另 2 例属 JS 测试，不计入 cargo 例数）；`verify-all desktop` PASS；
    `node --test plugins/dsh-pet-panel/test/` 全绿（含三条新闸门）。
 2. **无回归（实机）**：构建 + 签名 + 外部终端部署 + 重启 ⇒ 桌宠三主题行为与升级前一致
    （形象字段默认 default = 现有资产；hash 新键不影响既有 `ps*` 通道）。

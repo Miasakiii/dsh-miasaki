@@ -262,7 +262,7 @@
               // 与 psPart 的新值拼成**重复键**，而 Rust 侧 `split('&')` 顺序解析、
               // **后值覆盖前值**（keepPart 在 target 尾部）⇒ 用户的新切换被旧值压制，
               // 表现为「开关时灵时不灵」。新增 ps* 字段必须**两处同改**（本列表 +
-              // psSegs），themes/test/contract.test.js 的 hash-sync 组双Assert。
+              // psSegs），themes/test/hash-sync.test.js 的「管辖键只许一个新值」组双断言。
               if (key === 'miasaki-theme' || key === 'int' || key === 'act' || key === 'wait' ||
                   key === 'pet' || key === 'pettool' || key === 'petts' || key === 'petkey' ||
                   key === 'psmo' || key === 'psbubble' || key === 'psalpha' ||

@@ -46,7 +46,8 @@
 纯净皮肤下表面从 `rgb(21,21,23)`（不透明）变为 `color(srgb … / 0.8)`，壁纸可见；
 运行期关壁纸 ⇒ `content: none` 立即消失；换图立即生效；壳主题 palette 未被顶掉
 （`shell=zafkiel` 仍 `rgba(12,11,17,.8)`、`shell=kurkuriel` 仍 `rgba(247,244,241,.93)`）。
-单测 **155 → 165 例**（config +2 / client +7 / host +1）；`verify-all appearance` 18/18。
+单测 **本批 +10 例，当前 165 例**（config +2 / client +7 / host +1；旧起点 155/157/160 的口径互不一致，
+以本批新增条数与当前实跑为准）；`verify-all appearance` 18/18。
 
 ## 2026-10-14 · 退役程序化「默认」预设（用户「预设的这个图标删掉」）
 

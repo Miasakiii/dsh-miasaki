@@ -1308,7 +1308,7 @@ drop×2（两处收尾）/ alert（审批·告警出现）/ done（完成庆祝�
 **文档**：desktop CHANGELOG（2026-10-19 条）、设计 `2026-10-17-pet-fullscreen-sfx-sprint.md` §9-1、desktop README、矩阵 E35 改写 + E40 新立（分母 135 → 136）。
 
 **2026-10-19 桌宠 C 批（时段感知 ambient 编排，零素材）**：
-用户「桌宠鲸鱼娘是不是可以有多个形象，把参考仓库纳进来？」讨论后拍板「**先 C（零素材）解决眼前单调，A（多形象架构）作主干道**」。参考仓库实物核查（`PC2005-cloud/dsh-pet`：默认宠物正是这只鲸鱼娘、106 段 webm + 27 张梗图、**代码 MIT / 素材禁止商用 + 二创须署名**）⇒ 维持「不引入其素材」原决策，多形象走自建素材链（源头 `TreapGoGo/deepseek-whale-girl` MIT）。**C 批三项**：① `TimeBand`（Day/Evening/Night，边界对齐睡眠段 23–07、18 点起渐静，越界小时按正午 —— 误判深夜比误判正午代价大）；② `row_weight` 时段修正（深夜 `wave` 压 1、安静行 `wait`/`idle2`/`idle5` 抬 2，任何行任何时段**权重永不为 0**）；③ `ambient_wants_emote` 深夜不跳舞（High → Look）。**明确不做**：表情帧不入 ambient 池（单帧行入池 = 1.2–2.2s 完全定格 = L1 一直在消除的死图；表情帧继续走 marks 的 1.4s 事件通道）。**回归**：`cargo test` 294 → **298 例**（净增 3；`time_band` 越界分支首版漏写被边界测试当场打红）。**待实机（矩阵 E41，分母 136 → 137）**：傍晚渐静 / 深夜不跳舞 / kurumi 不回退 / 六态不变。
+用户「桌宠鲸鱼娘是不是可以有多个形象，把参考仓库纳进来？」讨论后拍板「**先 C（零素材）解决眼前单调，A（多形象架构）作主干道**」。参考仓库实物核查（`PC2005-cloud/dsh-pet`：默认宠物正是这只鲸鱼娘、106 段 webm + 27 张梗图、**代码 MIT / 素材禁止商用 + 二创须署名**）⇒ 维持「不引入其素材」原决策，多形象走自建素材链（源头 `TreapGoGo/deepseek-whale-girl` MIT）。**C 批三项**：① `TimeBand`（Day/Evening/Night，边界对齐睡眠段 23–07、18 点起渐静，越界小时按正午 —— 误判深夜比误判正午代价大）；② `row_weight` 时段修正（深夜 `wave` 压 1、安静行 `wait`/`idle2`/`idle5` 抬 2，任何行任何时段**权重永不为 0**）；③ `ambient_wants_emote` 深夜不跳舞（High → Look）。**明确不做**：表情帧不入 ambient 池（单帧行入池 = 1.2–2.2s 完全定格 = L1 一直在消除的死图；表情帧继续走 marks 的 1.4s 事件通道）。**回归**：`cargo test` 294 → **298 例**（**新增 4 例**：时段边界 / 行权重两例 / 深夜不跳舞；3 个既有测随签名迁移不增例；`time_band` 越界分支首版漏写被边界测试当场打红）。**待实机（矩阵 E41，分母 136 → 137）**：傍晚渐静 / 深夜不跳舞 / kurumi 不回退 / 六态不变。
 **2026-10-19 桌宠 A 批（多形象架构 + `pshl` 重复键真 bug）**：
 A-M1 **只搭架构**，形象清单初始仅「默认」（首个新形象素材另走生成 runbook，设计文档 §7）。**架构七项**：`frames.json` 平铺前缀键（`whale` = default 现状不动、`whale.<name>` 自包含）/ `load_frames_for(color, appearance)` 加载期烘焙（compose / `can_wander` / 回退链**零改动**，切形象 = 整份重载一次）/ 只对 whale 生效 + 缺失回落 default 且**留痕不静默** / `PetSettings.appearance` + `APPEARANCES` 字面量白名单 + hash `psapr` + `push_pet_state` 回推 / 面板「形象」行**条件渲染**（可选 ≤1 不放行，`APPEARANCE_CHOICES` 与 Rust 白名单逐字镜像）/ `build.rs` 主题目录**动态发现**（新形象素材零代码入链）+ `cut-frames.mjs` 按 `ATLAS_SPECS` 自动切 / ambient 可用性过滤（缺行永不上场，池空回落未过滤池）。**顺带修掉真 bug**（非本批引入）：R20-c 的 `pshl` 只进 `02-core.js` 的 psSegs、**漏加 keep 列表** ⇒ 旧 hash 值被 keepPart 原样保留、与新值拼出**重复键**、Rust 后值覆盖 ⇒ **柔光开关间歇性不生效**（E35⑦ 正会踩上）；keep 补 `pshl` + `hash-sync` 回归测钉住**所有** `ps*` 管辖键。**回归**：`cargo test` 298 → **306 例**（305 passed + 1 ignored；A 新增 8）；`hash-sync` **17/17**、`panel-settings` **32/32**；`verify-all desktop` **43/43**；全量 **185 项**（R20-c 重做退役 halo 产物闸门，186 → 185）。**待实机（矩阵 E42，分母 137 → 138）**：三主题行为与升级前一致 / 面板不出现「形象」行 / `pet-settings.json` 含 `appearance:"default"` / `pshl` 连切即时生效 / 首个新形象另立验收。
 **文档（2026-10-19 收尾）**：desktop README 补 C/A 批功能条目与 `cargo test` 306 例；矩阵 E41 / E42 新立；根 README 静态回归 **185 项**、台账 **72 / 138**。
@@ -1354,7 +1354,7 @@ pnpm test        # 89 项回归测试（8 个测试文件）
 cd dsh-miasaki-sidebar
 pnpm install
 pnpm run build   # node --check 两个入口文件（index.js / client.js）
-pnpm test        # 86 例（审查 5 / 审查视图 10 / 目录分组 3 / 视图持久化 6 / 右栏引导 4 / 标题栏按钮 4 / 主视图会话取数 7 / 辅助对话登记表 13 / 终端启动器 7 / 内嵌终端 hub 15 / 路由 12）
+pnpm test        # 104 例（11 个测试文件，2026-09-30 实测；辅助对话登记表 31 例含不占列表 / 继承段 / 折叠契约，明细见 dsh-miasaki-sidebar/README.md）
 # 开发模式：DSH profile 以 link 方式指向本目录，重启 dsh web + 刷新页面生效（client bundle 重启 host 生效）
 ```
 
