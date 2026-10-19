@@ -3,6 +3,27 @@ fn main() {
     gen_assets();
 }
 
+/// A 批：桌宠主题目录名判定——`mode` 或 `mode.<形象名>`（多形象平铺前缀键）。
+/// mode 限纯小写字母（whale / kurumi / inverse）；形象名限 `[a-z0-9-]+`。
+/// 与 `image::resolve_appearance_key` 的 charset 同口径（两侧不一致 = 扫到了却加载不到）。
+fn is_mode_dir_name(n: &str) -> bool {
+    let (base, variant) = match n.split_once('.') {
+        Some((b, v)) => (b, Some(v)),
+        None => (n, None),
+    };
+    if base.is_empty() || !base.chars().all(|c| c.is_ascii_lowercase()) {
+        return false;
+    }
+    match variant {
+        None => true,
+        Some(v) => {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        }
+    }
+}
+
 /// 生成 src/assets.rs：把运行时素材（图标 + 桌宠帧）编译期内嵌进 EXE。
 /// 磁盘 ui/（EXE 旁）仍作为覆盖层优先（dist 布局与开发覆盖不受影响），
 /// 单文件拷贝 EXE 时自动回退内嵌。
@@ -29,9 +50,16 @@ fn gen_assets() {
     // R20-b(2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §3.2)：程序化音效
     // —— scripts/gen-sfx.mjs 构建期合成，一致性闸门见同脚本 --check 模式。
     // 显式登记而非扫目录：漏登记 = 运行时静默无声（与图集通道同族纪律）。
-    for name in ["jump", "land", "wave", "grab", "drop", "alert", "done", "tick"] {
+    // P0(2026-10-18，design/2026-10-18-pet-p0-interaction-emote.md §4)：+5 个互动音效。
+    for name in [
+        "jump", "land", "wave", "grab", "drop", "alert", "done", "tick", // R20-b 八件
+        "pat", "chomp", "whoosh", "bounce", "yawn", //                     P0 五件
+    ] {
         add(&format!("pets/sfx/{name}.wav"), &mut files);
     }
+    // R20-c（2026-10-19 重做，design/2026-10-17-pet-fullscreen-sfx-sprint.md §4）：
+    // 背景对比 halo 已改为**运行期程序化轮廓柔光**（从本帧角色 alpha 生成），
+    // 不再有预渲染环 PNG ⇒ 这里没有素材要登记（`gen-halo.mjs` 已退役）。
     let pngs = |dir: &std::path::Path, prefix: &str, files: &mut Vec<String>| {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         let mut names: Vec<String> = rd
@@ -43,22 +71,32 @@ fn gen_assets() {
             files.push(format!("{prefix}/{n}"));
         }
     };
-    // v5 L0-3(design/pet-v5-motion-plan.md):**图集行**——kurumi 与 whale 各一份。
-    // whale 此前只内嵌 `states/`（三态立绘），其 11 行图集即使切了也进不了 EXE；
-    // 本清单是显式登记，新增图集主题必须在这里补一行，否则运行时静默回落到立绘。
-    for mode in ["kurumi", "whale"] {
-        pngs(
-            &ui_root.join("pets").join(mode).join("frames"),
-            &format!("pets/{mode}/frames"),
-            &mut files,
-        );
-    }
-    for mode in ["whale", "inverse"] {
-        pngs(
-            &ui_root.join("pets").join(mode).join("states"),
-            &format!("pets/{mode}/states"),
-            &mut files,
-        );
+    // v5 L0-3(design/pet-v5-motion-plan.md) + A 批（2026-10-19，
+    // design/2026-10-19-pet-a-appearance.md §3.5）：**图集行**与**立绘**按主题目录扫描。
+    // 目录名 = mode 或 `mode.<形象名>`（A 批多形象：`whale.sakura/` 与 `whale/` 平级，
+    // 自包含 frames/ + 可选 states/）。
+    // 从显式两主题清单改为**动态发现**——新形象的素材零代码入链；「静默回落」风险
+    // 由两侧管：loader 对缺失形象留痕（image::resolve_appearance_key 的 pet.log 行）
+    // + check-pet-assets.mjs 做 frames.json ↔ 盘上文件双向校验（孤儿/缺失都报警）。
+    // ⚠ 只扫 frames/ 与 states/ 两个子目录——`inverse/raw/`（抠图源立绘）等
+    // 非运行时不进 EXE（2026-09-10 教训：素材源与派生物分属两链，不可互相顶替）。
+    let mut modes: Vec<String> = match std::fs::read_dir(ui_root.join("pets")) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| is_mode_dir_name(n))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    modes.sort();
+    for mode in &modes {
+        for sub in ["frames", "states"] {
+            pngs(
+                &ui_root.join("pets").join(mode).join(sub),
+                &format!("pets/{mode}/{sub}"),
+                &mut files,
+            );
+        }
     }
 
     let mut s = String::new();

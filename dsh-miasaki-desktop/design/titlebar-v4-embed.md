@@ -35,7 +35,7 @@
 | 按钮样式 | 26×26 命中区、10×10 视口 SVG 线图标、hover 底 + 关闭 hover 红底 | 同上（66–75 行） |
 | 页面让位 | ~~`#root header:has([role="tablist"]){padding-right:132px}`（胶囊实测 ≈114px + 余量）~~ → v4 为 118px，**2026-09-10 废，改右上角安全区规则（见文首修正块）** | `03-switcher.js` 78 行 |
 | 命令链 | hash `cmd=min/max/close` → Rust watchdog；max 状态经 `wv.eval` 派发 `miasaki-max-state` 回推 | `06-titlebar.js` + `src-tauri/src/main.rs` |
-| 拖动 | document 级 mousedown，顶部 36px 空白 → `start_dragging`；事件路径含 `#miasaki-titlebar` 即放行点击 | `06-titlebar.js` `wireDragZone()` |
+| 拖动 | document 级 mousedown，顶部 36px 空白 → 记起手点，**移动越 4px 阈值才** `start_dragging`（R22：单击不进系统移动循环，防 tao 异步 `WM_NCLBUTTONDOWN` 竞态粘滞）；双击 → `internal_toggle_maximize` | `06-titlebar.js` `wireDragZone()` |
 | 主题变量 | `--ms-panel/--ms-accent/--ms-danger/--ms-hover/--ms-border/--ms-text` 定义于三主题 CSS（`:root` 主题选择器内） | `themes/{pure,zafkiel,kurkuriel}.css` |
 
 ## 3. 总路线

@@ -3,9 +3,11 @@ use std::os::raw::c_void;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use super::config::*;
+use super::backdrop;
 use super::dot;
 use super::ffi::*;
 use super::image::*;
+use super::marks::*;
 use super::model::*;
 use super::persist::*;
 use super::xform::*;
@@ -146,6 +148,62 @@ pub(crate) struct PetWin {
     /// R20-a（2026-10-17）：全屏规则是否当前持有隐藏（瞬态，不落盘）。
     /// `true` = 桌宠因「前台全屏覆盖本显示器」被规则藏起来，退出全屏即还原。
     fs_hidden: bool,
+    /// R20-c：上一帧画出的角色框（窗口局部物理像素：x, y, w, h）。
+    /// 背景 halo 的定位（贴在框外扩）与桌面采样带（框两侧）都以它为基准；
+    /// `w == 0` = 尚无有效帧。halo 只在**静态**时画（拖动/滑停期角色在动，
+    /// 环会滞后一帧显得脱节），故静态期这个框本来就是稳的。
+    last_char_box: (i32, i32, i32, i32),
+    /// R20-c：下一次背景采样的时刻（compose 节拍里判断，不新开定时器）。
+    next_backdrop: std::time::Instant,
+    /// R20-c：背景对比柔光的带回差状态（判据见 `backdrop`）。
+    halo: backdrop::HaloState,
+    /// R20-c（2026-10-19 重做）：轮廓柔光的三个复用缓冲（角色 alpha / 水平模糊 / 垂直模糊）。
+    /// 尺寸 = 窗口物理像素；首次启用时按窗分配（`apply_halo` 内 resize）。
+    halo_mask: Vec<u8>,
+    halo_tmp: Vec<u8>,
+    halo_blur: Vec<u8>,
+    /// R20-a 修正（2026-10-18）：上一拍的 `want_hide`（显隐意图影子），
+    /// 仅供本拍算「true→false 下降沿」——全屏规则隐藏期的用户逃逸必须**边沿触发**，
+    /// 电平触发会让 compose 与 `fs_poll` 互相拆台（桌宠每 ~250ms 眨一次，
+    /// 实机 2991 条 auto-hidden / 0 条 restored）。判据见
+    /// `model::show_branch_should_run` 的四例单测。
+    last_want_hide: bool,
+    /// P0-F1（2026-10-18）：摸头判定状态（纯逻辑在 `model::petting_tick`，
+    /// 本文件只在 `IDT_HIT` 轮询里喂事实：光标位置 + 是否命中角色）。
+    petting: Petting,
+    /// P0-F1：咬手「咬住光标」期间的偏移（光标 − 窗口左上角）。
+    /// `Some` = 正咬着，窗口每 `IDT_HIT` 拍跟随光标移到 `cursor - offset`。
+    bite_follow: Option<(i32, i32)>,
+    /// P0-F1：咬合结束时刻（`BITE_CLING_MS` 后自然松口）。
+    bite_until: Option<std::time::Instant>,
+    /// P0-F3：抛掷飞行状态（`Some` = 正飞着，`IDT_DRAG` 节拍驱动 `fly_step`）。
+    /// 松手速度 ≥ `THROW_VEL_MIN` 时由 `release_drag` 进入；慢放仍走 R18 滑停。
+    flying: Option<FlyState>,
+    /// P0-F4：心情值（[-100, 100]，会话级**不落盘**——进 pet.json schema 的收益
+    /// 不抵迁移成本）。作用面：ambient 加权与 emote 触发（`model::mood_band`）。
+    mood: i32,
+    /// P0-F4：下一次「被冷落」检查（`MOOD_NEGLECT_EVERY_MS`）。
+    next_mood_tick: std::time::Instant,
+    /// P0-F2：下一次睡眠时段检查（`SLEEP_CHECK_MS`，compose 时间戳，不新开定时器）。
+    next_sleep_check: std::time::Instant,
+    /// P1-b：当前播放的表情标记（`None` = 无；到期即清，见 compose 的标记段）。
+    mark: Option<MarkPlay>,
+    /// P1-b：瞌睡期间 Zzz 的下一次浮动时刻。
+    next_zzz: std::time::Instant,
+    /// P2-b：是否处于睡眠时段（30s 节拍读一次时钟的缓存）——「瞌睡续觉」钩子
+    /// 每拍用它，不能每拍读时钟。入睡/醒来两处更新。
+    sleep_night: bool,
+    /// P0-F2 审查修正（2026-10-18）：用户交互把桌宠叫醒后的**免睡冷却截止时刻**。
+    /// 没有它时，「瞌睡续觉」钩子会在点击/抚摸打断 Sleep 槽后的**下一拍**立刻补回
+    /// 睡姿——「点击即醒」实际只醒了一个 compose 拍（判据 E36⑤ 不可达）。
+    wake_sleep_until: Option<std::time::Instant>,
+    /// P2-a：当前 frames 已按哪个配色预设加载。与 `shared.settings.color` 比对，
+    /// 不一致 ⇒ 整份重载 + 重着色（一次性，设置变更才发生）。初值 = 冷启动预设。
+    loaded_color: u32,
+    /// A 批：当前 frames 已按哪个**形象**加载（whale 换装；其余主题恒 "default"）。
+    /// 与 `shared.settings.appearance`（经 mode 门控）比对，不一致 ⇒ 整份重载。
+    /// 与 `loaded_color` 合成一个加载键——`load_frames_for(color, appearance)`。
+    loaded_appearance: String,
 }
 impl PetWin {
     fn compose(&mut self) {
@@ -156,14 +214,43 @@ impl PetWin {
 
         // —— 外部命令消费（设置面板 hash 通道 → shared 标志；UI 仅在窗口线程执行）——
         {
-            let (want_hide, do_reset, want_theme) = {
+            let (want_hide, do_reset, want_theme, want_color, want_appearance) = {
                 let mut s = self.shared.lock().unwrap();
                 let h = s.hide;
                 let r = s.pending_reset;
                 let t = s.theme.clone();
+                let c = s.settings.color;
+                // A 批：形象**只对 whale 生效**（kurumi/inverse 的发型服装是角色设定，
+                // 与 P2-a 配色同口径）。mode 取当前 shared 值——钉选/主题变化后
+                // 下一次重载判定自然修正（非 whale 时 appearance 恒 default）。
+                let a = if s.mode == "whale" {
+                    s.settings.appearance.clone()
+                } else {
+                    super::settings::APPEARANCE_DEFAULT.to_string()
+                };
                 s.pending_reset = false;
-                (h, r, t)
+                (h, r, t, c, a)
             };
+            // P2-a + A 批：配色/形象变更 ⇒ 整份重载（一次性；两者在 load_frames_for
+            // 汇成一个加载键）。重新走 assets::read 保证磁盘 ui/ 覆盖层语义与冷启动一致，
+            // 且无状态可漂移。重载约百 ms 的卡顿只发生在用户主动改设置的那一刻——可接受；
+            // 改完加载键对齐，之后每拍只是一次整数/字符串比对。
+            let color_changed = want_color != self.loaded_color;
+            let appearance_changed = want_appearance != self.loaded_appearance;
+            if color_changed || appearance_changed {
+                self.frames = super::image::load_frames_for(want_color, &want_appearance);
+                self.loaded_color = want_color;
+                self.loaded_appearance = want_appearance.clone();
+                self.last_tick = now - std::time::Duration::from_secs(10); // 强制重绘
+                dirty = true;
+                // 两条日志分开写：E38 判据读 `recolor -> N` 行；形象切换读 `appearance -> X`。
+                if color_changed {
+                    pet_log_line(&format!("[native-pet] recolor -> {want_color}\n"));
+                }
+                if appearance_changed {
+                    pet_log_line(&format!("[native-pet] appearance -> {want_appearance}\n"));
+                }
+            }
             // 2026-09-24:主题变化 → 悬浮球换面（球面头像 + 主题色环/发光）。
             // 先于 reset/显隐切换落地：这样随后那两处的 render_dot 直接带上新主题，
             // 不会先画一帧旧球面再被覆盖。仅当球当前可见（= 桌宠隐藏）时才立即重绘；
@@ -215,11 +302,17 @@ impl PetWin {
             // R20-a（2026-10-17）：全屏规则隐藏期（`fs_hidden`）用户要求显示 ⇒ 也要走
             // 切换分支。原条件 `want_hide == self.shown` 在这种情形下恒为 false
             // （影子状态 shown=true 而 want_hide=false，布尔相等判断认为「无需切换」），
-            // 用户的「显示」会被规则态**吞掉**——面板点了没反应。补上
-            // `fs_hidden && !want_hide` 后分支执行：ShowWindow + 清规则态。
-            // 注意语义：清规则态不等于规则失效——下一拍 fs_poll 若仍覆盖会重新隐藏
-            // （参考实现 Coopanion 同口径：设置是常驻命令；要常驻请关「全屏时隐藏」）。
-            if want_hide == self.shown || (self.fs_hidden && !want_hide) {
+            // 用户的「显示」会被规则态**吞掉」——面板点了没反应。
+            // **R20-a 修正（2026-10-18 实机事故）**：逃逸必须是**边沿触发**。
+            // 首版补的 `fs_hidden && !want_hide` 是电平触发——规则藏着桌宠时
+            // `want_hide` 恒 false ⇒ compose 每拍都「显示 + 清规则态」、fs_poll 下一拍
+            // 再藏 ⇒ 桌宠在全屏应用上每 ~250ms 眨一次（实机 2991 条 auto-hidden /
+            // 0 条 restored）。现只在 `want_hide` 出现 true→false **下降沿**（用户主动
+            // 取消隐藏）时放行一次；常驻意图不触发。判据与回归见
+            // `model::show_branch_should_run` 的四例单测（R20a-F3 是防线）。
+            // 逃逸后规则下一拍重新生效（Coopanion 同口径；要常驻请关「全屏时隐藏」）。
+            let want_hide_falling_edge = !want_hide && self.last_want_hide;
+            if show_branch_should_run(want_hide, self.shown, self.fs_hidden, want_hide_falling_edge) {
                 unsafe {
                     if want_hide {
                         // M4.1：隐藏前先回吸附位——悬浮球按 pos 定位，peek 外移量会让
@@ -255,6 +348,10 @@ impl PetWin {
                 save_pet_pos(self.pos, want_hide, self.docked_edge);
                 dirty = true;
             }
+            // R20-a 修正：每拍记录 `want_hide`，供下一拍算**下降沿**（边沿检测的唯一状态）。
+            // 必须在分支外无条件更新——只在分支里更新会漏掉「没执行分支的那些拍」，
+            // 沿检测随即失灵（要么永远假、要么把一次真实切换判成连续沿）。
+            self.last_want_hide = want_hide;
         }
 
         // —— M2(v3):六态合成(官方契约优先,DOM 兜底,fleet 叠加) ——
@@ -297,6 +394,10 @@ impl PetWin {
             self.squash_start = Some(now);
             // R20-b：完成庆祝琶音（与挤压脉冲同一拍，视听同庆）
             self.sfx("done");
+            // P0-F4：任务完成，与有荣焉（心情 +）
+            self.mood = mood_apply(self.mood, MoodEvent::Done);
+            // P1-b：星星（得意/期待）——与庆祝琶音同拍的「面上有光」
+            self.show_mark(mark_for_done(), now);
             dirty = true;
         } else if state != PetState::Done {
             self.done_celebrated = false;
@@ -328,6 +429,28 @@ impl PetWin {
             } else {
                 self.action = Some(slot);
             }
+        }
+
+        // —— P2-b：瞌睡续觉（每拍）——
+        // exSleepy 犯困表情走的是 `Ambient` 动作槽（单槽互斥），它把 Sleep 慢呼吸
+        // 槽换掉了；到期即清后在这里**立即补回** Sleep——否则「犯困脸闪一下就
+        // 精神了」，后面整晚只剩普通待机。夜间判定用 30s 节拍缓存的
+        // `sleep_night`（不在此处读时钟）；准入条件与入睡门一致。
+        if self.sleep_night
+            && self.action.is_none()
+            && state == PetState::Idle
+            && self.alert.is_none()
+            && !self.dragged
+            && !self.drag_settling
+            && self.flying.is_none()
+            && self.bite_follow.is_none()
+            && !self.sleep_wake_blocked(now)
+        {
+            self.action = Some(ActionSlot {
+                action: Action::Emote { kind: EmoteKind::Sleep },
+                started: now,
+                duration: std::time::Duration::from_millis(SLEEP_MS),
+            });
         }
 
         // —— 待机随机行为：定时气泡台词 + 定时散步（有行走帧的主题才散步,左右移动贴边吸附） ——
@@ -369,6 +492,7 @@ impl PetWin {
                 && self.docked_edge.is_none()
                 && !self.dragged
                 && !self.drag_settling
+                && self.flying.is_none()
             {
                 let dir = if rand_u32() % 2 == 0 { 1 } else { -1 };
                 self.action = Some(ActionSlot {
@@ -384,28 +508,126 @@ impl PetWin {
             self.next_wander = now + std::time::Duration::from_millis(rand_range(45000, 120000));
         }
         // —— v2 环境编排：idle 基线低频随机小动作(手势打断见 wnd_proc) ——
+        // P0-F4（2026-10-18）：选池改走心情加权（`pick_ambient_choice`）——emote 概率由
+        // `mood_band(self.mood)` 决定，行池与行权重视主题而定（P1-a：whale 池含待机变体）。
+        // C 批（2026-10-19）：再叠加时段档（`time_band(local_hour())`）——深夜/傍晚
+        // 压低活跃行、安静行抬升、High 档不跳舞（纯函数 + 单测，见 model.rs）。
         if self.action.is_none() && now >= self.next_ambient {
-            let idle_intensity = {
+            let (idle_intensity, mode) = {
                 let s = self.shared.lock().unwrap();
-                s.intensity == "idle"
+                (s.intensity == "idle", s.mode.clone())
             };
             // M2(v3):非 Idle 六态(含 fleet_running)不开小动作(触发必能播,不挂空槽)
             let blocked = state != PetState::Idle || fleet_running;
             if idle_intensity && !blocked && self.alert.is_none() {
-                let row = pick_ambient_row();
-                self.action = Some(ActionSlot {
-                    action: Action::Ambient { row },
-                    started: now,
-                    duration: std::time::Duration::from_millis(
+                let band = mood_band(self.mood);
+                // C 批（2026-10-19）：时段档——`GetLocalTime` 是廉价的用户态调用，
+                // ambient 点火 8–18s 一次，直接现取不缓存（睡眠块 30s 一拍的门控
+                // 与这里不同步，缓存反而要多养一条失效路径）。
+                let time = time_band(local_hour());
+                // A 批：可用性过滤——当前生效形象缺的行永不上场（P1-a 空转槽纪律的
+                // 推广：新形象未必有 wave/idle2–idle5 全部行）。过滤后池空时
+                // pick_ambient_choice 回落未过滤池，不回 blank。
+                let has = |row: &str| self.frames.rows_have(&mode, row);
+                let (action, dur_ms) = match pick_ambient_choice(band, &mode, time, &has) {
+                    AmbientChoice::Row(row) => (
+                        Action::Ambient { row },
                         rand_range(AMBIENT_PLAY_MIN_MS, AMBIENT_PLAY_MIN_MS + AMBIENT_PLAY_VAR_MS),
                     ),
+                    // P0-F2：抽中 emote——时长走词表（`emote_duration`），与行内 ambient 二选一
+                    AmbientChoice::Emote(kind) => (Action::Emote { kind }, emote_duration(kind)),
+                };
+                self.action = Some(ActionSlot {
+                    action,
+                    started: now,
+                    duration: std::time::Duration::from_millis(dur_ms),
                 });
                 self.frame_idx = 0;
+                // P1-b：心情的「面上」表达——High 档偶尔冒爱心、Low 档偶尔冒泪滴。
+                // 与行/emote 抽样独立（各自的 rand），概率见 `MARK_PCT_*`；
+                // Mid 档不挂（平常脸不需要符号）。
+                let mark_pct = match band {
+                    AmbientBand::High => MARK_PCT_HIGH,
+                    AmbientBand::Low => MARK_PCT_LOW,
+                    AmbientBand::Mid => 0,
+                };
+                if mark_pct > 0 && rand_u32() % 100 < mark_pct {
+                    let kind = if band == AmbientBand::High { Mark::Heart } else { Mark::Tear };
+                    self.show_mark(kind, now);
+                }
                 dirty = true;
             }
             self.next_ambient = now + std::time::Duration::from_millis(
                 rand_range(AMBIENT_REST_MIN_MS, AMBIENT_REST_MIN_MS + AMBIENT_REST_VAR_MS),
             );
+        }
+
+        // —— P0-F4：被冷落检查（10min 无交互 ⇒ 心情 -4）——
+        // 时钟源 = `last_interaction`（光标压上/按下/拖动都会刷新它，peek 同源）。
+        if now >= self.next_mood_tick {
+            self.next_mood_tick = now + std::time::Duration::from_millis(MOOD_NEGLECT_EVERY_MS);
+            if now.duration_since(self.last_interaction)
+                >= std::time::Duration::from_millis(MOOD_NEGLECT_EVERY_MS)
+            {
+                self.mood = mood_apply(self.mood, MoodEvent::Neglect);
+            }
+        }
+
+        // —— P0-F2：睡眠时段检查（30s 一拍；深夜自动打瞌睡，早晨/交互醒来）——
+        // Sleep 占住动作槽 ⇒ wander/ambient 的 `action.is_none()` 门自动压制（免费互斥）；
+        // 点击/摸头/咬手经 WM_LBUTTONDOWN 的 interrupt 清单叫醒（见该分支）。
+        if self.shown && !self.fs_hidden && now >= self.next_sleep_check {
+            self.next_sleep_check = now + std::time::Duration::from_millis(SLEEP_CHECK_MS);
+            let hour = local_hour();
+            let night = hour >= SLEEP_START_HOUR || hour < SLEEP_END_HOUR;
+            // 缓存夜间判定：下面的「瞌睡续觉」钩子每拍跑，不能每拍读时钟
+            self.sleep_night = night;
+            let has_sleep = matches!(
+                &self.action,
+                Some(s) if matches!(s.action, Action::Emote { kind: EmoteKind::Sleep })
+            );
+            if night && !has_sleep && state == PetState::Idle && self.alert.is_none()
+                && !self.dragged && !self.drag_settling && self.flying.is_none()
+                && self.bite_follow.is_none()
+                // 2026-10-18 审查修正：刚被叫醒的免睡冷却内不再挂睡姿
+                && !self.sleep_wake_blocked(now)
+            {
+                self.action = Some(ActionSlot {
+                    action: Action::Emote { kind: EmoteKind::Sleep },
+                    started: now,
+                    duration: std::time::Duration::from_millis(SLEEP_MS),
+                });
+                // R20-b/P0：起始一个哈欠（听觉上的「去睡了」）
+                self.sfx("yawn");
+                // P1-b/P2-b：进入瞌睡先演一次**犯困表情帧**（whale；其余主题落
+                // Zzz 符号）——表情走动作槽会把下面刚挂的 Sleep 槽换掉，到期后
+                // 由「瞌睡续觉」钩子补回（见 compose 动作清理段）
+                self.show_mark(Mark::Sleepy, now);
+                self.sleep_night = true;
+                self.next_zzz = now + std::time::Duration::from_millis(ZZZ_EVERY_MS);
+                pet_log_line("[native-pet] sleep: 进入瞌睡（深夜时段）\n");
+                dirty = true;
+            } else if !night && has_sleep {
+                self.action = None;
+                self.sleep_night = false;
+                pet_log_line("[native-pet] sleep: 早晨醒来\n");
+                dirty = true;
+            }
+        }
+        // —— P1-b（2026-10-18 审查修正）：瞌睡 Zzz 周期浮动 ——
+        // 原实现把它放在上面的 30s 睡眠检查门内，实际每 30s 才检查一次 `next_zzz`
+        // （设计写「每 3s 浮动一次」，判据 E37/E38 不可达）。现改为每拍检查：
+        // 只在**确实处于 Sleep 槽**时刷（入睡瞬间的犯困表情帧把槽占住 1.4s，
+        // 那段不刷 Zzz——表情优先，续觉钩子补回 Sleep 后自然恢复）。
+        if self.shown && !self.fs_hidden && self.sleep_night && now >= self.next_zzz {
+            let sleeping = matches!(
+                &self.action,
+                Some(s) if matches!(s.action, Action::Emote { kind: EmoteKind::Sleep })
+            );
+            if sleeping {
+                self.next_zzz = now + std::time::Duration::from_millis(ZZZ_EVERY_MS);
+                self.show_mark(Mark::Zzz, now);
+            }
         }
 
         // —— M4.1：peek 状态机节拍（相位推进）——
@@ -467,12 +689,35 @@ impl PetWin {
                 if self.action.is_none() {
                     // M1.4:散步撞墙中断同步悬浮球(本段结尾统一置 dirty,present 会应用新 pos)
                     self.render_dot();
+                    // P0-F2：撞墙 ⇒ 回头张望一下（零素材的性格表达；800ms 后自然回 idle）
+                    self.action = Some(ActionSlot {
+                        action: Action::Emote { kind: EmoteKind::Look },
+                        started: now,
+                        duration: std::time::Duration::from_millis(LOOK_MS),
+                    });
+                    self.frame_idx = 0;
+                    // P2-b：撞墙还带一脸疑惑（whale 演 exDoubt 表情帧并覆盖上面
+                    // 的 Look 姿态槽；其余主题 Look 照演 + 头顶飘问号符号）
+                    self.show_mark(Mark::Doubt, now);
                 }
             }
             // 清空画布只在帧更新时进行,避免 33ms 心跳把中间帧清成空白
+            // R20-c：背景采样与判据必须在**清空前**跑——身体平均色从上一帧的
+            // 合成缓冲算（buf 此刻还是上一帧）。一帧（33ms）的滞后对 2s 节拍的
+            // 判据无感，却省掉「先采样再重画」的顺序死结。
+            if self.shown && !self.fs_hidden && self.docked_edge.is_none()
+                && !self.dragged && !self.drag_settling
+                && now >= self.next_backdrop
+            {
+                self.next_backdrop = now + std::time::Duration::from_millis(BACKDROP_EVERY_MS);
+                self.backdrop_tick();
+            }
             for p in self.buf.iter_mut() {
                 *p = 0;
             }
+            // R20-c（2026-10-19 重做）：轮廓柔光不再在清空后预画——它必须**基于
+            // 本帧角色画完后的 alpha 轮廓**生成，所以改在下方两个绘制分支之后调用
+            // `apply_halo`（见那里）。绘制时机与闸门（静态期才画）不变。
             let (mode, intensity, fleet_running, motion) = {
                 let s = self.shared.lock().unwrap();
                 (s.mode.clone(), s.intensity.clone(), s.fleet_running, s.settings.motion)
@@ -500,10 +745,33 @@ impl PetWin {
                 Some(p) => squash_scales(p, motion),
                 None => (1.0, 1.0),
             };
+            // —— P0-F2：本帧的表演动作（若有）——槽内进度 p 由 compose 现成的事实算
+            // （started/duration 都在 ActionSlot 上），编舞值全部来自 `emote_xform` 纯函数。
+            // 2026-10-18 审查修正：**六态压制必须同时压编舞**——`pick_state_row` 只换行
+            // （wait/failed/run），若这里的变换照旧施加，审批/告警/思考时桌宠会以状态
+            // 姿态「点头/发抖/呼吸」（设计 §5.1 明写「Emote 被状态压住，与 jump/wave
+            // 同命运」；E36⑥「不抢戏」）。故只在 Idle（槽真正上场）时施加。
+            let emote: Option<(EmoteKind, f32)> = if state == PetState::Idle {
+                match &self.action {
+                    Some(s) => match s.action {
+                        Action::Emote { kind } => {
+                            let d = s.duration.as_secs_f32().max(1e-6);
+                            let p = (now.duration_since(s.started).as_secs_f32() / d).clamp(0.0, 1.0);
+                            Some((kind, p))
+                        }
+                        _ => None,
+                    },
+                    None => None,
+                }
+            } else {
+                None
+            };
             // 挤压期间**必须**关摇摆：`sx = 1.10` 与 ±2° 叠加会让包围盒横向越出 `WIN_W`
             // （xform.rs 的 `squash_plus_sway_would_overflow_so_is_forbidden` 钉住了这件事）。
             // 语义上也自洽：脉冲是「压扁—弹回」的纵向动效，此刻不摆。
-            let can_sway = squash_p.is_none();
+            // P0-F2：emote 与挤压同样互斥，且**挤压赢**（Done 庆祝/落地那一拍是大事）——
+            // rot 3° 与 squash 1.10 叠加会横向越窗约 6px（xform.rs 的几何账）。
+            let can_sway = squash_p.is_none() && emote.is_none();
             // —— M2(v3):六态 → whale/inverse 三态立绘映射 ——
             // Waiting/Error/Done/FleetBlocked → work 立绘(会话有事发生);
             // Thinking → 沿用推理强度(intensity=idle 时升 work);Idle → intensity(fleet_running 例外升 work)
@@ -591,6 +859,16 @@ impl PetWin {
                     if next.as_ref().map_or(false, |a| a.priority <= ALERT_PRI_ALERT) {
                         self.sfx("alert");
                     }
+                    // P1-b：需要行动的提醒挂情绪标——**映射是纯函数**
+                    // （`mark_for_alert_priority`，单测在 marks.rs）：审批 = 感叹
+                    // （「看我看我」），fleet 告警 = 怒纹；Error 是状态档(2)不挂
+                    // （它没有「叮咚」，也不该有个符号一直飘——错误已有 failed
+                    // 姿态 + 红气泡）。
+                    if let Some(a) = next.as_ref() {
+                        if let Some(kind) = mark_for_alert_priority(a.priority) {
+                            self.show_mark(kind, now);
+                        }
+                    }
                     self.alert = next;
                     self.alert_shown_at = now;
                     // 帧更新块末尾已无条件置脏（见下方 `dirty = true`），此处不重复赋值
@@ -640,20 +918,39 @@ impl PetWin {
                     } else {
                         0.0
                     };
+                    // P0-F2：emote 顶替呼吸+摇摆（表演帧的动效归编舞；挤压在场时挤压赢，
+                    // 见上方 `can_sway` 处的互斥纪律）。inverse 三态立绘因此第一次能
+                    // 「转身/发抖/跳舞」——它没有图集，绘制层变换是它唯一的动作来源。
+                    let emote_xf = emote.filter(|_| squash_p.is_none()).map(|(k, p)| emote_xform(k, p, t_ms, motion));
+                    if let Some((_, bob_e)) = emote_xf {
+                        bob = bob_e;
+                    }
                     if lifting {
                         bob -= DRAG_LIFT_PX * dpr;
                     }
-                    let xf = if lifting { lean_xf } else { DrawXform::new(sway, sq_sx, sq_sy) };
+                    // P0-F2：转身的镜像翻转在中点发生（sx 蓄力到最低那一下）
+                    let flip = matches!(emote, Some((EmoteKind::Turn, p)) if p >= 0.5);
+                    let xf = if lifting {
+                        lean_xf
+                    } else if let Some((xe, _)) = emote_xf {
+                        xe
+                    } else {
+                        DrawXform::new(sway, sq_sx, sq_sy)
+                    };
                     if list.len() > 1 {
                         // v2:帧序列状态(idle.gif 拆帧),6fps 循环 + bob
                         self.anim_ms = 1000 / 6;
                         let idx = self.frame_idx % list.len();
                         self.frame_idx += 1;
-                        self.blit_center_bottom(&list[idx], bob, 1.0, &xf);
+                        // R20-c：记下本帧角色框（halo 定位/采样带的基准）
+                        self.last_char_box = self.blit_center_bottom(&list[idx], bob, 1.0, &xf, flip);
                     } else if let Some(img) = list.first() {
                         // 单帧:静态 + bob + 摇摆
                         self.anim_ms = 1000;
-                        self.blit_center_bottom(img, bob, 1.0, &xf);
+                        // 2026-10-18 审查修正：单帧分支也必须记角色框——halo/表情标记的
+                        // 定位都基准 `last_char_box`，漏写会沿用上一帧框（冷启时甚至
+                        // 是 (0,0,0,0) ⇒ 首帧不画环/标记）。
+                        self.last_char_box = self.blit_center_bottom(img, bob, 1.0, &xf, flip);
                     }
                 }
             } else {
@@ -708,12 +1005,43 @@ impl PetWin {
                     } else {
                         0.0
                     };
+                    // P0-F2：emote 顶替呼吸+摇摆（同立绘分支口径；emote 的基础行是 idle，
+                    // 帧内无位移，编舞的 bob/rot 是这一帧唯一的动效来源）。
+                    let emote_xf = emote.filter(|_| squash_p.is_none()).map(|(k, p)| emote_xform(k, p, t_ms, motion));
+                    if let Some((_, bob_e)) = emote_xf {
+                        bob = bob_e;
+                    }
                     if lifting {
                         bob -= DRAG_LIFT_PX * dpr;
                     }
-                    let xf = if lifting { lean_xf } else { DrawXform::new(sway, sq_sx, sq_sy) };
-                    self.blit_center_bottom(&list[idx % list.len()], bob, 1.0, &xf);
+                    let flip = matches!(emote, Some((EmoteKind::Turn, p)) if p >= 0.5);
+                    let xf = if lifting {
+                        lean_xf
+                    } else if let Some((xe, _)) = emote_xf {
+                        xe
+                    } else {
+                        DrawXform::new(sway, sq_sx, sq_sy)
+                    };
+                    // R20-c：记下本帧角色框（halo 定位/采样带的基准）
+                    self.last_char_box =
+                        self.blit_center_bottom(&list[idx % list.len()], bob, 1.0, &xf, flip);
                 }
+            }
+            // R20-c（2026-10-19 重做）：**角色画完之后**再合成轮廓柔光——光晕的
+            // 形状来源就是上一步写进 `buf` 的角色 alpha（贴合任何轮廓，不再是几何椭圆环）。
+            // 闸门与首版一致：拖动/滑停期不画（角色在动，光晕会滞后一帧显得脱节，
+            // 且「在手上」的桌宠没有融进桌面这个问题）；停靠/peek 与全屏规则隐藏期
+            // 同样不画（采样侧早已用 `docked_edge.is_none()` 闸住，绘制侧必须同口径，
+            // 否则「采样跳过、绘制照画旧光」）。
+            // 开关（`pshl`，设置面板「背景反差光」）与判据是**与**关系：判据说「该画」、
+            // 用户说「可以画」才画。设置每帧从 shared 读（与 motion 同口径，不缓存——
+            // 缓存就要维护失效路径，而这里一次加锁的成本远低于一条失效链）。
+            let halo_enabled = self.shared.lock().map(|s| s.settings.halo).unwrap_or(true);
+            if halo_enabled && self.halo.on
+                && !self.dragged && !self.drag_settling
+                && self.docked_edge.is_none() && !self.fs_hidden
+            {
+                self.apply_halo();
             }
             // 气泡与角色同帧绘制(帧更新清空 buf 后重画,避免每 tick 文本渲染)
             // R5:审批提醒走独立位图（帧高 84，含「拒绝 / 允许一次」两按钮）；其余仍走 22 帧精灵表
@@ -727,6 +1055,9 @@ impl PetWin {
             } else if let Some(frame) = self.alert.as_ref().map(|a| a.frame) {
                 self.blit_bubble(frame);
             }
+            // P1-b：表情标记画在气泡之后（在气泡之上、角色头顶上方）——它是这一帧
+            // 最后叠上去的「小情绪」，不参与气泡的优先级/驻留体系（独立小状态机）。
+            self.blit_mark(now);
             dirty = true;
         }
         // 气泡:超时检查每 tick;绘制只在帧更新后(避免每 33ms 图像合成)
@@ -734,6 +1065,13 @@ impl PetWin {
         //     限时项(定时台词/单击反馈)到期即清——取代原先「状态帧不参与 3s 过期」的散列判定。
         if self.alert.as_ref().map(|a| a.expired(now)).unwrap_or(false) {
             self.alert = None;
+            dirty = true;
+        }
+        // P1-b：标记到期即清（与气泡同哲学——绝不留一个永久挂在头顶的符号）。
+        // 标记只在帧更新块里画，到期的那一拍若不在帧更新节拍上，下一帧开头就不画
+        // （blit_mark 内部对过期项直接返回），这里负责把字段清掉。
+        if self.mark.as_ref().map(|m| m.expired(now)).unwrap_or(false) {
+            self.mark = None;
             dirty = true;
         }
         if tick < 3 {
@@ -769,7 +1107,21 @@ impl PetWin {
     ///
     /// 性能：全程就地写缓冲，**零分配、零新增 GDI 对象**（motion-plan §3.6 的硬约束）。
     /// 包围盒比原框大约 11%（±2° 摇摆的最坏情况），仍在 33ms 预算内。
-    fn blit_center_bottom(&mut self, img: &Image, bob: f32, scale: f32, xf: &DrawXform) {
+    ///
+    /// 2026-10-19：R20-c 首版为「预渲染椭圆环」加的 `blit_scaled`（显式目标尺寸双线性）
+    /// 随重做一并退役 —— 轮廓柔光直接合成到 `buf`，不再有第二张图要贴。
+    fn blit_center_bottom(
+        &mut self,
+        img: &Image,
+        bob: f32,
+        scale: f32,
+        xf: &DrawXform,
+        // P0-F2：水平镜像（EmoteKind::Turn 转身用）。落在**源采样坐标**上
+        // （`fw - ux`）而不是 DrawXform 的负缩放——那要放宽 `XF_MIN_SCALE` 的安全夹取
+        // （防逆变换除零的边界），为一个动作改它不划算。翻转不改包围盒（框还是那个框），
+        // 命中判定查最终 buf，天然一致。
+        flip: bool,
+    ) -> (i32, i32, i32, i32) {
         // DPI(2026-10-05)：以下几何全部走**物理像素**口径（`pw`/`ph`/`dpr`），
         // 素材绘制高度 = `CELL_H × scale × dpr`。此前硬编码 `WIN_W`/`CELL_H`
         // ⇒ 200% 下素材只有窗口面积的 1/4（窗放大 2× 而素材没放大）。
@@ -779,7 +1131,7 @@ impl PetWin {
         let h = (cell_h as f32 * scale) as i32;
         let w = (img.w as f32 / img.h as f32 * h as f32) as i32;
         if w <= 0 || h <= 0 {
-            return;
+            return (0, 0, 0, 0);
         }
         let src_w = img.w as i32;
         let src_h = img.h as i32;
@@ -815,8 +1167,8 @@ impl PetWin {
                     continue;
                 }
                 // 源坐标中心对齐:(目标像素中心 → 源空间),避免偏一像素的非对称采样
-                // sx = (x + 0.5) * src.w / w - 0.5（`ux` 已含 +0.5）
-                let sxf = ux * (src_w as f32) / fw - 0.5;
+                // sx = (x + 0.5) * src.w / w - 0.5（`ux` 已含 +0.5）；flip 时水平取镜像
+                let sxf = (if flip { fw - ux } else { ux }) * (src_w as f32) / fw - 0.5;
                 let syf = uy * (src_h as f32) / fh - 0.5;
                 let sx0 = sxf.floor() as i32;
                 let sy0 = syf.floor() as i32;
@@ -865,6 +1217,9 @@ impl PetWin {
                 *dst = (oa << 24) | (rr << 16) | (gg << 8) | bb;
             }
         }
+        // R20-c：回报本帧画出的**未变换角色框**（窗口局部物理像素）——背景 halo 的
+        // 定位（贴在框外）与桌面采样带（框两侧）都用它。调用方存入 `last_char_box`。
+        (x0 as i32, y0 as i32, w, h)
     }
 
     /// 叠加一张预渲染帧，按当前 DPI 放大（100% 时即 1:1 直贴）。
@@ -979,6 +1334,118 @@ impl PetWin {
         }
     }
 
+    /* ---------------- P1-b / P2-b：表情反应（符号标记 + whale 表情帧） ---------------- */
+
+    /// 播一个表情反应。**两条渲染路径，按主题与素材自动选**（P2-b）：
+    /// ① **whale 且有对应表情帧** ⇒ 播 `ex*` 图集行（整身瞬时帧，AI 生成 +
+    ///    差异合成的「角色真容」）——走 `Action::Ambient` 槽（继承到期即清与
+    ///    六态压制），时长 `MARK_MS`；
+    /// ② 其余（kurumi/inverse，或 Zzz 这种没生成的表情）⇒ 播 P1 的几何符号标记。
+    ///
+    /// **同源刷新**：再触发同一种 = 续播（重置计时，不重来）；不同种 = 替换。
+    /// 调用方全是事件点（Stroke/Bite/Done/告警/审批/睡眠），不进 33ms 主路径。
+    ///
+    /// 表情帧槽位与姿态槽是**同一个**（单动作槽互斥）——调用顺序上反应在姿态之后
+    /// （见 `petting_and_bite_tick`），whale 的表情因此覆盖 Nod/Shiver 姿态；
+    /// 其余主题的姿态（Nod/Shiver）与符号标记并存（符号本来就不占槽）。
+    fn show_mark(&mut self, kind: Mark, now: std::time::Instant) {
+        if let Some(row) = expression_row_for(kind) {
+            // 表情帧是 whale 资产：**当前模式必须是 whale 才行**——
+            // frames 是全量加载的（三主题都在内存），不判模式会让 kurumi/inverse
+            // 也播鲸鱼的表情帧（串味）。
+            let mode = self.shared.lock().map(|s| s.mode.clone()).unwrap_or_default();
+            let has_row = mode == "whale"
+                && self.frames.whale_rows.get(row).map(|l| !l.is_empty()).unwrap_or(false);
+            if has_row {
+                self.action = Some(ActionSlot {
+                    action: Action::Ambient { row: row.to_string() },
+                    started: now,
+                    duration: std::time::Duration::from_millis(MARK_MS),
+                });
+                self.frame_idx = 0;
+                self.last_tick = now - std::time::Duration::from_secs(10);
+                // 表情帧与符号二选一——播了表情就把符号收掉（避免「脸上有表情，
+                // 头顶还飘同情绪符号」的重复表达）
+                self.mark = None;
+                return;
+            }
+        }
+        let refresh = self.mark.as_ref().map(|m| m.kind == kind).unwrap_or(false);
+        if !refresh {
+            self.mark = Some(MarkPlay::new(kind, now, MARK_MS));
+        } else {
+            // 续播只续命不重播——同一种符号反复弹射读作「抽搐」
+            if let Some(m) = self.mark.as_mut() {
+                m.started = now;
+            }
+        }
+    }
+
+    /// 把当前标记画进合成缓冲（角色与气泡之后调用 ⇒ 符号在气泡之上、角色头顶上方）。
+    ///
+    /// 定位复用 `last_char_box`（R20-c halo 引入的本帧角色框）——不新算几何；
+    /// 盒 = 角色宽中心 ×（框顶 − `MARK_LIFT_PX`）。**只有有标记的帧**才做逐点判定
+    /// （约 34² 里形状内的少量像素），静止期零开销；隐藏/全屏隐藏期不画。
+    fn blit_mark(&mut self, now: std::time::Instant) {
+        if !self.shown || self.fs_hidden {
+            return;
+        }
+        let Some(play) = self.mark.as_ref() else { return };
+        if play.expired(now) {
+            return; // 清字段由 compose 的到期检查做（这里只负责不画）
+        }
+        let (bx, by, bw, _bh) = self.last_char_box;
+        if bw <= 0 {
+            return; // 冷启第一帧前没有角色框——不猜位置
+        }
+        let (pw, ph) = self.win_size();
+        let box_px = scaled_px(MARK_BOX_PX, self.dpi);
+        let (scale, bob, alpha) = mark_frame(play.progress(now));
+        let size = (box_px as f32 * scale).round() as i32;
+        if size <= 0 || alpha <= 0.0 {
+            return;
+        }
+        // 盒中心：角色宽中心；盒顶：框顶 − 升空 − 浮动（bob 向下为正）
+        let cx = bx + bw / 2;
+        let top = by - scaled_px(MARK_LIFT_PX, self.dpi) + bob.round() as i32;
+        let x0 = cx - size / 2;
+        let (cr, cg, cb) = mark_color(play.kind);
+        let a_full = (alpha * 255.0).round().clamp(0.0, 255.0) as u32;
+        let inv_size = 2.0 / size as f32; // 像素 → 局部坐标 [-1,1]²
+        for dy in 0..size {
+            let wy = top + dy;
+            if wy < 0 || wy >= ph {
+                continue;
+            }
+            let ly = (dy as f32 + 0.5) * inv_size - 1.0;
+            for dx in 0..size {
+                let wx = x0 + dx;
+                if wx < 0 || wx >= pw {
+                    continue;
+                }
+                let lx = (dx as f32 + 0.5) * inv_size - 1.0;
+                if !mark_shape(play.kind, lx, ly) {
+                    continue;
+                }
+                let dst = &mut self.buf[(wy * pw + wx) as usize];
+                let da = (*dst >> 24) & 0xFF;
+                let inv = 255 - a_full;
+                // 2026-10-18 审查修正：buf 是**预乘**缓冲（`load_png` 预乘 + ULW
+                // AC_SRC_ALPHA），源色必须先乘 alpha 再 over。直接加未预乘的 `cr`
+                // 会让淡入/淡出期的 RGB 远大于 alpha（视觉上标记「瞬间全彩出现、
+                // 瞬间消失」，与 `mark_frame` 的 alpha 演出设计不符）。
+                let sr = (cr as u32 * a_full + 127) / 255;
+                let sg = (cg as u32 * a_full + 127) / 255;
+                let sb = (cb as u32 * a_full + 127) / 255;
+                let r = (sr + (((*dst >> 16) & 0xFF) * inv / 255)).min(255);
+                let g = (sg + (((*dst >> 8) & 0xFF) * inv / 255)).min(255);
+                let b = (sb + ((*dst & 0xFF) * inv / 255)).min(255);
+                let oa = (a_full + da * inv / 255).min(255);
+                *dst = (oa << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+
     /// R2(2026-09-16):窗口局部坐标处是否「透明」（= 可让鼠标穿透到下层窗口）。
     /// 直接查当前合成缓冲 `buf`——它已是「立绘 + 气泡」逐像素 over 之后的**最终结果**，
     /// 因此不必像参考实现那样为每种元素单独维护 mask（`pet/window.py:_sync_mask`）：
@@ -989,6 +1456,8 @@ impl PetWin {
     /// 「看得见的必可点、看不见的必穿透」由「查最终缓冲」这一条架构决定自动成立。
     /// （`pet-v5-motion-plan.md` §3.3 曾把「命中必须与绘制同批改造」列为 L1 硬约束，
     ///  那是参考实现的前提：它为每元素单独维护 mask，旋转后 mask 与画面脱钩。我方无此问题。）
+    /// P1-b：标记同样写进 `buf` ⇒ 光标压在标记上算命中角色（与气泡同口径，
+    /// 不单独设命中层——§3.3.1 架构红利的延续）。
     fn is_transparent_at(&self, x: i32, y: i32) -> bool {
         // 2026-09-29：用户选「总是可点」⇒ **恒不穿透**，整个窗口矩形都接住鼠标。
         // 放在越界判断**之前**是刻意的：这是**策略**层（要不要参与命中），不是几何层
@@ -1005,6 +1474,22 @@ impl PetWin {
         let (pw, ph) = self.win_size();
         let pad = scaled_px(CLICK_GRAB_PAD_PX, self.dpi);
         !grab_hit(&self.buf, pw, ph, x, y, pad, CLICK_THROUGH_ALPHA)
+    }
+
+    /// P0-F1（2026-10-18 审查修正）：互动判据的**几何命中**——光标是否压在角色像素上。
+    ///
+    /// **不能复用 `is_transparent_at`**：它在最前面按「总是可点」设置（`through_disabled`）
+    /// 早退返回「不透明」。那是**穿透策略**（要不要把点击交给下层），不是几何事实。
+    /// 摸头判定若走它，该设置档下任何屏幕坐标都会被算成「命中角色」⇒ `petting_tick`
+    /// 的 `on_hit` 恒真 ⇒ 桌宠每 400ms 自己摸自己（点头 + pat 音 + 心情 +10，`pet.log`
+    /// 每 0.4s 一行），60s 内 5 下即咬手并把窗口瞬移到光标跟随 1.2s。
+    ///
+    /// 判据与 R2 的几何部分同源（`grab_hit`：窗口越界恒假 + 抓取热区膨胀），
+    /// 但**刻意不看策略层**。源码契约 `petting_uses_geometric_hit_only` 钉死这一点。
+    fn is_on_character(&self, x: i32, y: i32) -> bool {
+        let (pw, ph) = self.win_size();
+        let pad = scaled_px(CLICK_GRAB_PAD_PX, self.dpi);
+        grab_hit(&self.buf, pw, ph, x, y, pad, CLICK_THROUGH_ALPHA)
     }
 
     /// 「总是可点」设置。每 10ms 的命中轮询会读它，故**只取一个 bool、临界区极短**；
@@ -1134,14 +1619,356 @@ impl PetWin {
             )
         }
     }
+
+    /* ---------------- R20-c · 背景对比 halo ---------------- */
+
+    /// R20-c：一拍「采样桌面 → 与身体比 → 更新环状态」（2s 节拍，compose 清 buf 前调）。
+    ///
+    /// 身体色 = **上一帧** buf 的角色带实心像素平均（此刻 buf 还是上一帧）；
+    /// 桌面色 = 上一帧角色框**左右各一条**采样带的平均（框外 ⇒ 采到的是桌面/
+    /// 窗内透明留白，不是桌宠自己——参考实现靠 skip 区域绕开自己，我方靠
+    /// 「采样带在框外」这一条几何事实，更简单也更难错）。
+    /// 任一侧失败/出屏 ⇒ 本拍不更新（保持原状，不猜）。
+    fn backdrop_tick(&mut self) {
+        let Some(body) = self.body_avg_from_buf() else { return };
+        let (bx, by, bw, bh) = self.last_char_box;
+        if bw <= 0 || bh <= 0 {
+            return; // 还没有有效帧（冷启第一拍）
+        }
+        let dpr = dpi_scale(self.dpi);
+        let sh = scaled_px(BACKDROP_STRIP_H, self.dpi);
+        // 采样带不超过框宽的 1/3：窄角色（inverse ≈150px）时采样带随之收窄，
+        // 宽角色（whale ≈249px）时也不越过 BACKDROP_STRIP_W 的上限。
+        let strip_w = scaled_px(BACKDROP_STRIP_W, self.dpi).min((bw / 3).max(4));
+        let gap = (4.0 * dpr).round() as i32;
+        let (px, py) = self.pos;
+        let top = py + by + bh / 2 - sh / 2;
+        let left = Rect {
+            left: px + bx - gap - strip_w,
+            top,
+            right: px + bx - gap,
+            bottom: top + sh,
+        };
+        let right = Rect {
+            left: px + bx + bw + gap,
+            top,
+            right: px + bx + bw + gap + strip_w,
+            bottom: top + sh,
+        };
+        // 出屏闸门（纯函数 `backdrop::strips_inside`）：采到黑屏会把判据拉失真
+        // （深身 vs 黑 = 永不翻动、浅身 vs 黑 = 常亮），贴边/peek 时就该跳过。
+        let work = monitor_workspaces()
+            .into_iter()
+            .find(|r| {
+                let cx = (left.left + right.right) / 2;
+                let cy = top + sh / 2;
+                cx >= r.left && cx < r.right && cy >= r.top && cy < r.bottom
+            })
+            .unwrap_or(Rect { left: 0, top: 0, right: 1, bottom: 1 });
+        if !backdrop::strips_inside((left, right), work) {
+            return;
+        }
+        let (Some(a), Some(b)) = (backdrop::sample_avg(left), backdrop::sample_avg(right)) else {
+            return;
+        };
+        let backdrop = [
+            ((a[0] as u16 + b[0] as u16) / 2) as u8,
+            ((a[1] as u16 + b[1] as u16) / 2) as u8,
+            ((a[2] as u16 + b[2] as u16) / 2) as u8,
+        ];
+        self.halo.update(body, backdrop);
+    }
+
+    /// R20-c：从合成缓冲算**身体平均色**——角色带（物理口径）内 alpha ≥ 200 的像素平均。
+    ///
+    /// 阈值 200 而不是 16：边缘抗锯齿像素是「身体 + 桌面」的混合色，算进去会把
+    /// 身体色拉向桌面色、距离判据被系统性压低（ halo 该亮时不亮）。
+    /// buf 是预乘的——alpha=255 处预乘值即原色；≥200 处的反预乘误差 ≤1 级，
+    /// 对距离判据无感，不值得为此加一趟反预乘。
+    fn body_avg_from_buf(&self) -> Option<[u8; 3]> {
+        let (pw, _ph) = self.win_size();
+        let band = self.role_local_phys();
+        let (mut sr, mut sg, mut sb, mut n) = (0u64, 0u64, 0u64, 0u64);
+        for y in band.top.max(0)..band.bottom.min(self.buf.len() as i32 / pw.max(1)) {
+            for x in band.left.max(0)..band.right.min(pw) {
+                let px = self.buf[(y * pw + x) as usize];
+                if (px >> 24) & 0xFF >= 200 {
+                    sr += ((px >> 16) & 0xFF) as u64;
+                    sg += ((px >> 8) & 0xFF) as u64;
+                    sb += (px & 0xFF) as u64;
+                    n += 1;
+                }
+            }
+        }
+        if n < 256 {
+            return None; // 几乎没有实心像素（空帧/角色还没画）⇒ 不猜
+        }
+        Some([(sr / n) as u8, (sg / n) as u8, (sb / n) as u8])
+    }
+
+    /// R20-c（2026-10-19 重做）：把本帧角色的轮廓糊开、合成成角色**下面**的柔光。
+    ///
+    /// 调用时机：两个角色绘制分支都已把角色写进 `buf` 之后、气泡/标记之前——
+    /// 顺序是硬契约：光晕的**形状来源就是 `buf` 里角色的 alpha**（轮廓），
+    /// 而气泡/标记不该参与光晕（它们不是角色身体）。
+    ///
+    /// 为什么不是首版那种「预渲染环 PNG + blit」：环与角色轮廓没有几何关系，
+    /// 实机上就是一个套在鲸鱼娘外面的椭圆白圈（用户 2026-10-19 报障）。
+    /// 现在光晕由 alpha 轮廓生成 ⇒ 贴合裙摆/呆毛/双马尾任何形状。
+    ///
+    /// 三个缓冲字段复用：每帧新分配 3×111KB 在 30fps 下是 ~10MB/s 的垃圾，
+    /// 与本文件「静止期零分配」的既有口径相悖。
+    fn apply_halo(&mut self) {
+        let (pw, ph) = self.win_size();
+        let (pw_us, ph_us) = (pw as usize, ph as usize);
+        let n = pw_us * ph_us;
+        if pw_us == 0 || ph_us == 0 || self.buf.len() < n {
+            return;
+        }
+        if self.halo_mask.len() < n {
+            self.halo_mask.resize(n, 0);
+            self.halo_tmp.resize(n, 0);
+            self.halo_blur.resize(n, 0);
+        }
+        for i in 0..n {
+            self.halo_mask[i] = ((self.buf[i] >> 24) & 0xFF) as u8;
+        }
+        let dpr = dpi_scale(self.dpi);
+        let radius = (HALO_BLUR_PX * dpr).round().max(1.0) as usize;
+        backdrop::blur_alpha_box(
+            &self.halo_mask[..n],
+            &mut self.halo_tmp[..n],
+            &mut self.halo_blur[..n],
+            pw_us,
+            ph_us,
+            radius,
+        );
+        let color = self.halo.color;
+        backdrop::composite_glow(
+            &mut self.buf[..n],
+            &self.halo_blur[..n],
+            n,
+            color,
+            HALO_STRENGTH,
+            HALO_GAMMA,
+        );
+    }
+
+    /* ---------------- P0-F1（2026-10-18）：摸头与咬手 ---------------- */
+
+    /// 每个 `IDT_HIT` 拍（10ms）调：摸头判定 + 咬合跟随 + 咬合到期。
+    ///
+    /// **为什么搭 IDT_HIT 不新开定时器**：该轮询本就每 10ms 跑（R2 穿透判定），
+    /// 光标位置与 on_hit 都是现成事实；新增定时器要新的 id 与挂表/销毁路径，纯负担。
+    /// 与 `update_click_through` 的分工：那个管穿透样式，这个管互动语义——两者都读
+    /// 光标，但关注点不同（穿透问「该不该把点击交给下层」，抚摸问「摸多久了」）。
+    fn petting_and_bite_tick(&mut self) {
+        let now = std::time::Instant::now();
+        let mut p = Point { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut p);
+        }
+        // ① 咬着光标：窗口跟着光标走（「咬住你的手」），到期或被按下即松口。
+        //    咬着的时候不做抚摸判定——它正忙着咬。
+        if let Some(off) = self.bite_follow {
+            let target = (p.x - off.0, p.y - off.1);
+            if target != self.pos {
+                let (ww, wh) = self.win_size();
+                unsafe { MoveWindow(self.hwnd, target.0, target.1, ww, wh, 1) };
+                self.pos = target;
+            }
+            if self.bite_until.map(|t| now >= t).unwrap_or(false) {
+                self.finish_bite();
+            }
+            return;
+        }
+        // ② 以下情形不判定抚摸：隐藏 / 拖拽中 / 滑停中 / 飞行中 / 全屏规则隐藏期。
+        //    （飞行与滑停期窗口在动，「摸」的判据是光标与角色的接触连续性，
+        //     窗口自己在动会让判据失去意义；拖动中更不必说。）
+        //    2026-10-18 审查修正：早退必须**打断抚摸段**——否则 `hold_since` 冻结在早退前
+        //    的时刻，恢复第一拍立刻补出一个 Stroke（拖完松手「吱」一声、隐藏再显示也触发）。
+        if !self.shown || self.dragged || self.drag_settling || self.flying.is_some() || self.fs_hidden {
+            petting_tick(&mut self.petting, false, now, PET_HOLD_MS);
+            return;
+        }
+        // 2026-10-18 审查修正：命中判据锁定**几何层**（`is_on_character`），不得复用
+        // `is_transparent_at` —— 后者最前面按「总是可点」设置早退返回「不透明」，
+        // 那是穿透策略；组合起来会让该档下任何屏幕坐标都算摸头（每 400ms 自摸 + 咬手）。
+        let on_hit = self.is_on_character(p.x - self.pos.0, p.y - self.pos.1);
+        let ev = petting_tick(&mut self.petting, on_hit, now, PET_HOLD_MS);
+        match ev {
+            PetEvent::Stroke => {
+                // 摸一下：点头 + 吱一声 + 心情 +。表情槽会被六态压住（审批/告警优先），
+                // 与 jump/wave 同命运——反馈照给，姿态让位。
+                // 2026-10-18 审查修正：互动也是「叫醒」——不吃免睡冷却会下一拍回睡姿。
+                self.wake_from_sleep(now);
+                self.action = Some(ActionSlot {
+                    action: Action::Emote { kind: EmoteKind::Nod },
+                    started: now,
+                    duration: std::time::Duration::from_millis(NOD_MS),
+                });
+                self.frame_idx = 0;
+                self.last_tick = now - std::time::Duration::from_secs(10);
+                self.mood = mood_apply(self.mood, MoodEvent::Stroke);
+                self.sfx("pat");
+                pet_log_line(&format!("[native-pet] stroke mood={}\n", self.mood));
+            }
+            PetEvent::Bite => {
+                // 咬手：脱离停靠/peek（同拖动起手口径——窗口要跟着光标跑，
+                // 停靠/探头假设窗口不动，R14 教训②：位移来源必须让位），
+                // 记咬合偏移，挂全程颤抖，心情 -，进冷却。
+                self.wake_from_sleep(now);
+                peek_reset(&mut self.peek);
+                self.docked_edge = None;
+                self.bite_follow = Some((p.x - self.pos.0, p.y - self.pos.1));
+                self.bite_until = Some(now + std::time::Duration::from_millis(BITE_CLING_MS));
+                self.action = Some(ActionSlot {
+                    action: Action::Emote { kind: EmoteKind::Shiver },
+                    started: now,
+                    duration: std::time::Duration::from_millis(BITE_CLING_MS),
+                });
+                self.frame_idx = 0;
+                self.last_tick = now - std::time::Duration::from_secs(10);
+                self.mood = mood_apply(self.mood, MoodEvent::Bite);
+                self.sfx("chomp");
+                // P1-b：怒纹在 match 前经 `mark_for_pet_event` 统一挂（见上）
+                pet_log_line(&format!(
+                    "[native-pet] bite cling={}ms mood={}\n",
+                    BITE_CLING_MS, self.mood
+                ));
+            }
+            PetEvent::None => {}
+        }
+        // P1-b/P2-b：表情反应在**姿态之后**决定——事件 → 情绪是纯函数映射
+        // （`mark_for_pet_event`，单测钉死「谁配谁」；契约查不到「调用被注掉」，
+        // 映射查得到——P0 `throw_triggered` 同款纪律）；`show_mark` 内部按主题
+        // 选渲染路径：whale 演表情帧（覆盖上面的姿态槽），其余主题落符号标记
+        // （与姿态并存——符号不占槽）。
+        if let Some(kind) = mark_for_pet_event(ev) {
+            self.show_mark(kind, now);
+        }
+    }
+
+    /// P0-F2 审查修正（2026-10-18）：叫醒桌宠——清掉睡眠时段缓存并给一段
+    /// **免睡冷却**。点击/抚摸/咬手都走这里（设计「点击/抚摸/咬手都能叫醒」）。
+    ///
+    /// 为什么必须有冷却：`sleep_night` 会被 30s 的夜间检查重新置 true，
+    /// 而「瞌睡续觉」钩子每拍检查 `sleep_night && action.is_none()`——只清
+    /// `sleep_night` 的话，下一拍检查就把它放回睡姿，用户看到的是「点一下闪一下」。
+    /// 冷却期内两处挂睡眠槽的门都不放行（见 compose 的睡眠检查段/续觉段）。
+    fn wake_from_sleep(&mut self, now: std::time::Instant) {
+        self.sleep_night = false;
+        self.wake_sleep_until = Some(now + std::time::Duration::from_millis(SLEEP_WAKE_MS));
+    }
+
+    /// P0-F2 审查修正：是否仍处于「刚被叫醒」的免睡冷却中。
+    fn sleep_wake_blocked(&self, now: std::time::Instant) -> bool {
+        self.wake_sleep_until.map(|t| now < t).unwrap_or(false)
+    }
+
+    /// 咬合结束（自然松口 / 被按下 / 窗口销毁路径）：一次「迷你拖动收尾」——
+    /// 停靠判定 + 落盘 + 悬浮球同步。位置可能已被光标带出工作区，
+    /// `apply_dock`/`save_pet_pos` 都吃钳制后的值（E30 的推出逻辑在这里同样成立）。
+    fn finish_bite(&mut self) {
+        self.bite_follow = None;
+        self.bite_until = None;
+        let docked = self.apply_dock();
+        let hide = self.shared.lock().map(|s| s.hide).unwrap_or(false);
+        save_pet_pos(self.pos, hide, docked);
+        self.render_dot();
+        pet_log_line(&format!(
+            "[native-pet] bite end -> ({},{}) dock={:?}\n",
+            self.pos.0, self.pos.1, docked
+        ));
+    }
+
+    /* ---------------- P0-F3：抛掷飞行 ---------------- */
+
+    /// 飞行一拍（`IDT_DRAG` 8ms 节拍）：推进物理 → 落窗 → 命中反馈 → 结束判定。
+    /// dt 用 `last_drag_tick` 的真实经过时间（与弹簧同一口径：不写死 8ms）。
+    fn fly_tick(&mut self) {
+        let dt = self.last_drag_tick.elapsed().as_millis().min(DRAG_TICK_MAX_MS as u128) as u32;
+        self.last_drag_tick = std::time::Instant::now();
+        let bounds = self.fly_bounds();
+        let mut st = match self.flying.take() {
+            Some(s) => s,
+            None => return,
+        };
+        let hit = fly_step(&mut st, dt, bounds);
+        if hit != FlyHit::None {
+            // 撞边：一次挤压脉冲（与跳跃落地共用同一通道）+ 嘭一声
+            self.squash_start = Some(std::time::Instant::now());
+            self.sfx("bounce");
+            pet_log_line(&format!(
+                "[native-pet] bounce {:?} at ({:.0},{:.0}) v=({:.0},{:.0})\n",
+                hit, st.pos.0, st.pos.1, st.vel.0, st.vel.1
+            ));
+        }
+        let (nx, ny) = (st.pos.0.round() as i32, st.pos.1.round() as i32);
+        if (nx, ny) != self.pos {
+            let (ww, wh) = self.win_size();
+            unsafe { MoveWindow(self.hwnd, nx, ny, ww, wh, 1) };
+            self.pos = (nx, ny);
+        }
+        // 飞行倾斜的输入 = 当前速度（与 R18 拖动倾斜同源）
+        self.drag_vel = st.vel;
+        let end = fly_should_end(&st);
+        self.flying = Some(st);
+        if end {
+            self.finish_fly();
+        }
+    }
+
+    /// 飞行收尾：停表、清状态、停靠判定 + 落盘 + 放下音。与 `finish_drag_settle`
+    /// 同构（「落盘位置 = 用户看到的停止位置」）。
+    fn finish_fly(&mut self) {
+        self.flying = None;
+        if self.dragging_timer_on {
+            unsafe { KillTimer(self.hwnd, IDT_DRAG) };
+            self.dragging_timer_on = false;
+        }
+        self.drag_vel = (0.0, 0.0);
+        let docked = self.apply_dock();
+        let hide = self.shared.lock().map(|s| s.hide).unwrap_or(false);
+        save_pet_pos(self.pos, hide, docked);
+        self.render_dot();
+        self.sfx("drop");
+        pet_log_line(&format!(
+            "[native-pet] fly end -> ({},{}) dock={:?}\n",
+            self.pos.0, self.pos.1, docked
+        ));
+    }
+
+    /// 飞行的边界 = 桌宠所在显示器**工作区**收窄窗口物理尺寸（窗口左上角的允许范围）。
+    /// 取不到所在工作区时回主屏（`screen_size`）——「不猜」只适用于判据，
+    /// 边界必须有值，否则桌宠会飞进负数坐标。
+    fn fly_bounds(&self) -> (i32, i32, i32, i32) {
+        let (pw, ph) = self.win_size();
+        let (sx, sy) = screen_size();
+        let work = monitor_workspaces()
+            .into_iter()
+            .find(|r| {
+                let cx = self.pos.0 + pw / 2;
+                let cy = self.pos.1 + ph / 2;
+                cx >= r.left && cx < r.right && cy >= r.top && cy < r.bottom
+            })
+            .unwrap_or(Rect { left: 0, top: 0, right: sx, bottom: sy });
+        (
+            work.left,
+            work.top,
+            (work.right - pw).max(work.left),
+            (work.bottom - ph).max(work.top),
+        )
+    }
     /// R2:按光标位置切换 `WS_EX_TRANSPARENT`（由 10ms 轮询定时器驱动）。
     /// **必须轮询**：一旦置位穿透，本窗口收不到鼠标消息，「何时恢复可点击」无从由事件得知。
     /// 规则：隐藏 / 拖拽中恒不穿透（保证跟手与恢复入口可用），其余按命中结果切换。
     /// R18：滑停（松手后 ≤300ms 的自然滑行）也算「拖拽中」——那期间窗口还在动，
     /// 穿透态切换与移动叠在一起没有意义，且用户可能立刻再次按下。
+    /// P0-F3：抛掷飞行同理——高速移动中切穿透会让「伸手接住它」变成抽奖。
     /// R20-a：全屏规则隐藏期同样早退——窗口都藏了，10ms 光标轮询是纯浪费。
     fn update_click_through(&mut self) {
-        if !self.shown || self.dragged || self.drag_settling || self.fs_hidden {
+        if !self.shown || self.dragged || self.drag_settling || self.flying.is_some() || self.fs_hidden {
             self.set_click_through(false);
             return;
         }
@@ -1635,6 +2462,8 @@ impl PetWin {
         self.alert_shown_at = std::time::Instant::now();
         // R20-b：起跳音（落地音在 JumpHold 转定格处，见 compose 动作槽清理）
         self.sfx("jump");
+        // P0-F4：被撸一下，心情 +（与 Stroke 的 +10 区分：这是「点击」不是「抚摸」）
+        self.mood = mood_apply(self.mood, MoodEvent::Hop);
     }
 
     /// v2 双击挥手:播 wave 行(约 500ms 内容,余量 1300ms 收尾)。
@@ -1649,6 +2478,12 @@ impl PetWin {
         self.last_tick = std::time::Instant::now() - std::time::Duration::from_secs(10);
         // R20-b：挥手的「咻」
         self.sfx("wave");
+        // P0-F4：被打招呼，心情 +
+        self.mood = mood_apply(self.mood, MoodEvent::Wave);
+        // P2-b：被热情打招呼 ⇒ 害羞（whale 演 exShy 表情帧，其余主题落腮红符号）。
+        // 排在姿态槽之后：表情会覆盖 wave 行（单槽互斥），符号则不占槽与 wave 并存。
+        let now = std::time::Instant::now();
+        self.show_mark(Mark::Shy, now);
     }
 
     /// v2 决策1:主窗口最小化/隐藏时双击=唤起(do_wave 的替代路径)
@@ -1817,8 +2652,34 @@ impl PetWin {
     /// 残余 <1px），由 `drag_settle_tick` 在双轴到位时收尾。慢拖/点一下（松手时
     /// 已到位）首拍即收尾，行为与旧版无差异。
     /// 异常态（目标/弹簧已清）⇒ 立即按现状收尾，不留半拖状态。
+    ///
+    /// **P0-F3（2026-10-18）**：松手速度 ≥ `THROW_VEL_MIN` ⇒ 进**抛掷飞行**（`flying`），
+    /// 代替滑停——「拎起来甩出去」（Coopanion/GarfieldZhung 同款玩法）。判据用
+    /// `drag_vel`（R19 直跟手期每拍更新的窗口速度）；慢放仍走滑停，行为零变化。
     fn release_drag(&mut self) {
         self.dragged = false;
+        if self.drag_target.is_some() && throw_triggered(self.drag_vel) {
+            // 飞行从「当前窗口位置 + 松手速度」起跳——直跟手末期窗口就在目标附近，
+            // 不需要再对齐一次（对齐反而引入一次可见跳变）。
+            self.flying = Some(FlyState {
+                pos: (self.pos.0 as f32, self.pos.1 as f32),
+                vel: self.drag_vel,
+                bounces: 0,
+                age_ms: 0,
+            });
+            self.drag_target = None;
+            self.drag_spring_x = None;
+            self.drag_spring_y = None;
+            // 表继续挂着（松手路径不 KillTimer）——飞行由同一个 IDT_DRAG 节拍驱动
+            // P0-F4：被甩出去，它害怕（心情 -）
+            self.mood = mood_apply(self.mood, MoodEvent::Throw);
+            self.sfx("whoosh");
+            pet_log_line(&format!(
+                "[native-pet] throw start v=({:.0},{:.0}) from ({},{})\n",
+                self.drag_vel.0, self.drag_vel.1, self.pos.0, self.pos.1
+            ));
+            return;
+        }
         if self.drag_target.is_some() && self.drag_spring_x.is_some() && self.drag_spring_y.is_some() {
             self.drag_settling = true;
             return;
@@ -1873,8 +2734,10 @@ impl PetWin {
     /// 返回 `(xf, lifting)`：`lifting = true` 表示本帧处于拖动/滑停，调用方据此
     /// **关掉摇摆**（lean 顶替、不叠加——叠加会突破横向余量，由 `xform.rs` 的
     /// `lean_plus_sway_would_overflow_so_they_are_exclusive` 钉住）并加拎起抬升。
+    /// P0-F3：抛掷飞行同样吃 lean（「飞出去时朝着运动方向倾斜」）——抬升对飞行无意义
+    /// （它本来就在空中），但 6px 在高速移动中不可感知，统一走 lifting 更简单。
     fn drag_lean_now(&self, motion: f32) -> (DrawXform, bool) {
-        if self.dragged || self.drag_settling {
+        if self.dragged || self.drag_settling || self.flying.is_some() {
             (drag_lean(self.drag_vel.0, self.drag_vel.1, motion), true)
         } else {
             (DrawXform::IDENTITY, false)
@@ -2079,16 +2942,23 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             } else if wp == IDT_HIT {
                 // R2:透明区域鼠标穿透——10ms 轮询光标并切换 WS_EX_TRANSPARENT
                 (*pet).update_click_through();
+                // P0-F1：摸头判定 + 咬手跟随（同一 10ms 拍，光标与命中事实都是现成的）
+                (*pet).petting_and_bite_tick();
                 0
             } else if wp == IDT_DRAG {
                 // R13:拖动合帧——8ms 消费最新目标。**同一节拍内无新目标时不 MoveWindow**
                 // （这正是合帧省下来的开销）；也据此重画，避免无谓的 present。
-                if (*pet).flush_drag_target() {
-                    (*pet).render_dot();
+                if (*pet).flying.is_some() {
+                    // P0-F3：抛掷飞行中——本拍推进物理（移动/反弹/结束判定都在 fly_tick）
+                    (*pet).fly_tick();
+                } else {
+                    if (*pet).flush_drag_target() {
+                        (*pet).render_dot();
+                    }
+                    // R18：滑停节拍——松手后续跑到弹簧双轴到位才收尾落盘（消前跳）。
+                    // 不在拖动也不在滑停时是零开销早退。
+                    (*pet).drag_settle_tick();
                 }
-                // R18：滑停节拍——松手后续跑到弹簧双轴到位才收尾落盘（消前跳）。
-                // 不在拖动也不在滑停时是零开销早退。
-                (*pet).drag_settle_tick();
                 0
             } else if wp == IDT_PEEK {
                 // M4.1:peek 边界检测（静置到期 / 光标压上）；动画推进在 compose 节拍
@@ -2117,6 +2987,12 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
             // R13:新按压序列 —— 上一轮若有残留目标（异常路径，如拖动中窗口被销毁），
             // 在这里清掉并停表，避免下一次拖动时「跳到上一轮的目标」。
             (*pet).end_drag();
+            // P0-F3：飞行中按下 = 「伸手接住」——按现状收尾（停靠判定 + 落盘），
+            // 随后本按键序列照常起拖动（从当前位置）。不清这一步的话飞行状态会把
+            // 「按下即抓」变成「按下后它还按物理飞」。
+            if (*pet).flying.is_some() {
+                (*pet).finish_fly();
+            }
             // R16（2026-10-12）：**显式捕获鼠标**。
             //
             // 本仓 M1–M4 一直只依赖 Win32 的隐式捕获（「在客户区按下按钮时系统自动捕获」），
@@ -2150,15 +3026,29 @@ unsafe extern "system" fn wnd_proc(hwnd: isize, msg: u32, wp: usize, _lp: isize)
                 ));
             }
             // v2:指针按下即打断环境编排/挥手/散步(拖拽与动作互斥);跳跃保留不打折反馈
+            // P0-F2：Emote 也进打断清单——点一下 = 「别演了」（睡觉被叫醒、跳舞被叫停都走这条）；
+            // P0-F1：咬着光标时按下 = 「松口」（finish_bite 收尾落盘，点击本身照常走后续语义）。
+            if (*pet).bite_follow.is_some() {
+                (*pet).finish_bite();
+            }
+            let interrupted_sleep = matches!(
+                &(*pet).action,
+                Some(s) if matches!(s.action, Action::Emote { kind: EmoteKind::Sleep })
+            );
             let interrupt = matches!(
                 &(*pet).action,
                 Some(s) if matches!(
                     s.action,
-                    Action::Ambient { .. } | Action::Wave | Action::Wander { .. }
+                    Action::Ambient { .. } | Action::Wave | Action::Wander { .. } | Action::Emote { .. }
                 )
             );
             if interrupt {
                 (*pet).action = None;
+            }
+            // 2026-10-18 审查修正：打断的是**睡眠槽** ⇒ 走「叫醒」路径（清夜间缓存 +
+            // 免睡冷却）。只清动作槽的话「瞌睡续觉」钩子下一拍就把它放回睡姿（点击即醒失效）。
+            if interrupted_sleep {
+                (*pet).wake_from_sleep(std::time::Instant::now());
             }
             0
         }
@@ -2499,6 +3389,21 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// P0-F2：本地小时（0–23）——睡眠时段判定（`SLEEP_START_HOUR`–`SLEEP_END_HOUR`）。
+/// `GetLocalTime` 失败（不失败——它无返回值）给 12（正午，永不进睡眠段），
+/// 失败方向取「不睡」：误睡的代价（深夜桌宠不动）比不睡大。
+fn local_hour() -> u32 {
+    let mut t = SystemTime::default();
+    unsafe {
+        GetLocalTime(&mut t);
+    }
+    if t.hour > 23 {
+        12
+    } else {
+        t.hour as u32
+    }
+}
+
 /// R5:JSON 字符串字面量——把 key/decision 安全注入 eval 的 JS 片段（防注入）。
 fn json_lit(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
@@ -2667,6 +3572,21 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
         let (bw, bh) = scaled_window_size(WIN_W, WIN_H, boot_dpi);
         // 悬浮球球面初值 = 当前主题（spawn 时从 prefs.json 载入）→ 隐藏态冷启动第一帧即正确球面
         let theme0 = shared.lock().map(|s| s.theme.clone()).unwrap_or_else(|_| "pure".to_string());
+        // P2-a：冷启动加载时的配色预设（frames 已是该配色；之后 compose 每拍
+        // 与 shared.settings.color 比对，不一致才重载）
+        let color0 = shared.lock().map(|s| s.settings.color).unwrap_or(0);
+        // A 批：冷启动加载时的形象（与 spawn 的 load_frames_for 同一入参；
+        // 只对 whale 生效，其余主题恒 default）。与 loaded_color 合成加载键。
+        let appearance0 = shared
+            .lock()
+            .map(|s| {
+                if s.mode == "whale" {
+                    s.settings.appearance.clone()
+                } else {
+                    super::settings::APPEARANCE_DEFAULT.to_string()
+                }
+            })
+            .unwrap_or_else(|_| super::settings::APPEARANCE_DEFAULT.to_string());
         let mut pet = Box::new(PetWin {
             hwnd: 0,
             dot_hwnd: 0,
@@ -2729,6 +3649,37 @@ pub(crate) fn create_window(app: AppHandle, shared: Arc<Mutex<PetShared>>, frame
             dot_hover: false,
             dot_click_through: false,
             fs_hidden: false,
+            last_char_box: (0, 0, 0, 0),
+            next_backdrop: std::time::Instant::now(),
+            halo: backdrop::HaloState::off(),
+            // R20-c（2026-10-19 重做）：轮廓柔光缓冲——空起步，首次启用时按窗分配。
+            halo_mask: Vec::new(),
+            halo_tmp: Vec::new(),
+            halo_blur: Vec::new(),
+            last_want_hide: false,
+            // P0（2026-10-18）：互动/表演/物理/心情四件的初值。
+            // 心情从 0（平常）起；两个检查节拍都错开起手（不与 ambient 首次延迟撞车）。
+            petting: Petting::new(std::time::Instant::now()),
+            bite_follow: None,
+            bite_until: None,
+            flying: None,
+            mood: 0,
+            next_mood_tick: std::time::Instant::now()
+                + std::time::Duration::from_millis(MOOD_NEGLECT_EVERY_MS),
+            next_sleep_check: std::time::Instant::now()
+                + std::time::Duration::from_millis(SLEEP_CHECK_MS),
+            // P1-b：表情标记（头顶小符号）+ 瞌睡 Zzz 的浮动节拍
+            mark: None,
+            next_zzz: std::time::Instant::now()
+                + std::time::Duration::from_millis(ZZZ_EVERY_MS),
+            // P2-b：睡眠时段缓存（首拍由 30s 检查写入；false = 还没判过）
+            sleep_night: false,
+            // P0-F2 审查修正：叫醒后的免睡冷却（None = 从未被叫醒过）
+            wake_sleep_until: None,
+            // P2-a：与 spawn 的加载预设对齐（frames 进来时已是该配色）
+            loaded_color: color0,
+            // A 批：与 spawn 的加载形象对齐（frames 进来时已是该形象的行/states）
+            loaded_appearance: appearance0,
         });
         let pet_ptr = &mut *pet as *mut PetWin;
         let inst = GetModuleHandleW(std::ptr::null());
@@ -2989,5 +3940,300 @@ mod tests {
             follow < spring_early_exit,
             "直跟手分支必须排在弹簧早退之前，否则位置同步会被早退吞掉"
         );
+    }
+
+    /* ---------------- P0（2026-10-18）源码契约 ---------------- */
+
+    /// P0-F1：`IDT_HIT` 拍必须同时驱动摸头判定与咬合跟随；咬合必须**跟手移动**
+    /// （MoveWindow 到「光标 − 咬合偏移」）且收尾落盘（finish_bite 内含 save_pet_pos）。
+    /// 为什么用源码契约：这些分支的入参是 hwnd / 光标，纯函数测不了，而
+    /// 「咬合不跟手」= 彩蛋退化成「抖一下」，功能测试一条都抓不到。
+    #[test]
+    fn petting_and_bite_follows_cursor_and_persists_on_release() {
+        let src = include_str!("window.rs");
+        // IDT_HIT 分支确实调了它（接在 update_click_through 后面）
+        let timer = src
+            .split("WM_TIMER => {")
+            .nth(1)
+            .and_then(|s| s.split("WM_LBUTTONDOWN => {").next())
+            .expect("找不到 WM_TIMER 分支");
+        assert!(
+            timer.contains("(*pet).petting_and_bite_tick()"),
+            "IDT_HIT 拍必须驱动摸头/咬手（搭 R2 的 10ms 轮询，不新开定时器）"
+        );
+        let body = src
+            .split("fn petting_and_bite_tick")
+            .nth(1)
+            .and_then(|s| s.split("fn finish_bite").next())
+            .expect("找不到 petting_and_bite_tick");
+        assert!(body.contains("MoveWindow(self.hwnd, target.0, target.1"),
+            "咬合期间窗口必须跟随光标（咬着的手跑到哪它跟到哪）");
+        assert!(body.contains("self.finish_bite()"), "咬合到期必须松口收尾");
+        let finish = src
+            .split("fn finish_bite")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .expect("找不到 finish_bite");
+        assert!(finish.contains("save_pet_pos"),
+            "咬合结束 = 迷你拖动收尾：位置被光标带走了，必须落盘（否则重启回旧位）");
+    }
+
+    /// P0-F3：`release_drag` 必须按**松手速度**分流：速度门（`throw_triggered`）命中
+    /// 进抛掷飞行，慢放仍走 R18 滑停（行为零变化）。缺速度门 ⇒ 每次松手都飞；缺滑停
+    /// 分支 ⇒ 快速甩动后前跳回归（R18 修过的缺陷复活）。**判定本身是纯函数**
+    /// （`model::throw_triggered`，单测在 model.rs）——源码契约只钉「窗口层确实调它」。
+    #[test]
+    fn release_drag_splits_throw_from_settle_by_speed() {
+        let src = include_str!("window.rs");
+        let body = src
+            .split("fn release_drag")
+            .nth(1)
+            .and_then(|s| s.split("fn finish_drag_settle").next())
+            .expect("找不到 release_drag");
+        assert!(body.contains("throw_triggered(self.drag_vel)"), "必须调用速度门纯函数");
+        assert!(body.contains("FlyState {"), "速度够 ⇒ 构造飞行状态");
+        assert!(body.contains("self.drag_settling = true"),
+            "速度不够 ⇒ 仍走 R18 滑停（不得回归前跳）");
+        // 顺序：抛掷判定必须排在滑停之前（反之永远进不了飞行）
+        let throw_at = body.find("throw_triggered(self.drag_vel)").unwrap();
+        let settle_at = body.find("self.drag_settling = true").unwrap();
+        assert!(throw_at < settle_at, "抛掷判定必须排在滑停分支之前");
+    }
+
+    /// P0-F1/F2：`WM_LBUTTONDOWN` 必须①把咬合中的桌宠松口、②把 Emote 加进打断清单
+    /// （点一下 = 「别演了」：睡觉叫醒、跳舞叫停）。漏②的后果：点击后睡眠/跳舞槽继续
+    /// 到期自播，用户看到「点了没反应」——而单击的 jump 会被它压住（动作槽单槽互斥）。
+    #[test]
+    fn button_down_releases_bite_and_interrupts_emote() {
+        let src = include_str!("window.rs");
+        let down = src
+            .split("WM_LBUTTONDOWN => {")
+            .nth(1)
+            .and_then(|s| s.split("WM_MOUSEMOVE => {").next())
+            .expect("找不到 WM_LBUTTONDOWN 分支");
+        assert!(down.contains("(*pet).finish_bite()"), "咬着时按下 = 松口收尾");
+        assert!(
+            down.contains("Action::Emote { .. }"),
+            "interrupt 清单必须含 Emote（点击叫醒睡眠/叫停跳舞）"
+        );
+    }
+
+    /// P0-F3：飞行是**位移源**——wander 守卫与点击穿透早退都必须把它和
+    /// dragged/drag_settling 并列闸住。漏一处 = 飞行中桌宠自己横向走（位移源互斥破坏，
+    /// R16/R18 同族纪律）或高速移动中穿透态抽变（「伸手接住它」变成抽奖）。
+    #[test]
+    fn flying_gates_both_wander_and_click_through() {
+        let src = include_str!("window.rs");
+        let compose = src
+            .split("fn compose")
+            .nth(1)
+            .and_then(|s| s.split("fn backdrop_tick").next())
+            .expect("找不到 compose");
+        assert!(compose.contains("self.flying.is_none()"),
+            "wander 触发必须闸飞行（位移源互斥）");
+        let ct = src
+            .split("fn update_click_through")
+            .nth(1)
+            .and_then(|s| s.split("fn set_click_through").next())
+            .expect("找不到 update_click_through");
+        assert!(ct.contains("self.flying.is_some()"),
+            "飞行期点击穿透必须早退（窗口在动，切穿透会让接住它变成抽奖）");
+    }
+
+    /// P0-F2：两个绘制分支（三态立绘 / 图集）都必须消费 emote_xform 并下传 flip——
+    /// 漏一个分支 = 该主题（inverse 或 whale/kurumi）的表演全部静默失效，
+    /// 而「动作没接上」在功能测试里不可见（姿态仍是对的 idle）。
+    #[test]
+    fn emote_is_consumed_in_both_draw_branches() {
+        // 先剥掉测试段：否则本测试自己的字面量会被 include_str! 数进去
+        // （首版就踩了这个——计数 3 = 生产 2 + 测试 1）
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let n = src.matches("emote_xform(k, p, t_ms, motion)").count();
+        assert_eq!(n, 2, "两个绘制分支各消费一次 emote_xform，实得 {n} 处");
+        let flip_calls = src.matches("&xf, flip)").count();
+        assert_eq!(flip_calls, 3, "三处 blit_center_bottom 调用都要带 flip（立绘×2 + 图集×1），实得 {flip_calls}");
+        assert!(src.contains("matches!(emote, Some((EmoteKind::Turn, p)) if p >= 0.5)"),
+            "Turn 的镜像翻转必须锚在中点（p ≥ 0.5）");
+    }
+
+    /* ---------------- P2-a · 配色重着色源码契约 ---------------- */
+
+    /// P2-a-1：compose 必须有配色变更检测（`want_color != loaded_color` ⇒ 重载），
+    /// 且重载后**强制重绘**（`last_tick` 回拨）——否则新配色的第一帧要等下一拍
+    /// 动画节拍才上场，用户看到「改了设置宠物顿一下才变色」。
+    /// 判据用源码契约：该分支依赖 shared 锁与整份重载，纯函数测不了；
+    /// 但「重载入口在不在、强制重绘在不在」是结构事实，文本可锚。
+    /// A 批：加载键从单 color 扩为 (color, appearance)——本测试同步锚 appearance 半边。
+    #[test]
+    fn compose_reloads_frames_on_color_change() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        assert!(src.contains("let (want_hide, do_reset, want_theme, want_color, want_appearance)"),
+            "compose 的 shared 消费块必须取 want_color 与 want_appearance（漏了它 = 设置永远不生效）");
+        assert!(src.contains("let color_changed = want_color != self.loaded_color;"),
+            "必须有配色变更检测（每拍一次整数比对，零开销）");
+        assert!(src.contains("super::image::load_frames_for(want_color, &want_appearance)"),
+            "变更必须整份重载 + 重着色 + 形象烘焙（重新走 assets::read，磁盘覆盖层语义不变）");
+        let at = src.find("let color_changed = want_color != self.loaded_color;").unwrap();
+        let block = &src[at..at + 700];
+        assert!(block.contains("self.last_tick = now - std::time::Duration::from_secs(10)"),
+            "重载后必须强制重绘（否则第一帧延迟到下一动画节拍）");
+        assert!(block.contains("self.loaded_color = want_color"),
+            "重载后必须对齐 loaded_color（否则每拍都重载 = 桌面卡死）");
+    }
+
+    /// A 批-1：形象变更检测与对齐——`appearance_changed` 判据、`loaded_appearance`
+    /// 对齐、以及**只对 whale 生效**的 mode 门控，三者都是结构事实，文本可锚。
+    /// 漏对齐 = 每拍重载（桌面卡死）；漏 mode 门控 = kurumi/inverse 被换成 whale 形象。
+    #[test]
+    fn compose_reloads_frames_on_appearance_change() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        assert!(src.contains("let appearance_changed = want_appearance != self.loaded_appearance;"),
+            "必须有形象变更检测（与配色并列的一个加载键）");
+        assert!(src.contains("if color_changed || appearance_changed"),
+            "配色或形象任一变化都要重载");
+        assert!(src.contains("self.loaded_appearance = want_appearance.clone();"),
+            "重载后必须对齐 loaded_appearance（否则每拍都重载 = 桌面卡死）");
+        // mode 门控：非 whale 时 appearance 恒 default（角色设定不换装）
+        assert!(src.contains("if s.mode == \"whale\""),
+            "形象只对 whale 生效——mode 门控漏不得（与 P2-a 配色同口径）");
+        assert!(src.contains("super::settings::APPEARANCE_DEFAULT.to_string()"),
+            "非 whale 分支必须回落 APPEARANCE_DEFAULT");
+    }
+
+    /// A 批-2：ambient 选行必须带可用性过滤（形象缺的行不上场——P1-a 空转槽纪律推广）。
+    /// 只锚「闭包存在且传进 pick_ambient_choice」：过滤语义本身由 model.rs 单测管。
+    #[test]
+    fn ambient_choice_filters_by_available_rows() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        assert!(src.contains("let has = |row: &str| self.frames.rows_have(&mode, row);"),
+            "ambient 块必须构造可用性闭包（当前生效行集）");
+        assert!(src.contains("pick_ambient_choice(band, &mode, time, &has)"),
+            "可用性闭包必须传进 pick_ambient_choice（第四入参）");
+    }
+
+    /* ---------------- P1-b · 表情标记源码契约 ---------------- */
+    /// P1-b-1：标记必须在**气泡之后**画（在气泡之上、角色头顶）且每拍做过期清理——
+    /// 画在气泡前会被气泡盖住；不清字段则头顶永久挂符号（「到期即清」铁律）。
+    #[test]
+    fn mark_is_drawn_after_bubble_and_expires() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let bubble_at = src.find("self.blit_bubble(frame);").expect("找不到气泡绘制");
+        let mark_at = src.find("self.blit_mark(now);").expect("找不到标记绘制");
+        assert!(mark_at > bubble_at, "标记必须画在气泡之后（否则被气泡盖住）");
+        assert!(src.contains("m.expired(now)"),
+            "compose 必须每拍清理过期标记（否则头顶永久挂符号）");
+        // 定位复用角色框（不新算几何）——halo 的 last_char_box 是唯一基准
+        assert!(src.contains("let (bx, by, bw, _bh) = self.last_char_box;"),
+            "标记定位必须复用 last_char_box（与 halo 同基准，不新算几何）");
+    }
+
+    /// P1-b-2：触发映射必须在事件点上，且必须走**纯函数 seam**
+    /// （`mark_for_pet_event` / `mark_for_alert_priority` / `mark_for_done`）——
+    /// 直接 `show_mark(Mark::Heart)` 内联的写法契约查不到「被注掉」，
+    /// 映射纯函数化后「谁配谁」有单测、「调用在不在」有本契约。
+    /// 漏一处的表现是「那个事件没表情」，而姿态/音效照旧——功能测试抓不到。
+    #[test]
+    fn mark_triggers_are_wired_at_event_points() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let pet = src.split("fn petting_and_bite_tick").nth(1)
+            .and_then(|s| s.split("fn finish_bite").next()).expect("找不到 petting_and_bite_tick");
+        assert!(pet.contains("mark_for_pet_event(ev)"),
+            "互动事件必须走 mark_for_pet_event 纯函数（内联映射不可单测）");
+        assert!(pet.contains("show_mark(kind, now)"), "摸头/咬手分支必须挂标记");
+        let done = src.split("self.done_celebrated = true;").nth(1)
+            .and_then(|s| s.split("dirty = true;").next()).expect("找不到 Done 庆祝块");
+        assert!(done.contains("mark_for_done()"), "完成庆祝必须走 mark_for_done 纯函数");
+        let alerts = src.split("if let Some(next) = apply {").nth(1)
+            .and_then(|s| s.split("self.alert = next;").next()).expect("找不到 alert 应用块");
+        assert!(alerts.contains("mark_for_alert_priority(a.priority)"),
+            "审批/告警必须走 mark_for_alert_priority 纯函数");
+    }
+
+    /* ---------------- P2-b · 表情帧源码契约 ---------------- */
+
+    /// P2-b-1：`show_mark` 必须按主题分流——whale 演 `ex*` 表情帧（Ambient 槽），
+    /// 其余主题落符号；且表情路径必须**判当前模式**（frames 是全量加载的，
+    /// 不判模式会让 kurumi/inverse 播鲸鱼的表情帧——串味）。
+    /// 表情帧与符号二选一（播了表情就收掉符号，避免重复表达）。
+    #[test]
+    fn show_mark_routes_expression_frames_to_whale_only() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let body = src.split("fn show_mark").nth(1)
+            .and_then(|s| s.split("\n    fn ").next()).expect("找不到 show_mark");
+        assert!(body.contains("expression_row_for(kind)"), "必须查情绪 → 表情帧行映射");
+        assert!(body.contains("mode == \"whale\""),
+            "表情路径必须判当前模式（不判 = 三主题串味）");
+        assert!(body.contains("Action::Ambient { row: row.to_string() }"),
+            "whale 表情走 Ambient 槽（继承到期即清与六态压制）");
+        assert!(body.contains("self.mark = None;"),
+            "播了表情必须收掉符号（避免「脸上有表情、头顶还飘符号」）");
+    }
+
+    /// P2-b-2：表情反应必须在**姿态之后**触发（match 之后调 show_mark）——
+    /// 反序则 whale 的表情帧会被随后的 Nod/Shiver 姿态槽覆盖（单槽互斥），
+    /// 表现是「摸了有表情帧但一闪而过」。
+    #[test]
+    fn petting_reaction_fires_after_the_pose_slot() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let pet = src.split("fn petting_and_bite_tick").nth(1)
+            .and_then(|s| s.split("fn finish_bite").next()).expect("找不到 petting_and_bite_tick");
+        let pose = pet.find("Action::Emote { kind: EmoteKind::Nod").expect("找不到摸头姿态");
+        let react = pet.find("mark_for_pet_event(ev)").expect("找不到表情反应调用");
+        assert!(react > pose, "表情反应必须排在姿态槽之后（否则被 Nod 覆盖）");
+    }
+
+    /// P2-b-3：瞌睡的两条新契约——① 入睡演 **Sleepy 表情**（不是 Zzz 符号：
+    /// 犯困脸是「去睡了」的面部信号，Zzz 符号留给周期性浮动）；② 演完必须
+    /// **续觉**（`sleep_night && action.is_none()` ⇒ 补回 Sleep 慢呼吸槽）——
+    /// 表情帧走 Ambient 槽会把 Sleep 换掉，不补则「犯困脸闪一下就精神了」。
+    #[test]
+    fn sleep_plays_drowsy_face_then_rearms_slow_breath() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let onset = src.split("self.sfx(\"yawn\");").nth(1)
+            .and_then(|s| s.split("pet_log_line").next()).expect("找不到入睡块");
+        assert!(onset.contains("show_mark(Mark::Sleepy, now)"),
+            "入睡必须演犯困表情帧（whale；Zzz 符号只做周期性浮动）");
+        assert!(onset.contains("self.sleep_night = true"), "入睡必须置位夜间缓存");
+        assert!(src.contains("if self.sleep_night"),
+            "必须有瞌睡续觉钩子（表情演完补回 Sleep 槽）");
+        let hook = src.split("// —— P2-b：瞌睡续觉（每拍）——").nth(1)
+            .and_then(|s| s.split("// —— 待机随机行为").next()).expect("找不到续觉钩子");
+        assert!(hook.contains("Action::Emote { kind: EmoteKind::Sleep }"),
+            "续觉钩子必须补回 Sleep 慢呼吸槽");
+        assert!(hook.contains("self.action.is_none()"),
+            "只在动作槽空时补（不抢正在演的表情/其他动作）");
+        // 醒来必须清缓存（否则早晨钩子还在补觉）
+        assert!(src.contains("self.sleep_night = false"), "早晨醒来必须清夜间缓存");
+    }
+
+    /// P2-b-4：两个新触发点必须接线——① 双击挥手 ⇒ 害羞（`do_wave` 里
+    /// `show_mark(Mark::Shy)`）；② 散步撞墙 ⇒ 疑惑（Look 姿态之后
+    /// `show_mark(Mark::Doubt)`）。漏一处的表现是「那个互动没有表情」，
+    /// 而姿态/音效照旧——功能测试抓不到（P0/P1 同款纪律的第三次实例）。
+    #[test]
+    fn shy_and_doubt_triggers_are_wired() {
+        let src = include_str!("window.rs");
+        let src = src.split("#[cfg(test)]").next().expect("源码非空");
+        let wave = src.split("fn do_wave").nth(1)
+            .and_then(|s| s.split("fn main_needs_wake").next()).expect("找不到 do_wave");
+        assert!(wave.contains("show_mark(Mark::Shy"),
+            "双击挥手必须挂害羞表情（她被你逗羞了）");
+        let bump = src.split("Action::Emote { kind: EmoteKind::Look }").nth(1)
+            .and_then(|s| s.split("self.frame_idx = 0;").nth(1)) // frame_idx 之后才是反应
+            // 取后续若干**行**（不用字节切片——中文注释 3 字节/字，按字节切会切在
+            // UTF-8 字符中间直接 panic）
+            .map(|s| s.lines().take(8).collect::<Vec<_>>().join("\n"))
+            .expect("找不到撞墙 Look 块");
+        assert!(bump.contains("show_mark(Mark::Doubt"),
+            "撞墙必须挂疑惑表情（问号脸）");
     }
 }

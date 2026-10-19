@@ -345,3 +345,66 @@ test('★ 顶部安全区：官方页面标题行（_pageHead）不得落进窗�
   assert.ok(headTop <= bandBottom + gap + 12,
     `让位量过大：官方页头上沿 ${headTop}px 比「窗控带下沿 + 呼吸位」多出 ${headTop - bandBottom - gap}px（>12px）—— 多让只会留白，且常用于掩盖几何变动`)
 })
+
+/* ---------------- R22 标题栏拖动：阈值起手（2026-10-18 用户报障） ---------------- */
+
+// 用户原话：「从其他窗口切换到 miasaki 桌面端，点一下窗口上端就粘在鼠标上，
+// 要再点一次才脱离」。根因：旧 `wireDragZone` 在 mousedown 时**无条件** invoke
+// `plugin:window|start_dragging`（连纯单击也触发），而 tao 0.35.3 的 drag_window 是
+// `ReleaseCapture` + **PostMessage（异步）**`WM_NCLBUTTONDOWN`；跨窗口激活时消息
+// 队列时序改变，那次真实的 `WM_LBUTTONUP` 可能先于异步消息被 tao 吞掉 ⇒ 系统
+// 移动循环启动后永远等不到松手，鼠标输入被循环持续消费（粘滞），直到下一次
+// 点击的 UP 才退出。修法：**移动越过阈值才启动循环**（单击不进循环；拖动时
+// UP 必在循环启动之后 ⇒ 竞态消除）。
+test('★ R22：单击不进系统拖动循环；移动越阈值才 start_dragging；双击仍走 toggle', () => {
+  const titlebar = readFileSync(join(desktop, 'themes', 'src', '06-titlebar.js'), 'utf8')
+  const invoked = []
+  const listeners = {}
+  const doc = {
+    __miasakiDragWired: false,
+    addEventListener: (n, fn) => { (listeners[n] = listeners[n] || []).push(fn) },
+    removeEventListener: (n, fn) => { listeners[n] = (listeners[n] || []).filter((f) => f !== fn) }
+  }
+  const win = {
+    __TAURI_INTERNALS__: { invoke: (cmd) => { invoked.push(cmd); return Promise.resolve() } }
+  }
+  vm.runInNewContext(titlebar + '\n;wireDragZone();', { window: win, document: doc })
+
+  const plain = { nodeType: 1, tagName: 'DIV', hasAttribute: () => false, getAttribute: () => null, parentNode: null }
+  const ev = (o) => Object.assign({ button: 0, detail: 1, clientX: 0, clientY: 0, buttons: 0, preventDefault() {} }, o)
+
+  // ① 单击第一段：mousedown 不得启动循环，只登记 move/up 监听
+  listeners.mousedown.forEach((fn) => fn(ev({ clientY: 10, target: plain })))
+  assert.equal(invoked.length, 0, 'mousedown 不得直接 invoke start_dragging（单击也进循环 ⇒ 异步 UP 竞态粘滞）')
+  assert.equal((listeners.mousemove || []).length, 1, 'mousedown 后应登记 mousemove 监听')
+  // ② 小位移（< DRAG_THRESHOLD_PX）不启动
+  listeners.mousemove.forEach((fn) => fn(ev({ clientX: 2, clientY: 10, buttons: 1 })))
+  assert.equal(invoked.length, 0, '未越阈值不得启动拖动循环')
+  // ③ 越阈值 ⇒ start_dragging 恰好一次，且监听被清理（系统循环接管）
+  listeners.mousemove.forEach((fn) => fn(ev({ clientX: 20, clientY: 10, buttons: 1 })))
+  assert.deepEqual(invoked, ['plugin:window|start_dragging'])
+  assert.equal((listeners.mousemove || []).length, 0, '启动后应清理监听')
+  // ④ 松手不再产生调用
+  listeners.mouseup.forEach((fn) => fn(ev({ clientX: 20, clientY: 10 })))
+  assert.equal(invoked.length, 1)
+
+  // ⑤ 完整单击序列（DOWN→UP 无位移）不得启动
+  listeners.mousedown.forEach((fn) => fn(ev({ clientY: 10, target: plain })))
+  listeners.mouseup.forEach((fn) => fn(ev({ clientX: 0, clientY: 10 })))
+  assert.equal(invoked.length, 1, '单击（无位移）不得启动系统拖动循环')
+
+  // ⑥ 双击最大化语义保留
+  listeners.mousedown.forEach((fn) => fn(ev({ clientY: 10, detail: 2, target: plain })))
+  assert.deepEqual(invoked, ['plugin:window|start_dragging', 'plugin:window|internal_toggle_maximize'])
+
+  // ⑦ 可交互元素路径放行（按钮不得起拖）
+  const btn = { nodeType: 1, tagName: 'BUTTON', hasAttribute: () => false, getAttribute: () => null, parentNode: null }
+  listeners.mousedown.forEach((fn) => fn(ev({ clientY: 10, target: btn })))
+  assert.equal(invoked.length, 2, '按钮路径不得起拖')
+
+  // ⑧ 静态兜底：mousedown 分支内不得出现 start_dragging 字面量（防回退）
+  const code = titlebar.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const downBody = code.split("document.addEventListener('mousedown'")[1].split('}, true)')[0]
+  assert.doesNotMatch(downBody, /start_dragging/, 'mousedown 分支不得直接调 start_dragging（R22 回退即本测试失败）')
+  assert.match(code, /DRAG_THRESHOLD_PX/, '必须定义拖动阈值常量')
+})

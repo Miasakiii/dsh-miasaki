@@ -221,6 +221,14 @@
             // 写成 truthy 会把「关」当成「没报」—— 那 Setting 就永远关不掉）。
             if (ppSet.fs != null) psSegs.push('psfs=' + (ppSet.fs ? '1' : '0'))
             if (ppSet.sound != null) psSegs.push('psnd=' + (ppSet.sound ? '1' : '0'))
+            // P2-a（2026-10-18）：whale 配色预设索引（0..=5）。`!= null` 判——0 是
+            // 合法值（原色），写成 truthy 会把「选回原色」当成「没报」。
+            if (ppSet.color != null) psSegs.push('psclr=' + encodeURIComponent(String(ppSet.color)))
+            // R20-c 重做（2026-10-19）：背景反差柔光开关（pshl）。bool 同 fs/sound 口径。
+            if (ppSet.halo != null) psSegs.push('pshl=' + (ppSet.halo ? '1' : '0'))
+            // A 批（2026-10-19）：桌宠形象（psapr，whale 换装）。字符串原样
+            // （白名单 [a-z0-9-]，encodeURIComponent 对其为恒等，走一声保平安）。
+            if (ppSet.appearance != null) psSegs.push('psapr=' + encodeURIComponent(String(ppSet.appearance)))
             if (psSegs.length > 0) psPart = '&' + psSegs.join('&')
           }
         } catch (e) { /* ignore */ }
@@ -249,11 +257,18 @@
               var key = eq < 0 ? seg : seg.slice(0, eq)
               // 本函数管辖的键以本轮计算结果为准；其余（cmd / seq / 任何未来字段）一律保真
               // —— 宁可多留一个不认识的值，也不替别的通道做主删掉它。
+              // ⚠ 管辖键漏登记的后果（2026-10-19 A 批抓到的真 bug）：R20-c 的 `pshl`
+              // 只加了 psSegs 没加这里 ⇒ 当前 hash 里的旧 `pshl` 被 keepPart 原样保留，
+              // 与 psPart 的新值拼成**重复键**，而 Rust 侧 `split('&')` 顺序解析、
+              // **后值覆盖前值**（keepPart 在 target 尾部）⇒ 用户的新切换被旧值压制，
+              // 表现为「开关时灵时不灵」。新增 ps* 字段必须**两处同改**（本列表 +
+              // psSegs），themes/test/contract.test.js 的 hash-sync 组双Assert。
               if (key === 'miasaki-theme' || key === 'int' || key === 'act' || key === 'wait' ||
                   key === 'pet' || key === 'pettool' || key === 'petts' || key === 'petkey' ||
                   key === 'psmo' || key === 'psbubble' || key === 'psalpha' ||
                   key === 'pspet' || key === 'psthrough' || key === 'pstray' ||
-                  key === 'psfs' || key === 'psnd' ||
+                  key === 'psfs' || key === 'psnd' || key === 'psclr' ||
+                  key === 'pshl' || key === 'psapr' ||
                   key === 'bg' || key === 'diag') continue
               keep.push(seg)
             }

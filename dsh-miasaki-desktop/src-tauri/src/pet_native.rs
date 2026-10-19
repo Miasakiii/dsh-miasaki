@@ -5,12 +5,16 @@ use tauri::AppHandle;
 
 #[path = "pet_native/config.rs"]
 pub(crate) mod config;
+#[path = "pet_native/backdrop.rs"]
+pub(crate) mod backdrop;
 #[path = "pet_native/dot.rs"]
 pub(crate) mod dot;
 #[path = "pet_native/ffi.rs"]
 pub(crate) mod ffi;
 #[path = "pet_native/image.rs"]
 pub(crate) mod image;
+#[path = "pet_native/marks.rs"]
+pub(crate) mod marks;
 #[path = "pet_native/model.rs"]
 pub(crate) mod model;
 #[path = "pet_native/persist.rs"]
@@ -83,6 +87,9 @@ impl NativePet {
         // 冷启动即取持久化主题：隐藏态重启时悬浮球第一帧就是正确球面
         // （否则要等页面 hash 主题上报到达才换面，肉眼可见一次「换脸」）。
         let theme = crate::load_prefs().theme;
+        // P2-a：冷启动即读用户设置（含配色）——第一帧就要是所选颜色，
+        // 否则会先按原色画一帧再跳变（与 theme/settings 同理由）。
+        let settings0 = settings::load_settings();
         let shared = Arc::new(Mutex::new(PetShared {
             mode: "whale".to_string(),
             intensity: "idle".to_string(),
@@ -100,9 +107,9 @@ impl NativePet {
             official_at: None,
             // 冷启动即读用户设置：透明度/动效强度这类值必须在**第一帧**就生效，
             // 否则会先按默认值画一帧再跳变（与 `theme` 走同一个理由）。
-            settings: settings::load_settings(),
+            settings: settings0.clone(),
         }));
-        let frames = image::load_frames();
+        let frames = image::load_frames_for(settings0.color, &settings0.appearance);
         let s2 = shared.clone();
         let app2 = app.clone();
         let thread = std::thread::spawn(move || {
@@ -172,9 +179,9 @@ impl NativePet {
             return false;
         }
         window::pet_log_line(&format!(
-            "[native-pet] settings motion={} bubble={}ms alpha={} pet={:?} through={} tray={}\n",
+            "[native-pet] settings motion={} bubble={}ms alpha={} pet={:?} through={} tray={} appearance={:?}\n",
             candidate.motion, candidate.bubble_ms, candidate.alpha,
-            candidate.pet_override, candidate.through, candidate.tray
+            candidate.pet_override, candidate.through, candidate.tray, candidate.appearance
         ));
         s.settings = candidate.clone();
         settings::save_settings(&candidate);

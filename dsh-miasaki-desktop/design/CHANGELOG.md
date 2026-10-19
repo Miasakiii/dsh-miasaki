@@ -2,6 +2,469 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-19（A 批）· 桌宠多形象架构（appearance）+ 顺带修掉 R20-c pshl 的 hash 重复键 bug
+
+**触发**：用户「桌宠鲸鱼娘是不是可以有多个形象，把参考仓库纳进来？」讨论后的路线拍板 ——
+**先 C（同日已落地）解决眼前单调，A（本批）作多形象的主干道**。
+**参考仓库结论**（GitHub 浅克隆 + LICENSE + 默认配置实物核查）：`PC2005-cloud/dsh-pet`
+的默认宠物正是这只鲸鱼娘（whisperPrompt「Q版蓝发小女仆」+ 27 张鲸鱼梗表情包），
+素材 106 webm + 27 memes；**代码 MIT、素材禁止商用 + 二创须署名** ⇒ 维持「不引入其素材」
+原决策（[`pet-reference-benchmark.md`](pet-reference-benchmark.md) §8），多形象走**自建素材链**
+（源头 `TreapGoGo/deepseek-whale-girl` MIT 资产库）。**A-M1 只搭架构**——形象清单初始
+只有「默认」，首个新形象素材走生成流程（runbook 见设计文档 §7）。
+
+**架构七项**（设计 [`2026-10-19-pet-a-appearance.md`](2026-10-19-pet-a-appearance.md)）：
+
+1. **schema 平铺前缀键**：`frames.json` 的 `whale` = default 形象（现状一字不动），
+   `whale.<name>` = 新形象自包含条目（kind/rows/states 同 schema）；
+2. **加载期烘焙**：`load_frames_for(color, appearance)` 把当前形象的行/states 装进
+   **现有字段** ⇒ compose / `can_wander` / 回退链**零改动**；切换 = `(color, appearance)`
+   加载键比对、整份重载（与 P2-a 配色同一条路径，百 ms 级只在切换时发生）；
+3. **只对 whale 生效**（mode 门控，与配色先例同口径）；形象缺失/非法 ⇒ `pet.log`
+   **留痕 + 回落 default**（宁可用旧形象，不空白；但不静默）；
+4. **设置与通道**：`PetSettings.appearance` + `APPEARANCES` 白名单（字面量登记——
+   面板契约测试要正则抓两侧清单做镜像）+ hash `psapr` + `push_pet_state` 回推
+   （漏推 = 打开面板即重置，R20-c 同族陷阱）；
+5. **面板**：「形象」行**条件渲染**（可选 ≤1 不放行——当前只有「默认」，不放
+   speculative UI），`APPEARANCE_CHOICES` 与 Rust 白名单逐字镜像（闸门测试）；
+6. **构建链**：`build.rs` 主题目录改**动态发现**（`^mode(\.name)?$`，新形象素材
+   **零代码入链**；「静默回落」由 loader 留痕 + check-pet-assets 双向校验管）；
+   `cut-frames.mjs` 按 `ATLAS_SPECS` 键自动切（加形象 = 加一行规格）；
+7. **ambient 可用性过滤**：新形象缺的行永不上场（P1-a 空转槽纪律的推广——
+   池空回落未过滤池，不回 blank）。
+
+**顺带修掉一个真 bug（R20-c pshl，非本批引入）**：`pshl` 只加进 `02-core.js` 的
+psSegs 计算、**漏加 keep 管理列表** ⇒ 当前 hash 里的旧 `pshl` 被 keepPart 原样保留，
+与 psPart 的新值拼出**重复键**，Rust 侧 `split('&')` 顺序解析、后值覆盖前值
+（keepPart 在 target 尾部）⇒ **用户切换柔光开关间歇性不生效**（E35⑦ 实机判据未验，
+正会踩上）。修法 = keep 列表补 `pshl`；`hash-sync.test.js` 新增回归测
+（「切换后 hash 里只许一个新值」）——该判据从此钉住**所有** ps* 管辖键，
+新增字段漏登记 keep 列表会被这条测试抓住。
+
+**回归**：`cargo test` 298 → **306 例**（305 passed + 1 ignored；A 新增 8：
+settings 3 / image 1 / model 2 / window 契约 2）；`hash-sync` **17/17**（含 pshl 回归
++ psapr 三断言）；`panel-settings` **32/32**（A 契约组 5 断言）；`verify-all desktop`
+**43/43**。**未构建部署**（部署纪律：外部终端执行）。
+
+**待实机（归用户，矩阵 E42）**：① 三主题行为与升级前一致（appearance 默认 default
+= 现有资产）；② 面板桌宠页**不出现**「形象」行（只有「默认」时条件渲染）；
+③ `pet-settings.json` 含 `appearance:"default"`；④ 柔光开关（pshl）连续切来切回
+**每次立即生效**（重复键 bug 修复的实机判据）；⑤ 首个新形象：按 §7 runbook 生成后
+补视觉切换判据。
+
+## 2026-10-19（C 批）· 时段感知 ambient 编排（零素材）
+
+**触发**：用户「桌宠鲸鱼娘是不是可以有多个形象，把参考仓库纳进来？」讨论后的路线拍板 ——
+**先 C（零素材）解决眼前单调，A（多形象架构）作主干道随后**。
+参考仓库实物核查结论（GitHub 浅克隆 + LICENSE + 默认配置）：`PC2005-cloud/dsh-pet`
+的默认宠物**正是这只鲸鱼娘**（config.jsonc 的 whisperPrompt「Q版蓝发小女仆」+ 27 张鲸鱼梗
+表情包），素材 106 段 webm + 27 memes；许可 = 代码 MIT、**素材禁止商用 + 二创须署名**。
+⇒ 维持「不引入其素材」原决策（[`pet-reference-benchmark.md`](pet-reference-benchmark.md) §8），
+A 的多形象走自建素材链（源头 [TreapGoGo/deepseek-whale-girl](https://github.com/TreapGoGo/deepseek-whale-girl)
+MIT 资产库）；**C 批零新素材**，只把已有的时段感知（`local_hour` + 睡眠段）引进 ambient 编排。
+
+**三项改动**（设计 [`2026-10-19-pet-c-time-aware-ambient.md`](2026-10-19-pet-c-time-aware-ambient.md)）：
+
+1. **时段档 `TimeBand`（Day/Evening/Night）纯函数**：边界对齐睡眠段（23–07 Night）、
+   18 点起 Evening 渐静；越界小时按正午（与 `local_hour` 失败方向一致——误判深夜比误判正午代价大）。
+2. **`row_weight` 时段修正**：深夜 `wave` 压到 1（High 的心情加成让位给时辰）、安静行
+   （`wait`/`idle2`/`idle5`，2026-10-19 实图核验 + R21 逐行核验记录确认是站姿待机变体群中
+   动静最低三档）抬到 2。**只改概率不改节目单**：任何行任何时段权重永不为 0。
+3. **`ambient_wants_emote` 深夜不跳舞**：High 档在 Night 换张望（Look）——凌晨的活跃
+   交给睡眠系统，醒着的片刻安静点；概率门不变（时段调节目不调节奏）。
+
+**一项明确的「不做」**：表情帧（`ex*`）**不入 ambient 池**——图集分支 `calm = action.is_none()`，
+带动作槽时呼吸/摇摆全关 ⇒ 单帧行入池 = 1.2–2.2s **完全定格**，正是 L1(v5) M1/M2 一直在消除的
+「死图」（表情帧继续走 marks 的 1.4s 事件通道）。「节日切换」同批留到 A（whale 无节日行，切换无对象）。
+
+**回归**：`cargo test` 294 → **298 例**（297 passed + 1 ignored；净增 3 例：时段边界 /
+权重修正含「不为 0」全量扫描 / 深夜不跳舞；3 个既有测随签名迁移，Day 档断言逐字不变）；
+**反向验证**：`time_band` 越界分支首版漏写（`>= 23` 先命中 Night）⇒ 边界测试**当场转红**（实测）。
+**未构建部署**（部署纪律：外部终端执行）。
+
+**待实机（归用户，矩阵 E41）**：① 傍晚（18–23 点）静置 ⇒ 双手合十/双手交叠/尾翼弧度变多、
+挥手变少；白天行为与升级前一致；② 深夜醒着时（免睡冷却内）⇒ 不跳舞、改演张望，wave 变少；
+③ kurumi 主题行为不回退；④ 构建 + 签名 + 外部终端部署 + 重启走查。
+
+## 2026-10-19（R20-c 重做）· 「白圈」→ 贴合轮廓的程序化柔光 + 柔光开关；开屏动画排查
+
+**触发**：用户报**两件**——「开屏动画不见了，桌宠有时候会有一个白圈圈着」。两件都当批查清：
+一件是**配置状态**（不是代码缺陷），一件是**首版功能在实机上的真实观感缺陷**（R20-c 重做）。
+
+### ① 开屏动画不见了 —— 根因是外观总开关被关（配置状态，非代码缺陷）
+
+**取证**：`%USERPROFILE%\.dsh\miasaki-appearance\config.json` 的顶层 `enabled = false`
+（写于 2026-10-18 19:01，其余字段仍是用户自定义值：skin=pure / wallpaper=builtin:aurora /
+glass=light / surface=80 / boot.intro=brand）。而 `boot_intro::decide` 的第一道门就是
+**总开关**（`if !enabled { return off() }`，设计 §5-D3「关掉即原生」的同源纪律）⇒ 片头一律不播。
+**恢复**：把 `enabled` 改回 `true`（片头 `brand` 与其它外观设置原样保留），下次启动桌面端即播。
+**排查指引（入档，避免下次再绕）**：片头不播时**先读 config 的 `enabled`**，再看 `boot.intro`
+是否落在七段白名单内；两处任一处不对都没日志（模块刻意「只读一次、任何失败都不播、不报错」，
+见 `boot_intro.rs` 模块头「边界」节）。面板「启动」栏的说明行已写「总开关关闭时不播放」，
+但用户不一定打开过面板 —— 本次就是「关总开关时没意识到会连带关片头」。
+**未改代码**：这是运行环境状态，不构成缺陷；`dsh-miasaki-appearance` 本轮零改动。
+
+### ② 「有时候会有一个白圈圈着」 —— R20-c 首版椭圆环在实机上的观感失败，重做为轮廓柔光
+
+**根因（可复现的量化事实）**：首版是**构建期预渲染的径向环 PNG**，blit 时拉伸到
+「角色包围盒 + 8px」——两个问题叠加：
+1. **几何无关**：环是**椭圆**（包围盒宽高比≠1），与鲸鱼娘的裙摆/呆毛/双马尾轮廓没有关系 ⇒
+   视觉上就是「一个套在角色外面的白圈」，不是设计想要的「反差光」；
+2. **颜色无关**：whale 帧实心像素平均色 = **(100,123,165)**、Rec.601 亮度 **120 < 128** ⇒
+   判据选 `Light` 浅环（RGB 235,235,245、峰值 alpha 96/255 ≈ 38%）⇒ 深色桌面上就是一圈**白**。
+   用 Python 把「whale 帧 + 首版环 + 深色背景」按实机口径合成，复现了用户描述的一模一样。
+
+**修法（重做 `backdrop.rs` 的绘制半边，判据半边不动）**：光晕**从本帧角色的 alpha 轮廓生成**，
+不再是预渲染环：
+- 形状：`buf` 里角色画完后取 alpha 通道 → **两趟可分离盒式模糊**（O(n)，与半径无关；
+  `HALO_BLUR_PX=11` 逻辑像素 × dpr ≈ 125% 屏 14 物理像素）→ 模糊场 `ext = mask×(1-alpha)`
+  只在角色**没盖住**的地方显形 ⇒ 贴合任何轮廓，角色内部一个像素都不染；
+- 颜色：`glow_color(body)` 按身体明暗取**反差不刺眼**变体——深色身体向白提亮 78%
+  （whale ⇒ ≈[221,226,235]，角色自身体系的浅色，不是中性白）、浅色身体压暗到 25%；
+- 合成：预乘 `over`（光晕在下、角色在上）就地写 `buf`，`ga = 0.95 × ext^0.85`；
+- 三个复用缓冲（`halo_mask` / `halo_tmp` / `halo_blur`），每帧零新分配、零新 GDI 对象；
+- **退役**：`gen-halo.mjs`、`ui/pets/halo/*.png`、`build.rs` / `assets.rs` 登记、
+  `image::Frames.halo_light/dark`、`window::blit_scaled`、`verify-all` 的 halo 产物闸门（44 → 43）。
+- **新增开关**：`PetSettings.halo`（默认 true）+ hash `pshl` + 面板「外观与行为」→「背景反差光」。
+  设计文档当初判断「审美类功能关它的需求强度不够」——实机证明这个判断错了，**审美类功能必须可关**。
+
+**视觉验证**：改 Rust 前先用 Python 在真帧上做参数原型（249px 角色 / blur 14px / strength 0.95 /
+gamma 0.85），深色与深蓝背景各出一张对照——光晕贴角色轮廓、像自身微光，无「圈」感；
+Rust 实现按同一公式与参数落地。
+
+**回归**：`cargo test` **289 → 294 例全绿**（backdrop 6 → 10：+模糊峰值摊开/合成不染角色/
+空蒙版不画/亮度随 mask 单调；settings +1：halo 显式 false 往返；panel +1：默认值与 Rust 对齐 +
+`!== false` 判定；hash-sync +1：`pshl=0` 必须上报、缺字段不写）；`verify-all desktop` **43/43**
+（halo 产物闸门随素材退役移除，42 + sfx + 其余不变）；`repo` 仅 `md-links` 暂态断链（本轮文档
+未提交前，随提交转绿）。**未构建部署**（部署纪律：外部终端执行）。
+
+**待实机（归用户，并入矩阵 E35/E40）**：① 深色桌面静置 ⇒ 轮廓外出现**贴轮廓的柔光**
+（不是几何圆环）；② 浅色桌面 / 距离远 ⇒ 不出现；③ 面板关「背景反差光」⇒ 立即不画、重启保持；
+④ 拖动/peek/全屏隐藏期不画；⑤ 换主题（inverse 浅色身体）⇒ 柔光转深色；⑥ 性能无感。
+
+## 2026-10-18（验收审查）· 桌宠五批的阻断缺陷修复 + 文档对账
+
+**触发**：用户「桌宠线验收审查」。对 R20-c / R21 / P0 / P1 / P2 / R20-a 续三 / R22 整批做验收审查
+（三路并行：Rust 深审 / 闸门实跑 / 文档·合规·设置链），实跑复核 `verify-all desktop` **44/44**、
+`cargo test` **289 例**、appearance **18/18（165 例）**、素材双向一致；**抓出 6 处真缺陷并当批修掉**：
+
+① **`push_pet_state` 漏推 `color`**（`main.rs`）：面板 state 以默认值兜底（color=0），收到缺
+`color` 的回推后把 0 发布给壳 ⇒ **打开一次桌宠设置页/重启后已落盘的配色被重置成原色**（E38④ 必失败）。
+修：回推串补 `color`（字段名 ↔ `psclr`）。
+② **摸头命中误用穿透策略判据**（`window.rs`）：`is_transparent_at` 在「总是可点」档按策略早退返回
+「不透明」⇒ 该档下任何屏幕坐标都算命中角色 ⇒ 桌宠每 400ms 自摸（点头 + pat 音 + `pet.log` 每 0.4s
+一行）、60s 五下后咬手拽着光标跑。修：新增**几何判据** `is_on_character`（`grab_hit`，不看策略层）。
+③ **摸头 hold 段在早退路径未清零**（`window.rs`）：拖动/滑停/飞行/隐藏/全屏隐藏期早退时不喂
+`on_hit=false` ⇒ `hold_since` 冻结，恢复第一拍立刻补出 Stroke（拖完松手「吱」一声、显示后也触发）。
+修：早退先调 `petting_tick(..., false, ...)`。
+④ **瞌睡 Zzz 3s 节拍被 30s 睡眠检查门包住**（`window.rs`）：实际每 30s 才冒一次，E37②/E38⑤
+「每 3s 浮动」不可达。修：Zzz 块移出 30s 门、每拍检查（只在确实处于 Sleep 槽时刷）。
+⑤ **`backdrop::sample_avg` 在位图仍选中时调 `GetDIBits`**（`backdrop.rs`）：MSDN 明文要求
+`hbm` 不得选入 DC，违规调用可能返回 0 且本路径失败静默 ⇒ **halo 可能静默永不出现**（单测全绿拦不住）。
+修：`StretchBlt` 后先恢复 DC 旧位图再取像素 + `SelectObject` 失败分支清理返回。
+⑥ **点击/抚摸叫不醒睡眠**（`window.rs`）：`WM_LBUTTONDOWN` 的 interrupt 清了 Sleep 槽，但
+「瞌睡续觉」钩子下一拍又补回 ⇒ 点击即醒只醒来一拍（E36⑤ 不可达）。修：叫醒走 `wake_from_sleep`
+（清夜间缓存 + 60s 免睡冷却，两处挂睡眠槽的门都过它）。
+
+**次要修正（同批）**：⑦ 标记合成按预乘缓冲补 `×alpha`（否则淡入淡出期 RGB ≫ alpha，标记「瞬间
+全彩出现/消失」）；⑧ 单帧绘制分支补记 `last_char_box`（否则 halo/标记定位沿用上一帧框）；⑨ halo
+绘制补 `docked/fs_hidden` 闸（与采样侧口径对齐，E35④「静态期才画」）；⑩ 六态压制同时压 Emote 编舞
+（原先只换行、变换照旧施加，与 §5.1「Emote 被状态压住」不符）。
+
+**文档对账**：根 README 台账 **72/131 → 72/135**（E36–E39 未回填）；矩阵 §1 基线 **185 → 186**、
+desktop **43 → 44**、清 2 个垂直制表符并修复被吞的「erify-all」；desktop README `cargo test 228 → 289`；
+appearance README/CHANGELOG **164 → 165**（client +7）；**R21 重号 → 标题栏批改 R22**（6 文件 11 处）；
+矩阵补立 **E39**（标题栏修复的实机验收载体，分母 134 → 135）；`docs/ENGINEERING.md` 线表例数与
+R20-c 残留说法订正、补 10-18 桌宠五批记录。
+**已知未修（记录在案）**：R20-a 边沿触发的「规则隐藏期手动显示」仍需先隐藏再显示才产生下降沿
+（矩阵 E34④ 口径待实机确认）；`recolor` 整份重载的实测耗时（文档估「几十 ms」偏乐观，审查估算
+0.2–0.5s）待实机；标记与气泡的纵向重叠（符号实心像素落在审批按钮间隙内，不挡按钮）待目检。
+
+**回归（修后实跑）**：`cargo test` **289 例全绿**、`verify-all desktop` **44/44**；`repo` 仅 `md-links`
+6 处暂态断链（3 份新设计文档尚未入库，随本批 `git add` 转绿）。
+
+## 2026-10-18（R22）· 修「从其他窗口切到 miasaki、点一下上端就粘在鼠标上」
+
+**触发**：用户报障「比如本页面不位于桌面顶端的时候，我点击桌面端上部分，拖至顶端时，
+窗口会粘在鼠标上，要鼠标再点击一次才脱离」，复述为「**从其他窗口切换到 miasaki
+桌面端才出现**：点一下上端会粘滞住鼠标，再次点击脱离」。
+
+**根因（实机取证 + tao 0.35.3 源码双向坐实）**：`wireDragZone` 在 `mousedown` 时
+**无条件** `invoke('plugin:window|start_dragging')` —— 连**纯单击**也触发。而 tao 的
+`drag_window()`（`platform_impl/windows/window.rs:529-553`）= `ReleaseCapture()` +
+**`PostMessageW`（异步投递）**`WM_NCLBUTTONDOWN/HTCAPTION` ⇒ 系统移动循环。
+从其他窗口激活本窗时消息队列时序改变：那次真实的 `WM_LBUTTONUP` 可能**先于**异步
+`WM_NCLBUTTONDOWN` 被处理掉（tao 的 `WM_LBUTTONUP` 分支 `result=0` 直接吞掉、不留给
+系统）⇒ 循环启动后**永远等不到松手**，鼠标输入被循环持续消费（光标「粘住」），
+直到**下一次点击的 UP** 到达才退出循环 —— 与用户体感逐条吻合。
+
+**取证过程（四轮探针，留档 `_refs/scripts-archive/`）**：① `main-drag-probe` 抓到
+`MiasakiPetWin` 但 `Get-Process.MainWindowHandle` 误取桌宠句柄（主窗 rect 缺失，
+教训：Tauri 主窗类名是 `Tauri Window`，须 EnumWindows 按类名+进程取）；②
+`main-drag-monitor`（修正版）抓到用户一次成功复现：粘滞 5s 期间 `hwndMoveSize=0`、
+`cap=0`，且 `drag aborted (capture lost)` 与 `drag start` 在 pet.log 里交替出现；
+③ `auto-repro/2` 从前台态模拟拖动**完全正常**（`cap/move=D0830` 跟随、松手即 Aero
+Snap 最大化）—— 证明「前台拖动无障、跨窗口激活才触发」；④ `auto-repro3` 验证
+「快速点击」假设时点击点被夸克/B 站窗口吞掉（`WindowFromPoint` 校验不可省）。
+
+**修法（前端一行链，零 Rust 改动）**：`themes/src/06-titlebar.js` 的 `wireDragZone`
+改为**阈值起手** —— mousedown 只记起手点并登记 document capture 级
+mousemove/mouseup；**移动越过 `DRAG_THRESHOLD_PX`（4px，与系统 `SM_CXDRAG` 同量级）
+才** `invoke start_dragging`（一次性，随即清理监听）；未越阈值的 mouseup = 单击，
+**根本不进系统移动循环**；拖动（越阈值）时用户仍按住，UP 必在循环启动之后 ⇒
+竞态消除。双击最大化（`detail===2` → `internal_toggle_maximize`）与 Aero Snap
+（拖到顶端松手最大化）语义不变。
+
+**闸门**：`themes/test/contract.test.js` 新增行为化测试 `★ R22`（vm 真实执行
+`wireDragZone`，模拟 DOWN→小位移→越阈值→UP、完整单击、双击、按钮路径共 7 组断言，
+外加「mousedown 分支不得出现 `start_dragging` 字面量」静态兜底防回退）——
+契约测试 20 → **21 例**全绿。`theme-init.js` 已重建（13 片，147 KB，含阈值逻辑）。
+
+**残余风险（已知边界，记录在案）**：start_dragging 经 IPC 异步到达，若「越阈值启动」
+与「松手」间隔小于 IPC 延迟（极端快甩），理论竞态窗口仍在；单击场景（用户实报
+场景）已根治。待实机复验（构建部署归用户）。
+
+## 2026-10-18（P2）· 桌宠 P2-a：鲸鱼娘配色重着色 + P2-b 表情帧 8/8 入链（E38）
+
+**触发**：用户对 P0–P3 批次规划「开工」⇒ 执行 P2 批，拆两半交付（设计与判据：
+[`2026-10-18-pet-p2-recolor-and-expression-sheet.md`](2026-10-18-pet-p2-recolor-and-expression-sheet.md)）。
+
+**P2-a 配色重着色（已落地）**：
+
+- **六套配色**：原色 / 樱粉 / 青碧 / 紫萄 / 暖橘 / 霜白（`config::COLOR_PRESETS`）。
+  面板「外观与行为」新增「配色」行（官方 SegmentedControl，`psclr=` 上报）。
+- **加载期重着色，运行期零开销**：`image::recolor_pixel`（保亮度 hue 矩阵 +
+  饱和插值纯函数）→ `recolor_image`（预乘往返）→ `recolor_frames`（**只动 whale**）。
+  切设置时整份重载一次（百 ms 级，`pet.log` 留 `recolor -> N` 行）。
+- **只对 whale 生效**（kurumi/inverse 角色设定色不动）；halo 环色判据采样最终
+  画面，换色后自动跟随；alpha 轮廓不变 ⇒ 命中判定零改动。
+- **实施期订正**：首版断言「保 Rec.601 亮度」错——经典 hue 矩阵保**等权均值**，
+  Rec.601 对蓝色 palette 有 ≈1.4% 漂移；要精确守恒须绕亮度轴旋转，但那会让
+  灰/白（女仆围裙大面积白）着色——**灰度免疫是更重要的观感性质**。
+
+**P2-b 表情帧（5/6 入链；第 6 张因百炼账号欠费中断）**：
+
+- **素材源定夺**：盘点四条路——garfield-whale 的 11 张状态图许可未核实（其 README
+  自警）、自有 MIT 图集无表情行、whale-resources 的 chibi 设定图与 AATINF 93 张包
+  实图核验都不是表情矩阵（分别是三视图与全身立绘）⇒ 用户拍板「不行就生成吧」，
+  走 **bailian-gen**（qwen-image-3.0 图像编辑），以我们自己的 idle 帧 r0c0 为参考
+  保姿势/服装，prompt 只改脸。
+- **差异合成管线**（`_refs/p2b-gen/probe-align.mjs`，可复现）：生成图（512×555，
+  关水印）缩到 192×208 与原帧比差，**差异 >24 的像素**（实测 ≈50%——qwen-image
+  是整体重绘非局部换脸）经软边遮罩贴到**原帧**上、**alpha 保留原帧的** ⇒ 透明底
+  192×208 PNG：身体结构与原图集一致，只有脸变（白底不泄漏——遮罩只在原帧实心
+  区内取值）。
+- **8 张全部入链**：`exHappy / exAngry / exSad / exSurprise / exStarry /
+  exSleepy / exShy / exDoubt`（`ui/pets/whale/frames/` + frames.json whale 行登记）。
+  **渲染路由**：`marks::expression_row_for` 纯映射 → **whale 模式**播 `ex*` 图集行
+  （`Action::Ambient` 槽，1.4s，继承到期即清与六态压制），其余主题落 P1 几何符号；
+  表情与符号二选一；反应后置于姿态槽之后（单槽互斥）。
+- **exSleepy（犯困）当晚补入链**（账号充值后，模型 qwen-image-3.0 = `bl image edit`
+  默认档）：半闭眼 + 哈欠嘴 + 放松脸红。**瞌睡改两段式**——入睡演一次犯困表情帧
+  （`Mark::Sleepy`），演完（表情走 Ambient 槽会把 Sleep 慢呼吸槽换掉，单槽互斥）
+  由**瞌睡续觉钩子**（`sleep_night` 缓存 + 每拍 `action.is_none()` 补回 Sleep 槽）
+  续上；周期性浮动仍是 Zzz 符号（不占槽）。没有续觉钩子 = 「犯困脸闪一下就精神了」。
+- **exShy（害羞）与 exDoubt（疑惑）为用户追加的两张**（用户「可以」）：垂眼微笑 +
+  两团腮红；一高一低眉 + 侧视 + 头顶问号。**两个新触发点**：双击挥手 ⇒ 害羞
+  （被热情打招呼逗羞）、散步撞墙 ⇒ 疑惑（问号脸，whale 上覆盖 Look 姿态槽，
+  其余主题 Look 照演 + 头顶飘问号符号）。符号形状：腮红 = 左右两团椭圆；
+  问号 = 弧钩（解析式环段 + atan2 ±π 折叠修正）+ 竖笔 + 圆点。
+- **符号形状两处测试自身写错的订正**：新符号（Shy/Doubt）几何中心天然留空，
+  「中心在内」测试的白名单 2 → 4 个并加形内锚点断言；问号弧最左端踩 atan2 的
+  ±π 折叠，不折会让最左端缺一个像素。
+
+**验证**：`cargo test` **P1 收线时 276 → 289 例全绿**（P2 新增 13：P2-a 8 +
+P2-b 5）；`verify-all desktop` **44/44**（含 `check-pet-assets` 对 ex* 行的
+双向校验）。**反向验证八类全转红**：recolor 多加 kurumi（换色窜主题）/ 重载后
+不对齐 loaded_color（每拍重载卡死）/ 表情路径去模式判断（三主题串味）/ 反应
+提前于姿态（表情被 Nod 覆盖）/ 入睡改回符号 + 续觉钩子失效（犯困脸闪完就精神）/
+挥手与撞墙触发被注掉（那个互动没表情）。
+**待实机（归用户，E38 七条）**：六档换色 / 切主题不换色 / halo 跟随 / 落盘保持 /
+表情八连发 / 其余主题不播表情帧 / 工程链。**未构建部署**（部署纪律：外部终端执行）。
+
+## 2026-10-18（续三）· R20-a 实机抓到的全屏闪烁修复（判据抽纯函数 + 4 例单测）
+
+**事故**：用户实机使用 2.3 小时后 `pet.log` 刷出 **2991 条 `fullscreen: auto-hidden`、
+0 条 `restored`**——全屏应用下桌宠每 ~250ms 眨一次（compose 显示、fs_poll 藏），
+且退出全屏后永远看不到 `restored` 行。
+
+**根因**：R20-a 的 compose 显隐分支为「用户手动显示不被规则吞掉」补的条件
+`fs_hidden && !want_hide` 是**电平触发**——规则藏着桌宠时用户常驻意图 `want_hide`
+恒为 `false` ⇒ 该条件恒真 ⇒ compose 每拍执行「SW_SHOW + 清 `fs_hidden`」，
+`fs_poll`（250ms）下一拍再藏 ⇒ 两个所有者互相拆台的闪烁环。
+`restored` 永不出现的派生原因：`fs_hidden` 每拍就被 compose 清掉，fs_poll 的恢复分支
+（`!cover || !shown`）永远等不到「自己还藏着」的那一刻。
+
+**修复**：逃逸改**边沿触发**——条件抽成纯函数 `model::show_branch_should_run`
+（`want_hide == shown || (fs_hidden && want_hide_falling_edge)`），
+`want_hide` 出现 true→false 下降沿（用户主动取消隐藏）才放行一次；
+`PetWin` 增 `last_want_hide` 影子、每拍无条件更新（分支外——只在分支里更新会漏拍，
+沿检测随即失灵）。逃逸后规则按既定语义下一拍重新生效（Coopanion 同口径），但不再循环。
+
+**验证**：新增 **4 例**单测（R20a-F1..F4：稳态静默 / 影子分歧执行 /
+**常驻意图+规则隐藏不得执行（闪烁根因的回归防线，连跑 8 拍）** / 下降沿恰好放行一次）；
+**反向验证**：把纯函数改回电平触发 ⇒ F3/F4 精确转红，恢复后复绿。
+矩阵 E34 判据①同步补强（原文「有 auto-hidden/restored 成对行」抓不到刷屏）：
+**「全屏期间 auto-hidden 只出现一次、退出时恰好一条 restored——重复刷屏即红」**。
+
+**教训（与「判据的真值只在真机上」同族）**：验收判据写「有某日志行」是不够的，
+对**状态机类**行为要写「**不得出现什么**」（刷屏、抖动、永不恢复）——本次的闪烁
+完美满足原判据的字面要求（auto-hidden 行确实存在），只有「不重复/必恢复」能抓住它。
+
+## 2026-10-18（P1）· 桌宠 P1：whale 待机变体入池 + 程序化表情标记（E37）
+
+**触发**：用户对 P0–P3 批次规划「继续推进」⇒ 执行 P1 批（设计与判据：
+[`2026-10-18-pet-p1-idle-variants-and-marks.md`](2026-10-18-pet-p1-idle-variants-and-marks.md)）。
+**同样全部零素材**：待机变体是 R21 已切好的帧（只接线），表情标记是 Rust 程序化绘制。
+
+- **P1-a 待机不重样**（`model::ambient_pool(mode)` + `row_weight`）：whale 的 ambient
+  行池从 `[wave, review, wait]` 扩为 `[wave, wait, idle2–idle5]`——review 对 whale
+  **不存在**（旧池里它踩 fallback 落 idle = 空转槽，R21 批的发现），idle2–idle5 是
+  R21 切好的 28 帧站姿待机变体；kurumi 池不变。选择器从定长 3 槽泛化为**变长加权**
+  （`pick_ambient_pool_index_weighted(&[u32])`），权重从「按档位一张表」改为
+  「按行名 × 档位」（`row_weight`）——行池变长后「第 i 门」没有稳定含义，行名才有。
+  心情只调节奏（High 偏 wave、Low 偏 wait），待机变体恒中性不被挤掉。
+- **P1-b 程序化表情标记**（新模块 `pet_native/marks.rs`，零资产零字体）：六种标记
+  Heart/Star/Tear/Anger/Zzz/Bang 全部用隐式曲线 + 线段距离场判定（心形
+  `(x²+y²−1)³−x²y³≤0`、五角星极坐标边界、泪滴圆∪三角、怒纹四段斜线、Zzz 三递减、
+  感叹条+点），先例是悬浮球的程序化球面渲染（`dot.rs`）。演出 = 0.4→1.15→1.0
+  弹出过冲 + 3px 浮动 + 两端淡入淡出，1.4s 即逝；定位复用 `last_char_box`
+  （halo 的角色框，不新算几何），画在气泡之后。触发映射抽成**纯函数**
+  （`mark_for_pet_event`/`mark_for_alert_priority`/`mark_for_done`）：摸头→爱心、
+  咬手→怒纹、完成→星星、审批→感叹、fleet 告警→怒纹、深夜 Zzz 每 3s 浮动、
+  ambient 时 High 冒爱心 / Low 冒泪滴。
+- **两条实施期决策**：① 心形采样映射**不能统一缩放**——隐式心形 extent 非对称
+  （x ±1.13、y 上 1.3 下 1.0），按 y 缩裁瓣、按 x 缩裁尖，必须各轴缩放 + 居中
+  （首版统一 0.77 被单测当场抓住）；② **事件→参数的映射一律过纯函数**（本仓第二条
+  纪律实例）——首版内联 `show_mark(Mark::Heart)`，反向验证时注掉它，源码契约
+  **全绿**（文本还在），与 P0 `throw_triggered` 同款教训。
+
+**验证**：`cargo test` **P0 收线时 255 → 276 全绿**（P1 新增 17：marks 12 /
+model 3 / window 契约 2；净差 21 中另 4 例为并行批次 `show_branch_*` 入账）；
+`verify-all desktop` **44/44**。**反向验证**五类注入全部精确转红（心形映射改错
+⇒ 三测同红 / Stroke 错映射成 Tear / 审批分支置空 / ……）。
+**待实机（归用户，E37 六条）**：whale 待机变体轮换 / 六标记逐个触发 / 心情面上表达 /
+不遮挡审批按钮 / 三主题全覆盖 / 工程链。**未构建部署**（部署纪律：外部终端执行）。
+
+## 2026-10-18（续二）· 桌宠 P0：互动分级 + Emote 动作族 + 甩出抛掷 + 心情系统（E36）
+
+**触发**：用户放入三个参考仓库（`_refs/coopanion/` Coopanion、`_refs/garfield-whale/`
+小鲸鱼看板娘、`_refs/whale-resources/` 鲸鱼娘素材库）后要求「桌宠我想要一些新功能，
+动作表情什么的……你有什么建议和想法」⇒ 对标后提出 P0–P3 四批建议，用户拍板先做 P0
+四件套。设计与判据：[`2026-10-18-pet-p0-interaction-emote.md`](2026-10-18-pet-p0-interaction-emote.md)。
+
+**P0 全部零素材**：不出一张图、不录一个音频文件，靠绘制层编舞（`xform.rs` 纯函数）、
+程序化音效（`gen-sfx.mjs` 参数表 +5）与窗口层状态机（既有定时器节拍）实现。
+
+- **F1 互动分级 + 摸头咬手**（`model::Petting`/`petting_tick` 纯函数 + `window.rs`
+  搭 `IDT_HIT` 10ms 轮询）：光标在角色上连续停留 400ms = 摸一下（点头 + `pat` 吱 +
+  心情+10）；60s 内连摸 5 次 ⇒ **咬手**——桌宠咬住光标跟随 1.2s（颤抖 + `chomp` 两声
+  咬合 + 心情−20），松口后 60s 冷却。判据只有「连续命中」一条：设计稿的位移上限
+  被删除（来回划正是抚摸；且静止手的抖动会让累计位移顶到上限，判据边界抽风）。
+  咬合 = 一次「迷你拖动收尾」（停靠判定 + 落盘）；按下即松口；飞行/拖动/滑停期不判定。
+- **F2 Emote 动作族**（`xform::emote_xform` 七种编舞 + `Action::Emote` 新槽位）：
+  Nod 点头 / Shake 摇头 / **Turn 转身**（中点横向蓄力 + blit 镜像翻转）/ Shiver 发抖 /
+  Dance 跳舞 / Look 张望 / Sleep 睡觉（23:00–07:00 深慢呼吸 + 哈欠，点击叫醒）。
+  走既有动作槽 ⇒ 免费继承「到期即清」与六态压制；命中判定零改动（查最终合成缓冲）。
+  **「转圈」（360°）经几何核算不做**：角色 270px 高、pivot 在底边中心，旋转 θ 的
+  水平伸出 = `w/2·cosθ + h·sinθ`，窗口半宽仅 143px ⇒ 旋转上限 ≈3.7°（这正是 SWAY
+  取 2°、DRAG_LEAN 取 2.5° 的根因）；完整旋转需缩到 ~50% 才不裁。旋转类 emote 一律
+  ≤3.0°，单测逐 DPI 钉死「最坏情况不越窗」。触发源全本地事件：摸头→点头、咬手→
+  发抖、撞墙→张望、深夜→睡觉、ambient 按心情加权抽 emote。
+- **F3 甩出抛掷**（`xform::FlyState`/`fly_step` + `model::throw_triggered` 纯函数门）：
+  松手速度 ≥600px/s ⇒ 重力飞行 + 边缘反弹（恢复系数 0.55，3–4 次内停稳）+ 撞边
+  挤压脉冲与 `bounce` 嘭声；慢放仍走 R18 滑停（行为零变化）。飞行是位移源 ⇒ wander
+  守卫与点击穿透早退同步加闸；飞行中按下 = 伸手接住。`throw_triggered` 抽成纯函数
+  是因为源码契约抓不到「门被 `false &&` 掉」——反向验证当场证明过。
+- **F4 心情值**（`model::mood_apply`/`mood_band`，会话级不落盘）：7 类事件
+  （摸+10 / 咬−20 / 甩−6 / 点+4 / 挥+3 / 完成+6 / 冷落−4 每 10min）；作用面 =
+  ambient 行池加权（Low 多「双手合十」/ High 多「挥手」）与 emote 概率
+  （High 25% 跳舞 / Low 发抖张望 / Mid 转身摇头）。加权版取代均匀版
+  `pick_ambient_row`（`[1,1,1]` 同口径，E5 三例测试迁移）；重抽按权重公平抽——
+  「取第一个 ≠ 上次的门」会把权重吸向低索引（wait 档 60%→40%，测试当场抓住）。
+- **音效 +5**（`gen-sfx.mjs` 参数表，零音频资产）：pat 橡胶鸭吱 / chomp 两声咬合 /
+  whoosh 甩出上行风 / bounce 撞边弹 / yawn 哈欠。`SFX_NAMES` 8→13，
+  `build.rs` 显式登记 +5，`--check` 闸门 13/13。
+
+**验证**：`cargo test` **228 → 255 例全绿**（新增 27：model 11 / xform 11 / window
+源码契约 5）；`verify-all desktop` **44/44**（`gen-sfx --check` 13 个一致）。
+**反向验证**（三类注入全部精确转红后恢复）：速度门禁用 ⇒ `throw_triggered_*` 红；
+interrupt 去 Emote ⇒ `button_down_*` 红；`DANCE_DEG` 调 6° ⇒ 旋转余量测试**与**
+逐 DPI 几何测试**双红**。
+**待实机（归用户，E36 六条）**：摸头点头 / 五连咬手跟随+冷却 / 快甩抛掷弹跳 /
+撞墙张望 / 深夜瞌睡 / 六态不回退。**未构建部署**（部署纪律：外部终端执行）。
+
+**与 R21 批的协调（同会话并行，已错开）**：R21 把 whale r7–r10 切成 `idle2`–`idle5`
+并退役 `states/work.png`（资产侧，零 Rust 改动），其**池接线**（把 idle2–idle5 扩进
+whale 的 ambient 池）按约定留到本批落地后补做——本批的 `pick_ambient_choice` 已就位，
+届时只需扩 `POOL`/行名表并补实机判据。另注意 R21 退役 `states/work.png` 后，
+`Petting`/emote 路径不读 states 三态（只读图集行），无牵连。
+
+## 2026-10-18（续）· 桌宠 R21（一期）：whale 待机变体切图登记 + 死素材退役 —— ambient 池接线顺延
+
+**触发**：用户对 v5-motion-plan §6 三条待拍板「按你建议继续推进」⇒
+① 退役 whale `states.work`（我的建议：真死素材，留 idle 兜底）② r7–r10 进 ambient 池
+（我的建议：做）④ 形变开关接 intensity（我的建议：**不做**，语义耦合错，motion 滑杆已覆盖）。
+
+**已落地（资产侧，零 Rust 改动）**：
+
+- **r7–r10 切入并登记**：`cut-frames.mjs` 的 whale 行表从 r0–r6 扩到 **r0–r10**，
+  新切 28 帧（r7–r10 = 6/6/8/8 帧）以 `idle2`–`idle5` 登记进 Rust 行空间。
+  **接入前按 v5 L0 纪律做了逐行视觉核验**（本会话直接看图）：四行均为女仆装**站姿待机**
+  变体（双手交叠 / 侧身发 sweeps / 微张双臂 / 尾翼弧度差异），与切图脚本旧注释的
+  「站姿待机变体群」判断一致——不是「行号相等即语义相等」的想眼目。
+  重跑切图后 `git status` 证实**既有帧零改动**（再生确定性成立）。
+- **退役 `states/work.png`**（567KB）：代码路径核查确认 whale 走图集分支、
+  `whale_states` 仅在 deep 覆盖分支被读且 key 恒为 `deep`（compose 分支条件决定），
+  work 是死素材；`states/idle*.png`（6 帧）保留作 deep 缺失时的 `states.get("idle")` 兜底。
+  同步：`cut-frames.mjs` 立绘循环、`check-pet-assets.mjs` 的 `MANUAL_ASSETS`、
+  `frames.json`（重生成）。
+- **闸门**：`check-pet-assets.mjs` PASS（whale 11 行在位；`idle2–idle5` 刻意不进
+  `ACTION_ROWS` 跨主题覆盖分母——kurumi 没这些行，进了只会报噪声缺口；它们的登记由
+  frames.json ↔ 盘上文件双向校验管）。`cargo test` 我方相关 33/33 绿。
+
+**§6-2 池接线：已闭环（2026-10-18 当日，由并行会话的 P1-a 落地）**。其在 `model::ambient_pool(mode)` 实现了主题分流池——whale 池正是本批设计的口径 `[wave, wait, idle2, idle3, idle4, idle5]`（`review` 槽对 whale 是 fallback 空转，换成四个真待机变体），kurumi 池 `[wave, review, wait]` 不动；`row_weight` 让待机变体权重恒 1（「待机不重样」不该被心情权重挤掉——其注释引用了本批的发现）。⇒ **R21 的资产侧（切图+登记）与接线侧（池分流）合起来全环完成**，「待机不重样」第一次对 whale 成立；实机判据归入 P0 批的 E36（idle 期观察：whale 静置时待机姿态不重样）。
+
+**§6-4 形变开关接 intensity：关题（不做）**。理由：语义耦合是错的——模型推理档
+（idle/work/deep）不该决定宠物动效；用户要「少动」有 `motion` 滑杆（E2 已放到 0.0，
+0 = 关全部形变、帧动画照常）。写入 `pet-v5-motion-plan.md` §6 销项。
+
+## 2026-10-18 · 桌宠 R20-c：背景对比 halo —— 深色身体不再融进深色桌面（E35）
+
+**触发**：用户对 R20 剩余候选项「都做，编排一下」⇒ R20-c 从候选转正
+（设计判据：`2026-10-17-pet-fullscreen-sfx-sprint.md` §4）。
+
+**改动**：
+
+- **采样**（`pet_native/backdrop.rs`）：`GetDC(NULL)` + 24×24 `CreateCompatibleBitmap` +
+  `StretchBlt` 降采样 + `GetDIBits` 平均（FFI 新增 gdi32 四件套 + `ReleaseDC`——采样路径
+  失败也清理对象，「GDI 对象数不增」铁律）。**采样带在上一帧角色框左右各一条**
+  （框外 ⇒ 采到的是桌面/窗内留白，不是桌宠自己；带宽自适应框宽 1/3，窄角色
+  （inverse ≈150px）自动收窄）。出屏闸门（`strips_inside` 纯函数）：贴边/peek 时
+  两条带不完整落进工作区就**不采**——采到黑屏会把判据拉失真（深身 vs 黑 = 永不翻动）。
+- **判据**（同模块）：Rec.601 加权 RGB 距离 + **回差**（`HALO_DIST_ON=36` / `OFF=56`，
+  防临界桌面 2s 一闪）；环色按身体明暗选反差（深身浅环 / 浅身深环，`HaloKind` 三态）。
+  身体平均色从**上一帧**合成缓冲的角色带算（alpha ≥ 200 的实心像素——排掉边缘
+  抗锯齿的混合色），一帧滞后对 2s 节拍无感，省掉「先采样再重画」的顺序死结。
+- **绘制**：`scripts/gen-halo.mjs` 构建期生成两枚 256² 柔环 PNG（径向 alpha 渐变，
+  ~8.9KB/枚，确定性 ⇒ `--check` 即闸门）；新原语 `window.rs::blit_scaled`（显式目标
+  尺寸——`blit_img`/`blit_center_bottom` 都推导不出「角色框 + 外扩」，而环要贴任意
+  轮廓：whale 249 宽 / inverse 150 宽都服）；`blit_center_bottom` 现回报画出的角色框
+  （`last_char_box`），halo 画在角色**背后**（清 buf 后、角色分支前）——不透明处被
+  角色盖住，只有轮廓外透明区显出 ⇒ 贴着轮廓的一圈反差光。
+- **节拍与闸门**：compose 内 2s 一拍（`next_backdrop`，不新开定时器）；**静态期才采/画**
+  （拖动/滑停/全屏隐藏/停靠期全闸——「在手上」的桌宠没有融进桌面这个问题）。
+  规避参考实现的 GPU 教训（Coopanion 的 halo 用 CSS filter 整窗模糊，其注释记录
+  Mac 上常开 GPU 60–90%）：我方是预渲染环 + 单次 blit，零滤镜零表面。
+- **无设置开关**：这是「自动美化」不是行为改变，关它的需求强度不够；将来要关就加
+  `pshl`（模式同 `psfs`/`psnd`）。记录在设计文档 §4 决策 2。
+
+**验证**：`cargo test` **222 → 228 例全绿**（backdrop 6：同色开环选色 / 差距大不开 /
+**回差防抖** / 环色随明暗重选 / 采样带出屏闸门 / 退化矩形）；三类缺陷反向验证精确转红
+（去回差 / 环色反转 / 闸门恒真）；`verify-all desktop` **43 → 44/44**（+halo 闸门）。
+**待实机（归用户，E35 五条）**：深色桌面出环 / 边界不闪 / 换主题环色翻 / 拖动中不画 /
+贴边不采。**阈值 36/56 是纸面推的**，实机不满意调 `config.rs` 两个数即可。
+
 ## 2026-10-17（续三）· 桌宠专项 R20：全屏自动隐藏 + 程序化音效（E34）
 
 **触发**：用户对四个参考仓库（Coopanion / GarfieldZhung / fornarwhal / TreapGoGo，

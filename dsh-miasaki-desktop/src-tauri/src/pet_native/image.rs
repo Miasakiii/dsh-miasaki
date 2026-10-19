@@ -109,6 +109,18 @@ impl Frames {
         let has = |row: &str| map.get(row).map(|l| !l.is_empty()).unwrap_or(false);
         has("runRight") && has("runLeft")
     }
+
+    /// A 批：该主题**当前生效行集**（= 已烘焙进来的形象）里是否有这一行且非空。
+    /// ambient 选行的可用性过滤用（P1-a 空转槽纪律的推广：形象缺的行不上场）。
+    /// 无图集的主题（inverse）恒 false——它的 ambient 本就不被立绘分支消费。
+    pub(crate) fn rows_have(&self, mode: &str, row: &str) -> bool {
+        let map = match mode {
+            "whale" => &self.whale_rows,
+            "kurumi" => &self.kurumi,
+            _ => return false,
+        };
+        map.get(row).map(|l| !l.is_empty()).unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -177,9 +189,65 @@ mod tests {
         f.whale_rows.insert("runLeft".to_string(), one());
         assert!(f.can_wander("whale"));
     }
+
+    /// A 批：形象键解析——default/空 ⇒ "whale"（现有资产）；合法 variant ⇒ "whale.<name>"；
+    /// 缺失键 / 非法字符 ⇒ 回落 "whale"（留痕在 pet_log_line，这里只判键本身）。
+    #[test]
+    fn appearance_key_resolves_default_and_variant() {
+        let m: serde_json::Value = serde_json::from_str(
+            r#"{"whale":{"kind":"atlas"},"whale.sakura":{"kind":"atlas"}}"#,
+        )
+        .unwrap();
+        assert_eq!(resolve_appearance_key(&m, "default"), "whale", "default = 现有资产");
+        assert_eq!(resolve_appearance_key(&m, ""), "whale", "空串按 default");
+        assert_eq!(resolve_appearance_key(&m, "sakura"), "whale.sakura", "合法 variant 命中");
+        assert_eq!(resolve_appearance_key(&m, "missing"), "whale", "帧表没有的形象回落 default");
+        assert_eq!(resolve_appearance_key(&m, "../etc"), "whale", "非法字符回落 default");
+        assert_eq!(resolve_appearance_key(&m, "SAKURA"), "whale", "大写不合 charset，回落");
+        assert_eq!(resolve_appearance_key(&m, "sa ku"), "whale", "空格不合 charset，回落");
+    }
 }
 
-pub(crate) fn load_frames() -> Frames {
+/// A 批：解析 whale 的 manifest 键（纯函数 + 留痕，单测直接喂合成 JSON）。
+///
+/// - `"default"` / 空串 ⇒ `"whale"`（现有资产，默认路径零变化）；
+/// - 否则 `"whale.<name>"`，`name` 限 `[a-z0-9-]+`（URL/文件名安全；
+///   非法字符 ⇒ 留痕回落——settings.normalize 已白名单，这里是第二道闸）；
+/// - 键不在帧表 ⇒ 留痕回落（**宁可用旧形象，不空白**；但不静默——
+///   pet.log 有行，排障时能看见「请求了不存在的形象」）。
+fn resolve_appearance_key(manifest: &serde_json::Value, appearance: &str) -> String {
+    const DEFAULT_KEY: &str = "whale";
+    if appearance.is_empty() || appearance == super::settings::APPEARANCE_DEFAULT {
+        return DEFAULT_KEY.to_string();
+    }
+    if !appearance
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        super::window::pet_log_line(&format!(
+            "[native-pet] appearance {appearance} 含非法字符，回落 default\n"
+        ));
+        return DEFAULT_KEY.to_string();
+    }
+    let key = format!("whale.{appearance}");
+    if manifest.get(&key).is_none() {
+        super::window::pet_log_line(&format!(
+            "[native-pet] appearance {appearance} 不在帧表（缺 {key} 条目），回落 default\n"
+        ));
+        return DEFAULT_KEY.to_string();
+    }
+    key
+}
+
+/// A 批（2026-10-19，design/2026-10-19-pet-a-appearance.md §3.2）：按**形象**加载。
+///
+/// whale 的 manifest 键 = `"whale"`（default，现有资产）或 `"whale.<appearance>"`
+/// （新形象，自包含条目）；kurumi / inverse 恒 default（换装不涉及其角色设定）。
+/// 形象缺失/非法 ⇒ **留痕 + 回落 default**（`resolve_appearance_key`）——
+/// 宁可用旧形象，不空白；但不静默（pet.log 有行）。
+/// 加载期烘焙：当前形象的行/states 装进**现有字段**（`whale_rows` / `whale_states`…），
+/// 于是 compose / `can_wander` / 回退链对形象零感知（与 P2-a 配色同一条重载路径）。
+pub(crate) fn load_frames_appearance(appearance: &str) -> Frames {
     // 素材经 crate::assets 读取：磁盘 ui/（EXE 旁）优先，编译期内嵌兜底 ——
     // 单文件拷贝 EXE 也能完整显示桌宠（图标/气泡/帧图集），不再强制 ui/ 外置。
     let mut f = Frames::default();
@@ -221,10 +289,14 @@ pub(crate) fn load_frames() -> Frames {
     if let Some(bytes) = crate::assets::read("pets/frames.json") {
         if let Ok(txt) = String::from_utf8(bytes) {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                // A 批：whale 的 manifest 键按形象解析（default ⇒ "whale"；
+                // 否则 "whale.<name>"，缺失/非法留痕回落）。行与立绘两段共用。
+                let whale_key = resolve_appearance_key(&v, appearance);
                 // 行帧图集(kurumi / v5:whale)——同一 schema,按主题分流到各自的行集
                 for theme in ["kurumi", "whale"] {
+                    let key = if theme == "whale" { whale_key.as_str() } else { theme };
                     if let Some(rows) =
-                        v.get(theme).and_then(|m| m.get("rows")).and_then(|r| r.as_object())
+                        v.get(key).and_then(|m| m.get("rows")).and_then(|r| r.as_object())
                     {
                         for (row, files) in rows {
                             let mut imgs = Vec::new();
@@ -250,8 +322,11 @@ pub(crate) fn load_frames() -> Frames {
                     }
                 }
                 // 立绘三态(whale / inverse);v2:值可为帧组数组(idle 帧序列)或单帧字符串
+                // A 批：whale 段同样按形象键取（variant 可以是纯立绘 kind——那时
+                // whale_rows 为空，compose 的 whale_atlas 判据自然走立绘分支）。
                 for mode in ["whale", "inverse"] {
-                    if let Some(states) = v.get(mode).and_then(|m| m.get("states")).and_then(|s| s.as_object()) {
+                    let key = if mode == "whale" { whale_key.as_str() } else { mode };
+                    if let Some(states) = v.get(key).and_then(|m| m.get("states")).and_then(|s| s.as_object()) {
                         for (s, name) in states {
                             let names: Vec<String> = if let Some(arr) = name.as_array() {
                                 arr.iter().filter_map(|n| n.as_str().map(|x| x.to_string())).collect()
@@ -283,4 +358,230 @@ pub(crate) fn load_frames() -> Frames {
         }
     }
     f
+}
+
+/* ---------------- P2-a：配色重着色（加载期，design/2026-10-18-pet-p2-* §1） ---------------- */
+
+/// 单像素重着色（**纯函数**，直存 RGB、非预乘）：保亮度 hue 矩阵 + 饱和度插值。
+///
+/// hue 矩阵绕灰度轴旋转（内部色彩关系不变，只是整体转色相）；`sat` 向 Rec.601
+/// 亮度灰插值（1.0 = 不动，0 = 全灰）。`0° + sat 1.0` 恒等——冷启动默认路径
+/// 因此零失真。灰度像素（r=g=b）不受 hue 影响（矩阵对灰度轴不动）——单测锚定。
+pub(crate) fn recolor_pixel(r: u8, g: u8, b: u8, hue_deg: f32, sat: f32) -> (u8, u8, u8) {
+    if hue_deg == 0.0 && sat == 1.0 {
+        return (r, g, b); // 恒等快路径（默认预设，零失真零开销）
+    }
+    if !hue_deg.is_finite() {
+        return (r, g, b); // NaN 不猜
+    }
+    let sat = if sat.is_finite() { sat.clamp(0.0, 2.0) } else { 1.0 };
+    let (rf, gf, bf) = (r as f32, g as f32, b as f32);
+    // 保亮度 hue 旋转矩阵（经典 HSV 旋转公式）
+    let a = hue_deg.to_radians();
+    let (c, s) = (a.cos(), a.sin());
+    let k = 1.0 / 3.0;
+    let sq = (1.0 / 3.0_f32).sqrt();
+    let m = [
+        [c + k * (1.0 - c), k * (1.0 - c) - sq * s, k * (1.0 - c) + sq * s],
+        [k * (1.0 - c) + sq * s, c + k * (1.0 - c), k * (1.0 - c) - sq * s],
+        [k * (1.0 - c) - sq * s, k * (1.0 - c) + sq * s, c + k * (1.0 - c)],
+    ];
+    let hr = m[0][0] * rf + m[0][1] * gf + m[0][2] * bf;
+    let hg = m[1][0] * rf + m[1][1] * gf + m[1][2] * bf;
+    let hb = m[2][0] * rf + m[2][1] * gf + m[2][2] * bf;
+    // 饱和度：向 Rec.601 亮度灰插值
+    let luma = 0.299 * rf + 0.587 * gf + 0.114 * bf;
+    let out = |v: f32| (luma + (v - luma) * sat).round().clamp(0.0, 255.0) as u8;
+    (out(hr), out(hg), out(hb))
+}
+
+/// 对一张**预乘**帧图原地重着色：反预乘 → `recolor_pixel` → 预乘
+/// （预乘四舍五入与 `load_png` 一致，避免重新引入 ≤1 级偏暗）。
+/// a<8 的像素保持 0（与 load_png 的兜底同口径）。
+pub(crate) fn recolor_image(img: &mut Image, hue_deg: f32, sat: f32) {
+    for px in img.bgra.iter_mut() {
+        let a = (*px >> 24) & 0xFF;
+        if a < 8 {
+            *px = 0;
+            continue;
+        }
+        let pr = ((*px >> 16) & 0xFF) as u32;
+        let pg = ((*px >> 8) & 0xFF) as u32;
+        let pb = (*px & 0xFF) as u32;
+        // 反预乘（四舍五入；a=255 时无损）
+        let (r, g, b) = (
+            ((pr * 255 + a / 2) / a).min(255) as u8,
+            ((pg * 255 + a / 2) / a).min(255) as u8,
+            ((pb * 255 + a / 2) / a).min(255) as u8,
+        );
+        let (nr, ng, nb) = recolor_pixel(r, g, b, hue_deg, sat);
+        *px = (a << 24)
+            | (((nr as u32 * a + 127) / 255) << 16)
+            | (((ng as u32 * a + 127) / 255) << 8)
+            | ((nb as u32 * a + 127) / 255);
+    }
+}
+
+/// P2-a：按预设索引重着色一整套帧——**只动 whale**（行集 + 三态立绘）。
+///
+/// kurumi/inverse 不动：发色与瞳色是角色设定的一部分，hue 旋转会把狂三变成
+/// 另一个人（Coopanion 的配色同样只作用于自家 mascot）。索引越界 ⇒ 不动
+/// （调用方已过 `normalize()` 夹取，这里是第二道闸）。
+pub(crate) fn recolor_frames(f: &mut Frames, color: u32) {
+    let (hue, sat) = match COLOR_PRESETS.get(color as usize) {
+        Some(&p) => p,
+        None => return,
+    };
+    if hue == 0.0 && sat == 1.0 {
+        return; // 原色：不碰任何像素（默认路径零失真）
+    }
+    for map in [&mut f.whale_rows, &mut f.whale_states] {
+        for imgs in map.values_mut() {
+            for img in imgs.iter_mut() {
+                recolor_image(img, hue, sat);
+            }
+        }
+    }
+}
+
+/// 按（配色, 形象）加载帧。冷启动（`pet_native::spawn`）与运行期改设置
+/// （`window.rs` 的 `(color, appearance)` 变更检测）共用这一条路——重新走
+/// `assets::read` 保证磁盘 ui/ 覆盖层语义与冷启动完全一致。
+/// A 批：appearance 只影响 whale 的取键（其余主题恒 default，见加载器）。
+pub(crate) fn load_frames_for(color: u32, appearance: &str) -> Frames {
+    let mut f = load_frames_appearance(appearance);
+    recolor_frames(&mut f, color);
+    f
+}
+
+#[cfg(test)]
+mod recolor_tests {
+    use super::*;
+
+    /// 与 load_png 一致的预乘构造（测试专用）。
+    fn px(r: u8, g: u8, b: u8, a: u8) -> u32 {
+        (a as u32) << 24
+            | (((r as u32 * a as u32 + 127) / 255) << 16)
+            | (((g as u32 * a as u32 + 127) / 255) << 8)
+            | ((b as u32 * a as u32 + 127) / 255)
+    }
+
+    /// P2-a-1：默认预设恒等——冷启动默认路径零失真（这条是「不碰默认」的契约）。
+    #[test]
+    fn recolor_identity_at_default_preset() {
+        assert_eq!(recolor_pixel(20, 40, 90, 0.0, 1.0), (20, 40, 90));
+        assert_eq!(recolor_pixel(255, 255, 255, 0.0, 1.0), (255, 255, 255));
+        assert_eq!(recolor_pixel(0, 0, 0, 0.0, 1.0), (0, 0, 0));
+        // 越界索引 ⇒ 整套不动
+        let mut f = Frames::default();
+        f.whale_rows.insert(
+            "idle".to_string(),
+            vec![Image { w: 1, h: 1, bgra: vec![px(20, 40, 90, 255)] }],
+        );
+        recolor_frames(&mut f, 99);
+        assert_eq!(f.whale_rows["idle"][0].bgra[0], px(20, 40, 90, 255));
+    }
+
+    /// P2-a-2：灰度不受 hue 影响（矩阵对灰度轴不动）——霜白预设只降饱和不偏色。
+    #[test]
+    fn gray_pixels_are_hue_immune() {
+        for v in [0u8, 64, 128, 192, 255] {
+            assert_eq!(recolor_pixel(v, v, v, 120.0, 1.0), (v, v, v), "灰 {v} 不得偏色");
+        }
+        // 霜白：彩色去饱和后应显著靠近其亮度灰
+        let (r, g, b) = recolor_pixel(20, 40, 90, 0.0, 0.30);
+        let spread = r.max(g).max(b) - r.min(g).min(b);
+        assert!(spread < 40, "霜白应接近灰：({r},{g},{b}) spread={spread}");
+    }
+
+    /// P2-a-3：137° + 223° = 360° 轮回（旋转整圈回原色）+ **等权均值守恒**
+    /// （经典 hue 矩阵的真实不变量：三行和均为 1 ⇒ (r+g+b)/3 精确不变）。
+    ///
+    /// 注意：它**不**精确保 Rec.601 亮度——对蓝色为主的鲸鱼 palette 实测漂移
+    /// ≈3.5/255（1.4%，肉眼不可感），但「保 Rec.601」不是该矩阵的性质，
+    /// 写成断言就是假判据（首版就这么错的，红得莫名其妙）。要 Rec.601 精确守恒
+    /// 得改用绕亮度轴的旋转矩阵——那会让灰/白（女仆围裙的大面积白）着色，
+    /// 灰度免疫是更重要的观感性质（见 gray_pixels_are_hue_immune）。
+    #[test]
+    fn hue_round_trips_and_preserves_mean() {
+        for &(r, g, b) in &[(20u8, 40u8, 90u8), (200, 180, 60), (90, 200, 160), (10, 10, 10)] {
+            let (r1, g1, b1) = recolor_pixel(r, g, b, 137.0, 1.0);
+            let back = recolor_pixel(r1, g1, b1, 223.0, 1.0);
+            let orig = (r, g, b);
+            assert!((back.0 as i32 - r as i32).abs() <= 2, "轮回 x：{back:?} vs {orig:?}");
+            assert!((back.1 as i32 - g as i32).abs() <= 2, "轮回 y：{back:?} vs {orig:?}");
+            assert!((back.2 as i32 - b as i32).abs() <= 2, "轮回 z：{back:?} vs {orig:?}");
+            // 等权均值精确守恒（取整误差 ≤1）
+            let m0 = (r as f32 + g as f32 + b as f32) / 3.0;
+            let (r2, g2, b2) = recolor_pixel(r, g, b, 120.0, 1.0);
+            let m1 = (r2 as f32 + g2 as f32 + b2 as f32) / 3.0;
+            assert!((m1 - m0).abs() <= 1.0, "均值漂移：{m0} -> {m1}");
+        }
+    }
+
+    /// P2-a-4：输出恒在 0..255（u8 构造即保证，这里锚**纯函数确定性**——
+    /// 同入参必须同出；视觉假定的「不越界」由类型承担，测试不写恒真断言）、
+    /// NaN 入参安全（hue NaN 回原，sat NaN 按 1.0，两个都有明确归宿）。
+    #[test]
+    fn recolor_is_deterministic_and_nan_safe() {
+        for &(r, g, b) in &[(0u8, 0u8, 0u8), (255, 255, 255), (20, 40, 90), (250, 3, 7)] {
+            for hue in [0.0_f32, 47.5, 120.0, 300.0, 359.9] {
+                for sat in [0.0_f32, 0.3, 1.0, 2.0] {
+                    let a = recolor_pixel(r, g, b, hue, sat);
+                    let again = recolor_pixel(r, g, b, hue, sat);
+                    assert_eq!(a, again, "纯函数必须确定：({r},{g},{b}) hue={hue} sat={sat}");
+                }
+            }
+        }
+        assert_eq!(recolor_pixel(20, 40, 90, f32::NAN, f32::NAN), (20, 40, 90), "NaN ⇒ 原样");
+    }
+
+    /// P2-a-5：预乘往返——半透明像素重着色后 alpha 不变、不透明像素换色。
+    #[test]
+    fn recolor_image_handles_premultiplied_alpha() {
+        let mut img = Image {
+            w: 2,
+            h: 1,
+            bgra: vec![px(20, 40, 90, 255), px(200, 100, 50, 80)],
+        };
+        let before_a1 = img.bgra[1] >> 24;
+        recolor_image(&mut img, 120.0, 1.0);
+        assert_eq!(img.bgra[0] >> 24, 255, "alpha 不得变");
+        assert_eq!(img.bgra[1] >> 24, before_a1, "半透明像素 alpha 不得变");
+        assert_ne!(img.bgra[0], px(20, 40, 90, 255), "不透明像素应已换色");
+        // 全透明保持 0（load_png 同口径）
+        let mut t = Image { w: 1, h: 1, bgra: vec![0] };
+        recolor_image(&mut t, 120.0, 1.0);
+        assert_eq!(t.bgra[0], 0);
+    }
+
+    /// P2-a-6：`recolor_frames` 只动 whale——kurumi/inverse 帧逐字节不变
+    /// （角色设定色不参与换色；这条是「换色不窜主题」的契约）。
+    #[test]
+    fn recolor_touches_whale_only() {
+        let mut f = Frames::default();
+        let whale_px = px(20, 40, 90, 255);
+        let kurumi_px = px(200, 180, 60, 255);
+        f.whale_rows.insert(
+            "idle".to_string(),
+            vec![Image { w: 1, h: 1, bgra: vec![whale_px] }],
+        );
+        f.whale_states.insert(
+            "deep".to_string(),
+            vec![Image { w: 1, h: 1, bgra: vec![whale_px] }],
+        );
+        f.kurumi.insert(
+            "idle".to_string(),
+            vec![Image { w: 1, h: 1, bgra: vec![kurumi_px] }],
+        );
+        f.inverse_states.insert(
+            "idle".to_string(),
+            vec![Image { w: 1, h: 1, bgra: vec![kurumi_px] }],
+        );
+        recolor_frames(&mut f, 1); // 樱粉
+        assert_ne!(f.whale_rows["idle"][0].bgra[0], whale_px, "whale 应已换色");
+        assert_ne!(f.whale_states["deep"][0].bgra[0], whale_px, "whale 立绘也应换色");
+        assert_eq!(f.kurumi["idle"][0].bgra[0], kurumi_px, "kurumi 不得换色");
+        assert_eq!(f.inverse_states["idle"][0].bgra[0], kurumi_px, "inverse 不得换色");
+    }
 }

@@ -218,6 +218,32 @@ test('风格契约：界面文案不得漏出 markdown 记号（** 会被当字�
     '设置页文案是纯文本渲染，** 会原样显示成星号（先前「关掉某个状态只是**不显示**它」就漏过一次）')
 })
 
+/* ---------------- P2-a：配色行契约 ---------------- */
+
+/**
+ * P2-a（2026-10-18）新增的「配色」行必须：① 走官方 SegmentedControl（与其它
+ * 分段设置同一家族）；② 壳侧默认值含 `color: 0` 且与 Rust `PetSettings::default()`
+ * 一致（面板占位默认与壳里真实值不一致 ⇒ 用户一改就把真实值覆盖成「面板以为的默认」）；
+ * ③ 选项表六档（0..=5）与 Rust `config::COLOR_PRESETS` 的数量对齐。
+ * 为什么值得一条闸门：这一行同时踩「壳侧设置链」（默认值双处同步）与「风格契约」
+ * （自造控件）两条历史上的坑。
+ */
+test('P2-a 契约：配色行走官方 SegmentedControl 且默认值与选项表对齐 Rust', () => {
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(source, /segmentCtl\("pet-color"/, '配色行必须走 segmentCtl（官方 SegmentedControl）')
+  assert.match(source, /const COLOR_CHOICES = \[\s*\["0", "原色"\][\s\S]*?\]/,
+    '必须有 COLOR_CHOICES 选项表且以「原色」起头')
+  // 切到行尾 `];` 再数档位——惰性 `[\s\S]*?\]` 会截在第一个条目末尾的 `]` 上
+  // （首版就这么错的：把 `["0", "原色"]` 一个条目当成整张表，数出 1 档）。
+  const line = (source.match(/const COLOR_CHOICES = \[[\s\S]*?\];/) || [])[0] || ''
+  const n = (line.match(/\["/g) || []).length
+  assert.strictEqual(n, 6, `配色预设须六档（Rust COLOR_PRESETS.len() = 6），实得 ${n}`)
+  assert.match(source, /SHELL_SETTINGS_DEFAULTS = \{[^}]*color: 0/,
+    '壳侧默认值必须含 color: 0（与 Rust PetSettings::default() 的 color: 0 对齐）')
+  // 上报值走 Number——hash 里是数字索引，壳侧 parse::<u32>（字符串会让 parse 失败静默保留旧值）
+  assert.match(source, /applyShell\(\{ color: Number\(v\) \}\)/, '配色上报必须转 Number（壳侧按 u32 解析）')
+})
+
 /* ---------------- E1：error 态的老化（快照驱动的必要时效） ---------------- */
 
 /**
@@ -480,3 +506,63 @@ test('G2·防漂移：行为测试重演的条件串必须与源码逐字对应'
   assert.ok(m, 'done 边沿的条件串已变样（见实际文本：' + edge.trim() + '）—— 请同步 runDoneSequence')
 })
 
+
+/* ---------------- R20-c 重做（2026-10-19）：背景柔光开关的跨文件同步 ----------------
+ *
+ * 用户报「有时候会有一个白圈圈着」——首版是预渲染椭圆环，已重做为贴合轮廓的程序化
+ * 柔光；同时补一个开关兜底审美差异。开关涉及**三处同步**，漏任一条都是静默坏掉：
+ *   ① 面板默认值 `SHELL_SETTINGS_DEFAULTS.halo` 必须 = Rust `PetSettings::default().halo`；
+ *   ② 开关的取值判定必须用 `!== false`（undefined 视为开）——写成真值判断会让
+ *      初次打开面板时把「开」显示成「关」，用户一碰就写回错误值；
+ *   ③ 点击必须上报**取反后的 bool**（与 fs/sound 同口径）。
+ */
+test('R20-c 契约：背景柔光开关默认开、走官方 switchCtl、与 Rust 默认值对齐', () => {
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(source, /SHELL_SETTINGS_DEFAULTS = \{[^}]*halo: true/,
+    '壳侧默认值必须含 halo: true（与 Rust PetSettings::default() 的 halo: true 对齐）')
+  assert.match(source, /switchCtl\(shell\.halo !== false/,
+    '开关必须以「!== false」取反（undefined 视为开，否则首开面板会显示成关）')
+  assert.match(source, /applyShell\(\{ halo: shell\.halo === false \}\)/,
+    '点击必须上报取反后的 bool（switchCtl 同族口径）')
+  const rsPath = join(dirname(fileURLToPath(import.meta.url)),
+    '..', '..', '..', 'src-tauri', 'src', 'pet_native', 'settings.rs')
+  const rs = readFileSync(rsPath, 'utf8')
+  assert.match(rs, /halo: bool,/, 'Rust PetSettings 必须有 halo 字段')
+  assert.match(rs, /halo: true,/, 'Rust 默认必须是 halo: true（与面板默认一致）')
+  // pshl 的 hash 编码在 02-core；这里只钉面板侧字段名，编码由 themes/test/hash-sync 行为测试覆盖。
+  assert.doesNotMatch(source, /if \(shell\.halo\)/, '不得出现真值判定（关不掉/首开显示错）')
+})
+
+
+/* ---------------- A 批（2026-10-19）：桌宠形象（换装）的跨文件同步 ----------------
+ *
+ * 形象切换涉及**两处必须逐字一致**的清单（design/2026-10-19-pet-a-appearance.md
+ * runbook §7 的第 4/5 步）：
+ *   ① Rust `PetSettings::APPEARANCES`（normalize 白名单，越界回落 default）；
+ *   ② 面板 `APPEARANCE_CHOICES`（选项表）。
+ * 漂移的两种死法：面板有、Rust 没有 ⇒ 选了就被 normalize 打回 default（**静默失效**）；
+ * Rust 有、面板没有 ⇒ 形象存在但选不到。另钉条件渲染：≤1 项不放行（单选项是噪音）。
+ */
+test('A 契约：形象选项表与 Rust 白名单逐字镜像；≤1 项不渲染；默认值对齐', () => {
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.match(source, /const APPEARANCE_CHOICES = \[\s*\["default", "默认"\]\s*\]/,
+    '必须有 APPEARANCE_CHOICES 选项表且以「默认」起头（default = 现有资产）')
+  assert.match(source, /SHELL_SETTINGS_DEFAULTS = \{[^}]*appearance: "default"/,
+    '壳侧默认值必须含 appearance: "default"（与 Rust PetSettings::default() 对齐）')
+  assert.match(source, /APPEARANCE_CHOICES\.length > 1/,
+    '形象行必须条件渲染（≤1 项不放行——一个选项的单选是噪音）')
+  assert.match(source, /segmentCtl\("pet-appearance"/, '形象行必须走 segmentCtl（官方 SegmentedControl）')
+  assert.match(source, /applyShell\(\{ appearance: v \}\)/, '形象上报字段名必须与壳侧一致（appearance）')
+  const rsPath = join(dirname(fileURLToPath(import.meta.url)),
+    '..', '..', '..', 'src-tauri', 'src', 'pet_native', 'settings.rs')
+  const rs = readFileSync(rsPath, 'utf8')
+  const rustList = (rs.match(/pub\(crate\) const APPEARANCES: \[&str; \d+\] = \[([^\]]*)\]/) || [])[1] || ''
+  const rustVals = [...rustList.matchAll(/"([^"]+)"/g)].map(m => m[1]).sort()
+  const jsList = (source.match(/const APPEARANCE_CHOICES = \[([\s\S]*?)\]/) || [])[1] || ''
+  const jsVals = [...jsList.matchAll(/\["([^"]+)"/g)].map(m => m[1]).sort()
+  assert.ok(rustVals.length > 0, 'Rust 侧没解析到 APPEARANCES 白名单（正则漂移？）')
+  assert.deepEqual(jsVals, rustVals,
+    `形象清单两侧必须逐字一致（漂移 = 选了被打回 / 存在选不到）；Rust: [${rustVals}] 面板: [${jsVals}]`)
+  assert.match(rs, /appearance: String,/, 'Rust PetSettings 必须有 appearance 字段')
+  assert.match(rs, /appearance: APPEARANCE_DEFAULT\.to_string\(\),/, 'Rust 默认必须是 APPEARANCE_DEFAULT')
+})

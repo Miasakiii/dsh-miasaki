@@ -350,6 +350,10 @@ function planDesktop() {
     args: [join(dir, 'scripts', 'gen-sfx.mjs'), '--check'],
     cwd: dir,
   })
+  // R20-c（2026-10-19 重做）：背景对比 halo 改为**运行期程序化轮廓柔光**
+  // （`backdrop.rs` 从本帧角色 alpha 生成），预渲染环 PNG 与 gen-halo.mjs 一并退役
+  // ⇒ 不再有「产物 vs 生成器」闸门；判据侧由 `backdrop.rs` 的纯函数单测
+  // （模糊 / 合成 / 回差 / 选色）与 `cargo test` 覆盖。
   // 拖拽上传安全网（design/drag-drop-attachment-upload.md）：09-dropguard.js 分片登记 /
   // 生成产物含片 / 三判据（dragover 阻止、只认 Files、defaultPrevented 放行）/ 自包含形态。
   checks.push({

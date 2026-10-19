@@ -13,6 +13,8 @@
 //! 坐标口径（绘制唯一的采样路径）：目标像素（窗口坐标）→ 相对 pivot 的偏移 → **逆变换**
 //! → 未变换框内坐标 → 源图双线性采样。逆向映射（而非正向撒点）从结构上避免旋转采样空洞。
 use super::config::*;
+// P0-F2：emote_xform 的 kind 入参（动作词表住在 model.rs，编舞数学住本文件——纯逻辑分层）
+use super::model::EmoteKind;
 
 /// 绘制变换：绕**底部中心** pivot 的旋转 + 非等比缩放（挤压拉伸）。
 ///
@@ -237,6 +239,157 @@ pub(crate) fn spring_step(s: DragSpring, target: f32, dt_ms: u32) -> DragSpring 
 /// 顺序无所谓，两者都是「小于阈值」的合取。
 pub(crate) fn spring_at_target(s: DragSpring, target: f32) -> bool {
     s.vel.abs() < DRAG_SPRING_SETTLE_VEL && (target - s.pos).abs() < DRAG_SPRING_SETTLE_PX
+}
+
+/* ---------------- P0-F2 · Emote 编舞（2026-10-18，design/2026-10-18-pet-p0-interaction-emote.md） ---------------- */
+
+/// P0-F2：表演动作的逐帧变换 + bob 增量。`p ∈ [0,1]` = 槽内已播比例；
+/// `t_ms` 只给 Sleep 用（续期态没有有意义的 p，用真实时间相位）。
+///
+/// **三条纪律**（单测逐条钉死）：
+/// ① **旋转幅度不随动效强度缩放**（固定编舞）：`motion` 拉满时若把 3° 放大到 4.8°，
+///    水平伸出会越过窗口半宽（设计文档 §3.2.2 的几何账）；`motion` 只缩放 bob；
+/// ② 所有旋转 ≤ 布局余量预留角（`SWAY_MAX_DEG × MOTION_MAX` = 3.2°）——超出必裁底边；
+/// ③ **两端回中性**（p=0/1 时 rot=0、bob=0）：与 `ActionSlot`「到期即清」同哲学，
+///    绝不残留形变。Sleep 例外——它是续期态，bob 是时间波动的呼吸（有界但非零）。
+///
+/// Dance **不带挤压**：rot 3° 与 squash 1.10 叠加会横向越窗约 6px（同「挤压期关摇摆」）；
+/// 挤压通道（Done/落地）与 emote 在 compose 侧互斥。
+pub(crate) fn emote_xform(kind: EmoteKind, p: f32, t_ms: u64, motion: f32) -> (DrawXform, f32) {
+    let p = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 };
+    let motion = if motion.is_finite() { motion.max(0.0) } else { 0.0 };
+    let pi = std::f32::consts::PI;
+    match kind {
+        EmoteKind::Nod => {
+            // 点一次头：bob 走一个完整正弦（下-上），落底即回
+            let bob = (pi * p).sin() * NOD_PX * motion;
+            (DrawXform::IDENTITY, bob)
+        }
+        EmoteKind::Shake => {
+            // 摇两次头：一周期内两摆
+            let rot = (2.0 * pi * p).sin() * SHAKE_DEG.to_radians();
+            (DrawXform::new(rot, 1.0, 1.0), 0.0)
+        }
+        EmoteKind::Turn => {
+            // 转身：前半横向蓄力（挤到 1−TURN_SQUEEZE），**中点镜像翻转**（flip 在 blit 侧，
+            // 见 window.rs 的 p ≥ 0.5 判据），后半回弹——「回头看一眼」再转回来
+            let wind = if p < 0.5 { p / 0.5 } else { (1.0 - p) / 0.5 };
+            let sx = 1.0 - TURN_SQUEEZE * wind;
+            (DrawXform::new(0.0, sx, 1.0), 0.0)
+        }
+        EmoteKind::Shiver => {
+            // 高频确定性抖动：rot/bob 两个频率的 sin 复合——**不用随机**
+            // （rand_u32 是 FFI 且不可单测；复合正弦的包络抖动读作「怕得发抖」）。
+            // bob 用 2 倍频（12 微颤）而不是 1.3 倍频：非整数倍频在 p=1 处不为零，
+            // 会破坏「两端回中性」（1.3·12π 不是 2π 的整数倍，首版就被测试抓住）。
+            let ph = 2.0 * pi * p * SHIVER_CYCLES;
+            let rot = ph.sin() * SHIVER_DEG.to_radians() * (0.6 + 0.4 * (ph * 1.7).sin());
+            let bob = (ph * 2.0).sin() * SHIVER_BOB_PX * motion;
+            (DrawXform::new(rot, 1.0, 1.0), bob)
+        }
+        EmoteKind::Dance => {
+            // 跳舞：一周期两摆 + 四拍 bob（abs 让 bob 恒向下跳，像踩点）
+            let rot = (2.0 * pi * p).sin() * DANCE_DEG.to_radians();
+            let bob = (4.0 * pi * p).sin().abs() * DANCE_BOB_PX * motion;
+            (DrawXform::new(rot, 1.0, 1.0), bob)
+        }
+        EmoteKind::Look => {
+            // 张望：左-右-左三摆，幅度随进度衰减（越看越没兴趣）
+            let env = 1.0 - 0.5 * p;
+            let rot = (3.0 * pi * p).sin() * LOOK_DEG.to_radians() * env;
+            (DrawXform::new(rot, 1.0, 1.0), 0.0)
+        }
+        EmoteKind::Sleep => {
+            // 睡觉：深慢呼吸（周期 ×2.5、幅度 ×1.2），**不摇摆**（凝神睡觉，不晃）
+            let period = (BREATH_PERIOD_MS as f32 * SLEEP_BREATH_PERIOD_MUL) as u64;
+            let bob = wave(t_ms, period, 0) * BREATH_PX_ROW * SLEEP_BREATH_AMP * motion;
+            (DrawXform::IDENTITY, bob)
+        }
+    }
+}
+
+/* ---------------- P0-F3 · 甩出抛掷（`window.rs` 在 IDT_DRAG 节拍驱动） ---------------- */
+
+/// 抛掷飞行状态。半隐式欧拉推进（与 `spring_step` 同积分器，同稳定性口径）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FlyState {
+    /// 窗口左上角（px，浮点累积，落窗时取整）
+    pub(crate) pos: (f32, f32),
+    /// 速度（px/s，y 向下为正）
+    pub(crate) vel: (f32, f32),
+    /// 累计反弹次数（结束判据要求至少弹过一次——「飞出去直接穿墙」不算）
+    pub(crate) bounces: u32,
+    /// 累计飞行时长（ms，FLY_MAX_MS 兜底）
+    pub(crate) age_ms: u32,
+}
+
+/// 一拍飞行命中的轴（调用方据此触发挤压脉冲 + bounce 音）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FlyHit {
+    None,
+    X,
+    Y,
+}
+
+/// 推进一拍飞行。`bounds` = 窗口左上角的**允许范围**（工作区收窄窗口物理尺寸，
+/// 由调用方按当前显示器算——纯函数不枚举显示器）。
+///
+/// 模型：匀加重力 + 边缘完全非弹性碰撞（速度反向 × `FLY_RESTITUTION`）。
+/// 钳制在碰撞**之前**还是**之后**：先积分再钳制并反弹——位置永不越界（视觉硬约束），
+/// 反弹保留 55% 能量 ⇒ 3–4 次内自然停稳。
+pub(crate) fn fly_step(st: &mut FlyState, dt_ms: u32, bounds: (i32, i32, i32, i32)) -> FlyHit {
+    let dt_ms = dt_ms.clamp(1, 100);
+    let dt = dt_ms as f32 / 1000.0;
+    // 退化防护：非有限状态重置到原点（调用方的 pos 来自窗口矩形，本不该发生；
+    // 但「不可能」这三个字在窗口层不值钱——与 DrawXform::new 的夹取同哲学）
+    if !st.pos.0.is_finite() || !st.pos.1.is_finite() || !st.vel.0.is_finite() || !st.vel.1.is_finite() {
+        st.pos = (0.0, 0.0);
+        st.vel = (0.0, 0.0);
+        return FlyHit::None;
+    }
+    let (min_x, min_y, max_x, max_y) =
+        (bounds.0 as f32, bounds.1 as f32, bounds.2 as f32, bounds.3 as f32);
+    st.vel.1 += FLY_GRAVITY * dt;
+    st.pos.0 += st.vel.0 * dt;
+    st.pos.1 += st.vel.1 * dt;
+    st.age_ms = st.age_ms.saturating_add(dt_ms);
+    let mut hit = FlyHit::None;
+    if st.pos.0 < min_x {
+        st.pos.0 = min_x;
+        st.vel.0 = -st.vel.0 * FLY_RESTITUTION;
+        hit = FlyHit::X;
+    } else if st.pos.0 > max_x {
+        st.pos.0 = max_x;
+        st.vel.0 = -st.vel.0 * FLY_RESTITUTION;
+        hit = FlyHit::X;
+    }
+    if st.pos.1 < min_y {
+        st.pos.1 = min_y;
+        st.vel.1 = -st.vel.1 * FLY_RESTITUTION;
+        if hit == FlyHit::None {
+            hit = FlyHit::Y;
+        }
+    } else if st.pos.1 > max_y {
+        st.pos.1 = max_y;
+        st.vel.1 = -st.vel.1 * FLY_RESTITUTION;
+        if hit == FlyHit::None {
+            hit = FlyHit::Y;
+        }
+    }
+    if hit != FlyHit::None {
+        st.bounces += 1;
+    }
+    hit
+}
+
+/// 飞行是否该结束：**至少弹过一次**且速度已慢（`FLY_END_VEL`），或超 `FLY_MAX_MS` 兜底。
+/// 「至少弹过一次」防的是「水平扔出、还没落地就判定结束」——那观感是「扔出去直接消失」。
+pub(crate) fn fly_should_end(st: &FlyState) -> bool {
+    if st.age_ms >= FLY_MAX_MS {
+        return true;
+    }
+    let speed = (st.vel.0 * st.vel.0 + st.vel.1 * st.vel.1).sqrt();
+    st.bounces >= 1 && speed < FLY_END_VEL
 }
 
 
@@ -781,5 +934,244 @@ mod tests {
             "叠加后本应越窗（实测右沿 {:.1} vs {}）—— 若不再越窗，说明 lean/摇摆参数被改小，\
              本条的前提失效，应同步复核 compose 的「顶替」逻辑是否还需要",
             x0 + r, pw);
+    }
+
+    /* ---------------- P0-F2 · Emote 编舞 ---------------- */
+
+    /// 布局余量预留的最大角（`sway_layout_margin` 的逆解）。emote 的旋转上限就是它。
+    fn reserved_max_rad() -> f32 {
+        (SWAY_MAX_DEG * MOTION_MAX).to_radians()
+    }
+
+    const ALL_KINDS: [EmoteKind; 7] = [
+        EmoteKind::Nod,
+        EmoteKind::Shake,
+        EmoteKind::Turn,
+        EmoteKind::Shiver,
+        EmoteKind::Dance,
+        EmoteKind::Look,
+        EmoteKind::Sleep,
+    ];
+
+    /// P0-F2-1：**旋转永不超过布局余量**（几何硬约束的可执行形式）。
+    ///
+    /// 遍历七种 kind × 101 个相位 × 四个强度档：任何旋转类 emote 的任何瞬间都不得越过
+    /// `SWAY_MAX_DEG × MOTION_MAX`。这条同时是「调参刹车」——把 `DANCE_DEG` 调到 5
+    /// 会立刻转红（那时该做的是重算几何账，不是放宽度量）。
+    #[test]
+    fn emote_rotation_never_exceeds_reserved_margin() {
+        for kind in ALL_KINDS {
+            for i in 0..=100u32 {
+                let p = i as f32 / 100.0;
+                for motion in [0.5_f32, 1.0, 1.3, MOTION_MAX] {
+                    let (xf, _) = emote_xform(kind, p, 1234, motion);
+                    assert!(
+                        xf.rot_rad.abs() <= reserved_max_rad() + 1e-6,
+                        "{kind:?} p={p} motion={motion}：|rot|={:.3}° 超过预留 {:.3}°",
+                        xf.rot_rad.to_degrees(),
+                        reserved_max_rad().to_degrees()
+                    );
+                }
+            }
+        }
+        // load-bearing：摇头/跳舞必须真的接近上限（否则「不越界」可能是「根本没转」）
+        let peak = (0..=100u32)
+            .map(|i| emote_xform(EmoteKind::Dance, i as f32 / 100.0, 0, 1.0).0.rot_rad.abs())
+            .fold(0.0_f32, f32::max);
+        assert!(peak > reserved_max_rad() * 0.85,
+            "Dance 峰值 {:.2}° 明显低于上限 {:.2}°——幅度被谁改小了？",
+            peak.to_degrees(), reserved_max_rad().to_degrees());
+    }
+
+    /// P0-F2-2：两端回中性（到期即清、不残留形变）——Sleep 例外（续期呼吸有界非零）。
+    /// bob 的容差 1e-3（px）：`sin(4π)` 在 f32 里有 ~1e-6 的余数，那不是残留形变。
+    #[test]
+    fn emote_returns_neutral_at_both_ends() {
+        for kind in ALL_KINDS {
+            if kind == EmoteKind::Sleep {
+                continue;
+            }
+            for &p in &[0.0_f32, 1.0] {
+                let (xf, bob) = emote_xform(kind, p, 0, 1.0);
+                assert!(xf.rot_rad.abs() < 1e-6, "{kind:?} p={p}：rot 未回中性");
+                assert!((xf.sx - 1.0).abs() < 1e-6 && (xf.sy - 1.0).abs() < 1e-6,
+                    "{kind:?} p={p}：缩放未回中性 {:?}", xf);
+                assert!(bob.abs() < 1e-3, "{kind:?} p={p}：bob 未回中性（{bob}）");
+            }
+        }
+    }
+
+    /// P0-F2-3：**动效强度不缩放旋转、只缩放 bob**（P0 的刻意决策，几何约束使然）。
+    #[test]
+    fn emote_motion_scales_bob_but_not_rotation() {
+        // Shake 的旋转峰值处：两个强度档必须同值
+        let peak_p = 0.25_f32; // sin(2π·0.25)=1 峰值
+        let lo = emote_xform(EmoteKind::Shake, peak_p, 0, 0.5).0.rot_rad;
+        let hi = emote_xform(EmoteKind::Shake, peak_p, 0, MOTION_MAX).0.rot_rad;
+        assert!((lo - hi).abs() < 1e-6, "旋转不得随强度缩放：{lo} vs {hi}");
+        // Nod 的 bob 必须随强度线性缩放
+        let b1 = emote_xform(EmoteKind::Nod, 0.5, 0, 1.0).1;
+        let b05 = emote_xform(EmoteKind::Nod, 0.5, 0, 0.5).1;
+        assert!((b05 - b1 * 0.5).abs() < 1e-6, "bob 应随强度减半：{b05} vs {}", b1 * 0.5);
+    }
+
+    /// P0-F2-4：Turn 的蓄力曲线——中点最挤、两端归 1（配合 blit 的 flip 才是「转身」）。
+    #[test]
+    fn emote_turn_squeezes_at_midpoint_only() {
+        let (xf0, _) = emote_xform(EmoteKind::Turn, 0.0, 0, 1.0);
+        let (xfm, _) = emote_xform(EmoteKind::Turn, 0.5, 0, 1.0);
+        let (xf1, _) = emote_xform(EmoteKind::Turn, 1.0, 0, 1.0);
+        assert!((xf0.sx - 1.0).abs() < 1e-6 && (xf1.sx - 1.0).abs() < 1e-6);
+        assert!((xfm.sx - (1.0 - TURN_SQUEEZE)).abs() < 1e-6, "中点应挤到最低：{:?}", xfm);
+        assert_eq!(xfm.rot_rad, 0.0, "转身不出旋转（翻转在 blit 侧）");
+    }
+
+    /// P0-F2-5：Sleep 呼吸有界（幅度 = 行呼吸 × 1.2）且周期深慢。
+    #[test]
+    fn emote_sleep_breath_is_slow_and_bounded() {
+        let amp = BREATH_PX_ROW * SLEEP_BREATH_AMP;
+        for t in (0..40_000u64).step_by(97) {
+            let (xf, bob) = emote_xform(EmoteKind::Sleep, 0.0, t, 1.0);
+            assert_eq!(xf, DrawXform::IDENTITY, "睡觉不摇摆");
+            assert!(bob.abs() <= amp + 1e-4, "睡眠呼吸越界：{bob}");
+        }
+    }
+
+    /// P0-F2-6：退化入参（NaN / 越界 p / 负 motion）必须给出有限值——上游算错不能打穿绘制层。
+    #[test]
+    fn emote_degenerate_inputs_stay_finite() {
+        for kind in ALL_KINDS {
+            for &(p, motion) in &[
+                (f32::NAN, 1.0_f32),
+                (f32::INFINITY, 1.0),
+                (-5.0, 1.0),
+                (5.0, 1.0),
+                (0.5, f32::NAN),
+                (0.5, -3.0),
+            ] {
+                let (xf, bob) = emote_xform(kind, p, u64::MAX, motion);
+                assert!(xf.rot_rad.is_finite() && xf.sx.is_finite() && xf.sy.is_finite(),
+                    "{kind:?} p={p} motion={motion}：变换非有限 {:?}", xf);
+                assert!(bob.is_finite(), "{kind:?}：bob 非有限（{bob}）");
+                assert!(xf.sx >= XF_MIN_SCALE && xf.sx <= XF_MAX_SCALE);
+            }
+        }
+    }
+
+    /// P0-F2-7：**最坏情况不越窗**（与 R18-3 同式的逐 DPI 复算）。
+    /// 旋转类 emote 的峰值 + 最宽帧 + 最强强度，包围盒必须完整落在窗口内。
+    #[test]
+    fn emote_worst_case_stays_inside_window() {
+        for dpi in [96_u32, 120, 144, 168, 192, 240] {
+            let dpr = dpi_scale(dpi);
+            let (pw, ph) = scaled_window_size(WIN_W, WIN_H, dpi);
+            let cell_h = (CELL_H as f32 * dpr).round() as i32;
+            let fw = 192.0_f32 / 208.0 * cell_h as f32;
+            let fh = cell_h as f32;
+            let x0 = (pw as f32 - fw) / 2.0;
+            // 静止姿态的 y0（无拎起抬升）：底部 2px 留白 + 摇摆余量
+            let y0 = ph as f32 - fh - 2.0 * dpr - sway_layout_margin(fw) * dpr;
+            for kind in [EmoteKind::Shake, EmoteKind::Dance, EmoteKind::Look, EmoteKind::Shiver] {
+                for i in 0..=100u32 {
+                    let p = i as f32 / 100.0;
+                    let (xf, bob) = emote_xform(kind, p, 0, 1.0);
+                    let (l, t, r, b) = xf.bounds(fw, fh);
+                    let (left, top, right, bottom) = (x0 + l, y0 + t + bob, x0 + r, y0 + b + bob);
+                    assert!(left >= -0.5 && right <= pw as f32 + 0.5,
+                        "dpi={dpi} {kind:?} p={p}：横向越窗 [{left:.1}, {right:.1}] vs {pw}");
+                    assert!(top >= -0.5 && bottom <= ph as f32 + 0.5,
+                        "dpi={dpi} {kind:?} p={p}：纵向越窗 [{top:.1}, {bottom:.1}] vs {ph}");
+                }
+            }
+        }
+    }
+
+    /* ---------------- P0-F3 · 抛掷物理 ---------------- */
+
+    fn fly0() -> FlyState {
+        FlyState { pos: (500.0, 300.0), vel: (0.0, 0.0), bounces: 0, age_ms: 0 }
+    }
+
+    /// P0-F3-1：重力加速 + 落地反弹减速 + 位置恒在界内。
+    #[test]
+    fn fly_falls_bounces_and_stays_in_bounds() {
+        let mut st = fly0();
+        let bounds = (0, 0, 1000, 800);
+        let mut floor_hits = 0;
+        for _ in 0..2000 {
+            if fly_step(&mut st, 8, bounds) == FlyHit::Y {
+                floor_hits += 1;
+            }
+            assert!(st.pos.0 >= 0.0 && st.pos.0 <= 1000.0, "x 越界：{:?}", st.pos);
+            assert!(st.pos.1 >= 0.0 && st.pos.1 <= 800.0, "y 越界：{:?}", st.pos);
+        }
+        assert!(floor_hits >= 2, "应至少弹两次（实测 {floor_hits} 次）");
+        // 衰减：每次落地的**反弹速度**都应小于上一次（含当拍重力增量——
+        // 直接比「反弹后 vs 落地前」在末段小速度时不成立：g·dt 会盖过 0.55 的衰减）。
+        let mut st2 = fly0();
+        let mut prev_rebound = f32::INFINITY;
+        let mut seen = 0;
+        for _ in 0..2000 {
+            let vy_before = st2.vel.1;
+            if fly_step(&mut st2, 8, bounds) == FlyHit::Y {
+                seen += 1;
+                if seen > 4 {
+                    break; // 只看前几次（末段是微弹，衰减判据失去表现力）
+                }
+                let impact = (vy_before + FLY_GRAVITY * 0.008).abs();
+                assert!(st2.vel.1.abs() < prev_rebound,
+                    "第 {seen} 次反弹速度未衰减：{:.0} vs 上次 {:.0}（落地冲量 {impact:.0}）",
+                    st2.vel.1.abs(), prev_rebound);
+                prev_rebound = st2.vel.1.abs();
+            }
+        }
+        assert!(seen >= 3, "应观察到至少 3 次落地（实测 {seen}）");
+    }
+
+    /// P0-F3-2：水平快撞边 ⇒ X 轴反弹、速度反向且衰减；钳制先于穿透。
+    #[test]
+    fn fly_bounces_off_side_walls() {
+        // 起点贴右墙（995）：一拍 8ms 走 9.6px 即越界——位置不贴墙时一拍根本到不了
+        let mut st = FlyState { pos: (995.0, 100.0), vel: (1200.0, 0.0), bounces: 0, age_ms: 0 };
+        let bounds = (0, 0, 1000, 800);
+        let hit = fly_step(&mut st, 8, bounds);
+        assert_eq!(hit, FlyHit::X);
+        assert!(st.vel.0 < 0.0, "应反向");
+        assert!(st.vel.0.abs() < 1200.0, "应衰减");
+        assert!(st.pos.0 <= 1000.0, "不得越界");
+        assert_eq!(st.bounces, 1);
+    }
+
+    /// P0-F3-3：结束判据——至少弹过一次 + 慢，或超时兜底；「还没落地就慢」不算结束。
+    #[test]
+    fn fly_should_end_requires_a_bounce_first() {
+        assert!(!fly_should_end(&FlyState { pos: (0.0, 0.0), vel: (0.0, 0.0), bounces: 0, age_ms: 0 }),
+            "没弹过就静止（被扔在中心）不得结束——那观感是「扔出去直接消失」");
+        assert!(fly_should_end(&FlyState { pos: (0.0, 0.0), vel: (1.0, 1.0), bounces: 1, age_ms: 0 }));
+        assert!(!fly_should_end(&FlyState { pos: (0.0, 0.0), vel: (900.0, 900.0), bounces: 1, age_ms: 0 }),
+            "还快着不得结束");
+        assert!(fly_should_end(&FlyState { pos: (0.0, 0.0), vel: (900.0, 900.0), bounces: 0, age_ms: FLY_MAX_MS }),
+            "超时兜底必须结束（速度判据失灵时绝不让桌宠永远飞）");
+    }
+
+    /// P0-F3-4：dt 边界——0 夹到 1ms 仍推进、超大夹到 100ms 不发散。
+    #[test]
+    fn fly_step_is_safe_at_dt_extremes() {
+        let bounds = (0, 0, 1000, 800);
+        let mut s0 = fly0();
+        for _ in 0..10 {
+            fly_step(&mut s0, 0, bounds);
+        }
+        assert!(s0.pos.1 > 300.0, "dt=0 夹到 1ms 后仍应下落");
+        let mut s_big = fly0();
+        for _ in 0..50 {
+            fly_step(&mut s_big, 1_000_000, bounds);
+        }
+        assert!(s_big.pos.0.is_finite() && s_big.pos.1.is_finite(), "超大 dt 发散：{:?}", s_big);
+        // 非有限状态重置（ defensive ）
+        let mut s_nan = FlyState { pos: (f32::NAN, 0.0), vel: (0.0, 0.0), bounces: 3, age_ms: 5 };
+        fly_step(&mut s_nan, 8, bounds);
+        assert!(s_nan.pos.0.is_finite() && s_nan.vel.1.is_finite());
+        assert_eq!(s_nan.bounces, 3, "重置不丢计数");
     }
 }

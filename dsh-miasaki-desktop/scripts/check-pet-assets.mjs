@@ -42,7 +42,11 @@ function rel(p) {
  */
 /** 状态行：`model.rs::pick_state_row` 五个态各自可产出的行。 */
 const STATE_ROWS = ['idle', 'wait', 'failed', 'run', 'review']
-/** 动作行：`model.rs::slot_row` 可产出的行（ambient 池 wave/review/wait/jump 已含在内）。 */
+/** 动作行：`model.rs::slot_row` 可产出的行（ambient 池 wave/review/wait/jump 已含在内）。
+ *  R21（2026-10-18）：whale 的 `idle2–idle5`（图集 r7–r10，站姿待机变体，已逐行视觉核验）
+ *  是 whale 专属 ambient 行——**刻意不进本表**：本表是跨主题覆盖分母，kurumi 没有这些行，
+ *  进来只会给 kurumi 报噪声缺口。它们的登记由 frames.json ↔ 盘上文件的双向校验管
+ *  （引用缺失 / 孤儿派生两条）。 */
 const ACTION_ROWS = ['jump', 'wave', 'runRight', 'runLeft']
 /** atlas 主题的覆盖分母 = 两空间并集。 */
 const RUST_ROWS = [...new Set([...STATE_ROWS, ...ACTION_ROWS])]
@@ -60,8 +64,9 @@ const manifest = JSON.parse(readFileSync(framesPath, 'utf8'))
 const REGEN_SOURCES = {
   kurumi: [{ path: 'spritesheet.png', by: 'scripts/cut-frames.mjs（cutAtlas）' }],
   whale: [
-    // v5 L0-3：whale 的 11 行图集此前未被切片（只拆 idle.gif）——现在 r0–r6 由 cutAtlas 切出
-    { path: 'spritesheet.png', by: 'scripts/cut-frames.mjs（cutAtlas，图集 r0–r6）' },
+    // v5 L0-3：whale 的 11 行图集此前未被切片（只拆 idle.gif）——现在 r0–r6 由 cutAtlas 切出；
+    // R21（2026-10-18）：r7–r10（站姿待机变体 idle2–idle5）同批切入，供 whale 专属 ambient 池
+    { path: 'spritesheet.png', by: 'scripts/cut-frames.mjs（cutAtlas，图集 r0–r10）' },
     { path: 'idle.gif', by: 'scripts/cut-frames.mjs（cutWhaleIdleFrames）' },
   ],
   inverse: [
@@ -72,9 +77,12 @@ const REGEN_SOURCES = {
   ],
 }
 
-/** 手工资产（无生成脚本，删了没人重建）：whale 的 work/deep 立绘单帧。 */
+/** 手工资产（无生成脚本，删了没人重建）：whale 的 deep 立绘单帧。
+ *  R21（2026-10-18）：`states/work.png` 已退役——whale 走图集分支后 `whale_states`
+ *  只在 deep 覆盖分支被读且 key 恒为 "deep"（compose 的分支条件决定），work 是死素材；
+ *  `states/idle*.png`（idle.gif 拆出）保留，作 deep 缺失时 `states.get("idle")` 的兜底。 */
 const MANUAL_ASSETS = {
-  whale: ['states/work.png', 'states/deep.png'],
+  whale: ['states/deep.png'],
 }
 
 /** 展平 frames.json 的引用：主题 → [{ state, file }]。

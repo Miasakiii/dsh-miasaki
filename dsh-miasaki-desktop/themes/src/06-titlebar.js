@@ -115,9 +115,26 @@
   /* ---------- 空白拖动（V3）：页面零占位后没有自绘拖动条 ----------
    * document 级捕获 mousedown：落在窗口顶部 36px 且事件路径上无「可交互元素」
    * （复用 tauri 内置 drag-region 的判定口径：可点击标签 / contenteditable /
-   * tabindex / 交互 role）→ 调 tauri 原生 start_dragging；双击 → internal_toggle_maximize。
-   * 页面按钮/页签/输入框照常点击，空白处可拖窗，与 Windows 标题栏体感一致。 */
+   * tabindex / 交互角色）⇒ 记起手点；**移动越过 DRAG_THRESHOLD_PX 才**调 tauri 原生
+   * start_dragging；双击 → internal_toggle_maximize。
+   * 页面按钮/页签/输入框照常点击，空白处可拖窗，与 Windows 标题栏体感一致。
+   *
+   * R22（2026-10-18，用户报「从其他窗口切到 miasaki、点一下窗口上端就粘在鼠标上，
+   * 要再点一次才脱离」）：**为什么单击不能直接 start_dragging** ——
+   * tao 0.35.3 的 `drag_window()` = `ReleaseCapture()` + `PostMessageW(WM_NCLBUTTONDOWN,
+   * HTCAPTION)`（`platform_impl/windows/window.rs:529-553`），**消息是异步投递的**。
+   * 从其他窗口激活本窗时消息队列时序改变：那次真实的 `WM_LBUTTONUP` 可能**先于**异步
+   * 的 `WM_NCLBUTTONDOWN` 被处理掉（tao 的 `WM_LBUTTONUP` 分支 `result=0` 直接吞掉、
+   * 不留给系统）⇒ 系统移动循环启动后**永远等不到松手**，鼠标输入被循环持续消费
+   * （用户体感「粘在鼠标上」、窗口贴着光标预览走），直到**下一次点击的 UP** 到达
+   * 才退出循环（「再点一次才脱离」）。实机取证：复现全程 `GetGUIThreadInfo` 的
+   * `hwndMoveSize` 时有时无、`cap=0`，而 tao 源码链完整 —— 判据落在「异步投递 +
+   * 激活竞态」这一处。
+   * 阈值方案：单击（DOWN→UP 无位移）**根本不进循环**；拖动（越阈值）时用户仍按住，
+   * UP 必在循环启动之后 ⇒ 竞态消除。双击语义（detail===2）与 Aero Snap
+   * （拖到顶端松手最大化）均不变。 */
   var DRAG_H = 36
+  var DRAG_THRESHOLD_PX = 4
   var DRAG_CLICKABLE_TAGS = { A: 1, BUTTON: 1, INPUT: 1, SELECT: 1, TEXTAREA: 1, LABEL: 1, SUMMARY: 1 }
   var DRAG_INTERACTIVE_ROLES = { button: 1, link: 1, menuitem: 1, tab: 1, checkbox: 1, radio: 1, switch: 1, option: 1 }
 
@@ -133,6 +150,29 @@
     try {
       if (document.__miasakiDragWired) return
       document.__miasakiDragWired = true
+      // R22：起手待定态（null = 无待定拖拽）。started = 系统拖动循环已启动。
+      var pending = null
+      function dragCleanup() {
+        if (!pending) return
+        pending = null
+        document.removeEventListener('mousemove', dragOnMove, true)
+        document.removeEventListener('mouseup', dragOnUp, true)
+      }
+      function dragOnMove(e) {
+        if (!pending) return
+        if ((e.buttons & 1) !== 1) { dragCleanup(); return } // 窗口外松手/丢按键 ⇒ 收尾
+        if (pending.started) return
+        var dx = e.clientX - pending.x
+        var dy = e.clientY - pending.y
+        if (dx * dx + dy * dy < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return
+        // 越过阈值 = 拖动意图成立：启动系统拖动循环（一次性），随后系统接管
+        pending.started = true
+        dragCleanup()
+        try {
+          if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('plugin:window|start_dragging')
+        } catch (e2) { /* 非 Tauri 环境忽略 */ }
+      }
+      function dragOnUp() { dragCleanup() } // 未越阈值 = 点击，不启动循环
       document.addEventListener('mousedown', function (e) {
         try {
           if (e.button !== 0) return
@@ -145,12 +185,17 @@
             if (dragIsClickable(node)) return
             node = node.parentNode
           }
-          // 顶部空白 → 原生拖动 / 双击最大化（与 tauri data-tauri-drag-region 同一 IPC）
+          // 顶部空白 → 双击最大化 / 单键起拖（R22：移动越阈值才启动，见上方注释）
           e.preventDefault()
-          var cmd = e.detail === 2 ? 'internal_toggle_maximize' : 'start_dragging'
-          try {
-            if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('plugin:window|' + cmd)
-          } catch (e2) { /* 非 Tauri 环境忽略 */ }
+          if (e.detail === 2) {
+            try {
+              if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('plugin:window|internal_toggle_maximize')
+            } catch (e2) { /* 非 Tauri 环境忽略 */ }
+            return
+          }
+          pending = { x: e.clientX, y: e.clientY, started: false }
+          document.addEventListener('mousemove', dragOnMove, true)
+          document.addEventListener('mouseup', dragOnUp, true)
         } catch (e3) { /* 拖拽失败不影响页面 */ }
       }, true)
     } catch (e) { /* ignore */ }

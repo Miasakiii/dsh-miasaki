@@ -14,11 +14,16 @@
 
 use super::ffi::*;
 
-/// 音效名表。**三处必须一致**：本表 ↔ `scripts/gen-sfx.mjs` 的参数表 ↔ `build.rs` 的登记
+/// 音效名表。**三处必须一致**：本表 ↔ `scripts/gen-sfx.mjs` 的参数表 ↔ `assets.rs` 的登记
 /// （漏一处 = 该音效静默失踪；`every_declared_sfx_resolves_to_an_embedded_asset` 钉住
-/// 本表与 build.rs 的关系，`gen-sfx.mjs --check` 钉住产物与生成器的关系）。
-pub(crate) const SFX_NAMES: [&str; 8] =
-    ["jump", "land", "wave", "grab", "drop", "alert", "done", "tick"];
+/// 本表与 build.rs/assets.rs 的关系，`gen-sfx.mjs --check` 钉住产物与生成器的关系）。
+///
+/// P0（2026-10-18）新增 5 个：摸头 `pat` / 咬手 `chomp` / 甩出 `whoosh` / 弹跳 `bounce` /
+/// 哈欠 `yawn`——全部零音频资产（参数表合成，见 gen-sfx.mjs 头部）。
+pub(crate) const SFX_NAMES: [&str; 13] = [
+    "jump", "land", "wave", "grab", "drop", "alert", "done", "tick", // R20-b 八件
+    "pat", "chomp", "whoosh", "bounce", "yawn", //                   P0 五件
+];
 
 /// 按名取内嵌音效字节。**纯查找、不碰 Win32**（可单测）：未知名 / 未登记 ⇒ `None`。
 pub(crate) fn resolve(name: &str) -> Option<&'static [u8]> {

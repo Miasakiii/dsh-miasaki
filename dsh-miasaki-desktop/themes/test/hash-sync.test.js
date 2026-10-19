@@ -289,3 +289,76 @@ test('P4：未知字段一并保真（不替别的通道做主删字段）', () 
   assert.equal(h.calls.length, 2, '真字段变化必须写')
   assert.match(h.calls.at(-1), /&future=1$/, '写回时未知字段仍要在')
 })
+
+/* ---------------- R20-c 重做（2026-10-19）：背景柔光开关的 ps* 上报 ----------------
+ *
+ * 为什么值得单列一条：`ps*` 段是**增量上报**——壳侧以「当前设置」为底只覆盖出现的字段。
+ * 于是 bool 开关的两种写法差别巨大：
+ *   · 写成 `pshl=` + (halo ? '1' : '0') ⇒ false 能上报「关」，用户关得掉；
+ *   · 写成 truthy 判定（`if (halo)`）⇒ 关的时候整段不写，壳侧读成「没提这件事」，
+ *     **开关永远关不掉**（R20-a/b 的 fs/sound 踩过同款，注释里写死了 `!= null` 判）。
+ * 同理，未上报时不得凭空写 pshl —— 那会把用户已落盘的设置重置成面板默认。
+ */
+test('R20-c：背景柔光开关走 ps* 增量上报；false 写成 pshl=0、缺字段不写', () => {
+  const h = harness()
+  h.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { halo: false } }
+  h.syncHash()
+  assert.match(h.calls.at(-1), /pshl=0/, 'halo=false 必须上报 pshl=0（truthy 判定会让开关永远关不掉）')
+  // 缺字段（旧面板 / 别的原因没报）⇒ 不写 pshl：壳侧保持原值（增量语义）
+  const h2 = harness()
+  h2.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { motion: 1 } }
+  h2.syncHash()
+  assert.doesNotMatch(h2.calls.at(-1), /pshl=/, '未上报 halo 时不得凭空写 pshl（会重置用户设置）')
+  // 开的时候写 pshl=1（对照：不能只在关的时候写）
+  const h3 = harness()
+  h3.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { halo: true } }
+  h3.syncHash()
+  assert.match(h3.calls.at(-1), /pshl=1/, 'halo=true 必须上报 pshl=1')
+})
+
+/* ---------------- 2026-10-19 A 批：管辖键漏登记的重复键 bug（R20-c pshl 实测抓到） ----------------
+ *
+ * 真 bug 回放（修前）：`pshl` 只加进 psSegs 计算、漏加 keep 管理列表 ⇒ 当前 hash 里的旧
+ * `pshl=0` 被 keepPart 原样保留，与 psPart 的新值拼出**重复键**；Rust 侧 split('&')
+ * 顺序解析、后值覆盖前值，而 keepPart 在 target 尾部 ⇒ 用户的新切换被旧值压制，
+ * 表现为「开关时灵时不灵」（E35⑦ 实机判据还没验，正会踩上）。
+ * 判据：**任何 ps* 管辖键，切换后 hash 里只许出现一个新值**（旧值被替换而非保留）。
+ */
+
+test('★ 管辖键回归：pshl 切换后 hash 里只许有新值（旧值必须被替换，不得拼出重复键）', () => {
+  const h = harness()
+  h.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { halo: false } }
+  h.syncHash()
+  assert.match(h.calls.at(-1), /pshl=0/, '第一轮：关')
+  // 用户改成「开」——当前 hash 里带着旧的 pshl=0
+  h.sandbox.location.hash = h.calls.at(-1)
+  h.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { halo: true } }
+  h.syncHash()
+  const last = h.calls.at(-1)
+  assert.match(last, /pshl=1/, '切换后必须上报新值 pshl=1')
+  assert.doesNotMatch(last, /pshl=0/, `旧值 pshl=0 必须被替换而非保留（重复键会让 Rust 后值覆盖=新切换被压制）；实得：${last}`)
+  assert.equal((last.match(/pshl=/g) || []).length, 1, 'pshl 在 hash 里只许出现一次')
+})
+
+test('A 批：桌宠形象走 ps* 增量上报；psapr=<名>、缺字段不写、旧值被替换', () => {
+  // ① 上报时写 psapr=<名>
+  const h = harness()
+  h.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { appearance: 'sakura' } }
+  h.syncHash()
+  assert.match(h.calls.at(-1), /psapr=sakura/, 'appearance=sakura 必须上报 psapr=sakura')
+  // ② 缺字段不凭空写（会把用户已选形象重置回 default）
+  const h2 = harness()
+  h2.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { motion: 1 } }
+  h2.syncHash()
+  assert.doesNotMatch(h2.calls.at(-1), /psapr=/, '未上报 appearance 时不得凭空写 psapr（会重置用户设置）')
+  // ③ 切换后旧值被替换（管辖键两处同改的回归：psSegs + keep 列表）
+  const h3 = harness()
+  h3.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { appearance: 'sakura' } }
+  h3.syncHash()
+  h3.sandbox.location.hash = h3.calls.at(-1)
+  h3.sandbox.window.__miasakiPetPanel = { ts: 0, settings: { appearance: 'default' } }
+  h3.syncHash()
+  const last = h3.calls.at(-1)
+  assert.match(last, /psapr=default/, '切回默认必须上报 psapr=default')
+  assert.equal((last.match(/psapr=/g) || []).length, 1, 'psapr 在 hash 里只许出现一次（旧值被替换）')
+})

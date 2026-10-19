@@ -103,6 +103,35 @@ pub(crate) const IDT_DOT_DRAG: usize = 6;
 pub(crate) const IDT_FULLSCREEN: usize = 7;
 pub(crate) const FULLSCREEN_POLL_MS: u32 = 250;
 
+// —— R20-c（2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §4）：背景对比 halo ——
+/// 采样节拍（ms）。参考实现约 1s 一采；桌面颜色是慢变量，2s 足够且更省
+/// （每次采样 = 两次 StretchBlt + GetDIBits，虽 ~1ms 也不值得高频）。
+/// 搭 compose 33ms 节拍里的时间戳判断（`next_backdrop`），不新开定时器。
+pub(crate) const BACKDROP_EVERY_MS: u64 = 2000;
+/// 进入阈值（加权 RGB 距离，0..≈255）：身体与桌面距离小于它 ⇒ 「融进背景」⇒ 开柔光。
+/// 初值 36：深色 whale（≈[20,24,40]）对纯黑桌面距离 ≈25（开）、对中灰桌面（≈128）
+/// 距离 ≈100（不开）——「深色桌面才救」的口味。**需实机调**（判据从宽）。
+pub(crate) const HALO_DIST_ON: f32 = 36.0;
+/// 退出阈值：必须大于 `HALO_DIST_ON`（回差定义）。距离超过它才关柔光，
+/// 两阈值之间的「临界桌面」不翻动——否则桌宠停在渐变桌面上 2s 一闪。
+pub(crate) const HALO_DIST_OFF: f32 = 56.0;
+/// 轮廓柔光的**模糊半径**（基准 96 DPI 逻辑像素，调用方按 `round(×dpr)` 换算物理像素）。
+///
+/// 2026-10-19 重做时定的初始值：11 逻辑像素 ⇒ 125% 屏上是 14 物理像素，与
+/// 实机核对过的视觉原型（whale 249px 宽、blur 14px）同口径。这是「光晕从轮廓
+/// 向外衰减多远」的唯一旋钮——太小会像描边，太大会糊成一片雾。
+pub(crate) const HALO_BLUR_PX: f32 = 11.0;
+/// 柔光强度（0..1，乘在「轮廓场×透明度遮罩」上）。0.95 = 深色桌面上清晰可见但
+/// 不抢角色本身；配 `HALO_GAMMA` 一起调观感。
+pub(crate) const HALO_STRENGTH: f32 = 0.95;
+/// 柔光衰减的 gamma（< 1 把外缘小值抬起、过渡更长更柔）。0.85 是视觉原型的取值。
+pub(crate) const HALO_GAMMA: f32 = 0.85;
+/// 采样带几何（**基准 96 DPI 逻辑像素**，调用方按 DPI 换算）：角色带左右各一条，
+/// 避开中间的角色本体（窗内那两条是透明留白，采到的是桌面不是桌宠）。
+/// 带宽 48、高 24，贴在角色带垂直中线。
+pub(crate) const BACKDROP_STRIP_W: i32 = 48;
+pub(crate) const BACKDROP_STRIP_H: i32 = 24;
+
 /// M4（2026-10-05）：拖动尾随的临界阻尼弹簧刚度（1/s²）。
 ///
 /// **口径与取值理由**（参考实现同族：`pet/physics.py` 拖拽段用阻尼弹簧跟手，
@@ -270,3 +299,131 @@ pub(crate) fn sway_max_rad() -> f32 {
 pub(crate) fn drag_lean_max_rad() -> f32 {
     DRAG_LEAN_MAX_DEG.to_radians()
 }
+
+// —— P0（2026-10-18，design/2026-10-18-pet-p0-interaction-emote.md）：
+// 互动分级（摸头/咬手）+ Emote 动作族 + 甩出抛掷 + 心情系统 ——
+// F1 · 摸头与咬手（`model::Petting` / `petting_tick`，窗口层搭 IDT_HIT 10ms 轮询）——
+
+/// 光标在角色上持续多久算「摸了一下」（ms）。
+/// 400ms：短于它的是「划过」，长于它的是「停留」——停留即抚摸，
+/// 与 garfield-whale「摸着不放就会激发咬手」同口径。
+pub(crate) const PET_HOLD_MS: u64 = 400;
+/// 咬手需要的连续抚摸次数（garfield-whale 原值 5）。
+pub(crate) const BITE_STROKES: u32 = 5;
+/// 计数窗口（ms）：超过则重新累计——「一小时摸五下」不该触发。
+pub(crate) const BITE_WINDOW_MS: u64 = 60_000;
+/// 咬手后的冷却（ms）：冷却期内抚摸无反应（咬着人不放还想撸？）。
+pub(crate) const BITE_COOLDOWN_MS: u64 = 60_000;
+/// 咬住光标不放的时长（ms）。期间窗口跟随光标（「咬住你的手」）。
+pub(crate) const BITE_CLING_MS: u64 = 1200;
+
+// F2 · Emote 动作族（`xform::emote_xform` 编舞；旋转一律 ≤ SWAY_MAX_DEG·MOTION_MAX
+// 的布局余量 3.2°，见设计文档 §3.2.2 的几何账）——
+/// 各 emote 的时长（ms）。Sleep 例外（10min 续期，见 `SLEEP_MS`）。
+pub(crate) const NOD_MS: u64 = 600;
+pub(crate) const SHAKE_MS: u64 = 600;
+pub(crate) const TURN_MS: u64 = 700;
+pub(crate) const SHIVER_MS: u64 = 520;
+pub(crate) const DANCE_MS: u64 = 1600;
+pub(crate) const LOOK_MS: u64 = 800;
+pub(crate) const SLEEP_MS: u64 = 600_000;
+/// 点头的垂直幅度（px）。
+pub(crate) const NOD_PX: f32 = 6.0;
+/// 摇头角度（度）。**3.0 是旋转类 emote 的上限**（≤ 布局余量 3.2°，单测钉死）。
+pub(crate) const SHAKE_DEG: f32 = 3.0;
+/// 跳舞的摇摆角（度）。同受 3.2° 余量约束；**不带挤压**——rot 3° 与 squash
+/// 1.10 叠加会横向越窗约 6px（设计文档 §3.2.2 的账），与「挤压期关摇摆」同族纪律。
+pub(crate) const DANCE_DEG: f32 = 3.0;
+/// 跳舞的节拍 bob（px）。
+pub(crate) const DANCE_BOB_PX: f32 = 4.0;
+/// 张望的角度（度）。
+pub(crate) const LOOK_DEG: f32 = 2.5;
+/// 发抖的角度（度）+ 微颤 bob（px）。高频确定性抖动（sin 复合，不用随机）。
+pub(crate) const SHIVER_DEG: f32 = 1.5;
+pub(crate) const SHIVER_BOB_PX: f32 = 1.0;
+/// 发抖一个完整时长的抖动次数（频率随时长缩放，520ms 与咬合 1200ms 都适用）。
+pub(crate) const SHIVER_CYCLES: f32 = 6.0;
+/// 转身中点时的横向挤压（「蓄力—翻转—回弹」的最低点）。
+pub(crate) const TURN_SQUEEZE: f32 = 0.15;
+/// 睡眠呼吸：周期 = `BREATH_PERIOD_MS × 2.5`（≈8s 一次，深而慢）。
+pub(crate) const SLEEP_BREATH_PERIOD_MUL: f32 = 2.5;
+/// 睡眠呼吸幅度 = 图集行呼吸幅度 × 1.2（比醒着略深）。
+pub(crate) const SLEEP_BREATH_AMP: f32 = 1.2;
+/// 睡眠时段（本地小时，含头不含尾）：23:00–07:00。
+pub(crate) const SLEEP_START_HOUR: u32 = 23;
+pub(crate) const SLEEP_END_HOUR: u32 = 7;
+/// C 批（2026-10-19）：**傍晚渐静段**起点（本地小时，含头不含尾）：18:00–23:00。
+/// 与睡眠段是两回事——睡眠段桌宠真睡（动作槽被 Sleep 占住），渐静段只是
+/// ambient 编排的氛围修正（睡前不闹腾）。见 `model::time_band`。
+pub(crate) const EVENING_START_HOUR: u32 = 18;
+/// 睡眠状态续期检查间隔（ms）——也是「早晨醒来看时钟」的节拍。
+pub(crate) const SLEEP_CHECK_MS: u64 = 30_000;
+/// P0-F2 审查修正（2026-10-18）：用户交互把桌宠叫醒后的**免睡冷却**（ms）。
+/// 没有它时「瞌睡续觉」钩子会在打断后的下一拍立刻补回睡姿（点击即醒不可达）。
+/// 60s：够用户摸/点/拖一轮，又不会把整夜睡眠永久打断（冷却过后仍在深夜就再睡）。
+pub(crate) const SLEEP_WAKE_MS: u64 = 60_000;
+
+// F3 · 甩出抛掷（`xform::FlyState` / `fly_step`，窗口层搭 IDT_DRAG 8ms 节拍）——
+/// 触发抛掷的松手速度阈值（px/s）。低于它走 R18 滑停（行为不变）。
+/// 600 ≈ 慢速甩动的常见区；参考实现 GarfieldZhung/Coopanion 同量级。
+pub(crate) const THROW_VEL_MIN: f32 = 600.0;
+/// 重力加速度（px/s²）。2600 ≈ 0.28g 的桌面观感（太快像砸地、太慢像飘）。
+pub(crate) const FLY_GRAVITY: f32 = 2600.0;
+/// 边缘反弹的能量保留（0.55）：弹跳可见地衰减，3–4 次内停稳。
+pub(crate) const FLY_RESTITUTION: f32 = 0.55;
+/// 飞行最长时间（ms）兜底——速度判据失灵时绝不让桌宠永远飞。
+pub(crate) const FLY_MAX_MS: u32 = 2500;
+/// 飞行结束的速度阈值（px/s）：至少弹过一次且慢于此 ⇒ 落地收尾。
+pub(crate) const FLY_END_VEL: f32 = 140.0;
+
+// F4 · 心情值（`model::mood_apply` / `mood_band`；会话级，不落盘）——
+pub(crate) const MOOD_MIN: i32 = -100;
+pub(crate) const MOOD_MAX: i32 = 100;
+/// 心情档位阈值（|mood| ≥ 25 进 High/Low）。
+pub(crate) const MOOD_HIGH: i32 = 25;
+pub(crate) const MOOD_LOW: i32 = -25;
+/// 疏忽检查间隔（ms）：超过此时长无交互 ⇒ 心情 -4（「被冷落」）。
+pub(crate) const MOOD_NEGLECT_EVERY_MS: u64 = 600_000;
+/// 各事件的心情增量（`mood_apply` 的纯数据）。
+pub(crate) const MOOD_STROKE: i32 = 10;
+pub(crate) const MOOD_BITE: i32 = -20;
+pub(crate) const MOOD_THROW: i32 = -6;
+pub(crate) const MOOD_HOP: i32 = 4;
+pub(crate) const MOOD_WAVE: i32 = 3;
+pub(crate) const MOOD_DONE: i32 = 6;
+pub(crate) const MOOD_NEGLECT: i32 = -4;
+/// ambient 池里 emote 的概率（%，按心情档）：High 爱跳舞、Low 爱发抖/张望。
+pub(crate) const EMOTE_PCT_HIGH: u32 = 25;
+pub(crate) const EMOTE_PCT_MID: u32 = 15;
+pub(crate) const EMOTE_PCT_LOW: u32 = 25;
+
+// P1-b（2026-10-18，design/2026-10-18-pet-p1-idle-variants-and-marks.md §3.2）：
+// 程序化表情标记（零资产，形状判定在 marks.rs）——
+/// 单次标记播放时长（ms）。1.4s：够读完一个符号，又不至于长期挡在角色头上。
+pub(crate) const MARK_MS: u64 = 1400;
+/// 标记盒边长（px，**基准 96 DPI 口径**，调用方按 DPI 换算）。34px 在 390px 窗里
+/// 约 9%——「可见的小情绪」，不是占屏大头。
+pub(crate) const MARK_BOX_PX: i32 = 34;
+/// 标记盒底边距角色框顶边的距离（px，基准口径）——「浮在头顶上方」。
+pub(crate) const MARK_LIFT_PX: i32 = 26;
+/// 瞌睡时 Zzz 的浮动间隔（ms）。
+pub(crate) const ZZZ_EVERY_MS: u64 = 3000;
+/// ambient 行触发时附带情绪标记的概率（%，按心情档）——High 多爱心、Low 多泪滴。
+pub(crate) const MARK_PCT_HIGH: u32 = 25;
+pub(crate) const MARK_PCT_LOW: u32 = 25;
+
+// P2-a（2026-10-18，design/2026-10-18-pet-p2-recolor-and-expression-sheet.md §1）：
+// whale 配色预设表（hue 角度, 饱和度倍率）——**加载期**重着色（image::recolor_*），
+// 运行期零开销。**只对 whale 生效**：kurumi/inverse 的发色是角色设定，不参与换色
+// （Coopanion 的配色同样只作用于自家 mascot）。
+/// 0 = 原色（深蓝鲸鱼娘，默认）。
+pub(crate) const COLOR_PRESETS: [(f32, f32); 6] = [
+    (0.0, 1.00),   // 原色
+    (120.0, 1.00), // 樱粉（蓝 ≈220° → 340°）
+    (300.0, 1.00), // 青碧（220° → 160°）
+    (55.0, 1.00),  // 紫萄（220° → 275°）
+    (150.0, 1.00), // 暖橘（220° → 10°）
+    (0.0, 0.30),   // 霜白（去饱和，向亮度灰插值）
+];
+/// 配色预设数上限（`COLOR_PRESETS.len() - 1`，设置夹取用）。
+pub(crate) const COLOR_MAX: u32 = COLOR_PRESETS.len() as u32 - 1;

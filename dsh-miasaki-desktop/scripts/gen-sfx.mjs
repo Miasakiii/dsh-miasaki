@@ -125,7 +125,8 @@ const T = (o) => ({ kind: 'tone', o })
 const N = (o) => ({ kind: 'noise', o })
 
 /**
- * 8 个音效（v1 触发点映射见设计文档 §3.3）。
+ * 13 个音效（v1 八件 R20-b + P0 五件，触发点映射见设计文档 §3.3 与
+ * design/2026-10-18-pet-p0-interaction-emote.md §4）。
  * 每个条目 = 若干层（同时叠加）或 seq（首尾相接）。
  */
 const SOUNDS = [
@@ -153,6 +154,38 @@ const SOUNDS = [
     ]
   },
   { name: 'tick', layers: [T({ type: 'sine', f0: 1000, dur: 0.03, vol: 0.10 })] },
+  // —— P0 五件（2026-10-18，design/2026-10-18-pet-p0-interaction-emote.md §4）——
+  // pat：橡胶鸭般的吱吱——上行方短音 + 一簇高频气声
+  {
+    name: 'pat', layers: [
+      T({ type: 'square', f0: 900, f1: 1400, dur: 0.06, vol: 0.12 }),
+      N({ type: 'bandpass', f0: 2000, f1: 1200, q: 1.5, dur: 0.06, vol: 0.10 }),
+    ]
+  },
+  // chomp：两声咬合 + 一下闷响（seq 首尾相接）
+  {
+    name: 'chomp', seq: [
+      N({ type: 'bandpass', f0: 800, f1: 300, q: 2, dur: 0.05, vol: 0.20 }),
+      N({ type: 'bandpass', f0: 800, f1: 300, q: 2, dur: 0.05, vol: 0.18, at: 0.09 }),
+      T({ type: 'sine', f0: 120, f1: 60, dur: 0.08, vol: 0.20, at: 0.14 }),
+    ]
+  },
+  // whoosh：甩出去的上行风声
+  { name: 'whoosh', layers: [N({ type: 'bandpass', f0: 300, f1: 1800, q: 0.7, dur: 0.25, vol: 0.12 })] },
+  // bounce：撞边弹跳（比 land 更「弹」——带一点回挑的尾音）
+  {
+    name: 'bounce', layers: [
+      T({ type: 'sine', f0: 240, f1: 120, dur: 0.08, vol: 0.18 }),
+      N({ type: 'bandpass', f0: 600, f1: 250, q: 1.2, dur: 0.07, vol: 0.12 }),
+    ]
+  },
+  // yawn：哈欠——缓慢下行的气声
+  {
+    name: 'yawn', layers: [
+      T({ type: 'sine', f0: 420, f1: 170, dur: 0.5, vol: 0.10 }),
+      N({ type: 'lowpass', f0: 400, dur: 0.45, vol: 0.05 }),
+    ]
+  },
 ]
 
 /** 合成一个音效 → Float32 混音（单声道）。 */

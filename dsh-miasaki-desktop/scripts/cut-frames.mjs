@@ -1,6 +1,8 @@
 // cut-frames.mjs — 预切桌宠图集为逐帧 PNG + 帧清单（供原生分层窗口渲染）
-// kurumi：按行切帧（全部 9 行，非空探测）；whale：图集 7 行 + idle.gif 帧序列 + 立绘三态；
-// inverse：立绘三态直接引用
+// kurumi：按行切帧（全部 9 行，非空探测）；whale：图集 11 行 + idle.gif 帧序列 + 立绘三态；
+// inverse：立绘三态直接引用。
+// A 批（2026-10-19）：多形象（换装）——variant 键（`whale.<name>`）与 default 平铺，
+// 切帧按 ATLAS_SPECS 键自动进行（见下方调用处），schema 与加载链同构。
 import sharp from 'sharp'
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
@@ -20,9 +22,11 @@ const CELL_W = 192, CELL_H = 208
  */
 const ATLAS_SPECS = {
   kurumi: ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wait', 'run', 'review'],
-  // whale 图集实测 8 列 × 11 行：只取语义已核验的 r0–r6；
-  // r7–r10 为站姿待机变体群（进 ambient 池属 L2，先不切以控内嵌体积 ≈2.3MB）
-  whale: ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wait'],
+  // whale 图集实测 8 列 × 11 行。r0–r6 = 主动作（2026-09-27 逐行视觉核验）；
+  // r7–r10 = **站姿待机变体群**（2026-10-18 逐行视觉核验：四行均为女仆装站立待机，
+  // 姿态微差——双手交叠 / 侧身发 sweeps / 微张双臂 / 尾翼弧度；帧数 6/6/8/8），
+  // 以 idle2–idle5 登记进 Rust 行空间，供 whale 专属 ambient 池做「待机不重样」（R21）。
+  whale: ['idle', 'runRight', 'runLeft', 'wave', 'jump', 'failed', 'wait', 'idle2', 'idle3', 'idle4', 'idle5'],
 }
 
 const manifest = {
@@ -64,8 +68,13 @@ async function cutAtlas(mode) {
   manifest[mode].rows = frames
 }
 
-await cutAtlas('kurumi')
-await cutAtlas('whale')
+// A 批（2026-10-19）：按 ATLAS_SPECS 的**每个键**切（含 variant 键如
+// `whale.sakura`——多形象与 default 平铺前缀键、schema 同构）。manifest 条目
+// 按需创建：加一个形象 = ATLAS_SPECS 加一行（源图集 + 行名表），其余自动。
+for (const mode of Object.keys(ATLAS_SPECS)) {
+  if (!manifest[mode]) manifest[mode] = { kind: 'atlas', rows: {} }
+  await cutAtlas(mode)
+}
 
 // GIF 透明替代色残留后处理:绿色主导像素 → alpha 0(纯绿 0,254,0 / 0,126,0 等描边即此类)
 async function stripGreenEdge(buf) {
@@ -115,7 +124,10 @@ async function despeckle(buf) {
   return sharp(out, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer()
 }
 
-// whale:拆 idle.gif 帧序列(192×208×6 垂直帧条),work/deep 保持立绘单帧
+// whale:拆 idle.gif 帧序列(192×208×6 垂直帧条)；deep 保持立绘单帧。
+// R21（2026-10-18）：`work` 立绘退役——whale 走图集分支后 `whale_states` 只在
+// deep 覆盖分支被读且 key 恒为 "deep"（compose 分支条件决定），work 是 567KB 死素材；
+// idle（6 帧）保留作 deep 缺失时的 fallback（image.rs 的 states.get("idle") 兜底）。
 async function cutWhaleIdleFrames() {
   const src = join(root, 'ui', 'pets', 'whale', 'idle.gif')
   const outDir = join(root, 'ui', 'pets', 'whale', 'states')
@@ -144,7 +156,8 @@ async function cutWhaleIdleFrames() {
 }
 manifest.whale.states.idle = await cutWhaleIdleFrames()
 
-for (const s of ['work', 'deep']) {
+// whale 立绘强度档：仅 deep（R21 退役 work，见 cutWhaleIdleFrames 上方注释）
+for (const s of ['deep']) {
   manifest.whale.states[s] = `states/${s}.png`
   console.log(`whale state ${s}: states/${s}.png`)
 }

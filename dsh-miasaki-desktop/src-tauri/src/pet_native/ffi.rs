@@ -158,6 +158,24 @@ extern "system" {
     pub(crate) fn ReleaseCapture() -> i32;
     /// 诊断用：当前捕获窗口（非本窗 ⇒ 拖动已被外部夺走）。
     pub(crate) fn GetCapture() -> isize;
+    /// P0-F2（2026-10-18）：取**本地**时间（系统时区，含 DST 调整）——睡眠时段判定
+    /// （23:00–07:00 打瞌睡）用。为什么不用 `std::time::SystemTime`：它只有 UTC 纪元值，
+    /// 转本地时间要时区数据库（零依赖铁律下没有 chrono），而 user32 这一行就给本地字段。
+    pub(crate) fn GetLocalTime(t: *mut SystemTime);
+}
+
+/// P0-F2：Win32 `SYSTEMTIME`（`GetLocalTime` 的出口）。字段全 u16，`#[repr(C)]` 纯数据。
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SystemTime {
+    pub(crate) year: u16,
+    pub(crate) month: u16,
+    pub(crate) day_of_week: u16,
+    pub(crate) day: u16,
+    pub(crate) hour: u16,
+    pub(crate) minute: u16,
+    pub(crate) second: u16,
+    pub(crate) milliseconds: u16,
 }
 
 // DPI(2026-10-05)：`GetDpiForMonitor` 在 **shcore.dll**（Win8.1+），不在 user32。
@@ -177,7 +195,17 @@ extern "system" {
     pub(crate) fn DeleteObject(o: isize) -> i32;
     pub(crate) fn SelectObject(dc: isize, o: isize) -> isize;
     pub(crate) fn CreateDIBSection(h: isize, bmi: *const BmiHeader, usage: u32, bits: *mut *mut c_void, section: isize, offset: u32) -> isize;
+    // R20-c（2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §4）：桌面采样四件套。
+    // 用途：把桌宠身后的一小块屏幕降采样成平均色，判「身体是否融进背景」。
+    // Coopanion 用 koffi 调同一组 API（其 `grabScreen`），实测一 patch ≈1ms；我方 2s 一次。
+    pub(crate) fn GetDC(h: isize) -> isize;
+    pub(crate) fn ReleaseDC(h: isize, hdc: isize) -> i32;
+    pub(crate) fn CreateCompatibleBitmap(h: isize, w: i32, h: i32) -> isize;
+    pub(crate) fn StretchBlt(dst: isize, dx: i32, dy: i32, dw: i32, dh: i32, src: isize, sx: i32, sy: i32, sw: i32, sh: i32, rop: u32) -> i32;
+    pub(crate) fn GetDIBits(dc: isize, bmp: isize, start: u32, lines: u32, bits: *mut c_void, bmi: *mut BmiHeader, usage: u32) -> i32;
 }
+/// R20-c：`StretchBlt` 的光栅操作码（SRCCOPY = 原样拷贝）。
+pub(crate) const SRCCOPY: u32 = 0x00CC_0020;
 
 // R20-b（2026-10-17，design/2026-10-17-pet-fullscreen-sfx-sprint.md §3.2）：程序化音效播放。
 // 注：此处刻意用 `//` 而非 `///` —— rustdoc 不为 `extern` 块生成文档，会报 unused_doc_comments。

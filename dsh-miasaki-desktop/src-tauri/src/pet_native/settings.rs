@@ -45,6 +45,18 @@ pub(crate) const ALPHA_MAX: u32 = 100;
 pub(crate) const PET_OVERRIDE_FOLLOW: &str = "";
 pub(crate) const PET_OVERRIDES: [&str; 3] = ["whale", "kurumi", "inverse"];
 
+/// A 批（2026-10-19，design/2026-10-19-pet-a-appearance.md）：桌宠**形象**（换装）白名单。
+/// `"default"` = 现有 whale 资产（图集 + 立绘，即 `frames.json` 的平铺 `whale` 键）；
+/// 其余名对应 `whale.<name>` 条目（加载期烘焙进现有字段，compose 零感知）。
+/// **只对 whale 生效**——kurumi / inverse 的发型服装是角色设定，与 P2-a 配色同口径
+/// （mode 门控在加载与重载处，见 `image::load_frames_for` 与 window 重载块）。
+/// 加形象 = 这里加一个字符串 + 面板 `APPEARANCE_CHOICES` 加一个选项（runbook §7 六处）。
+/// ⚠ 本清单刻意用**字面量**（而非 `APPEARANCE_DEFAULT` 标识符）：面板契约测试
+/// （`panel-settings.test.js` 的 A 契约组）用正则从两侧抓清单做逐字镜像比对，
+/// 标识符它解析不到；`APPEARANCE_DEFAULT` 必须在清单内由 Rust 单测钉死（见下）。
+pub(crate) const APPEARANCE_DEFAULT: &str = "default";
+pub(crate) const APPEARANCES: [&str; 1] = ["default"];
+
 /// 穿透策略：`auto` = 按 alpha 自动（R2 现状）；`always` = 整窗可点（不做穿透）。
 pub(crate) const THROUGH_AUTO: &str = "auto";
 pub(crate) const THROUGH_ALWAYS: &str = "always";
@@ -75,6 +87,21 @@ pub(crate) struct PetSettings {
     pub(crate) fs_hide: bool,
     /// R20-b（2026-10-17）：音效总开关（跳跃/挥手/拎起/审批/庆祝）。默认 true。
     pub(crate) sound: bool,
+    /// P2-a（2026-10-18）：whale 配色预设索引（0..=`COLOR_MAX`，0 = 原色）。
+    /// **只对 whale 生效**——kurumi/inverse 的发色是角色设定，不参与换色。
+    /// 重着色在加载期做（`image::recolor_frames`），设置变更触发一次整份重载。
+    pub(crate) color: u32,
+    /// A 批（2026-10-19）：桌宠形象（whale 换装）。`"default"` = 现有资产；
+    /// 其余名 = `frames.json` 的 `whale.<name>` 条目。与配色正交（两者在
+    /// `load_frames_for(color, appearance)` 汇成一个加载键），同样只对 whale 生效。
+    pub(crate) appearance: String,
+    /// R20-c 重做（2026-10-19）：背景反差柔光总开关。默认 true。
+    ///
+    /// 用户实机报「有时候会有一个白圈圈着」后补的关闭路径——设计文档当初判断
+    /// 「这是自动美化、关它的需求强度不够」，实机证明**审美类功能必须可关**。
+    /// 关掉后 `backdrop_tick` 照常采样（采样只影响这一件事，没有别的消费者），
+    /// 只是 `apply_halo` 不再跑；不影响任何行为与命中判定。
+    pub(crate) halo: bool,
 }
 
 impl Default for PetSettings {
@@ -89,6 +116,9 @@ impl Default for PetSettings {
             tray: TRAY_DOT.to_string(),
             fs_hide: true,
             sound: true,
+            color: 0,
+            appearance: APPEARANCE_DEFAULT.to_string(),
+            halo: true,
         }
     }
 }
@@ -113,6 +143,12 @@ impl PetSettings {
         }
         if ![TRAY_DOT, TRAY_TRAY, TRAY_BOTH].contains(&self.tray.as_str()) {
             self.tray = TRAY_DOT.to_string();
+        }
+        // P2-a：配色索引夹取（hash/文件都是不可信输入；越界回 0 = 原色，不猜）
+        self.color = self.color.min(super::config::COLOR_MAX);
+        // A 批：形象白名单（hash/文件都是不可信输入；越界回 default，不猜）
+        if !APPEARANCES.contains(&self.appearance.as_str()) {
+            self.appearance = APPEARANCE_DEFAULT.to_string();
         }
         *self != before
     }
@@ -201,7 +237,57 @@ mod tests {
         assert_eq!(d.tray, TRAY_DOT);
         assert!(d.fs_hide, "R20-a：全屏隐藏默认开");
         assert!(d.sound, "R20-b：音效默认开");
+        assert!(d.halo, "R20-c 重做：背景柔光默认开");
         assert!((BUBBLE_MS_MIN..=BUBBLE_MS_MAX).contains(&d.bubble_ms));
+        assert_eq!(d.color, 0, "P2-a：配色默认原色（0）");
+        assert_eq!(d.appearance, APPEARANCE_DEFAULT, "A 批：形象默认 default（现有资产）");
+    }
+
+    /// A 批：形象白名单——hash/文件都是不可信输入，越界回 default（不保留脏值）；
+    /// 合法值（当前只有 default）不被改动。
+    #[test]
+    fn appearance_whitelist_falls_back() {
+        let mut s = PetSettings { appearance: "godzilla".into(), ..Default::default() };
+        assert!(s.normalize(), "越界形象应被夹取（返回 true 表示发生了改动）");
+        assert_eq!(s.appearance, APPEARANCE_DEFAULT, "未知形象 ⇒ 回 default（不猜）");
+        let mut ok = PetSettings::default();
+        assert!(!ok.normalize() || ok.appearance == APPEARANCE_DEFAULT, "合法值不得被改动");
+    }
+
+    /// A 批：形象字段必须真落盘（`#[serde(default)] 只管读取；写盘靠序列化）——
+    /// 旧文件缺字段回 default（兼容），新文件写出的 JSON 必须含 appearance 键。
+    #[test]
+    fn appearance_survives_round_trip() {
+        let old: PetSettings = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert_eq!(old.appearance, APPEARANCE_DEFAULT, "旧文件缺字段回 default");
+        let s = PetSettings::default();
+        let txt = serde_json::to_string(&s).unwrap();
+        assert!(txt.contains("\"appearance\""), "写盘 JSON 必须含 appearance 键（否则重启即丢）");
+        let back: PetSettings = serde_json::from_str(&txt).unwrap();
+        assert_eq!(back.appearance, s.appearance);
+    }
+
+    /// A 批：白名单必须含回落值本身——`APPEARANCES` 用字面量登记（面板契约测试
+    /// 要从两侧抓清单做镜像），`APPEARANCE_DEFAULT` 是指纹常量；两者漂移
+    /// （default 不在清单里）⇒ normalize 把用户看到的默认值都打成非法，静默回落死循环。
+    #[test]
+    fn appearance_default_is_whitelisted() {
+        assert!(APPEARANCES.contains(&APPEARANCE_DEFAULT),
+            "APPEARANCE_DEFAULT 必须在 APPEARANCES 白名单内（否则默认值即非法值）");
+        assert_eq!(PetSettings::default().appearance, APPEARANCE_DEFAULT);
+    }
+
+    /// P2-a：配色索引越界夹取（hash/文件都是不可信输入）；合法值不动。
+    #[test]
+    fn color_index_is_clamped() {
+        let mut s = PetSettings::default();
+        s.color = 99;
+        assert!(s.normalize(), "越界值应被夹取（返回 true 表示发生了改动）");
+        assert_eq!(s.color, crate::pet_native::config::COLOR_MAX, "越界夹到最大合法档");
+        let mut ok = PetSettings::default();
+        ok.color = 3;
+        assert!(!ok.normalize() || ok.color == 3, "合法值不得被改动");
+        assert_eq!(ok.color, 3);
     }
 
     #[test]
@@ -326,6 +412,7 @@ mod tests {
             tray: TRAY_TRAY.into(),
             fs_hide: false,
             sound: false,
+            appearance: APPEARANCE_DEFAULT.into(),
             ..Default::default()
         };
         let txt = serde_json::to_string(&s).unwrap();
@@ -350,5 +437,20 @@ mod tests {
         let mut z = off.clone();
         assert!(!z.normalize(), "合法 bool 不应被报告改动");
         assert!(!z.fs_hide && !z.sound);
+    }
+
+    /// R20-c 重做（2026-10-19）：「背景柔光」开关必须能显式关（用户报白圈后的关闭路径）。
+    /// 旧文件缺字段 ⇒ 默认 true；显式 false 必须存活（serde(default) 不得覆盖）。
+    #[test]
+    fn halo_switch_survives_explicit_false_round_trip() {
+        let old: PetSettings = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(old.halo, "缺字段回默认 true（旧文件兼容）");
+        let off: PetSettings = serde_json::from_str(r#"{"version":1,"halo":false}"#).unwrap();
+        assert!(!off.halo, "显式 false 不得被默认值覆盖");
+        let back: PetSettings = serde_json::from_str(&serde_json::to_string(&off).unwrap()).unwrap();
+        assert!(!back.halo, "往返后仍为 false");
+        let mut z = off.clone();
+        assert!(!z.normalize(), "合法 bool 不应被报告改动");
+        assert!(!z.halo);
     }
 }

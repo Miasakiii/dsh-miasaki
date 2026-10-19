@@ -2012,7 +2012,8 @@ fn start_backend_watchdog(app: &AppHandle) {
 /// R4(2026-09-16) 再增 petkey=<审批稳定身份，官方 PendingApproval.key>。
 ///
 /// **deprecated（T0.3，2026-09-25）**：`move_*` 保留但已无写者 —— 拖动改走 Tauri 原生
-/// `start_dragging`（`themes/src/06-titlebar.js` 的 `data-tauri-drag-region`，
+/// `start_dragging`（`themes/src/06-titlebar.js` 的 `wireDragZone`；R22/2026-10-18 起
+/// 为「mousedown 记起手 → 移动越阈值才 invoke」，单击不再触发系统移动循环，
 /// 全仓已无任何 `move=` 写入点，只在本文件残留解析）。**刻意不删**：
 /// 老版本注入产物（`injected/theme-init.js` 是构建产物，可能仍是旧的一版）在升级窗口期
 /// 还会写 `move=`，删掉解析会让它们静默失效。真正清理待下一次注入产物重建后一并做。
@@ -2048,6 +2049,15 @@ struct FragmentParts {
     /// 同样只存原样字符串，归一化在 `PetSettings::normalize()`（bool 解析只有一处）。
     ps_fs: Option<String>,
     ps_sound: Option<String>,
+    /// P2-a（2026-10-18）：`psclr` = whale 配色预设索引（0..=5）。
+    /// 原样字符串，夹取在 `normalize()`（越界回 0 = 原色）。
+    ps_color: Option<String>,
+    /// R20-c 重做（2026-10-19）：`pshl` = 背景反差柔光开关（`1`/`0`）。
+    /// 用户报「有时候会有一个白圈圈着」后补的关闭路径（审美类功能必须可关）。
+    ps_halo: Option<String>,
+    /// A 批（2026-10-19）：`psapr` = 桌宠形象（whale 换装，白名单在
+    /// `PetSettings::APPEARANCES`）。原样字符串，越界回 default 在 `normalize()`。
+    ps_appearance: Option<String>,
 }
 
 /// percent-decode（encodeURIComponent 产物；'+' 不转空格——encode 不产生 '+'）。
@@ -2094,6 +2104,9 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         ps_tray: None,
         ps_fs: None,
         ps_sound: None,
+        ps_color: None,
+        ps_halo: None,
+        ps_appearance: None,
     };
     for part in fragment.split('&') {
         if let Some(v) = part.strip_prefix("miasaki-theme=") {
@@ -2158,6 +2171,14 @@ fn parse_fragment(fragment: &str) -> FragmentParts {
         // R20-a/b：两个 bool 开关（`1`/`0`；解析与夹取在 settings 侧统一）
         if let Some(v) = part.strip_prefix("psfs=") { p.ps_fs = Some(v.to_string()); }
         if let Some(v) = part.strip_prefix("psnd=") { p.ps_sound = Some(v.to_string()); }
+        // P2-a：whale 配色预设索引（0..=5；夹取在 normalize）
+        if let Some(v) = part.strip_prefix("psclr=") { p.ps_color = Some(v.to_string()); }
+        // R20-c 重做：背景反差柔光开关（`1` = 开；其余按关，与 psfs/psnd 同口径）
+        if let Some(v) = part.strip_prefix("pshl=") { p.ps_halo = Some(v.to_string()); }
+        // A 批：桌宠形象（whale 换装）。原样字符串（可能 percent-encoded，
+        // 但白名单只有 [a-z0-9-]，解码在 normalize 之外无意义——与 pspet 同口径
+        // 存原样，夹取/回落只在 PetSettings::normalize() 一处）。
+        if let Some(v) = part.strip_prefix("psapr=") { p.ps_appearance = Some(v.to_string()); }
     }
     p
 }
@@ -2212,13 +2233,21 @@ fn pet_mode_for(theme: &str) -> &'static str {
 /// 字段名与 hash 的 `ps*` 一一对应（`psmo` ↔ `motion` …），改一处要同改两处。
 /// R20-a/b（2026-10-17）：追加 `fs`（全屏时隐藏）/ `sound`（音效）两个 bool，
 /// 对应 `psfs` / `psnd`。
+/// P2-a（2026-10-18 审查修正）：追加 `color`（whale 配色索引，对应 `psclr`）。
+/// **漏推的后果不是"面板显示默认值"这么轻**：面板 state 以 `SHELL_SETTINGS_DEFAULTS`
+/// 兜底（color=0），收到缺 color 的回推后会把 0 发布给壳 ⇒ 用户已落盘的配色被
+/// 打开面板这一动作重置成原色（E38④「落盘与重启保持」必失败）。
+/// R20-c 重做（2026-10-19）：追加 `halo`（背景反差柔光，对应 `pshl`）——**同样的漏推陷阱**：
+/// 面板默认 `halo:true`，缺字段回推会把用户关掉的柔光又打开（E35/E40 必失败）。
+/// A 批（2026-10-19）：追加 `appearance`（桌宠形象，对应 `psapr`）——同族陷阱：
+/// 面板默认 `default`，缺字段回推会把用户已选的形象重置回默认（「切了即失效」）。
 fn push_pet_state(app: &AppHandle) {
     let pet = app.state::<pet_native::NativePet>();
     let hidden = pet.is_hidden();
     let s = pet.settings_snapshot();
     let js = format!(
-        "window.dispatchEvent && window.dispatchEvent(new CustomEvent('miasaki-pet-state',{{detail:{{hidden:{hidden},settings:{{motion:{},bubbleMs:{},alpha:{},pet:\"{}\",through:\"{}\",tray:\"{}\",fs:{},sound:{}}}}}}}))",
-        s.motion, s.bubble_ms, s.alpha, s.pet_override, s.through, s.tray, s.fs_hide, s.sound
+        "window.dispatchEvent && window.dispatchEvent(new CustomEvent('miasaki-pet-state',{{detail:{{hidden:{hidden},settings:{{motion:{},bubbleMs:{},alpha:{},pet:\"{}\",through:\"{}\",tray:\"{}\",fs:{},sound:{},color:{},halo:{},appearance:\"{}\"}}}}}}))",
+        s.motion, s.bubble_ms, s.alpha, s.pet_override, s.through, s.tray, s.fs_hide, s.sound, s.color, s.halo, s.appearance
     );
     eval_status(app, &js);
 }
@@ -2560,7 +2589,9 @@ fn start_hash_watchdog(app: &AppHandle) {
             let ps_seen = parts.ps_motion.is_some() || parts.ps_alpha.is_some()
                 || parts.ps_bubble.is_some() || parts.ps_pet.is_some()
                 || parts.ps_through.is_some() || parts.ps_tray.is_some()
-                || parts.ps_fs.is_some() || parts.ps_sound.is_some();
+                || parts.ps_fs.is_some() || parts.ps_sound.is_some()
+                || parts.ps_color.is_some() || parts.ps_halo.is_some()
+                || parts.ps_appearance.is_some();
             if ps_seen {
                 let mut next = pet.settings_snapshot();
                 if let Some(v) = parts.ps_motion.as_deref() {
@@ -2580,6 +2611,18 @@ fn start_hash_watchdog(app: &AppHandle) {
                 // 一个确定态，否则「传了但看不懂」会静默保留上一态。
                 if let Some(v) = parts.ps_fs.as_deref() { next.fs_hide = v == "1" }
                 if let Some(v) = parts.ps_sound.as_deref() { next.sound = v == "1" }
+                // P2-a：配色索引——解析失败保持原值（与 motion 等同口径：
+                // 上报有 bug 时抹掉用户已存的值是更坏的选择），夹取在 normalize。
+                if let Some(v) = parts.ps_color.as_deref() {
+                    if let Ok(n) = v.parse::<u32>() { next.color = n }
+                }
+                // R20-c 重做：柔光开关与 psfs/psnd 同口径（`1` = 开，其余按关）。
+                if let Some(v) = parts.ps_halo.as_deref() { next.halo = v == "1" }
+                // A 批：形象——原样字符串透传（白名单夹取在 normalize；
+                // 解析失败/脏值由 normalize 回落 default，与 pspet 同口径）
+                if let Some(v) = parts.ps_appearance.as_deref() {
+                    next.appearance = v.to_string()
+                }
                 if pet.update_settings(next) {
                     // 宠物钉选可能刚变了 ⇒ **立即**重算 mode，不等下一次主题上报。
                     // 主题取 `LAST_THEME`（页面每次 syncHash 都带，这里读最近一次即可）：

@@ -21,6 +21,47 @@ pub(crate) enum Action {
     Ambient { row: String },
     /// 散步(dx = 每帧位移方向 ±1)
     Wander { dx: i32 },
+    /// P0-F2（2026-10-18，design/2026-10-18-pet-p0-interaction-emote.md）：表演动作。
+    /// 与 Ambient 的分工：Ambient 播**图集行**（wave/review/wait/jump），Emote 的
+    /// 基础姿态恒为 `idle` 行，表现全在**绘制层编舞**（`xform::emote_xform`）——
+    /// 零新素材得到「点头/摇头/转身/发抖/跳舞/张望/睡觉」。
+    /// 走同一动作槽 ⇒ 自动继承「到期即清」与六态压制（非 Idle 态被状态压住）。
+    Emote { kind: EmoteKind },
+}
+
+/// P0-F2：表演动作种类。旋转类（Shake/Dance/Look/Shiver）的角度上限是**几何硬约束**：
+/// 角色 270px 高、pivot 在底边中心，旋转 θ 的水平伸出 = `w/2·cosθ + h·sinθ`，
+/// 窗口半宽仅 143px ⇒ 任何旋转 ≤ 3.7°，而布局余量只预留 `SWAY_MAX_DEG·MOTION_MAX`
+/// = 3.2°（`sway_layout_margin`）。参数表在 config.rs，单测在 xform.rs 钉死上限。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum EmoteKind {
+    /// 点头（摸头反馈；bob 正弦一次）
+    Nod,
+    /// 摇头（两次快摆）
+    Shake,
+    /// 转身（中点横向挤压 + 镜像翻转——「回头看一眼」）
+    Turn,
+    /// 发抖（高频确定性抖动；咬手期间长时抖动）
+    Shiver,
+    /// 跳舞（摇摆 + 节拍 bob；**不带挤压**，见 config.rs `DANCE_DEG` 注释）
+    Dance,
+    /// 张望（左-右-左三摆，幅度递减；撞墙后触发）
+    Look,
+    /// 睡觉（深慢呼吸、不摇摆；深夜自动，交互或早晨唤醒）
+    Sleep,
+}
+
+/// P0-F2：emote 的时长（ms）。Sleep 由 SLEEP_MS 续期，不走这里。
+pub(crate) fn emote_duration(kind: EmoteKind) -> u64 {
+    match kind {
+        EmoteKind::Nod => NOD_MS,
+        EmoteKind::Shake => SHAKE_MS,
+        EmoteKind::Turn => TURN_MS,
+        EmoteKind::Shiver => SHIVER_MS,
+        EmoteKind::Dance => DANCE_MS,
+        EmoteKind::Look => LOOK_MS,
+        EmoteKind::Sleep => SLEEP_MS,
+    }
 }
 
 /// 带到期时间的动作槽。compose 每轮「先到期即清、再行选择」,从结构上消除「忘记清理」一类缺陷。
@@ -84,6 +125,9 @@ fn slot_row(slot: &ActionSlot) -> String {
         // dx 取值域是 ±1（window.rs 只产生这两种），`>= 0` 兼作 0 的兜底
         Action::Wander { dx } => if *dx >= 0 { "runRight" } else { "runLeft" }.to_string(),
         Action::Ambient { row } => row.clone(),
+        // P0-F2：Emote 的基础姿态恒为 idle——表现全在绘制层变换（xform::emote_xform），
+        // 行选择只决定「站在什么姿态上演」。回退链对 idle 恒命中，不会串到别态语义。
+        Action::Emote { .. } => "idle".to_string(),
     }
 }
 
@@ -179,28 +223,19 @@ pub(crate) fn pick_quote(mode: &str) -> usize {
     quote_base(mode) + rand_u32() as usize % pool.len()
 }
 
-/// v2 环境编排:选一个 ambient 动作行。池 wave/review/wait,jump 以 AMBIENT_JUMP_PCT 概率替换。
-/// 候选行若在 frames.json 缺失,由 kurumi 渲染分支的 fallback 链自动兜底(idle)。
-///
-/// **E5（2026-10-04）不重复同一条**（对齐上游 dsh-pet 的「档内轮换、避免连播同一段」）：
-/// 原实现是 `rand % 3` 均匀随机 ⇒ **连续两次选到同一行的概率是 1/3**，
-/// 而 idle 态下 ambient 是唯一的动作来源，等于每三次就有一次「刚才好像没动」。
-/// 修法是重抽一次而**不是**重排权重（后者会改动 `AMBIENT_JUMP_PCT` 的既有意图）。
-///
-/// **为什么要抽成两个纯函数**：`rand_u32()` 走 Win32 FFI、**不可注入种子** ⇒ 单元测试无法验证
-/// 「确实避开了上次」这种时序性质。故把「选行」与「记状态」拆开：
-/// `pick_ambient_pool_index()` 是纯函数（给定随机数与上次索引，返回新的且必不等于上次）；
-/// `pick_ambient_row()` 只做粘合（取随机数、调用纯函数、记状态）。这样单测能直接跑纯函数，
-/// 顺带保证「记忆状态」这件事只有一处写（下面的 `AMBIENT_LAST`）。
-pub(crate) fn pick_ambient_pool_index(rnd: u32, last: Option<usize>) -> usize {
-    const POOL_LEN: usize = 3;
-    let first = (rnd as usize) % POOL_LEN;
-    match last {
-        // 池只有 1 项时无「别的可選」——去重在此无意义（且不能死循环）。
-        Some(prev) if POOL_LEN > 1 && first == prev => (first + 1 + (rnd as usize) / POOL_LEN % (POOL_LEN - 1)) % POOL_LEN,
-        _ => first,
-    }
-}
+// v2 环境编排:选一个 ambient 动作行。池 wave/review/wait,jump 以 AMBIENT_JUMP_PCT 概率替换。
+// 候选行若在 frames.json 缺失,由 kurumi 渲染分支的 fallback 链自动兜底(idle)。
+//
+// **E5（2026-10-04）不重复同一条**（对齐上游 dsh-pet 的「档内轮换、避免连播同一段」）：
+// 原实现是 `rand % 3` 均匀随机 ⇒ **连续两次选到同一行的概率是 1/3**，
+// 而 idle 态下 ambient 是唯一的动作来源，等于每三次就有一次「刚才好像没动」。
+// 修法是重抽一次而**不是**重排权重（后者会改动 `AMBIENT_JUMP_PCT` 的既有意图）。
+//
+// **为什么要抽成两个纯函数**：`rand_u32()` 走 Win32 FFI、**不可注入种子** ⇒ 单元测试无法验证
+// 「确实避开了上次」这种时序性质。故把「选行」与「记状态」拆开：
+// `pick_ambient_pool_index_weighted()`（P0-F4 起，含权重入参）是纯函数；
+// 粘合层（`pick_ambient_choice`）只做取随机数、调纯函数、记状态。这样单测能直接跑纯函数，
+// 顺带保证「记忆状态」这件事只有一处写（下面的 `AMBIENT_LAST`）。
 
 // ambient 池上次选中的行下标（窗口线程独占，compose 循环单线程调用，无需原子操作）。
 //
@@ -211,19 +246,345 @@ thread_local! {
     static AMBIENT_LAST: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-pub(crate) fn pick_ambient_row() -> String {
-    if rand_u32() % 100 < AMBIENT_JUMP_PCT {
-        return "jump".to_string();
+/* ---------------- P0-F4（2026-10-18）：心情值与情绪化 ambient ---------------- */
+
+/// 心情事件。全部来自**本地事实**（互动/状态/疏忽），不解析模型输出——
+/// 与「官方契约为信号」的桌宠架构一致，零 LLM 依赖、判据可单测。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum MoodEvent {
+    /// 被摸一下
+    Stroke,
+    /// 被咬（咬手彩蛋的后果——它知道错了）
+    Bite,
+    /// 被甩出去（它害怕）
+    Throw,
+    /// 单击「撸一下」
+    Hop,
+    /// 双击挥手
+    Wave,
+    /// 任务完成庆祝（与有荣焉）
+    Done,
+    /// 被冷落（每 MOOD_NEGLECT_EVERY_MS 无交互）
+    Neglect,
+}
+
+/// 心情档位（ambient 加权与 emote 触发的依据）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AmbientBand {
+    /// 蔫（wait 多、易发抖/张望）
+    Low,
+    /// 平常
+    Mid,
+    /// 欢（wave 多、爱跳舞）
+    High,
+}
+
+/// 心情值推进（纯函数，clamp 在 [`MOOD_MIN`, `MOOD_MAX`]）。
+pub(crate) fn mood_apply(mood: i32, ev: MoodEvent) -> i32 {
+    let d = match ev {
+        MoodEvent::Stroke => MOOD_STROKE,
+        MoodEvent::Bite => MOOD_BITE,
+        MoodEvent::Throw => MOOD_THROW,
+        MoodEvent::Hop => MOOD_HOP,
+        MoodEvent::Wave => MOOD_WAVE,
+        MoodEvent::Done => MOOD_DONE,
+        MoodEvent::Neglect => MOOD_NEGLECT,
+    };
+    (mood + d).clamp(MOOD_MIN, MOOD_MAX)
+}
+
+/// 心情 → 档位。阈值对称（±25）：|mood| 够大才换档，中间带是「平常」。
+pub(crate) fn mood_band(mood: i32) -> AmbientBand {
+    if mood >= MOOD_HIGH {
+        AmbientBand::High
+    } else if mood <= MOOD_LOW {
+        AmbientBand::Low
+    } else {
+        AmbientBand::Mid
     }
-    const POOL: [&str; 3] = ["wave", "review", "wait"];
+}
+
+/// C 批（2026-10-19，design/2026-10-19-pet-c-time-aware-ambient.md）：**时段档**
+/// （纯函数）——ambient 编排的「夜里也别太闹」氛围修正。
+/// 边界与睡眠段常量对齐（`SLEEP_START_HOUR`–`SLEEP_END_HOUR`），渐静段是睡前的过渡。
+/// 入参是本地小时（0–23）；越界值（>23）按正午处理——与 `local_hour` 的失败方向一致，
+/// 「误判深夜」比「误判正午」代价大（凌晨桌宠莫名安静 vs 傍晚 slightly 闹）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum TimeBand {
+    /// 白天（07:00–18:00）：现行口径，不做修正。
+    Day,
+    /// 傍晚渐静（18:00–23:00）：轻推安静行。
+    Evening,
+    /// 深夜（23:00–07:00）：活跃行压到最低、安静行抬倍。
+    Night,
+}
+
+pub(crate) fn time_band(hour: u32) -> TimeBand {
+    if hour > 23 {
+        return TimeBand::Day; // 越界值不猜深夜（local_hour 失败方向给 12 = 正午）
+    }
+    if hour >= SLEEP_START_HOUR || hour < SLEEP_END_HOUR {
+        TimeBand::Night
+    } else if hour >= EVENING_START_HOUR {
+        TimeBand::Evening
+    } else {
+        TimeBand::Day
+    }
+}
+
+/// 加权选行（纯函数）。保留 E5 的**不重复**纪律：撞上上次时，在「别的门」里按权重
+/// **公平重抽**一次——「取第一个 ≠ 上次的门」这种写法会把权重系统地吸向低索引
+/// （[1,1,3] 的 wait 档实测被打压成与 wave 档持平，首版就被 `weighted_ambient_pick_*`
+/// 抓住）。第二抽样用 `rnd / total`（与首抽的余数独立，纯函数仍可单测）。
+/// 全零权重是退化输入（调用方不会给），落首项不死循环。
+/// 全 1 权重时与 P0 前的均匀随机同口径（E5 既有口径）。
+/// P1-a：入参从定长 `[u32;3]` 泛化为切片——whale 池有 6 行（含待机变体），
+/// 定长会把「主题相关变长池」这个需求憋死。权重来源从 `ambient_weights`（按档位
+/// 一张表）改为 `row_weight`（按行名 × 档位）——行池变长后「第 i 门的权重」
+/// 不再有稳定含义，行名才有。
+pub(crate) fn pick_ambient_pool_index_weighted(rnd: u32, last: Option<usize>, w: &[u32]) -> usize {
+    let total: u32 = w.iter().sum();
+    if total == 0 || w.is_empty() {
+        return 0;
+    }
+    let mut r = rnd % total;
+    let mut idx = 0usize;
+    while idx + 1 < w.len() && r >= w[idx] {
+        r -= w[idx];
+        idx += 1;
+    }
+    match last {
+        Some(prev) if idx == prev => {
+            let alt_total = total - w[prev];
+            if alt_total == 0 {
+                return idx; // 别的门全零（退化权重表）⇒ 保持原值
+            }
+            let r2 = (rnd / total) % alt_total;
+            let mut acc = 0u32;
+            for (i, &wi) in w.iter().enumerate() {
+                if i == prev {
+                    continue;
+                }
+                acc += wi;
+                if r2 < acc {
+                    return i;
+                }
+            }
+            idx
+        }
+        _ => idx,
+    }
+}
+
+/// ambient 的一次选择：播图集行，或演一个 emote（P0-F2 的入口之一）。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum AmbientChoice {
+    Row(String),
+    Emote(EmoteKind),
+}
+
+/// 心情档位 → 这次 ambient 要不要演 emote、演哪个（纯函数，概率见 `EMOTE_PCT_*`）。
+/// High 爱跳舞；Low 在发抖/张望里二选一；Mid 在转身/摇头里二选一。
+/// C 批：**深夜不跳舞**——High 档在 Night 换成张望（Look）。凌晨的活跃交给
+/// 睡眠系统（Sleep 长槽），醒着的片刻安静点；Dance 的节拍 bob 在深夜违和。
+pub(crate) fn ambient_wants_emote(band: AmbientBand, rnd: u32, time: TimeBand) -> Option<EmoteKind> {
+    let pct = match band {
+        AmbientBand::High => EMOTE_PCT_HIGH,
+        AmbientBand::Mid => EMOTE_PCT_MID,
+        AmbientBand::Low => EMOTE_PCT_LOW,
+    };
+    if rnd % 100 >= pct {
+        return None;
+    }
+    Some(match (band, time) {
+        (AmbientBand::High, TimeBand::Night) => EmoteKind::Look,
+        (AmbientBand::High, _) => EmoteKind::Dance,
+        (AmbientBand::Low, _) => {
+            if rnd / 100 % 2 == 0 {
+                EmoteKind::Shiver
+            } else {
+                EmoteKind::Look
+            }
+        }
+        (AmbientBand::Mid, _) => {
+            if rnd / 100 % 2 == 0 {
+                EmoteKind::Turn
+            } else {
+                EmoteKind::Shake
+            }
+        }
+    })
+}
+
+/// P1-a（2026-10-18，design/2026-10-18-pet-p1-idle-variants-and-marks.md §3.1）：
+/// 主题的 ambient 行池（**变长**）。两条主题差异：
+/// ① whale 没有 `review` 行——旧池里它踩 fallback 落 idle = **空转槽**
+///    （R21 批的发现：池里放一个主题不存在的行，播它等于白播一次）；
+/// ② whale 有 R21 切好的待机变体 `idle2`–`idle5`（r7–r10，站姿待机变体群），
+///    入池后「待机不重样」第一次对 whale 成立。
+/// kurumi 无待机变体、有 review ⇒ 池不变（P0 口径）。inverse 无图集，
+/// 行池不被消费（立绘分支不看动作行）。
+pub(crate) fn ambient_pool(mode: &str) -> &'static [&'static str] {
+    match mode {
+        "whale" => &["wave", "wait", "idle2", "idle3", "idle4", "idle5"],
+        _ => &["wave", "review", "wait"],
+    }
+}
+
+/// P1-a：行名 → 心情权重。`wave/review/wait` 随档位动（P0-F4 口径原样）；
+/// 待机变体 `idle2`–`idle5` 与一切未列举行恒 1——它们的存在意义是
+/// 「待机不重样」，不该被心情权重挤掉（心情只调节奏不调节目量）。
+///
+/// C 批（2026-10-19）：叠加**时段修正**（第三入参 `time`，纯函数可单测）——
+/// ① 深夜把 `wave`（挥手，全池最活跃）无条件压到 1：心情再好，凌晨三点
+///    不该老挥手（睡眠系统占槽时本就播不到，这里管的是「醒着的片刻」）；
+/// ② 深夜/傍晚把安静行（`wait` 双手合十 / `idle2` 双手交叠 / `idle5` 尾翼弧度，
+///    2026-10-19 逐帧视觉核验确认是站姿待机变体群中动静最低的三档）抬到 2。
+/// 修正**只改概率不改节目单**：永不为 0——凌晨也可能想挥手，只是不该老挥；
+/// 也永不新增行——池里没有的行权重多高都上不了场（P1-a 空转槽纪律）。
+pub(crate) fn row_weight(row: &str, band: AmbientBand, time: TimeBand) -> u32 {
+    let w = match (row, band) {
+        ("wave", AmbientBand::High) => 3,
+        ("review", AmbientBand::High) => 2,
+        ("wait", AmbientBand::Low) => 3,
+        _ => 1,
+    };
+    match (row, time) {
+        ("wave", TimeBand::Night) => 1,
+        ("wait" | "idle2" | "idle5", TimeBand::Night | TimeBand::Evening) => 2,
+        _ => w,
+    }
+}
+
+/// P0-F4 的 ambient 粘合层（取代 `pick_ambient_row` 的直接调用方）：
+/// jump 特殊概率（AMBIENT_JUMP_PCT）保留 → emote 按心情概率 → 否则按**主题行池** +
+/// 行级心情权重选行。「记忆状态」仍只有一处写（AMBIENT_LAST，E5 纪律）。
+/// P1-a：`mode` 入参决定行池与行权重（主题相关）。
+/// C 批：`time` 入参决定时段修正（深夜不跳舞、活跃行降压、安静行抬升）。
+/// A 批：`has` 入参按**当前生效行集**过滤行池（P1-a 空转槽纪律的推广——
+/// 新形象未必有全部行，如节日形象可能没有 `wave`；jump 特殊支同样受过滤）。
+/// 过滤后池空 ⇒ 回落未过滤池（degenerate 形象至少维持 default 节奏，不回 blank）。
+pub(crate) fn pick_ambient_choice(
+    band: AmbientBand,
+    mode: &str,
+    time: TimeBand,
+    has: &dyn Fn(&str) -> bool,
+) -> AmbientChoice {
+    if has("jump") && rand_u32() % 100 < AMBIENT_JUMP_PCT {
+        return AmbientChoice::Row("jump".to_string());
+    }
+    if let Some(kind) = ambient_wants_emote(band, rand_u32(), time) {
+        return AmbientChoice::Emote(kind);
+    }
+    let declared = ambient_pool(mode);
+    let avail: Vec<&str> = declared.iter().copied().filter(|r| has(r)).collect();
+    let pool: &[&str] = if avail.is_empty() { declared } else { &avail };
+    let w: Vec<u32> = pool.iter().map(|r| row_weight(r, band, time)).collect();
     let rnd = rand_u32();
-    // 记忆状态只有这一处读写（E5 纪律：避免散在多处后互相覆盖）。
     let picked = AMBIENT_LAST.with(|c| {
-        let next = pick_ambient_pool_index(rnd, c.get());
+        let next = pick_ambient_pool_index_weighted(rnd, c.get(), &w);
         c.set(Some(next));
         next
     });
-    POOL[picked].to_string()
+    AmbientChoice::Row(pool[picked].to_string())
+}
+
+/// P0-F3：松手是否触发抛掷（纯函数）。速度 = `drag_vel`（R19 直跟手期每拍更新的
+/// 窗口速度）；阈值 `THROW_VEL_MIN`（px/s）。抽成纯函数的理由：窗口层的分支
+/// （依赖 hwnd/光标）只能靠源码契约查「文本在不在」，而「门被 `false &&` 掉」
+/// 这类退化文本断言抓不到——判定本身必须可单测。
+/// NaN 速度（理论不存在，但窗口层的值不该被信任）⇒ 不触发（失败方向取「不飞」）。
+pub(crate) fn throw_triggered(vel: (f32, f32)) -> bool {
+    let speed = (vel.0 * vel.0 + vel.1 * vel.1).sqrt();
+    speed.is_finite() && speed >= THROW_VEL_MIN
+}
+
+/* ---------------- P0-F1（2026-10-18）：摸头与咬手 ---------------- */
+
+/// 一次 `petting_tick` 的事件（纯数据，窗口层据此反应）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PetEvent {
+    /// 无（持续中 / 未开始 / 冷却期）
+    None,
+    /// 摸了一下（光标在角色上连续停留 ≥ PET_HOLD_MS）
+    Stroke,
+    /// 咬手（窗口内累计 BITE_STROKES 次抚摸）——桌宠咬住光标不放
+    Bite,
+}
+
+/// 摸头判定状态。**判据只有一条：光标连续命中角色不透明像素 ≥ PET_HOLD_MS**——
+/// 刻意不设位移上限：「在头上来回划」正是抚摸（参考实现的摸头就是这个动作），
+/// 而划过（离开角色）/ 按下（拖动或点击）都会打断连续性。
+/// 参考：garfield-whale「连续摸头 5 次 → 咬住手进入冷却」。
+pub(crate) struct Petting {
+    /// 当前连续命中段的起点（None = 未在命中中）
+    hold_since: Option<std::time::Instant>,
+    /// 计数窗口内的累计抚摸次数
+    strokes: u32,
+    /// 计数窗口起点（BITE_WINDOW_MS 到期清零重计）
+    window_since: std::time::Instant,
+    /// 咬手冷却截止时刻（Some = 冷却中，抚摸无反应）
+    cooldown_until: Option<std::time::Instant>,
+}
+
+impl Petting {
+    pub(crate) fn new(now: std::time::Instant) -> Self {
+        Petting { hold_since: None, strokes: 0, window_since: now, cooldown_until: None }
+    }
+
+    /// 冷却是否仍在（窗口层也可用来决定要不要播放「没空理你」的反应——P0 不播）。
+    pub(crate) fn in_cooldown(&self, now: std::time::Instant) -> bool {
+        self.cooldown_until.map(|t| now < t).unwrap_or(false)
+    }
+}
+
+/// 每个命中轮询拍（10ms）调一次。`on_hit` = 光标命中角色不透明像素
+/// （调用方用 `is_transparent_at` 的反值，与 R2 穿透判定同源）。
+///
+/// 三条规则（单测逐条钉死）：
+/// ① `on_hit` 假 ⇒ 本段作废重计（划过去了不算摸）；
+/// ② 连续命中 ≥ `hold_ms` ⇒ **一次 Stroke**，本段重新起算（摸着不放 = 一下一下地摸）；
+/// ③ 窗口内累计 ≥ `BITE_STROKES` ⇒ **Bite** + 进冷却；冷却期内直接无反应。
+pub(crate) fn petting_tick(
+    st: &mut Petting,
+    on_hit: bool,
+    now: std::time::Instant,
+    hold_ms: u64,
+) -> PetEvent {
+    // 冷却优先：咬着人不放的时候，抚摸不计数也不反馈
+    if st.in_cooldown(now) {
+        st.hold_since = None;
+        return PetEvent::None;
+    }
+    if !on_hit {
+        st.hold_since = None;
+        return PetEvent::None;
+    }
+    let t0 = match st.hold_since {
+        Some(t0) => t0,
+        None => {
+            st.hold_since = Some(now);
+            return PetEvent::None;
+        }
+    };
+    if now.duration_since(t0) < std::time::Duration::from_millis(hold_ms) {
+        return PetEvent::None;
+    }
+    // —— 一次抚摸成立 ——
+    st.hold_since = None;
+    // 计数窗口过期 ⇒ 清零重计（「一小时摸五下」不触发）
+    if now.duration_since(st.window_since) >= std::time::Duration::from_millis(BITE_WINDOW_MS) {
+        st.strokes = 0;
+        st.window_since = now;
+    }
+    st.strokes += 1;
+    if st.strokes >= BITE_STROKES {
+        st.strokes = 0;
+        st.window_since = now;
+        st.cooldown_until = Some(now + std::time::Duration::from_millis(BITE_COOLDOWN_MS));
+        return PetEvent::Bite;
+    }
+    PetEvent::Stroke
 }
 
 /* ---------------- DPI 缩放判据（纯函数） ---------------- */
@@ -410,6 +771,35 @@ pub(crate) fn grab_hit(
         }
     }
     false
+}
+
+/* ---------------- R20-a 修正 · 显隐分支的触发条件（纯函数） ---------------- */
+
+/// compose 的显隐切换分支**这一拍要不要执行**（R20-a 2026-10-18 实机闪烁事故的修正）。
+///
+/// **事故与根因**：原条件是 `want_hide == shown || (fs_hidden && !want_hide)`。后半段
+/// 是**电平触发**——全屏规则藏着桌宠时用户的常驻意图 `want_hide` 恒为 `false`
+/// （影子 `shown` 仍是 true），于是 compose 每拍都执行「显示 + 清规则态」，
+/// `fs_poll` 下一拍再藏 ⇒ 桌宠在全屏应用上每 ~250ms 眨一次
+/// （实机 2.3 小时刷出 2991 条 `auto-hidden`、0 条 `restored`——
+/// 恢复日志永远不出现，因为规则态每拍就被 compose 清掉，fs_poll 轮不到恢复分支）。
+///
+/// **修正**：逃逸必须是**边沿触发**——只在 `want_hide` 出现「true → false」下降沿
+/// （用户主动把「隐藏」关掉）时放行一次。常驻的 `want_hide == false` 不再触发。
+/// 逃逸后规则按既定语义在下一拍重新生效（Coopanion 同口径），但不再循环。
+///
+/// 判据（逐条有单测）：
+/// ① 影子与意图不符（`want_hide == shown`）⇒ 执行（原语义，自清除：跑完 shown 对齐即假）；
+/// ② 规则隐藏中 + 用户**刚**取消隐藏（下降沿）⇒ 执行一次（逃逸出口）；
+/// ③ 规则隐藏中 + 常驻「想显示」但**无下降沿** ⇒ **不执行**（闪烁根因，本例是回归防线）；
+/// ④ 其余稳态 ⇒ 不执行。
+pub(crate) fn show_branch_should_run(
+    want_hide: bool,
+    shown: bool,
+    fs_hidden: bool,
+    want_hide_falling_edge: bool,
+) -> bool {
+    want_hide == shown || (fs_hidden && want_hide_falling_edge)
 }
 
 /* ---------------- M4.1 · 边缘停靠（吸附，纯逻辑） ---------------- */
@@ -842,11 +1232,12 @@ mod tests {
     ///
     /// 遍历全部 `0..1000` 的随机数 × 全部 3 种「上次值」，断言输出**恒不等于**上次 ——
     /// 这是「去重」这件事的完整定义（只抽样几个 case 会漏掉偏移公式的边界）。
+    /// P0-F4 起走加权版；此处用 `[1,1,1]`（= Mid 档权重）保持 E5 原口径。
     #[test]
     fn ambient_pool_never_repeats_previous() {
         for last in [None, Some(0usize), Some(1), Some(2)] {
             for rnd in 0..1000u32 {
-                let idx = pick_ambient_pool_index(rnd, last);
+                let idx = pick_ambient_pool_index_weighted(rnd, last, &[1, 1, 1]);
                 assert!(idx < 3, "索引越界：{idx}（池只有 3 项）");
                 if let Some(prev) = last {
                     assert_ne!(idx, prev, "rnd={rnd} 时选了 {idx}，与上次相同 —— 去重失效");
@@ -884,7 +1275,7 @@ mod tests {
         let mut same_after = 0u32;
         for i in 0..3000u32 {
             let rnd = i.wrapping_mul(2_654_435_761);
-            let idx = pick_ambient_pool_index(rnd, last_opt);
+            let idx = pick_ambient_pool_index_weighted(rnd, last_opt, &[1, 1, 1]);
             if i > 0 && Some(idx) == last_opt { same_after += 1; }
             last_opt = Some(idx);
         }
@@ -894,7 +1285,7 @@ mod tests {
     /// E5：首次调用时无「上次」可避（原实现行为），且不得 panic。
     #[test]
     fn ambient_first_call_has_no_previous() {
-        let idx = pick_ambient_pool_index(12345, None);
+        let idx = pick_ambient_pool_index_weighted(12345, None, &[1, 1, 1]);
         assert!(idx < 3, "首次调用仍须给出合法索引");
     }
 
@@ -1084,6 +1475,46 @@ mod tests {
             assert!(!foreground_is_fullscreen_cover(77, 66, true, 0, "Game", edge, m),
                 "少覆盖一边也不算全屏：{edge:?}");
         }
+    }
+
+    /* ---------------- R20-a 修正 · 显隐分支触发条件（2026-10-18 实机闪烁事故） ---------------- */
+
+    /// R20a-F1：稳态「想显示且已显示」⇒ 不执行（跑完 shown 对齐后条件自假）。
+    #[test]
+    fn show_branch_is_quiet_in_steady_states() {
+        assert!(!show_branch_should_run(false, true, false, false), "已显示且想显示 ⇒ 无操作");
+        assert!(!show_branch_should_run(true, false, false, false), "已隐藏且想隐藏 ⇒ 无操作");
+    }
+
+    /// R20a-F2：影子与意图不符 ⇒ 执行（原 `want_hide == shown` 语义，自清除）。
+    #[test]
+    fn show_branch_runs_on_shadow_divergence() {
+        assert!(show_branch_should_run(false, false, false, false), "想显示但还藏着 ⇒ 显示");
+        assert!(show_branch_should_run(true, true, false, false), "想隐藏但还显示 ⇒ 隐藏");
+    }
+
+    /// R20a-F3：**闪烁根因的回归防线**——规则隐藏中、常驻「想显示」但**没有下降沿**
+    /// ⇒ 必须不执行。原实现这里是电平触发（恒真），实机 2.3 小时刷了 2991 条
+    /// `auto-hidden` / 0 条 `restored`（桌宠在全屏应用上每 ~250ms 眨一次）。
+    #[test]
+    fn show_branch_must_not_fire_on_standing_intent_while_rule_hidden() {
+        assert!(!show_branch_should_run(false, true, true, false),
+            "规则藏着 + 常驻想显示 + 无下降沿 ⇒ 不执行（电平触发就是这条断言红）");
+        // 连续多拍都不得执行（模拟 compose 33ms 节拍连跑）
+        for _ in 0..8 {
+            assert!(!show_branch_should_run(false, true, true, false));
+        }
+    }
+
+    /// R20a-F4：规则隐藏中、用户**刚**取消隐藏（下降沿）⇒ 放行一次（逃逸出口），
+    /// 且只放行一次——下一拍无沿即假（规则按既定语义下一拍重新生效，不循环）。
+    #[test]
+    fn show_branch_fires_exactly_once_on_user_unhide_edge() {
+        assert!(show_branch_should_run(false, true, true, true), "下降沿必须放行");
+        // 同一意图的下一拍：边沿消失 ⇒ 不再执行
+        assert!(!show_branch_should_run(false, true, true, false));
+        // 用户取消隐藏的同时影子已经对齐（shown=true）时，靠第一判据也不误触
+        assert!(!show_branch_should_run(false, true, false, false));
     }
 
     /* ---------------- R16 · 抓取热区（命中容差） ---------------- */
@@ -1587,5 +2018,403 @@ mod tests {
             assert!((scaled_px(1, dpi) as f32 - s).abs() <= 0.5,
                 "dpi {dpi}: scaled_px(1) 与 scale 不一致");
         }
+    }
+
+    /* ---------------- P0-F1 · 摸头与咬手 ---------------- */
+
+    fn ms(n: u64) -> std::time::Duration {
+        std::time::Duration::from_millis(n)
+    }
+
+    /// 连续接触模拟：从 `from` 起每 `step` ms 喂一次 on_hit=true，直到 `until`。
+    /// 返回 (strokes, bites)。**为什么这样模拟**：真实抚摸 = 光标持续压在角色上，
+    /// 判定状态机每个 10ms 拍进一次；中间手动清 `hold_since` 反而破坏了连续性
+    /// （首版测试那么写，模拟出的是「摸一下抬一下」，与实际语义不符）。
+    fn pet_run(st: &mut Petting, from: std::time::Instant, until: std::time::Instant, step: u64) -> (u32, u32) {
+        let (mut s, mut b) = (0u32, 0u32);
+        let mut t = from;
+        while t < until {
+            match petting_tick(st, true, t, PET_HOLD_MS) {
+                PetEvent::Stroke => s += 1,
+                PetEvent::Bite => b += 1,
+                PetEvent::None => {}
+            }
+            t += ms(step);
+        }
+        (s, b)
+    }
+
+    /// P0-F1-1：命中不满 PET_HOLD_MS 不出事件；满足了才一下。
+    #[test]
+    fn petting_requires_sustained_contact() {
+        let t0 = std::time::Instant::now();
+        let mut st = Petting::new(t0);
+        // 第一拍：起算（本拍就是起点，不可能当拍就满窗）
+        assert_eq!(petting_tick(&mut st, true, t0, PET_HOLD_MS), PetEvent::None);
+        // 差 1ms 不满窗
+        assert_eq!(petting_tick(&mut st, true, t0 + ms(PET_HOLD_MS - 1), PET_HOLD_MS), PetEvent::None);
+        // 期满 ⇒ 一下
+        assert_eq!(petting_tick(&mut st, true, t0 + ms(PET_HOLD_MS), PET_HOLD_MS), PetEvent::Stroke);
+    }
+
+    /// P0-F1-2：on_hit 中断 ⇒ 本段作废（划过去不算摸），重新连续命中才起算。
+    #[test]
+    fn petting_resets_when_contact_breaks() {
+        let t0 = std::time::Instant::now();
+        let mut st = Petting::new(t0);
+        petting_tick(&mut st, true, t0, PET_HOLD_MS);
+        // 划走：中途清零
+        assert_eq!(petting_tick(&mut st, false, t0 + ms(PET_HOLD_MS - 1), PET_HOLD_MS), PetEvent::None);
+        // 重新命中要从头计（再等满一个 hold 才算）
+        assert_eq!(petting_tick(&mut st, true, t0 + ms(PET_HOLD_MS), PET_HOLD_MS), PetEvent::None);
+        assert_eq!(petting_tick(&mut st, true, t0 + ms(2 * PET_HOLD_MS), PET_HOLD_MS), PetEvent::Stroke);
+    }
+
+    /// P0-F1-3：窗口内累计 BITE_STROKES 下 ⇒ Bite；且随后进冷却、冷却期无反应。
+    /// 连续接触 3s：每 400ms 一下，第 5 下（2.0s 处）升级为 Bite——前 4 下是 Stroke。
+    #[test]
+    fn petting_bites_after_five_strokes_then_cools_down() {
+        let t0 = std::time::Instant::now();
+        let mut st = Petting::new(t0);
+        let (strokes, bites) = pet_run(&mut st, t0, t0 + ms(3000), 50);
+        assert_eq!((strokes, bites), (4, 1), "连续摸 3s 应恰好 4 下 + 第 5 下升级为咬手");
+        // 冷却期内：持续命中也不会有任何事件
+        let (s2, b2) = pet_run(&mut st, t0 + ms(3000), t0 + ms(5000), 50);
+        assert_eq!((s2, b2), (0, 0), "冷却期内不得有反应");
+        // 冷却结束后恢复
+        let after = t0 + ms(BITE_COOLDOWN_MS + 6000);
+        assert!(!st.in_cooldown(after));
+        let (s3, _) = pet_run(&mut st, after, after + ms(1000), 50);
+        assert!(s3 >= 1, "冷却结束后应能重新摸出反应");
+    }
+
+    /// P0-F1-4：计数窗口过期 ⇒ 清零重计（「一小时摸五下」不触发）。
+    #[test]
+    fn petting_window_expiry_resets_the_count() {
+        let t0 = std::time::Instant::now();
+        let mut st = Petting::new(t0);
+        // 连续摸 1.6s = 3 下（节拍 = hold 400ms + 重起 50ms ≈ 450ms；不满 5，不咬）
+        let (strokes, bites) = pet_run(&mut st, t0, t0 + ms(1600), 50);
+        assert_eq!((strokes, bites), (3, 0));
+        assert_eq!(st.strokes, 3);
+        // 中间光标离开（真实系统里这期间每拍 on_hit=false，会把 hold 段清掉——
+        // 不模拟这一段的话，回来第一拍会拿着 1.6s 前的 arm 时刻立刻补一下，
+        // 那是测试模拟失真，不是产品缺陷）
+        for i in 0..10u64 {
+            petting_tick(&mut st, false, t0 + ms(1600 + i * 10), PET_HOLD_MS);
+        }
+        // 歇远超窗口（> 60s）再摸 ⇒ 计数重新起算（1s 内 2 下：+400ms / +850ms），不咬
+        let late = t0 + ms(BITE_WINDOW_MS + 5000);
+        let (s2, b2) = pet_run(&mut st, late, late + ms(1000), 50);
+        assert_eq!((s2, b2), (2, 0), "窗口过期后计数应重新起算：实测 {s2} 下 {b2} 咬");
+        assert_eq!(st.strokes, 2);
+    }
+
+    /* ---------------- P0-F4 · 心情值 ---------------- */
+
+    /// P0-F4-1：各事件符号正确 + 双向 clamp。
+    #[test]
+    fn mood_events_have_sign_and_clamp() {
+        assert_eq!(mood_apply(0, MoodEvent::Stroke), MOOD_STROKE);
+        assert!(mood_apply(0, MoodEvent::Bite) < 0, "被咬应掉心情");
+        assert!(mood_apply(0, MoodEvent::Throw) < 0, "被甩应掉心情");
+        assert!(mood_apply(0, MoodEvent::Neglect) < 0, "被冷落应掉心情");
+        assert!(mood_apply(0, MoodEvent::Hop) > 0 && mood_apply(0, MoodEvent::Done) > 0);
+        // clamp：狂撸不会溢出，狂被咬也不会
+        let mut m = 0;
+        for _ in 0..50 {
+            m = mood_apply(m, MoodEvent::Stroke);
+        }
+        assert_eq!(m, MOOD_MAX);
+        for _ in 0..50 {
+            m = mood_apply(m, MoodEvent::Bite);
+        }
+        assert_eq!(m, MOOD_MIN);
+    }
+
+    /// P0-F4-2：档位边界（±25 换档，中间带是 Mid）。
+    #[test]
+    fn mood_band_switches_at_thresholds() {
+        assert_eq!(mood_band(0), AmbientBand::Mid);
+        assert_eq!(mood_band(MOOD_HIGH - 1), AmbientBand::Mid);
+        assert_eq!(mood_band(MOOD_HIGH), AmbientBand::High);
+        assert_eq!(mood_band(MOOD_LOW + 1), AmbientBand::Mid);
+        assert_eq!(mood_band(MOOD_LOW), AmbientBand::Low);
+    }
+
+    /// P0-F3：抛掷速度门——边界含等号（600 整就飞）、斜向速度按模长、
+    /// NaN 不触发（失败方向取「不飞」：误飞比不飞难收拾）。
+    #[test]
+    fn throw_triggered_uses_speed_magnitude_with_safe_fallback() {
+        assert!(throw_triggered((THROW_VEL_MIN, 0.0)), "边界值应触发（>=）");
+        assert!(throw_triggered((THROW_VEL_MIN - 1.0, 0.0)) == false, "差 1px/s 不触发");
+        assert!(throw_triggered((0.0, -800.0)), "纯竖直快甩也飞（向上甩出去）");
+        assert!(throw_triggered((0.0, 0.0)) == false, "静止松手不飞");
+        assert!(throw_triggered((f32::NAN, 0.0)) == false, "NaN 速度不得触发");
+        assert!(throw_triggered((f32::INFINITY, 0.0)) == false, "无穷速度不得触发");
+        // 斜向：(425, 425) 的模长 ≈ 601 ⇒ 触发（速度是矢量，门看大小不看方向）
+        let diag = 425.0_f32;
+        assert!(throw_triggered((diag, diag)), "斜向合速度达标应触发");
+    }
+
+    /// P0-F4-3 / P1-a：加权选行——**首抽分布严格等于权重表**（无「上次」干扰时），
+    /// 且**任何档位都不得连播同一条**（E5 纪律不随加权丢失）。
+    ///
+    /// 为什么分两段测：带着「上次」跑时，不重复约束本身会改变边际分布
+    /// （[1,1,3] 的 wait 档平稳占比 ≈3/7——连续两个 2 被禁止，上限就低于 3/5），
+    /// 那是**约束的数学后果**不是权重失真；权重是否被尊重要看 last=None 的首抽。
+    /// （首版把两件事混在一个断言里，红得莫名其妙。）
+    /// P1-a 起权重表变长（whale 6 槽），本测试随之泛化到任意长度。
+    #[test]
+    fn weighted_ambient_pick_respects_weights_and_never_repeats() {
+        // ① 首抽分布 = 权重表（rnd%total 对连续 rnd 是严格均匀的，容差只防推错）
+        for w in [
+            vec![1u32, 1, 1],
+            vec![1, 1, 3],
+            vec![3, 2, 1],
+            vec![1, 1, 1, 1, 1, 1], // whale Mid：六槽等权
+            vec![3, 1, 1, 1, 1, 1], // whale High：wave 加权
+        ] {
+            let total: u32 = w.iter().sum();
+            let n = w.len();
+            let mut counts = vec![0u32; n];
+            for rnd in 0..24000u32 {
+                let idx = pick_ambient_pool_index_weighted(rnd, None, &w);
+                assert!(idx < n);
+                counts[idx] += 1;
+            }
+            for i in 0..n {
+                let got = counts[i] as f32 / 24000.0;
+                let want = w[i] as f32 / total as f32;
+                assert!((got - want).abs() < 0.01,
+                    "w={w:?} 门{i}：首抽 {got:.3} ≠ 权重 {want:.3}");
+            }
+        }
+        // ② 不重复：带着「上次」跑，任何档位都不得连播
+        for w in [vec![1u32, 1, 1], vec![1, 1, 3], vec![3, 2, 1], vec![1u32, 1, 1, 1, 1, 1]] {
+            let mut last: Option<usize> = None;
+            for rnd in 0..3000u32 {
+                let idx = pick_ambient_pool_index_weighted(rnd, last, &w);
+                if let Some(prev) = last {
+                    assert_ne!(idx, prev, "w={w:?} rnd={rnd} 连播同一条");
+                }
+                last = Some(idx);
+            }
+        }
+        // 退化输入：全零权重不死循环、不 panic；空池不死循环
+        assert_eq!(pick_ambient_pool_index_weighted(7, Some(1), &[0, 0, 0]), 0);
+        assert_eq!(pick_ambient_pool_index_weighted(7, Some(1), &[]), 0);
+    }
+
+    /// P1-a-1：主题行池分流——whale 无 review（空转槽）且含待机变体；kurumi 反之。
+    #[test]
+    fn ambient_pool_splits_by_theme() {
+        let whale = ambient_pool("whale");
+        assert!(!whale.contains(&"review"), "whale 没有 review 行——放进去 = 空转槽");
+        for r in ["wave", "wait", "idle2", "idle3", "idle4", "idle5"] {
+            assert!(whale.contains(&r), "whale 池缺 {r}");
+        }
+        let kurumi = ambient_pool("kurumi");
+        assert!(kurumi.contains(&"review"));
+        assert!(!kurumi.contains(&"idle2"), "kurumi 没有待机变体帧");
+        // 未知主题回 kurumi 池（不猜、不空白）
+        assert_eq!(ambient_pool("bogus"), kurumi);
+    }
+
+    /// P1-a-2：行权重方向——High 偏 wave、Low 偏 wait、待机变体恒中性。
+    /// C 批：Day 档（默认入参）与 P1-a 口径逐字一致——时段修正只在傍晚/深夜生效。
+    #[test]
+    fn row_weight_follows_band_and_keeps_variants_neutral() {
+        assert!(row_weight("wave", AmbientBand::High, TimeBand::Day) > row_weight("wave", AmbientBand::Low, TimeBand::Day));
+        assert!(row_weight("wait", AmbientBand::Low, TimeBand::Day) > row_weight("wait", AmbientBand::High, TimeBand::Day));
+        assert!(row_weight("review", AmbientBand::High, TimeBand::Day) > row_weight("review", AmbientBand::Low, TimeBand::Day));
+        for r in ["idle2", "idle3", "idle4", "idle5", "jump"] {
+            for band in [AmbientBand::Low, AmbientBand::Mid, AmbientBand::High] {
+                assert_eq!(row_weight(r, band, TimeBand::Day), 1, "{r} 应恒中性（待机变体不被心情挤掉）");
+            }
+        }
+    }
+
+    /// P1-a-3：粘合层的主题纪律——whale 模式永远不返回 review（会空转），
+    /// 且待机变体确实能上场（这是本项的存在意义）；kurumi 模式不返回 idle2。
+    /// 判据是抽样的（`rand_u32` 不可注入种子），但样本量下「从不出现」的概率
+    /// 低于 1e-30——真出现就是回归。
+    #[test]
+    fn pick_ambient_choice_never_returns_rows_the_theme_lacks() {
+        let all = |_: &str| true; // 默认主题：池里各行都在（A 批过滤的对照基线）
+        let mut saw_variant = false;
+        for _ in 0..3000 {
+            if let AmbientChoice::Row(r) = pick_ambient_choice(AmbientBand::Mid, "whale", TimeBand::Day, &all) {
+                assert_ne!(r, "review", "whale 模式返回了不存在的 review 行（空转槽回归）");
+                if r.starts_with("idle") {
+                    saw_variant = true;
+                }
+            }
+        }
+        assert!(saw_variant, "3000 次抽样里待机变体一次都没上场——池接线没生效？");
+        for _ in 0..1000 {
+            if let AmbientChoice::Row(r) = pick_ambient_choice(AmbientBand::Mid, "kurumi", TimeBand::Day, &all) {
+                assert!(!r.starts_with("idle"), "kurumi 模式返回了它没有的待机变体行");
+            }
+        }
+    }
+
+    /// A-1：行池按当前生效行集过滤——形象缺的行永不上场（P1-a 空转槽纪律的推广）。
+    /// 判据是抽样的（`rand_u32` 不可注入种子）：3000 次里「过滤集外的行」一次都不该出现。
+    #[test]
+    fn ambient_pool_filters_by_available_rows() {
+        // 模拟一个只有 idle/wait 的从简形象（没有 wave/idle2–idle5/jump）
+        let has = |r: &str| matches!(r, "idle" | "wait");
+        for _ in 0..3000 {
+            if let AmbientChoice::Row(r) = pick_ambient_choice(AmbientBand::Mid, "whale", TimeBand::Day, &has) {
+                assert!(matches!(r.as_str(), "idle" | "wait"),
+                    "过滤后仍返回了 {r}——形象没有的行上了场（空转槽回归）");
+            }
+        }
+    }
+
+    /// A-2：过滤后池空 ⇒ 回落未过滤池（degenerate 形象不回 blank、不死循环、不 panic）。
+    /// 「什么都不缺」与「什么都缺」两种极端下都必须有产出。
+    #[test]
+    fn ambient_pool_empty_filter_falls_back_to_full() {
+        let nothing = |_: &str| false;
+        let mut saw_row = false;
+        for _ in 0..500 {
+            if let AmbientChoice::Row(_) = pick_ambient_choice(AmbientBand::Mid, "whale", TimeBand::Day, &nothing) {
+                saw_row = true;
+            }
+        }
+        assert!(saw_row, "过滤空池后仍须有行产出（回落未过滤池）——否则桌宠可能无演出");
+    }
+
+    /// P0-F4-4：emote 概率有界——None 占多数、触发的都在该档的词表内。
+    /// C 批：入参加 time；Day 档与 P0 口径逐字一致，Night 档的 High→Look
+    /// 由专门的新测覆盖（`ambient_wants_emote_never_dances_at_night`）。
+    #[test]
+    fn ambient_emote_chance_is_bounded_and_in_vocabulary() {
+        for band in [AmbientBand::Low, AmbientBand::Mid, AmbientBand::High] {
+            let mut fired = 0u32;
+            for rnd in 0..1000u32 {
+                if let Some(kind) = ambient_wants_emote(band, rnd, TimeBand::Day) {
+                    fired += 1;
+                    let legal = match band {
+                        AmbientBand::High => kind == EmoteKind::Dance,
+                        AmbientBand::Low => matches!(kind, EmoteKind::Shiver | EmoteKind::Look),
+                        AmbientBand::Mid => matches!(kind, EmoteKind::Turn | EmoteKind::Shake),
+                    };
+                    assert!(legal, "{band:?} 触发了词表外的 {kind:?}");
+                }
+            }
+            // 触发率（‰）= fired/1000×1000，上限 = pct×10（pct 是 %）
+            let pct = match band {
+                AmbientBand::High => EMOTE_PCT_HIGH,
+                AmbientBand::Mid => EMOTE_PCT_MID,
+                AmbientBand::Low => EMOTE_PCT_LOW,
+            };
+            assert!(fired <= pct * 10 + 5,
+                "{band:?} 触发 {fired}/1000 超过上限 {}%", pct);
+            assert!(fired >= pct * 10 - 5,
+                "{band:?} 触发 {fired}/1000 低于下限 {}%——概率门被谁改了？", pct);
+        }
+    }
+
+    /// C-1：时段分档边界——含头不含尾，与睡眠段常量对齐；越界小时按正午（Day）。
+    #[test]
+    fn time_band_splits_day_evening_night() {
+        assert_eq!(time_band(0), TimeBand::Night, "凌晨属深夜");
+        assert_eq!(time_band(6), TimeBand::Night);
+        assert_eq!(time_band(7), TimeBand::Day, "睡醒点归白天（含头）");
+        assert_eq!(time_band(12), TimeBand::Day);
+        assert_eq!(time_band(17), TimeBand::Day);
+        assert_eq!(time_band(18), TimeBand::Evening, "渐静段含头");
+        assert_eq!(time_band(22), TimeBand::Evening);
+        assert_eq!(time_band(23), TimeBand::Night, "睡眠段含头");
+        assert_eq!(time_band(99), TimeBand::Day, "越界值不猜深夜（失败方向取「不闹中取静」的反面：正午）");
+    }
+
+    /// C-2：深夜权重修正——wave 无条件压到 1（心情加成让位给时辰）、安静行抬到 2、
+    /// 其余行不动；**任何行任何时段都不为 0**（只改概率不改节目单）。
+    #[test]
+    fn row_weight_calms_down_at_night() {
+        assert_eq!(row_weight("wave", AmbientBand::High, TimeBand::Night), 1,
+            "深夜 wave 压到 1——High 的心情加成让位给时辰");
+        assert!(row_weight("wave", AmbientBand::High, TimeBand::Night)
+            < row_weight("wave", AmbientBand::High, TimeBand::Day),
+            "深夜必须比白天安静");
+        for r in ["wait", "idle2", "idle5"] {
+            assert_eq!(row_weight(r, AmbientBand::Mid, TimeBand::Night), 2, "深夜 {r} 抬到 2");
+            assert_eq!(row_weight(r, AmbientBand::Mid, TimeBand::Evening), 2, "傍晚 {r} 抬到 2");
+            assert_eq!(row_weight(r, AmbientBand::Mid, TimeBand::Day), 1, "白天 {r} 不动");
+        }
+        // 未被点名参与修正的行：三时段一致（不搭车）
+        for r in ["idle3", "idle4", "review", "jump"] {
+            for band in [AmbientBand::Low, AmbientBand::Mid, AmbientBand::High] {
+                let d = row_weight(r, band, TimeBand::Day);
+                assert_eq!(row_weight(r, band, TimeBand::Night), d, "{r} 不该被深夜修正搭车");
+                assert_eq!(row_weight(r, band, TimeBand::Evening), d, "{r} 不该被傍晚修正搭车");
+            }
+        }
+        // 节目单纪律：全行全时段全心情，权重永不为 0
+        for r in ambient_pool("whale").iter().chain(ambient_pool("kurumi")) {
+            for band in [AmbientBand::Low, AmbientBand::Mid, AmbientBand::High] {
+                for t in [TimeBand::Day, TimeBand::Evening, TimeBand::Night] {
+                    assert!(row_weight(r, band, t) >= 1, "{r} {band:?} {t:?} 权重归零=从节目单删除");
+                }
+            }
+        }
+    }
+
+    /// C-3：深夜不跳舞——High 档在 Night 换张望（Look），Dance 只属于白天/傍晚；
+    /// 概率门本身不变（仍按 EMOTE_PCT_HIGH 触发，只是换了词）。
+    #[test]
+    fn ambient_wants_emote_never_dances_at_night() {
+        for rnd in 0..1000u32 {
+            assert_ne!(ambient_wants_emote(AmbientBand::High, rnd, TimeBand::Night),
+                Some(EmoteKind::Dance), "深夜不该跳舞（rnd={rnd}）");
+            if let Some(k) = ambient_wants_emote(AmbientBand::High, rnd, TimeBand::Night) {
+                assert_eq!(k, EmoteKind::Look, "深夜 High 档换张望");
+            }
+        }
+        // 白天/傍晚保持 Dance（原口径不回归）
+        let mut saw_dance = false;
+        for rnd in 0..1000u32 {
+            if let Some(EmoteKind::Dance) = ambient_wants_emote(AmbientBand::High, rnd, TimeBand::Day) {
+                saw_dance = true;
+            }
+            if let Some(EmoteKind::Dance) = ambient_wants_emote(AmbientBand::High, rnd, TimeBand::Evening) {
+                saw_dance = true;
+            }
+        }
+        assert!(saw_dance, "白天/傍晚 High 档必须还能跳舞——原口径回归");
+        // Low/Mid 档的词表不受时段影响
+        for rnd in 0..500u32 {
+            for t in [TimeBand::Day, TimeBand::Evening, TimeBand::Night] {
+                if let Some(k) = ambient_wants_emote(AmbientBand::Low, rnd, t) {
+                    assert!(matches!(k, EmoteKind::Shiver | EmoteKind::Look));
+                }
+                if let Some(k) = ambient_wants_emote(AmbientBand::Mid, rnd, t) {
+                    assert!(matches!(k, EmoteKind::Turn | EmoteKind::Shake));
+                }
+            }
+        }
+    }
+
+    /// P0-F2：emote 时长表——七种都有正时长，Sleep 是续期档。
+    #[test]
+    fn emote_durations_are_positive() {        for k in [EmoteKind::Nod, EmoteKind::Shake, EmoteKind::Turn, EmoteKind::Shiver, EmoteKind::Dance, EmoteKind::Look] {
+            assert!(emote_duration(k) > 0 && emote_duration(k) < SLEEP_MS, "{k:?} 时长异常");
+        }
+        assert_eq!(emote_duration(EmoteKind::Sleep), SLEEP_MS);
+    }
+
+    /// P0-F2：Emote 在 Idle 态落 idle 基础行（编舞在绘制层），非 Idle 态被状态压住。
+    #[test]
+    fn emote_uses_idle_base_row_and_yields_to_states() {
+        let nod = slot(Action::Emote { kind: EmoteKind::Nod }, NOD_MS);
+        assert_eq!(pick_state_row(PetState::Idle, Some(&nod)), "idle");
+        assert_eq!(pick_state_row(PetState::Thinking, Some(&nod)), "run");
+        assert_eq!(pick_state_row(PetState::Waiting, Some(&nod)), "wait");
+        let dance = slot(Action::Emote { kind: EmoteKind::Dance }, DANCE_MS);
+        assert_eq!(pick_state_row(PetState::Idle, Some(&dance)), "idle");
     }
 }

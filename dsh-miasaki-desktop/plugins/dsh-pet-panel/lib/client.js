@@ -163,10 +163,18 @@ window.__ModuleLoader__.load({
 		 * 值会和壳里的真实值不一样，用户一改反而把真实值覆盖成"面板以为的默认"）。
 		 * 这只是**回推到达之前**的占位；`pet-state` 一到就被真实值替换。
 		 */
-		const SHELL_SETTINGS_DEFAULTS = { motion: 1.0, bubbleMs: 3000, alpha: 100, pet: "", through: "auto", tray: "dot", fs: true, sound: true };
+		const SHELL_SETTINGS_DEFAULTS = { motion: 1.0, bubbleMs: 3000, alpha: 100, pet: "", through: "auto", tray: "dot", fs: true, sound: true, color: 0, halo: true, appearance: "default" };
 		const PET_CHOICES = [["", "跟随主题"], ["whale", "鲸鱼娘"], ["kurumi", "狂三"], ["inverse", "反转狂三"]];
 		const THROUGH_CHOICES = [["auto", "自动（透明处点得到下层）"], ["always", "总是可点（不穿透）"]];
 		const TRAY_CHOICES = [["dot", "头像悬浮球"], ["tray", "只留托盘"], ["both", "两者都要"]];
+		// P2-a（2026-10-18）：whale 配色预设（索引 ↔ Rust `config::COLOR_PRESETS`）。
+		// 只对鲸鱼娘生效——狂三/反转狂三的发色是角色设定，不参与换色。
+		const COLOR_CHOICES = [["0", "原色"], ["1", "樱粉"], ["2", "青碧"], ["3", "紫萄"], ["4", "暖橘"], ["5", "霜白"]];
+		// A 批（2026-10-19）：桌宠形象（whale 换装）选项表——必须与 Rust
+		// `PetSettings::APPEARANCES` 逐字镜像（面板测试有对齐断言）。初始只有
+		// 「默认」= 现有资产（frames.json 的平铺 whale 键）；加形象 = 两侧各加一项
+		// （design/2026-10-19-pet-a-appearance.md runbook §7）。
+		const APPEARANCE_CHOICES = [["default", "默认"]];
 
 		/**
 		 * 桌宠设置面板。
@@ -331,6 +339,23 @@ window.__ModuleLoader__.load({
 						switchCtl(shell.fs !== false, () => applyShell({ fs: shell.fs === false }), "全屏时隐藏", !isDesktop)),
 					row("音效", "跳跃、挥手、拎起放下、审批到来、任务完成的提示音。",
 						switchCtl(shell.sound !== false, () => applyShell({ sound: shell.sound === false }), "音效", !isDesktop)),
+					// R20-c 重做（2026-10-19）：背景反差柔光。用户报「有时候会有一个白圈圈着」
+					// 后补的关闭路径——首版是套在角色外的椭圆白环（与轮廓无关），已重做为
+					// 贴合角色轮廓的程序化柔光；仍给一个开关兜底审美差异。
+					row("背景反差光", "桌宠停在颜色相近的桌面上时，沿角色轮廓加一圈柔光，防止角色融进背景。关掉即不画。",
+						switchCtl(shell.halo !== false, () => applyShell({ halo: shell.halo === false }), "背景反差光", !isDesktop)),
+					// P2-a（2026-10-18）：鲸鱼娘配色。换色是加载期重着色，切换时
+					// 有一次百毫秒级重载（设置变更的一次性代价，之后零开销）。
+					row("配色", "鲸鱼娘的配色。狂三与反转狂三的发色是角色设定，不随这里变化。",
+						segmentCtl("pet-color", String(shell.color != null ? shell.color : 0), COLOR_CHOICES,
+							v => applyShell({ color: Number(v) }), "配色", !isDesktop)),
+					// A 批（2026-10-19）：桌宠形象（whale 换装）。**条件渲染**——
+					// 可选形象 ≤1（当前只有「默认」）时不放这一行：一个选项的单选是噪音。
+					// 加形象 = Rust APPEARANCES + 本表 APPEARANCE_CHOICES 各加一项
+					// （design/2026-10-19-pet-a-appearance.md runbook §7），行自动出现。
+					...(APPEARANCE_CHOICES.length > 1 ? [row("形象", "鲸鱼娘的装扮。切换时有一次百毫秒级重载；狂三与反转狂三是角色设定，不随这里变化。",
+						segmentCtl("pet-appearance", shell.appearance != null ? shell.appearance : "default", APPEARANCE_CHOICES,
+							v => applyShell({ appearance: v }), "形象", !isDesktop))] : []),
 				]),
 
 				// ③ 状态呈现（纯客户端，localStorage）

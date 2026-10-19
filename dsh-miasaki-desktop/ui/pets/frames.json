@@ -61,6 +61,66 @@
         "r6c3.png",
         "r6c4.png",
         "r6c5.png"
+      ],
+      "idle2": [
+        "r7c0.png",
+        "r7c1.png",
+        "r7c2.png",
+        "r7c3.png",
+        "r7c4.png",
+        "r7c5.png"
+      ],
+      "idle3": [
+        "r8c0.png",
+        "r8c1.png",
+        "r8c2.png",
+        "r8c3.png",
+        "r8c4.png",
+        "r8c5.png"
+      ],
+      "idle4": [
+        "r9c0.png",
+        "r9c1.png",
+        "r9c2.png",
+        "r9c3.png",
+        "r9c4.png",
+        "r9c5.png",
+        "r9c6.png",
+        "r9c7.png"
+      ],
+      "idle5": [
+        "r10c0.png",
+        "r10c1.png",
+        "r10c2.png",
+        "r10c3.png",
+        "r10c4.png",
+        "r10c5.png",
+        "r10c6.png",
+        "r10c7.png"
+      ],
+      "exHappy": [
+        "exHappy.png"
+      ],
+      "exAngry": [
+        "exAngry.png"
+      ],
+      "exSad": [
+        "exSad.png"
+      ],
+      "exSurprise": [
+        "exSurprise.png"
+      ],
+      "exStarry": [
+        "exStarry.png"
+      ],
+      "exSleepy": [
+        "exSleepy.png"
+      ],
+      "exShy": [
+        "exShy.png"
+      ],
+      "exDoubt": [
+        "exDoubt.png"
       ]
     },
     "states": {
@@ -72,7 +132,6 @@
         "states/idle-04.png",
         "states/idle-05.png"
       ],
-      "work": "states/work.png",
       "deep": "states/deep.png"
     }
   },
