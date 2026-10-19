@@ -2,6 +2,52 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-10-18 · 壁纸在两个狂三主题下「无法设置」：params 层解绑皮肤 + 壁纸层运行期生效 + 预览卡
+
+**触发**：用户「关于壁纸设置，是在纯净主题下设置的，狂三的两个主题无法设置壁纸。外观设置页做好点」。
+
+**取证（三步，第三步推翻了前两步的假设）**：
+
+1. **读实机配置**（`~/.dsh/miasaki-appearance/config.json`）：`theme.skin = "pure"` + 完整壁纸配置
+   （`builtin:aurora` / scrim 20 / vignette 10 / glass light / surface 80·80·80·100）。
+   ⇒ 用户确实是在**纯净皮肤**下配的壁纸，并把「表面不透明度」降到了 80。
+2. **读代码链**：`client.js` 的 `syncSkin` 里
+   `const wantParams = want === true && skin.wallpaperActive === true && skin.surface !== null`，
+   而 `want` 要求 `skin.id !== 'pure'` ⇒ **纯净皮肤下 params 层永远不注册**，
+   四个旋钮是死的。同时壁纸层（`body::before`）与玻璃规则只存在于 **boot style**——
+   页面加载时注入一次，运行期改图源 / 玻璃 / 遮罩 / 晕影**没有任何东西重算**。
+3. **真 Chromium 探针复刻层叠**（官方 `base.css` + `design-platform.css` + 壳主题 CSS +
+   本线 `buildBootStyle` 真产物，量 computed 背景）：纯净皮肤下四个表面全是
+   `rgb(21,21,23)` **不透明** ⇒ 壁纸层被盖得严严实实；切到刻刻帝 / 狂狂帝才是 0.8 alpha。
+   ⇒ **「纯净下设置了没反应」成立**；而「两个狂三主题下无法设置」的真相是**运行期不生效**
+   （boot style 一次性）+ **`save()` 只同步 4 个门控属性里的 2 个**
+   （`data-mia-glass` / `data-mia-wallpaper` 漏写，桌面壳的 aurora 降透明与玻璃规则停在旧值）。
+
+**三处改动（都在 appearance 线，零壳改动）**：
+
+1. **params 层判据独立**：`wantParams = enabled && wallpaperActive && surface !== null && !conflict`
+   —— 去掉 `want === true`（皮肤非 pure）这一条。纯净皮肤下「表面不透明度」从此接管，
+   壁纸看得见。**conflict 仍然拦住它**：桌面壳在位且未让位时配色归壳，
+   硬注册会把壳主题的暖白 / 绯红 palette 换成官方 static 端的颜色（探针实测两种取值不同）。
+2. **运行期样式层**（`lib/config.js` 的 `buildRuntimeStyle`）：host 随 `/skin` 下发当前
+   壁纸 + 玻璃 CSS，client 维护自己的 `<style>`（追加在 head 末尾，同特异性后来者胜）。
+   **壁纸停用时给中和规则** `body::before { content: none; }` —— boot style 是加载时那份，
+   本次会话里关掉壁纸后不中和就是「关了还在」。总开关关闭则整层移除。
+3. **四个门控属性全同步**（`syncGateAttributes`，与 `buildBootScript` 判据逐字同源）+
+   **桌面壳换肤观察者**：壳主题菜单在让位态直接写外观配置并翻 `data-mia-skin`，
+   **不经过本插件的 save()** ⇒ 不补观察者的话 override 层挂着旧皮肤 token、要刷新页面才好。
+
+**「做好点」**：壁纸板块首行加**「当前生效」预览卡** —— 官方卡片语言铺一张与生效层**同源**
+的壁纸（`buildWallpaperLayers`，遮罩 → 晕影 → 图与 `body::before` 逐字一致），卡底一条
+**玻璃演示条**把当前档位的 `backdrop-filter` 作用在同一张壁上。在此之前用户只有一行
+「图源」选择丸 + 四个抽象旋钮，改完完全看不出改了什么。
+
+**验证**：真 Chromium 探针（探针与输出归档 `_refs/scripts-archive/appearance-2026-10-18-wallpaper-probe/`）——
+纯净皮肤下表面从 `rgb(21,21,23)`（不透明）变为 `color(srgb … / 0.8)`，壁纸可见；
+运行期关壁纸 ⇒ `content: none` 立即消失；换图立即生效；壳主题 palette 未被顶掉
+（`shell=zafkiel` 仍 `rgba(12,11,17,.8)`、`shell=kurkuriel` 仍 `rgba(247,244,241,.93)`）。
+单测 **155 → 165 例**（config +2 / client +7 / host +1）；`verify-all appearance` 18/18。
+
 ## 2026-10-14 · 退役程序化「默认」预设（用户「预设的这个图标删掉」）
 
 **触发**：用户贴出「默认」预设图标（`preset-default.png`，深色底 + 几何徽记）说「预设的这个图标删掉」。

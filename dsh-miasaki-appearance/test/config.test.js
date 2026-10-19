@@ -5,6 +5,8 @@ import {
   DEFAULT_CONFIG,
   buildBootScript,
   buildBootStyle,
+  buildRuntimeStyle,
+  buildWallpaperLayers,
   configEquals,
   evaluateContract,
   mergeConfig,
@@ -295,6 +297,51 @@ test('buildBootStyle：玻璃档位产出三条 slot 实盒子规则；off 不�
   assert.match(css, /html\[data-mia-glass="frost"\] \[data-slot="main\.conversation"\] > \*/)
   assert.match(css, /backdrop-filter: blur\(20px\) saturate\(1\.4\)/)
   assert.equal(buildBootStyle({ enabled: true, wallpaper: { glass: 'off' } }, null, {}), '')
+})
+
+// 2026-10-18：运行期样式（client 半自维护的样式标签）。boot style 只在**页面加载时**
+// 注入一次，用户随后在面板里改图源 / 玻璃 / 遮罩 / 晕影不会重算 ⇒ 「设置了没反应」。
+// 本函数产出同一套规则的当前值，由 client 在加载后与每次保存后重写。
+test('buildRuntimeStyle：壁纸启用时给壁纸段，停用时给中和规则', () => {
+  // ① 壁纸启用 ⇒ 与 boot style 的壁纸段逐字同源（多重背景 + 铺排）
+  const live = buildRuntimeStyle(
+    { enabled: true, wallpaper: { source: 'builtin:ember', scrim: 30, vignette: 40, fit: 'contain', focus: 'top' } },
+    { ember: 'linear-gradient(145deg, #14100e, #d9b36a)' },
+  )
+  assert.match(live, /body::before \{/)
+  assert.match(live, /background-image: linear-gradient\(rgba\(0, 0, 0, 0\.30\)[\s\S]+radial-gradient[\s\S]+linear-gradient\(145deg, #14100e, #d9b36a\)/)
+  assert.match(live, /background-size: contain; background-position: top; background-repeat: no-repeat/)
+  // ② 壁纸停用但总开关开着 ⇒ **必须**给中和规则：boot style 是加载时那份，
+  //    本次会话里关掉壁纸后，首帧那条 body::before 还在 head 里，不中和就是「关了还在」。
+  const neutral = buildRuntimeStyle({ enabled: true, wallpaper: { source: '' } }, {})
+  assert.equal(neutral, 'body::before { content: none; }')
+  // ③ 总开关关闭 ⇒ 空串（client 移除整层；boot style 同样不注入）
+  assert.equal(buildRuntimeStyle({ enabled: false, wallpaper: { source: 'builtin:ember' } }, { ember: 'x' }), '')
+  // ④ 玻璃段随档位产出（与 boot style 同一生成逻辑）
+  const glass = buildRuntimeStyle({ enabled: true, wallpaper: { glass: 'frost' } }, {})
+  assert.match(glass, /html\[data-mia-glass="frost"\] \[data-slot="rightbar"\] > \*/)
+  // ⑤ 玻璃 off ⇒ 只有壁纸段/中和规则，不掺玻璃规则
+  assert.doesNotMatch(buildRuntimeStyle({ enabled: true, wallpaper: { glass: 'off' } }, {}), /data-mia-glass/)
+})
+
+test('buildWallpaperLayers：与 body::before 的 background-image 同源同序（预览即真相）', () => {
+  const layers = buildWallpaperLayers(
+    { enabled: true, wallpaper: { source: 'builtin:ember', scrim: 20, vignette: 10 } },
+    { ember: 'linear-gradient(145deg, #14100e, #d9b36a)' },
+  )
+  assert.equal(
+    layers,
+    'linear-gradient(rgba(0, 0, 0, 0.20), rgba(0, 0, 0, 0.20)), '
+    + 'radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.10) 100%), '
+    + 'linear-gradient(145deg, #14100e, #d9b36a)',
+  )
+  // 无任何层（无壁纸、无遮罩、无晕影）⇒ 空串（面板预览卡走空态）
+  assert.equal(buildWallpaperLayers({ enabled: true, wallpaper: { source: '', scrim: 0, vignette: 0 } }, {}), '')
+  // 本地图源走 url()，反斜杠与引号按 boot style 同一规则转义
+  assert.match(
+    buildWallpaperLayers({ enabled: true, wallpaper: { source: '/appearance/wallpaper/local/a b.png' } }, {}),
+    /url\("\/appearance\/wallpaper\/local\/a b\.png"\)/,
+  )
 })
 
 test('buildBootScript：glass 属性随配置写入、关闭时恒 off', () => {

@@ -357,8 +357,45 @@ export function buildBootStyle(config, skinTokens, builtinWallpapers) {
   const parts = []
   const skinCss = buildSkinBootCss(safe, skinTokens)
   if (skinCss !== '') parts.push(skinCss)
-  const wallpaperCss = buildWallpaperBootCss(safe, builtinWallpapers)
-  if (wallpaperCss !== '') parts.push(wallpaperCss)
+  const layerCss = buildWallpaperGlassCss(safe, builtinWallpapers)
+  if (layerCss !== '') parts.push(layerCss)
+  return parts.join('\n')
+}
+
+/** 壁纸 + 玻璃两段（无中和规则）——首帧注入与运行期样式共用同一份生成逻辑。 */
+function buildWallpaperGlassCss(safe, builtinWallpapers) {
+  const parts = []
+  const wallpaperCss = wallpaperLayerCss(safe.wallpaper, builtinWallpapers)
+  if (wallpaperCss !== null) parts.push(wallpaperCss)
+  const glassCss = buildGlassBootCss(safe)
+  if (glassCss !== '') parts.push(glassCss)
+  return parts.join('\n')
+}
+
+/**
+ * 运行期样式（client 半自维护的 `<style>` 标签内容）。
+ *
+ * 为什么 boot style 不够用（2026-10-18 用户报「壁纸设置了没反应 / 两个狂三主题下无法设置壁纸」）：
+ * 首帧样式只在**页面加载时**注入一次，用户随后在面板里改图源 / 玻璃 / 遮罩 / 晕影，
+ * 页面里那条 `body::before` 规则不会变 —— 设置看起来「点了没反应」，直到某次刷新才生效。
+ * 本函数产出同一套规则的**当前值**，由 client 在加载后与每次保存后重写自己的样式标签；
+ * 该标签挂在 head 末尾（晚于 boot style），同特异性下后来者胜 ⇒ 立即覆盖首帧那份。
+ *
+ * 与 boot style 的分工：boot style 额外负责**皮肤 token** 的首帧防闪色（presenter 首次
+ * apply 之前的空窗），本函数不含皮肤段 —— 那部分由 overrideTokens 层在运行期接管。
+ *
+ * @param {object} config - 已归一化配置。
+ * @param {object} builtinWallpapers - `builtin:<id>` → CSS 渐变（host 侧 BUILTIN_WALLPAPERS）。
+ * @returns {string} CSS 文本；总开关关闭时返回空串（client 移除整层）。
+ */
+export function buildRuntimeStyle(config, builtinWallpapers) {
+  const safe = sanitizeConfig(config)
+  if (!safe.enabled) return ''
+  const parts = []
+  const wallpaperCss = wallpaperLayerCss(safe.wallpaper, builtinWallpapers)
+  // 壁纸停用时必须给一条**中和规则**：boot style 是加载时那份，用户可能在本次会话里
+  // 把壁纸关掉 ⇒ 首帧那条 body::before 仍在 head 里，不中和就会「关了还在」。
+  parts.push(wallpaperCss === null ? 'body::before { content: none; }' : wallpaperCss)
   const glassCss = buildGlassBootCss(safe)
   if (glassCss !== '') parts.push(glassCss)
   return parts.join('\n')
@@ -375,8 +412,13 @@ function buildSkinBootCss(safe, skinTokens) {
   return `html[data-mia-skin=${skin}] body {\n${light}\n}\nhtml[data-mia-skin=${skin}] body[data-ds-dark-theme] {\n${dark}\n}`
 }
 
-/** 双重背景的序：遮罩在最上、晕影次之、壁纸图最底。 */
-function wallpaperLayerCss(wallpaper, builtinWallpapers) {
+/**
+ * 壁纸层的 `background-image` 值（遮罩 → 晕影 → 图，多重背景）。
+ * 规则组装（`wallpaperLayerCss`）与面板预览（`buildWallpaperLayers`）共用这一份，
+ * 避免「预览看到的」与「实际生效的」两套生成逻辑漂移。
+ * @returns {string|null} 没有任何层时返回 null。
+ */
+function wallpaperLayerValue(wallpaper, builtinWallpapers) {
   const layers = []
   if (wallpaper.scrim > 0) {
     layers.push(`linear-gradient(rgba(0, 0, 0, ${(wallpaper.scrim / 100).toFixed(2)}), rgba(0, 0, 0, ${(wallpaper.scrim / 100).toFixed(2)}))`)
@@ -393,21 +435,33 @@ function wallpaperLayerCss(wallpaper, builtinWallpapers) {
       layers.push(`url("${wallpaper.source.replace(/\\/g, '/').replace(/"/g, '%22')}")`)
     }
   }
-  if (layers.length === 0) return null
+  return layers.length === 0 ? null : layers.join(', ')
+}
+
+/** 双重背景的序：遮罩在最上、晕影次之、壁纸图最底。 */
+function wallpaperLayerCss(wallpaper, builtinWallpapers) {
+  const value = wallpaperLayerValue(wallpaper, builtinWallpapers)
+  if (value === null) return null
   const repeat = wallpaper.fit === 'tile' ? 'repeat' : 'no-repeat'
   const size = wallpaper.fit === 'tile' ? 'auto' : wallpaper.fit
   return (
     `body::before {\n` +
     `  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;\n` +
-    `  background-image: ${layers.join(', ')};\n` +
+    `  background-image: ${value};\n` +
     `  background-size: ${size}; background-position: ${wallpaper.focus}; background-repeat: ${repeat};\n` +
     `}`
   )
 }
 
-function buildWallpaperBootCss(safe, builtinWallpapers) {
-  const css = wallpaperLayerCss(safe.wallpaper, builtinWallpapers)
-  return css === null ? '' : css
+/**
+ * 壁纸层值的当前形态（供面板**预览卡**消费）。
+ * 与 `wallpaperLayerCss` 同源：预览看到的图层序 = 实际生效的图层序。
+ * @returns {string} `background-image` 值；无任何层时返回空串。
+ */
+export function buildWallpaperLayers(config, builtinWallpapers) {
+  const safe = sanitizeConfig(config)
+  const value = wallpaperLayerValue(safe.wallpaper, builtinWallpapers)
+  return value === null ? '' : value
 }
 
 /** 玻璃段：三条 slot 实盒子规则（S1a 探针定稿的命中路径），composer/settings 降级纯 alpha。 */

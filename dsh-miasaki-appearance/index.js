@@ -24,7 +24,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, basename, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildSurfaceTokens, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
+import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildRuntimeStyle, buildSurfaceTokens, buildWallpaperLayers, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
 import { buildSplashHtml, buildSplashScript, buildSplashStyle } from './lib/splash.js'
 import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, avatarFileFromSource, isUserAvatarName, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
 import { ICON_PRESETS, presetAssetPath, presetFileName, presetUrl } from './lib/icon-presets.js'
@@ -299,12 +299,23 @@ export function apply(ctx, config) {
       // `defaults` 与 `config` 同源下发（P4 每板块恢复默认的输入）：
       // 默认值只有 host 这一份（lib/config.js 的 DEFAULT_CONFIG），客户端**不另存一份** ——
       // 两份默认值必然漂移，而漂移的后果是「恢复默认」把配置恢复成旧默认。
-      return sendJson(res, 200, { config: current, defaults: DEFAULT_CONFIG, revision, persistent: store.persistent })
+      // `wallpaperLayers` 是面板预览卡的输入（2026-10-18）：与 body::before 的
+      // background-image 同源同序，预览即真相；host 不下发时面板走空态。
+      return sendJson(res, 200, {
+        config: current,
+        defaults: DEFAULT_CONFIG,
+        revision,
+        persistent: store.persistent,
+        wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS),
+      })
     }
 
     // M2 S4：当前配置皮肤的 token 表（client 半 overrideTokens 与 boot style 消费同一份）。
     // M2 S5：顺带下发 params 层（表面不透明度）的覆盖表——它也是 overrideTokens 层，
     // 且与皮肤同样「host 计算、client 注册」，一次拉取双份。
+    // 2026-10-18：再下发**运行期样式**与**壁纸层值**——前者让面板改完壁纸/玻璃立即生效
+    // （boot style 只在加载时注入一次，改图源不重载页面就「点了没反应」），
+    // 后者给面板的预览卡用（预览与生效同源，见 lib/config.js 的 buildWallpaperLayers）。
     if (path === `${API_PREFIX}skin` && req.method === 'GET') {
       const mod = SKIN_MODULES[current.theme.skin]
       return sendJson(res, 200, {
@@ -313,6 +324,8 @@ export function apply(ctx, config) {
         tokens: mod === undefined ? null : mod.tokens,
         surface: buildSurfaceTokens(current),
         wallpaperActive: current.wallpaper.source !== '',
+        styleCss: buildRuntimeStyle(current, BUILTIN_WALLPAPERS),
+        wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS),
       })
     }
 
@@ -451,7 +464,7 @@ export function apply(ctx, config) {
       const expected = body?.expectedRevision
       if (expected !== undefined && expected !== null && Number(expected) !== revision) {
         // 乐观并发：调用方读到的是旧修订 → 拒绝并回带当前状态，由调用方决定重试策略。
-        return sendJson(res, 409, { error: 'revision-conflict', revision, config: current })
+        return sendJson(res, 409, { error: 'revision-conflict', revision, config: current, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS) })
       }
       const patch = body?.patch !== undefined ? body.patch : body?.config
       // P5（2026-09-30）：`replace: true` = **整体替换**语义（导入配置用）。
@@ -474,7 +487,7 @@ export function apply(ctx, config) {
       }
       if (configEquals(next, current)) {
         // 无实质变化：不写盘、不递增修订，但仍回答最新状态（面板的重复提交是常态）。
-        return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: false })
+        return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: false, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS) })
       }
       // 写盘失败必须**如实失败**（2026-09-26 修：此前 `.catch` 只记日志，随后仍无条件返回
       // 200 + `changed: true`，而 `current` / `revision` 停在旧值 ⇒ 客户端据此 setState 旧配置、
@@ -503,9 +516,10 @@ export function apply(ctx, config) {
           revision,
           persistent: store.persistent,
           changed: false,
+          wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS),
         })
       }
-      return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: true })
+      return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: true, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS) })
     }
 
     if (path === `${API_PREFIX}contract` && req.method === 'POST') {

@@ -161,11 +161,20 @@ window.__ModuleLoader__.load({
     const SPOT_NAMES = ['--dsw-static-neutral-bluish-950', '--dsw-alias-bg-base', '--dsw-static-deepseek-450']
 
     /**
-     * 皮肤接管同步：按「总开关 + 配置皮肤」决定 overrideTokens 层的注册与回收。
-     * 页面加载即调用（不等面板打开——boot style 撑首帧，这里接管运行时）；
-     * 面板每次 save 成功后也调用（幂等：同皮肤已接管则不动）。
-     * 同时维护 params 层（'appearance:params'，表面不透明度）——仅壁纸启用时生效，
-     * 否则半透明表面透出的是空白画布而非壁纸（M2 §5.4）。
+     * 外观三层同步（页面加载即调用；每次保存后调用；桌面壳换肤后由观察者触发；幂等）。
+     *
+     * 三层各自的判据 —— 2026-10-18 拆开，起因是 params 层原先整块挂在 `want` 上：
+     *   ① **skin 层**：总开关 ∧ 皮肤非 pure ∧ 桌面壳未拦路（conflict）。
+     *      「桌面壳在位却未让位」时配色归壳，本层不注册（M2 §8 override-conflict）。
+     *   ② **params 层**（表面不透明度）：总开关 ∧ 壁纸源非空 ∧ 有可覆盖的表面 ∧ 未 conflict。
+     *      **不再要求「皮肤非 pure」** —— 那是 2026-10-18 用户报障的根因：纯净皮肤下
+     *      官方表面全不透明，壁纸层（`body::before`，`z-index:-1`）被 surface 盖得严严实实，
+     *      用户把「表面不透明度」降到 80 也看不到任何变化（探针实测：pure 下四旋钮是死的）。
+     *   ③ **运行期样式**：总开关；壁纸 + 玻璃两段规则由 host 算好随 /skin 下发，写进
+     *      自维护的 `<style>`（挂在 head 末尾，同特异性后来者胜 ⇒ 覆盖首帧那份）。
+     *      因此面板改图源 / 玻璃 / 遮罩 / 晕影**立即生效**，不必刷新页面
+     *      （boot style 只在页面加载时注入一次，这是「设置了没反应」的另一半根因）。
+     *
      * @param {boolean} forceScheme - 选中新皮肤时把官方三立方拨到皮肤原生明暗（M2 §3.2：
      *   只在**选中动作**时调一次，不持续锁定——用户随后改明暗不拉回）。
      */
@@ -175,13 +184,19 @@ window.__ModuleLoader__.load({
         const skin = await requestJson('/skin', { method: 'GET' })
         const r = runtime
         if (r === null) return
+        // 四个门控属性与运行期样式**不依赖主题服务**：主题服务缺席（契约降级）时
+        // 壁纸与玻璃仍要按配置生效，否则「降级」会连带吃掉整个壁纸功能。
+        syncGateAttributes(state.config)
+        applyRuntimeStyle(typeof skin.styleCss === 'string' ? skin.styleCss : '')
+        lastSyncedSkin = typeof skin.id === 'string' ? skin.id : 'pure'
         const theme = r.theme
         if (theme === undefined || typeof theme.overrideTokens !== 'function') return
         // M2 S6 双向保险：桌面壳在位却未让位（无 yield 标记）→ 不注册皮肤层，
         // 让 desktop 继续管配色；冲突原因经契约自检（override-conflict）在面板显示。
         const conflict = document.documentElement.hasAttribute('data-miasaki-theme')
           && document.documentElement.getAttribute('data-miasaki-theme-yield') !== 'skin'
-        const want = state.config.enabled === true && skin.id !== 'pure' && skin.tokens !== null && !conflict
+        const enabled = state.config.enabled === true
+        const want = enabled && skin.id !== 'pure' && skin.tokens !== null && !conflict
         // ---- skin 层
         if (!want) {
           if (r.skin !== null && r.skin.disposer !== null) {
@@ -206,7 +221,7 @@ window.__ModuleLoader__.load({
           }
         }
         // ---- params 层（表面不透明度）：壁纸启用才有「透出壁纸」的意义
-        const wantParams = want === true && skin.wallpaperActive === true && skin.surface !== null
+        const wantParams = enabled && skin.wallpaperActive === true && skin.surface !== null && !conflict
         if (!wantParams) {
           if (r.params !== null && r.params.disposer !== null) {
             try { r.params.disposer() } catch { /* ignore */ }
@@ -223,6 +238,56 @@ window.__ModuleLoader__.load({
         /* 皮肤接管失败保持原生观感（不打断页面，也不打断面板） */
       }
     }
+
+    // ------------------------------------------------- 运行期样式与门控属性
+    const RUNTIME_CSS_ID = '@miasaki/dsh-appearance/runtime.css'
+
+    /** 取（按 id 去重）运行期样式节点；不存在则创建并**追加到 head 末尾**。 */
+    function runtimeStyleTag() {
+      if (typeof document === 'undefined') return null
+      const existing = document.querySelector(`style[data-plugin-css="${RUNTIME_CSS_ID}"]`)
+      if (existing !== null) return existing
+      const tag = document.createElement('style')
+      tag.dataset.plugin = '@miasaki/dsh-appearance'
+      tag.dataset.pluginCss = RUNTIME_CSS_ID
+      document.head.appendChild(tag)
+      return tag
+    }
+
+    /** 写运行期样式；空串 = 移除整层（总开关关闭 ⇒ 「关掉即原生」）。 */
+    function applyRuntimeStyle(css) {
+      if (typeof document === 'undefined') return
+      const tag = document.querySelector(`style[data-plugin-css="${RUNTIME_CSS_ID}"]`)
+      if (typeof css !== 'string' || css === '') {
+        if (tag !== null) tag.remove()
+        return
+      }
+      const live = runtimeStyleTag()
+      if (live !== null) live.textContent = css
+    }
+
+    /**
+     * 四个门控属性（boot script 首帧写一份，保存后由本函数同步一份）。
+     * 判据与 `lib/config.js` 的 `buildBootScript` 逐字同源 —— 两处漂移的后果是
+     * 「首帧一套、运行期另一套」：桌面壳的 aurora 降透明读 `data-mia-wallpaper`，
+     * 玻璃规则读 `data-mia-glass`，漏写一个该联动的地方就静默失效。
+     */
+    function syncGateAttributes(config) {
+      if (config === null || config === undefined || typeof document === 'undefined') return
+      try {
+        const r = document.documentElement
+        const wallpaper = config.wallpaper !== null && typeof config.wallpaper === 'object' ? config.wallpaper : {}
+        r.setAttribute('data-mia-appearance', config.enabled === true ? 'on' : 'off')
+        r.setAttribute('data-mia-skin', config.theme !== null && typeof config.theme === 'object' && typeof config.theme.skin === 'string'
+          ? config.theme.skin
+          : 'pure')
+        r.setAttribute('data-mia-glass', config.enabled === true && typeof wallpaper.glass === 'string' ? wallpaper.glass : 'off')
+        r.setAttribute('data-mia-wallpaper', config.enabled === true && typeof wallpaper.source === 'string' && wallpaper.source !== '' ? 'on' : 'off')
+      } catch { /* 属性同步不允许影响面板 */ }
+    }
+
+    /** 最近一次由本插件同步的皮肤 id（壳换肤观察者的去重键）。 */
+    let lastSyncedSkin = null
 
     // ------------------------------------------------------- 软件头像（M2.5）
     /** 头像文件由 host 在同源路由下服务；面板的 <img> 直接用它做预览。 */
@@ -349,6 +414,19 @@ window.__ModuleLoader__.load({
 .mia-avatarPreview{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-interactive-bg-hover);border-radius:var(--dsw-radius-sm);flex:none;justify-content:center;align-items:center;width:32px;height:32px;padding:1px;display:flex}
 .mia-avatarPreviewImg{width:100%;height:100%;object-fit:contain;display:block}
 .mia-avatarPreviewPh{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+/* 壁纸预览卡（2026-10-18）：壁纸板块的「当前生效」。
+   为什么必须有：壁纸是**看图选**的东西，而原形态只有一行「图源」选择丸 + 四个抽象旋钮，
+   用户改完完全看不出改了什么（遮罩/晕影/玻璃档位尤其如此）——这正是「设置了没反应」
+   这类报障的温床。卡片用官方卡片语言（models rowCard：card-fill / border-l4 / 令牌圆角），
+   内层直接铺 host 下发的壁纸层值（与 body::before 同源同序，预览即真相）。
+   玻璃演示条：把当前档位的 backdrop-filter 作用在**同一张壁纸**上，
+   用户在这里一眼看懂「磨砂/云母」在模糊什么，而不必去侧栏试。 */
+.mia-wallPreview{box-sizing:border-box;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-settings-card-fill);border-radius:var(--dsw-radius-lg);position:relative;overflow:hidden;height:112px}
+.mia-wallPreviewImg{position:absolute;inset:0;background-repeat:no-repeat}
+/* 空态：官方 skeleton 语言（细斜纹 + 一行说明），不用破图也不用纯色块 */
+.mia-wallPreviewEmpty{position:absolute;inset:0;background:repeating-linear-gradient(135deg,var(--dsw-alias-bg-layer-2) 0 8px,var(--dsw-alias-bg-layer-1) 8px 16px);justify-content:center;align-items:center;display:flex}
+.mia-wallPreviewEmptyText{background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-secondary);border-radius:var(--dsw-radius-sm);font-size:12px;line-height:18px;padding:2px 8px}
+.mia-wallGlass{position:absolute;left:12px;right:12px;bottom:12px;height:26px;background:var(--dsw-alias-bg-module-platform);border-radius:var(--dsw-radius-sm);justify-content:center;align-items:center;display:flex;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 /* 子块（预设 / 我的上传）：与官方行式同规格（0.5px 分隔线 + 16px 行距），
    但控件铺满下一行——九宫格塞不进 .mia-row 右侧的控件位。
    ⚠ 本块位于 PANEL_CSS 模板字符串**内部**：注释里**不得出现反引号** ——
@@ -1018,12 +1096,14 @@ window.__ModuleLoader__.load({
           })
           setState(next)
           // 与 lib/config.js 的 buildBootScript 同源：配置写入成功后即时同步
-          // <html> 门控属性，不等下次首帧（「开关往返」验收要求属性立即翻转）。
+          // <html> 门控属性（四个都写——glass / wallpaper 漏写过，桌面壳的 aurora
+          // 降透明与玻璃规则会停在旧值上静默失效），不等下次首帧。
           try {
-            const r = document.documentElement
-            const config = next.config
-            r.setAttribute('data-mia-appearance', config.enabled ? 'on' : 'off')
-            r.setAttribute('data-mia-skin', config.theme.skin)
+            syncGateAttributes(next.config)
+            // 同步去重键：本路径马上就要跑 syncSkin，别让壳换肤观察者重复触发一次。
+            lastSyncedSkin = next.config.theme !== null && typeof next.config.theme === 'object' && typeof next.config.theme.skin === 'string'
+              ? next.config.theme.skin
+              : 'pure'
           } catch { /* 属性同步不允许影响面板 */ }
           // 皮肤相关的写入（总开关/皮肤选择）变化后重同步 override 层；
           // 选了新皮肤时把官方三立方拨到皮肤原生明暗（M2 §3.2，只此一次不锁定）。
@@ -1132,11 +1212,11 @@ window.__ModuleLoader__.load({
         const guide = effect.reason === 'native'
           ? '外观总开关已开，但所有项都停在原生档——皮肤是「纯净」（= 官方原生配色）、没有设置壁纸、'
             + '动效与会话效果也全是默认档，因此页面与未装本线时逐像素一致。任选其一即可看到效果：'
-            + '皮肤换「刻刻帝 / 狂狂帝」、设一张壁纸（并把「表面不透明度」降到 80 以下）、'
+            + '设一张壁纸（并把「表面不透明度」降到 80 以下）、皮肤换「刻刻帝 / 狂狂帝」、'
             + '打开「动效」总开关、或把「消息密度」改成「紧凑」。'
-          : '皮肤是「纯净」（= 原生配色）、壁纸被 100% 不透明的表面挡住、'
-            + '「云母」档在 Win11 桌面壳下走系统材质（页面侧不模糊）。任选其一即可看到效果——皮肤换「刻刻帝 / 狂狂帝」、'
-            + '玻璃换「磨砂 / 轻」、或把「表面不透明度」的会话 / 侧栏 / 输入框降到 60–80。'
+          : '壁纸被 100% 不透明的表面挡住（皮肤是「纯净」时官方表面本来就不透光），'
+            + '「云母」档在 Win11 桌面壳下也走系统材质（页面侧不模糊）。任选其一即可看到效果——'
+            + '把「表面不透明度」的会话 / 侧栏 / 输入框降到 60–80、玻璃换「磨砂 / 轻」、或皮肤换「刻刻帝 / 狂狂帝」。'
         children.push(react.createElement('div', { key: 'novisible', className: 'mia-notice' },
           '当前配置下外观没有可见变化：' + guide))
       }
@@ -1203,13 +1283,32 @@ window.__ModuleLoader__.load({
         resetRow('theme'),
       ]))
 
-      // ---- 壁纸（M2 S5；V1 起图源/玻璃换官方选择丸）
+      // ---- 壁纸（M2 S5；V1 起图源/玻璃换官方选择丸；2026-10-18 起加「当前生效」预览）
       const wallpaper = state === null ? null : state.config.wallpaper
+      // 壁纸层值（host 随 /state、/config 下发；与 body::before 的 background-image 同源同序）。
+      // 旧 host 不下发该字段 ⇒ 空串 ⇒ 预览卡走空态而不是破图（与 M2.7 的 avatar 字段同款降级）。
+      const wallpaperLayers = state !== null && typeof state.wallpaperLayers === 'string' ? state.wallpaperLayers : ''
       const localWallpapers = wallpapers === null ? [] : wallpapers.local
+      // 桌面壳拦路提示（2026-10-18）：壳在位且未让位（外观皮肤还是「纯净」）时配色归壳，
+      // params 层按协议不注册 ⇒ 表面不透明度旋钮此刻不接管。这是**协议内的正确行为**，
+      // 但对用户是「旋钮动了却没变化」——必须说清楚，否则又是一条静默失效。
+      const shellBlocked = typeof document !== 'undefined'
+        && document.documentElement.hasAttribute('data-miasaki-theme')
+        && document.documentElement.getAttribute('data-miasaki-theme-yield') !== 'skin'
       children.push(group('壁纸', wallpaper === null ? [hint('配置未加载。')] : [
+        // 「当前生效」预览（2026-10-18）：先让用户看见现在是什么，再谈怎么换。
+        // 图层值由 host 随 /state 下发（buildWallpaperLayers，与 body::before 同源），
+        // 遮罩 / 晕影 / 图源三层的先后序与真实生效逐字一致。
+        reactElementWallpaperPreview(wallpaper, wallpaperLayers, localWallpapers),
+        shellBlocked === true
+          ? react.createElement('div', { key: 'shell-blocked', className: 'mia-notice' },
+            '桌面壳主题正在管理配色（外观皮肤为「纯净」时壳不让位）：壁纸会透过壳主题自带的半透明表面显示，'
+            + '但下方「表面不透明度」暂不接管。想按自己的数值控制可见度，可把上方「皮肤」切成「刻刻帝 / 狂狂帝」'
+            + '（壳会让位），或在桌面壳里切回「原版」主题。')
+          : null,
         row(
           '图源',
-          '内置为程序化渐变（零请求）；「本地」条目来自 ~/.dsh/miasaki-appearance/wallpapers/；留空即无壁纸。',
+          '内置为程序化渐变（零请求）；「本地」条目来自 ~/.dsh/miasaki-appearance/wallpapers/；留空即无壁纸。改动即时生效，不必刷新页面。',
           selectControl(
             'wallpaper-source',
             wallpaper.source,
@@ -1221,7 +1320,7 @@ window.__ModuleLoader__.load({
         ),
         row(
           '玻璃档位',
-          '关闭 = 原生；轻 / 磨砂 / 云母 逐级增强模糊（仅侧栏 / 会话 / 右栏三个主表面，输入框降级为纯透明分层）。',
+          '关闭 = 原生；轻 / 磨砂 / 云母 逐级增强模糊（仅侧栏 / 会话 / 右栏三个主表面，输入框降级为纯透明分层）。预览卡底部的条就是当前档位的效果。',
           selectControl(
             'wallpaper-glass',
             wallpaper.glass,
@@ -1233,17 +1332,18 @@ window.__ModuleLoader__.load({
         ),
         row(
           '暗色遮罩',
-          '0–100，压暗壁纸保证前景可读。',
+          '0–100，压暗壁纸保证前景可读（预览卡上直接可见）。',
           stepper(wallpaper.scrim, 0, 100, 10, v => save({ wallpaper: { scrim: v } }), busy, '暗色遮罩'),
         ),
         row(
           '晕影',
-          '0–100，四角渐暗聚焦视线。',
+          '0–100，四角渐暗聚焦视线（预览卡上直接可见）。',
           stepper(wallpaper.vignette, 0, 100, 10, v => save({ wallpaper: { vignette: v } }), busy, '晕影'),
         ),
         row(
           '表面不透明度',
-          '100 = 不透明。会话旋钮同时是全局基底（官方会话列直读 --dsw-alias-bg-base，无独立层，M2 §5.4 粒度说明）。',
+          '100 = 不透明。壁纸要看得见，这里必须降到 100 以下 —— 纯净皮肤下官方表面全不透明，会整块盖住壁纸。'
+            + '会话旋钮同时是全局基底（官方会话列直读 --dsw-alias-bg-base，无独立层，M2 §5.4 粒度说明）。',
           reactElementSurfaceKnobs(wallpaper.surface, busy, save),
         ),
         resetRow('wallpaper'),
@@ -1567,6 +1667,62 @@ window.__ModuleLoader__.load({
       { id: 'kurkuriel', label: '狂狂帝' },
     ]
 
+    /** 玻璃档位的页面侧模糊值（与 lib/config.js 的 buildGlassBootCss 同一张表；预览卡消费）。 */
+    const GLASS_BLUR = {
+      off: 'none',
+      light: 'blur(8px)',
+      frost: 'blur(20px) saturate(1.4)',
+      mica: 'blur(40px) saturate(1.6)',
+    }
+
+    /**
+     * 壁纸「当前生效」预览卡（2026-10-18）。
+     *
+     * 三段信息一张卡说完：① 现在用的是什么壁纸（图源名）；② 遮罩 / 晕罩 / 铺法当前值下
+     * 它长什么样（卡片背景直接铺 host 下发的层值，与 `body::before` 同一份生成逻辑）；
+     * ③ 玻璃档位在模糊什么（卡底那条演示条把当前档位的 backdrop-filter 作用在**同一张
+     * 壁纸**上 —— 在此之前用户只能去侧栏猜「磨砂」是啥效果）。
+     *
+     * 空态不用破图也不用纯色块：官方 skeleton 的细斜纹 + 一行说明。
+     *
+     * @param {object} wallpaper - 已归一化的 wallpaper 板块。
+     * @param {string} layers - host 下发的 background-image 值（空串 = 无壁纸）。
+     * @param {string[]} localList - 本地壁纸文件名（用于把 source 还原成可读名称）。
+     */
+    function reactElementWallpaperPreview(wallpaper, layers, localList) {
+      const source = typeof wallpaper.source === 'string' ? wallpaper.source : ''
+      const fit = typeof wallpaper.fit === 'string' ? wallpaper.fit : 'cover'
+      const focus = typeof wallpaper.focus === 'string' ? wallpaper.focus : 'center'
+      const size = fit === 'tile' ? 'auto' : fit
+      const repeat = fit === 'tile' ? 'repeat' : 'no-repeat'
+      const hasImage = layers !== ''
+      const glass = GLASS_BLUR[typeof wallpaper.glass === 'string' ? wallpaper.glass : 'off'] ?? 'none'
+      const body = []
+      if (hasImage) {
+        body.push(react.createElement('div', {
+          key: 'img',
+          className: 'mia-wallPreviewImg',
+          style: { backgroundImage: layers, backgroundSize: size, backgroundPosition: focus, backgroundRepeat: repeat },
+        }))
+      } else {
+        body.push(react.createElement('div', { key: 'empty', className: 'mia-wallPreviewEmpty' },
+          react.createElement('span', { key: 't', className: 'mia-wallPreviewEmptyText' }, '未设置壁纸')))
+      }
+      // 玻璃演示条：档位关闭时也留着（那正是「关闭 = 原生」的对照），只是不加模糊。
+      body.push(react.createElement('div', {
+        key: 'glass',
+        className: 'mia-wallGlass',
+        style: { backdropFilter: glass, WebkitBackdropFilter: glass },
+      }, `玻璃：${(GLASS_LEVELS.find(l => l.id === wallpaper.glass) ?? GLASS_LEVELS[0]).label}`))
+      const label = source === ''
+        ? '无壁纸'
+        : (wallpaperSourceOptions(localList).find(o => o.id === source) ?? { label: source }).label
+      const meta = source === ''
+        ? '在下方「图源」里选一张即可'
+        : `遮罩 ${wallpaper.scrim} · 晕影 ${wallpaper.vignette} · 铺法 ${fit === 'tile' ? '平铺' : fit === 'contain' ? '完整显示' : '裁切铺满'}`
+      return block(`当前生效：${label}`, meta, react.createElement('div', { key: 'p', className: 'mia-wallPreview' }, body))
+    }
+
     /**
      * 壁纸图源选项表：无 / 内置渐变 / 本地文件。
      * 本地文件名可能很长——选择丸截断显示，title 与 Menu 行给全名。
@@ -1833,6 +1989,23 @@ window.__ModuleLoader__.load({
       void syncMotion()
       // M4：页面加载即按配置应用会话效果层（与皮肤/动效同步的时机）。
       void syncConversation()
+      // 桌面壳主题菜单的「双入口」（M2 S6）：让位时它直接写外观配置并翻 data-mia-skin，
+      // **不经过本插件的 save()** ⇒ override 层还挂着旧皮肤的 token、运行期样式也没重算。
+      // 这里补一个观察者：属性一翻就重跑三层同步（幂等），换壳主题后不必刷新页面。
+      // 去重键 lastSyncedSkin 由 syncSkin 与 save 共同维护，本插件自己写的翻转变不出环。
+      try {
+        if (typeof MutationObserver === 'function' && document.documentElement) {
+          const root = document.documentElement
+          const skinObserver = new MutationObserver(() => {
+            const next = root.getAttribute('data-mia-skin') || 'pure'
+            if (next === lastSyncedSkin) return
+            lastSyncedSkin = next
+            void syncSkin(false)
+          })
+          skinObserver.observe(root, { attributes: true, attributeFilter: ['data-mia-skin'] })
+          ctx.effect(() => () => { try { skinObserver.disconnect() } catch { /* ignore */ } }, 'appearance: skin observer')
+        }
+      } catch { /* 观察器不可用（旧环境）时退回「刷新后才同步」 */ }
 
       // P2 Boot Splash 退场主信号（2026-09-26）：client 半装载 ⇒ shell 已挂载，
       // 调首帧脚本挂到 globalThis 的退场函数。兜底（MutationObserver + 2.5s 超时）
@@ -1856,6 +2029,11 @@ window.__ModuleLoader__.load({
             }
           }
         }
+        // 运行期样式是本插件追加到 head 的，退场时一并收回（「关掉即原生」的收尾）。
+        try {
+          const tag = document.querySelector(`style[data-plugin-css="${RUNTIME_CSS_ID}"]`)
+          if (tag !== null) tag.remove()
+        } catch { /* ignore */ }
         runtime = null
       }, 'appearance: boot flag')
     }

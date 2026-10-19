@@ -217,6 +217,44 @@ test('注入行：总开关开 + 非 pure 皮肤时追加 head style 行（双�
   assert.equal(offTable.find(row => row.kind === 'style'), undefined, '总开关关闭时不得注入任何 style')
 })
 
+// 2026-10-18：运行期两件下发（/skin 的 styleCss、/state·/config 的 wallpaperLayers）。
+// 判据 = 「面板改完立即生效」与「预览即真相」都只能由 host 供源 —— client bundle
+// 不能 import lib/config.js，内置渐变与规则生成逻辑只有 host 一份。
+test('/skin 下发 styleCss 与壁纸层值；/state·/config 同步下发壁纸层值', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const written = await writeConfig(ctx, {
+    patch: {
+      enabled: true,
+      theme: { skin: 'pure' },
+      wallpaper: { source: 'builtin:aurora', scrim: 20, vignette: 10, glass: 'light' },
+    },
+  })
+  assert.equal(written.status, 200)
+
+  const skin = await callApi(ctx, '/appearance/api/skin')
+  assert.equal(typeof skin.body.styleCss, 'string')
+  assert.match(skin.body.styleCss, /body::before \{/)
+  assert.match(skin.body.styleCss, /html\[data-mia-glass="light"\] \[data-slot="sidebar"\] > \*/)
+  assert.equal(typeof skin.body.wallpaperLayers, 'string')
+
+  const state = await callApi(ctx, '/appearance/api/state')
+  assert.match(state.body.wallpaperLayers, /linear-gradient\(135deg, #0b1026/)
+  assert.match(state.body.wallpaperLayers, /rgba\(0, 0, 0, 0\.20\)/, '遮罩层必须在预览值里')
+
+  // 关掉壁纸 ⇒ /skin 的 styleCss 给中和规则，/state 的层值为空串
+  const cleared = await writeConfig(ctx, { patch: { wallpaper: { source: '', scrim: 0, vignette: 0 } } })
+  assert.equal(cleared.status, 200)
+  assert.equal(cleared.body.wallpaperLayers, '', '无壁纸时层值为空串（预览卡走空态）')
+  const clearedSkin = await callApi(ctx, '/appearance/api/skin')
+  assert.equal(clearedSkin.body.styleCss, 'body::before { content: none; }\n'
+    + 'html[data-mia-glass="light"] [data-slot="sidebar"] > *,\n'
+    + 'html[data-mia-glass="light"] [data-slot="main.conversation"] > *,\n'
+    + 'html[data-mia-glass="light"] [data-slot="rightbar"] > * {\n'
+    + '  backdrop-filter: blur(8px);\n'
+    + '}')
+})
+
 
 test('本地壁纸路由：白名单文件 200，穿越与非法扩展 404', async () => {
   const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')

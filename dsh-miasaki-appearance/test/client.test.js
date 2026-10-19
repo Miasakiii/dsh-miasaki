@@ -58,7 +58,9 @@ function capture(opts = {}) {
     getAttribute: name => (name === 'data-mia-native-mica'
       ? 'on'
       : (Object.hasOwn(elementCalls.props, name) ? elementCalls.props[name] : null)),
-    hasAttribute: () => false,
+    // 2026-10-18：从实记属性里判在位（桌面壳主题 / 让位标记由测试播种）——
+    // 原来恒 false，`data-miasaki-theme` 相关的判据无从驱动。
+    hasAttribute: name => Object.hasOwn(elementCalls.props, name),
     setAttribute(name, value) { elementCalls.set.push([name, value]); elementCalls.props[name] = value },
     removeAttribute(name) { elementCalls.removed.push(name); delete elementCalls.props[name] },
     style: {
@@ -98,7 +100,7 @@ function capture(opts = {}) {
       ok: true,
       status: 200,
       json: async () => String(url).endsWith('/skin')
-        ? { id: 'pure', tokens: null, wallpaperActive: false, surface: null, meta: { preferredScheme: 'dark' } }
+        ? (opts.skin ?? { id: 'pure', tokens: null, wallpaperActive: false, surface: null, meta: { preferredScheme: 'dark' } })
         : { config: CONV_FETCH_CONFIG, defaults: opts.defaults ?? CONV_DEFAULTS, revision: 1, persistent: true },
     })
   }
@@ -114,6 +116,14 @@ function capture(opts = {}) {
     URL: {
       createObjectURL(blob) { objectUrls.push(blob); return `blob:mock-${objectUrls.length}` },
       revokeObjectURL() {},
+    },
+    // 2026-10-18：桌面壳换肤观察者（client 半 syncSkin 的补位触发）。VM 里给可驱动的替身：
+    // observe() 把回调挂到 documentElement 上，测试直接调 `documentElement.__observerCallback()`
+    // 即模拟「属性翻了、 MutationObserver 触发」。
+    MutationObserver: class {
+      constructor(callback) { this.callback = callback }
+      observe() { document.documentElement.__observerCallback = () => this.callback([], this) }
+      disconnect() { if (document.documentElement.__observerCallback) delete document.documentElement.__observerCallback }
     },
   })
   vm.runInContext(source, context, { filename: 'client.js' })
@@ -296,8 +306,9 @@ test('apply 幂等，且 fiber 拆除时复位守卫（允许 HMR 重挂）', ()
   assert.equal(ctx.registered.length, 1, '重复 apply 不得叠加第二个设置栏')
   assert.equal(window.__DSH_APPEARANCE_BOOTED__, true)
 
-  assert.equal(ctx.effects.length, 1)
-  ctx.effects[0].dispose()
+  // 两个 fiber effect：boot flag/层回收 + 桌面壳换肤观察者（2026-10-18）。
+  assert.equal(ctx.effects.length, 2)
+  for (const effect of ctx.effects) effect.dispose()
   assert.equal(window.__DSH_APPEARANCE_BOOTED__, false, '拆除后必须允许重新挂载')
 
   exports.apply(ctx)
@@ -1944,4 +1955,259 @@ test('P5：导入兼容裸配置对象（自己手写的 JSON 也能用）', asy
   assert.equal(posts.length, 1)
   assert.equal(JSON.parse(posts[0].body).replace, true)
   assert.deepEqual(JSON.parse(posts[0].body).patch, bare)
+})
+
+// ---------------------------------------------------------------- 2026-10-18
+// 壁纸「两个狂三主题下无法设置 / 纯净主题下设置了没反应」的根因修复。
+// 三层判据（skin / params / 运行期样式）自此各自独立，见 client.js 的 syncSkin 注释。
+/** 带主题服务（overrideTokens 记账）的 ctx —— 三层注册判据要用它观察。 */
+function themeCtx() {
+  const ctx = fakeCtx()
+  const overrides = []
+  const disposed = []
+  const theme = {
+    overrideTokens(source, tokens) {
+      overrides.push({ source, tokens })
+      return () => disposed.push(source)
+    },
+    setTheme() {},
+    getTheme() { return { active: { tokens: {} } } },
+    setFontSize() {},
+  }
+  ctx.get = name => (name === 'theme' ? theme : undefined)
+  return { ctx, overrides, disposed }
+}
+
+test('壁纸 params 层：纯净皮肤 + 壁纸启用 ⇒ 照样注册（不再要求皮肤非 pure）', async () => {
+  // 2026-10-18 用户报障的根因：`wantParams` 原先整块挂在 `want`（要求皮肤非 pure）上，
+  // 于是纯净皮肤下「表面不透明度」四旋钮是死的 —— 官方表面全不透明，壁纸层
+  // （body::before，z-index:-1）被盖得严严实实，用户把旋钮降到 80 也看不到任何变化。
+  const skin = {
+    id: 'pure',
+    tokens: null,
+    wallpaperActive: true,
+    surface: { '--dsw-alias-bg-base': { light: 'x', dark: 'x' } },
+    meta: { preferredScheme: 'dark' },
+    styleCss: 'body::before { content: ""; }',
+  }
+  const { descriptor } = capture({ skin })
+  const { ctx, overrides } = themeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  await flushAsync()
+  assert.deepEqual(
+    overrides.map(o => o.source),
+    ['appearance:params'],
+    '纯净皮肤 + 壁纸启用必须注册 params 层（skin 层仍不注册：pure 无 token 表）',
+  )
+})
+
+test('壁纸 params 层：壁纸停用 ⇒ 不注册（表面没必要半透明）', async () => {
+  const skin = {
+    id: 'zafkiel',
+    tokens: { '--dsw-alias-bg-base': { light: 'a', dark: 'a' } },
+    wallpaperActive: false,
+    surface: { '--dsw-alias-bg-base': { light: 'x', dark: 'x' } },
+    meta: { preferredScheme: 'dark' },
+    styleCss: 'body::before { content: none; }',
+  }
+  const { descriptor } = capture({ skin })
+  const { ctx, overrides } = themeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  await flushAsync()
+  assert.deepEqual(overrides.map(o => o.source), ['appearance:skin'], '壁纸停用时只有 skin 层')
+})
+
+test('运行期样式：加载即写 head 末尾的样式标签，总开关关闭即移除', async () => {
+  // ① 启用 + 有样式 ⇒ 建标签并写入 host 下发的 CSS
+  {
+    const skin = { id: 'pure', tokens: null, wallpaperActive: true, surface: null, meta: null, styleCss: 'body::before { content: ""; }' }
+    const { descriptor, created } = capture({ skin })
+    const ctx = fakeCtx()
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    const tag = created.find(el => el.tagName === 'STYLE' && el.dataset.pluginCss === '@miasaki/dsh-appearance/runtime.css')
+    assert.notEqual(tag, undefined, '必须创建运行期样式标签')
+    assert.equal(tag.textContent, 'body::before { content: ""; }')
+  }
+  // ② 总开关关闭 ⇒ host 下发空串 ⇒ 标签不创建（boot style 也不会注入，两层一致）
+  {
+    const skin = { id: 'pure', tokens: null, wallpaperActive: false, surface: null, meta: null, styleCss: '' }
+    const { descriptor, created } = capture({ skin })
+    const ctx = fakeCtx()
+    CONV_FETCH_CONFIG.enabled = false
+    try {
+      descriptor.factory(requireStub).apply(ctx)
+      await flushAsync()
+      assert.equal(
+        created.some(el => el.dataset.pluginCss === '@miasaki/dsh-appearance/runtime.css'),
+        false,
+        '关闭时不得留下运行期样式（「关掉即原生」）',
+      )
+    } finally {
+      CONV_FETCH_CONFIG.enabled = true
+    }
+  }
+})
+
+test('四个门控属性随配置同步（glass / wallpaper 漏写过 ⇒ 桌面壳 aurora 与玻璃规则静默失效）', async () => {
+  const skin = { id: 'zafkiel', tokens: null, wallpaperActive: true, surface: null, meta: null, styleCss: '' }
+  CONV_FETCH_CONFIG.theme = { skin: 'zafkiel' }
+  CONV_FETCH_CONFIG.wallpaper = {
+    source: 'builtin:aurora', light: '', dark: '', blur: 0, scrim: 20,
+    fit: 'cover', focus: 'center', glass: 'frost', vignette: 10,
+    surface: { sidebar: 80, conversation: 80, composer: 80, overlay: 100 },
+  }
+  try {
+    const { descriptor, elementCalls } = capture({ skin })
+    const ctx = fakeCtx()
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    assert.equal(elementCalls.props['data-mia-appearance'], 'on')
+    assert.equal(elementCalls.props['data-mia-skin'], 'zafkiel')
+    assert.equal(elementCalls.props['data-mia-glass'], 'frost', '玻璃档位必须同步（玻璃规则读它）')
+    assert.equal(elementCalls.props['data-mia-wallpaper'], 'on', '壁纸标记必须同步（桌面壳 aurora 降透明读它）')
+  } finally {
+    CONV_FETCH_CONFIG.theme = { skin: 'pure' }
+    CONV_FETCH_CONFIG.wallpaper = {
+      source: '', light: '', dark: '', blur: 0, scrim: 0,
+      fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+      surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+    }
+  }
+})
+
+test('桌面壳换肤（双入口写配置 + 翻 data-mia-skin）⇒ 本插件重跑三层同步', async () => {
+  // 壳的主题菜单在让位态直接 POST 外观配置并翻属性，**不经过本插件的 save()**；
+  // 没有观察者时 override 层还挂着旧皮肤的 token、运行期样式也没重算（要刷新页面才好）。
+  let skinResponse = {
+    id: 'zafkiel',
+    tokens: { '--dsw-alias-bg-base': { light: 'a', dark: 'a' } },
+    wallpaperActive: true,
+    surface: { '--dsw-alias-bg-base': { light: 'x', dark: 'x' } },
+    meta: { preferredScheme: 'dark' },
+    styleCss: 'body::before { content: ""; }',
+  }
+  const cap = capture({ get skin() { return skinResponse } })
+  const ctx = themeCtx()
+  cap.descriptor.factory(requireStub).apply(ctx.ctx)
+  await flushAsync()
+  assert.deepEqual(ctx.overrides.map(o => o.source), ['appearance:skin', 'appearance:params'])
+  // 模拟壳把皮肤翻成 kurkuriel（属性写在外层记录里，观察者据此触发）
+  skinResponse = {
+    id: 'kurkuriel',
+    tokens: { '--dsw-alias-bg-base': { light: 'b', dark: 'b' } },
+    wallpaperActive: true,
+    surface: { '--dsw-alias-bg-base': { light: 'y', dark: 'y' } },
+    meta: { preferredScheme: 'light' },
+    styleCss: 'body::before { content: ""; }',
+  }
+  cap.elementCalls.props['data-mia-skin'] = 'kurkuriel'
+  cap.document.documentElement.__observerCallback()
+  await flushAsync()
+  assert.deepEqual(
+    ctx.overrides.map(o => o.source),
+    ['appearance:skin', 'appearance:params', 'appearance:skin', 'appearance:params'],
+    '换肤后 skin 层要按新皮肤重注册（旧层先回收）',
+  )
+  assert.equal(ctx.disposed.length, 2, '旧 skin / params 两层都已回收')
+})
+
+test('壁纸预览卡：当前生效标题 + 层值铺底 + 玻璃演示条（2026-10-18「做好点」）', () => {
+  // 壁纸是看图选的东西；原形态只有一行「图源」选择丸 + 四个抽象旋钮，用户改完
+  // 完全看不出改了什么。预览卡把「现在是什么 / 遮罩晕影下长什么样 / 玻璃在模糊什么」
+  // 一卡说完，且图层值由 host 下发（与 body::before 同源），预览即真相。
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  const state = {
+    config: {
+      enabled: true,
+      theme: { skin: 'pure' },
+      wallpaper: {
+        source: 'builtin:dusk', light: '', dark: '', blur: 0, scrim: 20,
+        fit: 'cover', focus: 'center', glass: 'frost', vignette: 10,
+        surface: { sidebar: 80, conversation: 80, composer: 80, overlay: 100 },
+      },
+      avatar: { source: '' },
+      motion: { enabled: false, preset: 'fluid', scale: 1 },
+      conversation: { density: 'comfortable', maxWidth: 0 },
+    },
+    revision: 9,
+    persistent: true,
+    wallpaperLayers: 'linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2)), linear-gradient(160deg, #2b1055, #ffb26b)',
+  }
+  /** stateQueue 每次渲染都会被弹空 ⇒ 每次渲染前重新播种（其余七项取占位）。 */
+  const renderWith = layers => {
+    react.stateQueue = [{ ...state, wallpaperLayers: layers }, null, null, false, null, { local: [] }, { presets: [] }, null]
+    return view()
+  }
+  try {
+    const element = renderWith(state.wallpaperLayers)
+    const texts = collectText(element)
+    assert.equal(texts.includes('当前生效：内置 · 暮色'), true, '标题要点明当前是哪张壁纸')
+    assert.ok(texts.some(t => /遮罩 20 · 晕影 10/.test(t)), '说明行给出遮罩/晕影当前值')
+    // 预览底图就是 host 下发的层值（与 body::before 的 background-image 同一个字符串）
+    const previewImg = collectNodes(element, n => n.props.className === 'mia-wallPreviewImg')
+    assert.equal(previewImg.length, 1)
+    assert.equal(previewImg[0].props.style.backgroundImage,
+      'linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2)), linear-gradient(160deg, #2b1055, #ffb26b)')
+    assert.equal(previewImg[0].props.style.backgroundSize, 'cover')
+    // 玻璃演示条：把当前档位的 backdrop-filter 作用在同一张壁纸上
+    const glassBar = collectNodes(element, n => n.props.className === 'mia-wallGlass')
+    assert.equal(glassBar.length, 1)
+    assert.equal(glassBar[0].props.style.backdropFilter, 'blur(20px) saturate(1.4)')
+    assert.equal(glassBar[0].props.style.WebkitBackdropFilter, 'blur(20px) saturate(1.4)')
+    assert.equal(collectText(glassBar[0]).includes('玻璃：磨砂'), true)
+    // 旧 host 不下发层值 ⇒ 走空态而不是破图（与 M2.7 的 avatar 字段同款降级）
+    const legacy = renderWith(undefined)
+    assert.equal(collectNodes(legacy, n => n.props.className === 'mia-wallPreviewEmpty').length, 1, '无层值时给空态')
+    assert.equal(collectText(legacy).includes('未设置壁纸'), true)
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('桌面壳拦路时给出说明（否则「表面不透明度」旋钮动了没变化，又是一条静默失效）', () => {
+  // 壳在位且未让位（外观皮肤还是「纯净」）⇒ params 层按 M2 §8 协议不注册，配色归壳。
+  // 行为正确，但用户看到的是「旋钮改了没用」——必须显式说明，不能靠用户自己悟。
+  const { descriptor, elementCalls } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  const state = {
+    config: {
+      enabled: true,
+      theme: { skin: 'pure' },
+      wallpaper: {
+        source: 'builtin:aurora', light: '', dark: '', blur: 0, scrim: 20,
+        fit: 'cover', focus: 'center', glass: 'light', vignette: 10,
+        surface: { sidebar: 80, conversation: 80, composer: 80, overlay: 100 },
+      },
+      avatar: { source: '' },
+      motion: { enabled: false, preset: 'fluid', scale: 1 },
+      conversation: { density: 'comfortable', maxWidth: 0 },
+    },
+    revision: 3,
+    persistent: true,
+    wallpaperLayers: 'linear-gradient(135deg, #0b1026, #0e7c7b)',
+  }
+  const render = () => {
+    react.stateQueue = [state, null, null, false, null, { local: [] }, { presets: [] }, null]
+    return view()
+  }
+  try {
+    // ① 壳在场且未让位 ⇒ 有说明
+    elementCalls.props['data-miasaki-theme'] = 'zafkiel'
+    assert.ok(collectText(render()).some(t => /桌面壳主题正在管理配色/.test(t)), '壳拦路时必须说明')
+    // ② 壳让位（皮肤非 pure 时壳置 yield 标记）⇒ 不说明
+    elementCalls.props['data-miasaki-theme-yield'] = 'skin'
+    assert.equal(collectText(render()).some(t => /桌面壳主题正在管理配色/.test(t)), false, '让位后不得再提示')
+    // ③ 壳不在场（浏览器里的 dsh web）⇒ 不说明
+    delete elementCalls.props['data-miasaki-theme']
+    delete elementCalls.props['data-miasaki-theme-yield']
+    assert.equal(collectText(render()).some(t => /桌面壳主题正在管理配色/.test(t)), false, '无壳时不得提示')
+  } finally {
+    react.stateQueue = null
+  }
 })
