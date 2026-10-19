@@ -107,6 +107,9 @@ dsh-miasaki-fleet/tests/m3-acp/logs/
 
 # ---- 日志与系统杂项 ----
 *.log
+# harness 沙箱的溢出目录（2026-10-18 出现在根目录，files.txt 是工具调用的 spill 产物，
+# 非本项目内容；同 .vs/ 一族——工具私有状态，不入库）
+.sandbox-tmp/
 # Edge/WebView2 测试 profile（--user-data-dir 残留，任意层级均忽略）
 .edge-test-profile
 .workbuddy/
