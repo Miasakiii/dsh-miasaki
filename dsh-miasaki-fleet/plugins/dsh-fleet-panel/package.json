@@ -1,0 +1,37 @@
+{
+  "name": "@miasaki/dsh-fleet-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "fleet 监控面板的 DSH 入口：侧栏脚部「Fleet」按钮 → 全局浮窗（iframe 嵌 fleet-monitor 面板）；host 半负责确保 fleet-monitor 在跑（单实例探测 → 隐藏窗口拉起）并注册 /dsh-fleet/* 同源代理路由。P0 只做「看得见」，视觉统一留待 P1。",
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.2-rc.1 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  }
+}

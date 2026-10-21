@@ -223,7 +223,10 @@ function main() {
       if (opts.json) console.log(JSON.stringify({ ok: false, partial: true, error: r.error }))
       return r.code
     }
-    console.error(`[bus-apply] 契约校验失败 → ${r.error}`)
+    // 非契约类失败（如 2026-10-20 新增的跨进程锁超时，code 4）不能报成「契约校验失败」——
+    // 那会把环境问题指错方向（t-0011 复核同族教训：错误文案也是判据）。
+    const kind = r.code === EXIT_CONTRACT ? '契约校验失败' : '环境/IO 失败'
+    console.error(`[bus-apply] ${kind} → ${r.error}`)
     if (opts.json) console.log(JSON.stringify({ ok: false, error: r.error }))
     return r.code
   }

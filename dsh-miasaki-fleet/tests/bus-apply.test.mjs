@@ -3,15 +3,24 @@
 // 直接调用 workers/lib/bus-apply-core.cjs（不 spawn 子进程）：
 // 受限环境下子进程管道不可用，且核心逻辑本就该与命令行解耦。
 // 每个用例在独立临时目录里跑，断言的是**文件真的被写成什么样**。
+//
+// 例外（2026-10-20）：跨进程锁的语义**必须真起一个子进程**才能验证（同进程里
+// 两次同步调用不可能并发）。该用例用 `stdio: 'ignore'` 起子进程、不捕获管道，
+// 受限沙箱同样可用 —— 与 tests/bus-integration.test.mjs 的口径一致。
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 import core from '../workers/lib/bus-apply-core.cjs'
 
 const sha = 'b'.repeat(64)
+
+const FLEET_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const CORE_PATH = join(FLEET_DIR, 'workers', 'lib', 'bus-apply-core.cjs')
 
 /** 建一个空工作区，并登记用例结束后的清理。 */
 function freshRoot(t) {
@@ -22,6 +31,24 @@ function freshRoot(t) {
 
 function readText(root, rel) {
   return readFileSync(join(root, rel), 'utf8')
+}
+
+/** 目录下的 .tmp 残留（原子写修复的判据）。 */
+function listTmpFiles(dir) {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter((name) => name.endsWith('.tmp'))
+}
+
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
+
+/** 轮询等待（跨进程用例：等子进程进入临界区）。 */
+async function waitFor(predicate, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await sleep(10)
+  }
+  return false
 }
 
 function goodResult(taskId, over) {
@@ -336,4 +363,183 @@ test('连续超步版本单调递增', (t) => {
     assert.equal(r.currentVersion, i)
   }
   assert.equal(core.readCurrentVersion(root), 3)
+})
+
+// ---------------------------------------------------------------------------
+// 原子写：临时文件名唯一（2026-10-20，monkeyscan 0cbb0）
+// ---------------------------------------------------------------------------
+
+test('原子写：临时名唯一（pid + uuid），并发写同一目标不再共享固定 .tmp', (t) => {
+  const root = freshRoot(t)
+  const target = join(root, 'agents', 'scout', 'control.json')
+  const a = core.tmpPathFor(target)
+  const b = core.tmpPathFor(target)
+  assert.notEqual(a, b, '两次临时名必须不同（修复前恒为 <target>.tmp）')
+  assert.match(
+    basename(a),
+    new RegExp(`^control\\.json\\.${process.pid}\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$`),
+    '临时名应带 pid + UUID（每个写入者独占）',
+  )
+})
+
+test('原子写：串行覆盖写内容正确，且 rename 后不残留 tmp', (t) => {
+  const root = freshRoot(t)
+  const target = join(root, 'agents', 'scout', 'control.json')
+  core.writeJsonAtomic(target, { enabled: true })
+  core.writeJsonAtomic(target, { enabled: false, force_kill: true })
+  assert.deepEqual(JSON.parse(readFileSync(target, 'utf8')), { enabled: false, force_kill: true })
+  assert.deepEqual(listTmpFiles(dirname(target)), [], '临时文件必须在 rename 后消失')
+})
+
+test('原子写：失败路径清理临时文件（rename 失败不把残渣留在目标旁）', (t) => {
+  const root = freshRoot(t)
+  const target = join(root, 'agents', 'scout', 'control.json')
+  mkdirSync(target, { recursive: true }) // 目标是目录 ⇒ rename 必然失败
+  assert.throws(() => core.writeJsonAtomic(target, { enabled: true }), 'rename 失败必须上抛，不得假报成功')
+  assert.deepEqual(listTmpFiles(dirname(target)), [], '失败路径也要清理自己的临时文件')
+})
+
+// ---------------------------------------------------------------------------
+// tasks.jsonl 写入校验（2026-10-20，monkeyscan 6e766 的写入侧）
+// ---------------------------------------------------------------------------
+
+test('tasks.jsonl：create 行的 task id 必须是 t-0000 形态（穿越串被拒）', (t) => {
+  const root = freshRoot(t)
+  const r = core.applyPatches(root, [{
+    op: 'append',
+    path: 'state/tasks.jsonl',
+    value: { op: 'create', task: { id: '../../etc/shadow' } },
+    author: 'commander',
+    expected_version: 0,
+  }], {})
+  assert.equal(r.code, 2)
+  assert.match(r.error, /任务 id 形态非法/)
+  assert.equal(existsSync(join(root, 'state', 'tasks.jsonl')), false, '非法行不得落盘')
+})
+
+test('tasks.jsonl：create 行携带非法 graph 在写入时就被拒（不再等到事后巡检）', (t) => {
+  const root = freshRoot(t)
+  const r = core.applyPatches(root, [{
+    op: 'append',
+    path: 'state/tasks.jsonl',
+    value: { op: 'create', task: { id: 't-0002', graph: { node_kind: 'parallel' } } },
+    author: 'commander',
+    expected_version: 0,
+  }], {})
+  assert.equal(r.code, 2)
+  assert.match(r.error, /node_kind 非法/)
+})
+
+test('tasks.jsonl：update 行的 status 走枚举校验，非法值被拒', (t) => {
+  const root = freshRoot(t)
+  const r = core.applyPatches(root, [{
+    op: 'append',
+    path: 'state/tasks.jsonl',
+    value: { op: 'update', task_id: 't-0001', status: 'done-ish' },
+    author: 'dispatcher',
+    expected_version: 0,
+  }], {})
+  assert.equal(r.code, 2)
+  assert.match(r.error, /status 非法/)
+})
+
+test('tasks.jsonl：非法 op / 非法 task_id 形态被拒；合法行照常写入', (t) => {
+  const root = freshRoot(t)
+  const badOp = core.applyPatches(root, [{
+    op: 'append', path: 'state/tasks.jsonl', value: { op: 'bogus', task_id: 't-0001' }, author: 'commander', expected_version: 0,
+  }], {})
+  assert.equal(badOp.code, 2)
+  assert.match(badOp.error, /op 非法/)
+
+  const badId = core.applyPatches(root, [{
+    op: 'append', path: 'state/tasks.jsonl', value: { op: 'update', task_id: 't-1', status: 'done' }, author: 'dispatcher', expected_version: 0,
+  }], {})
+  assert.equal(badId.code, 2)
+  assert.match(badId.error, /task_id 形态非法/)
+
+  // 合法台账行：create + update（与真实派单路径同一形态）
+  const ok = core.applyPatches(root, [
+    { op: 'append', path: 'state/tasks.jsonl', value: { op: 'create', task: { id: 't-0001', status: 'queued' } }, author: 'commander', expected_version: 0 },
+    { op: 'append', path: 'state/tasks.jsonl', value: { op: 'update', task_id: 't-0001', status: 'done', accepted: true }, author: 'dispatcher', expected_version: 0 },
+  ], {})
+  assert.equal(ok.ok, true, ok.error)
+  const rows = core.readJsonl(join(root, 'state', 'tasks.jsonl'))
+  assert.deepEqual(rows.map((r) => r.op), ['create', 'update'])
+})
+
+// ---------------------------------------------------------------------------
+// 跨进程锁：超步临界区互斥（2026-10-20，monkeyscan e5a4b）
+// ---------------------------------------------------------------------------
+
+/** 子进程脚本：持锁 400ms 并写两个标记（in 在锁内开始、out 在锁内结束）。 */
+function lockHolderScript() {
+  return `
+const fs = require('node:fs')
+const path = require('node:path')
+const core = require(${JSON.stringify(CORE_PATH)})
+const root = process.env.TEST_BUS_ROOT
+core.withBusLock(root, () => {
+  fs.writeFileSync(path.join(root, 'child-in-lock'), '1')
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400)
+  fs.writeFileSync(path.join(root, 'child-out-lock'), '1')
+})
+`
+}
+
+test('跨进程锁：持锁期间 applyPatches 阻塞等待，释放后才提交（真互斥）', async (t) => {
+  const root = freshRoot(t)
+  const child = spawn(process.execPath, ['-e', lockHolderScript()], {
+    env: { ...process.env, TEST_BUS_ROOT: root },
+    stdio: 'ignore', // 不捕获管道（受限沙箱下管道会 EPERM）
+  })
+  const exited = new Promise((done) => child.once('exit', done))
+  t.after(() => { try { child.kill() } catch { /* 已退出 */ } })
+
+  assert.ok(await waitFor(() => existsSync(join(root, 'child-in-lock'))), '子进程应已持有锁')
+  assert.equal(existsSync(join(root, 'child-out-lock')), false, '持锁期间子进程尚未释放')
+
+  const startedAt = Date.now()
+  const r = core.applyPatches(root, [appendPatch({ expected_version: 0 })], {})
+  const elapsed = Date.now() - startedAt
+
+  assert.equal(r.ok, true, r.error)
+  assert.equal(r.currentVersion, 1)
+  assert.ok(elapsed >= 150, `applyPatches 应在等锁（实测 ${elapsed}ms）——而不是与子进程并发写`)
+  assert.ok(existsSync(join(root, 'child-out-lock')), '拿到锁时子进程已走完临界区（说明临界区真的互斥）')
+  await exited
+  assert.equal(existsSync(core.lockPath(root)), false, '超步结束后锁文件不得残留')
+})
+
+test('跨进程锁：回调抛错也释放锁（异常路径不把总线锁死）', (t) => {
+  const root = freshRoot(t)
+  assert.throws(() => core.withBusLock(root, () => { throw new Error('boom') }), /boom/)
+  assert.equal(existsSync(core.lockPath(root)), false, '异常路径必须释放锁')
+  const r = core.applyPatches(root, [appendPatch({ expected_version: 0 })], {})
+  assert.equal(r.ok, true, r.error)
+})
+
+test('跨进程锁：崩溃残留的过期锁可回收（stale）', (t) => {
+  const root = freshRoot(t)
+  const lp = core.lockPath(root)
+  mkdirSync(dirname(lp), { recursive: true })
+  writeFileSync(lp, JSON.stringify({ pid: 999999, ts: '2000-01-01T00:00:00.000Z' }))
+  const old = new Date(Date.now() - 120000)
+  utimesSync(lp, old, old)
+
+  const r = core.applyPatches(root, [appendPatch({ expected_version: 0 })], { lock: { staleMs: 1000 } })
+  assert.equal(r.ok, true, `过期锁应被回收后提交：${r.error}`)
+  assert.equal(existsSync(lp), false, '回收成功后不得残留旧锁')
+})
+
+test('跨进程锁：锁被长期持有 → 结构化超时（exit 4），且不误删他人的锁', (t) => {
+  const root = freshRoot(t)
+  const lp = core.lockPath(root)
+  mkdirSync(dirname(lp), { recursive: true })
+  writeFileSync(lp, JSON.stringify({ pid: 999999, ts: new Date().toISOString() }))
+
+  const r = core.applyPatches(root, [appendPatch({ expected_version: 0 })], { lock: { timeoutMs: 80, retryMs: 5 } })
+  assert.equal(r.ok, false)
+  assert.equal(r.code, 4, '等锁超时属环境错误（exit 4），与契约 2 / 版本冲突 3 区分')
+  assert.match(r.error, /总线锁超时/)
+  assert.equal(existsSync(lp), true, '超时方不得删除他人的锁（stale 回收只按 mtime）')
 })

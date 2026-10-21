@@ -26,6 +26,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import core from '../lib/bus-apply-core.cjs'
+import { isTaskId } from '../lib/bus-contract.mjs'
 import { evaluateLiveness } from '../lib/liveness.mjs'
 import {
   buildGraph,
@@ -105,13 +106,26 @@ function loadAgentStates() {
  * 按约定尝试两个位置：任务根（`tasks/<id>/<artifact>`，result.json 在此）
  * 与交付区（`tasks/<id>/result/<artifact>`，artifacts/ 在此）。
  * 任一命中即视为存在 —— 位置二选一的实现细节不应影响就绪判定。
+ *
+ * ⚠️ taskId / artifact 都是**总线数据**（来自 create 行的 graph.consumes），按不可信
+ * 输入处理：解析后必须仍在任务目录内，越界的 `..` / 绝对路径一律判「不存在」。
+ * 否则 `fs.existsSync` 会把工作区外文件的存在性编码进「上游产物缺失」原因 ——
+ * 一条注入的任务行就能当成存在性预言机（2026-10-20 修，monkeyscan 6e766）。
  */
 function artifactExists(taskId, artifact) {
-  const candidates = [
-    path.join(ROOT, 'tasks', taskId, artifact),
-    path.join(ROOT, 'tasks', taskId, 'result', artifact),
-  ]
-  return candidates.some((p) => fs.existsSync(p))
+  // 任务 id 形态非法：不拿它拼路径（foldTasks 只要求非空字符串，写入侧已收紧，
+  // 这里再兜一道 —— 直接改台账文件的旁路同样不该获得预言机能力）
+  if (!isTaskId(taskId)) return false
+  if (typeof artifact !== 'string' || artifact === '') return false
+  const taskDir = path.resolve(ROOT, 'tasks', taskId)
+  const resultDir = path.join(taskDir, 'result')
+  return [taskDir, resultDir].some((base) => {
+    const abs = path.resolve(base, artifact)
+    const rel = path.relative(base, abs)
+    // 越界（`..` 开头 / 绝对路径 / 跨盘符）、或落在 base 自身 → 不算产物
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return false
+    return fs.existsSync(abs)
+  })
 }
 
 function buildContext() {

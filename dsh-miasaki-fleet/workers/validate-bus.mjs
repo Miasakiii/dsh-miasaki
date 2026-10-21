@@ -10,14 +10,18 @@
 // 注（G0，2026-09-10）：graph / result / event 三类契约的判定规则来自
 // workers/lib/bus-contract.cjs —— 与 workers/bus/bus-apply.mjs（写入时拦截）
 // 是**同一份可执行定义**，此处不再重写一遍，以免两处口径漂移。
+// 注（2026-10-20）：fail() 的输出先过 logSafe —— 总线数据（台账行字段等）是写入者
+// 可控的，直接插进日志会被 `\n`/ESC 伪造日志行 / 注入终端控制序列（CWE-117，
+// monkeyscan da827）。转义只影响展示，退出码与真实摘要不变。
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { validateEvent, validateGraph, validateResult, validateVerdict } from './lib/bus-contract.mjs'
+import { TASK_ROW_OPS, TASK_ROW_STATUSES, validateEvent, validateGraph, validateResult, validateVerdict } from './lib/bus-contract.mjs'
 // 任务终态折叠口径**单点**：与 task-ready / agent-pick 共用 foldTasks，
 // 不在此处再写第二份「重放 tasks.jsonl」的实现（口径漂移是本仓复发形态）。
 import { foldTasks } from './lib/task-graph.mjs'
+import logSafeModule from './lib/log-safe.cjs'
 
 // 工作区根默认由本文件位置推导（workers/ → fleet/）。BUS_ROOT 可覆盖，
 // 与 workers/bus/bus-apply.mjs 同一约定：既便于集成测试，也便于校验其他布局的工作区。
@@ -27,9 +31,12 @@ const root = process.env.BUS_ROOT
 const strict = process.argv.includes('--strict')
 let errors = 0
 let checked = 0
+const { logSafe } = logSafeModule
 function fail(where, msg) {
   errors++
-  console.error(`[validate] FAIL ${where}: ${msg}`)
+  // 唯一汇点统一转义：where 含行号（可信）但 artifact/op/status 等 msg 内容来自总线，
+  // 两个都过一遍以防新增调用点漏改（日志注入的修法要按「汇点」而不是「插值点」做）。
+  console.error(`[validate] FAIL ${logSafe(where)}: ${logSafe(msg)}`)
 }
 function ok(where) { checked++ }
 function isStr(v) { return typeof v === 'string' && v.length > 0 }
@@ -134,7 +141,7 @@ let foldedTasks = new Map()
   const rows = readJsonl(p)
   for (const { row, n } of rows) {
     const w = `${p}:${n}`
-    if (!['create', 'assign', 'update', 'reopen', 'reassign', 'cancel'].includes(row.op)) { fail(w, `op 非法: ${row.op}`); continue }
+    if (!TASK_ROW_OPS.includes(row.op)) { fail(w, `op 非法: ${row.op}`); continue }
     if (row.op === 'create') {
       const t = row.task || {}
       if (!isStr(t.id)) fail(w, 'create.task.id 缺失')
@@ -149,7 +156,7 @@ let foldedTasks = new Map()
     } else {
       const tid = row.task_id
       if (!isStr(tid)) fail(w, '缺少 task_id')
-      if (row.op === 'update' && row.status && !['queued', 'running', 'blocked', 'failed', 'done', 'cancelled'].includes(row.status)) fail(w, `status 非法: ${row.status}`)
+      if (row.op === 'update' && row.status && !TASK_ROW_STATUSES.includes(row.status)) fail(w, `status 非法: ${row.status}`)
     }
   }
   foldedTasks = foldTasks(rows.map(({ row }) => row))

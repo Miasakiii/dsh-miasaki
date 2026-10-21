@@ -22,13 +22,17 @@ import fenceModule from '../fleet-monitor/fence.cjs'
 import serverModule from '../fleet-monitor/server.js'
 
 const { stripPort, fenceCheck, buildTrustedHosts, corsHeadersFor } = fenceModule
-const { handleRequest, TRUSTED_HOSTS } = serverModule
+const { handleRequest, TRUSTED_HOSTS, MAX_BODY_BYTES } = serverModule
 
 const LOCAL = buildTrustedHosts([])
 const LOOPBACK = { host: '127.0.0.1:39801' }
 
-/** 最小 res 替身：记录 status 与头，便于断言「不带 CORS 头」。 */
+/**
+ * 最小 res 替身：记录 status 与头，便于断言「不带 CORS 头」；
+ * 另支持 on('finish') —— 请求体超限路径会在响应发出后销毁连接。
+ */
 function fakeRes() {
+  const handlers = { finish: [] }
   return {
     statusCode: 0,
     body: '',
@@ -40,7 +44,13 @@ function fakeRes() {
       if (extra) for (const [key, value] of Object.entries(extra)) this.headers[key.toLowerCase()] = value
       return this
     },
-    end(chunk) { if (chunk !== undefined) this.body = String(chunk); this.ended = true },
+    on(event, handler) { if (handlers[event]) handlers[event].push(handler); return this },
+    once(event, handler) { return this.on(event, handler) },
+    end(chunk) {
+      if (chunk !== undefined) this.body = String(chunk)
+      this.ended = true
+      for (const handler of handlers.finish.splice(0)) handler()
+    },
   }
 }
 
@@ -48,17 +58,21 @@ function fakeRes() {
  * 最小 req 替身：只提供 handleRequest 真正读到的字段。
  * `on` 必须真的驱动 data/end —— readBody() 是一个等 end 事件的 Promise，
  * 空实现的 on 会让写分支永久挂起（首版踩过：用例不失败、只是不结束）。
+ * `aborted: true` 模拟客户端中途断开（只发 aborted、不发 end）。
  */
-function fakeReq({ method = 'GET', url = '/', headers = {}, body = '' } = {}) {
-  const handlers = { data: [], end: [] }
+function fakeReq({ method = 'GET', url = '/', headers = {}, body = '', aborted = false } = {}) {
+  const handlers = { data: [], end: [], error: [], aborted: [] }
   return {
     method,
     url,
     headers,
+    paused: false,
+    destroyed: false,
     on(event, handler) {
       if (handlers[event]) handlers[event].push(handler)
       if (event === 'end') {
         queueMicrotask(() => {
+          if (aborted) { for (const h of handlers.aborted) h(); return }
           const chunk = body === '' ? null : Buffer.from(body)
           if (chunk) for (const h of handlers.data) h(chunk)
           for (const h of handlers.end) h()
@@ -66,6 +80,12 @@ function fakeReq({ method = 'GET', url = '/', headers = {}, body = '' } = {}) {
       }
       return this
     },
+    removeListener(event, handler) {
+      if (handlers[event]) handlers[event] = handlers[event].filter((h) => h !== handler)
+      return this
+    },
+    pause() { this.paused = true; return this },
+    destroy() { this.destroyed = true; return this },
   }
 }
 
@@ -419,4 +439,55 @@ test('verifiers：同样过围栏 —— 跨站 403 且不带 CORS 头', async (
   }))
   assert.equal(res.statusCode, 403)
   assert.equal(res.headers['Access-Control-Allow-Origin'], undefined)
+})
+
+/* ---------- ⑦ 请求体上限（2026-10-20，monkeyscan 75975） ---------- */
+//
+// 判据：POST /api/toggle 的请求体在**校验前**就受 64 KiB 上限约束 —— 超限立刻
+// 413、不整体缓冲、也不调用 applier；客户端中途断开时 Promise 必须落定（不挂起）。
+
+/** 过围栏的 toggle 请求（body 由用例给）。 */
+function toggleBodyReq(body, extra) {
+  return fakeReq({
+    method: 'POST',
+    url: '/api/toggle/claude',
+    headers: { ...LOOPBACK, origin: 'http://127.0.0.1:39801' },
+    body,
+    ...extra,
+  })
+}
+
+test('toggle：请求体超过 64 KiB → 413，且不整体缓冲、不调用 applier', async () => {
+  assert.equal(MAX_BODY_BYTES, 64 * 1024, '上限口径应与 dual-model / ssh 的 64 KiB 一致')
+  let applierCalls = 0
+  const res = await withBusApplier(
+    () => { applierCalls++; throw new Error('不应被调用'); },
+    () => call(toggleBodyReq('x'.repeat(MAX_BODY_BYTES + 1))),
+  )
+  assert.equal(res.statusCode, 413, '超限应 413（而不是 500 或整包解析）')
+  assert.match(JSON.parse(res.body).error, /请求体过大/)
+  assert.equal(applierCalls, 0, '超限请求不得走到业务分支/落盘')
+})
+
+test('toggle：恰好 64 KiB 的合法请求体仍放行（边界不误伤）', async () => {
+  const json = JSON.stringify({ enabled: true })
+  const body = json + ' '.repeat(MAX_BODY_BYTES - Buffer.byteLength(json))
+  assert.equal(Buffer.byteLength(body), MAX_BODY_BYTES)
+  const res = await withBusApplier(
+    () => '{}',
+    () => call(toggleBodyReq(body)),
+  )
+  assert.equal(res.statusCode, 200)
+  assert.equal(JSON.parse(res.body).ok, true)
+})
+
+test('toggle：客户端中途断开 → 不崩、不写响应（aborted 让 Promise 落定）', async () => {
+  let applierCalls = 0
+  const res = await withBusApplier(
+    () => { applierCalls++; throw new Error('不应被调用'); },
+    () => call(toggleBodyReq('', { aborted: true })),
+  )
+  assert.equal(res.statusCode, 0, '客户端已断开：没有可写的对端，不应再写响应')
+  assert.equal(res.ended, false)
+  assert.equal(applierCalls, 0)
 })

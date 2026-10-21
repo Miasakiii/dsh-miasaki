@@ -14,6 +14,7 @@
 | `tasks/` | 任务书 brief 与交付物 |
 | `workers/` | 扫描器（discovery）、派单器（dispatch）、总线校验（validate-bus.mjs）、脉冲发布（pulse/publish-pulse.mjs） |
 | `fleet-monitor/` | 监控面板（panel.html + server.js + **fence.cjs 三道信任围栏**，本地 HTTP；2026-09-26 起所有路由先过围栏，跨站请求 403 且不带 CORS 头） |
+| `plugins/dsh-fleet-panel/` | **DSH 入口插件（2026-10-19，P0）**：会话视图 tab「Fleet」（排在「用量」后，每会话独立实例、**原生渲染**面板）；host 半确保 fleet-monitor 在跑并注册 `/dsh-fleet/*` 代理路由，见 [README](plugins/dsh-fleet-panel/README.md) |
 | `schemas/` | 文件总线 JSON Schema（F1 契约） |
 | `shared/` | 跨文件共享参考：`collective-memory.md`（经验沉淀）、**`agent-vendors.json`（厂商归属表 —— G4 异构验证的 vendor 级依据；缺省回退内置表并**显式告知**）** |
 | `docs/` | 设计文档与调研/校准报告 |
@@ -84,15 +85,15 @@ npm run validate / validate:strict / pulse
 | `workers/lib/bus-apply-core.cjs` | applier 核心逻辑。不调 `process.exit`，可被测试与非 CLI 消费者直接调用 |
 | `state/graph-events.jsonl` | 机器事件流（首次写入时创建）。**总线版本号由它派生**，刻意不落独立状态文件 |
 | `schemas/{graph,result,graph-event,patch}.schema.json` | 四类新契约的人类可读镜像（权威实现见 `bus-contract.cjs`） |
-| `tests/bus-{contract,apply,integration}.test.mjs` | 58 项测试：契约判定 26 / applier 超步 15 / 图校验闭环 17 |
+| `tests/bus-{contract,apply,integration}.test.mjs` | 59 项测试：契约判定 26 / applier 超步 16 / 图校验闭环 17 |
 
 ```bash
 node workers/bus/bus-apply.mjs --current-version       # 查当前总线版本
 node workers/bus/bus-apply.mjs --patch p.json --check  # 只校验不写入
 node workers/bus/bus-apply.mjs --patch p.json          # 提交一个超步
-npm test                                               # 本线单测入口（142 例：F3 判活 9 / G0 契约与总线 58 / G1 图与就绪度 13 / G2 能力图 17 / G4 验证者 29 / fleet-monitor 信任围栏 16）
-                                                       # ⚠️ 派单器侧两组（dispatch-state 9 / dispatch-gate 26）**不在** npm test 链上，只在 `verify-all` 的 fleet 类别里跑
-                                                       # ⇒ 全线用例 **197 例**（2026-10-17 实测：9+26+16+17+13+17+29+26+9+35），逐文件口径见回归矩阵 §1
+npm test                                               # 本线单测入口（170 例：F3 判活 9 / G0 契约与总线 59（26+16+17）/ G1 图与就绪度 13 / G2 能力图 17 / G4 验证者 29 / fleet-monitor 信任围栏 26 / fleet-panel host 10 + client 7）
+                                                       # ⚠️ 派单器侧两组（dispatch-state 9 / dispatch-gate 35）**不在** npm test 链上，只在 `verify-all` 的 fleet 类别里跑
+                                                       # ⇒ 全线用例 **214 例**（2026-10-20 实测：9+26+16+17+13+17+29+26+9+35+fleet-panel host 10+client 7），逐文件口径见回归矩阵 §1
 ```
 
 > **写入纪律（G0 起）**：总线文件（`state/*.jsonl`、`agents/*/capability.json`、
@@ -457,6 +458,30 @@ curl -s "http://127.0.0.1:<port>/api/events?limit=5"
 > ① 指纹根治取**契约显式豁免**（见上）；② 行数口径取**每次追加后总量 ≤10 行**（追加者负责压缩合并，
 > 文件有界；t-0003/t-0004 撞线时的「压缩合并至 10 行」做法即为该口径）。其余建议随各批次行处置。
 
+### DSH 入口：会话视图 tab「Fleet」（P0，2026-10-19；2026-10-20 形态调整）
+
+背景：`fleet-monitor` 面板早已存在（127.0.0.1:39801，P1 判定层上屏 + 三道围栏均已验收），
+但它**要手动起服务、也不在日常 DSH 界面里** ⇒ 实际「看不到情况」。P0 只解决「看得见」。
+**2026-10-20 按用户反馈两次调整**：① 第一版「侧栏脚部按钮 + 全局浮窗」会挤占侧栏「用量统计」，
+改为**会话视图 tab**（`conversation.view`，order 16，排在「用量」之后），每个会话各自一个视图实例；
+② 第二版 iframe 内嵌 panel.html **主题不统一、里页无法滚动**，改为**原生渲染**（直接消费同源代理端点、
+用官方 `--dsw` 令牌绘制），内容区可滚动；同时修掉判定层四块因「绝对路径未加前缀」而显示
+`SyntaxError: Unexpected token 'o'` 的实机缺陷，并移除在桌面壳里无效的「在浏览器打开」按钮
+（完整面板地址改为文本给出，浏览器手动打开即可）。
+
+| 项 | 内容 |
+|---|---|
+| 形态 | `plugins/dsh-fleet-panel`（DSH web 插件）：会话视图 tab「Fleet」（`conversation.view`，order 16，紧跟「用量」15）→ **原生渲染**（统计 6 卡 / 判定层 4 卡 / Agent 卡片，官方令牌，内容区可滚动）；**每会话独立实例**（各自渲染、各自轮询） |
+| host 半 | 探测 `127.0.0.1:39801/api/fleet`（应用层判据，不是 TCP 端口通）：在跑就复用，不在跑就隐藏窗口拉起 `fleet-monitor/server.js`；**只有自己拉起的实例才回收**（复用别人的不动） |
+| 同源代理 | `prefix /dsh-fleet/api` → `/api/*` 原样代理（fleet / dispatchable / gaps / events / verifiers / toggle 全部走它）；`/dsh-fleet/health` 供探活/重试；`/dsh-fleet/panel` 仍保留（**仅供浏览器嵌入/调试**，已修判定层 4 处绝对路径前缀） |
+| 围栏 | 三条路由都过 `lib/fence.js` 三道信任围栏（与六线同构）：跨站 `POST /dsh-fleet/api/toggle/*` 得到 403，不触碰 monitor 写接口 |
+| 判据 | 打开会话 → tab 栏「Fleet」在「用量」后 → 内容区出数据且**可滚动**、主题跟随三主题；**切另一个会话同样可独立打开**；关 DSH 后 39801 无残留；monitor 不可用显示可读错误 + 重试；**侧栏脚部不再有 Fleet 按钮** |
+| 边界 | **P0 不改数据层、不重写判定**（口径仍由 monitor spawn 现成 CLI）；完整成本报表仍在 fleet-monitor 页（浏览器打开 39801）；**会话级入口 ≠ 会话级数据**——fleet 仍是全局单例，per-session 隔离属独立设计 |
+
+**回归**：`verify-all fleet` **21 → 25 项**（+ host/client 语法 + 两个契约测试，共 **17 例**：
+host 10 / client 7）；fleet 全线 **197 → 214 例**。安装方式见
+[plugins/dsh-fleet-panel/README.md](plugins/dsh-fleet-panel/README.md)（miasaki profile `link:` + `pnpm install`）。
+
 ## 统一回归
 
 本线的 F1 总线校验、F3 心跳判活与 G0–G2、G4 各阶段单测已并入仓库级统一回归入口：
@@ -469,7 +494,7 @@ curl -s "http://127.0.0.1:<port>/api/events?limit=5"
 node ../scripts/verify-all.mjs fleet
 #  1) tests/liveness.test.mjs             F3 心跳判活（9 项，含首跑口径 isFirstRun）
 #  2) tests/bus-contract.test.mjs         G0 契约判定（26 项，含事件类型与新写者枚举）
-#  3) tests/bus-apply.test.mjs            G0 applier 超步（15 项）
+#  3) tests/bus-apply.test.mjs            G0 applier 超步（16 项）
 #  4) tests/bus-integration.test.mjs      G0 图校验闭环（17 项，含 validate-bus 新路径与反向存在性）
 #  5) tests/task-graph.test.mjs           G1 图与就绪度（13 项，含真实台账等价性）
 #  6) task-ready --check                  G1 图结构完整性
@@ -481,18 +506,25 @@ node ../scripts/verify-all.mjs fleet
 # 12) verifier-pick --check               G4 验证结论契约校验
 # 13) node --check fleet-monitor/server.js
 # 14) node --check fleet-monitor/fence.cjs
-# 15) tests/fleet-monitor.test.mjs        fleet-monitor 三道信任围栏 + P1 判定层端点（16 项）
+# 15) tests/fleet-monitor.test.mjs        fleet-monitor 三道信任围栏 + P1 判定层端点（26 项）
 # 16) tests/dispatch-state.test.mjs       K4 派单终态判定（9 项，含两个 ps1 的语法闸门）
-# 17) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证闸门夹具（26 项，2026-09-30 新增）
-# 18) fleet-monitor 判定层区块 (P1)       panel.html / server.js 的区块与三个端点（7 项，2026-09-30 新增）
-# 19) validate-bus                        F1 总线校验 + G0 图/事件/交付物与 G4 验证结论
-# 20) publish-pulse                       X1 脉冲发布
-# 21) validate-bus --strict               （要求 fleet-pulse.json 存在，故排在第 20 步后）
+# 17) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证闸门夹具（35 项，2026-09-30 新增）
+# 18) fleet-monitor 判定层区块 (P1)       panel.html / server.js 的区块与三个端点（10 项，2026-09-30 新增）
+# 19) node --check plugins/dsh-fleet-panel/lib/index.js
+# 20) node --check plugins/dsh-fleet-panel/lib/client.js
+# 21) plugins/dsh-fleet-panel/test/host.test.mjs      DSH 入口插件 host 半（10 项，2026-10-19 新增）
+# 22) plugins/dsh-fleet-panel/test/client.test.mjs    DSH 入口插件 client 契约（7 项，2026-10-19 新增，2026-10-20 原生渲染）
+# 23) validate-bus                        F1 总线校验 + G0 图/事件/交付物与 G4 验证结论
+# 24) publish-pulse                       X1 脉冲发布
+# 25) validate-bus --strict               （要求 fleet-pulse.json 存在，故排在第 24 步后）
 ```
 
-> **口径**：`fleet` 类别 2026-09-30 由 17 项升至 **21 项**（+ dispatch 可派闸门文本断言、+ dispatch-gate 夹具测试、
-> + P1 面板判定层区块断言；全量 **179 项**，**2026-10-05 起为 180 项**）。真实台账 9 个任务全终态 ⇒ 第 17 项是「放行」分支的唯一覆盖者，不可省。
+> **口径**：`fleet` 类别 2026-09-30 由 17 项升至 **21 项**，2026-10-19 因 DSH 入口插件再升至 **25 项**
+> （+4：host/client 语法各一、两个契约测试文件各一；插件用例 host 10 + client 7 = **17 例**）。
+> 全量 **2026-10-05 起为 180 项**、**2026-10-19 实跑为 189 项**。真实台账 12 个任务全终态 ⇒ 第 17 项是「放行」分支的唯一覆盖者，不可省。
 > **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（现 37），夹具例数就是 `node --test` 的 pass 数。
+> **本条顺带订正三处存量失真**（2026-10-19 核对：以实跑为准）：`bus-apply` 15 → **16 例**、
+> `fleet-monitor` 16 → **26 例**、`dispatch-gate` 26 → **35 例**、面板区块 7 → **10 项**。
 
 实机联动项（pulse → 桌宠状态映射、pulse 缺失/损坏时静默降级）见
 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §4。
@@ -508,6 +540,36 @@ node ../scripts/verify-all.mjs fleet
 设计决策与协议变更记录在
 [docs/multi-agent-cli-orchestrator-design.md](docs/multi-agent-cli-orchestrator-design.md)
 头部「变更记录」。
+
+### 2026-10-20 · DSH 入口第二轮：会话视图 tab + 原生渲染
+
+用户两次反馈：①「入口不要挤占用量统计，放到会话窗用量后面，做成会话级的」；②「界面设计语言
+不统一，里页无法滚动」（截图里判定层四块还报 `SyntaxError`、「在浏览器打开」按钮无效）。
+
+- **入口**：`sidebar.footer.action` + `shell.overlay` → 改为 **`conversation.view`**
+  （order 16，排在「用量」15 之后，label「Fleet」）；**每会话独立渲染一份视图实例**。
+- **渲染**：iframe 嵌 panel.html → **原生渲染**（直接消费 `/dsh-fleet/api/*`，用官方 `--dsw`
+  令牌绘制统计 6 卡 / 判定层 4 卡 / Agent 卡片）；内容区 `.fpanel-scroll` 可滚动，主题跟随三主题。
+- **判定层修复（实机缺陷）**：panel.html 的判定层四块用绝对路径 `j('/api/…')`，只改 API 基址时
+  会打到 DSH 自身的 `/api/*`（返回 `not found` 文本 ⇒ `JSON.parse` 报
+  `SyntaxError: Unexpected token 'o'`，四块全显示「不可用」）。现 `rewritePanelHtml` 一并改写为
+  `j('/dsh-fleet/api/…')`，host 测试新增 4 端点断言（10 例）。
+- **无效按钮**：桌面壳 WebView2 不处理 `window.open`，「在浏览器打开」按钮无效 ⇒ 移除；
+  完整面板地址改为文本给出（浏览器手动打开 `http://127.0.0.1:39801/`，含成本报表）。
+- **测试**：host 10 + client 7 = **17 例**（client 新增：原生渲染 / 无 iframe / 无 window.open /
+  数据源路径 / 滚动容器）；fleet 全线 197 → **214 例**。集成探针实测：五个端点均 200 JSON、
+  panel 页 4 处判定层路径全部改写、代理 POST 可用、跨站 403、停止后 39801 无监听。
+
+### 2026-10-19 · DSH 入口插件（P0 首版：侧栏按钮 + 浮窗）
+
+背景：`fleet-monitor` 面板早已存在（P1 判定层上屏 + 三道围栏均已验收），但**要手动起服务、
+也不在日常 DSH 界面里** ⇒ 实际「看不到情况」。首版新增 `plugins/dsh-fleet-panel`：
+侧栏脚部「Fleet」按钮（`sidebar.footer.action`）→ 全局浮窗（`shell.overlay`）→ iframe 嵌
+`/dsh-fleet/panel`；host 半应用层探活/拉起 monitor、同源托管 `/dsh-fleet/panel` 与
+`/dsh-fleet/api/*` 代理、三道信任围栏；**不重写判定**（数据仍由 monitor 口径单点给出）。
+首版判据：`verify-all fleet` 21 → 25 项、fleet 用例 197 → 211 例（host 9 + client 5）；
+集成探针实测真实拉起 monitor、面板改写命中、代理 200、跨站 403、非法路径 404。
+该版入口因挤占「用量统计」、iframe 主题不统一/不可滚动，已被 2026-10-20 第二轮取代。
 
 ### 2026-10-17 · 调度级生命周期落地（fleet gap 文档 §4② P1）
 
@@ -543,7 +605,7 @@ node ../scripts/verify-all.mjs fleet
   其唯一输入目录现为空）。
 
 同目录的 `plan.md` **保留**（`docs/m35-rc7-regression-smoke-2026-08-17.md`、`state/events.jsonl` 仍引用它，
-是 M3 回归结论的可追溯锚点）。验证：`node scripts/verify-all.mjs fleet` **15/15 PASS**（当轮口径；**现为 21/21**）。
+是 M3 回归结论的可追溯锚点）。验证：`node scripts/verify-all.mjs fleet` **15/15 PASS**（当轮口径；**现为 25/25**）。
 
 > 审计同时确认了本线几处「看起来可疑但必须保留」的结构，**后续清理勿误删**：
 > `workers/lib/` 的 5 对同名 `.cjs`/`.mjs`（`.mjs` 是 ESM 转发门面，两侧各有真实消费者）；

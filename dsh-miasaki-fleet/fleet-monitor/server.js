@@ -396,11 +396,65 @@ function sendHTML(res, filePath) {
   }
 }
 
-function readBody(req) {
-  return new Promise((resolve) => {
+/**
+ * 请求体上限：64 KiB（与 dual-model / ssh 的 MAX_BODY_BYTES 同一口径）。
+ *
+ * 2026-10-20 修（monkeyscan 75975）：此前 readBody 把每个 chunk 无上限堆进数组，
+ * 任意本地进程带 `Host: 127.0.0.1` 就能流式打爆本进程内存（CWE-400）。围栏只挡
+ * 浏览器跨站、不承担认证，也不限制体积。
+ */
+const MAX_BODY_BYTES = 64 * 1024;
+
+/**
+ * 读取请求体（上限 MAX_BODY_BYTES）。
+ *
+ * 超限：暂停请求流（不再累积、由内核缓冲区背压兜住）并拒绝一个
+ * `code: 'BODY_TOO_LARGE'` 的错误，由路由映射为 413。**不在这里 destroy** ——
+ * 还要把 413 写回去；响应发出后由路由销毁连接。
+ * 另外补齐 'error' / 'aborted'：客户端中途断开时 Promise 必须落定（否则挂起）。
+ */
+function readBody(req, limit = MAX_BODY_BYTES) {
+  return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', c => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    let size = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      req.removeListener('data', onData);
+      req.removeListener('end', onEnd);
+      req.removeListener('error', onError);
+      req.removeListener('aborted', onAborted);
+    };
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(value);
+    };
+
+    function onData(chunk) {
+      size += chunk.length;
+      if (size > limit) {
+        req.pause();
+        const err = new Error(`请求体过大（上限 ${limit} 字节）`);
+        err.code = 'BODY_TOO_LARGE';
+        settle(reject, err);
+        return;
+      }
+      chunks.push(chunk);
+    }
+    function onEnd() { settle(resolve, Buffer.concat(chunks).toString()); }
+    function onError(e) { settle(reject, e); }
+    function onAborted() {
+      const err = new Error('客户端中止了请求');
+      err.code = 'BODY_ABORTED';
+      settle(reject, err);
+    }
+
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+    req.on('aborted', onAborted);
   });
 }
 
@@ -543,6 +597,14 @@ async function handleRequest(req, res) {
       fleetCache = null; // invalidate cache
       return sendJSON(res, { ok: true, agent: agentId, enabled: control.enabled });
     } catch (e) {
+      // 请求体超限 → 413（2026-10-20 修 monkeyscan 75975）：此时请求流已暂停、
+      // 不再往内存里累积；响应发出后销毁连接，丢弃剩余字节。
+      if (e && e.code === 'BODY_TOO_LARGE') {
+        res.on('finish', () => { try { req.destroy(); } catch { /* guard-ok: 对端已断开属正常 */ } });
+        return sendJSON(res, { error: `请求体过大（上限 ${MAX_BODY_BYTES} 字节）` }, 413);
+      }
+      // 客户端中途断开：没有可写的对端，直接放弃（写响应只会再抛）
+      if (e && e.code === 'BODY_ABORTED') return;
       return sendJSON(res, { error: e.message }, 500);
     }
   }
@@ -574,4 +636,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { handleRequest, server, TRUSTED_HOSTS, __setJudgementRunner, __setBusApplier };
+module.exports = { handleRequest, server, TRUSTED_HOSTS, MAX_BODY_BYTES, readBody, __setJudgementRunner, __setBusApplier };

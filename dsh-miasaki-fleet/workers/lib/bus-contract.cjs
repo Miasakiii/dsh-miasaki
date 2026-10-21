@@ -53,6 +53,18 @@ function isTaskId(v) {
   return typeof v === 'string' && TASK_ID_RE.test(v)
 }
 
+/**
+ * tasks.jsonl 允许的行 op。
+ *
+ * 2026-10-20：从 validate-bus 与 applier 两处硬编码收敛到这里 —— 写入侧
+ * （bus-apply-core 的 validateValueForPath）与巡检侧（validate-bus）必须同一份
+ * 枚举，各写一份必然漂移（本仓复发形态；见 2026-09-29 迁移漏登记教训）。
+ */
+const TASK_ROW_OPS = Object.freeze(['create', 'assign', 'update', 'reopen', 'reassign', 'cancel'])
+
+/** 任务 status 枚举（create 行的 task.status 与 update 行的 status 共用）。 */
+const TASK_ROW_STATUSES = Object.freeze(['queued', 'running', 'blocked', 'failed', 'done', 'cancelled'])
+
 // ---------------------------------------------------------------------------
 // 节点图（tasks.jsonl 的 graph 子对象）—— 设计 §3.2
 // ---------------------------------------------------------------------------
@@ -543,6 +555,9 @@ module.exports = {
   AGENT_ID_RE,
   SHA256_RE,
   MAX_EVENT_BYTES,
+  // 任务台账行（tasks.jsonl）枚举：写入侧与巡检侧共用
+  TASK_ROW_OPS,
+  TASK_ROW_STATUSES,
   // graph
   NODE_KINDS,
   validateGraph,

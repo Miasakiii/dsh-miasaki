@@ -1,0 +1,21 @@
+# @miasaki/dsh-fleet-panel
+#
+# fleet 监控线的 DSH 入口（2026-10-19，P0「看得见」批次）。
+#
+# - client 半（两个槽位条目，同一插件）：
+#   · sidebar.footer.action（id: fleet-panel）：侧栏脚部「Fleet」入口按钮；
+#   · shell.overlay（id: fleet-panel-overlay）：全局浮窗 —— iframe 嵌
+#     host 半托管的 /dsh-fleet/panel（即 fleet-monitor/panel.html 的同源副本，
+#     面板内的 /api/* 请求经 /dsh-fleet/api/* 代理到 127.0.0.1:39801）。
+# - host 半：
+#   · 启动时探测 fleet-monitor（127.0.0.1:39801/api/fleet）：已在跑则复用，
+#     不在跑则以隐藏窗口拉起 `fleet-monitor/server.js`（只由拉起者负责回收）；
+#   · 注册 /dsh-fleet/panel（同源面板页）、/dsh-fleet/api/*（同源代理）、
+#     /dsh-fleet/health（浮窗首屏探活 + 重试触发）；
+#   · 三条路由都过与其它线同构的三道信任围栏（Host / sec-fetch-site / Origin）。
+#
+# 设计边界：本插件**不重写任何判定** —— 面板数据全部来自 fleet-monitor 的
+# 现成端点（可派/断层/事件/验证者口径同源在 monitor 侧 spawn 现成 CLI）。
+- insert:
+    - id: dsh-fleet-panel
+      name: '@miasaki/dsh-fleet-panel'

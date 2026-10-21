@@ -16,9 +16,11 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 
 import core from '../workers/lib/bus-apply-core.cjs'
+import logSafeModule from '../workers/lib/log-safe.cjs'
 
 const FLEET_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const VALIDATE = join(FLEET_DIR, 'workers', 'validate-bus.mjs')
+const { logSafe } = logSafeModule
 
 const sha = 'c'.repeat(64)
 
@@ -334,4 +336,25 @@ test('在途任务缺交付物 → 不报错（判据只约束终态）', (t) =>
 test('done 但未验收 → 不要求交付物（不变式的边界是 accepted，不是 done）', (t) => {
   const root = makeBus(t, { tasks: [task('t-0001'), toDone('t-0001', false)] })
   assert.equal(validate(root), 0, '未验收的 done 不构成「验收通过」，判据不应越界')
+})
+
+// ---------------------------------------------------------------------------
+// validate-bus 的日志净化（2026-10-20，monkeyscan da827）
+// ---------------------------------------------------------------------------
+
+test('日志净化：总线数据里的控制字符被转义，无法伪造日志行 / 注入 ANSI', () => {
+  // 行字段是写入者可控的：JSON 转义存盘、JSON.parse 还原成真控制字符
+  assert.equal(
+    logSafe('bogus\n[validate] done: 0 文件通过，0 错误'),
+    'bogus\\n[validate] done: 0 文件通过，0 错误',
+    '换行必须变成可见的 \\n 转义',
+  )
+  assert.equal(logSafe('a\rb\tc'), 'a\\rb\\tc')
+  assert.equal(logSafe('\u001b[31mred\u001b[0m'), '\\x1b[31mred\\x1b[0m', 'ESC 控制序列也要转义')
+  assert.equal(logSafe('正常中文 / t-0001'), '正常中文 / t-0001', '普通文本不得被改写')
+
+  // 与 validate-bus 的 fail() 同构的拼接：转义后整行不得含真实换行
+  const line = `[validate] FAIL ${logSafe('state/tasks.jsonl:7')}: ${logSafe('op 非法: bogus\n[validate] done: 0 文件通过，0 错误')}`
+  assert.ok(!line.includes('\n'), '拼接后的日志行不得含真实换行（否则可伪造一条通过摘要）')
+  assert.ok(!line.includes('\u001b'))
 })

@@ -23,6 +23,9 @@ export const {
   AGENT_ID_RE,
   SHA256_RE,
   MAX_EVENT_BYTES,
+  // 任务台账行（tasks.jsonl）枚举：写入侧与巡检侧共用
+  TASK_ROW_OPS,
+  TASK_ROW_STATUSES,
   // graph
   NODE_KINDS,
   validateGraph,

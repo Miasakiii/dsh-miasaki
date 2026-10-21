@@ -5,7 +5,9 @@
 //      （legacyReady）逐字一致 —— 这是 G1「零行为变更」的证明，而非口头承诺。
 //   2. **consume 语义**：数据依赖比时序依赖严格（要求上游已验收 + 产物存在）。
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
@@ -23,6 +25,7 @@ import {
 } from '../workers/lib/task-graph.mjs'
 
 const FLEET_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const TASK_READY = join(FLEET_DIR, 'workers', 'graph', 'task-ready.mjs')
 
 function stripBom(s) {
   return s.charCodeAt(0) === 0xFEFF ? s.slice(1) : s
@@ -330,4 +333,77 @@ test('buildGraph：暴露悬挂引用与自环（不负责契约形态，那是 
   const g = buildGraph(tasks)
   const kinds = g.issues.map((i) => i.kind).sort()
   assert.deepEqual(kinds, ['dangling', 'dangling_parent', 'self_loop'])
+})
+
+// ---------------------------------------------------------------------------
+// 产物存在性：artifact 不得逃出任务目录（2026-10-20，monkeyscan 6e766 读取侧）
+// ---------------------------------------------------------------------------
+
+/** 搭一个可跑 task-ready 的最小工作区（只写台账；产物目录由用例自己造）。 */
+function makeReadyWorkspace(t, rows) {
+  const root = mkdtempSync(join(tmpdir(), 'fleet-ready-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'state'), { recursive: true })
+  writeFileSync(join(root, 'state', 'tasks.jsonl'), rows.map((r) => JSON.stringify(r)).join('\n') + '\n', 'utf8')
+  return root
+}
+
+/**
+ * 跑 task-ready CLI 并解析 JSON 输出。
+ *
+ * 用**文件重定向**（stdio 数组里的 fd）而不是管道捕获：受限沙箱下捕获子进程管道会
+ * EPERM（与 tests/bus-integration.test.mjs 的口径一致）。
+ */
+function runTaskReady(root, args) {
+  const outPath = join(root, '.task-ready.out.json')
+  const fd = openSync(outPath, 'w')
+  try {
+    const r = spawnSync(process.execPath, [TASK_READY, ...args], {
+      cwd: FLEET_DIR,
+      env: { ...process.env, BUS_ROOT: root },
+      stdio: ['ignore', fd, 'ignore'],
+    })
+    if (r.error) throw r.error
+  } finally {
+    closeSync(fd)
+  }
+  return JSON.parse(readFileSync(outPath, 'utf8'))
+}
+
+test('artifactExists：../../.. 越界不算产物存在（不再做工作区外存在性探测）', (t) => {
+  const root = makeReadyWorkspace(t, [
+    create('t-0001'),
+    { op: 'update', task_id: 't-0001', status: 'done', accepted: true },
+    // 穿越 artifact 指向一个**真实存在**的工作区文件（root/state/tasks.jsonl）：
+    // 修复前 existsSync 为真 ⇒ 不报「上游产物缺失」；修复后必须按「不存在」处理。
+    create('t-0002', {
+      graph: { node_kind: 'work', consumes: [{ task: 't-0001', artifact: '../../state/tasks.jsonl' }] },
+    }),
+    // 合法产物：交付区 tasks/t-0001/result/result-t-0001.md 存在 ⇒ 不报缺失
+    create('t-0003', {
+      graph: { node_kind: 'work', consumes: [{ task: 't-0001', artifact: 'result-t-0001.md' }] },
+    }),
+    // taskId 也来自台账：形态非法时不拿它拼路径（直接改台账文件的旁路同样不留预言机）
+    { op: 'create', task: { id: '../escape', status: 'queued' } },
+    create('t-0004', {
+      graph: { node_kind: 'work', consumes: [{ task: '../escape', artifact: 'state/tasks.jsonl' }] },
+    }),
+    { op: 'update', task_id: '../escape', status: 'done', accepted: true },
+  ])
+  mkdirSync(join(root, 'tasks', 't-0001', 'result'), { recursive: true })
+  writeFileSync(join(root, 'tasks', 't-0001', 'result', 'result-t-0001.md'), 'ok\n', 'utf8')
+
+  const out = runTaskReady(root, ['--dispatchable', '--json'])
+  const reasonsOf = new Map((out.blocked || []).map((b) => [b.taskId, b.reasons.join(' ')]))
+  assert.match(
+    reasonsOf.get('t-0002') || '',
+    /上游产物缺失：t-0001\/\.\.\/\.\.\/state\/tasks\.jsonl/,
+    '穿越 artifact 即使目标真实存在，也必须判为「缺失」（修复前会因 existsSync 命中而不报）',
+  )
+  assert.doesNotMatch(
+    reasonsOf.get('t-0003') || '',
+    /上游产物缺失/,
+    '合法产物（tasks/<id>/result/ 下）不得被包含性检查误伤',
+  )
+  assert.match(reasonsOf.get('t-0004') || '', /上游产物缺失/, '非法 taskId 不得拿去拼路径（否则仍可穿越）')
 })
