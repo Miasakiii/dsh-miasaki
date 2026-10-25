@@ -2,6 +2,47 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-25 · DSH 本体升级 0.2.1-rc.3：九件补丁重打（3 件重建基线）+ 第三方插件适配
+
+**触发**：用户「按规划设计更新miasaki桌面端dsh本体并进行插件适配吧」。规划与四路调研见
+`_refs/internal-plans/dsh-0.2.1-rc3-upgrade-plan-2026-10-25.md`（规划类不入库；执行记录见该文件附录 C/D）。
+
+**升级**：`npm i -g @deepseek-ai/dsh@0.2.1-rc.3`（changed 613 packages / 2 分钟）→ `dsh --version` = 0.2.1-rc.3
+（npm `latest` 仍指 rc.2，升级必须钉版本）。官方 bundle 解析是 **installation-anchor-first** ⇒ 三个 profile 的官方
+bundle 自动跟随新安装，**不需要逐 profile 重装**。
+
+**补丁**（9 件官方补丁，rc.3 锚点 **9/9 命中**，锚点改写 **0 件**）：
+
+- **6 件零适配直接重打**（rc.3 目标文件与 rc.2 逐字节相同）：attachment / brand-official / chat / trajectory /
+  settings-models / api-session-controller（dual-model）。`verify` PASS + `apply` patched，产物 SHA 与记录一致。
+- **3 件重建基线**（目标包被官方实质重写：会话头标签行重写 / 侧栏面板列表 + More / navigation 语义）：
+  `rebuild-baseline.mjs` 用 rc.3 安装产物重写 `baseline/client.original.js` + 回填三常量 + `verify` 自证 + `apply`：
+  - conversation：原始 782,288 B → 产物 **782,478 B / `EA4AC5C3B903ED43…`**
+  - sidebar：原始 36,877 B → 产物 **36,971 B / `ADAA1D24D0EBF0EF…`**
+  - workspace：原始 232,824 B → 产物 **234,535 B / `8AF41ABE55CC3869…`**
+- `patch-live-audit`：**12 目标 / 11 件在册全 patched（0 未生效 / 0 未安装）**；`dsh-cordis-host-runner` 保持退役、
+  在 rc.3 上 4 条锚点仍 0 命中（与退役结论一致），**不要适配**。
+
+**第三方插件适配**（规划 §6）：
+
+- `@deepseek-ai/dsh-subagent-claude-code`：miasaki 侧 `0.2.1-rc.2 → 0.2.1-rc.3`（peer 为精确版本，不升则 bundle 被跳过）；
+  desktop profile 本来就是 rc.3、无需动。
+- `@yeesy369/dsh-tool-browser@0.7.0`：peer 上界 `<0.2.0`（连 rc.2 也不覆盖，此前靠 exact-version exemption）⇒
+  miasaki / web 两 profile 的豁免**重授到 `0.2.1-rc.3`**（`dsh plugin --profile <p> allow-version … --accept-risk`）。
+- openviking（2026-10-22 起暂停、不在 bundles）/ browser-playwright（补丁留存、状态 PATCHED）无需动。
+
+**验证**：
+
+- 全量 `node scripts/verify-all.mjs`：**200 项 / 十类全 PASS**（desktop 45/45 含补丁离线自证）。
+- web 端（`dsh web --no-open`）：页面 HTTP 200、九线插件特征齐全、**启动日志零 skip**。
+- miasaki 桌面端（系统目录 `C:\ProgramData\MiasakiApp\Miasaki.exe`）：窗口标题 `Miasaki · DSH`、后端
+  `node … bin.js --profile miasaki --no-open`（rc.3）、3080 监听、页面 HTTP 200、**12 个插件特征命中**、
+  server.log 零 skip、pet.log 桌宠 Idle + 页面加载正常。
+- **实机 UI 走查（设置页 / 右栏 / 会话布 / SSH / 用量 / 外观 / 桌宠交互）归用户**（矩阵 **E56**）。
+
+**注意（本次实测再次印证）**：`src-tauri/target/release/miasaki.exe` 与 `dist\Miasaki.exe` 在用户目录运行会被系统
+降权 ⇒ WebView2 初始化失败（「Miasaki · 启动失败」弹窗）；**实机入口必须是 `C:\ProgramData\MiasakiApp`**。
+
 ## 2026-10-20 · 模型设置页白屏修复（补丁 v4.1：退役 `no-key-card-hint`）
 
 **现象**：用户截图报「模型设置页出问题了」—— 设置弹窗顶栏与左侧导航正常，右侧内容区**整块空白**，切 tab 不恢复，只有刷新页面才回来。

@@ -1316,6 +1316,29 @@ A-M1 **只搭架构**，形象清单初始仅「默认」（首个新形象素�
 **2026-10-19 fleet 面板 DSH 入口插件（P0「看得见」）**：
 用户「主要是没面板，我看不到情况」。现状核对：面板早已存在（`fleet-monitor` 127.0.0.1:39801，P1 判定层 + 三道围栏均验收），缺的是**常驻 + 入口**。P0 新增 `dsh-miasaki-fleet/plugins/dsh-fleet-panel`（DSH web 插件）：**会话视图 tab「Fleet」**（`conversation.view`，order 16，排在「用量」之后；每会话独立视图实例）→ **原生渲染**（统计 6 卡 / 判定层 4 卡 / Agent 卡片，官方 `--dsw` 令牌，内容区可滚动；2026-10-20 第二轮由 iframe 改来，同时移除桌面壳里无效的 `window.open` 按钮）。**2026-10-20 按用户反馈调整形态**：第一版是「侧栏脚部按钮（`sidebar.footer.action`）+ 全局浮窗（`shell.overlay`）」，实测挤占侧栏「用量统计」，已删除对应槽位、改为会话级 tab（client 测试有防回退断言）。host 半以**应用层判据**探活 `127.0.0.1:39801/api/fleet`、不在跑则隐藏窗口拉起 `fleet-monitor/server.js`（**只回收自己拉起的实例**），并注册 `/dsh-fleet/panel`（改写 panel.html 的 API_BASE 锚点，**锚点缺失显式 500**）+ `prefix /dsh-fleet/api`（代理到 monitor）+ `/dsh-fleet/health`（探活/重试），三条路由均过同构三道信任围栏（跨站 403）。**不重写判定**（数据仍由 monitor 口径单点给出）。**回归**：新增 host 10 + client 7 = **17 例**；`verify-all fleet` **21 → 25 项**、fleet 用例 **197 → 214 例**、全量 **185 → 189 项**；集成探针实跑：真实拉起 monitor（health `ok:true, reused:false`）、面板改写命中、代理 `/api/fleet` 200、跨站 403、非法路径 404、停止后 39801 无监听。**安装**：miasaki profile `link:` + `pnpm install`（junction 已建）+ 重启宿主生效。**待实机（矩阵 §3.13 P0 行）**：会话 tab 出现且位于「用量」后 / 每会话可独立打开 / **内容区可滚动** / **主题跟随三主题** / **判定层四块有数据（不再 SyntaxError「不可用」）** / 自动拉起 / 退出无残留 / 侧栏无按钮 / **无「在浏览器打开」按钮** / 跨站 403。**P2 未做**：四条告警；完整报表仍在 monitor 页（浏览器开 39801）；**per-session fleet 数据隔离**另立设计（当前 fleet 仍是全局单例）。
 
+**2026-10-25 · DSH 本体升级 0.2.1-rc.3（九件补丁重打 + 三件重建基线）+ 第三方插件适配**`[实测]`：
+本机内核 **0.2.1-rc.2 → 0.2.1-rc.3**（npm `next` 轨；tag `dsh-v0.2.1-rc.3` = `1f81c047`，npm 10-23 发布）。
+规划与四路调研见 `_refs/internal-plans/dsh-0.2.1-rc3-upgrade-plan-2026-10-25.md`（规划类不入库）。
+① **九件在役官方补丁全部重打**：**6 件零适配**（attachment / brand-official / chat / trajectory / settings-models / api-session-controller ——
+rc.3 目标文件与 rc.2 **逐字节相同**，`verify` PASS + `apply` patched）；**3 件重建基线**（conversation `EA4AC5C3…` 782,478 B /
+sidebar `ADAA1D24…` 36,971 B / workspace `8AF41ABE…` 234,535 B —— 目标包被官方实质重写、锚点仍唯一命中，
+`rebuild-baseline.mjs` 重建 `baseline/client.original.js` + 回填三常量 + `verify` 自证 + `apply`）；
+`patch-live-audit` **12 目标 / 11 件在册全 patched（0 未生效 / 0 未安装）**；`dsh-cordis-host-runner` 保持退役、不适配。
+② **契约面零破坏**：槽位 100 → 103（仅新增 3 个 list/root，0 删 0 改名）、15 个 host 关键包源文件逐字节未变、会话格式仍 **V4**；
+九线业务代码 **0 行改动**（逐线契约清单见 `_refs/internal-plans/upgrade-rc3-plugin-audit-2026-10-25.md`）。
+③ **第三方插件适配**：`@deepseek-ai/dsh-subagent-claude-code` miasaki 侧 `0.2.1-rc.2 → 0.2.1-rc.3`（peer 为精确版本，不升则 bundle 被跳过）；
+`@yeesy369/dsh-tool-browser@0.7.0` peer 上界 `<0.2.0` ⇒ miasaki / web 两 profile **exact-version exemption 重授到 rc.3**
+（重启后日志零 `skipping`）；openviking（暂停中）/ browser-playwright 无需动。
+④ **验证**：全量 `verify-all` **200 项 / 十类全 PASS**（sidebar 13 / canvas 15 / fleet 32 / desktop 45 / ssh 31 /
+dual-model 16 / appearance 18 / usage 7 / free-model 16 / repo 7）；web 端（`dsh web --no-open`）页面 HTTP 200、
+九线插件特征齐全、零 skip；**miasaki 桌面端**（系统目录 `C:\ProgramData\MiasakiApp\Miasaki.exe`）启动成功 ——
+窗口标题 `Miasaki · DSH`、后端 `node … bin.js --profile miasaki --no-open`（rc.3）、3080 监听、页面 HTTP 200、
+12 个插件特征命中、server.log 零 skip、pet.log 桌宠 Idle/页面加载正常。
+**注意**：`src-tauri/target/release/miasaki.exe` 与 `dist\Miasaki.exe` 在用户目录运行会被系统降权 ⇒ WebView2 初始化失败
+（「Miasaki · 启动失败」），实机入口必须是 `C:\ProgramData\MiasakiApp`（既有纪律）。
+**待用户（矩阵 E56）**：升级后九线页面实机走查（设置页 / 右栏 / 会话布 / SSH / 用量 / 外观 / 桌宠交互）。
+**文档**：desktop CHANGELOG、根 README 兼容性表、矩阵内核基线与 E56（分母 152 → 153）。
+
 历史基线：2026-09-23（全量 96 项、desktop 20/20、`cargo test` 28 例——09-24 的 S4a 视觉闸门、桌宠资产闸门与 `dot.rs` 尚未入账）；2026-09-10（DSH 0.1.5-rc.1 / Node v24.15.0）sidebar 8/8、canvas 11/11、fleet 14/14、desktop 4/4、ssh 9/9、dual-model 10/10；2026-09-11 新增外观线 `appearance` 9/9（首次实机启动即暴露 `module is not defined` 整包加载失败，已修并补 client 半装载契约测试）。
 需要真机或运行中 host 的实机项（插件加载 / 桌面壳冒烟 / 跨线联动）
 不在脚本内，清单见 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。

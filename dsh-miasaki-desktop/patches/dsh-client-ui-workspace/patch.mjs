@@ -50,11 +50,11 @@ const ORIGINAL_FILE = join(BASELINE, 'client.original.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-workspace'
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.2.1-rc.2'
+export const BASELINE_DSH_VERSION = '0.2.1-rc.3'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '52765AACB6C7F96327DA5D8709D8CBB30DD2957D4744A42DA04C18E07FE264E5'
+export const ORIGINAL_SHA256 = '9C2C17A66A5C20DE00AC2852CB76DEBB5237439E97F877403BCAA2A471086544'
 /** 应用本补丁后的 SHA-256（产物不落盘，用 SHA 自证：重建 == 逐字节相等）。 */
-export const PATCHED_SHA256 = '3A26910CD7FEFCAE383D308CF0FAFEA70A44BBDF51DFC478706E2E1CA72932D5'
+export const PATCHED_SHA256 = '8AF41ABE55CC386934F37255E1C7692AD0C90FC426C1D943CFC62E27088751BF'
 /**
  * 补丁特征串：出现即视为已应用（用于幂等与状态判定）。
  * 取自己插入的那一行判定 —— 它在本包产物里唯一。

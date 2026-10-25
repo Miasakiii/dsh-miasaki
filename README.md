@@ -124,7 +124,8 @@ dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
 
 | DSH 版本 | 状态 |
 |---|---|
-| **0.2.1-rc.2** | **当前实装**（2026-10-17 升级：九件补丁已重打/重写、预设 `backgroundMode` 已迁移；两个第三方插件已升级/豁免，见桌面端 CHANGELOG） |
+| **0.2.1-rc.3** | **当前实装**（2026-10-25 升级：九件补丁重打（3 件重建基线）+ `subagent-claude-code` 升 rc.3 + `tool-browser` 豁免重授；全量 200 项 PASS，见桌面端 CHANGELOG） |
+| **0.2.1-rc.2** | 已复验（上一实装版本：2026-10-17 升级，九件补丁重打/重写、预设 `backgroundMode` 已迁移） |
 | **0.2.0-rc.2** | 已复验（上一实装版本：八件补丁已重打，`patch-live-audit` 10/10 patched） |
 | **0.2.0-rc.1** | 已复验 |
 | **0.1.7 及以上** | 支持（canvas 已按 0.1.7 的 `uiWorkspace` 契约适配） |
