@@ -2,6 +2,109 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-10-20 · 模型设置页白屏修复（补丁 v4.1：退役 `no-key-card-hint`）
+
+**现象**：用户截图报「模型设置页出问题了」—— 设置弹窗顶栏与左侧导航正常，右侧内容区**整块空白**，切 tab 不恢复，只有刷新页面才回来。
+
+**取证（不打断宿主）**：宿主（`dsh --profile miasaki`，127.0.0.1:3080）正在给用户窗口服务，重启它等于杀掉用户会话载体。改用**系统 Edge `--headless=new` + CDP 连同一个宿主**（token 从 `%LOCALAPPDATA%\miasaki\server.log` 的 `dsh web: …/?token=` 行取，`GET /?token=` 换 cookie），复现路径与用户一致。`Runtime.exceptionThrown` 抓到：
+
+```
+ReferenceError: keyState is not defined
+    at curatedFields (…/dsh-client-ui-settings-models/client.js)
+slot entry crashed in 'settings.section'
+```
+
+触发点是**点开任一 provider 的「编辑」卡片**；不点则首屏正常 —— 这解释了为什么「看着能进、一操作就白」。崩溃是**粘性**的：section 一旦崩，切走再切回仍空白，刷新才恢复。
+
+**根因（在运行时补丁、不在官方）**：DSH 0.2.1 把密钥失败提示的渲染搬进辅助函数 `curatedFields(family)`，同时把「密钥是否已配置」的数据源从编辑卡片 state 换成 `props.credential` / `props.credentialChecks` ⇒ 补丁 `no-key-card-hint`（v3 加的无 Key 卡片提示）插入的代码所引用的 `keyState` / `keyRef` **在该作用域里已不存在**（`keyRef` 只剩 `deriveKeyRef` 一侧的局部 const）。而它的锚点 `shownKeyFailure === void 0 ? null : …` 仍然存在、仍然唯一命中 ⇒ `apply` 成功、语法闸门绿、`verify` 三行 PASS、`patch-live-audit` 报 patched，**四道静态判据全部无感**。
+
+**修法**：按仓库既有范式「官方吸收即退役」（同 v4 退役思考强度）—— 0.2.1 的 `credentialHint` 已原生给出等价引导且文案点名环境变量（「未检测到环境变量。请填写 API 密钥，或设置环境变量 OPENROUTER_API_KEY。」），不再双写 ⇒ **删除该编辑**，13 → 12 条。`no-key-row-hint`（行级 tooltip 点名 env）保留 —— 官方无等价物。产物 `883942A3…` → **`AA1A51AD…`（222,925 B）**，`verify` 三行 PASS → `resync` 重打安装目录。
+
+**验证**：真机（同一宿主、独立客户端）逐个点开 6 张「编辑」卡片（DeepSeek / openai / opencode / xiaomi / 微信小程序大赛 / step；当时 OpenRouter（免费）行未出现在该客户端，随配置状态变化——脚本按实际找到的数量逐个点）—— **0 异常、全部正常渲染**；OpenRouter 卡片在修复前那次取证里显示官方原生无 Key 提示。`patch-live-audit` 12/12 patched；`verify-all desktop` **44 → 45**（新增 `smoke-model-page.mjs` 语法闸门），**全量 192 → 193**（各类实跑：sidebar 13 / canvas 15 / fleet 25 / ssh 31 / dual-model 16 / appearance 18 / usage 7 / free-model 16 / desktop 45 / repo **5/7** —— repo 的 2 红是**既存暂态**：`??` 未入库文档的 md-links 断链，与本批无关，随对应文件提交即绿）。
+
+**同批**：
+- 新增 `patches/dsh-client-ui-settings-models/smoke-model-page.mjs` —— 把这次的真机验收固化成脚本（headless Edge + CDP → 设置 → 模型 → 逐个点「编辑」→ 抓 `slot entry crashed`），**升级重打后必跑**；它不是 CI 闸门（依赖运行中的宿主），是人工验收步骤。
+- 补丁 README 新增「产物不变量 #6」：**锚点命中 ≠ 作用域可用**；并把「编辑表」与实现重新对齐（v4 后表格仍残留已退役的思考强度 / `reasoningDefaultOf`，属文档失真，本次一并订正）。
+- 验收矩阵补立 **E43**（台账分母 139 → 140，勾选仍 72：机器部分已过，待用户刷新目检签字）。
+
+**教训（入纪律）**：这是「能全绿也可能是假绿」的又一形态 —— ASI 陷阱那次是「语法合法、运行时炸」，这次是「**锚点命中、作用域失效**」。静态闸门只能在「文本还在不在」这一层取证；对「它周围的变量还在不在」，唯一判据是真机把每个交互点开一遍。升级重打后的标准动作因此多一步：`node smoke-model-page.mjs`。
+
+## 2026-10-20 · 安全修复批（monkeyscan 核实后修复：bca30 / 0c59d / ac466 / b3d0b / a859a / 61ed5 / cafdb + 注释订正）
+
+**背景**：对 monkeyscan 36 份扫描报告逐条核实（`_refs/monkeyscan-2026-10-19/verify/SUMMARY-36.md`：18 确认存在 / 14 部分成立 / 3 误报 / 1 已修复），本批修复 desktop 线 7 条 + 2 处注释失真订正（其余误报/归上游项不动）。
+
+### bca30（P1）model-probe 凭据外发边界 + 路由准入
+
+**问题**：`POST /model-probe-api/probe` 的请求体 `baseURL` 不经任何校验直达 `fetch()`，省略 `apiKey` 时把已存凭据（credentials / 环境变量）附加到调用方指定目标；三条 `kind:'exact'` 路由绕过 composition 的 `/api` 准入链。
+
+**修法**：① 新增纯函数 `sameOrigin(a,b)`（scheme+host+port，默认端口规范化；解析失败/非 http(s) 判不同源）——`probeModel()` 只在「未给 baseURL」或「baseURL 与 profile 同源」时复用已存凭据，否则必须显式 `apiKey`，缺失回 `{ok:false,kind:'no-credential'}` 且**不发请求、不读凭据**；不禁止回环/私有地址（本地模型探测是正当用例）。② 路由统一包装 `trustFence`：逐请求 `ctx.get('connection').requestRejection` 优先（401/403 原样、undefined 放行、抛错/未知值回落结构层）；结构围栏补 Origin 端口判据（`cross-port-origin`，Chromium 剥端口时保持兼容）。③ `fenceRequest` 保留为 `structuralFence` 旧名。回归：`test/probe.test.js` 20 → **45 例**（假 fetch / 假 webServer，不出网）。
+
+### 0c59d（P1）computer-use 观测信封 XML 转义
+
+**问题**：`formatForegroundEnvelope()` 把 OS 元数据（appName/windowTitle/finderFolder/focusNote）直接插进类 XML 标签，`envelopeValue()` 只折叠 CR/LF + trim、不转义 `< > &`。窗口标题由前台应用控制（Windows `GetWindowTextW`，浏览器页面 `document.title` 即可设置），系统提示又授权模型把标签当可信 OS 元数据 ⇒ 标题可提前闭合元素、伪造 `<frontmost_folder>`（策略可能把它当 `code_agent` 的 cwd）。
+
+**修法**：`envelopeValue()` 改为「CR/LF 折叠 → XML 转义（先 `&→&amp;`，再 `<→&lt;`、`>→&gt;`）→ C0 控制字符替换空格 → trim」；四个字段统一经它插值，错误路径复用；导出 `envelopeValue` / `formatForegroundEnvelope`。回归：新增 `plugins/dsh-computer-use/test/envelope.test.js` **11 例**（修复前为红），并已并入 `verify-all desktop`（`test computer-use (观测信封转义)`）。该文件是入库编译产物：重建 orb bundle 后必须重新接线（测试会显式变红，不静默退化）；上游 `tool-computer-use` 的 `observe.ts` 同为未转义实现，建议回提。
+
+### ac466 / b3d0b / a859a / 61ed5 / cafdb（安全与健壮性）
+
+- **ac466（CWE-798 硬编码凭据）**：删除 `themes/src/00-boot.js` 与 `ui/loading.html` 中硬编码的 43 字符 `SECRET_B64`（历史 browser-session secret）及「无 cookie 时自签」回退。现约定：预置侧拿不到真 secret 就**跳过注入**，认证由官方 `GET /?token=…` 交换 + 服务端 `Set-Cookie` 兜底；00-boot 只保留「已有 cookie 按原值续写 Max-Age」与 401 跨文档熔断。行为闸门 `themes/test/auth-cookie.test.js` 重写为 7 例（含「无 cookie 零写入」与「SECRET_B64 不得回潮」源码断言）；README 新增「硬编码兜底 secret 移除」节并给出轮换步骤。**已提交 secret 视为泄漏，需用户轮换 `client-connection/browser-session.secret`（本仓不触碰 ~/.dsh）。**
+- **b3d0b（UTF-8 截断 panic）**：`pet_native.rs` 新增 `truncate_utf8`（char boundary 回退），替换 `pettool=80` / `petkey=120` 两处 `String::truncate`；页面可控多字节串不再 panic（release 下 panic=abort = 整壳退出），+3 单测。
+- **a859a（pet.log 日志注入）**：`pet_log_line` 与 `app_log_line` 统一经 `escape_log_controls` 转义 CR/LF/ESC 及其它控制字符（末尾换行保留为行终止符），伪造日志行不再可能，+3 单测。
+- **61ed5（诊断产物泄漏 token）**：`tail_log`（`export_diagnostics` 与 `host_log_tail_public` 自动崩溃报告的唯一汇聚点）统一脱敏：`token=<值>` → `token=<redacted>`、`dsh web: http…` 整行 → `dsh web: <redacted-url>`；运行期日志写入不变。+2 单测（含接线断言）。
+- **cafdb（素材服务无上限缓冲）**：`start_asset_server` 增加请求头/单连接总量 8 KiB 上限（超限 400 关闭）、整请求 8s 截止（慢速滴送直接关闭）、并发连接上限 32（RAII 归还名额）、`Host` 必须 `127.0.0.1`/`localhost`（防 DNS 重绑定，403）。抽 `asset_header_value` / `asset_host_allowed` / `asset_head_too_large` / `asset_path_from_head` 纯函数 + 4 单测。
+
+### 注释订正（03e0c / 450ea，误报背后的文档失真）
+
+`main.rs` 的 `diag_console` 文档与 `themes/src/11-console.js` 头注改为准确表述：remote origin 的应用命令需显式 ACL 授权，当前 `remote-dsh` capability 只授 `core:default` + `start-dragging`、未授权任何应用命令（本仓无应用 ACL 清单）⇒ 远程 3080 页的 `diag_console` 调用会被拒，该回传通道当前实际失效（不是安全漏洞，但注释不得声称相反）。
+
+### 验证
+
+`cargo test --bin miasaki` **317 passed / 0 failed / 1 ignored**（MSVC x64；基线 305+1，+12 例）；`themes/test/*.test.js` 9/9 文件全绿；`ui/test/loading-visual.test.js` 16 例全绿；`node scripts/build-init.mjs` 自校验通过；`node --check` 改动的 js/产物通过；`git grep SECRET_B64` 源码/测试零赋值（仅历史文档提及）。
+
+### 遗留（归用户/后续）
+
+- 需构建 exe 后实机验证冷启动无 401（判据：`pet.log` 出现 `navigate: 带官方 token 进入`）与桌宠日志；需一次性轮换 `client-connection/browser-session.secret`。
+- `auth_secret()` 的手写解析只认顶格段，DSH 0.2.x `version:1 + records:` 嵌套格式下很可能恒返回 None（预置路径当前不生效，已由官方 token 通道兜底；解析器适配另案，勿顺手改）。
+- 本批未做 bf421（Cookie HttpOnly 属服务端/设计变更）与 fbf73（主窗口 CSP 会与注入 inline script 冲突），已在核实报告中记为「不修/后续设计」。
+
+## 2026-10-19（D 批）· 表情帧面区重合成 —— 修「变换表情脸上会有线」+ 补回 exDoubt 头顶问号
+
+**触发**：用户「对桌宠线进行细节上的优化，现在变换表情脸上会有线，你看看，优化优化」。
+
+**根因（实测，非猜）**：P2-b 的 8 张表情帧（2026-10-18）用**全图散点蒙版**合成——
+「生成图 vs idle 原帧差异 >24 的逐像素 + 3×3 软边」。而 qwen-image 是**整体重绘**
+（不是局部换脸）：实测差异像素 ≈50% 实心、包围盒几乎覆盖全身（diff.png 里散点遍布
+头发/裙边/四肢，刘海垂落带连续成片）。散点蒙版把 AI 的全图细微重排逐像素贴回帧，
+叠加处的混合缝在实机上读作「脸上的线/噪边」。**真正的表达差异只在脸部**
+（眼/眉/嘴/腮红），身体那半边差异是噪声不是内容。
+
+**修法（asset-only，Rust 零改动；脚本 `_refs/p2b-gen/recomposite-face.mjs`，判据全文
+见设计文档 [`2026-10-18-pet-p2-recolor-and-expression-sheet.md`](2026-10-18-pet-p2-recolor-and-expression-sheet.md) §4）**：
+
+1. 感知误差（sRGB 伽马² + 类红均值加权）> 7 → 膨胀 1px（只许进实心区）→ 最大
+   4-连通块 = 脸（实测 2400–3000px，含刘海垂落带）；
+2. 腐蚀 1px 取核心 → 包络 bbox 外扩（左2/右2/上4/下3）∩ 实心区 = **矩形面区**
+   （袋帽下沿～颈部）。矩形是刻意的：AI 在脸周头发上有大面积 8–25 级轻微重排，
+   凸边界必穿头发留线；矩形边界落在「逐像素 ≤7 级」的带上，3×3 两遍羽化后不可见；
+3. `out = orig·(1−m) + gen·m`；**alpha 一律用原帧**（命中测试 / halo / 轮廓三链不变）。
+   代价：脸周头发保留原图（AI 那侧 8–25 级的轻微重排被丢弃）——**它们本来就是噪声**。
+
+**顺带补回一个从未真正交付的设计意图**：exDoubt 的「头顶问号」在生成图里是
+「白底深色、原帧透明」像素，旧管线的差异判据（只比实心区）+ alpha 全取原帧 ⇒
+问号**两张都过不了关**（首版成品里就没有，验收判据却写着有）。补回法 = 深色 ∧
+原帧近透明 ∧ 头顶右侧区域的连通像素为核心，覆盖率 α=(255−lum)/160 **反预乘白底**
+还原颜色，alpha 取覆盖率——全表唯一破例改 alpha 处（区域悬空、不触头发，命中测试
+增量 ≈ 一个 16×19 符号，与 P1 几何符号同理）。alpha 契约口径从此写明：只有
+「原帧透明 + 悬空新内容」才允许破例。
+
+**回归**：8 张逐张目检（脸部新表情 / 面外与 r0c0 逐像素 ≤6 级 / 无残留散点缝；
+exDoubt 问号 235px 在位）+ `check-pet-assets` 双向校验 PASS。**已镜像 dist/ 并刷新
+安装目录 ui/**（运行时磁盘 ui/ 优先，重载即生效）；未重新构建签名（Rust 未动，
+用户实机确认后如需随包发布再走外部终端 `npm run deploy`）。
+
+**待实机（归用户，并入 E38）**：① 八连发表情脸上无线；② exDoubt 疑惑时头顶出现问号；
+③ 面外（头发/身体/裙摆）与变脸前一模一样（变脸只动脸）。
+
 ## 2026-10-19（A 批）· 桌宠多形象架构（appearance）+ 顺带修掉 R20-c pshl 的 hash 重复键 bug
 
 **触发**：用户「桌宠鲸鱼娘是不是可以有多个形象，把参考仓库纳进来？」讨论后的路线拍板 ——

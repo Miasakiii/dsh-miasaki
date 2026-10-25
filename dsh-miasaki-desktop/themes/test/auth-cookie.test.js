@@ -1,21 +1,24 @@
-// 鉴权 cookie 兜底链的行为闸门（offline）。
+// 鉴权 cookie 注入链的行为闸门（offline）。
 //
 // 被测对象是 `themes/src/00-boot.js` 里 `@slice:auth-cookie` 标记之间的那个 IIFE ——
 // 它注入到 WebView2 的**每个文档**（document_start），负责：
-//   ① 无 cookie 时用硬编码兜底 secret 签一枚 `dsh-auth-*`；
-//   ② 有 cookie 时**按原值续写** `Max-Age`（不改值）；
+//   ① **绝不自己签名 cookie**（2026-10-20 ac466 修复：删除硬编码 SECRET_B64 与自签回退）；
+//   ② 有（非 HttpOnly）cookie 时**按原值续写** `Max-Age`（不改值）；
 //   ③ 401 文本页 → reload，但带 sessionStorage 跨文档熔断（上限 3 次，超限停止并显示提示）。
 //
 // 为什么必须离线钉死（2026-09-23 二轮复审 P2-B）：
 //   原实现无条件用硬编码 secret 覆写 cookie。预置注入（main.rs set_auth_cookie）签入的是
 //   `~/.dsh/.credentials.yaml` 里的**真** secret，两者一旦漂移，覆写就把**有效** cookie
 //   换成无效的 ⇒ 首次导航成功、下次整页导航 401 ⇒ reload ⇒ 新文档再签错 ⇒ 无限刷新。
-//   实机复现要造「secret 漂移 + 预置失败」场景，成本高且危险；这里用假浏览器把三条契约
+//   实机复现要造「secret 漂移 + 预置失败」场景，成本高且危险；这里用假浏览器把契约
 //   钉死在接口层。
+//
+// 2026-10-20（ac466）：兜底 secret 已整段删除 ⇒ 无 cookie 时**不得发生任何 cookie 写入**
+// （认证由 loading 页 IPC 预置 + 官方 `/?token=` 交换负责）；本文件另加源码断言，
+// 守住「SECRET_B64 / signFallback 不得回潮」。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { webcrypto } from 'node:crypto'
 import vm from 'node:vm'
 
 const source = await readFile(new URL('../src/00-boot.js', import.meta.url), 'utf8')
@@ -82,31 +85,18 @@ function harness({ jar = '', docText = '', readyState = 'loading', reloadCount =
 }
 
 /**
- * 跑一遍被测段。
- * `waitWrite`：无 cookie 的用例必须等**真实** `crypto.subtle` 签名落地（Node 的 webcrypto
- * 走 libuv 线程池，固定轮数的 setImmediate 会偶发抢跑 → 用例假红）。有 cookie 的路径不碰
- * crypto、纯 microtask，无需等待。
+ * 跑一遍被测段。2026-10-20 起本段不再调用 crypto（不再自签），全部是同步 + microtask，
+ * 固定轮次 `setImmediate` 即可排空 `ensureCookie → armChecks → check` 链。
  */
-async function run(state, { waitWrite = false } = {}) {
+async function run(state) {
   const context = vm.createContext({
     location: state.location,
     document: state.document,
     sessionStorage: state.sessionStorage,
-    crypto: webcrypto,
     setTimeout: (fn) => { state.timers.push(fn); return state.timers.length },
-    btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
-    atob: (s) => Buffer.from(s, 'base64').toString('binary'),
-    TextEncoder,
     console,
   })
   vm.runInContext(slice, context, { filename: '00-boot.js#auth-cookie' })
-  if (waitWrite) {
-    const deadline = Date.now() + 2000
-    while (state.writes.length === 0 && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 5))
-    }
-  }
-  // 再把 then 链（ensureCookie → armChecks → check）排空。
   for (let i = 0; i < 12; i += 1) await new Promise((resolve) => setImmediate(resolve))
 }
 
@@ -130,22 +120,16 @@ test('预置 cookie 在场时不改写其值，只按原值续写 Max-Age（P2-B
   assert.equal(state.jar.includes('v1.payload.signature'), true)
 })
 
-test('无 cookie 时才用兜底 secret 签一枚 v1 三段的 cookie', async () => {
+test('无 cookie 时不再自签：不产生任何 cookie 写入（ac466：兜底 secret 已删除）', async () => {
   const state = harness({ jar: '' })
-  await run(state, { waitWrite: true })
+  await run(state)
 
-  const authWrites = state.writes.map(splitWrite).filter(w => w.name.startsWith('dsh-auth-'))
-  assert.equal(authWrites.length, 1, '无 cookie 必须签一次')
-  assert.match(authWrites[0].name, /^dsh-auth-[\w-]+$/)
-  assert.match(authWrites[0].value, /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/, '值形如 v1.<payload>.<sig>')
-  assert.match(authWrites[0].attrs, /Path=\//)
-  assert.match(authWrites[0].attrs, /Max-Age=2592000/)
-  assert.match(authWrites[0].attrs, /SameSite=Strict/)
+  assert.equal(state.writes.length, 0, `无 cookie 不得自己签/写 cookie，实际写入了：${JSON.stringify(state.writes)}`)
 })
 
 test('401 页在熔断计数未到上限时 reload 一次并推进计数', async () => {
   const state = harness({ docText: FAIL_TEXT, reloadCount: 0 })
-  await run(state, { waitWrite: true })
+  await run(state)
 
   assert.equal(state.reloads, 1, '401 且未超限 → 应 reload')
   assert.equal(state.sessionStorage.getItem(RELOAD_KEY), '1', '计数必须落库（跨文档熔断的唯一凭据）')
@@ -154,12 +138,13 @@ test('401 页在熔断计数未到上限时 reload 一次并推进计数', async
 
 test('401 页超过熔断上限时停止 reload，并显示可见提示（不再无限刷新）', async () => {
   const state = harness({ docText: FAIL_TEXT, reloadCount: 3 })
-  await run(state, { waitWrite: true })
+  await run(state)
 
   assert.equal(state.reloads, 0, '超过上限必须停止自动重载')
   const halt = state.appended.find(el => el.id === 'miasaki-auth-halt')
   assert.notEqual(halt, undefined, '必须留下可见提示（否则用户只看到纯文本 401 页，无从判断）')
-  assert.match(String(halt.textContent), /鉴权 cookie 注入失败/)
+  assert.match(String(halt.textContent), /鉴权失败/)
+  assert.doesNotMatch(String(halt.textContent), /SECRET|兜底常量/, '提示不得再引用已删除的兜底常量（会误导排查）')
   assert.equal(state.sessionStorage.getItem(RELOAD_KEY), '4', '计数继续推进，便于记录已重试次数')
 })
 
@@ -175,8 +160,15 @@ test('document_start（body 尚未解析）不误判为正常页，不误清计�
   // 复现「本段跑在 document_start，is401() 必然 false」的时序：此时若清零，
   // 熔断计数永远归零、等于没有熔断。
   const state = harness({ docText: '', readyState: 'loading', reloadCount: 2 })
-  await run(state, { waitWrite: true })
+  await run(state)
 
   assert.equal(state.reloads, 0)
   assert.equal(state.sessionStorage.getItem(RELOAD_KEY), '2', '未确认到达正常文档前不得复位')
+})
+
+test('源码闸门：SECRET_B64 / 自签回退不得回潮（ac466）', () => {
+  // 注释里可以出现「SECRET_B64」这个名词（说明历史），但**不得再有赋值**。
+  assert.doesNotMatch(source, /SECRET_B64\s*=/, '00-boot.js 不得再赋值硬编码 SECRET_B64')
+  assert.equal(source.includes('signFallback'), false, '不得再保留自签回退函数')
+  assert.equal(/crypto\.subtle/.test(slice), false, 'auth-cookie 段不得再调用 crypto.subtle 自签')
 })

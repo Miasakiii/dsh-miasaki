@@ -455,8 +455,23 @@ function imageRefFromObserved(image) {
 		...optionalImageFields(image)
 	};
 }
+/**
+ * Sanitize one OS-provided value before it is interpolated into an observation tag.
+ *
+ * The value is attacker-controlled in practice: a foreground browser page sets
+ * `document.title`, which becomes the window title on both platforms. The system
+ * prompt then tells the model to trust these tags as OS metadata, so an unescaped
+ * `</frontmost_window>` would close the element early and let the title forge
+ * additional observation tags (e.g. a `<frontmost_folder>` that the policy may use
+ * as a `code_agent` cwd). CR/LF collapse first (each line break becomes one space),
+ * then `&`, `<`, `>` are escaped - `&` must go first or the escapes would be
+ * re-escaped. C0 control characters are replaced with a space (tab and space
+ * survive) so no control sequence can reach the model-facing text. Trim last.
+ * @param value - OS-provided string.
+ * @returns single-line, XML-escaped, trimmed text.
+ */
 function envelopeValue(value) {
-	return value.replace(/[\r\n]+/g, " ").trim();
+	return value.replace(/[\r\n]+/g, " ").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ").trim();
 }
 /**
 * Format OS foreground metadata as one observation-level envelope.
@@ -2122,4 +2137,4 @@ function apply(ctx, config = {}) {
 	applyComputerUse(ctx, desktopBackend(ctx, createPlatformBackend(process.platform, excludedRegionCapture)), resolveComputerUseConfig(config));
 }
 //#endregion
-export { Config, FAKE_DESKTOP_PNG, FOCUS_FALLBACK_FOREGROUND, FOCUS_NOTE, PLUGIN_NAME, POLICY, POLICY_SECTION_ORDER, UNFOCUSED_WINDOW_NOTE, apply, applyComputerUse, createFakeDesktopBackend, createPlatformBackend, inject, name, resolveComputerUseConfig, wrapDesktopBackend };
+export { Config, FAKE_DESKTOP_PNG, FOCUS_FALLBACK_FOREGROUND, FOCUS_NOTE, PLUGIN_NAME, POLICY, POLICY_SECTION_ORDER, UNFOCUSED_WINDOW_NOTE, apply, applyComputerUse, createFakeDesktopBackend, createPlatformBackend, envelopeValue, formatForegroundEnvelope, inject, name, resolveComputerUseConfig, wrapDesktopBackend };

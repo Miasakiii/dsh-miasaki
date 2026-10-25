@@ -30,10 +30,14 @@ import {
   classifyStatus,
   isProbeable,
   redactSecret,
+  sameOrigin,
   shouldContinueToGenerate,
   summarizeDetail,
 } from './probe.js';
 import { readSettingsSection } from './settings-read.js';
+
+// 凭据边界判定（纯逻辑，住在 probe.js）：同源才允许复用已存凭据。导出以便单测直接打。
+export { sameOrigin };
 
 const NS = 'llm-pi-ai';
 const HEALTH_PATH = '/model-probe-api/health';
@@ -64,25 +68,93 @@ function trustedHostSet(config) {
 }
 
 /**
- * The three-layer browser-trust fence: ① Host must be loopback or configured;
- * ② the browser's own cross-site verdict is refused; ③ a present Origin must
- * name our hostname (hostname, not authority — some Chromium builds strip a
- * non-default loopback port; `null` = opaque, refused).
- * @param headers - the incoming request headers.
- * @param trusted - trusted hostname set.
- * @returns `{ok:true}` or `{ok:false, status, error}`.
+ * The port named by a `Host` header, defaulted from the Origin scheme when the
+ * header carries no explicit port (browsers omit the default one).
+ * @param rawHost - the raw `Host` header value (`host` or `host:port`, IPv6 bracketed).
+ * @param originProtocol - the parsed Origin protocol (`http:` or `https:`).
+ * @returns the port as a string.
  */
-export function fenceRequest(headers, trusted) {
-  const hostname = (typeof headers.host === 'string' ? headers.host : '').replace(/:\d+$/, '').toLowerCase();
-  if (!trusted.has(hostname)) return { ok: false, status: 403, error: '不被信任的 Host' };
-  if (headers['sec-fetch-site'] === 'cross-site') return { ok: false, status: 403, error: '跨站请求被拒绝' };
-  const origin = headers.origin;
-  if (typeof origin === 'string' && origin !== '') {
-    let originHostname = null;
-    try { originHostname = new URL(origin).hostname.toLowerCase(); } catch { originHostname = null; }
-    if (originHostname === null || originHostname !== hostname) return { ok: false, status: 403, error: '跨站来源被拒绝' };
+function hostPortOf(rawHost, originProtocol) {
+  const explicit = /:(\d+)$/.exec(rawHost);
+  if (explicit !== null) return String(Number(explicit[1]));
+  return originProtocol === 'https:' ? '443' : '80';
+}
+
+/**
+ * The structural browser-trust fence: ① Host must be loopback or configured;
+ * ② the browser's own cross-site verdict is refused; ③ a present Origin must
+ * name our hostname (hostname, not authority — `null` = opaque, refused) and,
+ * when it carries an explicit port, the same port as the `Host` header.
+ *
+ * The port rule is the 2026-10-19 fix for a cross-port page
+ * (`http://127.0.0.1:5173` served on another local port) passing the hostname
+ * check: a non-empty `Origin` port that differs from the request's `Host` port
+ * is now refused. Chromium strips the default port from `Origin` on some
+ * builds; an empty `Origin` port therefore keeps the old hostname-only verdict
+ * so a legitimate same-origin request is not falsely rejected.
+ * @param headers - the incoming request headers.
+ * @param trusted - trusted hostname set; defaults to the built-in loopback set.
+ * @returns `{ok:true}` or `{ok:false, status, error, reason}`.
+ */
+export function structuralFence(headers, trusted) {
+  const allowed = trusted instanceof Set ? trusted : trustedHostSet(null);
+  const rawHost = typeof headers?.host === 'string' ? headers.host : '';
+  const hostname = rawHost.replace(/:\d+$/, '').toLowerCase();
+  if (!allowed.has(hostname)) return { ok: false, status: 403, error: '不被信任的 Host', reason: 'untrusted-host' };
+  if (String(headers?.['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
+    return { ok: false, status: 403, error: '跨站请求被拒绝', reason: 'cross-site' };
+  }
+  const origin = headers?.origin;
+  if (typeof origin === 'string' && origin.trim() !== '') {
+    let parsed = null;
+    try { parsed = new URL(origin.trim()); } catch { parsed = null; }
+    const originHostname = parsed === null ? null : parsed.hostname.toLowerCase();
+    if (originHostname === null || originHostname !== hostname) {
+      return { ok: false, status: 403, error: '跨站来源被拒绝', reason: 'cross-origin' };
+    }
+    // `URL.port` is '' both for「no explicit port」and for a default port the
+    // parser normalized away — both keep the hostname-only verdict (compat).
+    if (parsed.port !== '' && parsed.port !== hostPortOf(rawHost, parsed.protocol)) {
+      return { ok: false, status: 403, error: '跨端口来源被拒绝', reason: 'cross-port-origin' };
+    }
   }
   return { ok: true };
+}
+
+/**
+ * The old export name of the structural fence. `lib/index.d.ts` publishes it,
+ * so keeping the name preserves the package's exported API; new code may use
+ * either name (`structuralFence` matches the sibling plugins' wording).
+ */
+export const fenceRequest = structuralFence;
+
+/**
+ * The two-layer admission fence used by every /model-probe-api route.
+ *
+ * The exact routes never pass through the harness `/api` admission chain, so
+ * they must reproduce it: when the composition provides `connection` (and its
+ * `requestRejection`), its verdict wins — 401/403 refused, `undefined` allowed,
+ * anything else falls back to the structural layer (a malformed verdict must
+ * not open the door). The `connection` service may be provided after this
+ * plugin loads, so callers must read it **per request**; a snapshot taken in
+ * `apply()` would silently downgrade the fence for the whole process lifetime.
+ * @param headers - the incoming request headers.
+ * @param connection - the per-request `ctx.get('connection')` value.
+ * @param trusted - trusted hostname set for the structural fallback.
+ * @returns `{ok:true}` or `{ok:false, status, error, reason}`.
+ */
+export function trustFence(headers, connection, trusted) {
+  if (connection !== undefined && connection !== null && typeof connection.requestRejection === 'function') {
+    try {
+      const rejection = connection.requestRejection({ headers });
+      if (rejection === 401) return { ok: false, status: 401, error: '未通过浏览器鉴权', reason: 'unauthorized' };
+      if (rejection === 403) return { ok: false, status: 403, error: '请求来源不被信任', reason: 'forbidden' };
+      if (rejection === undefined) return { ok: true };
+    } catch {
+      // connection 抛错属 composition 缺陷：退回结构层，而不是让每个请求 500。
+    }
+  }
+  return structuralFence(headers, trusted);
 }
 
 /** Reply JSON with a stable envelope; never leaks internal objects. */
@@ -121,6 +193,19 @@ function safeMessage(error) {
 }
 
 /**
+ * Read an optional service (`credentials` / `llm` / `connection`) without letting
+ * a host that lacks it — or a context mock that has no `get` — turn the probe
+ * into an error page. Real cordis contexts always expose `get`; the `typeof`
+ * guard only covers offline tests and torn-down contexts.
+ * @param ctx - plugin context.
+ * @param name - service name.
+ * @returns the service, or undefined when unavailable.
+ */
+function optionalService(ctx, name) {
+  try { return typeof ctx.get === 'function' ? ctx.get(name) : undefined; } catch { return undefined; }
+}
+
+/**
  * The stored llm-pi-ai profile for one provider route.
  *
  * The read is dual-track (lib/settings-read.js): 0.1.7 removed
@@ -156,7 +241,7 @@ function resolveProfile(ctx, provider) {
 async function resolveCredential(ctx, apiKeyEnv) {
   const ref = pickString(apiKeyEnv);
   if (ref === null) return null;
-  const credentials = ctx.get('credentials');
+  const credentials = optionalService(ctx, 'credentials');
   if (credentials && typeof credentials.resolve === 'function') {
     try {
       const hit = await credentials.resolve(ref);
@@ -225,6 +310,15 @@ async function sendOnce({ api, baseURL, model, apiKey, stage, timeoutMs }) {
  * continue when the endpoint refused the request on its shape, which is proof
  * that the credential was accepted. A 401 therefore ends the probe with zero
  * tokens spent — the property that makes this safe to click repeatedly.
+ *
+ * Credential boundary (2026-10-19, P1): the stored credential is re-used only
+ * when the request does not carry its own draft `baseURL` (so the target is the
+ * stored profile endpoint) or when that draft is **same-origin** with the
+ * profile's baseURL. A draft pointing anywhere else must carry its own
+ * `apiKey`; otherwise the probe answers `no-credential` and sends **nothing**.
+ * Before this, any page that could reach the exact route could attach the
+ * user's saved key to a destination of its choosing and use the probe as a
+ * credential-carrying SSRF primitive.
  * @param ctx - plugin context.
  * @param request - provider / model / optional draft baseURL, api, apiKey.
  * @returns the probe result in the shared vocabulary.
@@ -234,13 +328,18 @@ export async function probeModel(ctx, request) {
   if (model === null) return { ok: false, kind: 'no-model' };
 
   const profile = resolveProfile(ctx, request?.provider);
-  const baseURL = pickString(request?.baseURL) ?? pickString(profile && profile.baseURL);
+  const requestBaseURL = pickString(request?.baseURL);
+  const profileBaseURL = pickString(profile && profile.baseURL);
+  const baseURL = requestBaseURL ?? profileBaseURL;
   const api = pickString(request?.api) ?? pickString(profile && profile.api) ?? 'openai-completions';
   if (baseURL === null) return { ok: false, kind: 'no-endpoint' };
   if (!isProbeable(api)) return { ok: false, kind: 'unsupported', api };
 
+  // 凭据边界：请求自带 baseURL 且与 profile 不同源 ⇒ 不许复用已存凭据。
+  const mayReuseCredential = requestBaseURL === null || sameOrigin(requestBaseURL, profileBaseURL);
   const supplied = pickString(request?.apiKey);
-  const apiKey = supplied ?? await resolveCredential(ctx, profile && profile.apiKeyEnv);
+  let apiKey = supplied;
+  if (apiKey === null && mayReuseCredential) apiKey = await resolveCredential(ctx, profile && profile.apiKeyEnv);
   if (apiKey === null) return { ok: false, kind: 'no-credential', api, apiKeyEnv: pickString(profile && profile.apiKeyEnv) };
 
   const timeoutMs = DEFAULT_TIMEOUT_MS;
@@ -250,16 +349,6 @@ export async function probeModel(ctx, request) {
   return sendOnce({ api, baseURL, model, apiKey, stage: 'generate', timeoutMs });
 }
 
-/**
- * Register the routes once the webServer is up.
- *
- * `inject: ['settings', 'webServer']` is what makes that ordering a guarantee:
- * reading the server through `ctx.get` without declaring it would let an
- * activation race silently skip registration — which surfaces to the user as a
- * 404 and (thanks to the client fallback) a quietly weaker probe.
- * @param ctx - plugin context.
- * @param config - optional `trustedHosts`.
- */
 /**
  * The badge facts for one resolved model entry.
  *
@@ -297,7 +386,7 @@ export async function describeCapabilities(ctx, request) {
   const ids = Array.isArray(request?.models)
     ? request.models.map(pickString).filter((id) => id !== null).slice(0, MAX_CAPABILITY_MODELS)
     : [];
-  const llm = ctx.get('llm');
+  const llm = optionalService(ctx, 'llm');
   if (provider === null || ids.length === 0 || !llm || typeof llm.resolveModelInfo !== 'function') return { models: {} };
   const models = {};
   for (const id of ids) {
@@ -310,6 +399,16 @@ export async function describeCapabilities(ctx, request) {
   return { models };
 }
 
+/**
+ * Register the routes once the webServer is up.
+ *
+ * `inject: ['settings', 'webServer']` is what makes that ordering a guarantee:
+ * reading the server through `ctx.get` without declaring it would let an
+ * activation race silently skip registration — which surfaces to the user as a
+ * 404 and (thanks to the client fallback) a quietly weaker probe.
+ * @param ctx - plugin context.
+ * @param config - optional `trustedHosts`.
+ */
 export function apply(ctx, config) {
   const trusted = trustedHostSet(config);
 
@@ -318,7 +417,11 @@ export function apply(ctx, config) {
       kind: 'exact',
       path,
       handler: async (req, res) => {
-        const fence = fenceRequest(req.headers, trusted);
+        // 准入两层（2026-10-19）：exact 路由不经过内核 `/api` 准入链，所以这里
+        // 复刻它 —— connection 的 `requestRejection` 优先（逐请求读取：该服务可能
+        // 晚 provide，apply 时快照会让围栏整轮退化成结构层），缺席/抛错/给出其他值
+        // 时退回结构围栏。围栏排在 method 检查与业务之前。
+        const fence = trustFence(req.headers, optionalService(ctx, 'connection'), trusted);
         if (!fence.ok) { sendJson(res, fence.status, { ok: false, error: fence.error }); return; }
         if (req.method !== method) { sendJson(res, 405, { ok: false, error: `需要 ${method}` }); return; }
         try {

@@ -14,7 +14,12 @@
  *      错误风暴不得把 IPC 或内存打满。
  *
  * 通道：`window.__TAURI__.core.invoke('diag_console', { lines })`。
- * 远程页 IPC 由 `capabilities/remote-dsh.json` 放行（与已有 `start_dragging` 同一份能力声明）；
+ * **注意（2026-10-20 注释订正，03e0c/450ea 可达性核实结论）**：`diag_console` 是**应用命令**。
+ * Tauri 2 的 ACL 只允许 remote origin 调用 capability 显式授权过的命令；`capabilities/
+ * remote-dsh.json` 只授了 `core:default` + `start-dragging`（未授权任何应用命令，本仓也没有
+ * 应用 ACL 清单）⇒ 远程 3080 页里的该调用会被拒绝，下面的 `.catch()` 会静默吞错 ⇒
+ * **本分片在当前 IPC 策略下实际不生效**（诊断报告 renderer console 段因此通常为空）。
+ * 要恢复需先定义应用 ACL 并显式授权，属功能变更、不在本次安全修复范围。
  * 非壳环境（浏览器直开）没有 `__TAURI__`，静默跳过 —— 本分片在 web 下是零副作用。
  */
 ;(function () {

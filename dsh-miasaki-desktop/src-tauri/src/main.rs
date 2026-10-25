@@ -145,12 +145,17 @@ fn log_dir() -> PathBuf {
 }
 
 fn app_log_line(line: &str) {
+    // a859a（2026-10-20）：pet.log 的**公共写入入口之一**（另一处是
+    // `pet_native::window::pet_log_line`，两者写同一个文件）。外部来源文本（spawn 错误、
+    // 安装输出、插件停用 notes 等）可能带 CR/LF/ESC，不转义即可伪造额外日志行；
+    // 与 pet_log_line 共用同一转义函数，末尾换行保留为行终止符。
+    let safe = pet_native::escape_log_controls(line);
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_dir().join("pet.log"))
     {
-        let _ = f.write_all(line.as_bytes());
+        let _ = f.write_all(safe.as_bytes());
     }
 }
 
@@ -164,6 +169,9 @@ pub(crate) fn app_log_line_public(line: &str) {
 /// 自拉后端 stderr 尾部（T2.1 `--- host tail ---`）。
 /// `spawn_dsh` 把后端 stdout/stderr 都重定向到 `server.log`，此处只读它、
 /// 不碰进程（取证模块绝不改变被取证对象的状态）。
+///
+/// 61ed5（2026-10-20）：返回前经 `tail_log` 统一脱敏（`?token=…` → `<redacted>`、
+/// `dsh web:` URL 行 → `<redacted-url>`），避免自动崩溃报告/诊断导出把有效凭据带出去。
 pub(crate) fn host_log_tail_public(max: usize) -> String {
     tail_log(&log_dir().join("server.log"), max)
 }
@@ -1301,7 +1309,13 @@ fn confirm_background_close() -> bool {
 /// DSH web 应用鉴权 secret：读 `~/.dsh/.credentials.yaml` 的
 /// `client-connection/browser-session.secret`（2026-09-22 预置注入配套的「secret 动态化」）。
 /// 手写行解析，零 crate 依赖：定位段 → 段内缩进行找 `secret:`；值须为 b64url 字符集。
-/// 任何失败返回 None —— 调用方（loading 页）回落硬编码常量，行为与历史版本一致。
+/// 任何失败返回 None —— 调用方（loading 页）**跳过预置**（2026-10-20 起不再回落硬编码
+/// 常量，认证由官方 `/?token=` 交换兜底；ac466 已删除已提交的兜底 secret）。
+///
+/// 已知限制：DSH 0.2.x 的凭据文档是 `version: 1` + `records:` 嵌套布局，本手写解析只认
+/// **顶格** `client-connection/browser-session:` 段，因此在当前内核上很可能恒返回 None
+/// （与 README 的 401 实测一致）。解析器适配另案；在此之前预置路径不生效、官方 token
+/// 通道照常兜底（不劣化）。
 #[tauri::command]
 fn auth_secret() -> Option<String> {
     let path = std::env::var_os("USERPROFILE")
@@ -1576,10 +1590,12 @@ fn set_status(app: &AppHandle, text: &str) {
 /// ② 壳的「预置 cookie」路线：读 `~/.dsh/.credentials.yaml` 的
 ///    `client-connection/browser-session.secret` 自己签一份（`main.rs::auth_secret`）。
 /// **本机实测 ② 的前提不存在**：该文件（1141B，2026-09-25 21:23）里**没有那个段**
-/// （只有 `version` / `refs` / `records`）⇒ `auth_secret()` 返回 `None` ⇒ loading 页回落到
-/// **硬编码兜底 secret** ⇒ 签出来的 cookie 后端不认 ⇒ `GET /` 恒 401
+/// （只有 `version` / `refs` / `records`）⇒ `auth_secret()` 返回 `None` ⇒（2026-10-20 之前）
+/// loading 页回落到**硬编码兜底 secret** ⇒ 签出来的 cookie 后端不认 ⇒ `GET /` 恒 401
 /// （`dsh web authentication required; reopen the URL printed by dsh web.`，实测原文）⇒
 /// `themes/src/00-boot.js` 的 401 兜底链每轮 `location.reload()` ⇒ 用户看到「一直在刷新」。
+/// **2026-10-20（ac466）起该兜底常量与自签回退已删除**：拿不到 secret 就跳过预置，
+/// 由下方官方 token 通道兜底。
 ///
 /// 因此**优先用官方 token URL 导航**：后端随即 `Set-Cookie`（30 天持久），之后所有导航
 /// （含 F5、hash 变化）都带这个 cookie。取不到 token 时回落到裸 URL —— 最坏不劣化。
@@ -3164,11 +3180,66 @@ fn open_logs_dir() -> Result<String, String> {
     Ok(dir.display().to_string())
 }
 
+/// 诊断/崩溃报告用的日志脱敏（61ed5 修复，2026-10-20）。
+///
+/// 背景：`spawn_dsh` 把后端 stdout/stderr 重定向进 `server.log`，其中包含
+/// `dsh web: http://127.0.0.1:3080/?token=…`；而诊断导出与自动崩溃报告会把该日志尾部
+/// 原样带走 —— token 是**进程级有效凭据**（可换 30 天 HttpOnly cookie），分享诊断文件
+/// 即等于分享凭据。**只在取证路径**（`tail_log` = 导出 + 自动报告）脱敏，运行期日志写入
+/// 保持原样（排查时仍要看得到 token 行是否存在）。
+///
+/// 规则（零依赖手写，等价于规格里的两条正则）：
+/// ① 行内 `token=<值>` → `token=<redacted>`，值字符集取 `[A-Za-z0-9._~+/=%-]`；
+/// ② `dsh web: http…` 整行 → `dsh web: <redacted-url>`（保守：URL 可能带 token/参数）。
+pub(crate) fn redact_log_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        let (body, newline) = match line.strip_suffix('\n') {
+            Some(rest) => (rest, "\n"),
+            None => (line, ""),
+        };
+        if body.trim_start().starts_with("dsh web: http") {
+            out.push_str("dsh web: <redacted-url>");
+        } else {
+            out.push_str(&redact_token_values(body));
+        }
+        out.push_str(newline);
+    }
+    out
+}
+
+/// 把一行文本里的 `token=<值>` 替换为 `token=<redacted>`（空值不替换，保持原文）。
+fn redact_token_values(line: &str) -> String {
+    const NEEDLE: &str = "token=";
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(pos) = rest.find(NEEDLE) {
+        out.push_str(&rest[..pos + NEEDLE.len()]);
+        let tail = &rest[pos + NEEDLE.len()..];
+        let value_len = tail
+            .char_indices()
+            .find(|(_, c)| {
+                !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '~' | '+' | '/' | '=' | '%' | '-'))
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(tail.len());
+        if value_len > 0 {
+            out.push_str("<redacted>");
+        }
+        rest = &tail[value_len..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn tail_log(path: &Path, max: usize) -> String {
     match std::fs::read(path) {
         Ok(bytes) => {
             let start = bytes.len().saturating_sub(max);
-            String::from_utf8_lossy(&bytes[start..]).into_owned()
+            let text = String::from_utf8_lossy(&bytes[start..]).into_owned();
+            // 61ed5：诊断导出（export_diagnostics）与自动崩溃报告（host_log_tail_public）
+            // 共用本函数 ⇒ 取证路径统一脱敏，写盘前的唯一汇聚点。
+            redact_log_text(&text)
         }
         Err(_) => "（无日志）".to_string(),
     }
@@ -3570,13 +3641,21 @@ fn diag_report(reason: Option<String>, source: Option<String>) -> Result<String,
 
 /// renderer 侧 console 回传入口（`--- renderer console ---` 段的喂点）。
 ///
-/// 现状（2026-09-25 起，W2 收尾）：**写者已接，不再是「待接」** ——
+/// 现状（2026-09-25 起 W2 收尾；2026-10-20 注释订正：03e0c/450ea 可达性核实结论）：
 /// `themes/src/11-console.js`（登记在 `themes/src/MANIFEST.json` 的 `order` 里，由
 /// `scripts/build-init.mjs` 拼进 `src-tauri/injected/theme-init.js`）旁路本页
 /// `console.error` 与 `error` / `unhandledrejection`，只顶层 frame、环形缓冲
 /// （50 条 / 16 KiB，丢最旧）+ 2s 批量，经 `window.__TAURI__.core.invoke('diag_console',
-/// { lines })` 回传；远程页 IPC 由 `capabilities/remote-dsh.json` 放行（与
-/// `start_dragging` 同一份能力声明），浏览器直开（无 `__TAURI__`）静默跳过。
+/// { lines })` 回传。
+///
+/// **注意（ACL 事实，勿再写成「远程页 IPC 由 remote-dsh 放行」）**：`diag_console` 是
+/// **应用命令**。Tauri 2 的 ACL 只允许 remote origin 调用 capability 显式授权过的命令，
+/// 而 `capabilities/remote-dsh.json` 只授了 `core:default` + `start-dragging`（**未授权
+/// 任何应用命令**，本仓也没有应用 ACL 清单）⇒ 远程 3080 页里的该调用会被 ACL 拒绝，
+/// `11-console.js` 的 `.catch()` 又把错误静默吞掉 ⇒ **该回传通道在当前 IPC 策略下实际
+/// 失效**（诊断报告的 renderer console 段因此通常为空）。要恢复该功能，需先为本仓定义
+/// 应用 ACL 清单并把 `diag_console` 显式加入 remote capability —— 属功能变更，不在本次
+/// 安全修复范围。浏览器直开（无 `__TAURI__`）仍按原样静默跳过。
 /// 报告里该段为空时会有显式说明（见 `diag.rs` 的 format_report），不会误导。
 #[tauri::command]
 fn diag_console(lines: Vec<String>) {
@@ -3758,6 +3837,96 @@ fn apply_mica(_wv: &tauri::WebviewWindow, _fallback_bg: tauri::utils::config::Co
 
 /* ---------------- 素材服务 ---------------- */
 
+/// cafdb（2026-10-20）加固：素材服务只给主题层取 `pets/` / `icons/` 静态素材，
+/// 但旧实现对**每个连接起一个 OS 线程**、把收到的字节**无上限**追加进 `String`，
+/// 且只有「每次 read 8s」超时 —— 本机慢速客户端（坚持不发 `\r\n\r\n`）可拖住线程并
+/// 无限涨内存。现在四道限制：
+/// ① 请求头累计 > [`ASSET_MAX_HEAD_BYTES`] ⇒ 400 并关闭（单连接总量同限）；
+/// ② 每次 `read` 8s 超时 + 整个请求 [`ASSET_REQUEST_TIMEOUT`] 截止 ⇒ 慢速滴送无法长期占用；
+/// ③ 并发连接上限 [`ASSET_MAX_CONNECTIONS`]，超限直接关连接；
+/// ④ `Host` 必须是 `127.0.0.1` / `localhost`（带端口只比 hostname）⇒ 防 DNS 重绑定。
+const ASSET_MAX_HEAD_BYTES: usize = 8 * 1024;
+const ASSET_MAX_CONNECTIONS: usize = 32;
+const ASSET_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// 素材服务当前活跃连接数（与 [`AssetConnSlot`] 的 acquire/drop 配对）。
+static ASSET_CONNECTIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// 并发连接名额：`acquire()` 成功即占一个，`Drop` 时归还 —— 线程内所有提前 `return`
+/// 路径都自动覆盖（漏减会让名额永久泄漏、最终整个服务拒收连接）。
+struct AssetConnSlot;
+
+impl AssetConnSlot {
+    fn acquire() -> Option<Self> {
+        // fetch_add 先占位再判定：并发下也不会超过上限（超限者自己减回）。
+        if ASSET_CONNECTIONS.fetch_add(1, Ordering::SeqCst) >= ASSET_MAX_CONNECTIONS {
+            ASSET_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(AssetConnSlot)
+    }
+}
+
+impl Drop for AssetConnSlot {
+    fn drop(&mut self) {
+        ASSET_CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 大小写不敏感地取一个 HTTP 请求头字段值（纯函数；只扫请求头行，去掉首尾空白）。
+fn asset_header_value<'a>(head: &'a str, wanted: &str) -> Option<&'a str> {
+    for line in head.split("\r\n").skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case(wanted) {
+            return Some(value.trim());
+        }
+    }
+    None
+}
+
+/// `Host` 是否属于素材服务的合法访问者（纯函数，cafdb 单测覆盖）。
+///
+/// 只接受 `127.0.0.1` / `localhost`（大小写不敏感、忽略端口与 FQDN 末尾点）：
+/// 监听地址本身是 127.0.0.1，但**必须校验 Host** 才能挡住把任意域名解析到 127.0.0.1
+/// 的 DNS 重绑定页面（它们会带攻击者域名作 Host，从而绕过同源策略读回响应）。
+fn asset_host_allowed(host: &str) -> bool {
+    let host = host.trim();
+    // 本服务不监听 IPv6；带方括号的形态直接拒绝，避免冒号分割歧义。
+    if host.starts_with('[') {
+        return false;
+    }
+    let hostname = host.split(':').next().unwrap_or("").trim_end_matches('.');
+    hostname.eq_ignore_ascii_case("127.0.0.1") || hostname.eq_ignore_ascii_case("localhost")
+}
+
+/// 从请求头文本解析请求目标路径（纯函数，cafdb 单测覆盖；保持旧实现行为）。
+fn asset_path_from_head(head: &str) -> &str {
+    head.split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .trim_start_matches('/')
+}
+
+/// 请求头累计是否超限（纯函数，cafdb 单测覆盖；边界 = 恰好 8 KiB 仍然允许）。
+fn asset_head_too_large(head_len: usize) -> bool {
+    head_len > ASSET_MAX_HEAD_BYTES
+}
+
+/// 给素材服务回一个最小的 4xx 并关闭（只用于加固错误路径，不参与正常 200/404）。
+fn asset_write_error(stream: &mut TcpStream, status: &str, body: &str) {
+    let head = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+}
+
 fn start_asset_server() {
     std::thread::spawn(|| {
         let Ok(listener) = TcpListener::bind(("127.0.0.1", ASSET_PORT)) else {
@@ -3776,15 +3945,32 @@ fn start_asset_server() {
         }
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { continue };
+            // ③ 并发上限：拿不到名额就关连接，**不 spawn 线程**（线程本身也不能成为放大面）。
+            let Some(slot) = AssetConnSlot::acquire() else {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+                continue;
+            };
             std::thread::spawn(move || {
-                let _ = s.set_read_timeout(Some(Duration::from_secs(8)));
+                let _slot = slot; // 线程结束才归还名额（含下面所有提前 return）
+                let _ = s.set_read_timeout(Some(ASSET_REQUEST_TIMEOUT));
+                let started = Instant::now();
                 let mut req = String::new();
                 let mut buf = [0u8; 8192];
+                let mut too_large = false;
                 loop {
+                    // ② 整个请求的截止时间：只靠单次 read 超时挡不住「每 7s 滴一个字节」。
+                    if started.elapsed() > ASSET_REQUEST_TIMEOUT {
+                        break;
+                    }
                     match s.read(&mut buf) {
                         Ok(0) => break,
                         Ok(n) => {
                             req.push_str(&String::from_utf8_lossy(&buf[..n]));
+                            // ① 单连接总量上限：超限立即回 400 并关闭，不再继续累积。
+                            if asset_head_too_large(req.len()) {
+                                too_large = true;
+                                break;
+                            }
                             if req.contains("\r\n\r\n") {
                                 break;
                             }
@@ -3792,17 +3978,23 @@ fn start_asset_server() {
                         Err(_) => break,
                     }
                 }
-                if req.is_empty() {
+                if too_large {
+                    asset_write_error(&mut s, "400 Bad Request", "request too large");
                     return;
                 }
-                let path = req
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("/")
-                    .split('?')
-                    .next()
-                    .unwrap_or("/")
-                    .trim_start_matches('/');
+                // 超时/对端半途关闭：没收齐请求头，直接关闭（不响应、不解析）。
+                if !req.contains("\r\n\r\n") {
+                    return;
+                }
+                // ④ Host 校验（防 DNS 重绑定）：浏览器/主题层请求必带 Host。
+                if !asset_header_value(&req, "host")
+                    .map(asset_host_allowed)
+                    .unwrap_or(false)
+                {
+                    asset_write_error(&mut s, "403 Forbidden", "forbidden host");
+                    return;
+                }
+                let path = asset_path_from_head(&req);
                 let mut parts = path.split('/');
                 let dir = parts.next().unwrap_or("");
                 let file = parts.collect::<Vec<_>>().join("/");
@@ -4276,6 +4468,19 @@ fn main() {
                     .tooltip("Miasaki · DSH")
                     .menu(&menu)
                     .show_menu_on_left_click(false)
+                    // 左键单击 = 显示并聚焦主窗口（`show_menu_on_left_click(false)` 关掉的
+                    // 只是「左键也弹菜单」，左键本身此前没有任何行为绑定 —— 窗口隐藏到托盘后
+                    // 唯一的「单击唤回」入口必须在这里接住。右键照常弹菜单不受影响。
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_window_front(tray.app_handle());
+                        }
+                    })
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "toggle" => {
                             if let Some(w) = app.get_webview_window("main") {
@@ -5447,5 +5652,105 @@ mod tests {
             !launch.contains("install_dsh"),
             "启动路径不得自动安装 DSH —— 契约是「用户点了才装」"
         );
+    }
+
+    /// 61ed5：诊断/崩溃报告里的凭据必须脱敏。
+    ///
+    /// 背景（本机实测）：`%APPDATA%\com.miasaki.desktop\diagnostics-*.txt` 与
+    /// `%LOCALAPPDATA%\miasaki\crash-*.log` 的 host tail 曾含明文
+    /// `dsh web: http://127.0.0.1:3080/?token=…`；token 可换 30 天 HttpOnly cookie。
+    /// 覆盖：① `dsh web: http…` 整行 → `<redacted-url>`；② 行内 `token=<值>` → `<redacted>`
+    /// （值字符集截止到 `&` / 空白 / 标点）；③ 无凭据文本与中文原样保留；④ 空值不误伤。
+    #[test]
+    fn diagnostic_log_text_redacts_tokens() {
+        let text = "line1\n\
+                    dsh web: http://127.0.0.1:3080/?token=abc-DEF_123\n\
+                    token=xyz&q=1 and token=not-a-value!\n\
+                    plain 中文行\n";
+        let out = redact_log_text(text);
+        assert_eq!(
+            out,
+            "line1\n\
+             dsh web: <redacted-url>\n\
+             token=<redacted>&q=1 and token=<redacted>!\n\
+             plain 中文行\n"
+        );
+        assert!(!out.contains("abc-DEF_123") && !out.contains("xyz"));
+        // 空值不替换（规格是 `+` 语义）；不含 `token=` 的文本一字不改。
+        assert_eq!(redact_log_text("token=\n"), "token=\n");
+        assert_eq!(redact_log_text("hello tokenizer=1\n"), "hello tokenizer=1\n");
+    }
+
+    /// 61ed5 **接线**断言：`tail_log` 是「诊断导出 + 自动崩溃报告（host_log_tail_public）」
+    /// 的唯一汇聚点，必须真的走脱敏（纯函数全绿也可能根本没接线）。
+    ///
+    /// 临时目录刻意放 `target/test-tmp/`：受限环境下 cargo 启动的测试进程写系统 TEMP 会被
+    /// 拒（`os error 5`，2026-09-25 实测，同 `diag.rs::test_tmp_dir` 的理由）。
+    #[test]
+    fn tail_log_redacts_before_returning() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join("tail-log-redact");
+        std::fs::create_dir_all(&dir).expect("create test tmp dir under target/");
+        let path = dir.join("server.log");
+        std::fs::write(
+            &path,
+            "first line\ndsh web: http://127.0.0.1:3080/?token=SECRET_TOKEN_VALUE\nlast line\n",
+        )
+        .expect("写测试日志失败");
+        let out = tail_log(&path, 4096);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            out.contains("dsh web: <redacted-url>"),
+            "tail_log 未接线脱敏：{out}"
+        );
+        assert!(!out.contains("SECRET_TOKEN_VALUE"), "token 值残留：{out}");
+        assert!(out.contains("first line") && out.contains("last line"), "正常行不得被吞：{out}");
+    }
+
+    /// cafdb：素材服务只接受环回 Host（防 DNS 重绑定），大小写/端口/FQDN 末尾点不敏感。
+    #[test]
+    fn asset_host_allows_only_loopback_names() {
+        for ok in ["127.0.0.1", "127.0.0.1:39800", "localhost", "LocalHost:39800", "localhost."] {
+            assert!(asset_host_allowed(ok), "应放行 {ok}");
+        }
+        for bad in [
+            "",
+            "evil.example",
+            "evil.example:39800",
+            "127.0.0.1.evil.example",
+            "[::1]:39800",
+            "0.0.0.0",
+        ] {
+            assert!(!asset_host_allowed(bad), "必须拒绝 {bad}");
+        }
+    }
+
+    /// cafdb：请求头解析（大小写不敏感；只扫请求头行，不能把请求行里的冒号当头部）。
+    #[test]
+    fn asset_header_value_is_case_insensitive() {
+        let head = "GET /pets/x.png HTTP/1.1\r\nhOsT: 127.0.0.1:39800\r\nX-Other: 1\r\n\r\n";
+        assert_eq!(asset_header_value(head, "host"), Some("127.0.0.1:39800"));
+        assert_eq!(asset_header_value(head, "HOST"), Some("127.0.0.1:39800"));
+        assert_eq!(asset_header_value(head, "missing"), None);
+        assert_eq!(asset_header_value("GET /a:b HTTP/1.1\r\n\r\n", "GET"), None);
+    }
+
+    /// cafdb：请求头累计上限边界 —— 恰好 8 KiB 允许，超过 1 字节即判超限。
+    #[test]
+    fn asset_head_limit_rejects_only_above_eight_kib() {
+        assert!(!asset_head_too_large(0));
+        assert!(!asset_head_too_large(ASSET_MAX_HEAD_BYTES));
+        assert!(asset_head_too_large(ASSET_MAX_HEAD_BYTES + 1));
+    }
+
+    /// cafdb：路径解析保持旧行为（取请求目标、去 `?query`、去前导 `/`；畸形请求回空路径）。
+    #[test]
+    fn asset_path_uses_request_target_and_strips_query() {
+        assert_eq!(asset_path_from_head("GET /pets/x.png HTTP/1.1\r\n\r\n"), "pets/x.png");
+        assert_eq!(asset_path_from_head("GET /icons/a.png?v=1 HTTP/1.1\r\n\r\n"), "icons/a.png");
+        assert_eq!(asset_path_from_head("GET / HTTP/1.1\r\n\r\n"), "");
+        assert_eq!(asset_path_from_head("garbage\r\n"), "");
     }
 }

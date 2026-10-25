@@ -9,46 +9,30 @@
   if (window.__MIASAKI_BOOTED__) return
   window.__MIASAKI_BOOTED__ = true
 
-  // DSH web 鉴权 cookie 注入（v2026-09-05 修复「桌面端黑屏」）：
+  // DSH web 鉴权 cookie 注入（v2026-09-05 修复「桌面端黑屏」；2026-10-20 安全清理）：
   // dsh web 重启后旧 cookie 失效 → 401 纯文本页（深色底 = 黑屏）。
   //
-  // 本段是**兜底链**：主路径是 loading 页用 `~/.dsh/.credentials.yaml` 里的
-  // browser-session.secret 签好 cookie、经 IPC 预置进 WebView2（main.rs set_auth_cookie），
-  // 使首次 `GET /` 即带有效 cookie，401 不发生。
+  // **认证职责已收口到官方 token 通道**：主路径是 loading 页经 IPC 取
+  // `~/.dsh/.credentials.yaml` 里的真 secret 签好 cookie、经 `set_auth_cookie` 预置进
+  // WebView2（拿不到 secret 就跳过预置，绝不自己造值）；导航走 `GET /?token=…`
+  // → 303 + 服务端下发的 HttpOnly 30 天 cookie（见 main.rs::navigate_main）。
   //
-  // 2026-09-23 加固（复审 P2-B，两处）：
-  //  ① **绝不改写已有 `dsh-auth-*` cookie 的值**：init script 无 IPC，本段只有硬编码
-  //     兜底 secret，而预置 cookie 用的是 credentials 里的真 secret。两者一旦漂移，
-  //     无条件覆写会把**有效**cookie 换成无效的 —— 首次导航成功，下一次整页导航即 401，
-  //     正是「预置注入」要防的场景被兜底链自己制造出来。现在只在**无 cookie**时签名；
-  //     有 cookie 时仅按**原值**续写 Max-Age（保留「预置 session cookie → 持久 cookie」
-  //     的原设计意图，但不动值）。
-  //  ② 401 → reload 补**跨文档熔断**：原实现只在单个文档内做四轮停检，跨文档可无限
-  //     reload（每次新文档都重签/重判）。现用 sessionStorage 记次数，超过上限停止重载
-  //     并显示可见错误提示；第 MAX 次前若「有 cookie 却仍 401」，清掉这份无效 cookie，
-  //     给兜底签名最后一次自愈机会。
+  // 2026-10-20（ac466 修复，CWE-798）：**删除硬编码 SECRET_B64 与「无 cookie 时自签」
+  // 回退路径**。原兜底 secret 是已提交进仓库的真实历史凭据：即使后端已轮换、该值签出的
+  // cookie 不被接受，也属泄漏凭证；一旦与 credentials 漂移还会制造 401 循环。现约定：
+  //   ① 本段**绝不自己签名任何 cookie**（不 importKey、不写新的 cookie 值）；
+  //   ② 已有（非 HttpOnly）`dsh-auth-*` 时仍按**原值**续写 `Max-Age`，保留
+  //      「预置 session cookie → 持久 cookie」的原设计意图，值一个字节都不动；
+  //   ③ 401 → reload 补**跨文档熔断**：sessionStorage 记次数，超过上限停止重载
+  //      并显示可见错误提示（不再无限刷新）。
   /* @slice:auth-cookie:begin —— themes/test/auth-cookie.test.js 按此标记截段做行为闸门，勿删/勿改本行 */
   ;(function () {
     try {
       if (location.origin !== 'http://127.0.0.1:3080') return
-      if (typeof crypto === 'undefined' || !crypto.subtle) return
-      var SECRET_B64 = '2h4nw6Dhj2bmzH3ATVS3MAcld_4DEW1PieSSOi_ETas' // 仅无 cookie 时使用
-      var AUTHORITY = '127.0.0.1:3080'
       var COOKIE_PREFIX = 'dsh-auth-'
       var COOKIE_TAIL = '; Path=/; Max-Age=2592000; SameSite=Strict'
       var RELOAD_KEY = 'miasaki.auth.reloads'
       var MAX_RELOADS = 3
-      var b64url = function (u8) {
-        var s = ''
-        for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i])
-        return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-      }
-      var fromB64url = function (s) {
-        var bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'))
-        var u8 = new Uint8Array(bin.length)
-        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
-        return u8
-      }
 
       // ---- 已有鉴权 cookie 的读写（cookie 名固定为 dsh-auth-<sha256(authority)>） ----
       var readAuthCookie = function () {
@@ -67,33 +51,16 @@
         try { document.cookie = name + '=; Path=/; Max-Age=0' } catch (e) { /* ignore */ }
       }
 
-      // ---- 兜底签名（只在无 cookie 时执行） ----
-      var signFallback = function () {
-        return crypto.subtle.importKey('raw', fromB64url(SECRET_B64), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-          .then(function (key) {
-            var issued = Date.now()
-            var expires = issued + 30 * 86400 * 1000
-            var payload = JSON.stringify({ version: 1, authority: AUTHORITY, issuedAt: issued, expiresAt: expires })
-            var body = b64url(new TextEncoder().encode(payload))
-            return crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)).then(function (sig) {
-              return body + '.' + b64url(new Uint8Array(sig))
-            })
-          })
-          .then(function (signed) {
-            return crypto.subtle.digest('SHA-256', new TextEncoder().encode(AUTHORITY)).then(function (dig) {
-              document.cookie = COOKIE_PREFIX + b64url(new Uint8Array(dig)) + '=v1.' + signed + COOKIE_TAIL
-            })
-          })
-      }
+      // ---- 只续期已有 cookie，绝不自己签名（2026-10-20 ac466：删除兜底签名） ----
       var ensureCookie = function () {
         var existing = readAuthCookie()
         if (existing !== null) {
           // 同值续写：把预置的 session cookie 升级为持久 cookie（原设计意图），
-          // 值一个字节都不动 —— 见段首 ①。
+          // 值一个字节都不动 —— 见段首 ②。
           try { document.cookie = existing.name + '=' + existing.value + COOKIE_TAIL } catch (e) { /* ignore */ }
-          return Promise.resolve()
         }
-        return signFallback()
+        // 无 cookie ⇒ 什么都不写：认证由官方 `/?token=` 交换 / 服务端 Set-Cookie 负责。
+        return Promise.resolve()
       }
 
       // ---- 401 检测（原逻辑保持不变：text/plain 文档 body/innerText 无保证，三级兜底） ----
@@ -140,10 +107,11 @@
             el.id = 'miasaki-auth-halt'
             el.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:2147483647;background:#7f1d1d;'
               + 'color:#fff;font:12px/1.7 monospace;padding:8px 12px;white-space:pre-wrap'
-            el.textContent = 'MIASAKI: 鉴权 cookie 注入失败 —— 已连续重载 ' + tries + ' 次仍返回 401，停止自动重载。\n'
-              + '可能原因：~/.dsh/.credentials.yaml 的 client-connection/browser-session.secret 与 00-boot 兜底常量不一致'
-              + '（桌面端重启会用真 secret 自动预置，可先重启）。\n'
-              + '处理：重启桌面端；仍不行则清除 127.0.0.1:3080 的站点数据 / cookie 后重开。'
+            el.textContent = 'MIASAKI: 鉴权失败 —— 已连续重载 ' + tries + ' 次仍返回 401，停止自动重载。\n'
+              + '可能原因：~/.dsh/.credentials.yaml 缺少 client-connection/browser-session.secret，'
+              + '或该 secret 与后端当前值不一致（预置 cookie 因此无效）。\n'
+              + '处理：重启桌面端（会走官方 token 交换重新签发 cookie）；'
+              + '仍不行则清除 127.0.0.1:3080 的站点数据 / cookie 后重开。'
             document.body.appendChild(el)
           } catch (e) { /* ignore */ }
         }
@@ -160,8 +128,9 @@
         var n = readCount() + 1
         writeCount(n)
         if (n > MAX_RELOADS) { showHalt(MAX_RELOADS); return }
-        // 最后一次机会：已有 cookie 却仍是 401 → 这份 cookie 已无效，清掉它，
-        // 让 reload 后的文档走「无 cookie → 兜底签名」路径。
+        // 最后一次机会：已有 cookie 却仍是 401 → 这份 cookie 已失效（多半是后端已轮换
+        // secret）。本段已无权自签补救，只能清掉它，避免后续每次导航都带着无效 cookie；
+        // 真正的自愈来自「重启桌面端 → 官方 token 交换」。
         if (n === MAX_RELOADS) {
           var stale = readAuthCookie()
           if (stale !== null) dropAuthCookie(stale.name)
@@ -179,7 +148,7 @@
       }
       try { document.addEventListener('DOMContentLoaded', check) } catch (e) { /* ignore */ }
 
-      // 签名失败也必须挂上 401 兜底检查（原来整段在 .then 里，失败即静默停摆）。
+      // ensureCookie 即使异常也必须挂上 401 兜底检查（否则失败即静默停摆）。
       ensureCookie().then(armChecks, armChecks)
     } catch (e) { /* ignore */ }
   })()

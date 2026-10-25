@@ -298,7 +298,7 @@ PATH 里有没有 `%APPDATA%\npm`、`dsh.cmd` 在不在（在即「装好了」�
 | 现象 | 成因与判据 |
 |---|---|
 | WebView2 显示 `找不到此 127.0.0.1 页 / HTTP ERROR 404` | 壳在「webserver 已监听、**路由还没注册**」的窗口里导航了 —— DSH 的 fallback 在此期间对**任何**请求返回 404。现就绪判据已从「TCP 可连」升为**应用层**（`GET /` 状态码 ≠ 404），撞上也还有一次**自动重导航**（`schedule_renavigate_when_ready`，等路由就绪后重导） |
-| 页面反复刷新、停不下来 | `GET /` 返回 **401**（正文 `dsh web authentication required; reopen the URL printed by dsh web.`）⇒ 注入层的 401 兜底链每轮 `location.reload()`。根因：壳「预置 cookie」路线要用 `~/.dsh/.credentials.yaml` 的 `client-connection/browser-session.secret` 自己签名，**本机该段不存在**（只有 `version`/`refs`/`records`）⇒ 回落硬编码兜底 secret ⇒ 后端不认。现改为**官方 token 通道**：`GET /?token=…` → `303` + `Set-Cookie`（HttpOnly / SameSite=Strict / 30 天）。判据：`pet.log` 出现 `navigate: 带官方 token 进入（len …）`；若出现 `未取到 token` 则说明后端没把 `dsh web: …?token=…` 打进 `server.log`，此时会退回裸 URL（最坏是「要点一次刷新」的老体验） |
+| 页面反复刷新、停不下来 | `GET /` 返回 **401**（正文 `dsh web authentication required; reopen the URL printed by dsh web.`）⇒ 注入层的 401 兜底链每轮 `location.reload()`。根因：壳「预置 cookie」路线要用 `~/.dsh/.credentials.yaml` 的 `client-connection/browser-session.secret` 自己签名，**本机该段不存在**（只有 `version`/`refs`/`records`）⇒ 回落硬编码兜底 secret ⇒ 后端不认。现改为**官方 token 通道**：`GET /?token=…` → `303` + `Set-Cookie`（HttpOnly / SameSite=Strict / 30 天）。判据：`pet.log` 出现 `navigate: 带官方 token 进入（len …）`；若出现 `未取到 token` 则说明后端没把 `dsh web: …?token=…` 打进 `server.log`，此时会退回裸 URL（最坏是「要点一次刷新」的老体验）。**2026-10-20 已删除该硬编码兜底常量**（理由与轮换建议见下文「硬编码兜底 secret 移除」） |
 
 > 诊断口径：`doc-boot #N` 只统计**顶层** frame（`top:true`），是「页面是否被重载」的判据；
 > 子 frame 的 `about:blank` 重建另计 `frame-boot #M`（画布/SSH 预览 iframe 的正常/异常活动）。
@@ -1076,8 +1076,10 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
   host 只回稳定 `kind`，文案在客户端本地化（中英各一份）。
 - **协议覆盖**：`anthropic-messages`（`POST {root}/v1/messages`，与对话路径同规则）、
   `openai-completions`、`openai-responses`；其余协议明确回 `unsupported`。
-- **凭据**：表单临时 key → `credentials.resolve(apiKeyEnv)` → 进程环境变量；
-  **key 永不回传**（`detail` 两遍脱敏）。
+- **凭据边界（2026-10-20 安全批，monkeyscan bca30）**：表单临时 key →
+  `credentials.resolve(apiKeyEnv)` → 进程环境变量；**key 永不回传**（`detail` 两遍脱敏）。
+  **已存凭据只发给与 profile 同源的端点**：请求体自定义 `baseURL` 时必须显式提供 key，
+  否则回 `no-credential` 且不发请求（防止把已存 key 外发到任意 URL）。
 - **settings 读取双轨（v0.2.1，2026-09-23）**：已保存行的 `baseURL` / `api` /
   `apiKeyEnv` 从 `llm-pi-ai` 配置解析（请求体只带草稿值）。DSH 0.1.7 移除
   `ctx.settings.get(ns)` 后改走 `describe()`（profile 条目 Config 投影）；
@@ -1085,7 +1087,10 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
   `describe`）。不双轨时 0.1.7 上已保存行的探测静默退化成 no-credential /
   no-endpoint（线上实测）；配套评估见 shared-docs
   `dsh-0.1.7-upgrade-assessment-2026-09-23.md` §7.4。
-- **信任栅栏**：Host / Origin / `sec-fetch-site` 三层（与 sidebar、canvas 的 `/api` 栅栏同构）。
+- **信任栅栏（2026-10-20 安全批）**：两层 —— ① `connection.requestRejection` 逐请求准入
+  （与内核 `/api` 同级，401/403 直接拒、connection 缺失时回落结构层）；② 结构层
+  Host / Origin / `sec-fetch-site` 三层 + **Origin 显式端口必须等于 Host 端口**
+  （`cross-port-origin`；Chromium 剥端口场景按 hostname 判定保持兼容）。
 - **无副作用**：除一次极小模型调用外不改配置、不写文件。
 - **降级**：路由 404（插件未装 / host 未重启）时补丁自动回退 v1 目录探测并附提示，
   因此本插件是补丁的**可选**依赖，缺失不会让按钮失效。
@@ -1095,10 +1100,12 @@ profile 目录 `pnpm install` 并把 `lib/*` 同步到 `node_modules`（pnpm fil
 零提供商请求、不需要凭据，供模型页能力徽标；`llm` 缺失或 404 时徽标静默缺席）。
 
 安装：同其它 profile bundle —— `%USERPROFILE%\.dsh\profiles\web\package.json` 的
-`dependencies` + `dsh.profile.bundles` 加 `dsh-model-probe`（file: 依赖），
-profile 目录 `pnpm install`，**host 重启**后生效。
+`dependencies` + `dsh.profile.bundles` 加 `dsh-model-probe`（本地源码用 `link:` 依赖；
+`file:` 会复制快照、不跟源码，见 2026-09-29 纪律），profile 目录 `pnpm install`，
+**host 重启**后生效。
 
-自证：`node plugins/dsh-model-probe/test/probe.test.js`（20 例判定表单测，纯逻辑无网络）+
+自证：`node plugins/dsh-model-probe/test/probe.test.js`（45 例：判定表单测 + 凭据边界 +
+结构围栏 + connection 两层 + 路由端到端，假 fetch 不出网）+
 `node plugins/dsh-model-probe/test/settings-read.test.js`（12 例：双轨 helper 契约 10 +
 probeModel 存储档案解析接线 2），已并入 `node scripts/verify-all.mjs desktop`。
 
@@ -1209,12 +1216,13 @@ deepseek-harness-desktop 启动恢复 + 健康标记 + 可靠性矩阵思路）�
   刚更新过）；
 - **新增语法闸门**：`verify-all desktop` 现含 `syntax injected/theme-init.js`（注入脚本是
   每个文档都跑的代码，语法错＝实机整屏黑；分片跨片闭合，只有拼接产物能整体解析）；
-- **新增行为闸门**：`themes/test/auth-cookie.test.js` 6 例 —— 从 `themes/src/00-boot.js` 的
+- **新增行为闸门**：`themes/test/auth-cookie.test.js` 7 例 —— 从 `themes/src/00-boot.js` 的
   `@slice:auth-cookie` 段截出 IIFE，在 VM 里用假浏览器（cookie jar / sessionStorage /
-  `crypto.subtle` / `location.reload`）驱动，钉死「已有 cookie 只按原值续期、绝不覆写」
-  「401 reload 有跨文档上限、超限停止并显示提示」「document_start 不误清计数」三条契约
+  `location.reload`）驱动，钉死「已有 cookie 只按原值续期、绝不覆写」「无 cookie 不再自签
+  （2026-10-20 删除兜底 secret 后）」「401 reload 有跨文档上限、超限停止并显示提示」
+  「document_start 不误清计数」四条契约，另加一条源码断言防 `SECRET_B64` 回潮
   （实机复现要造 secret 漂移 + 预置失败，成本高且危险）。**区分力已双向验证**：回退覆写判据
-  → 用例 1 红；把上限改成 999 → 用例 4 红；还原 → 6/6 绿。
+  → 用例 1 红；把上限改成 999 → 用例 4 红；还原 → 全绿。
 
 设计与验收见 `design/auth-cookie-prepinject.md` §2.4 / §3 / §5 第 6 条，变更记录见
 `design/CHANGELOG.md` 同日「二轮复审」条。
@@ -1229,10 +1237,32 @@ dsh 后端每次重启都有新签名 cookie，首次 `GET /` 必然 401；9-05 
 **修法（已落地）**：cookie 签名与写入**提前到 navigate 之前**（loading 页 Web Crypto 签名 →
 invoke → Rust 经 Tauri 2 cookie API 写入 3080 域，navigate 前 3s 超时等待、fail-open），
 首次 `GET /` 即带有效 cookie，401 不发生；00-boot.js 的检测→reload 链降级为加固兜底
-（三级文本兜底 + 四轮检查 + 跨文档熔断，且**不再覆写**预置 cookie）。secret 改为从
-`~/.dsh/.credentials.yaml` 动态读（失败回落硬编码），轮换不再要改源码。已随 release 构建
-（47.8s 干净通过）替换 `dist/Miasaki.exe`。
+（三级文本兜底 + 四轮检查 + 跨文档熔断，且**不再覆写**预置 cookie）。secret 从
+`~/.dsh/.credentials.yaml` 动态读；**2026-10-20 起删除硬编码兜底 secret：取不到 secret 就跳过
+预置**（认证由官方 `/?token=` 交换兜底，见下一节）。已随 release 构建（47.8s 干净通过）替换
+`dist/Miasaki.exe`。
 设计与变更记录：`design/auth-cookie-prepinject.md`；验收清单见 `design/CHANGELOG.md` 同日条目。
+
+### 硬编码兜底 secret 移除（2026-10-20，安全加固）
+
+**背景**：`themes/src/00-boot.js` 与 `ui/loading.html` 曾各硬编码同一个 43 字符 HMAC secret
+（历史运行期确为 `client-connection/browser-session.secret` 的值，且随仓库提交），用于
+「没有 cookie 时自己签一枚 `dsh-auth-*`」的兜底。该值后来已与后端 secret 漂移（签出的 cookie
+被 401 拒绝），但代码层面仍属 **CWE-798 硬编码凭据**：即便当前不可利用，也应按泄漏凭证处理。
+
+**本次改动**：
+- `themes/src/00-boot.js`：删除 `SECRET_B64`、`b64url`/`fromB64url`、`signFallback`；无 cookie 时
+  **不再写任何 cookie**；保留「已有 cookie 按原值续写 `Max-Age`」与 401 跨文档熔断。
+- `ui/loading.html`：删除 `SECRET_B64` 与回退签名；`auth_secret` IPC 返回空/失败时**跳过预置**，
+  认证由 `GET /?token=…` 交换 + 服务端 `Set-Cookie`（`HttpOnly; SameSite=Strict; Max-Age=2592000`）负责。
+- 行为闸门 `themes/test/auth-cookie.test.js` 同步改写，并加源码断言防 `SECRET_B64` 回潮。
+
+**用户建议执行一次（轮换凭据，本仓库不会自动改 `~/.dsh/`）**：已提交过的 secret 视为泄漏，
+建议轮换 DSH 的 `client-connection/browser-session.secret` —— 关闭桌面端后，从
+`~/.dsh/.credentials.yaml` 的 `records:` 段删除 `client-connection/browser-session` 这一条
+（**不要删整个文件**，那会连 LLM 凭据一起丢），DSH 下次启动会自动重新生成；或用官方 CLI 的
+凭据管理入口清除该记录。轮换不影响本桌面端启动（它走官方 token 通道）；若轮换后仍遇 401，
+重启桌面端并清除 `127.0.0.1:3080` 的站点 cookie 即可。
 
 ## 启动加载 2.0 · 内嵌启动终端与闪窗根治（2026-09-22 定稿：闪窗根治与视觉层已实施，日志流待 S3）
 

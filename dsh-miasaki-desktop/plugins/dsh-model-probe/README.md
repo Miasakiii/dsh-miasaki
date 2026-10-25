@@ -9,7 +9,7 @@ DSH web profile bundle，**host only**（无 client 半侧）。为设置页「�
 | 包名 | `dsh-model-probe` |
 | 平台 | host only（无 client bundle、不注册 slot） |
 | 注入服务 | `settings`、`webServer`（`credentials` / `llm` 经 `ctx.get` 可选获取） |
-| 单测 | `node test/probe.test.js`（20 例，纯逻辑、无网络）+ `node test/settings-read.test.js`（12 例：双轨 helper 契约 + probeModel 存储档案解析接线） |
+| 单测 | `node test/probe.test.js`（45 例：判定表 / `sameOrigin` 凭据边界 / 围栏与路由准入，假 fetch 不出网）+ `node test/settings-read.test.js`（12 例：双轨 helper 契约 + probeModel 存储档案解析接线） |
 
 ### 为什么需要它
 
@@ -67,13 +67,16 @@ dual-model 的视觉路由**同一真值源**——`llm.resolveModelInfo(provide
 - **可选依赖**：`llm` 经 `ctx.get` 获取；host 没有该服务或路由 404（插件未装 / 未重启）时
   客户端静默不渲染徽标，与探测降级同构；
 - 批量上限 200 个 id，顺序解析（适配器本地操作，无需并发）；
-- 凭据优先级与脱敏、信任栅栏同上（本路由其实不需要凭据）。
+- 准入围栏（connection 准入 + 结构围栏）与脱敏同上（本路由其实不需要凭据）。
 
 ### 结果类别
 
 `ok`（附耗时）/ `unauthorized` / `model-missing` / `quota` / `rate-limited` /
 `timeout`（15s）/ `unreachable` / `bad-request` / `server-error` / `unknown` /
 `unsupported`（协议不支持探测）/ `no-credential` / `no-endpoint` / `no-model`。
+
+`no-credential` 有两种成因：已存凭据读不到；或请求自带的 `baseURL` 与已保存端点
+不同源又没有显式 `apiKey`（此时按凭据边界直接收手，不发请求 —— 见下节）。
 
 host 只回稳定 `kind`，**文案在客户端本地化**（中英各一份），两语言不会漂移。
 
@@ -88,12 +91,34 @@ host 只回稳定 `kind`，**文案在客户端本地化**（中英各一份）�
 
 ### 凭据与安全
 
-- 凭据优先级：**请求体里的表单临时 key**（尚未保存的新 key）→ `credentials.resolve(apiKeyEnv)`
-  （即 `.credentials.yaml`，Models 页写入处）→ 进程环境变量；
+**凭据边界（2026-10-19，P1 修复）**：`probeModel()` 只在这两种情况下复用**已存凭据**
+（`credentials.resolve(apiKeyEnv)` → 进程环境变量）：
+
+1. 请求**未给** `baseURL` —— 目标只能是 profile 里已保存的端点；
+2. 请求 `baseURL` 与 profile `baseURL` **同源** —— `sameOrigin()` 比较 scheme + host + port
+   （默认端口规范化；URL 解析失败、非 http(s) 一律判不同源，fail closed）。
+
+草稿 `baseURL` 指向其它源时**必须**由请求体显式带 `apiKey`；缺失则返回
+`{ok:false, kind:'no-credential'}` 且**一个请求都不发**（连凭据都不读取）。修的是
+「已保存的 key 被附加到调用方指定的 SSRF 目标」：修复前任何能打通 exact 路由的页面
+都能让 host 带着用户的已存 key 去请求任意地址。取舍：**不禁止回环 / 私有网段** ——
+本地模型探测（`http://127.0.0.1:…`）是正当用例，禁止会把主用例废掉；协议只认 http(s)。
+
+- 凭据优先级：显式 `request.apiKey` →（边界允许时）`credentials.resolve(apiKeyEnv)`
+  → 进程环境变量；
 - **key 永不回传**：响应里的 `detail` 已经过两遍脱敏（精确匹配本次 key + `sk-`/长串通配）；
-- **信任栅栏**：Host 必须是 loopback 或 `trustedHosts` 配置项；`sec-fetch-site: cross-site`
-  拒绝；存在 Origin 时必须与本机主机名一致（与 sidebar / canvas 的 `/api` 栅栏同构）。
-  防的是 DNS rebinding 与跨站触发，不是鉴权；
+- **准入两层（2026-10-19，P1 修复）**：`/model-probe-api/*` 是 `kind: 'exact'` 路由，
+  不经过内核 `/api` 的准入链，所以每个请求**逐请求**读 `ctx.get('connection')`：
+  1. composition 提供 `connection.requestRejection` 时以它为准（与内核 `/api` 同级：
+     信任围栏 + 浏览器鉴权 cookie）—— `401` / `403` 原样返回，`undefined` 放行；
+     抛错或给出其它值退回结构层（异常不得开闸）；
+  2. 服务缺席时退回**结构围栏**：Host 必须是 loopback 或 `trustedHosts`；
+     `sec-fetch-site: cross-site` 拒绝；存在 Origin 时必须与 Host **同 hostname 且同端口**
+     （2026-10-19 补端口判据：`Origin: http://127.0.0.1:5173` + `Host: 127.0.0.1:3080`
+     现在拒绝）；Origin 被 Chromium 剥掉端口时退回 hostname 判据，避免误拒正常请求；
+     `Origin: null`（opaque）拒绝。
+  - 围栏排在 method 检查与业务之前；`connection` **不做 apply 时快照**（该服务可能
+    比本插件晚 provide）。
 - **无副作用**：除一次极小模型调用外，不改配置、不写文件（这与 `@miasaki/dsh-free-model`
   的 `apply` 有本质区别）。
 
@@ -131,20 +156,27 @@ profile 目录 `pnpm install` 后 **host 重启**生效（web bundle 图重建�
 ### 验证
 
 ```powershell
-node test/probe.test.js                 # 20 例纯逻辑单测（判定表 / URL 规则 / 脱敏 / 能力位）
+node test/probe.test.js                 # 45 例：判定表 / sameOrigin 凭据边界 / 围栏与路由准入
 node test/settings-read.test.js         # 12 例双轨读取（helper 契约 + probeModel 接线）
+npm test                                # 上两条
 node ../../../scripts/verify-all.mjs desktop   # 已并入 desktop 线回归
 ```
+
+**凭据边界与准入的对抗用例**（`test/probe.test.js`，全部用假 fetch / 假 webServer，
+不出网）：不同源 `baseURL` + 无 `apiKey` → `no-credential` 且 fetch 零调用（凭据存储也
+零读取）；同源 → 复用已存 key；显式 key → 照常发到指定目标；`requestRejection` 的
+401/403/undefined/抛错/缺席五种判定；跨端口 Origin → 403；围栏先于 method 检查；
+`connection` 晚 provide 后同一路由立即按新判定走。
 
 实机项（插件加载 / 真实网关探测矩阵 / 降级路径）见
 [`../../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md`](../../../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md)。
 
 ### 文件
 
-- `lib/probe.js` — 纯逻辑：URL 构造、请求体构造、状态分类、脱敏（可单测、无 I/O）
+- `lib/probe.js` — 纯逻辑：URL 构造、`sameOrigin()` 凭据边界判定、请求体构造、状态分类、脱敏（可单测、无 I/O）
 - `lib/settings-read.js` — settings 读取双轨（≤0.1.6 `get` / 0.1.7 `describe`）
-- `lib/index.js` — 插件装配：信任栅栏、路由、凭据解析、两段式探测、批量能力查询
+- `lib/index.js` — 插件装配：两层准入围栏（`trustFence`：connection 准入 + `structuralFence`）、路由、凭据边界、两段式探测、批量能力查询；`sameOrigin` 经此再导出
 - `lib/index.d.ts` — 类型声明
-- `test/probe.test.js` — 判定表单测
+- `test/probe.test.js` — 判定表 + 凭据边界 + 准入围栏单测（假 fetch / 假 webServer，不出网）
 - `test/settings-read.test.js` — 双轨读取单测（含 probeModel 存储档案解析接线）
 - `cordis.patch.yml` — bundle 挂载声明

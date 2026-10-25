@@ -53,7 +53,7 @@ export const ORIGINAL_SHA256 = '190498E15358BCD3FE6810FE6368023A20B0403E3EA493BC
  * 产物语法错误且让整份 client bundle 不注册。它之所以能通过 `verify` 并被打进生产，
  * 是因为当时的 `verify` 只做逐字节比对（可复现 ≠ 合法）——`assertParses` 因此加入。
  */
-export const PATCHED_SHA256 = '883942A39F90CBABE3A9CB2192A9D7A53DBFE95456C719431F1E5DC8F7AB5F4D'
+export const PATCHED_SHA256 = 'AA1A51AD70198FB5CEEE0C6C585D89DB128343B7F1A02CF9826BCD4B7D8BD9B8'
 /** 补丁特征串：出现即视为已应用（用于幂等与状态判定）。 */
 const PATCH_MARKER = 'const [testing, setTesting] = '
 
@@ -67,8 +67,21 @@ const PATCH_MARKER = 'const [testing, setTesting] = '
 //   · 退役：思考强度下拉（REASONING_LEVELS / reasoningChoice / reasoningPatch /
 //     reasoningInheritLabel）、继承值解析器（reasoningDefaultOf）、相关 locale 词条；
 //   · 保留：逐模型「测试连通性」（host 探测六分类 + 目录探测降级）、「测试全部」、
-//     能力徽标（视觉/推理）、无 Key 引导（行 tooltip + 卡片提示）。
-// 规则数从 14 条缩至 10 条；产物不再包含思考强度控件（官方控件已接管该能力）。
+//     能力徽标（视觉/推理）、无 Key 引导（行 tooltip —— 卡片级提示随 v4.1 退役，见下）。
+//
+// 2026-10-20（v4.1，用户报「模型设置页空白」后修）：**再退役一条** ——
+//   `no-key-card-hint`（编辑卡片里密钥区下方的无 Key 提示）。真机点「编辑」即整页空白：
+//     ReferenceError: keyState is not defined at curatedFields
+//     slot entry crashed in 'settings.section'
+//   根因：0.2.1 把密钥失败提示的渲染搬进了辅助函数 `curatedFields(family)`，而「密钥是否
+//   已配置」的数据源同时从编辑卡片 state 改成了 `props.credential` / `props.credentialChecks`
+//   —— **`keyState` 与 `keyRef` 在该作用域里已不存在**（`keyRef` 只剩 `deriveKeyRef` 一侧的
+//   局部 const）。锚点 `shownKeyFailure === void 0 ? null : …` 仍在、仍唯一命中，于是
+//   补丁"成功"、语法闸门绿、verify 绿，唯独运行时抛 ReferenceError。
+//   官方此时已用 `credentialHint`（keyFallbackMissing/Unchecked/Detected，文案点名 {hint}
+//   环境变量）原生给出等价引导 ⇒ 按「官方吸收即退役」删除，不再硬改锚点。
+//   教训（已写入 README「产物不变量」）：**锚点命中 ≠ 作用域可用**；升级重打后必须真机
+//   点开每个 provider 的「编辑」卡片验收，静态闸门对这类缺陷无感。
 // ---------------------------------------------------------------------------
 const EDITS = [
   {
@@ -372,21 +385,6 @@ const EDITS = [
     anchor: 'title: t("credentialMissing")',
     lines: [
       '\t\t\t\t\t\t\t\t\t\t\t\t\ttitle: `${t("credentialMissing")}（${row.apiKeyEnv}）`',
-    ],
-  },
-  {
-    // A-2 无 Key 引导（卡片级）：编辑卡片里，凭据未配置且用户还没粘 key 时，
-    // 在密钥输入区下方给一行可操作提示（点名 ref + 说明后果）。
-    // 锚点是密钥失败段落的首行（该数组最后一个元素、无尾逗号）—— 插在它**之前**，
-    // 新元素自带尾逗号，数组结构不变。
-    id: 'no-key-card-hint',
-    mode: 'insertBefore',
-    anchor: 'shownKeyFailure === void 0 ? null : (0, react_jsx_runtime.jsx)("p", {',
-    lines: [
-      '\t\t\t\t\t\tkeyState !== void 0 && keyState.configured !== true && keyValue.length === 0 ? (0, react_jsx_runtime.jsx)("p", {',
-      '\t\t\t\t\t\t\tclassName: ModelsSection_module_css_default["advancedHint"],',
-      '\t\t\t\t\t\t\tchildren: `${t("credentialMissingHint")}${keyRef}${t("credentialMissingTail")}`',
-      '\t\t\t\t\t\t}) : null,',
     ],
   },
   {

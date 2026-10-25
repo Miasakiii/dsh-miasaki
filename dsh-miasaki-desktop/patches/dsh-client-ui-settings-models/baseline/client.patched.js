@@ -2258,10 +2258,6 @@ window.__ModuleLoader__.load({
 							className: ModelsSection_module_css_default[missingRefs ? "notice" : detectedRef === void 0 ? "advancedHint" : "savedNotice"],
 							children: credentialHint
 						}),
-						keyState !== void 0 && keyState.configured !== true && keyValue.length === 0 ? (0, react_jsx_runtime.jsx)("p", {
-							className: ModelsSection_module_css_default["advancedHint"],
-							children: `${t("credentialMissingHint")}${keyRef}${t("credentialMissingTail")}`
-						}) : null,
 						shownKeyFailure === void 0 ? null : (0, react_jsx_runtime.jsx)("p", {
 							className: ModelsSection_module_css_default["error"],
 							children: t(shownKeyFailure)

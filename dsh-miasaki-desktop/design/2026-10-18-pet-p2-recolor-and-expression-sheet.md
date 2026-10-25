@@ -1,6 +1,8 @@
 # 桌宠 P2：配色重着色（P2-a）+ 表情精灵表（P2-b 8/8 已交付）（2026-10-18）
 
 > 状态：**已实施完毕（单测 13 例 + 反向验证八类全转红 + 静态回归 44/44），待构建部署 + 用户实机走查（E38）**。
+> **2026-10-19 追记**：用户报障「变换表情脸上会有线」⇒ 8 张表情帧用面区蒙版重合成、
+> exDoubt 补回头顶问号（asset-only，判据与脚本见 §4「表情帧重合成」）。
 > P2-b 的 8 张表情帧全部入链；exSleepy 于账号充值后补生成，exShy / exDoubt 为用户追加。
 > 触发：用户对 P0–P3 批次规划「开工」⇒ 执行 P2 批。P0/P1 已于同日落地
 > （[`2026-10-18-pet-p0-interaction-emote.md`](2026-10-18-pet-p0-interaction-emote.md)、
@@ -119,7 +121,6 @@ compose 顶部比对 `shared.settings.color` 与缓存 `loaded_color`，不一�
 | D. **AI 生成（定源）** | 用户 2026-10-18 拍板「看看这里有没有参考，不行就生成吧」⇒ bailian-gen（qwen-image-3.0 图像编辑），以**我们自己的 idle 帧 r0c0 为参考图**保姿势/服装/构图，prompt 只改脸部表情 |
 
 **生成管线（可复现；脚本 `_refs/p2b-gen/probe-align.mjs`，目录已 gitignore）**：
-
 1. `bl image edit --image ref-idle.png --prompt "<表情描述>。保持完全相同的姿势、服装、构图、背景和画风，只改变脸部表情，身体其余部分与原图完全一致。" --size 512*555 --watermark false`
    （水印必须关——带水印的图不能切进精灵表；512×555 保持 192:208 宽高比，
    API 的 i2i 下限 512×512）；
@@ -129,6 +130,30 @@ compose 顶部比对 `shared.settings.color` 与缓存 `loaded_color`，不一�
    PNG：身体结构/透明区与原图集一致，只有脸变了（白底不泄漏——差异遮罩天然
    只在原帧实心区内取值）；
 3. 落盘 `ui/pets/whale/frames/ex*.png` + `frames.json` 的 whale 行登记。
+
+**表情帧重合成（2026-10-19，用户报障「变换表情脸上会有线」后换蒙版）**：首版
+散点蒙版（步骤 2 的「差异 >24 逐像素 + 3×3 软边」）把 AI **全图细微重排**也贴回帧
+——实测差异像素 ≈50% 实心、散点遍布头发/裙边/全身（刘海垂落带连续、四肢裙摆零星），
+叠加处的混合缝在实机上读作「脸上的线/噪边」。真正的表达差异只在脸部（眼/眉/嘴/
+腮红），故 8 张全部用**面区蒙版**重合成（脚本 `_refs/p2b-gen/recomposite-face.mjs`，
+头注释写明判据）：
+
+1. 感知误差（sRGB 伽马² + 类红均值加权）> 7 的实心像素 → 膨胀 1px（只许进实心区）
+   → 最大 4-连通块 = 脸（实测 2400–3000px，含刘海垂落带）；
+2. 腐蚀 1px 取核心 → 包络 bbox 外扩（左2/右2/上4/下3）∩ 实心区 = **矩形面区**
+   （袋帽下沿～颈部）——矩形是刻意的：AI 在脸周头发上有大面积 8–25 级轻微重排，
+   凸边界必穿头发留线，矩形边界落在「逐像素 ≤7 级」的带上，3×3 两遍羽化后不可见；
+3. `out = orig·(1−m) + gen·m`，**alpha 一律用原帧**（命中测试 / halo / 轮廓三链不变）；
+4. **exDoubt 专属补回**：头顶问号在生成图里是「白底深色、原帧透明」像素，步骤 1
+   天然丢弃（首版成品其实也没有问号——设计意图「头顶问号」从未真正交付）。补回法 =
+   深色(max<130) ∧ 原帧近透明(<128) ∧ x≥110 ∧ y≤40 的连通像素为核心，覆盖率
+   α=(255−lum)/160 反预乘白底还原颜色，alpha 取覆盖率（**全表唯一破例改 alpha 处**，
+   区域悬空于头顶、不触头发，命中测试增量 ≈ 一个 16×19 符号，与 P1 几何符号同理）。
+   alpha 契约的完整口径：只有「原帧透明 + 悬空新内容」才允许破例，任何碰实心轮廓的
+   破例都会破坏 halo/命中的逐帧一致性。
+
+重合成后逐张目检 8/8：脸部为新表情、面外与 r0c0 逐像素一致（≤6 级）、无残留散点缝；
+exDoubt 头顶问号 235px 在位。
 
 **交付与中断**：**8 张全部入链**——exHappy / exAngry / exSad / exSurprise /
 exStarry / **exSleepy** / **exShy** / **exDoubt**（摸头/咬手/完成/审批/mood-Low/
@@ -168,6 +193,7 @@ exSleepy，1.4s）→ 到期后由**瞌睡续觉钩子**（`sleep_night && actio
 | 设置链 | `main.rs`（`psclr=` 解析 + ps_seen + apply）、`themes/src/02-core.js`（syncHash 拼装 + keep-list）、面板 `client.js`（`COLOR_CHOICES` 六档 + SegmentedControl 行 + 默认值 `color: 0`） | 面板 1 例契约（官方原语 + 默认值对齐 + Number 上报） |
 | **P2-b 表情帧资产** | `ui/pets/whale/frames/ex{Happy,Angry,Sad,Surprise,Starry,Sleepy,Shy,Doubt}.png`（8 张，各 ~54KB）+ `ui/pets/frames.json` 的 whale 行登记 | `check-pet-assets` 双向校验过（desktop 44/44） |
 | **P2-b 渲染路由** | `marks.rs`（`expression_row_for` 纯映射）、`window.rs`（`show_mark` 主题分流：whale 演表情帧 Ambient 槽、其余落符号；反应后置于姿态槽之后；**瞌睡续觉钩子** `sleep_night` + 每拍补 Sleep 槽） | 1 例映射测试 + 3 例源码契约（模式分流 / 顺序 / 瞌睡两段式） |
+| **表情帧面区重合成（2026-10-19）** | `_refs/p2b-gen/recomposite-face.mjs`（判据见 §4「表情帧重合成」）+ 8 张 `ex*.png` 换新（asset-only，Rust 零改动；exDoubt 补回头顶问号 235px） | 逐张目检 8/8（脸部新表情、面外与 r0c0 逐像素 ≤6 级、无散点缝）+ `check-pet-assets` PASS |
 
 **回归证据**：`cargo test` **P1 收线时 276 → 289 例全绿**（P2 新增 13：P2-a 8 +
 P2-b 5）；`verify-all desktop` **44/44**。

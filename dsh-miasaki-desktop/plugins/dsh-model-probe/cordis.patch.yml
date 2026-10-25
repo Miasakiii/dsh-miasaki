@@ -13,12 +13,16 @@
 #     响应外层 ok 表示「探测执行了」，内层 result.ok 表示「模型可用」。
 #   GET  /model-probe-api/health —— 就绪探针（版本 / 支持的协议 / 超时）。
 #
-# 凭据：优先用请求体里携带的表单临时 key（尚未保存的新 key），否则经
-# credentials 服务解析 profile 的 apiKeyEnv，再回落进程环境变量；
-# 任何情况下都不把 key 写进响应（detail 已脱敏）。
+# 凭据：优先用请求体里携带的表单临时 key（尚未保存的新 key）；只有「请求未给
+# baseURL」或「请求 baseURL 与 profile 的 baseURL 同源」时才经 credentials 服务
+# 解析 profile 的 apiKeyEnv，再回落进程环境变量。草稿 baseURL 指向其它源时必须
+# 显式带 key，否则直接返回 no-credential、一个请求都不发。任何情况下都不把 key
+# 写进响应（detail 已脱敏）。
 #
-# 信任栅栏：Host/Origin/sec-fetch-site 三层，拒绝跨站与 DNS rebinding，
-# 与 sidebar / canvas 插件的 /api 栅栏同构。
+# 准入：优先用 composition 的 `connection.requestRejection`（逐请求读取，与内核
+# `/api` 同级；401/403 原样返回，缺席/抛错时退回结构围栏），结构围栏为
+# Host/Origin/sec-fetch-site 三层 + Origin 端口判据（同 hostname 且同端口），
+# 拒绝跨站、跨端口与 DNS rebinding，与 sidebar / canvas 插件的 /api 栅栏同构。
 - insert:
     - id: model-probe
       name: 'dsh-model-probe'

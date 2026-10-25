@@ -14,7 +14,7 @@
 
 | 分片 | 行段(legacy 参考) | 职责 |
 |---|---|---|
-| `00-boot.js` | 1–46 | IIFE 开头、错误陷阱、STYLES/META/TIPS/FORCE_DARK、鉴权 cookie 注入 |
+| `00-boot.js` | 1–46 | IIFE 开头、错误陷阱、STYLES/META/TIPS/FORCE_DARK、鉴权 cookie 续期 + 401 跨文档熔断（**2026-10-20 起不再自签 cookie**：硬编码兜底 secret 已删除，无 cookie 时什么都不写，认证走官方 `/?token=` 交换/预置注入） |
 | `01-persona.js` | 47–124 | 人格会话联动（派发 `miasaki-persona-request`；创建/去重/toast 由 dsh-pet-panel 插件完成） |
 | `02-core.js` | 125–272 | hash 同步通道、主题来源优先级（`__MIA_THEME__` > URL > localStorage）、IS_LOCAL、apply 定律 |
 | `03-switcher.js` | 273–534 | 主题面板/标题栏/关闭弹窗 CSS + 面板构建与交互。**2026-10-07：右下角主题悬浮球 `#miasaki-switcher` 退役**，切换能力并入窗控组的主题头像按钮 `.tb-theme`（DOM 在 06）；面板 `#miasaki-theme-menu` 作为 `.tb-group` 的绝对定位子元素挂载。文件名沿用历史（它仍是主题切换面板的宿主分片），但 `#miasaki-switcher` 元素与 `.ms-btn` 球体样式已不存在 |

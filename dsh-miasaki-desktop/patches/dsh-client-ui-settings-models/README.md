@@ -65,6 +65,34 @@
 > 产物 **223,216 B / `883942A3…`**；`verify` 三行 PASS、`apply` patched、语法合法。
 > 实测：0.2.1 原版 211,258 B / `190498E1…`。
 
+> **2026-10-20（v4.1）：用户报「模型设置页空白」，真机定位到一条编辑的作用域已失效。**
+> 现象：设置 →「模型」右侧内容区**整块空白**（左侧导航正常），且是**永久的**——一旦触发，
+> 切走再切回也不恢复，只能刷新页面。真机取证（headless Edge + CDP 连同一宿主）：
+> ```
+> ReferenceError: keyState is not defined
+>     at curatedFields (…/dsh-client-ui-settings-models/client.js)
+> slot entry crashed in 'settings.section'
+> ```
+> 触发点是**点开任一 provider 的「编辑」卡片**。根因：0.2.1 把「密钥失败提示」的渲染搬进了
+> 辅助函数 `curatedFields(family)`，同时把「密钥是否已配置」的数据源从编辑卡片 state 换成了
+> `props.credential` / `props.credentialChecks` —— **`keyState` 与 `keyRef` 在该作用域里已不存在**
+> （`keyRef` 只剩 `deriveKeyRef` 那一侧的局部 const）。而 `no-key-card-hint` 的锚点
+> `shownKeyFailure === void 0 ? null : …` 仍然存在、仍然唯一命中 ⇒ 补丁「成功」、语法闸门绿、
+> `verify` 三行 PASS、`patch-live-audit` 也报 patched，**唯独运行时抛 ReferenceError**。
+>
+> **修法：退役 `no-key-card-hint`**（编辑数 13 → 12）。不是硬改锚点，理由与 v4 退役思考强度同源：
+> 官方 0.2.1 已用 `credentialHint` 原生给出等价引导，且文案点名环境变量：
+> ```
+> 未检测到环境变量。请填写 API 密钥，或设置环境变量 OPENROUTER_API_KEY。
+> ```
+> `no-key-row-hint`（行级 tooltip 点名 env）保留 —— 官方没有等价物。
+> 产物 **222,925 B / `AA1A51AD…`**；`verify` 三行 PASS（12 条编辑）→ `resync` 重打 →
+> 真机逐个点开 7 个 provider 的「编辑」卡片：**0 异常、卡片全部正常渲染**。
+>
+> **教训（已写进「产物不变量」#6）**：**锚点命中 ≠ 作用域可用**。语法闸门、逐字节比对、锚点
+> 唯一性全都对这类缺陷无感 —— 判据的真值只在真机点开编辑卡片时才出现。升级重打后必须跑
+> `node smoke-model-page.mjs`（见「用法」）。
+
 ## 为什么是「运行时补丁」而不是插件
 官方设置页刻意不提供逐模型思考强度控件，也不做逐模型连通性测试——上游取向是
 「effort 是 per-MODEL 能力，放在对话模型选择器里」。而本机没有 pnpm 全量重建链路
@@ -83,10 +111,11 @@
 
 | 文件 | 作用 |
 |---|---|
-| `patch.mjs` | **补丁规范**：13 条锚点编辑规则 + CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
+| `patch.mjs` | **补丁规范**：12 条锚点编辑规则 + CLI（verify / status / apply / resync / revert / rebuild）+ **语法闸门**（`applyPatch` 出口强制 `vm.Script` 解析） |
+| `smoke-model-page.mjs` | **真机冒烟**（v4.1 新增）：headless Edge + CDP 连运行中的宿主，打开 设置 → 模型 → 逐个点开「编辑」卡片，抓 `slot entry crashed` / `ReferenceError`。**升级重打后必跑** |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建两份 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
 | `baseline/client.original.js` | DSH **0.2.1-rc.2** 官方原版 client.js（211,258 B，SHA-256 `190498E1…`）。与安装目录的 `client.js.dsh-bak` 逐字节一致 |
-| `baseline/client.patched.js` | 应用补丁后的产物（223,216 B，SHA-256 `883942A3…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
+| `baseline/client.patched.js` | 应用补丁后的产物（222,925 B，SHA-256 `AA1A51AD…`）。**黄金对照**：既是重建目标，也是下次升级后人工适配时的 diff 基准 |
 
 > 两份 baseline 是第三方产物而非本项目源码，但它们是不可再生的重建依据
 > （`vendor/` 不入库、安装目录会被升级覆盖），故随补丁规则一并版本化。
@@ -104,6 +133,9 @@
 > → `0.2.1-rc.2`（2026-10-17 升级重打 + **缩减重写 v4**：`190498E1…` / `883942A3…`；
 > 退役思考强度下拉与继承值解析器、删 inline 变体与 4 条 locale 词条；13 条编辑，
 > `ModelInputTypes` 插入点改 `insertBefore`。**`EDITS` 语义变更见文首 v4 说明**）。
+> → `0.2.1-rc.2` + **v4.1**（2026-10-20，官方原版未变：`190498E1…` / 产物 `AA1A51AD…`；
+> 退役 `no-key-card-hint` —— 它的插入点 `curatedFields` 里 `keyState` / `keyRef` 已不存在，
+> 真机点「编辑」即 `ReferenceError` ⇒ 整页空白。12 条编辑。**见文首 v4.1 说明**）。
 > 旧基线见 git 历史。
 
 ## 用法
@@ -118,6 +150,7 @@ node patch.mjs resync            # 由 backup 重打（apply 幂等跳过时的�
 node patch.mjs revert            # 从 .dsh-bak 还原
 node patch.mjs rebuild           # 改过 EDITS 后：由 baseline 原始文件重建 golden 产物并打印新常量
 node rebuild-baseline.mjs        # 升级后：用当前安装的官方原版重建 baseline（见下）
+node smoke-model-page.mjs        # **真机冒烟（升级重打后必跑）**：设置→模型→逐个点开编辑卡片，抓 slot entry crashed
 
 # 通用参数：--target <client.js 路径> 覆盖自动探测（默认探测 %APPDATA%\npm 全局安装）
 ```
@@ -146,26 +179,26 @@ node ..\..\..\scripts\verify-all.mjs desktop
 
 ## 补丁做了什么
 
-13 条编辑，全部按「锚点唯一」定位（不唯一即报错，宁可失败也不瞎改）：
+12 条编辑，全部按「锚点唯一」定位（不唯一即报错，宁可失败也不瞎改）。**v4 起「思考强度
+下拉 / 继承值解析」已随官方 `ModelReasoningEfforts` 退役**，下表为 v4.1 之后的真实构成：
 
-| # | 位置 | 内容 |
-|---|---|---|
-| 1 | 模块级（`textOf` 前） | `REASONING_LEVELS` / `reasoningChoice()` / `reasoningPatch()` / `reasoningInheritLabel()`（继承项带当前生效值）/ `testResultClass()` / `describeProbe()`（结果类别 → 本地化文案）/ `probeViaHost()`（调 host 探测路由，未就绪时返回 null） |
-| 2 | `ModelListEditor` state 区 | `testing` / `testResults` 两个 useState |
-| 3 | `askable` 前 | `testModel()`——**先** `probeViaHost`（真实可用性，六分类）；返回 null（插件未就绪）时**降级**为 `operations.discoverModels`（目录探测），并在文案尾附「探测服务未就绪」 |
-| 4 | 删除模型行处 | `testing` / `testResults` 的行号重排（防幽灵按钮） |
-| 5 | 高级编辑区（maxTokens 之后） | 思考强度 `<select>` + 测试按钮 + 结果文案 + **能力徽标**（视觉/推理）。**分两代变体**（`variants` + `probe`）：`0.1.5-rc.x` 直接插入内联 JSX（1 条子编辑）；`0.1.6-alpha.2` 起改为「Editor 渲染成 ReactNode → `reasoningRow` prop → ModelRow 摆位」（2 条子编辑，成对生效） |
-| 6/7 | en / zh 字典 | 32 个词条（思考强度 / 继承提供方默认 / 未声明 / 不支持思考 / 测试连通性 / 测试中… / 测试全部 / 可达·已列出 / 可达·未列出 / 无 Key 引导两条 / 视觉 / 推理 + 13 条探测类别文案） |
-| 8 | 缺 key 行小点 | tooltip 点名环境变量：`API 密钥缺失（OPENROUTER_API_KEY）` |
-| 9 | 编辑卡片密钥区 | 未配置且未粘 key 时一行可操作提示（点名 ref + 后果） |
-| 10 | `catalogProps` | `reasoningDefaultOf(id)` 解析器（按 id 查解析后命名空间值的同 id 条目） |
-| 11 | state 区（锚 edit #2 产物） | `capabilities` Map / `testingAll` 态 |
-| 12 | `askable` 前（锚 edit #3 之后） | 能力加载 effect（`POST /model-probe-api/capabilities`，404 静默）+ `testAllModels`（顺序跑全部行） |
-| 13 | 模型列表头 | 「测试全部」按钮（获取可用模型右侧） |
+| # | id | 位置 | 内容 |
+|---|---|---|---|
+| 1 | `reasoning-helpers` | 模块级（`textOf` 前） | `testResultClass()`（成功/错误色调）/ `describeProbe()`（host 稳定 `kind` → 本地化文案，只附真实测得的耗时）/ `probeViaHost()`（调 host 探测路由；路由缺席返回 null 以触发降级） |
+| 2 | `test-state` | `ModelListEditor` state 区 | `testing` / `testResults` 两个 useState |
+| 3 | `test-model` | `askable` 前 | `testModel()`——**先** `probeViaHost`（真实可用性，六分类）；返回 null（插件未就绪）时**降级**为 `operations.discoverModels`（目录探测），并在文案尾附「探测服务未就绪」 |
+| 4 | `reindex-test-state` | 删除模型行处 | `testing` / `testResults` 的行号重排（防幽灵按钮） |
+| 5 | `reasoning-ui`（变体） | 高级编辑区 | **能力徽标（视觉/推理）+ 逐行「测试连通性」按钮与结果文案**。两代变体：`0.1.6-alpha.2` 起为「Editor 侧渲染 `testRow` → 作为 prop 传给 `ModelRow` → `ModelRow` 摆到容量字段之后」；0.2.1 把收尾与 `ModelInputTypes` 拆成两行后，摆位改 `insertBefore` |
+| 6/7 | `locale-en` / `locale-zh` | en / zh 字典 | 测试相关词条：测试连通性 / 测试中… / 测试全部 / 可达·已列出 / 可达·未列出 / 视觉 / 推理 + 13 条探测类别文案 + 无 Key 行提示两条（`credentialMissingHint` / `Tail`） |
+| 8 | `no-key-row-hint` | 缺 key 行小点 | tooltip 点名环境变量：`API 密钥缺失（OPENROUTER_API_KEY）` |
+| 9 | `capabilities-state` | state 区（锚 edit #2 产物） | `capabilities` Map / `testingAll` 态 |
+| 10 | `capabilities-effect-and-testall` | `askable` 前（锚 edit #3 之后） | 能力加载 effect（`POST /model-probe-api/capabilities`，404 静默）+ `testAllModels`（顺序跑全部行） |
+| 11 | `test-all-button-comma` | 模型列表头（补分隔符） | 0.2.0 起「获取可用模型」是该 children 数组的**最后一项且无尾逗号** ⇒ 先把 `})` 改回 `}),`，否则下一条插入会踩 ASI 陷阱 |
+| 12 | `test-all-button` | 模型列表头 | 「测试全部」按钮（获取可用模型右侧） |
 
-语义：`inherit` = 不写字段、`disabled` = `reasoningEfforts: false`、其余 = `{off: null, [lvl]: lvl}`。
-**「继承」的显示语义（v3）**：标签带当前生效值——按模型 id 在解析后的命名空间值里找同 id 条目，
-取其声明的等级；解析不到显示「未声明」。绝不猜一个用户看不见的默认值。
+> 已退役（历史）：`no-key-card-hint`（v4.1，作用域失效）、`reasoning-ui` 的思考强度部分、
+> `reasoning-default-resolver`（v4，官方内置推理等级编辑）。**退役项不保留死规则**——
+> 作用域或语义已变的插入类编辑一律删除，不硬改锚点。
 
 **连通性结果语义（v2）**：host 返回稳定的 `kind`（不是句子），文案在客户端本地化，
 两语言不会各说各话。类别：`ok`（附耗时）/ `unauthorized` / `model-missing` /
@@ -173,39 +206,41 @@ node ..\..\..\scripts\verify-all.mjs desktop
 `server-error` / `unknown` / `unsupported` / `no-credential` / `no-endpoint` / `no-model`。
 v1 的「原样回显错误串」已不再出现——那条路径只在降级时保留。
 
-## 双代变体（edit #5 如何同时支持两个 DSH 版本）
+## 双代变体（edit #5 如何跨两代 DSH 结构）
 
 `EDITS` 的项有两种形态：**单条**（`{ id, mode, anchor, lines }`，自身即一次编辑）与
 **变体**（`{ id, variants: [{ probe, edits: [...] }] }`）。`probe` 是一行源码文本，trim 后全等且在
 源文件里出现即选中该变体；**没有任何 probe 命中就报错** —— 「两个已知版本都不匹配」必须响亮失败，
 因为静默跳过会让补丁「成功」而 UI 不在位，那要等用户打开设置页才发现。
 
-edit #5（思考强度 + 测试按钮）是唯一用到变体的：
+edit #5（能力徽标 + 测试按钮）是唯一用到变体的。v4 已删除 0.1.5 的 `inline-jsx` 历史分支
+（当前运行内核是 0.2.1），只剩一对成对生效的子编辑：
 
 | 子编辑 | probe（选中条件） | 模式 | 插到哪里 |
 |---|---|---|---|
-| `reasoning-ui@inline-jsx` | `editCapacity(index, "maxTokens", event.target.value);` | `insertAfterOffset` | `ModelListEditor` 内联 JSX 的 children 数组，紧跟 maxTokens 输入框（锚点 +2 行的 `})]` 之后） |
-| `reasoning-ui@model-row-prop` | `editCapacity(index, "maxTokens", text);` | `insertBefore` | Editor 的 `<ModelRow>` props：插一个 `reasoningRow`（已渲染好的 `Fragment`） |
-| `reasoning-ui@model-row-slot` | 同上 | `replaceLine` | `ModelRow` 内部：把 `props.reasoningRow` 摆到容量字段 map 之后、`ModelInputTypes` 之前 |
+| `reasoning-ui@model-row-prop` | `editCapacity(index, "maxTokens", text);` | `insertBefore` | Editor 的 `<ModelRow>` props：插一个 `testRow`（已渲染好的 `Fragment`） |
+| `reasoning-ui@model-row-slot` | 同上 | `insertBefore` | `ModelRow` 内部：把 `props.testRow` 摆到容量字段 map 收尾行之后、`ModelInputTypes` 之前（0.2.1 把收尾与下一项拆成两行，故不再需要 `replaceLine`） |
 
-**新版为什么跨组件传节点，而不是把状态搬进组件**：`testing` / `testResults` / `testModel` 以及
+**为什么跨组件传节点，而不是把状态搬进组件**：`testing` / `testResults` / `testModel` 以及
 `patch`、`t`、`disabled`、`model`、`index` 全在 `ModelListEditor` 作用域里，而 `ModelRow` 是官方组件、
 props 契约固定。所以让**闭包留在 Editor**，跨组件传递的是**已渲染好的 ReactNode** ——
-`ModelRow` 只负责摆位置。另一处 `ModelRow` 调用点（`DeepSeekModelsEditor`）不传 `reasoningRow`，
+`ModelRow` 只负责摆位置。另一处 `ModelRow` 调用点（`DeepSeekModelsEditor`）不传 `testRow`，
 值为 `undefined`，React 对 undefined 子节点不渲染任何东西，**安全且无需改动它**。
 
 > **两条实测踩过的坑**（都撞在 `applyPatch` 出口的语法闸门上，值得记下）：
 > ① **锚点不能选 `onFieldChange`** —— `ModelRow` 被**两个编辑器**共用，那个锚点在 bundle 里命中 2 次，
 > 撞 `findUnique` 的唯一性要求；`inputLoading` 里的 `catalogProvider` 只有本编辑器有，实测唯一命中。
-> ② **`}, field)), (0, react_jsx_runtime.jsx)(ModelInputTypes, {` 这一行插不进独立行** ——
+> ② **`}, field)), (0, react_jsx_runtime.jsx)(ModelInputTypes, {` 这一行插不进独立行**（0.2.0 及以前）——
 > 它**行内**同时装着上一项的收尾（`.map(...)` 的 `)`）与下一项的开头：在它之前插入会落进
-> `.map()` 的参数里，在它之后插入会落进 `ModelInputTypes` 的 props 里。改用 `replaceLine` 整行重写，
-> 把节点放在两者之间。
+> `.map()` 的参数里，在它之后插入会落进 `ModelInputTypes` 的 props 里。当时改用 `replaceLine` 整行重写。
+> **0.2.1 已把这两者拆成独立两行** ⇒ 现在直接 `insertBefore` 即可（规则见上表）。
+> ③（v4.1 新增教训）**锚点命中不代表插入点的作用域可用**：0.2.1 把某段渲染搬进辅助函数后，
+> 锚点仍在但变量没了（`keyState`）⇒ 见「产物不变量」#6 与文首 v4.1 记录。
 
 **legacy 分支逐字节不变**：0.1.5 走的分支与改造前完全一致，两份 baseline 与三个常量都未动，
 `verify` 仍报同一条 `F1717A07…`。因此这次改造**不影响当前运行环境**，只增加了一条未来路径。
 
-## 产物不变量（四条，缺一不可）
+## 产物不变量（六条，缺一不可）
 
 `verify` 的 PASS 只说明这些不变量当前成立；任一条破了都必须先修再重打。
 
@@ -216,6 +251,7 @@ props 契约固定。所以让**闭包留在 Editor**，跨组件传递的是**�
 | 3 | **产物是可解析的经典脚本** | `applyPatch` 出口 `assertParses`（`vm.Script`） | 语法闸门抛错；`status` 单独报「语法 非法」 |
 | 4 | **变体探测命中**：至少要有一个 `probe` 在源文件里 trim 后整行全等 | `resolveEdits` | 抛出「没有任何变体的探测锚点命中」并列出试过的 probe —— **不静默跳过** |
 | 5 | **插入点不得踩 ASI 陷阱**：插入的第一行若以 (/[/`  ` 等开头，则其前一行必须以 ,/;/{/[ 等分隔符结尾 | —— （2026-09-28 事故后立的规矩：见下文「ASI 陷阱」） | 语法闸门**查不出来**（jsx(...)(jsx(...)) 是合法语法），只能在浏览器里运行时炸 |
+| 6 | **插入代码引用的每个自由变量在插入点作用域内可解析** —— 锚点命中只说明「这段文本还在」，不说明「它周围的变量还在」（v4.1 事故：`keyState` / `keyRef` 已被官方重构掉） | **无法静态验证**（本机无 JS 解析器，且作用域跨越 bundle 的压缩函数）；只能靠 `node smoke-model-page.mjs` 真机点开编辑卡片 | 运行时 `ReferenceError: xxx is not defined` ⇒ `slot entry crashed in 'settings.section'` ⇒ 该 section 内容区**永久空白**（刷新才恢复）。**语法闸门、逐字节比对、锚点唯一性、`patch-live-audit` 全绿都拦不住** |
 
 ### 为什么「逐字节一致」不够（2026-09-19 事故复盘）
 
@@ -256,6 +292,11 @@ SHA 与常量一致、产物却是坏的）。`verify` 同时校验 `PATCHED_SHA
 4. `node patch.mjs apply` 重新应用，刷新页面生效。
    若它报「已应用但产物语法非法」，说明安装目录里躺着旧规则的坏产物 —— 用
    `node patch.mjs resync` 由 backup 重打。
+5. **真机冒烟（v4.1 起必做，不可省）**：`node smoke-model-page.mjs` —— 自动打开
+   设置 →「模型」→ 逐个点开每个 provider 的「编辑」卡片。**锚点命中不代表插入点的作用域可用**
+   （不变量 #6），语法闸门 / 逐字节比对 / 锚点唯一性 / `patch-live-audit` 对这类缺陷全部无感。
+   前置条件：miasaki 桌面端在跑（默认探测 `127.0.0.1:3080` 与 `%LOCALAPPDATA%\miasaki\server.log`
+   里的 token）；脚本**不是** CI 闸门，是升级后的人工验收步骤。
 
 > **实操记录（2026-09-10，0.1.2-rc.1 → 0.1.5-rc.1）**：7 个锚点在新版 client.js 中
 > **全部唯一命中**（新版 138,937 B，比 0.1.2 多 1,236 B），`insertAfterOffset` 的期望值检查
@@ -326,6 +367,26 @@ SHA 与常量一致、产物却是坏的）。`verify` 同时校验 `PATCHED_SHA
 > `apply` 成功（语法合法）→ `patch-live-audit` 12/12 patched。产物自查：
 > `testRow`/`testModel`/`testResults`/`capabilities` 均在位，`REASONING_LEVELS`/`reasoningChoice`/
 > `modelReasoningEffort` **全部 0 命中**（退役干净）。
+
+> **实操记录（2026-10-20，用户报障「模型设置页空白」→ v4.1 修复）**：用户截图 = 设置遮罩正常、
+> 左侧导航正常、**右侧内容区整块空白**，且切 tab 不恢复。取证走**独立客户端**而不是打断宿主：
+> 用系统 Edge `--headless=new` + CDP 连**同一个** 3080 宿主（`GET /?token=…` 换 cookie），
+> 复现路径与用户一致；`Runtime.exceptionThrown` 抓到
+> `ReferenceError: keyState is not defined at curatedFields` + `slot entry crashed in 'settings.section'`。
+> 触发点是**点开任一 provider 的「编辑」卡片**（不点不炸，所以首屏看着正常）。
+>
+> 根因与修法：0.2.1 把密钥失败提示的渲染搬进 `curatedFields(family)`、数据源换成
+> `props.credential` ⇒ `keyState` / `keyRef` 不在作用域；而锚点仍在 ⇒ 静态闸门全绿。
+> 官方 `credentialHint` 已原生给出等价引导 ⇒ **退役该编辑**（13 → 12 条）。`rebuild` →
+> 产物 222,925 B / `AA1A51AD…` → 回填常量 → `verify` 三行 PASS → `resync` →
+> 真机点开 7 个 provider 的「编辑」卡片：**0 异常**，OpenRouter 卡片显示官方文案
+> 「未检测到环境变量。请填写 API 密钥，或设置环境变量 OPENROUTER_API_KEY。」
+>
+> 同轮新增：`smoke-model-page.mjs`（把上述真机验收固化，升级重打后必跑）、
+> 不变量 #6（锚点命中 ≠ 作用域可用）、本 README 的「编辑表」与实现重新对齐
+> （v4 后表格仍残留思考强度/`reasoningDefaultOf` 等已退役项，本次一并订正）。
+> **未做**：没有把作用域检查做成静态闸门 —— 本机无 JS 解析器，且压缩 bundle 的作用域
+> 无法可靠重建；真机冒烟是当前唯一能抓住这类缺陷的判据。
 
 ### ASI 陷阱（写插入类编辑必读）
 

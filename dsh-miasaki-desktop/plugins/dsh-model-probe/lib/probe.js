@@ -56,6 +56,43 @@ export function messagesRoot(baseURL) {
 }
 
 /**
+ * Parse one http(s) URL, or null when it cannot be one.
+ *
+ * Only `http:`/`https:` are accepted on purpose: under the WHATWG rules every
+ * other scheme (`file:`, `data:`, `blob:` …) reports `origin === 'null'`, so a
+ * naive origin comparison would call any two such URLs same-origin.
+ * @param value - the candidate URL string.
+ * @returns the parsed URL, or null.
+ */
+function parseHttpUrl(value) {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (raw === '') return null;
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
+}
+
+/**
+ * Whether two URLs name one origin (scheme + host + port, default ports normalized).
+ *
+ * This is the credential boundary of the probe: the stored credential may only
+ * be re-used while the target stays on the profile's own origin, otherwise a
+ * draft `baseURL` pointed at a third party would carry the user's saved key
+ * there. Every failure mode (missing/unparsable/non-http(s) URL) answers
+ * `false` — the safe direction is「not the same origin」.
+ * @param a - one URL string (usually the draft baseURL from the request).
+ * @param b - the other URL string (usually the stored profile baseURL).
+ * @returns true only when both parse as http(s) and share scheme+host+port.
+ */
+export function sameOrigin(a, b) {
+  const left = parseHttpUrl(a);
+  const right = parseHttpUrl(b);
+  if (left === null || right === null) return false;
+  return left.protocol === right.protocol && left.hostname === right.hostname && left.port === right.port;
+}
+
+/**
  * Whether one provider protocol can be probed at all.
  * @param api - the configured protocol id.
  * @returns true when a request can be built for it.

@@ -28,6 +28,56 @@ pub(crate) mod window;
 #[path = "pet_native/xform.rs"]
 pub(crate) mod xform;
 
+/// 按 **UTF-8 字符边界**安全截断（b3d0b 修复，2026-10-20）。
+///
+/// `String::truncate` 的索引必须落在字符边界上，否则直接 panic：页面可控的
+/// `pettool=` / `petkey=` 经 `from_utf8_lossy` 可能是多字节文本，旧实现
+/// `t.truncate(80)` / `k.truncate(120)` 一旦截在多字节字符中间，release 下
+/// `panic = "abort"` 会让**整个桌面端进程**退出（dev 下则毒化 `PetShared` 互斥锁）。
+/// 这里回退到 ≤max 的最近字符边界再截断；短于上限时保持原样（与 std 语义一致）。
+pub(crate) fn truncate_utf8(s: &mut String, max_bytes: usize) {
+    if s.len() <= max_bytes {
+        return;
+    }
+    let mut cut = max_bytes;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s.truncate(cut);
+}
+
+/// 把一行日志里的控制字符转成**可见转义**（a859a 修复，2026-10-20）。
+///
+/// `pet.log` 的所有写入都经本函数（`pet_native/window.rs::pet_log_line` 与
+/// `main.rs::app_log_line`）：`pettool=` / `petkey=` / 审批工具名等来自页面或
+/// 事件通道，含 CR/LF/ESC 时可伪造额外日志行（CWE-117 形态）。
+///
+/// 规则：`\r`→`\\r`、`\n`→`\\n`、ESC→`\\x1b`、其余其它控制字符→`\\xNN`
+/// （保留 `\t` 可读性）；**末尾换行视为行终止符原样保留**，使每行仍以换行结束。
+pub(crate) fn escape_log_controls(line: &str) -> String {
+    use std::fmt::Write as _;
+    let (text, terminated) = match line.strip_suffix('\n') {
+        Some(rest) => (rest.strip_suffix('\r').unwrap_or(rest), true),
+        None => (line, false),
+    };
+    let mut out = String::with_capacity(text.len() + 8);
+    for ch in text.chars() {
+        match ch {
+            '\r' => out.push_str("\\r"),
+            '\n' => out.push_str("\\n"),
+            '\u{1b}' => out.push_str("\\x1b"),
+            c if c.is_control() && c != '\t' => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    if terminated {
+        out.push('\n');
+    }
+    out
+}
+
 /// M2(v3):桌宠六态（pet-v3-roadmap.md M2.1）。官方契约通道（hash pet= 字段，白名单归一化）
 /// 优先；DOM 扫描（act=/wait=）兜底；fleet 脉冲叠加 FleetBlocked。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -252,13 +302,15 @@ impl NativePet {
                 ));
             }
             s.official_state = Some(norm);
+            // hash/事件通道来的 tool/key 不可信（长度、字符集都不保证）：
+            // 截断必须按 UTF-8 字符边界（b3d0b：旧 truncate 会 panic → 整壳 abort）。
             let mut t = tool.to_string();
-            t.truncate(80);
+            truncate_utf8(&mut t, 80);
             s.official_tool = t;
             // R4:审批的稳定身份（官方 `PendingApproval.key`）。插件仅在审批态填充，其余态为空。
             // hash 字段不可信 → 截断上限；身份门禁（拿不到身份就不显示可交互审批气泡）在 compose 侧。
             let mut k = key.to_string();
-            k.truncate(120);
+            truncate_utf8(&mut k, 120);
             s.official_key = k;
         }
     }
@@ -280,5 +332,63 @@ impl NativePet {
     /// 当前是否隐藏（面板状态同步）。
     pub fn is_hidden(&self) -> bool {
         self.shared.lock().map(|s| s.hide).unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{escape_log_controls, truncate_utf8};
+
+    /// b3d0b：79 个 ASCII 字节 + 一个 3 字节 CJK 字符，旧 `t.truncate(80)` 会切在
+    /// 字符中间 panic（release `panic="abort"` = 整壳退出）。安全截断必须回退到 79。
+    #[test]
+    fn truncate_utf8_does_not_split_a_multibyte_char() {
+        let mut s = format!("{}中", "a".repeat(79));
+        truncate_utf8(&mut s, 80);
+        assert_eq!(s, "a".repeat(79), "不得把多字节字符截成半截（旧实现会 panic）");
+        assert!(s.is_char_boundary(s.len()));
+        assert!(s.len() <= 80);
+    }
+
+    /// 上限落在字符边界上时按上限截断（不多退一位）。
+    #[test]
+    fn truncate_utf8_cuts_at_exact_boundary() {
+        let mut s = "中中中".to_string(); // 9 字节
+        truncate_utf8(&mut s, 3);
+        assert_eq!(s, "中");
+        truncate_utf8(&mut s, 0);
+        assert_eq!(s, "", "max=0 时安全清空，不 panic");
+    }
+
+    /// 未超上限（含恰好等于上限）一律不动 —— 与 std `truncate` 的 no-op 语义对齐。
+    #[test]
+    fn truncate_utf8_keeps_short_strings_untouched() {
+        let mut s = "短".to_string();
+        truncate_utf8(&mut s, 80);
+        assert_eq!(s, "短");
+        let mut exact = "abc".to_string();
+        truncate_utf8(&mut exact, 3);
+        assert_eq!(exact, "abc");
+    }
+
+    /// a859a：CR/LF/ESC 必须变成可见转义，否则页面可控工具名可伪造 `pet.log` 行。
+    #[test]
+    fn escape_log_controls_neutralizes_crlf_and_esc() {
+        let out = escape_log_controls("ok\r\n[forged] line\u{1b}[31m\n");
+        assert_eq!(out, "ok\\r\\n[forged] line\\x1b[31m\n");
+    }
+
+    /// 内嵌换行转成字面 `\\n`，但**末尾换行**是行终止符，必须保留为真实换行。
+    #[test]
+    fn escape_log_controls_escapes_embedded_newline_but_keeps_terminator() {
+        let out = escape_log_controls("a\nb\n");
+        assert_eq!(out, "a\\nb\n");
+        assert!(!out.contains("\n[") && out.ends_with('\n'));
+    }
+
+    /// 普通文本与制表符保持原样（不制造无意义 diff / 不破坏既有日志可读性）。
+    #[test]
+    fn escape_log_controls_keeps_plain_text_and_tab() {
+        assert_eq!(escape_log_controls("plain 正常文本\tok\n"), "plain 正常文本\tok\n");
     }
 }

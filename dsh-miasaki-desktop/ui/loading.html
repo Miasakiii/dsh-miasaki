@@ -480,12 +480,15 @@
     })();
 
     // 鉴权 cookie 预置（2026-09-22，design/auth-cookie-prepinject.md）：
-    // dsh web 每次重启都有新签名 cookie，首次 GET / 必然 401（纯文本错误页）。
-    // 这里在 navigate 之前签好 cookie 经 invoke 交 Rust 写入 WebView2 cookie jar，
-    // 使首次请求即带有效 cookie —— 401 不发生（旧的「401 检测→reload」降级为兜底）。
-    // 全程静默 try/catch：失败时 Rust 3s 超时放行 + 00-boot.js 兜底链接管。
+    // dsh web 每次重启都有新签名 cookie，首次 GET / 可能 401（纯文本错误页）。
+    // 这里在 navigate 之前用 IPC 从 `~/.dsh/.credentials.yaml` 取真 secret、签好 cookie
+    // 经 invoke 交 Rust 写入 WebView2 cookie jar，使首次请求即带有效 cookie。
+    //
+    // 2026-10-20（ac466 修复，CWE-798）：**删除硬编码 SECRET_B64 与回退签名**。
+    // `auth_secret` 拿不到/返回空 ⇒ **跳过注入**（不再用仓库里泄漏的历史常量签无效
+    // cookie）；认证由官方 `/?token=` 交换 + 服务端 Set-Cookie 兜底（main.rs::navigate_main）。
+    // 全程静默 try/catch：失败时 Rust 3s 超时放行 + 00-boot.js 的 401 检测/熔断接管。
     ;(function () {
-      var SECRET_B64 = '2h4nw6Dhj2bmzH3ATVS3MAcld_4DEW1PieSSOi_ETas' // 与 00-boot.js 同源兜底值
       function b64url(u8) {
         var s = ''
         for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i])
@@ -507,8 +510,9 @@
           pinvoke('auth_secret')
             .catch(function () { return null })
             .then(function (secret) {
-              var raw = (typeof secret === 'string' && secret) ? secret : SECRET_B64
-              return crypto.subtle.importKey('raw', fromB64url(raw), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+              // 拿不到真 secret ⇒ 放弃预置（主路径退化为官方 token 交换）。
+              if (typeof secret !== 'string' || secret === '') return null
+              return crypto.subtle.importKey('raw', fromB64url(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
                 .then(function (key) {
                   var issued = Date.now()
                   var expires = issued + 30 * 86400 * 1000
@@ -524,7 +528,10 @@
                   })
                 })
             })
-            .then(function (c) { return pinvoke('set_auth_cookie', { name: c.name, value: c.value }) })
+            .then(function (c) {
+              if (c === null || c === undefined) return null
+              return pinvoke('set_auth_cookie', { name: c.name, value: c.value })
+            })
             .catch(function () { /* 静默降级 */ })
         } catch (e) { /* 静默降级 */ }
       }

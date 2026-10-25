@@ -3539,12 +3539,16 @@ pub(crate) fn dpi_at_point(x: i32, y: i32) -> u32 {
 }
 
 pub(crate) fn pet_log_line(line: &str) {
+    // a859a（2026-10-20）：**公共写入入口统一转义控制字符**。`pettool=` / `petkey=` /
+    // 审批工具名来自页面 hash 或 emit 事件通道，含 CR/LF/ESC 时可伪造额外日志行
+    // （CWE-117 形态）。转义在这里收口，所有调用方自动受保护；末尾换行仍作为行终止符保留。
+    let safe = super::escape_log_controls(line);
     if let Ok(base) = std::env::var("LOCALAPPDATA") {
         let dir = std::path::Path::new(&base).join("miasaki");
         let _ = std::fs::create_dir_all(&dir);
         if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("pet.log")) {
             use std::io::Write;
-            let _ = f.write_all(line.as_bytes());
+            let _ = f.write_all(safe.as_bytes());
         }
     }
 }
