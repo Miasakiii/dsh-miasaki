@@ -25,6 +25,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import core from '../lib/bus-apply-core.cjs'
+import agentFacts from '../lib/agent-facts.cjs'
+import policyLib from '../lib/selection-policy.cjs'
 import { evaluateLiveness } from '../lib/liveness.mjs'
 import {
   buildCapabilityGraph,
@@ -58,16 +60,22 @@ function deriveHistory(tasks, agentId) {
 }
 
 function readAgentDir(dir, id, opts) {
-  const manifest = core.readJsonOrNull(path.join(dir, 'manifest.json'))
+  // P2-B：manifest（Operator 字段）+ observed（发现事实）合并视图；observed 缺席时回退 manifest。
+  const manifest = agentFacts.readAgentFactsFrom(dir)
   if (!manifest) return null
   const control = core.readJsonOrNull(path.join(dir, 'control.json'))
   const status = core.readJsonOrNull(path.join(dir, 'status.json'))
   const live = opts.archived ? { alive: false } : evaluateLiveness(status, manifest, Date.now())
+  // P0-A：skills[] 兼容旧档案；capabilities[] 是 P0-A 的新声明位（两者合并去重）。
+  const skills = Array.isArray(manifest.skills) ? manifest.skills : []
+  const capabilities = Array.isArray(manifest.capabilities) ? manifest.capabilities : []
 
   return {
     id,
-    skills: Array.isArray(manifest.skills) ? manifest.skills : [],
-    model: manifest.model ?? null,
+    kind: manifest.kind ?? 'unknown',
+    skills: [...new Set([...skills, ...capabilities])],
+    // P0-B：模型真值取 model_info.value（只读配置探测），旧 model 字段仅兜底。
+    model: (manifest.model_info && manifest.model_info.value) || manifest.model || null,
     modelPrice: manifest.model_price ?? null,
     metering: manifest.metering_source ?? null,
     archived: opts.archived === true,
@@ -121,7 +129,7 @@ function buildGraph() {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { need: null, substitute: null, gaps: false, check: false, json: false, all: false }
+  const opts = { need: null, substitute: null, gaps: false, check: false, json: false, all: false, kind: null, strategy: null, listStrategies: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--need') {
@@ -130,7 +138,14 @@ function parseArgs(argv) {
     } else if (a === '--substitute') {
       opts.substitute = argv[++i]
       if (!opts.substitute) throw new Error('--substitute 需要 agent id')
-    } else if (a === '--gaps') opts.gaps = true
+    } else if (a === '--kind') {
+      opts.kind = (argv[++i] || '').trim()
+      if (!['coding-agent', 'tool-cli', 'unknown'].includes(opts.kind)) throw new Error(`--kind 非法: ${opts.kind}（应为 coding-agent|tool-cli|unknown）`)
+    } else if (a === '--strategy') {
+      opts.strategy = (argv[++i] || '').trim()
+      if (!opts.strategy) throw new Error('--strategy 需要策略 id（见 --list-strategies）')
+    } else if (a === '--list-strategies') opts.listStrategies = true
+    else if (a === '--gaps') opts.gaps = true
     else if (a === '--check') opts.check = true
     else if (a === '--all') opts.all = true
     else if (a === '--json') opts.json = true
@@ -145,6 +160,11 @@ function printHelp() {
 
   --need <a,b,...>      按能力需求选型（技能名会被规范化，code 等价于 coding）
   --substitute <id>     找某 agent 的替代者（含部分覆盖与缺口清单）
+  --kind <k>            只考虑指定类型（coding-agent | tool-cli | unknown）；P0-A 起
+                        工具型 CLI 不是 worker 候选，推荐与 --need 一起用 coding-agent
+  --strategy <id>       选型策略（只影响排序，不改变硬判定）；P2-F 起
+                        id 见 --list-strategies，默认取 shared/selection-policy.json 的 default
+  --list-strategies     列出可用策略（含默认项与权重）
   --gaps                系统级诊断：无人提供的能力 / 只有归档提供的能力 / 疑似同义未归一
   --check               结构检查（供回归使用：无问题 0，有问题 1）
   --all                 连归档与未开启的 agent 一并纳入候选
@@ -175,6 +195,38 @@ function main() {
     return 2
   }
 
+  // P2-F（2026-10-21）：选型策略只影响排序；文件缺席用内置默认，文件损坏则显式失败。
+  let policyInfo
+  try {
+    policyInfo = policyLib.loadPolicy(ROOT)
+  } catch (e) {
+    console.error(`[agent-pick] ${e.message}`)
+    return 2
+  }
+  if (policyInfo.source === 'default' && !opts.json) {
+    console.error('[agent-pick] 注意：shared/selection-policy.json 缺失，使用内置默认策略')
+  }
+  let strat
+  try {
+    strat = policyLib.resolveStrategyWeights(policyInfo.policy, opts.strategy)
+  } catch (e) {
+    console.error(`[agent-pick] ${e.message}`)
+    return 2
+  }
+  if (opts.listStrategies) {
+    if (opts.json) {
+      console.log(JSON.stringify({ default: policyInfo.policy.default, strategies: policyLib.listStrategies(policyInfo.policy).map((id) => policyLib.resolveStrategyWeights(policyInfo.policy, id)) }))
+    } else {
+      console.log(`[agent-pick] 选型策略（默认 ${policyInfo.policy.default}，来源 ${policyInfo.source === 'file' ? 'shared/selection-policy.json' : '内置默认'}）：`)
+      for (const id of policyLib.listStrategies(policyInfo.policy)) {
+        const s = policyLib.resolveStrategyWeights(policyInfo.policy, id)
+        const w = s.weights
+        console.log(`  ${id.padEnd(10)} ${s.description}（coverage ${w.coverage} / confidence ${w.confidence} / cost ${w.cost} / load ${w.load}）`)
+      }
+    }
+    return 0
+  }
+
   let graph
   try {
     graph = buildGraph()
@@ -183,15 +235,15 @@ function main() {
     return 2
   }
 
-  const optsForQuery = { includeArchived: opts.all, includeUnavailable: opts.all }
+  const optsForQuery = { includeArchived: opts.all, includeUnavailable: opts.all, kind: opts.kind, weights: strat.weights }
 
   // ---- --need：选型 ----
   if (opts.need) {
     const r = selectAgents(opts.need, graph, optsForQuery)
     if (opts.json) {
-      console.log(JSON.stringify(r))
+      console.log(JSON.stringify(Object.assign({ strategy: { id: strat.id, weights: strat.weights } }, r)))
     } else {
-      console.log(`[agent-pick] 需求：${r.required.map((c) => c.replace('cap:', '')).join(' + ')}`)
+      console.log(`[agent-pick] 需求：${r.required.map((c) => c.replace('cap:', '')).join(' + ')} · 策略：${strat.id}`)
       if (r.missingCapabilities.length > 0) {
         console.log(`  ⚠ 无人提供：${r.missingCapabilities.map((c) => c.replace('cap:', '')).join(',')}（含"只有归档 agent 提供"）`)
       }

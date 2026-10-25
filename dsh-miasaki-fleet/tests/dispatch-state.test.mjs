@@ -154,3 +154,78 @@ test('两个派单脚本都能被解析（语法闸门：PowerShell 侧此前无
   const detail = existsSync(errFile) ? readFileSync(errFile, 'utf8').trim() : '(无详情)'
   assert.equal(r.status, 0, `PowerShell 语法错误：\n${detail}`)
 })
+
+// ---------------------------------------------------------------------------
+// 派单执行期间刷新心跳（2026-10-22，外部清单对账挖出的在债 P0）
+//
+// 根因（t-0010/t-0011 已实测）：判活窗口 = 3 × heartbeat_ms（默认 90s），而 status.json
+// 旧行为只在派单开始（running）与终态落账两处各写一次 ⇒ worker 执行超过 90s 后
+// 心跳过龄 ⇒ G1 对该 agent 的后续派单**永久硬拒**（running + 过龄心跳的残留要有人跑
+// -ResetStatus 才清）—— 能干活的 agent 被自己的上一次派单「僵」住，且不报错。
+//
+// 修法：Invoke-WorkerProcess 的等待由整段 WaitForExit 改为**轮询切片 + 心跳刷新**。
+// 下面两组：① 源码契约（纯文本，防接线退化/回退）；② 功能探针（真跑刷新函数）。
+// ---------------------------------------------------------------------------
+
+test('心跳刷新接线：函数、调用点、raw 替换纪律、旧整段等待形态已不在', () => {
+  const s = readFileSync(join(FLEET_DIR, 'workers', 'dispatch', 'dispatch-task.ps1'), 'utf8')
+  // ① 刷新函数存在，且纪律注释在位（raw 正则替换，不经过 ConvertFrom-Json ——
+  //    后者会把 UTC 串转成 Local 且数值不变，读改写会静默损坏心跳）
+  // ② 等待循环内调用（只钉函数定义会让「接线悄悄退化」全绿）
+  // ③ 调用点传入两个新参数
+  for (const [label, needle] of [
+    ['刷新函数', 'function Update-DispatchHeartbeat'],
+    ['raw 替换纪律', '不经过 ConvertFrom-Json'],
+    ['刷新不阻断纪律', '绝不能因为刷不上心跳就把正在执行的 worker 带走'],
+    ['循环内调用', 'Update-DispatchHeartbeat $AgentDir'],
+    ['调用点传参', '-AgentDir $agentDir -HeartbeatMs $heartbeatMs'],
+  ]) {
+    assert.ok(s.includes(needle), `心跳刷新接线缺失：${label}`)
+  }
+  // ④ 反向（防回退）：整段 WaitForExit($TimeoutMs) 的旧形态不应仍在 ——
+  //    那正是「执行期间心跳停动、超过判活窗口自己僵住」的根因。
+  assert.ok(!s.includes('$p.WaitForExit($TimeoutMs)'), '整段 WaitForExit($TimeoutMs) 旧形态不应仍在（执行期间不刷新心跳的根因）')
+})
+
+test('心跳刷新功能：刷新后心跳变新、其他字段一字不变、无 status.json 静默', (t) => {
+  if (!PWSH) return t.skip('本机无 pwsh / powershell')
+  const dir = mkdtempSync(join(tmpdir(), 'fleet-hb-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const psFile = join(dir, 'probe.ps1')
+  const outFile = join(dir, 'probe.json')
+  // 探针脚本：AST 提取 Update-DispatchHeartbeat 单函数 eval（不 dot-source 整个派单器），
+  // 造过龄心跳夹具 → 刷新 → 结果写 JSON 落盘回读（stdio ignore + 落盘，绕开沙箱 EPERM）。
+  // 刻意用普通字符串（非模板字符串）拼 PS 脚本：PS 的反引号转义会终结 JS 模板字符串。
+  // 夹具用 ConvertTo-Json 生成，不手写 JSON 字面量（嵌套引号地狱）。
+  const q = (s) => "'" + String(s).replace(/'/g, "''") + "'"
+  const ps = [
+    '$ErrorActionPreference = \'Stop\'',
+    '$script = ' + q(join(FLEET_DIR, 'workers', 'dispatch', 'dispatch-task.ps1')),
+    '$tokens = $null; $parseErrs = $null',
+    '$ast = [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$parseErrs)',
+    '$fn = $ast.FindAll({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq \'Update-DispatchHeartbeat\' }, $true)',
+    'if ($fn.Count -ne 1) { @{ ok = $false; why = "function x" + $fn.Count } | ConvertTo-Json | Set-Content ' + q(outFile) + ' -Encoding UTF8; exit 0 }',
+    'Invoke-Expression $fn[0].Extent.Text',
+    '$tmp = ' + q(dir),
+    'New-Item -ItemType Directory -Force -Path $tmp | Out-Null',
+    '$old = (Get-Date).ToUniversalTime().AddSeconds(-600).ToString(\'yyyy-MM-ddTHH:mm:ssZ\')',
+    '@{ version = 1; state = \'running\'; current_task = \'t-9001\'; heartbeat_at = $old; last_error = $null } | ConvertTo-Json | Set-Content (Join-Path $tmp \'status.json\') -Encoding UTF8',
+    'Update-DispatchHeartbeat $tmp',
+    '$after = Get-Content (Join-Path $tmp \'status.json\') -Raw',
+    '$m = [regex]::Match($after, \'"heartbeat_at"\\s*:\\s*"([^"]+)"\')',
+    '$beat = [System.DateTimeOffset]::Parse($m.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)',
+    '$ageSec = ((Get-Date).ToUniversalTime() - $beat.UtcDateTime).TotalSeconds',
+    '# 无 status.json 时静默（首跑 agent 场景）',
+    'Update-DispatchHeartbeat (Join-Path $tmp \'nonexistent\')',
+    '@{ ok = ($ageSec -lt 10) -and ($after -match \'"current_task": "t-9001"\') -and ($after -match \'"state": "running"\'); ageSec = [math]::Round($ageSec, 1); fieldsIntact = ($after -match \'"current_task": "t-9001"\') -and ($after -match \'"state": "running"\'); noStatusSilent = $true } | ConvertTo-Json | Set-Content ' + q(outFile) + ' -Encoding UTF8',
+    'exit 0',
+  ].join('\n')
+  writeFileSync(psFile, ps, 'utf8')
+  const r = spawnSync(PWSH, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', psFile], { stdio: 'ignore' })
+  assert.equal(r.status, 0, '探针脚本应正常退出')
+  const got = JSON.parse(readFileSync(outFile, 'utf8'))
+  assert.equal(got.ok, true, `刷新行为不符：ageSec=${got.ageSec} fieldsIntact=${got.fieldsIntact} why=${got.why || ''}`)
+  assert.ok(got.ageSec < 10, '刷新后心跳必须是当前时刻（判据：年龄 <10s）')
+  assert.equal(got.fieldsIntact, true, 'current_task / state 等其他字段必须一字不变（raw 替换，不读改写）')
+  assert.equal(got.noStatusSilent, true, '无 status.json 时必须静默返回（首跑 agent 无档可刷）')
+})

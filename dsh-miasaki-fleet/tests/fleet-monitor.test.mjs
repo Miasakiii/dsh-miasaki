@@ -177,7 +177,11 @@ test('handler：环回同源请求正常放行，并回显 Origin', async () => 
   const res = await call(fakeReq({ url: '/api/fleet', headers: { ...LOOPBACK, origin, 'sec-fetch-site': 'same-origin' } }))
   assert.equal(res.statusCode, 200)
   assert.equal(res.headers['access-control-allow-origin'], origin)
-  assert.doesNotThrow(() => JSON.parse(res.body), '面板要拿到的必须是合法 JSON')
+  const body = JSON.parse(res.body)
+  assert.ok(Array.isArray(body.agents), '面板要拿到的必须是合法 JSON（含 agents）')
+  // P0-A（2026-10-21）：类型与模型来源必须原样上屏，面板才能区分 coding agent / 工具型 CLI。
+  assert.ok(body.agents.every((a) => typeof a.kind === 'string' && a.kind !== ''), '每个 agent 卡片必须带 kind')
+  assert.ok(body.agents.every((a) => a.model_info === null || typeof a.model_info === 'object'), 'model_info 原样上屏')
 })
 
 test('handler：preflight 也走围栏（跨站 OPTIONS 不得 204）', async () => {
@@ -435,6 +439,62 @@ test('verifiers：空 for（?for= 或 ?for=%20）按概览处理，不把空产�
 test('verifiers：同样过围栏 —— 跨站 403 且不带 CORS 头', async () => {
   const res = await call(fakeReq({
     url: '/api/verifiers?for=claude',
+    headers: { host: '127.0.0.1:39801', 'sec-fetch-site': 'cross-site' },
+  }))
+  assert.equal(res.statusCode, 403)
+  assert.equal(res.headers['Access-Control-Allow-Origin'], undefined)
+})
+
+/* ---------- ⑥b /api/drift（P0-B，2026-10-21：模型来源与配置漂移上屏） ---------- */
+
+test('drift：/api/drift 透传 agent-drift --json，不重复实现探测', async () => {
+  const calls = []
+  const res = await withJudgement(
+    (script, args) => {
+      calls.push([script, args.join(' ')])
+      return JSON.stringify({
+        ok: true, generated_at: '2026-10-21T00:00:00Z', adapters: 6, agents_scanned: 6,
+        summary: { match: 1, replaced: 0, missing: 2, 'parse-error': 0, unknown: 3 },
+        missing_adapters: [], adapter_problems: [],
+        agents: [{ agent_id: 'claude', declared: 'step-5-preview[1M]', actual: 'step-5-preview[1M]', status: 'match' }],
+      })
+    },
+    () => call(fakeReq({ url: '/api/drift', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, true)
+  assert.equal(body.summary.missing, 2, '漂移汇总是面板要显示的「事实」，不能被吞成错误')
+  assert.equal(body.agents[0].status, 'match')
+  assert.deepEqual(calls[0], ['workers/discovery/agent-drift.mjs', '--json'], '口径必须走判定层 CLI')
+})
+
+test('drift：适配器表损坏 → ok:false 且不 500（面板整页不该挂）', async () => {
+  const res = await withJudgement(
+    () => { throw new Error('config-drift：适配器表损坏') },
+    () => call(fakeReq({ url: '/api/drift', headers: LOOPBACK })),
+  )
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, false)
+  assert.match(body.error, /适配器表损坏/)
+})
+
+/* ---------- ⑥c /api/schedules（P2-D，2026-10-21） ---------- */
+
+test('schedules：/api/schedules 读 state/schedules.json（真相），空清单也返回 ok:true', async () => {
+  const res = await call(fakeReq({ url: '/api/schedules', headers: LOOPBACK }))
+  assert.equal(res.statusCode, 200)
+  const body = JSON.parse(res.body)
+  assert.equal(body.ok, true)
+  assert.ok(Array.isArray(body.schedules), '面板需要数组形状（空清单是合法状态）')
+  assert.equal(typeof body.total, 'number')
+  assert.equal(typeof body.due_now, 'number')
+})
+
+test('schedules：跨站请求 → 403（与其它只读端点同围栏）', async () => {
+  const res = await call(fakeReq({
+    url: '/api/schedules',
     headers: { host: '127.0.0.1:39801', 'sec-fetch-site': 'cross-site' },
   }))
   assert.equal(res.statusCode, 403)

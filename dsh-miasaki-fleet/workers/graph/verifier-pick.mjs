@@ -24,9 +24,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import core from '../lib/bus-apply-core.cjs'
+import agentFacts from '../lib/agent-facts.cjs'
 import { validateVerdict } from '../lib/bus-contract.mjs'
 import { evaluateLiveness, isFirstRun } from '../lib/liveness.mjs'
-import { HETERO_LEVELS, buildVerifierBrief, selectVerifiers, summarizeVerdicts } from '../lib/verifier.mjs'
+import { HETERO_LEVELS, buildVerifierBrief, parseGateCommand, selectVerifiers, summarizeVerdicts } from '../lib/verifier.mjs'
 // K5（2026-09-30）：厂商表加载移出本文件 —— 「缺文件/结构非法」两条回退路径要能测、
 // 且必须显式告知（此前是静默断链：读一个从不存在的文件，读不到就悄悄用内置表）。
 import { loadVendors } from '../lib/vendors.mjs'
@@ -50,13 +51,21 @@ function loadAgents() {
       if (!archived && id === 'archive') continue
       const agentDir = path.join(dir, id)
       try { if (!fs.statSync(agentDir).isDirectory()) continue } catch { continue }
-      const manifest = core.readJsonOrNull(path.join(agentDir, 'manifest.json'))
+      // P2-B：manifest（Operator）+ observed（发现事实）合并视图；observed 缺席时回退 manifest。
+      const manifest = agentFacts.readAgentFactsFrom(agentDir)
       if (!manifest) continue
+      // P0-A（2026-10-21）：工具型 CLI 不是 agent，不能作验证者 —— 它没有自主工具循环，
+      // 无法执行「读产出物 + 找反例」的验证任务。coding-agent/unknown 仍按既有口径处理
+      // （unknown 交给可用性与异构判定，不在这里静默放行）。
+      if (manifest.kind === 'tool-cli') continue
       const control = core.readJsonOrNull(path.join(agentDir, 'control.json'))
       const status = core.readJsonOrNull(path.join(agentDir, 'status.json'))
       const live = archived ? { alive: false } : evaluateLiveness(status, manifest, Date.now())
 
-      agents.set(id, { model: manifest.model ?? null })
+      // P0-B（2026-10-21）：模型真值优先取 model_info.value（scan-models 从 CLI 配置只读探测），
+      // 旧 `model` 字段仅在 model_info 缺席时兜底；`cli-default` 仍由 normalizeModel 归为未声明。
+      const declaredModel = (manifest.model_info && manifest.model_info.value) || manifest.model || null
+      agents.set(id, { model: declaredModel, kind: manifest.kind ?? 'unknown' })
       meta.set(id, {
         archived,
         enabled: archived ? false : (control ? control.enabled === true : false),
@@ -94,7 +103,7 @@ function loadVerdicts() {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const opts = { for: null, brief: null, producer: null, status: null, check: false, json: false, minLevel: 'agent', all: false }
+  const opts = { for: null, brief: null, producer: null, status: null, check: false, json: false, minLevel: 'agent', all: false, gate: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     const val = () => {
@@ -112,6 +121,9 @@ function parseArgs(argv) {
     } else if (a === '--check') opts.check = true
     else if (a === '--all') opts.all = true
     else if (a === '--json') opts.json = true
+    // WORK-01（2026-10-22）：判官前置确定性闸命令。显式传入 > brief 的 gate: 行；
+    // 两处都没有 ⇒ 传 null，任务书走「未声明」分支（不猜命令）。
+    else if (a === '--gate') opts.gate = val()
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0) }
     else throw new Error(`未知参数: ${a}`)
   }
@@ -124,6 +136,7 @@ function printHelp() {
   --for <producer>       为某产出者挑验证者（自验被排除，按异构强度排序）
   --brief <taskId>       生成验证任务书（需配合 --producer）
   --producer <id>        --brief 的产出者
+  --gate <cmd>           判官前置的确定性闸命令（WORK-01；缺省从 brief 的 gate: 行提取，仍无则任务书走「未声明」分支）
   --status <taskId>      查看某任务的验证结论
   --min-level <l>        异构下限：none|agent|model|vendor（默认 agent）
   --all                  连归档与未开启的 agent 一并纳入候选
@@ -188,8 +201,11 @@ function main() {
     const taskDir = path.join(ROOT, 'tasks', opts.brief)
     const briefPath = path.join(taskDir, 'brief.md')
     const acceptance = []
+    // WORK-01（2026-10-22）：确定性闸命令。显式 --gate > brief 的 gate: 行 > null（不猜）。
+    let gateFromBrief = null
     if (fs.existsSync(briefPath)) {
       const text = fs.readFileSync(briefPath, 'utf8')
+      gateFromBrief = parseGateCommand(text)
       // 从「## 验收标准」小节里抓编号项 —— 只做最朴素的解析，抓不到就让验证者自己读
       const m = text.match(/##\s*验收标准\s*\n([\s\S]*?)(?=\n##\s|\s*$)/)
       if (m) {
@@ -204,7 +220,8 @@ function main() {
       if (fs.existsSync(path.join(taskDir, cand))) artifacts.push(`tasks/${opts.brief}/${cand}`)
     }
 
-    const text = buildVerifierBrief(opts.brief, opts.producer, { artifacts, acceptance })
+    const gate = opts.gate || gateFromBrief
+    const text = buildVerifierBrief(opts.brief, opts.producer, { artifacts, acceptance, gate })
     if (opts.json) console.log(JSON.stringify({ task_id: opts.brief, producer: opts.producer, brief: text }))
     else console.log(text)
     return 0

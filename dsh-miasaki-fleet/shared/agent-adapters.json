@@ -1,0 +1,44 @@
+{
+  "$schema_version": 1,
+  "$comment": "P0-B 只读适配器：每个 coding agent 的配置文件位置与模型字段。**只读**——config-drift / scan-models 只打开读取，从不写入用户配置（写各 CLI 配置属独立设计，需 Operator 拍板）。路径支持 %VAR% 与 ~ 展开；字段路径按 JSON 路径（数组下标可用数字）。字段位置均为 2026-10-21 本机实测。",
+  "claude": {
+    "format": "json",
+    "paths": ["%USERPROFILE%/.claude/settings.json"],
+    "model_path": ["env", "ANTHROPIC_MODEL"],
+    "provider_path": ["env", "ANTHROPIC_BASE_URL"],
+    "evidence": "settings.json env.ANTHROPIC_MODEL；2026-10-21 本机实测值 step-5-preview[1M]（经 stepfun 中转）"
+  },
+  "pi": {
+    "format": "json",
+    "paths": ["%USERPROFILE%/.pi/agent/settings.json"],
+    "model_path": ["defaultModel"],
+    "provider_path": ["defaultProvider"],
+    "evidence": "settings.json defaultModel/defaultProvider；2026-10-21 本机实测 deepseek-v4-flash"
+  },
+  "mimo": {
+    "format": "json",
+    "paths": ["%USERPROFILE%/.local/state/mimocode/model.json"],
+    "model_path": ["recent", 0, "modelID"],
+    "provider_path": ["recent", 0, "providerID"],
+    "evidence": "mimocode 状态文件 recent[0] 为最近使用模型；2026-10-21 本机实测 xiaomi/mimo-v2.5-pro"
+  },
+  "dsh": {
+    "format": "yaml-regex",
+    "paths": ["%USERPROFILE%/.dsh/profiles/headless/cordis.patch.yml"],
+    "model_regex": "id:\\s*agent-default-model[\\s\\S]{0,240}?\\bmodel:\\s*([^\\s#]+)",
+    "provider_regex": "id:\\s*agent-default-model[\\s\\S]{0,240}?\\bprovider:\\s*([^\\s#]+)",
+    "evidence": "fleet 的 dsh 派单固定 --profile headless，故读 headless 的 cordis.patch.yml 的 agent-default-model.config；2026-10-21 本机该 profile 不存在 ⇒ drift=missing（preflight 已记同一事实）"
+  },
+  "gemini": {
+    "format": "json",
+    "paths": ["%USERPROFILE%/.gemini/settings.json"],
+    "model_path": ["model", "name"],
+    "evidence": "Gemini CLI settings.json model.name；2026-10-21 本机文件不存在（CLI 亦未安装）"
+  },
+  "opencode": {
+    "format": "jsonc",
+    "paths": ["%USERPROFILE%/.config/opencode/opencode.jsonc"],
+    "model_path": ["model"],
+    "evidence": "opencode.jsonc model；2026-10-21 本机配置存在但无 model 字段（CLI 未安装）"
+  }
+}

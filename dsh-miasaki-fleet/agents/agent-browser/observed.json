@@ -1,0 +1,47 @@
+{
+  "capabilities": [
+    "web-automation",
+    "browser"
+  ],
+  "runtime_kind": "agent-browser",
+  "cli": {
+    "command": "agent-browser",
+    "invoke": "agent-browser {prompt}",
+    "version": "agent-browser 0.34.0",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\agent-browser.ps1"
+  },
+  "agent_id": "agent-browser",
+  "preflight": "命令型 CLI（agent-browser <command>），非 prompt 型；P0-A 起 kind=tool-cli，派单器拒绝作为 worker",
+  "schema_version": 2,
+  "observed_at": "2026-10-21T06:01:22Z",
+  "permissions": {
+    "mode": "unknown",
+    "calibration": "unknown",
+    "evidence": "工具型 CLI，不参与 worker 权限模型（kind=tool-cli 已禁止派单）",
+    "tool_allowlist": [],
+    "denied_tools": [],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "tool-cli",
+  "present": true,
+  "invoke_contract": {
+    "exit_code_semantics": {},
+    "prompt_transport": "unknown",
+    "permission_flags": {},
+    "output_format": "unknown"
+  },
+  "capability_boundary": {
+    "workspace_read": "no",
+    "shell_headless": "no",
+    "workspace_write_headless": "no",
+    "tool_loop": "no",
+    "network": "yes"
+  },
+  "model_info": {
+    "confidence": "unknown",
+    "value": null,
+    "source": "unknown",
+    "evidence": "P0-A 未接入配置读取（P0-B 落地）"
+  }
+}

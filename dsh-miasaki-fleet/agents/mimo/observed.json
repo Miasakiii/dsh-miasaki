@@ -1,0 +1,51 @@
+{
+  "capabilities": [
+    "coding",
+    "multi-step-tools"
+  ],
+  "runtime_kind": "mimocode",
+  "cli": {
+    "command": "mimo",
+    "invoke": "mimo run {prompt}",
+    "version": "0.1.14",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\mimo.ps1"
+  },
+  "agent_id": "mimo",
+  "preflight": "0.1.14 实测为 mimocode（ACP/MCP/run/serve）；非交互入口是 mimo run {prompt}；旧模板 mimo {prompt} 会进 TUI",
+  "schema_version": 2,
+  "observed_at": "2026-10-21T06:01:22Z",
+  "permissions": {
+    "mode": "unknown",
+    "calibration": "unknown",
+    "evidence": "未校准（无 headless 权限实测）；P2-A 按只读降级，不授未证明的写权",
+    "tool_allowlist": [],
+    "denied_tools": [],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "coding-agent",
+  "present": true,
+  "invoke_contract": {
+    "exit_code_semantics": {
+      "0": "success",
+      "non-zero": "failure"
+    },
+    "prompt_transport": "argv",
+    "permission_flags": {},
+    "output_format": "text"
+  },
+  "capability_boundary": {
+    "workspace_read": "unknown",
+    "shell_headless": "unknown",
+    "workspace_write_headless": "unknown",
+    "tool_loop": "yes",
+    "network": "yes"
+  },
+  "model_info": {
+    "value": "mimo-v2.5-pro",
+    "source": "config",
+    "confidence": "declared",
+    "evidence": "%USERPROFILE%/.local/state/mimocode/model.json → recent.0.modelID",
+    "provider": "xiaomi"
+  }
+}

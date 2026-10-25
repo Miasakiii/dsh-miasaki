@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "profiles": {
+    "balanced": {
+      "description": "日常：六个 coding agent 全开（缺装的自然 present=false，派单闸门会拒）",
+      "enabled": ["claude", "mimo", "pi", "dsh", "gemini", "opencode"]
+    },
+    "lean": {
+      "description": "省预算：只开 pi / mimo（便宜的两条），其余关闭",
+      "enabled": ["pi", "mimo"],
+      "budgets": { "pi": 2, "mimo": 2 }
+    },
+    "review": {
+      "description": "评审：开 claude / pi / mimo（异构三家），预算抬高给验证者",
+      "enabled": ["claude", "pi", "mimo"],
+      "budgets": { "claude": 5, "pi": 5, "mimo": 5 }
+    }
+  }
+}

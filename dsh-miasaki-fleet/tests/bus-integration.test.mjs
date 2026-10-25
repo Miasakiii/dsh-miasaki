@@ -220,6 +220,76 @@ test('result.json：合法通过，非法（缺 evidence / task_id 不符）失�
   assert.equal(validate(mismatched), 1, 'task_id 与目录不符必须失败')
 })
 
+// P1-B（2026-10-21）：deliverables[] 显式成品清单 —— 存在性 + 工作区内包含性
+function resultWithDeliverables(paths) {
+  return {
+    task_id: 't-0001',
+    status: 'completed',
+    conclusion: '结论',
+    evidence: [],
+    deliverables: paths.map((p) => ({ path: p, note: '成品' })),
+  }
+}
+
+test('P1-B：deliverables 声明的文件存在 ⇒ 通过', (t) => {
+  const root = makeBus(t, { tasks: [task('t-0001')], results: { 't-0001': resultWithDeliverables(['tasks/t-0001/out.md']) } })
+  writeFileSync(join(root, 'tasks', 't-0001', 'out.md'), '# 成品\n', 'utf8')
+  assert.equal(validate(root), 0)
+})
+
+test('P1-B：deliverables 声明了不存在的文件 ⇒ 显式失败', (t) => {
+  const root = makeBus(t, { tasks: [task('t-0001')], results: { 't-0001': resultWithDeliverables(['tasks/t-0001/nope.md']) } })
+  assert.equal(validate(root), 1, '「声明了但不存在」必须报，不能静默当没声明')
+})
+
+test('P1-B：deliverables 路径穿越（../）⇒ 契约层拒绝', (t) => {
+  const root = makeBus(t, { tasks: [task('t-0001')], results: { 't-0001': resultWithDeliverables(['../../etc/passwd']) } })
+  assert.equal(validate(root), 1, '路径必须是工作区内相对路径')
+})
+
+// P2-B（2026-10-21）：manifest（Operator）+ observed（发现事实）派生分离。
+function writeSplitAgent(root, id, manifest, observed) {
+  const dir = join(root, 'agents', id)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  if (observed !== undefined) {
+    writeFileSync(join(dir, 'observed.json'), `${JSON.stringify(observed, null, 2)}\n`, 'utf8')
+  }
+}
+
+const OPERATOR_MANIFEST = {
+  id: 'alpha', name: 'Alpha', runtime: 'cli', model: 'cli-default', metering_source: 'unknown',
+  skills: ['coding'], limits: { budget_per_day: 2, timeout_ms: 60000, heartbeat_ms: 30000 },
+}
+
+const OBSERVED_FACTS = {
+  schema_version: 1, agent_id: 'alpha', observed_at: '2026-10-21T00:00:00Z', present: true,
+  runtime_kind: 'fake', kind: 'coding-agent',
+  cli: { command: 'alpha', binPath: '%USERPROFILE%\\alpha.exe', version: '1.0.0', invoke: 'alpha -p {prompt}' },
+  capabilities: ['coding'],
+  capability_boundary: { tool_loop: 'yes', workspace_read: 'yes', workspace_write_headless: 'no', shell_headless: 'no', network: 'yes' },
+  model_info: { value: null, source: 'unknown', confidence: 'unknown' },
+  permissions: { mode: 'unknown', calibration: 'unknown' },
+}
+
+test('P2-B：manifest 只留 Operator 字段 + observed 承载发现事实 ⇒ validate-bus 通过', (t) => {
+  const root = makeBus(t)
+  writeSplitAgent(root, 'alpha', OPERATOR_MANIFEST, OBSERVED_FACTS)
+  assert.equal(validate(root), 0)
+})
+
+test('P2-B：observed 里 kind 非法 ⇒ validate-bus 显式失败（合并视图参与语义校验）', (t) => {
+  const root = makeBus(t)
+  writeSplitAgent(root, 'alpha', OPERATOR_MANIFEST, { ...OBSERVED_FACTS, kind: 'robot' })
+  assert.equal(validate(root), 1)
+})
+
+test('P2-B：manifest 无 cli 且无 observed ⇒ 显式失败（不静默接受半档案）', (t) => {
+  const root = makeBus(t)
+  writeSplitAgent(root, 'alpha', OPERATOR_MANIFEST, undefined)
+  assert.equal(validate(root), 1)
+})
+
 // ---------------------------------------------------------------------------
 // 闭环：applier 写入 → 巡检通过
 // ---------------------------------------------------------------------------
@@ -336,6 +406,63 @@ test('在途任务缺交付物 → 不报错（判据只约束终态）', (t) =>
 test('done 但未验收 → 不要求交付物（不变式的边界是 accepted，不是 done）', (t) => {
   const root = makeBus(t, { tasks: [task('t-0001'), toDone('t-0001', false)] })
   assert.equal(validate(root), 0, '未验收的 done 不构成「验收通过」，判据不应越界')
+})
+
+// ---------------------------------------------------------------------------
+// P0-A（2026-10-21）：manifest 的 kind / 能力边界 / 模型来源契约
+// ---------------------------------------------------------------------------
+
+function writeAgentManifest(root, id, manifest) {
+  const dir = join(root, 'agents', id)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+}
+
+function validManifest(over) {
+  return {
+    id: 'alpha',
+    name: 'Alpha',
+    runtime: 'cli',
+    kind: 'coding-agent',
+    present: true,
+    capabilities: ['coding'],
+    capability_boundary: {
+      tool_loop: 'yes', workspace_read: 'yes', workspace_write_headless: 'no',
+      shell_headless: 'no', network: 'yes',
+    },
+    model_info: { value: null, source: 'unknown', confidence: 'unknown', evidence: '夹具' },
+    invoke_contract: { prompt_transport: 'argv', output_format: 'text', exit_code_semantics: {}, permission_flags: {} },
+    permissions: { mode: 'unknown', tool_allowlist: [], denied_tools: [], approval_required: [], headless_allow_delegation: false },
+    cli: { command: 'alpha', binPath: '%USERPROFILE%\\alpha.exe', version: '1.0.0', invoke: 'alpha -p {prompt}' },
+    limits: { budget_per_day: 2.0, timeout_ms: 60000, heartbeat_ms: 30000 },
+    metering_source: 'unknown',
+    ...over,
+  }
+}
+
+test('P0-A 契约：合法的 coding-agent 档案通过 validate-bus', (t) => {
+  const root = makeBus(t)
+  writeAgentManifest(root, 'alpha', validManifest())
+  assert.equal(validate(root), 0)
+})
+
+test('P0-A 契约：kind=coding-agent 但 tool_loop!=yes → validate-bus 拒绝', (t) => {
+  const root = makeBus(t)
+  writeAgentManifest(root, 'alpha', validManifest({
+    capability_boundary: {
+      tool_loop: 'no', workspace_read: 'yes', workspace_write_headless: 'no',
+      shell_headless: 'no', network: 'yes',
+    },
+  }))
+  assert.equal(validate(root), 1, '类型声明与能力证据不自洽必须报错')
+})
+
+test('P0-A 契约：model_info.value 不得用 cli-default 冒充真实模型', (t) => {
+  const root = makeBus(t)
+  writeAgentManifest(root, 'alpha', validManifest({
+    model_info: { value: 'cli-default', source: 'unknown', confidence: 'unknown', evidence: '夹具' },
+  }))
+  assert.equal(validate(root), 1)
 })
 
 // ---------------------------------------------------------------------------

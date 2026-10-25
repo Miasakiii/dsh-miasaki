@@ -1,0 +1,50 @@
+{
+  "capabilities": [
+    "coding",
+    "cli-task-runner"
+  ],
+  "runtime_kind": "opencode",
+  "cli": {
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\opencode.ps1",
+    "command": "opencode",
+    "version": "1.18.18",
+    "invoke": "opencode run {prompt}"
+  },
+  "agent_id": "opencode",
+  "preflight": "已实测可用（默认模型 deepseek-v4-flash）；派单需 full-access（写 ~/.local/share/opencode 日志）",
+  "schema_version": 2,
+  "observed_at": "2026-10-21T06:01:22Z",
+  "permissions": {
+    "mode": "unknown",
+    "calibration": "unknown",
+    "evidence": "未校准（无 headless 权限实测）；P2-A 按只读降级，不授未证明的写权",
+    "tool_allowlist": [],
+    "denied_tools": [],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "coding-agent",
+  "present": false,
+  "invoke_contract": {
+    "exit_code_semantics": {
+      "0": "success",
+      "non-zero": "failure"
+    },
+    "prompt_transport": "argv",
+    "permission_flags": {},
+    "output_format": "text"
+  },
+  "capability_boundary": {
+    "workspace_read": "unknown",
+    "shell_headless": "unknown",
+    "workspace_write_headless": "unknown",
+    "tool_loop": "yes",
+    "network": "yes"
+  },
+  "model_info": {
+    "value": null,
+    "source": "unknown",
+    "confidence": "unknown",
+    "evidence": "配置存在但未找到模型字段（model）"
+  }
+}

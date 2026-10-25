@@ -1,0 +1,51 @@
+{
+  "capabilities": [
+    "coding",
+    "headless-orchestration",
+    "dsd-native"
+  ],
+  "runtime_kind": "dsh",
+  "cli": {
+    "command": "dsh",
+    "invoke": "dsh --profile headless {prompt}",
+    "version": "0.2.1-rc.2",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\dsh.ps1"
+  },
+  "agent_id": "dsh",
+  "preflight": "本机尚无 headless profile，派单前需先建 profile",
+  "schema_version": 2,
+  "observed_at": "2026-10-21T06:01:22Z",
+  "permissions": {
+    "mode": "unknown",
+    "calibration": "unknown",
+    "evidence": "未校准（无 headless 权限实测）；P2-A 按只读降级，不授未证明的写权",
+    "tool_allowlist": [],
+    "denied_tools": [],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "coding-agent",
+  "present": true,
+  "invoke_contract": {
+    "exit_code_semantics": {
+      "0": "success",
+      "non-zero": "failure"
+    },
+    "prompt_transport": "argv",
+    "permission_flags": {},
+    "output_format": "text"
+  },
+  "capability_boundary": {
+    "workspace_read": "unknown",
+    "shell_headless": "unknown",
+    "workspace_write_headless": "unknown",
+    "tool_loop": "yes",
+    "network": "yes"
+  },
+  "model_info": {
+    "value": null,
+    "source": "unknown",
+    "confidence": "unknown",
+    "evidence": "配置文件不存在：%USERPROFILE%/.dsh/profiles/headless/cordis.patch.yml"
+  }
+}

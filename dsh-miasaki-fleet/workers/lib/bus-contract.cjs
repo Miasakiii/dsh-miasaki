@@ -225,6 +225,27 @@ function validateResult(r, where, fail, expectTaskId) {
     }
   }
 
+  // 交付物显式声明（P1-B，2026-10-21，Cherry report_artifacts 模式）：
+  // 执行者用 deliverables[] 列出**成品文件**（不含 scratch），验收时逐条核对存在性。
+  // 与 artifacts[] 的分工：artifacts 是带 sha256 的指纹（防篡改），deliverables 是
+  // 「这次任务到底交了什么」的声明（K3 的延伸：存在性之外再加「是什么」）。
+  if (r.deliverables !== undefined) {
+    if (!Array.isArray(r.deliverables)) {
+      err('deliverables 应为 array')
+    } else {
+      r.deliverables.forEach((d, i) => {
+        const w = `${where} deliverables[${i}]`
+        if (!isObj(d)) { fail(w, '应为 object'); bad++; return }
+        if (!isStr(d.path)) { fail(w, '缺少 path'); bad++; return }
+        const p = d.path.replace(/\\/g, '/')
+        if (p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..')) {
+          fail(w, 'path 必须是工作区内的相对路径（不得绝对路径 / ..）')
+        }
+        if (d.note !== undefined && !isStr(d.note)) fail(w, 'note 应为 string')
+      })
+    }
+  }
+
   // 语义一致性：status=failed/blocked 时应有说明
   if ((r.status === 'failed' || r.status === 'blocked') && (!Array.isArray(r.blockers) || r.blockers.length === 0)) {
     err(`status=${r.status} 时 blockers 不应为空（失败必须说明卡在哪）`)
@@ -322,6 +343,8 @@ const EVENT_TYPES = Object.freeze({
   'agent.status.reset': { task: false, reason: true },
   'interrupt.raised': { task: true, reason: true },
   'interrupt.resumed': { task: true, reason: true },
+  // P2-D（2026-10-21）：定时触发器把到期 schedule 转成任务（事件挂在新建任务上）。
+  'schedule.fired': { task: true, reason: true },
   'superstep.committed': { task: false, reason: false },
 })
 
@@ -329,7 +352,7 @@ const EVENT_TYPES = Object.freeze({
  * 合法的写者角色。事件必须能点名作者，否则审计无从下手。
  * `verifier` / `scanner` 通常带 `:<agent-id>` 后缀（G4 验证器、能力图扫描器）。
  */
-const EVENT_AUTHORS = new Set(['commander', 'dispatcher', 'operator', 'applier', 'verifier', 'scanner'])
+const EVENT_AUTHORS = new Set(['commander', 'dispatcher', 'operator', 'applier', 'verifier', 'scanner', 'scheduler'])
 
 /** 写者可以带限定后缀，如 `verifier:opencode`（G4 验证器）。 */
 function isEventAuthor(v) {
@@ -468,7 +491,12 @@ const PATCH_PATH_RULES = [
   //  （保留登记以便未来实现 —— 不是误登记，是有意的占位）。
   { re: /^agents\/[a-z0-9-]+\/control\.json$/, ops: ['set'] },
   { re: /^agents\/[a-z0-9-]+\/manifest\.json$/, ops: ['set'] },
+  // P2-B（2026-10-21）：扫描/探测事实的唯一落点（派生分离，D3）。manifest 只留 Operator 字段；
+  // observed 由 scan-agents.ps1 / scan-models.mjs 经唯一入口写入。
+  { re: /^agents\/[a-z0-9-]+\/observed\.json$/, ops: ['set'] },
   { re: /^agents\/registry\.json$/, ops: ['set'] },
+  // P2-D（2026-10-21）：定时任务真相；只由 scheduler 经 bus-apply 写（任务行与 next_fire_at 同超步）。
+  { re: /^state\/schedules\.json$/, ops: ['set'] },
   { re: /^agents\/[a-z0-9-]+\/usage\.jsonl$/, ops: ['append'] },
   { re: /^tasks\/t-\d{4}\/result\.json$/, ops: ['set'] },
   { re: /^tasks\/t-\d{4}\/verdict\.json$/, ops: ['set'] },

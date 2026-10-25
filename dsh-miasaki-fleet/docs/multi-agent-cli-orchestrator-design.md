@@ -82,7 +82,7 @@
 4. 总指挥依据 **agent 特性（人设/技能）及其搭配的模型**，在**已开启的 CLI 集合内**做任务分配；
 5. 一个**监控面板**：开关、状态灯、进度、token/成本、心跳、告警。
 
-本文档定义所有跨进程协议与数据结构，是后续实现的唯一依据。**worker = 本机已安装的 agent CLI**：总指挥扫描发现它们、Operator 开关它们、Commander 按特性派单（spawn CLI 进程执行任务）。**不自研 worker 运行时**——自研薄壳与 dsh-sdk 常驻子进程路线已废弃（等价于重复造 subagent，无增量价值；评估结论归档于 `docs/m3-official-runtime-eval-2026-08-16.md`，仅供 dsh 原生任务参考）。
+本文档定义所有跨进程协议与数据结构，是后续实现的唯一依据。**worker = 本机已安装的 agent CLI**：总指挥扫描发现它们、Operator 开关它们、Commander 按特性派单（spawn CLI 进程执行任务）。**P0-A（2026-10-21）修订**：worker 池只收 `kind=coding-agent` —— 工具型 CLI（`bl`/`agent-browser`）仍保留档案但不可派单；判定口径见 [`design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md`](../design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md)。**不自研 worker 运行时**——自研薄壳与 dsh-sdk 常驻子进程路线已废弃（等价于重复造 subagent，无增量价值；评估结论归档于 `docs/m3-official-runtime-eval-2026-08-16.md`，仅供 dsh 原生任务参考）。
 
 ### 术语
 
@@ -90,8 +90,8 @@
 |---|---|
 | Operator / 操作者 | **人类**。唯一有权开关 agent CLI 的角色（通过面板开关或命令） |
 | Commander / 总指挥 | 大会话（本 DSH 会话）。任务分解、分配、验收、仲裁、知识策展 |
-| Worker / 小会话 | **本机已安装的一个 agent CLI**（bl / claude / gemini / opencode / pi / dsh / mimo / agent-browser 等，由扫描器发现）。每个任务派单时 spawn 一次进程，CLI 的 stdout/会话即小会话内容 |
-| Discovery / 扫描器 | `workers/discovery/scan-agents.ps1`：探测 PATH 上的已知 agent CLI → 生成 `agents/<id>/manifest.json`（runtime:"cli"）与 `agents/registry.json`；只刷新 cli 元数据，不覆盖 Operator 编辑 |
+| Worker / 小会话 | **本机已安装的一个 coding agent CLI**（`kind=coding-agent`：claude / gemini / opencode / pi / dsh / mimo 等，由扫描器发现并判定；`bl` / `agent-browser` 是工具型 CLI，不进 worker 池）。每个任务派单时 spawn 一次进程，CLI 的 stdout/会话即小会话内容 |
+| Discovery / 扫描器 | `workers/discovery/scan-agents.ps1`：探测 PATH 上的已知 agent CLI → 生成 `agents/<id>/manifest.json`（runtime:"cli"，含 P0-A 的 `kind`/能力边界/调用契约）与 `agents/registry.json`；只刷新 discovered 元数据，不覆盖 Operator 编辑 |
 | Fleet | 当前 **enabled=true 且进程存活** 的 worker 集合 |
 | Workspace | 所有协作文件的根目录（本项目即 `dsh-miasaki`） |
 | Bus | 文件总线：所有跨进程通信机制的总称 |
@@ -233,6 +233,11 @@ workspace/                          # 本项目根目录
   "id": "scout",
   "name": "调研员",
   "runtime": "cli",                   // "cli"（本机 agent CLI，v1 主路线）| "dsh" | "custom"（旧）
+  "kind": "coding-agent",             // ★ P0-A：coding-agent | tool-cli | unknown（非 coding-agent 不得派单）
+  "capability_boundary": { "tool_loop": "yes", "workspace_read": "yes", "workspace_write_headless": "no", "shell_headless": "no", "network": "yes" },
+  "model_info": { "value": null, "source": "unknown", "confidence": "unknown", "evidence": "……" },  // ★ P0-A：模型来源三态，cli-default 不是值
+  "invoke_contract": { "prompt_transport": "argv", "output_format": "json" },                        // ★ P0-A：调用契约
+  "permissions": { "mode": "read-only", "tool_allowlist": ["Read", "Glob", "Grep"] },                // ★ P0-A：权限声明（P1 加闸门）
   "model": "qwen-max",
   "model_price": { "input": 0.0008, "output": 0.002 },   // 元/1K tokens，估算用；无计量时为 null
   "metering": true,                   // 是否强制 usage.jsonl 上报；false 的 agent 豁免 §4.4 并显示"无计量"
@@ -259,7 +264,10 @@ workspace/                          # 本项目根目录
 
 约束：
 - `id` 全局唯一，创建后不可变；**manifest 不含 enabled 字段——开关归属 §4.2 的 control.json，由 Operator 独有**；
-- `runtime:"cli"` 的档案由扫描器生成（只刷新 `cli`/`updated_at`，不覆盖 Operator 编辑的 skills/persona/limits 等字段）；`cli.invoke` 是派单模板，Commander 派单时把 `{prompt}` 替换为 brief+context 全文；
+- `runtime:"cli"` 的档案由扫描器生成（只刷新 `cli`/`kind`/`present`/`updated_at`，不覆盖 Operator 编辑的 skills/persona/limits 等字段）；`cli.invoke` 是派单模板，Commander 派单时把 `{prompt}` 替换为 brief+context 全文；
+- **P0-A（2026-10-21）类型字段**：`kind` 由扫描器判定（coding-agent / tool-cli / unknown），派单器前置 `Test-AgentKindGate`——非 coding-agent 与缺字段一律拒绝派单（fail-closed）；`capability_boundary` 五维取值 yes/no/unknown，不得用默认值冒充证据；`model_info` 的 `value=null + source=unknown` 表示未声明，禁止写 `cli-default`（validate-bus 已拦）。完整判据与批次见 `design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md`。
+- **P0-B（2026-10-21）模型真实值**：`shared/agent-adapters.json` 声明每个 coding agent 的「配置文件 + 模型字段」（只读）；`workers/discovery/scan-models.mjs` 探测后经 `bus-apply` 写 `model_info{value,source,confidence,evidence,provider}`（读不到即 missing/unknown，不猜）；`workers/discovery/agent-drift.mjs` 只读巡检五态（match/replaced/missing/parse-error/unknown）；`verifier-pick` / `agent-pick` 的模型真值改为优先读 `model_info.value`。模型级异构自此有真数据。
+- **P2-A（2026-10-21）权限校准**：`permissions` 增 `calibration`（verified/declared/unknown）与 `evidence`；派单器 `Test-TrustGate` —— 声明写权限但 `capability_boundary.workspace_write_headless≠yes` 一律拒绝（不授未证明的写权）；`unknown` 按**只读降级**并告警（当前仅 claude 有 headless 实测证据；安全降级不是静默放行）。`validate-bus` 同口径巡检。
 - `persona_prompt` 必须内嵌 §2 的唯一路由规则与"排空退出"规则（cli runtime 无主循环，该规则主要约束派单器不向未开启的 CLI 派单）；
 - `model_price` 是估算单价，v1 不做实时报价查询（见 §9）；`metering=false` 或 `metering_source:"unknown"` 的 agent 豁免 §4.4 上报义务，面板显示"无计量"。
 - `tool_allowlist` 是 worker 可见工具的白名单（领域收窄，见 §7.5）；null = 用 runtime 默认工具面（约 25 项，固定前缀可达 1 万+ token，不推荐，见 §7.6）。cli runtime 的工具面由该 CLI 自身配置决定，白名单语义迁移到 §7.5 的 CLI 配置层。
@@ -377,7 +385,6 @@ workspace/                          # 本项目根目录
 ```
 
 ### 4.7 交付物 `result-<task-id>.md` — 固定结构（worker 写）
-
 ```markdown
 # 结果：<task-id> <标题>
 
@@ -399,6 +406,19 @@ workspace/                          # 本项目根目录
 ## 下一步建议
 <可选>
 ```
+
+---
+
+### 4.7b 节点交付契约 `result.json`（G0；P1-B 增 `deliverables[]`）
+
+与人类可读的 `result-<task-id>.md` **并列**的机器可读契约：`task_id` / `status`（completed|blocked|failed）/
+`conclusion` / `evidence[]` / `blockers[]` / `artifacts[]`（带 sha256 指纹）等 —— 权威校验实现是
+`workers/lib/bus-contract.cjs` 的 `validateResult`，schema 镜像 `schemas/result.schema.json`。
+
+**P1-B（2026-10-21）新增可选 `deliverables[]`**：执行者显式声明的**成品文件清单**（`{path, note?}`），
+路径必须是工作区内相对路径（拒绝绝对路径 / `..`）；`validate-bus` 逐条核对存在性与工作区包含性。
+与 `artifacts[]` 的分工：artifacts 是带 sha256 的**指纹**（防事后篡改），deliverables 回答
+「这次任务到底交付了什么」（K3 的延伸）；未声明该字段的旧契约零行为变更。
 
 ---
 
@@ -444,6 +464,36 @@ applier 依次执行五步：
 > 见 [graph-engineering-fleet-design.md](graph-engineering-fleet-design.md)。
 
 ---
+
+### 4.9 `agents/<agent-id>/observed.json` — 扫描/探测事实（P2-B，2026-10-21）
+
+manifest 只保留 Operator 字段（name / runtime / model / metering / skills / persona / limits / updated_at）；
+**发现事实**（present / runtime_kind / kind / cli / capabilities / capability_boundary / invoke_contract /
+permissions / model_info / preflight）落 `observed.json`。消费方**统一经** `workers/lib/agent-facts.cjs`
+的 `readAgentFactsFrom(dir)` 读合并视图（observed 覆盖 manifest；observed 缺席时回退 manifest 的兼容窗口，
+`_facts_source` 显式标记）。扫描器与 `scan-models` 是唯一写者，均经 bus-apply；`agents/registry.json`
+仍是派生快照，不是真相来源。
+
+### 4.10 `state/schedules.json` — 定时任务（P2-D，2026-10-21）
+
+真相文件（`version:1` + `schedules[]`）。**没有常驻 daemon**：`workers/scheduler/enqueue-due.mjs` 是由
+外部触发器（Windows 任务计划 / 手动 / DSH 定时插件）周期调用的一次性 CLI；到期 schedule 转成 queued 任务。
+任务行与 `next_fire_at` 推进在**同一次超步**提交（幂等）；错过多个窗口只补一次。总线事件 `schedule.fired`
+（author=scheduler）挂在新建任务上。
+
+### 4.11 档案 `schema_version` 与迁移（P2-E，2026-10-21）
+
+manifest / observed 均带 `schema_version`（当前 **2**；缺席按 1 legacy 读）。`workers/lib/schema-version.cjs`
+是五态判定单点；`workers/discovery/migrate-schema.mjs` 只标注版本并经 bus-apply 写入；future 版本
+在 `validate-bus` 显式失败（不猜新字段语义）。
+
+### 4.12 选型策略与 profiles（P2-F/P2-G，2026-10-21）
+
+- `shared/selection-policy.json` + `agent-pick --strategy`：策略**只影响候选排序**（weights），不改变
+  类型闸门 / 判活 / 开关等硬判定；未知策略 exit 2。
+- `shared/profiles.json` + `workers/profile/apply-profile.mjs`：Operator 的**声明式快照**（enabled 集合 +
+  每 agent 日预算），差分经 bus-apply 一次超步只写 `control.enabled` / `manifest.limits.budget_per_day`；
+  发现事实（observed）不在 profile 范围内。
 
 ## 5. 任务状态机
 
@@ -568,7 +618,7 @@ applier 依次执行五步：
 
 ## 7. Worker 行为规范
 
-### 7.0 派单式执行（runtime:"cli"，v1 主路线）
+### 7.0 派单式执行（runtime:"cli"，v1 主路线；P0-A 起前置类型闸门）
 
 本机 agent CLI **没有常驻主循环**——每次任务派单 spawn 一次进程，任务结束进程即退出：
 
@@ -594,6 +644,9 @@ Commander 派单（派单器 workers/dispatch/dispatch-task.ps1）：
      写入 usage.jsonl + status tokens 累计；stdout 追加 transcript.md；
      status 由 final-state.ps1 判定：idle（exit 0 且契约非 blocked/failed）/ blocked / error；
      终态机器事件 task.completed（健康）或 failure.detected（失败**或自述受阻**），判据与 status 同源；
+     失败分类（P1-A，2026-10-21）：失败/受阻时 status.json 增 failure{kind,retryable,suggest_switch,detail}，
+     failure.detected 事件带 error_kind/retryable/suggest_switch 附加字段；分类器缺失或输出不可解析
+     只告警、不阻断派单（分类是附加事实，不是闸门；退出码语义不变）
      交付物由派单器代写 result/（§4.7 结构；异构 CLI 无人值守权限自动拒绝，实测见 t-0006）
   6. 退出码语义：0 成功 / 2 拒绝派单（开关未开、无模板、**任务不可派、无能力候选**）/ 3 CLI 执行失败 / 4 预算熔断；
      免执行验证：-CheckOnly（跑完整预检：预算 + G1 + G2，不派单也不写总线）/ -ParseOnly（只跑 usage 解析，打印将写入的行）
@@ -811,12 +864,18 @@ loop:
 | 2 | 模型实际看见了什么，能不能从日志完整重建 | append-only session event log + 请求前 invariant 校验（重建不一致直接 fail） | usage.jsonl + transcript.md + brief/context 必须可重建 worker 每次请求的上下文 |
 | 3 | 换掉文件系统 / 沙箱 / 模型提供方，多少工具必须跟着改 | Capability Seam：fs / sandbox / provider 为可替换服务，上层工具不动 | 协议与 runtime 解耦（§12）：runtime 替换时 §4 协议、工具白名单语义不变 |
 
-### 12.2 记忆层选型（OpenViking，2026-08-24 试点通过）
+### 12.2 记忆层选型（OpenViking，2026-08-24 试点通过；2026-10-22 复评：DSH 侧暂停）
 
 > 结论：worker 与总指挥的**跨会话长记忆**采用 [OpenViking](https://github.com/volcengine/OpenViking)
 >（开源 AI Agent 上下文数据库，火山引擎，AGPL-3.0，v0.4.16）。评估与安装细节归档于
 > `../dsh-miasaki-shared-docs/dsh-platform/ref-openviking-dsh-2026-08-24.md`（含 v0.4.16 DSH 官方插件
 > Release 说明、端到端验证记录）。
+>
+> **2026-10-22 复评（DSH 侧集成暂停）**：本机实测记忆库停在 2026-09-28（17 个文件 / 33 vectors）、
+> pending 积压 7,360 个 / 19.6 MB（7 天 TTL 会定时丢弃）、服务端 0.4.16 与插件 0.5.26 错配两个月。
+> 已从 `miasaki` / `web` 两个 profile 的 `dsh.profile.bundles` 移除插件（依赖保留），服务端与历史
+> 记忆保留。fleet 若要重启记忆层，先按归档文档 §10 的「恢复步骤」完成服务端对齐、常驻、pending
+> 哨兵三项，再评估跨 harness 复用收益；在此之前 fleet 的记忆仍按 `AGENTS.md` + 任务书承载。
 
 **本机已装实例（2026-08-24，全链路验证通过）**：
 
@@ -894,4 +953,4 @@ loop:
 
 ---
 
-*本文档变更记录：v0.1 初稿 2026-08-16；v0.2 引入 Operator 角色与开关协议 2026-08-16；v0.3 按官方仓库调研重写 runtime 选型 2026-08-16；v0.3 附录：M1 实测修正（§5 交付/验收终态区分）2026-08-16；v0.3 附录2：§8.3 增补桌宠聚合形态方向 2026-08-16；v0.4 M3 实测回写（dsh-sdk 定为 M3.5 runtime，自研薄壳退役）2026-08-16；v0.5 按腾讯技术工程《DSH 实测》补充计量字段/工具面收窄/上下文隔离/治理指标/自检三问 2026-08-16；v0.6 按 Datawhale 插件教程补充视觉扩展/第三方插件治理清单/插件开发实操坑 2026-08-16；v0.7 按 Datawhale GLM-5.3 实测补充模型特性画像/生产级验收必查项/ZCode 候选 2026-08-16；v0.8 按 xiaobright/dsh-anchored-standard 分析补充工具面杠杆证据/三层目录 v2 方向/轨迹扰动与技能按需加载/社区参考实现 2026-08-16；v0.9 按 Datawhale 桌面版/CLI 教程补充 TUI 与桌宠社区先例/入口形态与 Headless/凭证卫生/工作区范围 2026-08-16；v0.10 按官方仓库复查增补（2026-08-17 rc.7）修订 §12/§13：rc.7 三条新能力（产品后台 Job / ACP 图片桥接 / 插件设置面板）、opt-in 安装模型、M3.5 回归冒烟、M6 异构候选 2026-08-17；v0.10 附录：M1 里程碑收尾（t-0002 验收裁决）2026-08-17；v0.11 方向修正：编排本机 agent CLI（扫描发现 → 开关 → 派单），废弃自研 worker 路线 2026-08-17；v0.12 派单器落地：预算预检 + usage 自动解析 + t-0005/t-0006 双闭环 2026-08-17；v0.12 附录：rc.7 回归冒烟完成（dsh 原生参考线 A/B/C 无回归 + rc7-test profile 混装加载通过，报告 docs/m35-rc7-regression-smoke-2026-08-17.md）2026-08-17；v0.13 校准批次（4/8 可用）+ 并发派单验证（opencode+pi）+ t-0001~t-0008 八任务闭环 2026-08-17；v0.15 按 OpenViking 试点结论（归档 `../dsh-miasaki-shared-docs/dsh-platform/ref-openviking-dsh-2026-08-24.md`）新增 §12.2 记忆层选型：总指挥 DSH 已挂 openviking-memory 插件、worker 侧 claude/pi 已装官方记忆集成、本地 server（bge + deepseek VLM）全链路验证通过；记忆层与文件总线正交、按 workspace peer 隔离 2026-08-24。*
+*本文档变更记录：v0.1 初稿 2026-08-16；v0.2 引入 Operator 角色与开关协议 2026-08-16；v0.3 按官方仓库调研重写 runtime 选型 2026-08-16；v0.3 附录：M1 实测修正（§5 交付/验收终态区分）2026-08-16；v0.3 附录2：§8.3 增补桌宠聚合形态方向 2026-08-16；v0.4 M3 实测回写（dsh-sdk 定为 M3.5 runtime，自研薄壳退役）2026-08-16；v0.5 按腾讯技术工程《DSH 实测》补充计量字段/工具面收窄/上下文隔离/治理指标/自检三问 2026-08-16；v0.6 按 Datawhale 插件教程补充视觉扩展/第三方插件治理清单/插件开发实操坑 2026-08-16；v0.7 按 Datawhale GLM-5.3 实测补充模型特性画像/生产级验收必查项/ZCode 候选 2026-08-16；v0.8 按 xiaobright/dsh-anchored-standard 分析补充工具面杠杆证据/三层目录 v2 方向/轨迹扰动与技能按需加载/社区参考实现 2026-08-16；v0.9 按 Datawhale 桌面版/CLI 教程补充 TUI 与桌宠社区先例/入口形态与 Headless/凭证卫生/工作区范围 2026-08-16；v0.10 按官方仓库复查增补（2026-08-17 rc.7）修订 §12/§13：rc.7 三条新能力（产品后台 Job / ACP 图片桥接 / 插件设置面板）、opt-in 安装模型、M3.5 回归冒烟、M6 异构候选 2026-08-17；v0.10 附录：M1 里程碑收尾（t-0002 验收裁决）2026-08-17；v0.11 方向修正：编排本机 agent CLI（扫描发现 → 开关 → 派单），废弃自研 worker 路线 2026-08-17；v0.12 派单器落地：预算预检 + usage 自动解析 + t-0005/t-0006 双闭环 2026-08-17；v0.12 附录：rc.7 回归冒烟完成（dsh 原生参考线 A/B/C 无回归 + rc7-test profile 混装加载通过，报告 docs/m35-rc7-regression-smoke-2026-08-17.md）2026-08-17；v0.13 校准批次（4/8 可用）+ 并发派单验证（opencode+pi）+ t-0001~t-0008 八任务闭环 2026-08-17；v0.15 按 OpenViking 试点结论（归档 `../dsh-miasaki-shared-docs/dsh-platform/ref-openviking-dsh-2026-08-24.md`）新增 §12.2 记忆层选型：总指挥 DSH 已挂 openviking-memory 插件、worker 侧 claude/pi 已装官方记忆集成、本地 server（bge + deepseek VLM）全链路验证通过；记忆层与文件总线正交、按 workspace peer 隔离 2026-08-24；v0.16 P0-A 类型闸门（2026-10-21）：manifest 增 `kind`/`capability_boundary`/`model_info`/`invoke_contract`/`permissions`，派单器拒非 coding-agent（fail-closed），扫描器迁移 8 档案（6 coding-agent + 2 tool-cli）与 registry，能力图/验证者选取按类型过滤；v0.17 P0-B 模型真实值（2026-10-21）：`shared/agent-adapters.json` + `scan-models` 把各 CLI 配置里的模型只读写入 `model_info`（读不到即 unknown/missing），`agent-drift` 只读巡检五态，`fleet-monitor /api/drift` 上屏，`verifier-pick`/`agent-pick` 改读真值（G4 模型级异构首次有数据）；v0.18 P1-A/P1-B（2026-10-21）：P1-A 新增失败分类器（八态、retryable/suggest_switch 语义分开）+ 派单器 `status.failure` 与 `failure.detected` 事件附加字段（不改退出码/闸门，分类器缺失不阻断）；P1-B `result.json` 增可选 `deliverables[]`（成品清单，validate-bus 核对存在性与工作区包含性，与 artifacts 指纹互补）；v0.19 P2-A 权限校准 + 信任闸门（2026-10-21）：`permissions` 增 `calibration`/`evidence`（claude 唯一 verified，其余 unknown 不冒充），派单器 `Test-TrustGate`（矛盾声明拒绝、unknown 按只读降级并告警），`validate-bus` 同口径；v0.20 P2-B observed.json 派生分离（2026-10-21）：扫描/探测事实迁 `agents/<id>/observed.json`（manifest 只留 Operator 字段），消费方经 `workers/lib/agent-facts.cjs` 读合并视图（缺席回退 manifest），扫描器一次超步 17 补丁，validate-bus 校验 observed 契约与合并语义；v0.21 P2-C UI 信息架构（2026-10-21）：DSH Fleet tab 收敛为概览 / Agents / Tasks / Verifiers / Events 五 section（Schedule 待调度器落地，不放假入口），概览新增模型来源与漂移卡（/api/drift）；v0.22 P2-D 定时任务（2026-10-21）：`state/schedules.json` + `workers/scheduler/enqueue-due.mjs`（一次性触发器，任务行与 next_fire_at 同超步 ⇒ 幂等；错过只补一次；事件 schedule.fired），DSH Fleet tab 增 Schedule section（/api/schedules）；v0.23 P2-E/F/G（2026-10-21）：schema_version 与迁移（五态、future 拒绝）、可插拔选型策略（只排序、未知策略显式失败）、profiles 快照（只写 Operator 字段，未知 agent 显式失败）。*

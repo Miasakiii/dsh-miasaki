@@ -139,14 +139,14 @@ test('原生渲染：不使用 iframe，也不调用 window.open（桌面壳里�
 	assert.ok(SOURCE.includes('http://127.0.0.1:39801/'), '完整面板地址仍以文本形式给出')
 })
 
-test('数据源走同源代理：fleet / dispatchable / gaps / events / verifiers', () => {
-	for (const p of ['/api/fleet', '/api/dispatchable', '/api/gaps', '/api/events?limit=8', '/api/verifiers', '/api/toggle/']) {
+test('数据源走同源代理：fleet / dispatchable / gaps / events / verifiers / drift / schedules', () => {
+	for (const p of ['/api/fleet', '/api/dispatchable', '/api/gaps', '/api/events?limit=8', '/api/verifiers', '/api/drift', '/api/schedules', '/api/toggle/']) {
 		assert.ok(SOURCE.includes(p), `缺少数据源：${p}`)
 	}
 	assert.ok(SOURCE.includes('const API = "/dsh-fleet"'), '所有请求必须走 /dsh-fleet 同源前缀')
 })
 
-test('视图渲染：style + 视图容器 + 可滚动内容区 + 判定层与 Agent 区块', () => {
+test('视图渲染：style + 视图容器 + 可滚动内容区 + 信息架构 tabs（P2-C）', () => {
 	const def = loadBundle()
 	const { react } = makeReact()
 	const exports = def.factory((name) => (name === 'react' ? react : undefined))
@@ -162,8 +162,12 @@ test('视图渲染：style + 视图容器 + 可滚动内容区 + 判定层与 Ag
 	assert.ok(info.classNames.some((c) => c.includes('fpanel-scroll')), '需要可滚动内容区（里页无法滚动的修复点）')
 	const text = info.texts.join('|')
 	assert.match(text, /Fleet/)
-	assert.match(text, /判定层/)
-	assert.match(text, /Agent Fleet/)
+	assert.match(text, /判定层/, '概览页仍保留判定层四卡')
+	// P2-C/P2-D：信息架构收敛 —— 六个 section tab（Schedule 由外部触发器驱动，无常驻 daemon）。
+	for (const label of ['概览', 'Agents', 'Tasks', 'Schedule', 'Verifiers', 'Events']) {
+		assert.match(text, new RegExp(label), `缺少 section tab：${label}`)
+	}
+	assert.ok(info.classNames.filter((c) => c.startsWith('fpanel-tab')).length >= 6, '六个 tab 都要渲染成按钮（激活态类名是 fpanel-tab fpanel-tab-active）')
 	assert.match(text, /会话级入口/, '传入 sessionId 时应标出会话级入口')
 })
 

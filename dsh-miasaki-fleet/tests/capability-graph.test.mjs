@@ -17,16 +17,16 @@ import {
   selectAgents,
 } from '../workers/lib/capability-graph.mjs'
 
-/** 真实档案快照（2026-09-10 勘察）。 */
+/** 真实档案快照（2026-09-10 勘察；kind 于 2026-10-21 P0-A 补入）。 */
 const REAL_AGENTS = [
-  { id: 'agent-browser', skills: ['web-automation', 'browser'], model: 'cli-default', metering: 'unknown', enabled: true, alive: true },
-  { id: 'bl', skills: ['bailian-resources', 'bailian-chat'], model: 'cli-default', metering: 'console-usage', enabled: true, alive: true },
-  { id: 'claude', skills: ['analysis', 'coding', 'multi-step-tools', 'json-output'], model: 'cli-default', metering: 'json-cost-usd', enabled: true, alive: true },
-  { id: 'dsh', skills: ['headless-orchestration', 'dsd-native'], model: 'cli-default', metering: 'session', enabled: false, alive: true },
-  { id: 'gemini', skills: ['google-chat'], model: 'cli-default', metering: 'unknown', enabled: false, alive: true },
-  { id: 'mimo', skills: ['light-chat'], model: 'cli-default', metering: 'unknown', enabled: false, alive: true },
-  { id: 'opencode', skills: ['coding', 'cli-task-runner'], model: 'cli-default', metering: 'unknown', enabled: true, alive: true },
-  { id: 'pi', skills: ['coding'], model: 'cli-default', metering: 'unknown', enabled: true, alive: true },
+  { id: 'agent-browser', kind: 'tool-cli', skills: ['web-automation', 'browser'], model: 'cli-default', metering: 'unknown', enabled: true, alive: true },
+  { id: 'bl', kind: 'tool-cli', skills: ['bailian-resources', 'bailian-chat'], model: 'cli-default', metering: 'console-usage', enabled: true, alive: true },
+  { id: 'claude', kind: 'coding-agent', skills: ['analysis', 'coding', 'multi-step-tools', 'json-output'], model: 'cli-default', metering: 'json-cost-usd', enabled: true, alive: true },
+  { id: 'dsh', kind: 'coding-agent', skills: ['headless-orchestration', 'dsd-native'], model: 'cli-default', metering: 'session', enabled: false, alive: true },
+  { id: 'gemini', kind: 'coding-agent', skills: ['google-chat'], model: 'cli-default', metering: 'unknown', enabled: false, alive: true },
+  { id: 'mimo', kind: 'coding-agent', skills: ['light-chat'], model: 'cli-default', metering: 'unknown', enabled: false, alive: true },
+  { id: 'opencode', kind: 'coding-agent', skills: ['coding', 'cli-task-runner'], model: 'cli-default', metering: 'unknown', enabled: true, alive: true },
+  { id: 'pi', kind: 'coding-agent', skills: ['coding'], model: 'cli-default', metering: 'unknown', enabled: true, alive: true },
   // 归档：有真实模型与技能，是「替代关系断裂」的当事方
   { id: 'coder', skills: ['code', 'scripting', 'engineering', 'zh-report'], model: 'deepseek-v4-flash', modelPrice: { input: 0.0001, output: 0.0002 }, archived: true },
   { id: 'analyst', skills: ['research', 'comparative-analysis', 'zh-report'], model: 'deepseek-v4-pro', modelPrice: { input: 0.0005, output: 0.0015 }, archived: true },
@@ -175,6 +175,19 @@ test('选型：裸技能名会被 canonical 化，code 与 coding 等价', () =>
   const byCanonical = selectAgents(['cap:coding'], g)
   assert.deepEqual(byRaw.required, byCanonical.required)
   assert.deepEqual(byRaw.candidates.map((c) => c.agentId), byCanonical.candidates.map((c) => c.agentId))
+})
+
+test('选型：kind 过滤把工具型 CLI 排除在 worker 候选外（P0-A）', () => {
+  const g = graphOf()
+  // 不设过滤时，bl 是 bailian-chat 的提供者（工具型 CLI 也在图里）
+  const withoutFilter = selectAgents(['bailian-chat'], g)
+  assert.ok(withoutFilter.candidates.some((c) => c.agentId === 'bl'))
+  // kind=coding-agent 后，工具型 CLI 不再是候选
+  const filtered = selectAgents(['bailian-chat'], g, { kind: 'coding-agent' })
+  assert.equal(filtered.candidates.length, 0)
+  const coding = selectAgents(['coding'], g, { kind: 'coding-agent' })
+  assert.ok(coding.candidates.length > 0)
+  assert.ok(coding.candidates.every((c) => !['bl', 'agent-browser'].includes(c.agentId)))
 })
 
 test('选型：报出无人提供的能力（缺口），而不是静默给空候选', () => {

@@ -1,8 +1,10 @@
 // verifier.test.mjs — G4 验证器选取与异构性判定单测（2026-09-10）
 //
-// 两组重点：
+// 三组重点：
 //   1. **异构等级**：自验必须被拒；同模型只算 agent 级；不同厂商才算最强异构。
 //   2. **契约**：verdict.json 的三条硬约束（署名 / 拒绝须有依据 / findings 须有证据）。
+//   3. **WORK-01（2026-10-22）**：判官前置确定性闸（显式声明不猜 / exitCode 不可信显式失败 /
+//      续跑提示只要尾部 3000 字符 / 任务书三形态）。
 //
 // 代理人数据取自 2026-09-10 真实勘察快照。注意其中一条**现实约束**：
 // 8 个活动 agent 的 model 全是 cli-default → 「不同模型」这一级无法判定，
@@ -18,9 +20,12 @@ import { validateVerdict } from '../workers/lib/bus-contract.mjs'
 import {
   assessHeterogeneity,
   buildVerifierBrief,
+  evaluateGate,
   normalizeModel,
+  parseGateCommand,
   selectVerifiers,
   summarizeVerdicts,
+  tailForContinuation,
   vendorOf,
 } from '../workers/lib/verifier.mjs'
 // K5（2026-09-30）：厂商表加载 —— 此前是「读一个从不存在的文件并静默回退」。
@@ -238,6 +243,97 @@ test('验证任务书：未提供产物与标准时给出兜底指引而非空�
   const brief = buildVerifierBrief('t-0001', 'pi')
   assert.match(brief, /未列出/)
   assert.match(brief, /brief\.md/)
+})
+
+// ---------------------------------------------------------------------------
+// WORK-01（2026-10-22）：判官前置的确定性 shell 闸
+//
+// 来源：外部逆向清单（luanyujia-workbench 09-改造参考 Hermes 05-改造清单 A-9）。
+// 判据（照抄其验收命令）：闸命令 exit≠0 ⇒ 判官不被调用；
+// 续跑提示 == 闸输出的尾部 3000 字符。
+//
+// 三条边界各对着一种真实失效（详见 verifier.cjs 头部注释）：
+//   ① 只认显式声明，不猜 —— 猜出来的命令「跑错还退出 0」比不跑更危险；
+//   ② exitCode 不可信时显式失败，不给结论 —— 判据本身坏了的时候沉默 = 放行；
+//   ③ 续跑提示只要尾部 —— 全量回贴会把刚炸过上下文的生产者再次顶爆。
+// ---------------------------------------------------------------------------
+
+test('parseGateCommand：只认显式声明（gate: / 闸命令： / 确定性闸：，中英文冒号均可）', () => {
+  assert.equal(parseGateCommand('...\ngate: node workers/graph/task-ready.mjs --check\n...'), 'node workers/graph/task-ready.mjs --check')
+  assert.equal(parseGateCommand('# 标题\n闸命令：npm test\n'), 'npm test')
+  assert.equal(parseGateCommand('确定性闸：pnpm -C dsh-miasaki-fleet test verifier\n'), 'pnpm -C dsh-miasaki-fleet test verifier')
+  // 反例（自证，防「永远通过」）：没有声明必须返回 null，不许猜
+  assert.equal(parseGateCommand('## 验收标准\n1. 跑一下测试\n2. 看看效果\n'), null, '没有 gate: 行就不猜命令')
+  assert.equal(parseGateCommand(''), null)
+  assert.equal(parseGateCommand(null), null)
+  assert.equal(parseGateCommand('gate:    \n'), null, '空命令不算声明')
+})
+
+test('tailForContinuation：短输出原样；长输出只留尾部且带截断标记', () => {
+  assert.equal(tailForContinuation('短输出', 3000), '短输出')
+  // 失败现场放在输出**末尾**（真实日志也是这样：错误在最后几行）
+  const long = 'x'.repeat(200) + 'TAIL_MARKER_'
+  const r = tailForContinuation(long, 50)
+  assert.ok(r.endsWith('TAIL_MARKER_'), '要的是尾部，不是头部（续跑提示给的是失败现场）')
+  assert.match(r, /truncated; showing last 50 chars/, '截断必须留痕，不许静默丢内容')
+  assert.equal(r.length, '…[earlier output truncated; showing last 50 chars]\n'.length + 50, '结果有界')
+})
+
+test('evaluateGate：exit 0 ⇒ 闸通过；exit≠0 ⇒ 不通过且带尾部续跑提示', () => {
+  const pass = evaluateGate({ exitCode: 0, output: 'ok' })
+  assert.equal(pass.ok, true)
+  assert.equal(pass.passed, true)
+  assert.equal(pass.continuation, null)
+
+  const fail = evaluateGate({ exitCode: 1, output: 'a'.repeat(5000) + 'FAILED: assertion' })
+  assert.equal(fail.ok, true)
+  assert.equal(fail.passed, false, 'exit≠0 就不许往下走')
+  assert.ok(fail.continuation.endsWith('FAILED: assertion'))
+  assert.match(fail.continuation, /truncated/, '超长输出截断留痕')
+})
+
+test('evaluateGate：exitCode 不可信时显式失败（守卫必须显式失败，不猜）', () => {
+  for (const bad of ['0', undefined, null, -1, 1.5, NaN]) {
+    const r = evaluateGate({ exitCode: bad, output: 'x' })
+    assert.equal(r.ok, false, `exitCode=${JSON.stringify(bad)} 不可信 ⇒ 必须显式失败`)
+    assert.equal(r.passed, false, '不可信既不是通过也不是打回 —— 调用方必须停下来')
+    assert.match(r.error, /不可信/)
+  }
+})
+
+test('验证任务书（WORK-01）：带闸时第 0 步是硬规则——不过就不许写 verdict', () => {
+  const brief = buildVerifierBrief('t-0100', 'claude', {
+    artifacts: ['tasks/t-0100/result.json'],
+    acceptance: ['退出码必须为 0'],
+    gate: 'node workers/graph/task-ready.mjs --check',
+  })
+  assert.match(brief, /第 0 步：确定性闸/)
+  assert.match(brief, /node workers\/graph\/task-ready\.mjs --check/, '闸命令必须原样进任务书')
+  assert.match(brief, /不许\*\*写 verdict\.json/, 'exit≠0 时 pass/reject 都不许写')
+  assert.match(brief, /尾部 3000 字符/)
+  assert.match(brief, /npm test \| head -20.*的退出码属于/, 'VER-01 的退出码归因教训必须嵌进去')
+  const m = brief.match(/```json\n([\s\S]*?)\n```/)
+  assert.equal(JSON.parse(m[1]).gate, '<ran | not-run>', '模板要求判官声明闸跑没跑')
+})
+
+test('验证任务书（WORK-01）：无声明 ⇒ 不静默跳过，走「未声明」分支', () => {
+  const brief = buildVerifierBrief('t-0101', 'pi', { acceptance: ['文档类交付'] })
+  assert.match(brief, /\*\*未声明\*\*/, '没有闸是可感知的状态，不是默认放行')
+  assert.match(brief, /写明 `"gate": null` 与理由/)
+  // 反例（自证）：无闸时任务书不得含任何具体闸命令（不许偷偷塞一个猜的）
+  assert.equal(brief.includes('第 0 步：确定性闸（必须先跑'), false)
+})
+
+test('WORK-01 闭环：brief 提取 → 任务书 → 闸判定 → 尾部即续跑提示', () => {
+  const briefText = '# 任务\ngate: npm test\n## 验收标准\n1. 全绿\n'
+  const gate = parseGateCommand(briefText)
+  assert.equal(gate, 'npm test')
+  const gateResult = evaluateGate({ exitCode: 1, output: 'log head...\nFAILED tests/x.test.js:42' })
+  const brief = buildVerifierBrief('t-0102', 'gemini', { gate })
+  // 任务书承诺的「尾部即续跑提示」与 evaluateGate 的实际行为一致
+  assert.ok(gateResult.continuation.includes('FAILED tests/x.test.js:42'))
+  assert.match(brief, /npm test/)
+  assert.equal(gateResult.passed, false)
 })
 
 // ---------------------------------------------------------------------------

@@ -62,6 +62,18 @@
         }
       }
     },
+    "deliverables": {
+      "type": "array",
+      "description": "P1-B：执行者显式声明的成品文件清单（只列成品、不含 scratch）。validate-bus 逐条核对存在性；路径必须是工作区内相对路径。与 artifacts 的分工：artifacts = 指纹（防篡改），deliverables = 交付了什么。",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1, "description": "工作区内相对路径（不得绝对路径 / ..）" },
+          "note": { "type": "string" }
+        }
+      }
+    },
     "broadcast": {
       "type": "string",
       "description": "可选：值得写入 collective-memory 的发现（Commander 审阅后决定）"

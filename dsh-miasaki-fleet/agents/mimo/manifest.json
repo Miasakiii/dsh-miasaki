@@ -1,27 +1,22 @@
-﻿{
-    "metering_source":  "unknown",
-    "name":  "MiMo CLI",
-    "updated_at":  "2026-08-22T13:27:38Z",
-    "cli":  {
-                "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\mimo.ps1",
-                "command":  "mimo",
-                "version":  "0.1.12",
-                "invoke":  "mimo {prompt}"
-            },
-    "model_price":  null,
-    "id":  "mimo",
-    "limits":  {
-                   "budget_per_day":  2.0,
-                   "max_concurrent_tasks":  1,
-                   "heartbeat_ms":  30000,
-                   "timeout_ms":  900000,
-                   "max_tokens_per_task":  50000
-               },
-    "runtime":  "cli",
-    "model":  "cli-default",
-    "persona_prompt":  "你是本机 agent CLI「MiMo CLI」的档案。总指挥通过你的可执行文件派发任务。",
-    "metering":  false,
-    "skills":  [
-                   "light-chat"
-               ]
+{
+  "model_price": null,
+  "persona_prompt": "你是本机 agent CLI「MiMo CLI」的档案。总指挥通过你的可执行文件派发任务。",
+  "id": "mimo",
+  "metering": false,
+  "metering_source": "unknown",
+  "skills": [
+    "light-chat"
+  ],
+  "runtime": "cli",
+  "limits": {
+    "budget_per_day": 2,
+    "max_concurrent_tasks": 1,
+    "heartbeat_ms": 30000,
+    "timeout_ms": 900000,
+    "max_tokens_per_task": 50000
+  },
+  "updated_at": "2026-10-21T06:01:22Z",
+  "model": "cli-default",
+  "name": "MiMo CLI",
+  "schema_version": 2
 }

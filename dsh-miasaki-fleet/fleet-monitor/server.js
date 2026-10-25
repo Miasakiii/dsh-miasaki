@@ -24,6 +24,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+// P2-B：manifest（Operator）+ observed（发现事实）合并视图；observed 缺席时回退 manifest。
+const agentFacts = require('../workers/lib/agent-facts.cjs');
 // F3 判活：与 publish-pulse 共用同一口径（实现在 workers/lib/liveness.cjs）。
 const { evaluateLiveness } = require('../workers/lib/liveness.cjs');
 // 2026-09-26 审计 P1.5：本服务原为「CORS 通配 + 写接口零鉴权」。补三道信任围栏，
@@ -159,8 +161,8 @@ function aggregateFleet() {
   for (const id of agentDirs) {
     const agentDir = path.join(AGENTS_DIR, id);
 
-    // manifest.json
-    const manifest = safeReadJSON(path.join(agentDir, 'manifest.json'));
+    // manifest + observed 合并视图（P2-B：发现事实在 observed.json）
+    const manifest = agentFacts.readAgentFactsFrom(agentDir);
     if (!manifest) continue;
 
     // control.json
@@ -199,11 +201,18 @@ function aggregateFleet() {
     const agent = {
       id: manifest.id || id,
       name: manifest.name || id,
+      // P0-A（2026-10-21）：类型与模型来源原样上屏 —— 面板必须能区分「coding agent / 工具型 CLI」，
+      // 也要让「模型未声明（unknown）」可见，而不是用 cli-default 冒充。
+      kind: manifest.kind || 'unknown',
+      present: manifest.present !== false,
       runtime: manifest.runtime || 'cli',
+      runtime_kind: manifest.runtime_kind || null,
       model: manifest.model || null,
+      model_info: manifest.model_info || null,
+      capability_boundary: manifest.capability_boundary || null,
       metering: manifest.metering !== false,
       metering_source: manifest.metering_source || null,
-      skills: manifest.skills || [],
+      skills: [...new Set([...(manifest.skills || []), ...(manifest.capabilities || [])])],
       limits: manifest.limits || {},
       cli_version: manifest.cli ? manifest.cli.version : null,
       // 状态
@@ -294,7 +303,7 @@ function aggregateReport(days) {
     .map(d => d.name);
 
   for (const id of agentDirs) {
-    const manifest = safeReadJSON(path.join(AGENTS_DIR, id, 'manifest.json'));
+    const manifest = agentFacts.readAgentFactsFrom(path.join(AGENTS_DIR, id));
     if (!manifest) continue;
 
     const usageLines = safeReadJSONL(path.join(AGENTS_DIR, id, 'usage.jsonl'));
@@ -543,6 +552,31 @@ async function handleRequest(req, res) {
     } catch (e) {
       return sendJSON(res, { ok: false, error: String((e && e.message) || e) });
     }
+  }
+
+  // GET /api/drift → 只读配置漂移巡检（P0-B）：manifest 声明的模型 vs 当前 CLI 配置。
+  // 与判定层同款：spawn 现成 CLI（agent-drift --json），不重复实现探测；漂移是事实，
+  // 响应带 ok:true + summary，适配器缺口才 ok:false。
+  if (req.method === 'GET' && pathname === '/api/drift') {
+    try {
+      return sendJSON(res, runJudgement('workers/discovery/agent-drift.mjs', ['--json']));
+    } catch (e) {
+      return sendJSON(res, { ok: false, error: String((e && e.message) || e) });
+    }
+  }
+
+  // GET /api/schedules → 定时任务（P2-D）：读 state/schedules.json（真相），只读转发。
+  // 不在本服务里跑触发器 —— 触发器是 workers/scheduler/enqueue-due.mjs（外部周期调用）。
+  if (req.method === 'GET' && pathname === '/api/schedules') {
+    // guard-ok: 文件缺席 = 未登记任何 schedule（合法空态，不是读取失败；响应带 note 可区分）
+    const doc = safeReadJSON(path.join(STATE_DIR, 'schedules.json'));
+    if (!doc) return sendJSON(res, { ok: true, schedules: [], note: '未登记任何 schedule' });
+    const schedules = Array.isArray(doc.schedules) ? doc.schedules : [];
+    const now = Date.now();
+    const rows = schedules.map((s) => Object.assign({}, s, {
+      due_now: !!(s && s.enabled !== false && s.next_fire_at && Date.parse(s.next_fire_at) <= now),
+    }));
+    return sendJSON(res, { ok: true, updated_at: doc.updated_at || null, total: rows.length, due_now: rows.filter((r) => r.due_now).length, schedules: rows });
   }
 
   // GET /api/events?limit=N → 机器事件流尾部（G0：唯一真相的最近若干条）

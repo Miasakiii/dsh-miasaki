@@ -19,4 +19,9 @@ export const {
   selectVerifiers,
   buildVerifierBrief,
   summarizeVerdicts,
+  // WORK-01（2026-10-22）：判官前置确定性闸
+  GATE_CONTINUATION_MAX,
+  parseGateCommand,
+  tailForContinuation,
+  evaluateGate,
 } = module

@@ -620,6 +620,7 @@ function renderAgent(agent) {
           <span style="font-size:11px;color:var(--fm-text-dim);font-weight:400">${escHtml(agent.id)}</span>
         </div>
         <div class="card-meta">
+          <span class="meta-item">${escHtml(agent.kind || 'unknown')}</span>
           <span class="meta-item">${escHtml(agent.runtime)}</span>
           ${agent.cli_version ? '<span class="meta-item">v' + escHtml(agent.cli_version) + '</span>' : ''}
           ${agent.model ? '<span class="meta-item">model: <span class="meta-val">' + escHtml(agent.model) + '</span></span>' : ''}

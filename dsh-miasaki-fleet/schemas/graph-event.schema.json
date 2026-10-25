@@ -21,6 +21,7 @@
         "agent.status.reset",
         "interrupt.raised",
         "interrupt.resumed",
+        "schedule.fired",
         "superstep.committed"
       ],
       "description": "task.* 类事件需要合法 task_id；标记为变更类的还需要 reason"

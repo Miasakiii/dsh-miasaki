@@ -260,6 +260,14 @@ window.__ModuleLoader__.load({
 				padding: 6px 0;
 			}
 			.fpanel-tip { font-size: 10px; color: var(--dsw-alias-label-secondary); opacity: .85; }
+			.fpanel-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; }
+			.fpanel-tab {
+				font-size: 12px; line-height: 1.5; padding: 3px 10px; border-radius: 999px;
+				border: 1px solid var(--dsw-alias-label-secondary); background: transparent;
+				color: var(--dsw-alias-label-secondary); cursor: pointer; opacity: .9;
+			}
+			.fpanel-tab:hover { color: var(--dsw-alias-label-primary); opacity: 1; }
+			.fpanel-tab-active { color: var(--dsw-alias-brand-primary); border-color: var(--dsw-alias-brand-primary); opacity: 1; }
 		`;
 
 		const h = react.createElement;
@@ -311,8 +319,8 @@ window.__ModuleLoader__.load({
 						onClick: () => onToggle(agent, !agent.enabled)
 					}, disabled ? "处理中…" : (agent.enabled ? "关闭" : "开启"))),
 				h("div", { className: "fpanel-agent-meta" },
-					h("span", null, (agent.runtime || "cli") + " · " + (agent.cli_version || "版本未知")),
-					h("span", null, "model: " + (agent.model || "—")),
+					h("span", null, "kind: " + (agent.kind || "unknown") + " · " + (agent.runtime || "cli") + " · " + (agent.cli_version || "版本未知")),
+					h("span", null, "model: " + (agent.model || "—") + (agent.model_info && agent.model_info.source !== "config" ? "（" + (agent.model_info.source || "unknown") + "）" : "")),
 					h("span", null, "state: " + (agent.reported_state || agent.state || "—")),
 					agent.stale ? h("span", { className: "fpanel-warn" }, "心跳过龄") : null),
 				h("div", { className: "fpanel-agent-metrics" },
@@ -344,8 +352,18 @@ window.__ModuleLoader__.load({
 			const [healthError, setHealthError] = react.useState(null);
 			const [checking, setChecking] = react.useState(false);
 			const [judge, setJudge] = react.useState({
-				dispatchable: null, gaps: null, events: null, verifiers: null, errors: {},
+				dispatchable: null, gaps: null, events: null, verifiers: null, drift: null, schedules: null, errors: {},
 			});
+			// P2-C/P2-D（2026-10-21）：信息架构收敛为「概览 / Agents / Tasks / Schedule / Verifiers / Events」。
+			const SECTIONS = [
+				{ id: "overview", label: "概览" },
+				{ id: "agents", label: "Agents" },
+				{ id: "tasks", label: "Tasks" },
+				{ id: "schedules", label: "Schedule" },
+				{ id: "verifiers", label: "Verifiers" },
+				{ id: "events", label: "Events" },
+			];
+			const [section, setSection] = react.useState("overview");
 			const [busy, setBusy] = react.useState(null);
 			const [flash, setFlash] = react.useState(null);
 
@@ -356,19 +374,21 @@ window.__ModuleLoader__.load({
 			};
 
 			const loadJudge = () => {
-				const titles = { dispatchable: "可派集", gaps: "能力断层", events: "机器事件", verifiers: "验证者覆盖" };
+				const titles = { dispatchable: "可派集", gaps: "能力断层", events: "机器事件", verifiers: "验证者覆盖", drift: "模型漂移", schedules: "定时任务" };
 				const paths = {
 					dispatchable: "/api/dispatchable",
 					gaps: "/api/gaps",
 					events: "/api/events?limit=8",
 					verifiers: "/api/verifiers",
+					drift: "/api/drift",
+					schedules: "/api/schedules",
 				};
 				const tasks = Object.keys(paths).map((key) =>
 					getJSON(paths[key])
 						.then((j) => ({ key, ok: true, value: j }))
 						.catch((e) => ({ key, ok: false, error: String((e && e.message) || e), title: titles[key] })));
 				return Promise.all(tasks).then((results) => {
-					const next = { dispatchable: null, gaps: null, events: null, verifiers: null, errors: {} };
+					const next = { dispatchable: null, gaps: null, events: null, verifiers: null, drift: null, schedules: null, errors: {} };
 					for (const r of results) {
 						if (r.ok) next[r.key] = r.value;
 						else next.errors[r.key] = r.error;
@@ -467,6 +487,8 @@ window.__ModuleLoader__.load({
 				gaps: judge.errors.gaps,
 				events: judge.errors.events,
 				verifiers: judge.errors.verifiers,
+				drift: judge.errors.drift,
+				schedules: judge.errors.schedules,
 			};
 
 			const readyList = (judge.dispatchable && Array.isArray(judge.dispatchable.ready)) ? judge.dispatchable.ready : [];
@@ -504,97 +526,199 @@ window.__ModuleLoader__.load({
 					h("div", { className: "fpanel-tip", style: { marginTop: 8 } },
 						"面板由 fleet-monitor 提供；首次打开会自动拉起它。若持续失败，可在 dsh-miasaki-fleet 目录运行：node fleet-monitor/server.js")));
 			} else {
-				// ① 统计行
-				scrollChildren.push(h("div", { key: "stats", className: "fpanel-stats" },
-					Stat("在线", online + "/" + total, monitorOnline ? "monitor 在线" : "monitor 未就绪"),
-					Stat("已启用", String(summary.enabled || 0), "Operator 开关"),
-					Stat("活跃任务", String(summary.tasks_active || 0), "running / draining"),
-					Stat("今日成本", fmtCost(summary.cost_today), "全 agent 合计"),
-					Stat("可派", judge.dispatchable ? String(readyList.length) : "—", judge.dispatchable ? "G1 可派集" : "判定层不可用"),
-					Stat("终态", judge.dispatchable ? String(finishedList.length) : "—", judge.dispatchable ? "done + accepted" : "判定层不可用")));
+				// P2-C：先给信息架构（section tabs），再按 section 渲染对应内容。
+				scrollChildren.push(h("div", { key: "tabs", className: "fpanel-tabs" },
+					SECTIONS.map((s) => h("button", {
+						type: "button", key: "tab-" + s.id,
+						className: "fpanel-tab" + (section === s.id ? " fpanel-tab-active" : ""),
+						onClick: () => setSection(s.id),
+					}, s.label))));
 
-				// ② 判定层
-				const judgeCards = [];
-
-				judgeCards.push(Card("可派集（G1）", judgeErr.dispatchable
-					? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.dispatchable)
-					: (readyList.length === 0 && blockedList.length === 0
-						? h("div", { className: "fpanel-empty" }, "可派：无（全部 " + finishedList.length + " 个任务终态）")
+				const drift = judge.drift || null;
+				const driftSummary = (drift && drift.summary) ? drift.summary : null;
+				const driftCard = Card("模型来源与漂移（P0-B）", judgeErr.drift
+					? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.drift)
+					: (!drift
+						? h("div", { className: "fpanel-empty" }, "尚未取到 drift 数据")
 						: h("div", null,
-							readyList.map((t) => {
-								const id = (t && t.id) || t;
-								return h("div", { className: "fpanel-row", key: "ready-" + id }, h("span", { className: "fpanel-row-k" }, "可派"), h("span", { className: "fpanel-row-v" }, String(id)));
-							}),
-							blockedList.map((t, i) => {
-								const id = (t && (t.id || t.task_id)) || ("blocked-" + i);
-								const reasons = (t && Array.isArray(t.reasons)) ? t.reasons.join("；") : ((t && t.reason) || "不可派");
-								return h("div", { className: "fpanel-row", key: "blocked-" + id }, h("span", { className: "fpanel-row-k fpanel-warn" }, "受阻"), h("span", { className: "fpanel-row-v", title: reasons }, String(id) + " · " + reasons));
-							})))));
+							Row("d-match", "match", String((driftSummary && driftSummary.match) || 0)),
+							Row("d-replaced", "replaced", String((driftSummary && driftSummary.replaced) || 0)),
+							Row("d-missing", "missing", String((driftSummary && driftSummary.missing) || 0)),
+							Row("d-unknown", "unknown", String((driftSummary && driftSummary.unknown) || 0)),
+							h("div", { className: "fpanel-tip", style: { marginTop: 6 } },
+								"适配器 " + (drift.adapters || 0) + " 个 · coding-agent " + (drift.agents_scanned || 0) + " 个；漂移是事实，不阻断派单"))));
 
-				const gaps = judge.gaps && judge.gaps.gaps ? judge.gaps.gaps : null;
-				const archivedOnly = (gaps && Array.isArray(gaps.archivedOnly)) ? gaps.archivedOnly : [];
-				const issues = (gaps && Array.isArray(gaps.issues)) ? gaps.issues : [];
-				const synonyms = (gaps && Array.isArray(gaps.suspectedSynonyms)) ? gaps.suspectedSynonyms : [];
-				judgeCards.push(Card("能力断层（G2）", judgeErr.gaps
-					? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.gaps)
-					: h("div", null,
-						archivedOnly.length === 0
-							? h("div", { className: "fpanel-empty" }, "无断层")
-							: archivedOnly.map((g) => h("div", { className: "fpanel-row", key: "gap-" + g.capability },
-								h("span", { className: "fpanel-row-k fpanel-warn" }, String(g.capability || "").replace(/^cap:/, "")),
-								h("span", { className: "fpanel-row-v" }, "仅归档：" + ((g.archivedAgents || []).join(", ") || "—")))),
-						issues.length ? h("div", { className: "fpanel-tip", style: { marginTop: 6 } }, "诊断 " + issues.length + " 条：" + issues.slice(0, 2).map((x) => x.agentId + " " + (x.detail || x.kind)).join("；") + (issues.length > 2 ? "…" : "")) : null,
-						synonyms.length ? h("div", { className: "fpanel-tip" }, "疑似同义词 " + synonyms.length + " 组（需人工确认）") : null)));
+				if (section === "overview") {
+					scrollChildren.push(h("div", { key: "stats", className: "fpanel-stats" },
+						Stat("在线", online + "/" + total, monitorOnline ? "monitor 在线" : "monitor 未就绪"),
+						Stat("已启用", String(summary.enabled || 0), "Operator 开关"),
+						Stat("活跃任务", String(summary.tasks_active || 0), "running / draining"),
+						Stat("今日成本", fmtCost(summary.cost_today), "全 agent 合计"),
+						Stat("可派", judge.dispatchable ? String(readyList.length) : "—", judge.dispatchable ? "G1 可派集" : "判定层不可用"),
+						Stat("终态", judge.dispatchable ? String(finishedList.length) : "—", judge.dispatchable ? "done + accepted" : "判定层不可用")));
 
-				const verifiers = judge.verifiers || {};
-				const explicitModels = Number(verifiers.agents_with_explicit_model || 0);
-				const verifierAgents = Number(verifiers.agents || 0);
-				judgeCards.push(Card("验证者覆盖（G4）", judgeErr.verifiers
-					? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.verifiers)
-					: h("div", null,
-						Row("v-agents", "agent 数", String(verifierAgents)),
-						Row("v-model", "显式 model", String(explicitModels)),
-						Row("v-verdict", "已有 verdict", String(verifiers.verdicts || 0)),
-						Row("v-problems", "问题", String((verifiers.problems || []).length)),
-						explicitModels < verifierAgents
-							? h("div", { className: "fpanel-tip", style: { marginTop: 6 } }, "模型级异构不可判定（多数 agent 的 model 为 cli-default）⇒ 判定层已保守降级到厂商级")
-							: null)));
+					const judgeCards = [];
+					judgeCards.push(Card("可派集（G1）", judgeErr.dispatchable
+						? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.dispatchable)
+						: (readyList.length === 0 && blockedList.length === 0
+							? h("div", { className: "fpanel-empty" }, "可派：无（全部 " + finishedList.length + " 个任务终态）")
+							: h("div", null,
+								readyList.map((t) => {
+									const id = (t && t.id) || t;
+									return h("div", { className: "fpanel-row", key: "ready-" + id }, h("span", { className: "fpanel-row-k" }, "可派"), h("span", { className: "fpanel-row-v" }, String(id)));
+								}),
+								blockedList.map((t, i) => {
+									const id = (t && (t.id || t.task_id)) || ("blocked-" + i);
+									const reasons = (t && Array.isArray(t.reasons)) ? t.reasons.join("；") : ((t && t.reason) || "不可派");
+									return h("div", { className: "fpanel-row", key: "blocked-" + id }, h("span", { className: "fpanel-row-k fpanel-warn" }, "受阻"), h("span", { className: "fpanel-row-v", title: reasons }, String(id) + " · " + reasons));
+								})))));
 
-				const events = (judge.events && Array.isArray(judge.events.events)) ? judge.events.events : [];
-				judgeCards.push(Card("最近机器事件（G0）", judgeErr.events
-					? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.events)
-					: (events.length === 0
-						? h("div", { className: "fpanel-empty" }, "暂无事件")
-						: h("div", null, events.slice(0, 8).map((ev, i) => h("div", { className: "fpanel-ev", key: "ev-" + i },
-							h("span", { className: "fpanel-ev-time" }, fmtClock(ev.ts)),
-							h("span", { className: "fpanel-ev-body", title: (ev.event || "") + " " + (ev.reason || "") },
-								(ev.event || "—") + (ev.task_id ? " · " + ev.task_id : "") + (ev.reason ? " · " + ev.reason : ""))))))));
+					const gaps = judge.gaps && judge.gaps.gaps ? judge.gaps.gaps : null;
+					const archivedOnly = (gaps && Array.isArray(gaps.archivedOnly)) ? gaps.archivedOnly : [];
+					const issues = (gaps && Array.isArray(gaps.issues)) ? gaps.issues : [];
+					const synonyms = (gaps && Array.isArray(gaps.suspectedSynonyms)) ? gaps.suspectedSynonyms : [];
+					judgeCards.push(Card("能力断层（G2）", judgeErr.gaps
+						? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.gaps)
+						: h("div", null,
+							archivedOnly.length === 0
+								? h("div", { className: "fpanel-empty" }, "无断层")
+								: archivedOnly.map((g) => h("div", { className: "fpanel-row", key: "gap-" + g.capability },
+									h("span", { className: "fpanel-row-k fpanel-warn" }, String(g.capability || "").replace(/^cap:/, "")),
+									h("span", { className: "fpanel-row-v" }, "仅归档：" + ((g.archivedAgents || []).join(", ") || "—")))),
+							issues.length ? h("div", { className: "fpanel-tip", style: { marginTop: 6 } }, "诊断 " + issues.length + " 条：" + issues.slice(0, 2).map((x) => x.agentId + " " + (x.detail || x.kind)).join("；") + (issues.length > 2 ? "…" : "")) : null,
+							synonyms.length ? h("div", { className: "fpanel-tip" }, "疑似同义词 " + synonyms.length + " 组（需人工确认）") : null)));
 
-				scrollChildren.push(h("div", { key: "judge", className: "fpanel-sec" },
-					h("div", { className: "fpanel-sec-head" },
-						h("div", { className: "fpanel-sec-title" }, "判定层"),
-						h("div", { className: "fpanel-tip" }, "数据源：fleet-monitor 现成端点（与派单器判定同源）")),
-					h("div", { className: "fpanel-grid" }, judgeCards)));
+					const verifiers = judge.verifiers || {};
+					const explicitModels = Number(verifiers.agents_with_explicit_model || 0);
+					const verifierAgents = Number(verifiers.agents || 0);
+					judgeCards.push(Card("验证者覆盖（G4）", judgeErr.verifiers
+						? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.verifiers)
+						: h("div", null,
+							Row("v-agents", "agent 数", String(verifierAgents)),
+							Row("v-model", "显式 model", String(explicitModels)),
+							Row("v-verdict", "已有 verdict", String(verifiers.verdicts || 0)),
+							Row("v-problems", "问题", String((verifiers.problems || []).length)),
+							explicitModels < verifierAgents
+								? h("div", { className: "fpanel-tip", style: { marginTop: 6 } }, "模型级异构不可判定（多数 agent 的 model 为 cli-default）⇒ 判定层已保守降级到厂商级")
+								: null)));
 
-				// ③ Agent 列表
-				const canToggleAll = busy === null;
-				scrollChildren.push(h("div", { key: "agents", className: "fpanel-sec" },
-					h("div", { className: "fpanel-sec-head" },
-						h("div", { className: "fpanel-sec-title" }, "Agent Fleet"),
-						h("div", { className: "fpanel-tip" }, "开关写 control.json（经 bus-apply 唯一入口）"),
-						h("div", { className: "fpanel-sec-actions" },
-							h("button", {
-								type: "button", className: "fpanel-agent-toggle", disabled: !canToggleAll,
-								onClick: () => toggleAll(true)
-							}, "全部开启"),
-							h("button", {
-								type: "button", className: "fpanel-agent-toggle", disabled: !canToggleAll,
-								onClick: () => toggleAll(false)
-							}, "全部关闭"))),
-					agents.length === 0
-						? h("div", { className: "fpanel-card fpanel-muted" }, "未发现 agent 档案（agents/*/manifest.json）")
-						: h("div", { className: "fpanel-agents" },
-							agents.map((agent) => AgentCard(agent, busy, toggleAgent)))));
+					const events = (judge.events && Array.isArray(judge.events.events)) ? judge.events.events : [];
+					judgeCards.push(Card("最近机器事件（G0）", judgeErr.events
+						? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.events)
+						: (events.length === 0
+							? h("div", { className: "fpanel-empty" }, "暂无事件")
+							: h("div", null, events.slice(0, 8).map((ev, i) => h("div", { className: "fpanel-ev", key: "ev-" + i },
+								h("span", { className: "fpanel-ev-time" }, fmtClock(ev.ts)),
+								h("span", { className: "fpanel-ev-body", title: (ev.event || "") + " " + (ev.reason || "") },
+									(ev.event || "—") + (ev.task_id ? " · " + ev.task_id : "") + (ev.reason ? " · " + ev.reason : ""))))))));
+
+					judgeCards.push(driftCard);
+					scrollChildren.push(h("div", { key: "judge", className: "fpanel-sec" },
+						h("div", { className: "fpanel-sec-head" },
+							h("div", { className: "fpanel-sec-title" }, "判定层"),
+							h("div", { className: "fpanel-tip" }, "数据源：fleet-monitor 现成端点（与派单器判定同源）")),
+						h("div", { className: "fpanel-grid" }, judgeCards)));
+				} else if (section === "agents") {
+					const canToggleAll = busy === null;
+					scrollChildren.push(h("div", { key: "agents", className: "fpanel-sec" },
+						h("div", { className: "fpanel-sec-head" },
+							h("div", { className: "fpanel-sec-title" }, "Agent Fleet"),
+							h("div", { className: "fpanel-tip" }, "开关写 control.json（经 bus-apply 唯一入口）"),
+							h("div", { className: "fpanel-sec-actions" },
+								h("button", {
+									type: "button", className: "fpanel-agent-toggle", disabled: !canToggleAll,
+									onClick: () => toggleAll(true)
+								}, "全部开启"),
+								h("button", {
+									type: "button", className: "fpanel-agent-toggle", disabled: !canToggleAll,
+									onClick: () => toggleAll(false)
+								}, "全部关闭"))),
+						agents.length === 0
+							? h("div", { className: "fpanel-card fpanel-muted" }, "未发现 agent 档案（agents/*/manifest.json + observed.json）")
+							: h("div", { className: "fpanel-agents" },
+								agents.map((agent) => AgentCard(agent, busy, toggleAgent)))));
+				} else if (section === "tasks") {
+					const currentTasks = agents.filter((a) => a.current_task).map((a) => ({ agent: a, task: a.current_task }));
+					scrollChildren.push(h("div", { key: "tasks", className: "fpanel-sec" },
+						h("div", { className: "fpanel-sec-head" },
+							h("div", { className: "fpanel-sec-title" }, "Tasks"),
+							h("div", { className: "fpanel-tip" }, "可派 / 受阻 / 终态 + 当前执行（数据源：task-ready + fleet）")),
+						h("div", { className: "fpanel-grid" },
+							Card("可派集（G1）", judgeErr.dispatchable
+								? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.dispatchable)
+								: h("div", null,
+									Row("t-ready", "可派", String(readyList.length)),
+									Row("t-blocked", "受阻", String(blockedList.length)),
+									Row("t-finished", "终态", String(finishedList.length)),
+									readyList.map((t) => h("div", { className: "fpanel-row", key: "task-ready-" + ((t && t.id) || t) },
+										h("span", { className: "fpanel-row-k" }, "可派"), h("span", { className: "fpanel-row-v" }, String((t && t.id) || t)))))),
+							Card("当前执行", currentTasks.length === 0
+								? h("div", { className: "fpanel-empty" }, "当前没有 running / draining 任务")
+								: h("div", null, currentTasks.map((x) => h("div", { className: "fpanel-row", key: "cur-" + x.agent.id },
+									h("span", { className: "fpanel-row-k" }, x.agent.id),
+									h("span", { className: "fpanel-row-v" }, String((x.task && x.task.id) || x.task)))))),
+							Card("终态（done + accepted）", finishedList.length === 0
+								? h("div", { className: "fpanel-empty" }, "无终态任务")
+								: h("div", null, finishedList.slice(0, 12).map((t) => h("div", { className: "fpanel-row", key: "fin-" + ((t && t.id) || t) },
+									h("span", { className: "fpanel-row-k" }, "终态"), h("span", { className: "fpanel-row-v" }, String((t && t.id) || t)))))))));
+				} else if (section === "schedules") {
+					const sched = judge.schedules || {};
+					const schedRows = Array.isArray(sched.schedules) ? sched.schedules : [];
+					const schedList = schedRows.length === 0
+						? h("div", { className: "fpanel-empty" }, "未登记 schedule（Operator 经 bus-apply 写入 state/schedules.json）")
+						: h("div", null, schedRows.map((s) => h("div", { className: "fpanel-row", key: "sch-" + s.id },
+							h("span", { className: "fpanel-row-k" + (s.due_now ? " fpanel-warn" : "") }, String(s.id)),
+							h("span", { className: "fpanel-row-v", title: JSON.stringify(s.task || {}) },
+								(s.task && s.task.title ? s.task.title : "—") + " · " + (s.task && s.task.assignee ? s.task.assignee : "—") + " · " + (s.interval_seconds || "?") + "s · next " + (s.next_fire_at || "—") + (s.due_now ? " · 已到期" : "")))));
+					const schedCard = Card("定时任务（" + (sched.total || schedRows.length) + "）", judgeErr.schedules
+						? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.schedules)
+						: schedList);
+					const triggerCard = Card("触发器说明", h("div", null,
+						Row("s-manual", "手动", "node workers/scheduler/enqueue-due.mjs"),
+						Row("s-check", "预检", "--check（不写总线）"),
+						Row("s-os", "OS 触发器", "Windows 任务计划周期调用（建议 1 分钟；未自动安装）"),
+						h("div", { className: "fpanel-tip", style: { marginTop: 6 } }, "错过多个窗口只补一次；同一时刻重复调用幂等（任务行 + next_fire_at 同超步）")));
+					scrollChildren.push(h("div", { key: "schedules", className: "fpanel-sec" },
+						h("div", { className: "fpanel-sec-head" },
+							h("div", { className: "fpanel-sec-title" }, "Schedule"),
+							h("div", { className: "fpanel-tip" }, "触发器 = workers/scheduler/enqueue-due.mjs（无常驻 daemon）")),
+						h("div", { className: "fpanel-grid" }, schedCard, triggerCard)));
+				} else if (section === "verifiers") {
+					const verifiers = judge.verifiers || {};
+					const explicitModels = Number(verifiers.agents_with_explicit_model || 0);
+					const verifierAgents = Number(verifiers.agents || 0);
+					scrollChildren.push(h("div", { key: "verifiers", className: "fpanel-sec" },
+						h("div", { className: "fpanel-sec-head" },
+							h("div", { className: "fpanel-sec-title" }, "Verifiers"),
+							h("div", { className: "fpanel-tip" }, "验证者候选与模型异构前提（G4）")),
+						h("div", { className: "fpanel-grid" },
+							Card("验证者覆盖", judgeErr.verifiers
+								? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.verifiers)
+								: h("div", null,
+									Row("v-agents", "agent 数", String(verifierAgents)),
+									Row("v-model", "显式 model", String(explicitModels)),
+									Row("v-verdict", "已有 verdict", String(verifiers.verdicts || 0)),
+									Row("v-problems", "问题", String((verifiers.problems || []).length)),
+									explicitModels === 0
+										? h("div", { className: "fpanel-tip", style: { marginTop: 6 } }, "无显式模型 ⇒ 模型级异构不可判定（判定层保守降级到厂商级）")
+										: null)),
+							driftCard)));
+				} else if (section === "events") {
+					const events = (judge.events && Array.isArray(judge.events.events)) ? judge.events.events : [];
+					scrollChildren.push(h("div", { key: "events", className: "fpanel-sec" },
+						h("div", { className: "fpanel-sec-head" },
+							h("div", { className: "fpanel-sec-title" }, "Events"),
+							h("div", { className: "fpanel-tip" }, "机器事件流尾部（G0 唯一真相）")),
+						h("div", { className: "fpanel-grid" },
+							Card("最近机器事件", judgeErr.events
+								? h("div", { className: "fpanel-muted fpanel-bad" }, "不可用：" + judgeErr.events)
+								: (events.length === 0
+									? h("div", { className: "fpanel-empty" }, "暂无事件")
+									: h("div", null, events.map((ev, i) => h("div", { className: "fpanel-ev", key: "ev-all-" + i },
+										h("span", { className: "fpanel-ev-time" }, fmtClock(ev.ts)),
+										h("span", { className: "fpanel-ev-body", title: (ev.event || "") + " " + (ev.reason || "") },
+											(ev.event || "—") + (ev.task_id ? " · " + ev.task_id : "") + (ev.reason ? " · " + ev.reason : ""))))))))));
+				}
 
 				scrollChildren.push(h("div", { key: "full", className: "fpanel-tip", style: { marginTop: 2 } },
 					"完整面板（含成本报表 / 年热力图）仍由 fleet-monitor 提供，可在浏览器打开：" + FULL_PANEL_URL));

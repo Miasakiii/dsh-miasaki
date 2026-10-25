@@ -75,6 +75,9 @@ function fixture(t, opts = {}) {
     briefExtra = '',
     limits = null,       // 追加/覆盖 manifest.limits（调度级用例：timeout_ms / max_concurrent_tasks / max_tokens_per_task）
     usageTokens = null,  // 写一条本任务的 usage.jsonl（任务级 token 预算用例）
+    manifestKind = 'coding-agent', // P0-A 类型闸门：默认 coding-agent；传 'tool-cli' / null 覆盖
+    permissions = null,            // P2-A 信任闸门：显式 permissions 对象（默认缺省 ⇒ unknown 只读降级）
+    boundary = null,               // P2-A：追加/覆盖 capability_boundary（写权证据等）
   } = opts
 
   const dir = mkdtempSync(join(tmpdir(), 'fleet-gate-'))
@@ -116,6 +119,10 @@ function fixture(t, opts = {}) {
     mkdirSync(adir, { recursive: true })
     writeFileSync(join(adir, 'manifest.json'), JSON.stringify({
       id,
+      // P0-A 类型字段：派单器据此拒绝非 coding-agent（缺 kind 的档案 fail-closed）。
+      ...(manifestKind ? { kind: manifestKind } : {}),
+      capability_boundary: { tool_loop: manifestKind === 'coding-agent' ? 'yes' : 'no', ...(boundary ?? {}) },
+      ...(permissions ? { permissions } : {}),
       // 默认只给最小集（不改变既有用例语义）；调度级用例显式传 limits 追加字段
       limits: { budget_per_day: 2.0, heartbeat_ms: 30000, ...(limits ?? {}) },
       cli: { invoke: `${id} -p {prompt}` },
@@ -258,6 +265,59 @@ test('可派任务（queued + assignee 一致 + 依赖已满足）→ 闸门放�
   assert.doesNotMatch(r.text, /口径分歧/)
   // -CheckOnly 是预检：绝不写总线（事件流由派单路径写，预检不落任何盘）
   assert.ok(!existsSync(join(fix, 'state', 'graph-events.jsonl')), '预检不应写事件流')
+})
+
+// ---- P0-A 类型闸门（2026-10-21）：worker 池只收 coding-agent -------------
+
+test('P0-A：tool-cli 被类型闸门拒绝（exit 2，点名工具型 CLI 不是 worker）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { manifestKind: 'tool-cli' })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 2, `工具型 CLI 应被拒；实际：\n${r.text}`)
+  assert.match(r.text, /\[kind\] 拒绝派单/)
+  assert.match(r.text, /工具型 CLI 不是 worker/)
+})
+
+test('P0-A：缺 kind 被类型闸门拒绝（fail-closed，给迁移入口）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { manifestKind: null })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 2, `缺 kind 应 fail-closed；实际：\n${r.text}`)
+  assert.match(r.text, /缺少可判定的 kind/)
+  assert.match(r.text, /scan-agents\.ps1/)
+})
+
+// ---- P2-A 信任闸门（2026-10-21）：矛盾声明拒绝 / unknown 只读降级 --------
+
+test('P2-A：声明写权限但无 headless 写证据 ⇒ 拒绝 exit 2（不授未证明的写权）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, {
+    permissions: { mode: 'workspace-write', calibration: 'declared', tool_allowlist: [], denied_tools: [], approval_required: [], headless_allow_delegation: false },
+    boundary: { workspace_write_headless: 'no', workspace_read: 'yes' },
+  })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 2, `矛盾声明必须拒绝；实际：\n${r.text}`)
+  assert.match(r.text, /\[trust\] 拒绝派单/)
+  assert.match(r.text, /不授未证明的写权/)
+})
+
+test('P2-A：权限 unknown ⇒ 按只读降级放行（安全降级，不静默授写权）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t) // 无 permissions 字段 ⇒ unknown
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 0, `unknown 只读降级应放行；实际：\n${r.text}`)
+  assert.match(r.text, /按只读降级生效（不授写权）/)
+})
+
+test('P2-A：read-only + verified 校准 ⇒ 通过并标注 calibration=verified', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, {
+    permissions: { mode: 'read-only', calibration: 'verified', tool_allowlist: ['Read'], denied_tools: [], approval_required: [], headless_allow_delegation: false },
+    boundary: { workspace_read: 'yes', workspace_write_headless: 'no' },
+  })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 0, `verified read-only 应放行；实际：\n${r.text}`)
+  assert.match(r.text, /calibration=verified/)
 })
 
 test('状态不是 queued（done）→ 拒绝 exit 2，且点名状态', (t) => {
@@ -608,4 +668,56 @@ test('调度级：普通失败（exit 1）不触发重试（避免掩盖真实�
   assert.equal(r.status, 1, `普通失败沿用 CLI 退出码透传（非超时映射 3）；实际：\n${r.text}`)
   assert.doesNotMatch(r.text, /重试第/)
   assert.equal(readFileSync(cnt, 'utf8').trim().length, 1, '普通失败只跑一次')
+})
+
+// ---- P1-A 失败分类（2026-10-21）：结构化类别进 status.failure ----------------
+
+test('P1-A：429 失败 ⇒ status.failure.kind=rate_limit 且 retryable/suggest_switch=true', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const fake = writeFakeCli(fix, [
+    "console.error('HTTP 429 Too Many Requests')",
+    'process.exit(1)',
+  ].join('\n'))
+  writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
+    `# 夹具任务 t-9001\n\n## 约束\n- 夹具：不声明 requires（跳过能力闸门）\ncmd: node "${fake}"\n`, 'utf8')
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-TimeoutMs', '5000', '-RetriesOnTimeout', '0'])
+  assert.equal(r.status, 1, `CLI 退出码透传；实际：\n${r.text}`)
+  const status = JSON.parse(readFileSync(join(fix, 'agents', 'alpha', 'status.json'), 'utf8'))
+  assert.equal(status.state, 'error')
+  assert.ok(status.failure, '失败轮必须带结构化 failure（last_error 保持人话）')
+  assert.equal(status.failure.kind, 'rate_limit', '429 应归 rate_limit')
+  assert.equal(status.failure.retryable, true)
+  assert.equal(status.failure.suggest_switch, true)
+  assert.match(status.step ?? '', /失败类别 rate_limit/)
+})
+
+test('P1-A：超时 ⇒ status.failure.kind=timeout（与调度级超时同源）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const fake = writeFakeCli(fix, 'setTimeout(() => {}, 60000)\n')
+  writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
+    `# 夹具任务 t-9001\n\n## 约束\n- 夹具：不声明 requires（跳过能力闸门）\ncmd: node "${fake}"\n`, 'utf8')
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-TimeoutMs', '500', '-RetriesOnTimeout', '0'])
+  assert.equal(r.status, 3)
+  const status = JSON.parse(readFileSync(join(fix, 'agents', 'alpha', 'status.json'), 'utf8'))
+  assert.equal(status.failure.kind, 'timeout')
+  assert.equal(status.failure.retryable, true)
+})
+
+test('P1-A：400 参数错误 ⇒ request_error（不重试、不换 agent）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const fake = writeFakeCli(fix, [
+    "console.error('422 Unprocessable Entity: invalid argument')",
+    'process.exit(1)',
+  ].join('\n'))
+  writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
+    `# 夹具任务 t-9001\n\n## 约束\n- 夹具：不声明 requires（跳过能力闸门）\ncmd: node "${fake}"\n`, 'utf8')
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-TimeoutMs', '5000', '-RetriesOnTimeout', '0'])
+  assert.equal(r.status, 1)
+  const status = JSON.parse(readFileSync(join(fix, 'agents', 'alpha', 'status.json'), 'utf8'))
+  assert.equal(status.failure.kind, 'request_error')
+  assert.equal(status.failure.retryable, false)
+  assert.equal(status.failure.suggest_switch, false)
 })

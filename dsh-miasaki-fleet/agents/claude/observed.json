@@ -1,0 +1,66 @@
+{
+  "capabilities": [
+    "analysis",
+    "coding",
+    "multi-step-tools",
+    "json-output"
+  ],
+  "runtime_kind": "claude-code",
+  "cli": {
+    "command": "claude",
+    "invoke": "claude -p {prompt} --output-format json",
+    "version": "2.1.302 (Claude Code)",
+    "binPath": "%USERPROFILE%\\.local\\bin\\claude.exe"
+  },
+  "agent_id": "claude",
+  "preflight": "已实测（t-0006）：headless -p 下 Write/Bash 权限自动拒绝，交付物必须由派单器代写",
+  "schema_version": 2,
+  "observed_at": "2026-10-21T06:01:22Z",
+  "permissions": {
+    "mode": "read-only",
+    "calibration": "verified",
+    "evidence": "t-0006：headless -p 下 Write/Bash 被权限栈拒绝，交付物由派单器代写",
+    "tool_allowlist": [
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "denied_tools": [
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "coding-agent",
+  "present": true,
+  "invoke_contract": {
+    "exit_code_semantics": {
+      "0": "success",
+      "non-zero": "failure"
+    },
+    "prompt_transport": "argv",
+    "permission_flags": {
+      "readonly": [
+        "--permission-mode",
+        "plan"
+      ]
+    },
+    "output_format": "json"
+  },
+  "capability_boundary": {
+    "workspace_read": "yes",
+    "shell_headless": "no",
+    "workspace_write_headless": "no",
+    "tool_loop": "yes",
+    "network": "yes"
+  },
+  "model_info": {
+    "value": "step-5-preview[1M]",
+    "source": "config",
+    "confidence": "declared",
+    "evidence": "%USERPROFILE%/.claude/settings.json → env.ANTHROPIC_MODEL",
+    "provider": "https://api.stepfun.com/step_plan/v1/messages"
+  }
+}

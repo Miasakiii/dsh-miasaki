@@ -1,74 +1,68 @@
-﻿[
-    {
-        "id":  "bl",
-        "name":  "Bailian CLI",
-        "invoke":  "bl text chat --message {prompt}",
-        "metering":  "console-usage",
-        "bin":  "bl",
-        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\bl.ps1",
-        "version":  "bl 1.16.0"
-    },
-    {
-        "id":  "claude",
-        "name":  "Claude Code",
-        "invoke":  "claude -p {prompt} --output-format json",
-        "metering":  "json-cost-usd",
-        "bin":  "claude",
-        "binPath":  "%USERPROFILE%\\.local\\bin\\claude.exe",
-        "version":  "2.1.238 (Claude Code)"
-    },
-    {
-        "id":  "gemini",
-        "name":  "Gemini CLI",
-        "invoke":  "gemini -p {prompt}",
-        "metering":  "unknown",
-        "bin":  "gemini",
-        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\gemini.ps1",
-        "version":  "0.55.1"
-    },
-    {
-        "id":  "opencode",
-        "name":  "opencode",
-        "invoke":  "opencode run {prompt}",
-        "metering":  "unknown",
-        "bin":  "opencode",
-        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\opencode.ps1",
-        "version":  "1.18.18"
-    },
-    {
-        "id":  "dsh",
-        "name":  "DSH CLI",
-        "invoke":  "dsh --profile headless {prompt}",
-        "metering":  "session",
-        "bin":  "dsh",
-        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\dsh.ps1",
-        "version":  "0.1.1-rc.1"
-    },
-    {
-        "id":  "pi",
-        "name":  "pi coding agent",
-        "invoke":  "pi -p {prompt}",
-        "metering":  "unknown",
-        "bin":  "pi",
-        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\pi.ps1",
-        "version":  "0.84.1"
-    },
-    {
-        "id":  "mimo",
-        "name":  "MiMo CLI",
-        "invoke":  "mimo {prompt}",
-        "metering":  "unknown",
-        "bin":  "mimo",
-        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\mimo.ps1",
-        "version":  "0.1.12"
-    },
-    {
-        "id":  "agent-browser",
-        "name":  "agent-browser",
-        "invoke":  "agent-browser {prompt}",
-        "metering":  "unknown",
-        "bin":  "agent-browser",
-        "binPath":  "%USERPROFILE%\\AppData\\Roaming\\npm\\agent-browser.ps1",
-        "version":  "agent-browser 0.34.0"
-    }
+[
+  {
+    "metering": "console-usage",
+    "id": "bl",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\bl.ps1",
+    "name": "Bailian CLI",
+    "bin": "bl",
+    "invoke": "bl text chat --message {prompt}",
+    "runtime_kind": "bailian",
+    "kind": "tool-cli",
+    "version": "bl 2.2.1"
+  },
+  {
+    "metering": "json-cost-usd",
+    "id": "claude",
+    "binPath": "%USERPROFILE%\\.local\\bin\\claude.exe",
+    "name": "Claude Code",
+    "bin": "claude",
+    "invoke": "claude -p {prompt} --output-format json",
+    "runtime_kind": "claude-code",
+    "kind": "coding-agent",
+    "version": "2.1.302 (Claude Code)"
+  },
+  {
+    "metering": "session",
+    "id": "dsh",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\dsh.ps1",
+    "name": "DSH CLI",
+    "bin": "dsh",
+    "invoke": "dsh --profile headless {prompt}",
+    "runtime_kind": "dsh",
+    "kind": "coding-agent",
+    "version": "0.2.1-rc.2"
+  },
+  {
+    "metering": "unknown",
+    "id": "pi",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\pi.ps1",
+    "name": "pi coding agent",
+    "bin": "pi",
+    "invoke": "pi -p {prompt}",
+    "runtime_kind": "pi",
+    "kind": "coding-agent",
+    "version": "1.0.4"
+  },
+  {
+    "metering": "unknown",
+    "id": "mimo",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\mimo.ps1",
+    "name": "MiMo Code (mimocode)",
+    "bin": "mimo",
+    "invoke": "mimo run {prompt}",
+    "runtime_kind": "mimocode",
+    "kind": "coding-agent",
+    "version": "0.1.14"
+  },
+  {
+    "metering": "unknown",
+    "id": "agent-browser",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\agent-browser.ps1",
+    "name": "agent-browser",
+    "bin": "agent-browser",
+    "invoke": "agent-browser {prompt}",
+    "runtime_kind": "agent-browser",
+    "kind": "tool-cli",
+    "version": "agent-browser 0.34.0"
+  }
 ]

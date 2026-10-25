@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "state/schedules.json — 定时任务（P2-D，无常驻 daemon）",
+  "description": "schedule 的定时语义真相。由 workers/scheduler/enqueue-due.mjs（一次性 CLI，外部触发器调用）读取；任务行与 next_fire_at 推进在同一次 bus-apply 超步提交（幂等）。权威校验实现见 workers/lib/schedule.cjs 的 validateSchedules。",
+  "type": "object",
+  "required": ["version", "schedules"],
+  "properties": {
+    "version": { "const": 1 },
+    "updated_at": { "type": "string" },
+    "schedules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "interval_seconds", "next_fire_at", "task"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^s-[a-z0-9-]+$" },
+          "enabled": { "type": "boolean" },
+          "interval_seconds": { "type": "integer", "minimum": 60 },
+          "next_fire_at": { "type": "string", "minLength": 1 },
+          "last_fired_at": { "type": ["string", "null"] },
+          "fire_count": { "type": "integer", "minimum": 0 },
+          "task": {
+            "type": "object",
+            "required": ["title", "assignee"],
+            "properties": {
+              "title": { "type": "string", "minLength": 1 },
+              "assignee": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+              "brief": { "type": "string", "description": "可选：写进 tasks/<id>/brief.md 的目标段落" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

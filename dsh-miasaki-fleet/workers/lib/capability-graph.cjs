@@ -104,6 +104,7 @@ function buildCapabilityGraph(agents, opts) {
 
     const agent = {
       id: raw.id,
+      kind: raw.kind || 'unknown',
       archived,
       enabled: raw.enabled === true,
       alive: raw.alive !== false,
@@ -215,6 +216,7 @@ function findSubstitutes(agentId, graph, opts) {
 
   for (const cand of graph.agents.values()) {
     if (cand.id === agentId) continue
+    if (o.kind && cand.kind !== o.kind) continue
     if (cand.archived && !o.includeArchived) continue
     if (!cand.enabled && !o.includeUnavailable) continue
 
@@ -323,6 +325,8 @@ function selectAgents(required, graph, opts) {
   const candidates = []
   for (const agent of graph.agents.values()) {
     if (agent.archived && !o.includeArchived) continue
+    // P0-A：按类型过滤（如 --kind coding-agent）——工具型 CLI 不是 worker 候选。
+    if (o.kind && agent.kind !== o.kind) continue
 
     const scored = scoreAgent(agent, normalized, o)
     if (o.requireFull && scored.missing.length > 0) continue

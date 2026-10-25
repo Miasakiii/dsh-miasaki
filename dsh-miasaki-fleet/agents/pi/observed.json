@@ -1,0 +1,51 @@
+{
+  "capabilities": [
+    "coding",
+    "multi-step-tools"
+  ],
+  "runtime_kind": "pi",
+  "cli": {
+    "command": "pi",
+    "invoke": "pi -p {prompt}",
+    "version": "1.0.4",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\pi.ps1"
+  },
+  "agent_id": "pi",
+  "preflight": "已实测可用（pi -p）；派单需 full-access（写 ~/.pi 配置）",
+  "schema_version": 2,
+  "observed_at": "2026-10-21T06:01:22Z",
+  "permissions": {
+    "mode": "unknown",
+    "calibration": "unknown",
+    "evidence": "未校准（无 headless 权限实测）；P2-A 按只读降级，不授未证明的写权",
+    "tool_allowlist": [],
+    "denied_tools": [],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "coding-agent",
+  "present": true,
+  "invoke_contract": {
+    "exit_code_semantics": {
+      "0": "success",
+      "non-zero": "failure"
+    },
+    "prompt_transport": "argv",
+    "permission_flags": {},
+    "output_format": "text"
+  },
+  "capability_boundary": {
+    "workspace_read": "unknown",
+    "shell_headless": "unknown",
+    "workspace_write_headless": "unknown",
+    "tool_loop": "yes",
+    "network": "yes"
+  },
+  "model_info": {
+    "value": "deepseek-v4-flash",
+    "source": "config",
+    "confidence": "declared",
+    "evidence": "%USERPROFILE%/.pi/agent/settings.json → defaultModel",
+    "provider": "deepseek"
+  }
+}

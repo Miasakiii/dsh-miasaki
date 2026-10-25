@@ -1,0 +1,47 @@
+{
+  "capabilities": [
+    "bailian-resources",
+    "bailian-chat"
+  ],
+  "runtime_kind": "bailian",
+  "cli": {
+    "command": "bl",
+    "invoke": "bl text chat --message {prompt}",
+    "version": "bl 2.2.1",
+    "binPath": "%USERPROFILE%\\AppData\\Roaming\\npm\\bl.ps1"
+  },
+  "agent_id": "bl",
+  "preflight": "用量/额度/配额类命令需要有效 console 会话：bl auth login --console --console-site domestic；派单前先 bl auth status 检查",
+  "schema_version": 2,
+  "observed_at": "2026-10-21T06:01:22Z",
+  "permissions": {
+    "mode": "unknown",
+    "calibration": "unknown",
+    "evidence": "工具型 CLI，不参与 worker 权限模型（kind=tool-cli 已禁止派单）",
+    "tool_allowlist": [],
+    "denied_tools": [],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "tool-cli",
+  "present": true,
+  "invoke_contract": {
+    "exit_code_semantics": {},
+    "prompt_transport": "argv",
+    "permission_flags": {},
+    "output_format": "unknown"
+  },
+  "capability_boundary": {
+    "workspace_read": "no",
+    "shell_headless": "no",
+    "workspace_write_headless": "no",
+    "tool_loop": "no",
+    "network": "yes"
+  },
+  "model_info": {
+    "confidence": "unknown",
+    "value": null,
+    "source": "unknown",
+    "evidence": "P0-A 未接入配置读取（P0-B 落地）"
+  }
+}

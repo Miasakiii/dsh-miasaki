@@ -13,8 +13,10 @@
 #   声明了风险时，派单结束后生成 tasks/<id>/verify-brief.md（**不自动派发**验证任务）。
 # 事件留痕（G0，2026-09-30）：派单开始与终态各写一条机器事件（task.started / task.completed /
 #   failure.detected），经 workers/bus/bus-apply.mjs 唯一入口；事件是审计不是闸门，写失败只告警不阻断。
-# 闸门顺序（先廉价后昂贵）：档案 → 开关 → 日预算 → 并发上限 → G1 可派 → G2 能力 → G4 验证 → 任务级 token 预算。
+# 闸门顺序（先廉价后昂贵）：档案 → 类型 → 权限 → 开关 → 日预算 → 并发上限 → G1 可派 → G2 能力 → G4 验证 → 任务级 token 预算。
 #   前者拒了就不跑后者。
+# 类型闸门（P0-A，2026-10-21）：worker 池只收 coding-agent —— kind=tool-cli / unknown / 缺字段
+#   一律拒绝派单。依据 design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md §7.1。
 # 调度级生命周期（2026-10-17，gap 文档 §4② P1）：agent manifest 的 limits.timeout_ms /
 #   max_concurrent_tasks / max_tokens_per_task 此前是**纸面字段**（无任何消费点）——
 #   本批把它们变成执行点：
@@ -26,7 +28,7 @@
 #   优先级：显式参数 > manifest.limits.* > brief 的文字约束（「超时：M 分钟」/「预算：N tokens」）> 不限。
 # 验证模式：-CheckOnly（只跑预检，不派单也不写总线）/-ParseOnly（只跑 usage 解析，打印将要写入的 usage.jsonl 行）
 # 运维入口：-ResetStatus（清除崩溃残留的 status.json，见下）
-# 退出码：0 成功；2 拒绝派单（开关未开/无模板/无能力候选/选择器不可用/任务不可派/并发上限）
+# 退出码：0 成功；2 拒绝派单（类型不符/开关未开/无模板/无能力候选/选择器不可用/任务不可派/并发上限）
 #         /3 CLI 执行失败（含超时 kill）；4 预算熔断拒绝（日成本或任务级 token）；127 CLI 不存在
 # 协议：status.json 由派单器代理写；stdout 存 logs/<task>-stdout.log；usage.jsonl 按 metering_source 解析；transcript.md 追加；tasks.jsonl 由 Commander 另写。
 # 记忆隔离：spawn worker 进程时注入 OPENVIKING_RECALL_PEER_SCOPE=actor（§12.2 OpenViking 记忆层），进程结束后恢复原值。
@@ -68,6 +70,21 @@ function Read-JsonFile([string]$Path) {
   try { return Get-Content $Path -Raw | ConvertFrom-Json } catch { return $null }
 }
 
+# P2-B（2026-10-21）：manifest = Operator 字段；observed.json = 扫描/探测事实。两者合并后
+# 所有既有 `$manifest.xxx` 消费点无需改动；observed 缺席时回退 manifest（兼容窗口）。
+function Read-AgentFacts([string]$AgentDir) {
+  $manifest = Read-JsonFile (Join-Path $AgentDir 'manifest.json')
+  if ($null -eq $manifest) { return $null }
+  $observed = Read-JsonFile (Join-Path $AgentDir 'observed.json')
+  if ($null -eq $observed) { return $manifest }
+  foreach ($k in @('present','runtime_kind','kind','cli','capabilities','capability_boundary','invoke_contract','permissions','model_info','preflight')) {
+    if ($observed.PSObject.Properties[$k]) {
+      $manifest | Add-Member -NotePropertyName $k -NotePropertyValue $observed.$k -Force
+    }
+  }
+  return $manifest
+}
+
 function Get-DayCost([string]$AgentDir) {
   # 预算预检：当日 cost = usage.jsonl 中 ts 为今天的 cost 之和（损坏行跳过，§10 容错）
   $usageFile = Join-Path $AgentDir 'usage.jsonl'
@@ -101,6 +118,67 @@ function Test-Budget([string]$AgentDir, $manifest) {
     Write-Host "[budget] 预警：当日 cost $('{0:N4}' -f $dayCost) 已达预算 ${budget} 的 $('{0:P0}' -f ($dayCost / $budget))，仍放行"
   } else {
     Write-Host "[budget] 预检通过：当日 cost $('{0:N4}' -f $dayCost) / 预算 $budget"
+  }
+  return $true
+}
+
+# --- P0-A 类型闸门（2026-10-21）---------------------------------------------
+# 依据：design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md §7.1。
+# 修的是什么：本机扫描到的 CLI 里混着工具型 CLI（bl / agent-browser），此前 manifest 只有
+# runtime:"cli"、无类型字段，派单器无法拒绝它们 —— 把任务派给工具只会得到「假完成」。
+# 判定口径：kind=coding-agent 才放行；tool-cli / unknown / 缺字段一律拒绝（fail-closed，
+# 宁可不派也不猜）。缺字段的迁移入口是 workers/discovery/scan-agents.ps1。
+function Test-AgentKindGate($manifest) {
+  $kind = $manifest.kind
+  if ([string]::IsNullOrWhiteSpace([string]$kind) -or $kind -eq 'unknown') {
+    Write-Host "[kind] 拒绝派单：$Agent 的档案缺少可判定的 kind（当前：$($kind ?? '缺失')）。P0-A 迁移后应为 coding-agent；先跑 workers/discovery/scan-agents.ps1"
+    return $false
+  }
+  if ($kind -ne 'coding-agent') {
+    Write-Host "[kind] 拒绝派单：$Agent 的 kind=$kind —— 工具型 CLI 不是 worker（需要它请直接调用，或由 coding agent 在任务内调用）"
+    return $false
+  }
+  $loop = $manifest.capability_boundary.tool_loop
+  if ($loop -ne 'yes') {
+    Write-Host "[kind] 拒绝派单：$Agent 的 kind=coding-agent 但 capability_boundary.tool_loop=$($loop ?? '缺失')（证据不自洽，拒绝）"
+    return $false
+  }
+  Write-Host "[kind] 闸门通过：$Agent 是 coding-agent"
+  return $true
+}
+
+# --- P2-A 信任闸门（2026-10-21）---------------------------------------------
+# 依据：design/... §13.3 / §14「权限校准 + TrustGate」。
+# 修的是什么：`permissions` 此前只是**声明**（tool_allowlist/mode 均无消费点）。本闸门只做
+# 两件可判定的事：
+#   ① **拒绝互相矛盾的声明**：声明 workspace-write / danger-full-access，但 capability_boundary
+#      的 workspace_write_headless 不是 yes ⇒ 拒绝（不授未证明的写权）；
+#   ② **unknown 安全降级**：mode/calibration 缺失或 unknown ⇒ 生效权限按 **read-only**，
+#      打印告警但不拒绝派单（当前 6 个 coding agent 仅 claude 有 headless 实测证据，
+#      一律 fail-closed 会把 fleet 直接锁死；这是「安全降级」不是「静默放行」——见告警文案）。
+# 门槛放低的原因写在这里，升级路径：逐 CLI 做权限校准并写 `permissions.calibration=verified`。
+function Test-TrustGate($Manifest) {
+  $pm = $Manifest.permissions
+  $mode = if ($pm -and $pm.mode) { [string]$pm.mode } else { 'unknown' }
+  $calibration = if ($pm -and $pm.calibration) { [string]$pm.calibration } else { 'unknown' }
+  $cb = $Manifest.capability_boundary
+  $writeEvidence = if ($cb -and $cb.workspace_write_headless) { [string]$cb.workspace_write_headless } else { 'unknown' }
+  $readEvidence = if ($cb -and $cb.workspace_read) { [string]$cb.workspace_read } else { 'unknown' }
+
+  if (($mode -eq 'workspace-write' -or $mode -eq 'danger-full-access') -and $writeEvidence -ne 'yes') {
+    Write-Host "[trust] 拒绝派单：permissions.mode=$mode 但 capability_boundary.workspace_write_headless=$writeEvidence（声明矛盾；不授未证明的写权）"
+    return $false
+  }
+  if ($mode -eq 'read-only' -and $readEvidence -eq 'no') {
+    Write-Host "[trust] 拒绝派单：permissions.mode=read-only 但 capability_boundary.workspace_read=no（连读都无证据）"
+    return $false
+  }
+  if ($mode -eq 'unknown') {
+    Write-Host "[trust] ⚠ 权限未声明/未校准（mode=unknown，calibration=$calibration）——按只读降级生效（不授写权）"
+  } elseif ($calibration -ne 'verified') {
+    Write-Host "[trust] ⚠ 权限声明未实测校准（mode=$mode，calibration=$calibration）——按声明生效，写权需 verified 证据"
+  } else {
+    Write-Host "[trust] 闸门通过：生效权限 $mode（calibration=verified）"
   }
   return $true
 }
@@ -184,13 +262,46 @@ function Test-HeartbeatFresh([string]$StatusJson, $Manifest) {
   } catch { return $false }
 }
 
+# 刷新派单心跳（2026-10-22，外部清单对账挖出的在债 P0）。
+#
+# 根因（t-0010/t-0011 已实测的形态）：判活窗口 = 3 × heartbeat_ms（默认 90s），
+# 而 status.json 旧行为只在**派单开始**（L1048 running）与**终态落账**两处各写一次
+# ⇒ worker 执行超过 90s 后心跳过龄 ⇒ G1 对该 agent 的后续派单**永久硬拒**
+# （status.json 停留在 running + 过龄心跳，直到有人跑 -ResetStatus）——
+# 一个能干活的 agent 被自己的上一次派单「僵」住，且不报错、无提示。
+#
+# 刷新刻意走**原始文本正则替换**，不经过 ConvertFrom-Json —— 后者会把
+# `2026-10-17T13:08:52Z` 解析成 Kind=Local 且数值不变的 DateTime，
+# 读改写会把 UTC 串静默降成本地时刻（Test-HeartbeatFresh 头部注释的实测教训）。
+# status.json 的写者唯一（派单器代理写，见文件头协议），raw 替换无并发问题。
+# 刷新失败（占用/权限）只静默跳过：心跳是判活输入，不是派单正确性输入——
+# 绝不能因为刷不上心跳就把正在执行的 worker 带走。
+function Update-DispatchHeartbeat([string]$AgentDir) {
+  if ([string]::IsNullOrWhiteSpace($AgentDir)) { return }
+  $statusPath = Join-Path $AgentDir 'status.json'
+  try {
+    if (-not (Test-Path $statusPath)) { return }
+    $raw = Get-Content $statusPath -Raw
+    if ($null -eq $raw) { return }
+    if ($raw -notmatch '"heartbeat_at"\s*:\s*"[^"]*"') { return }
+    $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $updated = [regex]::Replace($raw, '"heartbeat_at"\s*:\s*"[^"]*"', "`"heartbeat_at`":`"$now`"")
+    if ($updated -cne $raw) {
+      $updated | Set-Content $statusPath -Encoding UTF8
+    }
+  } catch { }
+}
+
 # 带超时的 worker 进程执行（2026-10-17）。为什么不用 `& $exe @args`：它是同步阻塞，
 # worker 挂死会永久占住 Commander 会话（gap 文档 §4② 实测形态）。
 # 为什么用 ArgumentList：PS7/.NET 逐参数传递，prompt 里的引号/空格/换行不会被二次切分
 # （`Start-Process -ArgumentList` 在 Windows 上仍是拼接字符串，会破坏参数边界）。
 # 输出语义变化：由「实时 Tee」改为「结束后整块写日志 + 控制台回显」—— 超时控制必须异步等待，
 # 牺牲实时性换可中断性；日志文件内容仍与旧实现同源（stdout+stderr 合并）。
-function Invoke-WorkerProcess([string]$Exe, [string[]]$Argv, [string]$OutFile, [int]$TimeoutMs) {
+# 等待改为**轮询切片 + 心跳刷新**（2026-10-22）：整段 WaitForExit(TimeoutMs) 期间
+# status.json 的心停在上一次派单开始时刻，超过判活窗口（3×heartbeat_ms）即被 G1
+# 判僵尸；每个切片（≤HeartbeatMs）后刷一次心跳，执行再长也不会「自己僵住」。
+function Invoke-WorkerProcess([string]$Exe, [string[]]$Argv, [string]$OutFile, [int]$TimeoutMs, [string]$AgentDir, [int]$HeartbeatMs) {
   $psi = [System.Diagnostics.ProcessStartInfo]::new()
   $psi.FileName = $Exe
   foreach ($a in $Argv) { $psi.ArgumentList.Add([string]$a) }
@@ -202,7 +313,18 @@ function Invoke-WorkerProcess([string]$Exe, [string[]]$Argv, [string]$OutFile, [
   $p = [System.Diagnostics.Process]::Start($psi)
   $outTask = $p.StandardOutput.ReadToEndAsync()
   $errTask = $p.StandardError.ReadToEndAsync()
-  $exited = if ($TimeoutMs -gt 0) { $p.WaitForExit($TimeoutMs) } else { $p.WaitForExit(); $true }
+  # 轮询切片：默认 30s（= heartbeat_ms 默认值）；TimeoutMs<=0 表示不设超时，恒按切片等。
+  $sliceMs = if ($HeartbeatMs -gt 0) { $HeartbeatMs } else { 30000 }
+  $waitedMs = 0
+  $exited = $false
+  while ($true) {
+    $chunkMs = if ($TimeoutMs -gt 0) { [Math]::Min($sliceMs, $TimeoutMs - $waitedMs) } else { $sliceMs }
+    if ($chunkMs -le 0) { break }
+    if ($p.WaitForExit($chunkMs)) { $exited = $true; break }
+    $waitedMs += $chunkMs
+    Update-DispatchHeartbeat $AgentDir
+    if ($TimeoutMs -gt 0 -and $waitedMs -ge $TimeoutMs) { break }
+  }
   $timedOut = -not $exited
   if ($timedOut) {
     # Kill(entireProcessTree) 是 .NET Core 3.0+（PS7 满足）；旧框架回落成只杀主进程。
@@ -763,8 +885,12 @@ if ($ResetStatus) {
 }
 
 if ($CheckOnly) {
-  $manifest = Read-JsonFile (Join-Path $agentDir 'manifest.json')
+  $manifest = Read-AgentFacts $agentDir
   if (-not $manifest) { Write-Host "[budget] agent $Agent 无档案"; exit 2 }
+  # P0-A 类型闸门（2026-10-21）：与派单主路径同口径；工具型 CLI / 缺 kind 一律拒绝。
+  if (-not (Test-AgentKindGate $manifest)) { Write-Host '[kind] 预检不通过，拒绝派单（-CheckOnly）'; exit 2 }
+  # P2-A 信任闸门（与派单主路径同口径）：矛盾声明拒绝；unknown 按只读降级并告警。
+  if (-not (Test-TrustGate $manifest)) { Write-Host '[trust] 预检不通过，拒绝派单（-CheckOnly）'; exit 2 }
   $ok = Test-Budget $agentDir $manifest
   if (-not $ok) { exit 4 }
   # 闸门 0.5：并发上限（与派单路径同口径；2026-10-17）
@@ -825,8 +951,12 @@ if ($CheckOnly) {
   exit 0
 }
 
-$manifest = Read-JsonFile (Join-Path $agentDir 'manifest.json')
+$manifest = Read-AgentFacts $agentDir
 if (-not $manifest) { Write-Host "[dispatch] agent $Agent 无档案"; exit 2 }
+# P0-A 类型闸门（2026-10-21）：档案 → 类型 → 开关 → 预算 → …（先廉价后昂贵）
+if (-not (Test-AgentKindGate $manifest)) { Write-Host '[dispatch] 类型闸门未通过，拒绝派单'; exit 2 }
+# P2-A 信任闸门：矛盾声明拒绝；unknown 按只读降级并告警（不授未证明的写权）。
+if (-not (Test-TrustGate $manifest)) { Write-Host '[trust] 权限闸门未通过，拒绝派单'; exit 2 }
 $control = Read-JsonFile (Join-Path $agentDir 'control.json')
 if (-not $control -or $control.enabled -ne $true) { Write-Host "[dispatch] agent $Agent 开关未开启，拒绝派单（§7.0 派单许可）"; exit 2 }
 if ($manifest.preflight) { Write-Host "[dispatch] preflight 提示：$($manifest.preflight)" }
@@ -1004,9 +1134,13 @@ try {
     }
     # 调度级执行（2026-10-17）：带超时的进程执行 + **只在超时**时重试（普通失败不重试）。
     # 旧实现 `& $exe @args` 同步阻塞、无超时 —— worker 挂死会永久占住 Commander 会话。
+    # 心跳刷新（2026-10-22）：执行期间按 heartbeat_ms 刷新 status.json 心跳，
+    # 否则超过判活窗口（3×heartbeat_ms）后该 agent 被 G1 判僵尸、后续派单全拒。
+    $heartbeatMs = 30000
+    if ($manifest -and $manifest.limits -and $manifest.limits.heartbeat_ms) { $heartbeatMs = [int]$manifest.limits.heartbeat_ms }
     $attempt = 0
     while ($true) {
-      $run = Invoke-WorkerProcess -Exe $exe -Argv $args -OutFile $outFile -TimeoutMs $timeoutMs
+      $run = Invoke-WorkerProcess -Exe $exe -Argv $args -OutFile $outFile -TimeoutMs $timeoutMs -AgentDir $agentDir -HeartbeatMs $heartbeatMs
       if (-not $run.timedOut) { $lastTimedOut = $false; $code = [int]$run.exitCode; break }
       $lastTimedOut = $true
       if ($attempt -ge $RetriesOnTimeout) {
@@ -1084,6 +1218,28 @@ $stepText = if ($finalFailed) { "派单完成（exit $exitCode）：终态判定
   elseif ($lastTimedOut) { "派单完成（exit $exitCode）：超时（${timeoutMs}ms）已 kill 进程树（重试 $RetriesOnTimeout 次后仍失败）" }
   elseif ($final -and $final.reason) { "派单完成（exit $exitCode，$($final.source)）：$($final.reason)" }
   else { "派单完成（exit $exitCode）" }
+
+# P1-A 失败分类（2026-10-21）：失败 / 受阻时给出**可行动的类别**（rate_limit / quota / auth /
+# unavailable / timeout / context_overflow / request_error / unknown）。分类只写 status 与事件
+# 的附加字段，**不改退出码、不改闸门**；分类器缺失或输出不可解析时按 unknown 处理，不阻断派单。
+$failureInfo = $null
+if ($state -ne 'idle' -or $exitCode -ne 0) {
+  $classifier = Join-Path $PSScriptRoot 'classify-failure.mjs'
+  if (Test-Path $classifier) {
+    $cfArgs = @($classifier, '--exit-code', "$exitCode", '--log', $outFile)
+    if ($lastTimedOut) { $cfArgs += '--timed-out' }
+    $cfRaw = & node @cfArgs 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      try { $failureInfo = ($cfRaw | Out-String).Trim() | ConvertFrom-Json } catch { $failureInfo = $null }
+    }
+    if ($null -eq $failureInfo) { Write-Host '[failure] 分类器未给出结论（不阻断派单；按 unknown 语义记日志）' }
+  } else {
+    Write-Host '[failure] 分类器缺失，跳过失败分类（审计缺口，不阻断派单）'
+  }
+}
+if ($failureInfo -and $failureInfo.kind) {
+  $stepText = "$stepText（失败类别 $($failureInfo.kind)）"
+}
 $status.state = $state; $status.current_task = $null; $status.progress = 1.0; $status.step = $stepText; $status.heartbeat_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 if ($state -ne 'idle') {
   $status.last_error = if ($finalFailed) { 'final-state.ps1 调用失败，终态未判定（保守记 error）' }
@@ -1091,6 +1247,15 @@ if ($state -ne 'idle') {
     elseif ($final -and $final.reason) { $final.reason }
     elseif ($state -eq 'blocked') { 'worker 自述受阻（result.json status=blocked）' }
     else { "CLI exit $exitCode" }
+}
+if ($failureInfo -and $failureInfo.kind) {
+  # 结构化失败类别（K4 的补充：last_error 仍是人话，这里给机器可读字段）。
+  $status.failure = @{
+    kind = [string]$failureInfo.kind
+    retryable = [bool]$failureInfo.retryable
+    suggest_switch = [bool]$failureInfo.suggest_switch
+    detail = [string]$failureInfo.detail
+  }
 }
 if ($usageRow) {
   $taskTokens = [int]$usageRow.input_tokens + [int]$usageRow.output_tokens
@@ -1107,7 +1272,14 @@ if ($state -eq 'idle') {
 } else {
   $evReason = if ($status.last_error) { $status.last_error } else { "派单失败（exit $exitCode，state=$state）" }
   # 带 `state` 字段：否则事件流里 blocked（自述受阻）与 error（真失败）**不可分**
-  Write-BusEvent 'failure.detected' $TaskId $evReason @{ state = $state }
+  $evFields = @{ state = $state }
+  if ($failureInfo -and $failureInfo.kind) {
+    # P1-A：失败类别进事件流，面板/Commander 可按 kind 统计与决定是否改派。
+    $evFields.error_kind = [string]$failureInfo.kind
+    $evFields.retryable = $(if ($failureInfo.retryable) { 'true' } else { 'false' })
+    $evFields.suggest_switch = $(if ($failureInfo.suggest_switch) { 'true' } else { 'false' })
+  }
+  Write-BusEvent 'failure.detected' $TaskId $evReason $evFields
 }
 
 # G4：声明了风险 → 生成验证任务书（**只准备材料，不自动派发**）。

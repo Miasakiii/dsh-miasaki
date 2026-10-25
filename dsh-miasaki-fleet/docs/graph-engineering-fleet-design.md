@@ -836,11 +836,39 @@ $ node workers/graph/verifier-pick.mjs --for coder --all
 
 **厂商未登记时保守降级为 `agent` 级并说明原因，绝不假装异构。**
 
+#### WORK-01：判官前置的确定性 shell 闸（2026-10-22 追加落地）
+
+**设计决策来源**：外部逆向清单（luanyujia-workbench 09-改造参考 Hermes 05-改造清单 A-9）与
+DSH 0.2.1-rc.2 内核对账——内核查证：`dsh-tool-ralph` README 自认 *"Completion is worker
+self-declaration — there is no independent evaluator or verifier"*、`verify_on_stop` 全树零命中
+⇒ 内核无「完成需证据」闸门；fleet 的 `verifier.cjs` / `verdict.json` / `bus-contract` 已在地
+⇒ 判定为「可做」且是清单里性价比最高的一条（成本 S）。
+
+**机制**：验证任务书第 0 步 = 一条确定性 shell 命令（brief 的 `gate:` 行或 `--gate` 显式传入）。
+判据（照抄其验收命令）：**exit≠0 ⇒ 判官不被调用**——不许写 `verdict.json`（pass/reject 都不行）、
+不许做模型判断，闸输出**尾部 3000 字符**作为续跑提示退回产出者；exit=0 才继续。
+
+**为什么放在判官之前而不是之后**：判官是 LLM，昂贵且会自欺——测试都没跑过就让模型判「通过」，
+它能编一个「看起来跑过了」的结论（这正是 ralph 自认的 self-declaration 形态）。确定性检查
+（exit code）不会客气。放在验证任务书里而不是派单器里：闸命令是**任务属性**（因任务而异），
+派单器不该知道每个任务怎么测。
+
+**三条边界**（`tests/verifier.test.mjs` 各有反例自证，防「永远通过的检查是装饰品」）：
+
+1. **只认显式声明，不猜**——猜出来的命令「跑错还退出 0」比不跑更危险（虚假放行）；
+2. **`exitCode` 不可信（非整数）时显式失败**——判据本身坏了时沉默 = 放行，与 `check-silent-guards` 同口径；
+3. **续跑提示只要尾部**——全量回贴会把刚炸过上下文的生产者再次顶爆。
+
+**未声明时不静默跳过**：任务书走「未声明」分支（要求判官自行判断有无可跑的确定性命令、
+或写明 `"gate": null` 与理由）——「没有闸」必须是可感知状态，不是默认放行。
+VER-01（退出码可归因）的教训以提示词形式内嵌进任务书（`npm test | head` 的退出码属于 `head`），
+不依赖其单独落地。
+
 **验收进度**
 
 | 验收项 | 状态 |
 |---|---|
-| 异构判定与验证者选取 | ✅ 20 项单测（`tests/verifier.test.mjs`） |
+| 异构判定与验证者选取 | ✅ 36 项单测（`tests/verifier.test.mjs`，含 WORK-01 确定性闸 7 项） |
 | `verdict.json` 契约三条硬约束 | ✅ 署名 / 拒绝须有依据 / findings 须有证据 |
 | 写入与巡检接入 | ✅ applier 校验 + `validate-bus` 巡检 |
 | 真实数据可用性 | ✅ 活动 agent 两两之间均可判定为 `vendor` 级异构 |

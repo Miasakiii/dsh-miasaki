@@ -12,12 +12,13 @@
 | `agents/` | agent 档案（manifest/control/status/usage，运行时产物已 ignore） |
 | `state/` | 任务台账 / 成本账本 / 事件流 / `fleet-pulse.json`（运行时产物） |
 | `tasks/` | 任务书 brief 与交付物 |
-| `workers/` | 扫描器（discovery）、派单器（dispatch）、总线校验（validate-bus.mjs）、脉冲发布（pulse/publish-pulse.mjs） |
+| `workers/` | 扫描器（discovery：`scan-agents` / **`scan-models`** / **`agent-drift`**）、派单器（dispatch）、总线校验（validate-bus.mjs）、脉冲发布（pulse/publish-pulse.mjs） |
 | `fleet-monitor/` | 监控面板（panel.html + server.js + **fence.cjs 三道信任围栏**，本地 HTTP；2026-09-26 起所有路由先过围栏，跨站请求 403 且不带 CORS 头） |
 | `plugins/dsh-fleet-panel/` | **DSH 入口插件（2026-10-19，P0）**：会话视图 tab「Fleet」（排在「用量」后，每会话独立实例、**原生渲染**面板）；host 半确保 fleet-monitor 在跑并注册 `/dsh-fleet/*` 代理路由，见 [README](plugins/dsh-fleet-panel/README.md) |
 | `schemas/` | 文件总线 JSON Schema（F1 契约） |
-| `shared/` | 跨文件共享参考：`collective-memory.md`（经验沉淀）、**`agent-vendors.json`（厂商归属表 —— G4 异构验证的 vendor 级依据；缺省回退内置表并**显式告知**）** |
+| `shared/` | 跨文件共享参考：`collective-memory.md`（经验沉淀）、**`agent-vendors.json`（厂商归属表 —— G4 异构验证的 vendor 级依据；缺省回退内置表并**显式告知**）**、**`agent-adapters.json`（P0-B 只读模型来源适配器：每个 coding agent 的配置文件与模型字段）** |
 | `docs/` | 设计文档与调研/校准报告 |
+| `design/` | **设计决策与判据**（P0-A 起）：[`2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md`](design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md)（coding agent 判据 / 三仓库定位 / P0–P2 批次） |
 | `tests/` | 回归冒烟与样本 |
 
 ## 常用命令
@@ -91,9 +92,9 @@ npm run validate / validate:strict / pulse
 node workers/bus/bus-apply.mjs --current-version       # 查当前总线版本
 node workers/bus/bus-apply.mjs --patch p.json --check  # 只校验不写入
 node workers/bus/bus-apply.mjs --patch p.json          # 提交一个超步
-npm test                                               # 本线单测入口（170 例：F3 判活 9 / G0 契约与总线 59（26+16+17）/ G1 图与就绪度 13 / G2 能力图 17 / G4 验证者 29 / fleet-monitor 信任围栏 26 / fleet-panel host 10 + client 7）
-                                                       # ⚠️ 派单器侧两组（dispatch-state 9 / dispatch-gate 35）**不在** npm test 链上，只在 `verify-all` 的 fleet 类别里跑
-                                                       # ⇒ 全线用例 **214 例**（2026-10-20 实测：9+26+16+17+13+17+29+26+9+35+fleet-panel host 10+client 7），逐文件口径见回归矩阵 §1
+npm test                                               # 本线单测入口（257 例：F3 判活 9 / G0 契约与总线 80（26+27+27）/ G1 图与就绪度 14 / G2 能力图 18 / G4 验证者 36（含 WORK-01 确定性闸 7）/ fleet-monitor 33 / P0-B 配置漂移 14 / P1-A 失败分类 11 / P2-B 合并视图 5 / P2-D 定时任务 7 / P2-E schema 版本 4 / P2-F 选型策略 5 / P2-G profiles 4 / fleet-panel host 10 + client 7）
+                                                       # ⚠️ 派单器侧两组（dispatch-state 9 / dispatch-gate 43）**不在** npm test 链上，只在 `verify-all` 的 fleet 类别里跑
+                                                       # ⇒ 全线用例 **311 例**（2026-10-22 实测：9+26+27+27+14+18+14+11+5+7+4+5+4+36+33+11+43+10+7），逐文件口径见回归矩阵 §1
 ```
 
 > **写入纪律（G0 起）**：总线文件（`state/*.jsonl`、`agents/*/capability.json`、
@@ -167,8 +168,8 @@ G4 把「谁来验证」变成可判定的问题。
 
 | 新增 | 作用 |
 |---|---|
-| `workers/lib/verifier.cjs` | **异构验证的唯一实现**：异构性判定、验证者选取、验证任务书生成、结论汇总 |
-| `workers/graph/verifier-pick.mjs` | CLI：`--for` / `--brief` / `--status` / `--check` / `--min-level` |
+| `workers/lib/verifier.cjs` | **异构验证的唯一实现**：异构性判定、验证者选取、验证任务书生成、结论汇总、**判官前置确定性闸（WORK-01）** |
+| `workers/graph/verifier-pick.mjs` | CLI：`--for` / `--brief` / `--status` / `--check` / `--min-level` / `--gate` |
 | `verdict.json` 契约 | `bus-contract.validateVerdict`，已接入 applier 写入校验与 `validate-bus` 巡检 |
 
 **异构等级**（由弱到强）：`none`（同一 agent = 自验，**禁止**）< `agent` < `model` < `vendor`。
@@ -181,6 +182,7 @@ G4 把「谁来验证」变成可判定的问题。
 ```bash
 node workers/graph/verifier-pick.mjs --for claude     # 挑验证者（按异构强度排序）
 node workers/graph/verifier-pick.mjs --brief t-0013 --producer claude   # 生成验证任务书
+node workers/graph/verifier-pick.mjs --brief t-0013 --producer claude --gate "npm test"   # 带判官前置确定性闸（WORK-01）
 node workers/graph/verifier-pick.mjs --status t-0013  # 查看验证结论（含驳回历史）
 ```
 
@@ -190,6 +192,36 @@ node workers/graph/verifier-pick.mjs --status t-0013  # 查看验证结论（含
 > **已接线（2026-09-30，第三批）**：派单器新增 `Test-VerifierGate` —— **声明了风险**的 brief 必须有
 > **可用的**异构验证者，否则拒绝派单；派单结束后生成验证任务书（`tasks/<id>/verify-brief.md`，**不自动派发**）。
 > 详见下节「派单验证闸门（G4）已接线」。
+
+#### WORK-01：判官前置的确定性 shell 闸（2026-10-22）
+
+**来源**：外部逆向清单（luanyujia-workbench 09-改造参考 Hermes 05-改造清单 A-9「质量闸：判官前置的
+确定性 shell 检查」）与 DSH 0.2.1-rc.2 内核对账的落地结论之一（对账报告见本次会话结论；内核实证：
+`dsh-tool-ralph` README 自认 *"Completion is worker self-declaration — there is no independent
+evaluator or verifier"*，`verify_on_stop` 全树零命中 —— 内核侧无此闸，fleet 侧地基已在地）。
+
+**机制**（判据照抄其验收命令）：验证任务书的**第 0 步**是一条确定性 shell 命令
+（brief 的 `gate:` 行，或 `--gate` 显式传入）—— **exit≠0 ⇒ 判官不被调用**：
+不许写 `verdict.json`（pass/reject 都不行）、不许做模型判断，把闸输出的
+**尾部 3000 字符**作为续跑提示退回产出者修。exit=0 才继续往下验证。
+
+**三条边界**（各对一种真实失效，`tests/verifier.test.mjs` 各有反例自证）：
+
+| 边界 | 防的是什么 |
+|---|---|
+| 只认**显式声明**（`gate:` 行 / `--gate`），不猜 | 猜出来的命令「跑错还退出 0」比不跑更危险（虚假放行） |
+| `exitCode` 不可信（非整数）时**显式失败**，不给结论 | 判据本身坏了时沉默 = 放行（与 `check-silent-guards` 同口径） |
+| 续跑提示**只要尾部**（截断留痕） | 全量回贴会把刚炸过上下文的生产者再次顶爆 |
+
+未声明 `gate:` 时**不静默跳过**（那正是「没有闸」的缺陷形态）：任务书走「未声明」分支，
+要求判官自行判断有无可跑的确定性命令、或在 verdict 里写明 `"gate": null` 与理由。
+任务书同时内嵌 VER-01 的退出码归因教训（`npm test \| head` 的退出码属于 `head`）——
+这条不依赖 VER-01 单独落地，提示词层先生效。
+
+**顺带修掉的跨运行时陷阱**（实测炸过，已写进源码注释）：从 PowerShell/.NET 正则往 Node 抄时
+① `(?m)` 顶层内联标志在 JS 里**从来不是合法语法**，必须写成 `/m` flag；
+② 字符类 `[:：]` 的 `[:` 开头会被 V8 当 POSIX 类报 `Invalid group`。
+（派单器 G4 的 `risk:` 解析是同款写法的 .NET 版，不受影响。）
 
 ### 派单能力闸门已接线（P0，2026-09-11）
 
@@ -494,37 +526,49 @@ host 10 / client 7）；fleet 全线 **197 → 214 例**。安装方式见
 node ../scripts/verify-all.mjs fleet
 #  1) tests/liveness.test.mjs             F3 心跳判活（9 项，含首跑口径 isFirstRun）
 #  2) tests/bus-contract.test.mjs         G0 契约判定（26 项，含事件类型与新写者枚举）
-#  3) tests/bus-apply.test.mjs            G0 applier 超步（16 项）
-#  4) tests/bus-integration.test.mjs      G0 图校验闭环（17 项，含 validate-bus 新路径与反向存在性）
-#  5) tests/task-graph.test.mjs           G1 图与就绪度（13 项，含真实台账等价性）
+#  3) tests/bus-apply.test.mjs            G0 applier 超步（27 项）
+#  4) tests/bus-integration.test.mjs      G0 图校验闭环（27 项，含 validate-bus 新路径、反向存在性、deliverables 与 observed 契约）
+#  5) tests/task-graph.test.mjs           G1 图与就绪度（14 项，含真实台账等价性）
 #  6) task-ready --check                  G1 图结构完整性
-#  7) tests/capability-graph.test.mjs     G2 能力图（17 项，含真实档案替代查找）
-#  8) agent-pick --check                  G2 能力图结构完整性
-#  9) dispatch 能力闸门接线               G2→派单器 纯文本断言（7 项）
-# 10) dispatch 可派闸门接线               G1/G0/G4→派单器 纯文本断言（37 项，2026-09-30 新增）
-# 11) tests/verifier.test.mjs             G4 异构验证（29 项，含 verdict 契约三条硬约束 + 首跑豁免及其三条边界）
-# 12) verifier-pick --check               G4 验证结论契约校验
-# 13) node --check fleet-monitor/server.js
-# 14) node --check fleet-monitor/fence.cjs
-# 15) tests/fleet-monitor.test.mjs        fleet-monitor 三道信任围栏 + P1 判定层端点（26 项）
-# 16) tests/dispatch-state.test.mjs       K4 派单终态判定（9 项，含两个 ps1 的语法闸门）
-# 17) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证闸门夹具（35 项，2026-09-30 新增）
-# 18) fleet-monitor 判定层区块 (P1)       panel.html / server.js 的区块与三个端点（10 项，2026-09-30 新增）
-# 19) node --check plugins/dsh-fleet-panel/lib/index.js
-# 20) node --check plugins/dsh-fleet-panel/lib/client.js
-# 21) plugins/dsh-fleet-panel/test/host.test.mjs      DSH 入口插件 host 半（10 项，2026-10-19 新增）
-# 22) plugins/dsh-fleet-panel/test/client.test.mjs    DSH 入口插件 client 契约（7 项，2026-10-19 新增，2026-10-20 原生渲染）
-# 23) validate-bus                        F1 总线校验 + G0 图/事件/交付物与 G4 验证结论
-# 24) publish-pulse                       X1 脉冲发布
-# 25) validate-bus --strict               （要求 fleet-pulse.json 存在，故排在第 24 步后）
+#  7) tests/capability-graph.test.mjs     G2 能力图（18 项，含真实档案替代查找 + kind 过滤）
+#  8) tests/config-drift.test.mjs         P0-B 模型来源探测 + 配置漂移五态（14 项，2026-10-21 新增）
+#  8b) tests/failure-classify.test.mjs    P1-A 失败分类八态（11 项，2026-10-21 新增）
+#  8c) tests/agent-facts.test.mjs         P2-B manifest/observed 合并视图（5 项，2026-10-21 新增）
+#  8d) tests/scheduler.test.mjs           P2-D 定时任务语义（7 项，2026-10-21 新增）
+#  8e) tests/schema-version.test.mjs      P2-E schema 版本五态 + 迁移（4 项，2026-10-21 新增）
+#  8f) tests/selection-policy.test.mjs     P2-F 选型策略（5 项，2026-10-21 新增）
+#  8g) tests/profile.test.mjs              P2-G profiles 快照（4 项，2026-10-21 新增）
+#  9) agent-pick --check                  G2 能力图结构完整性
+# 10) dispatch 能力闸门接线               G2→派单器 纯文本断言（7 项）
+# 11) dispatch 可派闸门接线               G1/G0/G4→派单器 纯文本断言（47 项，2026-09-30 新增/2026-10-21 扩）
+# 12) tests/verifier.test.mjs             G4 异构验证（36 项，含 verdict 契约三条硬约束 + 首跑豁免及其三条边界 + WORK-01 确定性闸 7 项）
+# 13) verifier-pick --check               G4 验证结论契约校验
+# 14) node --check fleet-monitor/server.js
+# 15) node --check fleet-monitor/fence.cjs
+# 16) tests/fleet-monitor.test.mjs        fleet-monitor 三道信任围栏 + P1 判定层端点 + /api/drift（31 项）
+# 17) tests/dispatch-state.test.mjs       K4 派单终态判定（11 项，含两个 ps1 的语法闸门 + 派单执行期间心跳刷新两组）
+# 18) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证 + P1-A 失败分类 + P2-A 信任闸门夹具（43 项）
+# 19) fleet-monitor 判定层区块 (P1)       panel.html / server.js 的区块与三个端点（10 项，2026-09-30 新增）
+# 20) node --check plugins/dsh-fleet-panel/lib/index.js
+# 21) node --check plugins/dsh-fleet-panel/lib/client.js
+# 22) plugins/dsh-fleet-panel/test/host.test.mjs      DSH 入口插件 host 半（10 项，2026-10-19 新增）
+# 23) plugins/dsh-fleet-panel/test/client.test.mjs    DSH 入口插件 client 契约（7 项，2026-10-19 新增，2026-10-20 原生渲染）
+# 24) validate-bus                        F1 总线校验 + G0 图/事件/交付物与 G4 验证结论
+# 25) publish-pulse                       X1 脉冲发布
+# 26) validate-bus --strict               （要求 fleet-pulse.json 存在，故排在第 25 步后）
 ```
 
 > **口径**：`fleet` 类别 2026-09-30 由 17 项升至 **21 项**，2026-10-19 因 DSH 入口插件再升至 **25 项**
-> （+4：host/client 语法各一、两个契约测试文件各一；插件用例 host 10 + client 7 = **17 例**）。
-> 全量 **2026-10-05 起为 180 项**、**2026-10-19 实跑为 189 项**。真实台账 12 个任务全终态 ⇒ 第 17 项是「放行」分支的唯一覆盖者，不可省。
-> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（现 37），夹具例数就是 `node --test` 的 pass 数。
-> **本条顺带订正三处存量失真**（2026-10-19 核对：以实跑为准）：`bus-apply` 15 → **16 例**、
-> `fleet-monitor` 16 → **26 例**、`dispatch-gate` 26 → **35 例**、面板区块 7 → **10 项**。
+> （+4：host/client 语法各一、两个契约测试文件各一；插件用例 host 10 + client 7 = **17 例**）；
+> 2026-10-21 P0-B 新增 `tests/config-drift.test.mjs` → **26 项**；同日 P1-A 新增
+> `tests/failure-classify.test.mjs` → **27 项**；P2-B 新增 `tests/agent-facts.test.mjs` → **28 项**；
+> P2-D 新增 `tests/scheduler.test.mjs` → **29 项**；P2-E/F/G 新增 `schema-version` / `selection-policy` / `profile`
+> 三个测试文件 → **32 项**。
+> 全量 **2026-10-05 起为 180 项**、**2026-10-19 实跑 189**、**2026-10-21 实跑 200 项**。真实台账 12 个任务全终态 ⇒ 第 18 项是「放行」分支的唯一覆盖者，不可省。
+> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（现 **47**），夹具例数就是 `node --test` 的 pass 数。
+> **本条顺带订正存量失真**（2026-10-21 核对：以实跑为准）：`bus-apply` 16 → **27 例**、
+> `bus-integration` 17 → **27 例**、`fleet-monitor` 31 → **33 例**、`task-graph` 13 → **14 例**、`fleet-monitor` 26 → **31 例**、
+> `dispatch-gate` 35 → **40 例**、面板区块 7 → **10 项**；旧记「16/17/13/17/26/35」为迁移前口径。
 
 实机联动项（pulse → 桌宠状态映射、pulse 缺失/损坏时静默降级）见
 [统一回归矩阵](../dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) §4。
@@ -540,6 +584,189 @@ node ../scripts/verify-all.mjs fleet
 设计决策与协议变更记录在
 [docs/multi-agent-cli-orchestrator-design.md](docs/multi-agent-cli-orchestrator-design.md)
 头部「变更记录」。
+
+### 2026-10-22 · 在债 P0 收口：派单执行期间刷新心跳 + WORK-01 判官前置确定性闸
+
+两件事都源自同一场对账：用户分享外部仓库 [mashanglinyu/luanyujia-workbench](https://github.com/mashanglinyu/luanyujia-workbench)
+（多场景 AI 工作台方法论；其 09-改造参考含 Hermes 37 篇 + workbudy 19 篇逆向拆解与一份
+**44 条改造清单**）⇒ 对清单与 DSH 0.2.1-rc.2 内核 + 本线逐条对账（判定：已做 4 / 部分 8 /
+没有 11 / 不适用 6，另点名 lyj 清单 5 处已过时 —— 对账报告见本次会话结论，可入库）。
+
+**① WORK-01 判官前置确定性闸（G4 追加落地）**：验证任务书第 0 步 = brief 的 `gate:` 行或
+`--gate` 传入的确定性 shell 命令，**exit≠0 ⇒ 判官不被调用**（不许写 verdict、不许模型判断，
+闸输出尾部 3000 字符退回产出者）。三条边界各有反例自证（显式声明不猜 / exitCode 不可信显式
+失败 / 续跑提示只要尾部）。内核查证：`dsh-tool-ralph` 自认 *"Completion is worker
+self-declaration — there is no independent evaluator or verifier"*、`verify_on_stop` 全树零命中
+⇒ 内核无此闸、本线地基已在地 ⇒ 判为清单里性价比第一。详见「G4 验证器判定层」节末小节。
+
+**② 在债 P0：派单执行期间刷新心跳（`dispatch-task.ps1`）**：判活窗口 = 3 × heartbeat_ms
+（默认 90s），而 `status.json` 旧行为只在派单开始与终态落账两处各写一次 ⇒ worker 执行
+超过 90s 后心跳过龄 ⇒ **G1 对该 agent 的后续派单永久硬拒**（running + 过龄心跳的残留要
+有人跑 `-ResetStatus` 才清）—— 能干活的 agent 被自己的上一次派单「僵」住，且不报错
+（t-0010/t-0011 已实测的形态）。修法：`Invoke-WorkerProcess` 的等待由整段
+`WaitForExit(TimeoutMs)` 改为**轮询切片 + `Update-DispatchHeartbeat`**（每 ≤heartbeat_ms
+刷一次）。刷新走**原始文本正则替换**（不经过 ConvertFrom-Json —— 后者会把 UTC 串转成
+Local 且数值不变，读改写会静默损坏心跳，与 `Test-HeartbeatFresh` 同款教训）；刷新失败
+只静默跳过（心跳是判活输入，不是派单正确性输入）。
+
+**回归**：`tests/dispatch-state.test.mjs` **9 → 11 例**（源码契约防回退 + pwsh 功能探针：
+刷新后心跳变新、其他字段一字不变、无 status.json 静默；反向验证：移除循环内调用即精确
+转红）；`tests/verifier.test.mjs` **29 → 36 例**；`verify-all fleet` **32/32**；全线 **309 → 311 例**。
+
+**顺带修掉的跨运行时陷阱**（已写进源码注释）：从 PowerShell/.NET 正则往 Node 抄时
+① `(?m)` 顶层内联标志在 JS 里**从来不是合法语法**，必须写 `/m` flag；
+② 字符类 `[:：]` 的 `[:` 开头会被 V8 当 POSIX 类报 `Invalid group`。
+
+### 2026-10-21 · P2-E/F/G 规划项收口
+
+- **P2-E schema 版本与迁移**：manifest / observed 增 `schema_version`（当前 **2**；缺席按 1 legacy 读）；
+  `workers/lib/schema-version.cjs`（五态分类 + 纯函数迁移，future 拒绝降级）；
+  `workers/discovery/migrate-schema.mjs`（只标注版本，经 bus-apply；`--check` 不写盘）；
+  `validate-bus` 对 future/invalid 版本显式失败。扫描器写 v2。
+- **P2-F 可插拔选型策略**：`shared/selection-policy.json`（balanced / cheap / reliable / coverage 四套权重）+
+  `workers/lib/selection-policy.cjs`；`agent-pick --strategy/--list-strategies`。策略**只排序**，
+  不改变类型/判活/开关等硬判定；未知策略 exit 2（不静默回退默认）。
+- **P2-G profiles（整套快照）**：`shared/profiles.json`（balanced / lean / review）+
+  `workers/profile/apply-profile.mjs`（`--list` / `--check` / apply）。快照语义 = enabled 集合 + 每 agent
+  日预算；经 bus-apply 一次超步只写 `control.enabled` 与 `manifest.limits.budget_per_day`，
+  **不碰 observed 发现事实**；未知 profile exit 2、profile 引用未知 agent exit 1（打错字不静默忽略）。
+- 测试：`schema-version` 4 / `selection-policy` 5 / `profile` 4；`verify-all fleet` **32/32**、
+  fleet 单测 **302 例**、静态全量 **200 项**、`validate-bus` **39 文件** 0 错误。
+- 顺延（需 Operator 决策/外部前提，不影响本批）：quota（无诚实读取源）、magpie 可选模型层（需拍板+安装）、
+  MCP/Skills/Prompts 集中管理（按需求评估）。
+
+### 2026-10-21 · P2-D 定时任务（无常驻 daemon）+ Schedule tab
+
+- **真相**：新增 `state/schedules.json`（`version/schedules[]`，每项 id / interval_seconds /
+  next_fire_at / task{title,assignee,brief?}，interval ≥ 60s）。
+- **触发器**：新增 `workers/scheduler/enqueue-due.mjs`（一次性 CLI，**不常驻**）：外部触发器
+  （Windows 任务计划 / 手动 / 未来 DSH 定时插件）周期调用；到期 schedule 转成 queued 任务。
+- **幂等**：任务行 append 与 schedules 的 `next_fire_at` 推进在**同一次 bus-apply 超步**提交
+  （要么都生效要么都不动）；同一时刻重复调用不重复建任务；错过多个窗口**只补一次**。
+- 总线契约：白名单新增 `state/schedules.json`；新增事件 `schedule.fired`（author=scheduler）；
+  `validate-bus` 校验 schedules（id 形态 / interval / ISO 时间 / task 必填）。
+- **UI**：DSH Fleet tab 新增 **Schedule** section（读 `GET /api/schedules`，显示 id / title /
+  assignee / interval / next / 已到期标记 + 触发器说明）；现为 6 个 section。
+- **回归**：`tests/scheduler.test.mjs` **7 例**（校验收敛 / due 判定 / 补一次 / 幂等 / 坏配置）；
+  fleet-monitor **+2 例**（/api/schedules）；`verify-all fleet` 28 → **29/29**；fleet 单测
+  280 → **289 例**；静态全量 **197 项**。
+
+### 2026-10-21 · P2-C UI 信息架构收敛
+
+DSH Fleet tab 从「一页长滚动」收敛为五个 section（数据源不变，仍走 fleet-monitor 现成端点）：
+
+- **概览**：统计 6 卡 + 判定层四卡 + **模型来源与漂移（P0-B）** 卡（match / replaced / missing /
+  unknown + 适配器数，消费 `GET /api/drift`）。
+- **Agents**：Agent 卡片（kind / model 来源 / 开关，写 control.json 经 bus-apply）。
+- **Tasks**：可派 / 受阻 / 终态 + 当前执行（task-ready + fleet 同源）。
+- **Verifiers**：验证者覆盖（G4 前提）+ drift 卡。
+- **Events**：机器事件流尾部（G0）。
+
+刻意**不**放 Schedule 入口（调度器本体属 P2 后续）；无 iframe / 无 window.open / 仍走
+`/dsh-fleet/api/*` 同源代理与三道围栏。client 契约测试 7 例（含 5 个 tab 的渲染断言）；
+`verify-all fleet` **28/28**、fleet 单测 **280 例**。
+
+### 2026-10-21 · P2-B observed.json 派生分离
+
+扫描/探测事实从 `manifest.json` 拆到 `agents/<id>/observed.json`：manifest 只留 Operator 字段
+（name / runtime / model / model_price / metering / metering_source / skills / persona_prompt /
+limits / updated_at），observed 承载 present / runtime_kind / kind / cli / capabilities /
+capability_boundary / invoke_contract / permissions / model_info / preflight。
+
+- 新增 **`workers/lib/agent-facts.cjs`**：所有消费方读**合并视图**（observed 覆盖 manifest；
+  observed 缺席时回退 manifest —— 兼容窗口，`_facts_source` 显式标记来源）。
+- 扫描器一次超步写 **17 个补丁**（8 observed + 8 manifest + registry）；`scan-models` 改为写
+  observed 的 `model_info`；`agent-pick` / `verifier-pick` / `fleet-monitor` / **派单器
+  （Read-AgentFacts）** 全部切换；`validate-bus` 校验 observed 契约（agent_id/observed_at/
+  present/kind/cli 等）与合并语义（缺 observed 且 manifest 无 cli ⇒ 显式失败）。
+- 派生边界：`agents/registry.json` 仍是**派生快照**（只用于展示/兼容）；真相 = manifest
+  （Operator）+ observed（发现事实）。
+- 测试：新增 **`tests/agent-facts.test.mjs` 5 例** + bus-integration **+3 例**（拆分契约 /
+  observed kind 非法 / 半档案拒绝）；fleet 单测 **280 例**、`verify-all fleet` **28/28**、
+  静态全量 **196 项**。
+
+### 2026-10-21 · P2-A 权限校准 + 信任闸门
+
+- `permissions` 从「纸面字段」变成**可判定的安全边界**：新增 `calibration`（verified / declared /
+  unknown）与 `evidence`；8 档案迁移 —— **claude 唯一 verified**（t-0006：headless `-p` 下
+  Write/Bash 被权限栈拒绝），其余 unknown（未做 headless 权限实测，不冒充）。
+- 派单器新增 **`Test-TrustGate`**（档案 → 类型 → **权限** → 开关 → …）：
+  ① 矛盾声明拒绝（`mode=workspace-write/danger-full-access` 但 `workspace_write_headless≠yes`；
+  `read-only` 但 `workspace_read=no`）；② `mode/calibration=unknown` ⇒ **按只读降级并告警**
+  （当前仅 claude 有实测证据，一律 fail-closed 会把 fleet 锁死；这是安全降级、不是静默放行 ——
+  告警文案与 `permissions.evidence` 都可审计）。
+- `validate-bus` 同步：`calibration` 枚举 + 同一组矛盾声明巡检（写时拦截与事后巡检同一口径）。
+- 测试：dispatch-gate **+3**（矛盾拒绝 / unknown 只读降级 / verified read-only 通过）；
+  派单接线断言 **42 → 47**。
+- **回归**：fleet 单测 269 → **272 例**；`verify-all fleet` **27/27 PASS**；
+  `validate-bus` 36 文件 0 错误。
+- **顺延**：`observed.json` 派生分离与 UI 收敛为 P2 后续子批（见设计文档 §14）。
+
+### 2026-10-21 · P1-A/P1-B：失败分类 + 交付物声明
+
+- **P1-A 失败分类**：新增 `workers/lib/failure-classify.cjs`（八态：timeout / rate_limit /
+  quota / auth / unavailable / context_overflow / request_error / unknown；`retryable`（同 agent
+  可重试）与 `suggest_switch`（换异构 agent 可能有帮助）语义分开）+ `workers/dispatch/classify-failure.mjs`
+  （PowerShell 调用；只读日志尾部 64 KiB）。派单失败时 `status.json` 增 `failure{kind,retryable,
+  suggest_switch,detail}`，`failure.detected` 事件增 `error_kind/retryable/suggest_switch` 字段；
+  **退出码与闸门不变**，分类器缺失/不可解析按 unknown 处理、不阻断派单。
+- **P1-B 交付物声明**：`result.json` 增可选 `deliverables[]`（`{path,note?}`，工作区内相对路径）
+  —— 执行者显式声明**成品清单**；契约见 `bus-contract.cjs` 与 `schemas/result.schema.json`；
+  `validate-bus` 逐条核对存在性与工作区包含性（与 `artifacts[]` 的 sha256 指纹互补：
+  artifacts 防篡改、deliverables 说明「交付了什么」）。
+- **回归**：fleet 单测 252 → **269 例**（+failure-classify 11 / dispatch-gate +3 /
+  bus-integration +3）；`verify-all fleet` 26 → **27/27 PASS**；`validate-bus` 36 文件 0 错误。
+- **顺延（记录在案，不假装做完）**：权限闸门 `Test-TrustGate`（需先校准 `permissions.mode`，
+  否则会误拒全部 agent）；配额三源/分档（无 magpie 时没有诚实读取源，不猜）；定时任务语义
+  （需新增总线文件与调度生命周期，独立批次）；UI 收敛（P2）；`observed.json` 派生分离（P2）。
+
+### 2026-10-21 · P0-B 模型真实值 + 只读配置漂移
+
+P0-A 把类型变成字段后，「每个 coding agent 实际用什么模型」仍是 `cli-default` / `unknown`。
+本批把模型来源变成**可复核的只读事实**：
+
+- 新增 **`shared/agent-adapters.json`**：每个 coding agent 一条「配置文件 + 模型字段」规则
+  （json / jsonc / yaml-regex 三种格式；只读，字段位置按 2026-10-21 本机实测）。
+- 新增 **`workers/discovery/scan-models.mjs`**：只读探测后经 `bus-apply` 写 `model_info`
+  （value/source/confidence/evidence/provider）。本机落盘结果：claude `step-5-preview[1M]`
+  （`settings.env.ANTHROPIC_MODEL`）、pi `deepseek-v4-flash`、mimo `mimo-v2.5-pro`；
+  dsh **missing**（`--profile headless` 未建）、gemini **missing**（未安装且无配置）、
+  opencode **unknown**（配置存在但无 model 字段）。
+- 新增 **`workers/lib/config-drift.cjs` + `workers/discovery/agent-drift.mjs`**：只读巡检五态
+  （`match / replaced / missing / parse-error / unknown`）；漂移是**事实不是错误**（`--json` 仍 exit 0），
+  `--check` 只在「适配器表坏 / coding-agent 缺适配器」时失败。
+- **判定层消费真值**：`verifier-pick` / `agent-pick` 的模型改为优先读 `model_info.value`
+  —— G4 的「模型级异构」第一次有真实数据；`model_info` 新增可选 `provider` 并由 `validate-bus` 校验。
+- **面板**：`fleet-monitor` 新增 `GET /api/drift`（spawn 现成 `agent-drift --json`，不重复实现探测）。
+- **只读纪律**：探测前后用户配置文件字节不变（单测钉住）；`scan-models` 写盘只经 `bus-apply`。
+- **回归**：fleet 单测 236 → **252 例**（config-drift 14 / fleet-monitor +2）；`verify-all fleet`
+  25 → **26/26 PASS**；`agent-drift --check` 适配器覆盖 6/6；真实巡检
+  **match 3 / missing 2 / unknown 1**。
+- **顺延 P1**：usage 行富字段（requested/served/effort/tries/err_type）——模型级异构已由
+  `model_info` 打通，usage 归因留给预算/成本批次。
+
+### 2026-10-21 · P0-A 类型闸门：worker 池只收 coding-agent
+
+用户 2026-10-20 的纠正「fleet 线，你要区分 CLI 工具和 agent 的区别，我要的是 coding agent」
+落地为**机器可读判定 + 派单闸门**（设计文档见
+[`design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md`](design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md)，
+调研明细在本地 `_refs/research-2026-10-20/` 不入库）：
+
+- **manifest**：新增 `kind`（coding-agent / tool-cli / unknown）、`present`、`runtime_kind`、
+  `capabilities[]`、`capability_boundary`（五维三态 yes/no/unknown）、`model_info`
+  （value/source/confidence/evidence）、`invoke_contract`、`permissions`；旧字段保留（零行为变更）。
+- **扫描器迁移**：8 个档案经 `bus-apply` 一次超步落盘（bus version → 34）——**6 个 coding agent**
+  （claude / mimo / pi / dsh / gemini / opencode，后两者当前未安装 ⇒ `present=false`）+
+  **2 个工具型 CLI**（bl / agent-browser）。顺带修正 `mimo` 的派单模板为 `mimo run {prompt}`
+  （0.1.14 实测为 mimocode，旧模板会进 TUI）；registry 6 个已发现、版本刷新到本机实测。
+- **派单器**：新增 `Test-AgentKindGate`（档案 → 类型 → 开关 → …），`tool-cli` / `unknown` /
+  缺字段一律 exit 2（fail-closed），`-CheckOnly` 与派单主路径两处调用点。
+- **判定层**：`agent-pick --kind`；能力图合并 `capabilities[]`；`verifier-pick` 不把工具型 CLI
+  当验证者；`validate-bus` 加 kind 枚举、能力边界自洽与 `model_info` 禁止 `cli-default` 的交叉校验。
+- **面板**：`/api/fleet` 与两处 UI 显示 kind、model 来源（unknown 不再冒充 cli-default）。
+- **回归**：fleet 单测 **236 例**（bus-integration 18→21 / capability-graph 17→18 /
+  dispatch-gate 35→37，其余不变）；`node ../scripts/verify-all.mjs fleet` **25/25 PASS**；
+  `validate-bus` 36 文件 0 错误。P0-B（模型真实值 + 只读漂移检测）已随后落地，见上一条。
 
 ### 2026-10-20 · DSH 入口第二轮：会话视图 tab + 原生渲染
 
@@ -605,7 +832,7 @@ node ../scripts/verify-all.mjs fleet
   其唯一输入目录现为空）。
 
 同目录的 `plan.md` **保留**（`docs/m35-rc7-regression-smoke-2026-08-17.md`、`state/events.jsonl` 仍引用它，
-是 M3 回归结论的可追溯锚点）。验证：`node scripts/verify-all.mjs fleet` **15/15 PASS**（当轮口径；**现为 25/25**）。
+是 M3 回归结论的可追溯锚点）。验证：`node scripts/verify-all.mjs fleet` **15/15 PASS**（当轮口径；**现为 26/26**）。
 
 > 审计同时确认了本线几处「看起来可疑但必须保留」的结构，**后续清理勿误删**：
 > `workers/lib/` 的 5 对同名 `.cjs`/`.mjs`（`.mjs` 是 ESM 转发门面，两侧各有真实消费者）；

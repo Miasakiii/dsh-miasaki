@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "default": "balanced",
+  "strategies": {
+    "balanced": {
+      "description": "默认：覆盖优先，置信度与成本平滑",
+      "weights": { "coverage": 100, "confidence": 20, "cost": 10, "load": 5 }
+    },
+    "cheap": {
+      "description": "成本优先（仅当档案声明 model_price 时产生区分度）",
+      "weights": { "coverage": 60, "confidence": 10, "cost": 80, "load": 5 }
+    },
+    "reliable": {
+      "description": "历史成功率优先（Laplace 平滑后的 confidence）",
+      "weights": { "coverage": 70, "confidence": 60, "cost": 5, "load": 5 }
+    },
+    "coverage": {
+      "description": "能力覆盖优先（宁可贵/慢也不缺能力）",
+      "weights": { "coverage": 160, "confidence": 10, "cost": 5, "load": 5 }
+    }
+  }
+}

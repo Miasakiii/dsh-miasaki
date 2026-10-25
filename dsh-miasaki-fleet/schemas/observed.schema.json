@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "agents/<id>/observed.json — 扫描/探测事实（派生分离，P2-B）",
+  "description": "P2-B（2026-10-21）：扫描器与 scan-models 的唯一产物。manifest 只保留 Operator 字段；消费方经 workers/lib/agent-facts.cjs 的 readAgentFacts() 读合并视图（observed 覆盖 manifest）。权威写入只有 workers/discovery/scan-agents.ps1 与 scan-models.mjs，且经 bus-apply 唯一入口。",
+  "type": "object",
+  "required": ["agent_id", "observed_at", "present", "kind", "cli"],
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1, "maximum": 2, "description": "档案契约版本（P2-E）：当前 2；缺席按 1（legacy）读，迁移见 workers/discovery/migrate-schema.mjs" },
+    "agent_id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "observed_at": { "type": "string", "minLength": 1 },
+    "present": { "type": "boolean" },
+    "runtime_kind": { "type": "string" },
+    "kind": { "type": "string", "enum": ["coding-agent", "tool-cli", "unknown"] },
+    "cli": {
+      "type": "object",
+      "required": ["command", "binPath", "version", "invoke"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "binPath": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "invoke": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilities": { "type": "array", "items": { "type": "string" } },
+    "capability_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool_loop": { "type": "string", "enum": ["yes", "no", "unknown"] },
+        "workspace_read": { "type": "string", "enum": ["yes", "no", "unknown"] },
+        "workspace_write_headless": { "type": "string", "enum": ["yes", "no", "unknown"] },
+        "shell_headless": { "type": "string", "enum": ["yes", "no", "unknown"] },
+        "network": { "type": "string", "enum": ["yes", "no", "unknown"] }
+      }
+    },
+    "model_info": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": ["string", "null"] },
+        "provider": { "type": "string" },
+        "source": { "type": "string", "enum": ["config", "transcript", "served", "unknown"] },
+        "confidence": { "type": "string", "enum": ["verified", "declared", "unknown"] },
+        "evidence": { "type": "string" }
+      }
+    },
+    "invoke_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt_transport": { "type": "string", "enum": ["argv", "stdin", "unknown"] },
+        "output_format": { "type": "string", "enum": ["json", "text", "ndjson", "unknown"] },
+        "exit_code_semantics": { "type": "object" },
+        "permission_flags": { "type": "object" }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["read-only", "workspace-write", "danger-full-access", "unknown"] },
+        "tool_allowlist": { "type": "array", "items": { "type": "string" } },
+        "denied_tools": { "type": "array", "items": { "type": "string" } },
+        "approval_required": { "type": "array", "items": { "type": "string" } },
+        "headless_allow_delegation": { "type": "boolean" },
+        "calibration": { "type": "string", "enum": ["verified", "declared", "unknown"] },
+        "evidence": { "type": "string" }
+      }
+    },
+    "preflight": { "type": "string" }
+  }
+}

@@ -14,10 +14,15 @@
 // 可控的，直接插进日志会被 `\n`/ESC 伪造日志行 / 注入终端控制序列（CWE-117，
 // monkeyscan da827）。转义只影响展示，退出码与真实摘要不变。
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { TASK_ROW_OPS, TASK_ROW_STATUSES, validateEvent, validateGraph, validateResult, validateVerdict } from './lib/bus-contract.mjs'
+import agentFacts from './lib/agent-facts.cjs'
+import scheduleLib from './lib/schedule.cjs'
+import schemaVersionLib from './lib/schema-version.cjs'
+import selectionPolicyLib from './lib/selection-policy.cjs'
+import profileLib from './lib/profile.cjs'
 // 任务终态折叠口径**单点**：与 task-ready / agent-pick 共用 foldTasks，
 // 不在此处再写第二份「重放 tasks.jsonl」的实现（口径漂移是本仓复发形态）。
 import { foldTasks } from './lib/task-graph.mjs'
@@ -72,6 +77,7 @@ function readJsonl(p) {
         ids.add(r.id)
         for (const k of ['name', 'invoke', 'bin', 'binPath', 'version']) if (!isStr(r[k])) fail(w, `缺少 ${k}`)
         if (!['json-cost-usd', 'console-usage', 'session', 'unknown'].includes(r.metering)) fail(w, `metering 非法: ${r.metering}`)
+        if (r.kind !== undefined && !['coding-agent', 'tool-cli', 'unknown'].includes(r.kind)) fail(w, `kind 非法: ${r.kind}`)
       })
       ok(p)
     }
@@ -89,12 +95,93 @@ function readJsonl(p) {
     const dir = join(agentsDir, id)
     const mp = join(dir, 'manifest.json')
     if (existsSync(mp)) {
-      const m = readJson(mp)
+      const m = agentFacts.readAgentFactsFrom(dir)
+      const rawManifest = readJson(mp)
+      // observed 是可选兼容窗口：存在才校验（缺席时 readAgentFactsFrom 已回退 manifest）。
+      const observedPath = join(dir, 'observed.json')
+      const observed = existsSync(observedPath) ? readJson(observedPath) : null
       if (m) {
         const w = mp
+        // P2-E（2026-10-21）：档案契约版本 —— future 版本显式拒绝（不猜新字段语义）；
+        // legacy（缺席/1）允许读，迁移入口 workers/discovery/migrate-schema.mjs。
+        for (const [label, doc] of [['manifest', rawManifest], ['observed', observed]]) {
+          if (!doc) continue
+          const sv = schemaVersionLib.classifySchema(doc)
+          if (sv.status === 'future') fail(doc === rawManifest ? w : observedPath, `${label}.schema_version=${sv.version} 是未来版本（当前 ${schemaVersionLib.CURRENT_SCHEMA_VERSION}），拒绝解释`)
+          else if (sv.status === 'invalid') fail(doc === rawManifest ? w : observedPath, `${label}.schema_version 非法：${JSON.stringify(doc.schema_version)}`)
+        }
+        // P2-B（2026-10-21）：发现事实以 observed.json 为准；readAgentFactsFrom 已做合并
+        // （observed 缺席时回退 manifest —— 兼容窗口，不静默丢事实）。下面的语义校验因此
+        // 对「新档案（observed）」与「旧档案（manifest legacy）」是同一套判据。
         if (m.id !== id) fail(w, `id 与目录名不一致: ${m.id} vs ${id}`)
         if (!['cli', 'custom'].includes(m.runtime)) fail(w, `runtime 非法: ${m.runtime}`)
-        for (const k of ['command', 'binPath', 'version', 'invoke']) if (!m.cli || !isStr(m.cli[k])) fail(w, `cli.${k} 缺失`)
+        // P0-A（2026-10-21）：类型闸门的证据面 —— kind 与能力边界必须自洽，
+        // 否则「是不是 coding agent」会退化成一个没人校验的自由文本字段。
+        if (m.kind !== undefined) {
+          if (!['coding-agent', 'tool-cli', 'unknown'].includes(m.kind)) fail(w, `kind 非法: ${m.kind}`)
+          const loop = m.capability_boundary && m.capability_boundary.tool_loop
+          if (m.kind === 'coding-agent' && loop !== 'yes') fail(w, `kind=coding-agent 但 capability_boundary.tool_loop=${loop ?? '缺失'}（应为 yes）`)
+          if (m.kind === 'tool-cli' && loop !== 'no') fail(w, `kind=tool-cli 但 capability_boundary.tool_loop=${loop ?? '缺失'}（应为 no）`)
+        }
+        if (m.capability_boundary !== undefined) {
+          const cb = m.capability_boundary
+          if (cb === null || typeof cb !== 'object' || Array.isArray(cb)) fail(w, 'capability_boundary 应为 object')
+          else for (const k of ['tool_loop', 'workspace_read', 'workspace_write_headless', 'shell_headless', 'network']) {
+            if (!['yes', 'no', 'unknown'].includes(cb[k])) fail(w, `capability_boundary.${k} 非法: ${cb[k]}`)
+          }
+        }
+        if (m.model_info !== undefined) {
+          const mi = m.model_info
+          if (mi === null || typeof mi !== 'object' || Array.isArray(mi)) fail(w, 'model_info 应为 object')
+          else {
+            if (mi.value !== null && !isStr(mi.value)) fail(w, 'model_info.value 应为 string|null')
+            if (mi.provider !== undefined && !isStr(mi.provider)) fail(w, 'model_info.provider 应为 string')
+            if (mi.value === 'cli-default') fail(w, 'model_info.value 不得是 cli-default（它不是真实模型；未声明请用 null）')
+            if (!['config', 'transcript', 'served', 'unknown'].includes(mi.source)) fail(w, `model_info.source 非法: ${mi.source}`)
+            if (!['verified', 'declared', 'unknown'].includes(mi.confidence)) fail(w, `model_info.confidence 非法: ${mi.confidence}`)
+            if (mi.evidence !== undefined && !isStr(mi.evidence)) fail(w, 'model_info.evidence 应为 string')
+          }
+        }
+        if (m.invoke_contract !== undefined) {
+          const ic = m.invoke_contract
+          if (ic === null || typeof ic !== 'object' || Array.isArray(ic)) fail(w, 'invoke_contract 应为 object')
+          else {
+            if (!['argv', 'stdin', 'unknown'].includes(ic.prompt_transport)) fail(w, `invoke_contract.prompt_transport 非法: ${ic.prompt_transport}`)
+            if (!['json', 'text', 'ndjson', 'unknown'].includes(ic.output_format)) fail(w, `invoke_contract.output_format 非法: ${ic.output_format}`)
+          }
+        }
+        if (m.permissions !== undefined) {
+          const pm = m.permissions
+          if (pm === null || typeof pm !== 'object' || Array.isArray(pm)) fail(w, 'permissions 应为 object')
+          else {
+            if (!['read-only', 'workspace-write', 'danger-full-access', 'unknown'].includes(pm.mode)) fail(w, `permissions.mode 非法: ${pm.mode}`)
+            for (const k of ['tool_allowlist', 'denied_tools', 'approval_required']) {
+              if (pm[k] !== undefined && !Array.isArray(pm[k])) fail(w, `permissions.${k} 应为 array`)
+            }
+            if (pm.headless_allow_delegation !== undefined && typeof pm.headless_allow_delegation !== 'boolean') fail(w, 'permissions.headless_allow_delegation 应为 boolean')
+            if (pm.calibration !== undefined && !['verified', 'declared', 'unknown'].includes(pm.calibration)) fail(w, `permissions.calibration 非法: ${pm.calibration}`)
+            if (pm.evidence !== undefined && !isStr(pm.evidence)) fail(w, 'permissions.evidence 应为 string')
+            // P2-A 权限自洽：写权限声明必须有 headless 写证据；读权限声明不能与「读不可用」并存。
+            const cb = m.capability_boundary || {}
+            if ((pm.mode === 'workspace-write' || pm.mode === 'danger-full-access') && cb.workspace_write_headless !== 'yes') {
+              fail(w, `permissions.mode=${pm.mode} 但 capability_boundary.workspace_write_headless=${cb.workspace_write_headless ?? '缺失'}（未证明的写权不得声明）`)
+            }
+            if (pm.mode === 'read-only' && cb.workspace_read === 'no') {
+              fail(w, 'permissions.mode=read-only 但 capability_boundary.workspace_read=no（连读都无证据）')
+            }
+          }
+        }
+        if (m.present !== undefined && typeof m.present !== 'boolean') fail(w, 'present 应为 boolean')
+        if (m.capabilities !== undefined && !Array.isArray(m.capabilities)) fail(w, 'capabilities 应为 array')
+        for (const k of ['command', 'binPath', 'version', 'invoke']) if (!m.cli || !isStr(m.cli[k])) fail(w, `cli.${k} 缺失（manifest 与 observed 均无）`)
+        // observed.json 自身结构（存在时）：agent_id / observed_at / present / kind 是合并视图的锚点。
+        if (observed) {
+          const ow = join(dir, 'observed.json')
+          if (observed.agent_id !== id) fail(ow, `agent_id 与目录名不一致: ${observed.agent_id} vs ${id}`)
+          if (!isStr(observed.observed_at)) fail(ow, 'observed_at 缺失或非字符串')
+          if (typeof observed.present !== 'boolean') fail(ow, 'present 应为 boolean')
+          if (observed.schema_version !== undefined && !Number.isInteger(observed.schema_version)) fail(ow, 'schema_version 应为整数')
+        }
         for (const k of ['budget_per_day', 'timeout_ms', 'heartbeat_ms']) if (!m.limits || typeof m.limits[k] !== 'number' || m.limits[k] <= 0) fail(w, `limits.${k} 非法`)
         if (m.skills !== undefined && !Array.isArray(m.skills)) fail(w, 'skills 应为 array')
         ok(w)
@@ -266,6 +353,21 @@ let foldedTasks = new Map()
       const r = readJson(rp)
       if (r) {
         validateResult(r, rp, fail, id)
+        // P1-B（2026-10-21）：deliverables[] 是执行者显式声明的成品清单 —— 逐条核对
+        // **存在性与工作区内包含性**（契约里的 path 形态已由 validateResult 校验）。
+        if (Array.isArray(r.deliverables)) {
+          r.deliverables.forEach((d, i) => {
+            if (!d || typeof d.path !== 'string' || d.path === '') return // 契约已报，避免二次刷屏
+            const abs = resolve(root, d.path)
+            const rel = relative(root, abs)
+            const w = `${rp}:deliverables[${i}]`
+            if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+              fail(w, `path 越出工作区: ${d.path}`)
+            } else if (!existsSync(abs)) {
+              fail(w, `交付物不存在: ${d.path}（deliverables 声明的成品必须可核对；与 artifacts 指纹互补）`)
+            }
+          })
+        }
         ok(rp)
       }
     }
@@ -304,6 +406,45 @@ let foldedTasks = new Map()
     }
   } else if (strict) {
     fail(pp, 'strict 模式要求存在（X1 未落地）')
+  }
+}
+
+// ---- schedules（如存在，P2-D 定时任务契约）----
+{
+  const sp = join(root, 'state', 'schedules.json')
+  if (existsSync(sp)) {
+    const doc = readJson(sp)
+    if (doc) {
+      const v = scheduleLib.validateSchedules(doc)
+      for (const p of v.problems) fail(sp + p.where.slice(1), p.message)
+      if (v.ok) ok(sp)
+    }
+  }
+}
+
+// ---- selection-policy（如存在，P2-F 选型策略契约）----
+{
+  const pp = join(root, 'shared', 'selection-policy.json')
+  if (existsSync(pp)) {
+    const doc = readJson(pp)
+    if (doc) {
+      const v = selectionPolicyLib.validatePolicy(doc)
+      for (const p of v.problems) fail(pp + p.where.slice(1), p.message)
+      if (v.ok) ok(pp)
+    }
+  }
+}
+
+// ---- profiles（如存在，P2-G Operator 快照契约）----
+{
+  const pp = join(root, 'shared', 'profiles.json')
+  if (existsSync(pp)) {
+    const doc = readJson(pp)
+    if (doc) {
+      const v = profileLib.validateProfiles(doc)
+      for (const p of v.problems) fail(pp + p.where.slice(1), p.message)
+      if (v.ok) ok(pp)
+    }
   }
 }
 
