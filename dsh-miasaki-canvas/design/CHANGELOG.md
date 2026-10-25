@@ -2,6 +2,136 @@
 
 本文件记录 `dsh-miasaki-canvas/` 线的设计决策与变更。
 
+## 2026-10-20 · compaction 感知的上下文视图（借鉴社区插件请求级指标·第三期）
+
+**触发**：继第一、二期后落地第三期。调研结论（`_refs/canvas-compaction-event-research.md`，
+证据来自本机 DSH 0.2.1-rc.2）：compaction 在事件流里的可见落地是一条 `user/message`
+（`frameSummary` 包装的摘要，带 `surfaceOp: {op:'replace', startSeq, endSeq}`）——
+canvas 此前把它投影成普通用户消息，用户在 detail 里看到一条**来路不明的「用户消息」**，
+实际是压缩摘要。本期既加可视化，也修掉这个现存缺陷。
+
+**事件面**（官方 `dsh-compaction-basic`）：`compaction/summary` 的 data =
+`{ compactionId, summary: ContentBlock[], shadowedSeqs[], shadowedRange, shadowedTokenCount, … }`；
+`compaction/start`/`end` 是 log-only 括号标记（不产生消息）。
+
+**实现**：
+- host（`index.js` `projectEventInto`）：`compaction/summary` → `kind: 'compaction'` 消息
+  （text = `contentText(summary)`，另存 `shadowedCount` = `shadowedSeqs.length`）；
+  **过滤** `surfaceOp.op === 'replace'` 的 `user/message`（compaction 落地占位消息）；
+  summary 形状做字符串防御兼容（官方是 ContentBlock[]）；
+- 前端（`app.js` `threadMessage`）：compaction 消息渲染为「上下文压缩」条目 ——
+  琥珀色左边条 + 淡底、折叠摘要（复用 `message-collapsible` 展开态机制，
+  折叠按钮文案走压缩语义）、「压缩了 N 条旧消息」徽标（`shadowedCount`）；
+- `styles.css`：`.message-compaction` / `.message-compaction-badge` + 暗色覆盖。
+
+**测试**（132 → 134 例，`workspace-store.test.js` +2）：
+- `compaction/summary` → compaction 消息（text = 摘要、shadowedCount = 2），
+  且 replace 型 user/message 被过滤（不出现「来路不明的用户消息」），真实用户消息照常；
+- 无 compaction 的普通会话行为不变（消息 kind 序列不变）。
+
+**回归**：canvas 线 `node --test` 134/134；仓库级 `verify-all canvas` 15/15 PASS。
+
+**已知限制**：`compaction/prune`（裁剪水位相关）不投影 —— canvas 有自己的 trim 机制，
+两者独立；`frameSummary` 的包装文本（若有）会原样显示在摘要里（低风险，实机验证留待用户）。
+
+## 2026-10-20 · 耗时拆分「模型等待 vs 工具执行」（借鉴社区插件请求级指标·第二期）
+
+**触发**：继第一期（卡片 meta「调用 N 次」）后落地第二期 —— 插件把请求级耗时拆成
+「模型等待」与「工具执行」两条线，canvas 的 process 条目此前无任何时间信息，
+「哪一轮卡住了」无法定位。
+
+**口径**（复刻插件 `layout.ts` 的 `durationSeconds`：`Math.max(0, later − earlier)`，
+缺时间戳 → null → 显示「—」）：
+- 工具执行耗时 = `resultedAt − calledAt`（`tool/result` 事件时间 − `tool/call` 事件时间）；
+- 时钟回拨（负值）→ 0，不显示负数；
+- detail 头部「模型 Xs · 工具累计 Ys」：工具累计 = process 条目耗时之和
+  （**并行工具串行累加会高估 —— 文案写「累计」不写「耗时」，title 注明**）；
+  模型耗时 = 轮边界近似（首条 assistant 的 `at` − user 消息的 `at` − 工具累计，
+  canvas 无 stepStartTime，title 注明「轮边界估算」）。
+
+**实现**：
+- host（`index.js` `foldToolProcess`）：`tool/call` 存 `calledAt`、`tool/result` 存
+  `resultedAt`（ISO 字符串，与消息 `at` 同格式）。**老数据缺省 null，前端降级显示「—」，
+  无需 store 版本迁移**（字段可选，v5 文件不重写）；
+- 前端（`app.js`）：新增纯函数 `processDurationMs` / `formatDurationMs` /
+  `turnTimingSplit`；`processRecords` 条目折叠行右侧渲染耗时（`process-entry-duration`）；
+  `renderCardInspector` 的 meta 行渲染「模型 Xs · 工具累计 Ys」（`card-inspector-timing`）；
+- `styles.css`：两处新样式 + 暗色主题覆盖。
+
+**测试**（123 → 132 例）：
+- host（`workspace-store.test.js` +3）：call+result 带时间戳 / 只有 call 时
+  `resultedAt` 为 null / 老 fixture 无字段不抛错（`undefined` 降级）；
+- 纯函数（`conversation-cards.test.js` +6）：正常耗时 / 缺字段与非法时间 → null /
+  时钟回拨 → 0 / 格式化 ms·s·m 三档与「—」/ 拆分求和与模型近似 / 缺数据的半边省略。
+  vm 切片新增 `processSummary → renderCardInspector` 一段（三个纯函数无外部依赖）。
+
+**回归**：canvas 线 `node --test` 132/132；仓库级 `verify-all canvas` 15/15 PASS。
+
+**已知限制**（与插件同构）：并行工具串行累加高估（UI 已标注「累计」）；
+裁剪水位外的消息耗时永久丢失（与消息本身一同被裁）。
+
+## 2026-10-20 · 卡片 meta 增加「模型调用 N 次」徽标（借鉴社区插件请求级指标·第一期）
+
+**触发**：调研社区插件 `xuanyuanzhifeng/dsh-plugin-agent-workflow` v0.3.0 后评估其对会话布线的
+借鉴价值（结论：画布拓扑无帮助，卡片信息密度与 detail 诊断力有可借鉴点）。第一期落地
+「卡片 meta 加模型调用次数」——零新数据源、纯前端派生。
+
+**问题**：多步工具循环时，一轮内模型来回多趟（每 step 一条 assistant 消息），卡片只显示
+「工具 N」，看不出「模型被调了几次」。
+
+**口径**（借鉴插件 `deriveWorkflowModel` 的 step 分组思想，用 canvas 自己的消息数据）：
+- `callCount` = 轮内 assistant 消息按 `turn:step` 去重后的数量；
+- 同 step 的流式多条 assistant 不重复计数；
+- 只统计持久化消息（有 `sourceSeq`）；liveReplies 合成的前端 pending 消息无 step，不计入；
+- error 轮（无 assistant 消息）为 0，meta 不渲染徽标（不显示「调用 0 次」）。
+
+**实现**（`app.js` `conversationCards` + `conversationCard`、`styles.css`）：
+- `turns.push` 增加 `callCount` 字段（轮内扫描时按 `turn:step` 收集进 Set）；
+- meta 行在「第 N 轮」与「工具 N」之间渲染 `调用 M 次` 徽标（`card-call-count`，
+  中性色描边样式，视觉权重低于工具数的强调位）；
+- 暗色主题同步覆盖。
+
+**测试**（`test/conversation-cards.test.js`，119 → 123 例）：四条例据 ——
+两步轮 `callCount === 2` / 同 step 多条 assistant 只算一次 / live pending 消息不计入 /
+error 轮为 0。渲染面断言经评估降级为数据面：`conversationCard` 的完整渲染依赖链
+（`renderMarkdown` → marked 等）在 vm 切片内复刻成本过高，与 `sidechat-badge`
+「数据面钉死 + 渲染模板纯拼接」的既有模式一致。
+
+**回归**：canvas 线 `node --test` 123/123；仓库级 `verify-all canvas` 15/15 PASS。
+
+**后续期**（规划稿 `_refs/canvas-borrow-request-metrics-plan.md`）：第二期耗时拆分
+（host 补 `calledAt`/`resultedAt`）、第三期 compaction 感知视图（调研结论
+`_refs/canvas-compaction-event-research.md`：事件面已确认开放，顺带修掉
+「compaction 摘要被投影成普通用户消息」的现存缺陷）。
+
+## 2026-10-19 · `/canvas/api` 浏览器信任围栏：补 Origin / 跨站 / 端口判据（扫描 5b1f6）
+
+**触发**：代码扫描（`_refs/monkeyscan-2026-10-19/`）报告 5b1f6 核实为真实缺陷 ——
+`/canvas/api` 此前**只校验 Host**：任意网页可用无需预检的 `text/plain` 表单 POST 打
+`POST /canvas/api/reset`，清空画布工作区并把现有 session 写入 `hiddenSessionIds`
+（此后该会话不再被投影，人工数据不可自动恢复）。插件路由不经过内核 `/api` 的准入链
+（同形态已在 usage 线 2026-09-29 实测），因此必须自带围栏。
+修复规格：`_refs/monkeyscan-2026-10-19/FIX-SPEC.md` §2/§4；核实报告：
+`_refs/monkeyscan-2026-10-19/verify/E-appearance-canvas-freemodel.md`。
+
+**实现**（`index.js`）：
+- 新增导出纯函数 `splitHostPort()`（IPv6 保留方括号）与 `fenceRequest()`；`apply()` 内在
+  方法分派**之前**统一过围栏 —— 所有现有路由（reset / workspaces / threads / merge /
+  sync / messages）自动覆盖，无需逐条挂，新增路由也不会漏。
+- 三道判据：① Host 必须是 `localhost` / `127.0.0.1` / `config.trustedHosts`（缺失 Host
+  fail closed）；② `Sec-Fetch-Site: cross-site` 一律 403；③ Origin 存在时 hostname 必须
+  等于 Host，显式端口必须与 Host 端口一致（Origin 无端口 = Chromium 端口剥离 ⇒ 退回
+  hostname 判定，不误拒正常同源请求）。
+- 后续可选加固（本批刻意不做、避免超范围）：拒绝 `Sec-Fetch-Site` 非 `same-origin`、
+  写路由要求自定义请求头（强制预检）。
+
+**测试**：新增 `test/api-fence.test.js` 3 例（纯函数判据 + 真实 `apply()` 注册出来的
+handler：同源 200 / 不可信 Host 403 / 跨站 403 / 同站跨端口 403）。canvas 单测
+116 → **119 例**，`node --test test/*.test.js` 全绿。
+
+**实机待验**（归用户）：① 画布页正常读写不受影响；② 从另一 `127.0.0.1` 端口起的页面
+POST `/canvas/api/reset` 得 403；③ 跨站表单无法再清空画布。
+
 ## 2026-10-12 · 分发就绪订正：npm 元数据补全
 
 **背景**：本仓已进入插件对外分发阶段（根 README 的 `dsh plugin add @miasaki/…` 命令行已就位、

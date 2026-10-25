@@ -7,6 +7,13 @@ async function loadConversationCards({ sideChatIds } = {}) {
   const source = await readFile(new URL('../app.js', import.meta.url), 'utf8')
   const start = source.indexOf('function overlapsCard')
   const end = source.indexOf('function canvasConnectors')
+  // 耗时拆分纯函数（2026-10-20）：processDurationMs / formatDurationMs /
+  // turnTimingSplit 在文件后段（processSummary 区），单独切片求值 —— 三者均为
+  // 无外部依赖的纯函数（不碰 escapeHtml / renderMarkdown）。
+  const timingStart = source.indexOf('function processSummary')
+  const timingEnd = source.indexOf('function renderCardInspector')
+  assert.notStrictEqual(timingStart, -1, 'app.js 里找不到 processSummary')
+  assert.notStrictEqual(timingEnd, -1, 'app.js 里找不到 renderCardInspector 锚点')
   // 侧线标注（2026-09-30）：`conversationCards` 会给卡片打 `sideChat` 标，判据函数在文件更上面
   // —— 切片必须把那段一起求值，否则整段调用栈 ReferenceError（本文件因此改过一次切片范围）。
   const sideChatStart = source.indexOf('// --- 辅助对话（侧线）标注')
@@ -27,8 +34,8 @@ async function loadConversationCards({ sideChatIds } = {}) {
     state: { branchAnchors: new Map(), cardPositions: new Map(), liveReplies: new Map(), collapsedCardIds: new Set() },
   }
   vm.createContext(context)
-  vm.runInContext(`${source.slice(sideChatStart, sideChatEnd)}\n${source.slice(start, end)};globalThis.conversationCards = conversationCards;globalThis.conversationGraphView = conversationGraphView;globalThis.initialCanvasCamera = initialCanvasCamera`, context)
-  return { conversationCards: context.globalThis.conversationCards, conversationGraphView: context.globalThis.conversationGraphView, initialCanvasCamera: context.globalThis.initialCanvasCamera, state: context.state }
+  vm.runInContext(`${source.slice(sideChatStart, sideChatEnd)}\n${source.slice(start, end)}\n${source.slice(timingStart, timingEnd)};globalThis.conversationCards = conversationCards;globalThis.conversationGraphView = conversationGraphView;globalThis.initialCanvasCamera = initialCanvasCamera;globalThis.processDurationMs = processDurationMs;globalThis.formatDurationMs = formatDurationMs;globalThis.turnTimingSplit = turnTimingSplit`, context)
+  return { conversationCards: context.globalThis.conversationCards, conversationGraphView: context.globalThis.conversationGraphView, initialCanvasCamera: context.globalThis.initialCanvasCamera, processDurationMs: context.globalThis.processDurationMs, formatDurationMs: context.globalThis.formatDurationMs, turnTimingSplit: context.globalThis.turnTimingSplit, state: context.state }
 }
 
 test('projects each user question in one DSH session as a connected canvas card', async () => {
@@ -413,4 +420,124 @@ test('without the declaration the canvas behaves exactly as before', async () =>
   }])
   assert.ok(cards.length > 0, '声明缺席时线照旧在画布上')
   assert.ok(cards.every(card => card.sideChat === false), '只是没有标注')
+})
+
+// ── 耗时拆分纯函数（2026-10-20，第二期）────────────────────────────────────
+
+test('processDurationMs computes call-to-result duration', async () => {
+  const { processDurationMs } = await loadConversationCards()
+  assert.equal(processDurationMs({ calledAt: '2026-01-01T00:00:00.000Z', resultedAt: '2026-01-01T00:00:03.500Z' }), 3_500)
+})
+
+test('processDurationMs returns null for missing or unusable timestamps', async () => {
+  const { processDurationMs } = await loadConversationCards()
+  assert.equal(processDurationMs({ calledAt: '2026-01-01T00:00:00.000Z', resultedAt: null }), null, '未回结果')
+  assert.equal(processDurationMs({ calledAt: null, resultedAt: '2026-01-01T00:00:03.500Z' }), null, 'result 先到（pendingProcess 场景）')
+  assert.equal(processDurationMs({}), null, '老数据无字段')
+  assert.equal(processDurationMs({ calledAt: 'not-a-date', resultedAt: '2026-01-01T00:00:03.500Z' }), null, '非法时间串')
+})
+
+test('processDurationMs clamps clock rollback to zero instead of showing negatives', async () => {
+  const { processDurationMs } = await loadConversationCards()
+  assert.equal(processDurationMs({ calledAt: '2026-01-01T00:00:05.000Z', resultedAt: '2026-01-01T00:00:03.000Z' }), 0)
+})
+
+test('formatDurationMs renders ms / s / m tiers with an em dash for null', async () => {
+  const { formatDurationMs } = await loadConversationCards()
+  assert.equal(formatDurationMs(420), '420ms')
+  assert.equal(formatDurationMs(1_500), '1.5s')
+  assert.equal(formatDurationMs(45_000), '45s')
+  assert.equal(formatDurationMs(125_000), '2m5s')
+  assert.equal(formatDurationMs(null), '—')
+})
+
+test('turnTimingSplit sums tool durations and approximates model wait', async () => {
+  const { turnTimingSplit } = await loadConversationCards()
+  const messages = [
+    { kind: 'user', at: '2026-01-01T00:00:00.000Z' },
+    { kind: 'assistant', at: '2026-01-01T00:00:10.000Z', process: [
+      { calledAt: '2026-01-01T00:00:02.000Z', resultedAt: '2026-01-01T00:00:05.000Z' },
+      { calledAt: '2026-01-01T00:00:06.000Z', resultedAt: '2026-01-01T00:00:08.000Z' },
+    ] },
+  ]
+  const split = turnTimingSplit(messages)
+  assert.equal(split.toolMs, 5_000, '工具累计 = 各条目耗时之和（并行按串行累加）')
+  assert.equal(split.modelMs, 5_000, '模型耗时 = 首条 assistant 的 at − user 的 at − 工具累计（轮边界近似）')
+})
+
+test('turnTimingSplit omits halves without data', async () => {
+  const { turnTimingSplit } = await loadConversationCards()
+  const noTools = turnTimingSplit([
+    { kind: 'user', at: '2026-01-01T00:00:00.000Z' },
+    { kind: 'assistant', at: '2026-01-01T00:00:04.000Z', process: [] },
+  ])
+  assert.equal(noTools.toolMs, null, '无工具时间 → 不渲染工具项')
+  assert.equal(noTools.modelMs, 4_000)
+
+  const legacy = turnTimingSplit([
+    { kind: 'user', at: '2026-01-01T00:00:00.000Z' },
+    { kind: 'assistant', at: '2026-01-01T00:00:04.000Z', process: [{ name: 'bash', result: 'ok' }] },
+  ])
+  assert.equal(legacy.toolMs, null, '老条目无时间字段 → 工具项不渲染')
+  assert.equal(legacy.modelMs, 4_000, '模型耗时不受工具缺时间影响')
+})
+
+// 模型调用次数徽标（2026-10-20）：一轮内模型可能来回多趟（每 step 一条 assistant
+// 消息），卡片 meta 显示「调用 N 次」。口径：按 turn:step 去重；只统计持久化消息
+// （有 sourceSeq）；liveReplies 合成的前端 pending 消息无 step，不计入。
+test('counts distinct model calls per turn by turn:step', async () => {
+  const { conversationCards } = await loadConversationCards()
+  const cards = conversationCards([{
+    id: 'session-1', parentId: null, position: { x: 86, y: 82 },
+    messages: [
+      { kind: 'user', text: '第一个问题', sourceSeq: 1 },
+      { kind: 'assistant', text: '第一步回复', sourceSeq: 2, turn: 1, step: 1 },
+      { kind: 'assistant', text: '第二步回复', sourceSeq: 3, turn: 1, step: 2 },
+      { kind: 'user', text: '第二个问题', sourceSeq: 4 },
+      { kind: 'assistant', text: '第二轮回复', sourceSeq: 5, turn: 2, step: 1 },
+    ],
+  }])
+
+  assert.equal(cards[0].callCount, 2, '一轮内两个 step = 两次模型调用')
+  assert.equal(cards[1].callCount, 1)
+})
+
+test('does not double-count streamed assistant messages of one step', async () => {
+  const { conversationCards } = await loadConversationCards()
+  const cards = conversationCards([{
+    id: 'session-1', parentId: null, position: { x: 86, y: 82 },
+    messages: [
+      { kind: 'user', text: '问题', sourceSeq: 1 },
+      { kind: 'assistant', text: '草稿', sourceSeq: 2, turn: 1, step: 1 },
+      { kind: 'assistant', text: '最终', sourceSeq: 3, turn: 1, step: 1 },
+    ],
+  }])
+
+  assert.equal(cards[0].callCount, 1, '同 step 的多条 assistant 只算一次调用')
+})
+
+test('excludes live pending replies without a step from the call count', async () => {
+  const { conversationCards } = await loadConversationCards()
+  const cards = conversationCards([{
+    id: 'session-1', parentId: null, position: { x: 86, y: 82 },
+    messages: [
+      { kind: 'user', text: '问题', sourceSeq: 1 },
+      { kind: 'assistant', text: '', pending: true, at: '2026-10-20T00:00:00.000Z' },
+    ],
+  }])
+
+  assert.equal(cards[0].callCount, 0, 'liveReplies 合成消息（无 sourceSeq/step）不计入')
+})
+
+test('keeps a failed turn at zero calls so the badge stays hidden', async () => {
+  const { conversationCards } = await loadConversationCards()
+  const [card] = conversationCards([{
+    id: 'session-error', parentId: null, position: { x: 86, y: 82 },
+    messages: [
+      { kind: 'user', text: '调用搜索', sourceSeq: 1 },
+      { kind: 'error', text: '余额不足', sourceSeq: 2 },
+    ],
+  }])
+
+  assert.equal(card.callCount, 0, 'error 轮没有 assistant 消息，调用数为 0（meta 不渲染徽标）')
 })

@@ -2,6 +2,44 @@
 
 本文件记录 `dsh-miasaki-sidebar/` 线的设计决策与变更。
 
+## 2026-10-20 · a1dc8：内嵌终端会话上限的并发预留 + 重启串行化（孤儿 PTY）
+
+**背景**：代码扫描报告 a1dc8（CWE-362）的核实结论成立 —— `TerminalHub.ensureSession`
+的容量判断（`sessions.size >= maxSessions`）与会话入表（`sessions.set`）之间隔着
+`await _spawn(...)`（内部还有 `where.exe` PATH 探测与目录 `stat`，毫秒级窗口），
+WS 的每个 attach 帧又以独立 `Promise.resolve().then(...)` 派发 ⇒ 一批并发 attach
+可以在任何会话入表前全部通过检查，**8 会话上限**（设计文档
+[`2026-09-19-terminal-multi-tab-plan.md`](2026-09-19-terminal-multi-tab-plan.md):265
+「数量上限即拒绝服务防线」）被绕过；并发的 `restart: true` 还会互相覆盖
+`session.pty`，先完成的 PTY 既没被 kill、也没有引用可回收（孤儿进程，其
+onData/onExit 还会继续污染会话）。
+
+**修法（`index.js`，只动 `TerminalHub` 与 `_spawn`）**：
+- **同步预留**：新增 `pendingSpawns: Set`；容量判断改为
+  `sessions.size + pendingSpawns.size >= maxSessions`，且「检查 → 登记 pending」
+  是同一段同步代码（中间无 await）；`finally` 释放 —— 未知 shell / 目录不存在 /
+  node-pty 加载失败都不再永久占名额。
+- **重启串行化**：新增 `respawns: Map<sessionId, Promise>`（按会话的 promise 链），
+  `restart: true` 与「退出后重生」统一走 `_respawn()`：串行段内先 `_killPty(旧)` 再
+  `_spawn` ⇒ 任何时刻只有一条在位 PTY；排队期间或 spawn 期间会话若被 `close()` 摘掉，
+  已建出的新 PTY 立即回收并报「终端会话已关闭」，不再 spawn 出没人回收的孤儿。
+- **覆盖前兜底**：`_spawn` 在赋值 `session.pty` 前，若会话仍握着一条未回收的旧 PTY
+  就先 `_killPty`（`session.ptyKilled` 标记避免重复 kill）—— 覆盖而不 kill 就是孤儿。
+
+**测试**：`test/terminal-hub.test.js` **15 → 19 例**（+4）：并发 13 帧同时 attach 只建满
+8 个（被拒的 5 帧不 spawn、`pendingSpawns` 归零）/ 失败 spawn 释放预留 / 两个并发
+`restart: true` 后仅 1 条 PTY 存活且被覆盖的都已被 kill / spawn 在飞时 `close()` 会
+回收刚建出的 PTY（不留孤儿）。
+**修复前 A/B 实测**（同一场景跑 `HEAD` 旧实现）：并发 13 帧 `ok=13, spawned=13`
+（上限被绕过）；并发 restart `spawned=3, live=2`（孤儿）。修复后分别为 8/8、`live=1`。
+全量 `node --test test/*.test.js` **108/108 全绿**（原 104）。
+
+**遗留（不在本次范围）**：① 上限仍是 host 侧资源防线，不是鉴权边界（token / 围栏未变）；
+② `dispose()` 期间在飞的 spawn 完成后仍会入表 —— 既有行为，本次未改；
+③ 正常 UI 不能触发上限绕过（客户端 `createTab` 有上限判断），本次修的是 host 侧口径
+与「restart 双击 / 同会话双 viewer 即可自然触发的孤儿泄漏」。
+④ 仓库级台账里的 sidebar 例数（根 `AGENTS.md`「104」）由仓库级同步批次订正为 108。
+
 ## 2026-10-12 · 分发就绪订正：npm 元数据补全（`files` 未动）
 
 **背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——

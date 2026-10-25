@@ -698,6 +698,10 @@ export class TerminalHub {
     this.maxSessions = maxSessions
     this.viewers = viewers // Map<ws, { sessionId, cols, rows }> — identity is what makes tabs safe
     this.sessions = new Map() // sessionId → session
+    // a1dc8（2026-10-20）：容量预留与重生串行化。两处登记都必须是**同步**的 ——
+    // 检查与登记之间一旦有 await，一批并发 attach 帧会全部通过检查再一起 spawn。
+    this.pendingSpawns = new Set() // 正在 spawn 的新会话 id：计入容量
+    this.respawns = new Map() // sessionId → 串行链尾：并发 restart / 重生按会话排队
     this.logger = logger
     this._pty = null // lazy require('node-pty')
     // Shell → absolute path. Injectable so the single-process unit tests stay
@@ -760,29 +764,65 @@ export class TerminalHub {
    *   show a hint in the UI). Exited sessions always respawn (the [重启] path),
    *   and `restart: true` (shell change / button) kills first.
    * - unknown / absent id → brand-new session, capped by `maxSessions`.
+   *
+   * a1dc8：容量判断与**预留**是同一段同步代码（`pendingSpawns`），且失败路径
+   * 在 `finally` 释放 —— 否则一批并发 attach 帧会在任何会话入表前全部通过检查。
    */
   async ensureSession({ sessionId = null, shell, cwd, cols, rows, restart = false }) {
     const existing = this.get(sessionId)
     if (existing !== null) {
-      if (existing.exited || restart) {
-        this._killPty(existing)
-        await this._spawn(existing, shell, cwd, cols, rows)
-        return { session: existing, spawned: true }
-      }
+      if (existing.exited || restart) return await this._respawn(existing, shell, cwd, cols, rows)
       return { session: existing, spawned: false }
     }
-    if (this.sessions.size >= this.maxSessions) {
+    if (this.sessions.size + this.pendingSpawns.size >= this.maxSessions) {
       throw new LimitError(`终端标签已达上限 ${this.maxSessions} 个，请先关闭一个再新建`)
     }
     const session = {
       id: randomUUID(),
       shell: null, bin: null, cwd: null, pid: null,
-      ring: null, pty: null, exited: false, exitCode: null,
+      ring: null, pty: null, ptyKilled: false, exited: false, exitCode: null,
       cols: null, rows: null, createdAt: Date.now(),
     }
-    await this._spawn(session, shell, cwd, cols, rows)
-    this.sessions.set(session.id, session)
-    return { session, spawned: true }
+    this.pendingSpawns.add(session.id)
+    try {
+      await this._spawn(session, shell, cwd, cols, rows)
+      this.sessions.set(session.id, session)
+      return { session, spawned: true }
+    } finally {
+      // 未知 shell / 目录不存在 / node-pty 加载失败都要释放，否则名额永久泄漏。
+      this.pendingSpawns.delete(session.id)
+    }
+  }
+
+  /**
+   * 重生一个已存在的会话（退出后 attach / `restart: true`）。
+   *
+   * a1dc8：并发的重生必须按 sessionId **串行化**。没有串行化时两条 `_spawn`
+   * 交错，后完成的覆盖 `session.pty`，先完成的 PTY 既没被 kill、也没有引用可
+   * 回收（孤儿进程），且它的 onData/onExit 会继续污染会话。串行链内先回收旧
+   * PTY 再 spawn，保证任何时刻只有一条在位。
+   */
+  async _respawn(session, shell, cwd, cols, rows) {
+    const prior = this.respawns.get(session.id) ?? Promise.resolve()
+    const run = prior.then(async () => {
+      // 排队期间会话可能已被 close() 摘掉：再 spawn 就是没人回收的孤儿。
+      if (this.sessions.get(session.id) !== session) throw new NotFoundError('终端会话已关闭')
+      this._killPty(session)
+      await this._spawn(session, shell, cwd, cols, rows)
+      // spawn 期间被 close() 摘掉：这条新 PTY 立刻回收，绝不留成没人持有的孤儿。
+      if (this.sessions.get(session.id) !== session) {
+        this._killPty(session)
+        throw new NotFoundError('终端会话已关闭')
+      }
+      return { session, spawned: true }
+    })
+    const tail = run.then(() => undefined, () => undefined)
+    this.respawns.set(session.id, tail)
+    try {
+      return await run
+    } finally {
+      if (this.respawns.get(session.id) === tail) this.respawns.delete(session.id)
+    }
   }
 
   /** Spawn (or respawn in place) the pty for a session; a fresh ring every time. */
@@ -791,6 +831,11 @@ export class TerminalHub {
     if (shellDef === undefined) throw new InputError(`未知的终端类型：${String(shell).slice(0, 40)}`)
     const bin = await this._resolveBin(shellDef)
     await assertDirectory(cwd)
+    // a1dc8 双保险：任何路径在覆盖 session.pty 之前，先把仍存活的旧 PTY 回收。
+    // `_respawn` 已在串行段内 kill 过（ptyKilled 为 true），这里只兜底其它重入路径。
+    if (session.pty !== null && session.exited !== true && session.ptyKilled !== true) {
+      this._killPty(session)
+    }
     const pty = this._loadPty().spawn(bin, shellDef.args, {
       name: 'xterm-256color',
       cols: clampPtySize(cols, 16, 500, 80),
@@ -802,6 +847,7 @@ export class TerminalHub {
     session.cwd = cwd
     session.pid = pty.pid
     session.pty = pty
+    session.ptyKilled = false
     session.cols = clampPtySize(cols, 16, 500, 80)
     session.rows = clampPtySize(rows, 4, 300, 24)
     session.exited = false
@@ -905,6 +951,8 @@ export class TerminalHub {
   _killPty(session) {
     if (session.pty === null || session.exited) return
     try { session.pty.kill() } catch (error) { this.logger?.warn?.(`sidebar:terminal kill: ${error instanceof Error ? error.message : String(error)}`) }
+    // 标记「已尝试回收」，供 `_spawn` 的覆盖前兜底判断（a1dc8）。
+    session.ptyKilled = true
   }
 
   /** Close a tab: kill the pty, drop the session, unbind its viewers, tell everyone. */

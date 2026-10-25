@@ -1025,6 +1025,15 @@ export class SshRuntime {
       return
     }
     // viewer binding: this socket may only drive the exact (runtime, shell) it attached to
+    // 2026-10-20（monkeyscan e7a2a）：同一 socket 再次 attach 时先**解绑旧绑定**——
+    // 否则旧 shell 的 viewers / 旧 runtime 的 sockets 会一直留着它，旧 shell 的原始
+    // PTY 字节继续推给该 socket（串屏），写权也被陈旧 socket 占着。
+    // ⚠️ unbindShell 依赖当前的 ws.sshRc/ws.shellId，必须在覆盖这两个字段**之前**调用。
+    const prevRc = ws.sshRc ?? null
+    if (prevRc !== null) {
+      this.unbindShell(ws)
+      if (prevRc !== rc) prevRc.sockets.delete(ws)
+    }
     ws.sshRc = rc
     ws.sshStale = false
     if (!rc.sockets.has(ws)) rc.sockets.add(ws)

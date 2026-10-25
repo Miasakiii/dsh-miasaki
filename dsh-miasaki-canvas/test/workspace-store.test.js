@@ -99,6 +99,119 @@ test('retains a tool failure and exposes a failed turn without assistant text', 
   assert.equal(graph.threads[0].pendingProcess.length, 0)
 })
 
+// 耗时拆分（2026-10-20）：tool/call 与 tool/result 的事件时间存进 process 条目
+// （calledAt / resultedAt），供前端算「工具执行耗时」。老数据缺省 null，免 store 迁移。
+test('records call and result timestamps on the process entry', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-timing-'))
+  const store = new WorkspaceStore(join(directory, 'state.json'))
+  await store.projectSession({
+    id: 'session-timing', header: { meta: { cwd: 'C:\\work\\timing' } }, firstLiveSeq: 0,
+    events: [
+      { type: 'user/message', seq: 0, time: 1_700_000_000_000, data: { content: [{ type: 'text', text: '跑测试' }] } },
+      { type: 'assistant/message', seq: 1, time: 1_700_000_001_000, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '好。' }] } } },
+      { type: 'tool/call', seq: 2, time: 1_700_000_002_000, data: { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' } },
+      { type: 'tool/result', seq: 3, time: 1_700_000_005_500, data: { turn: 1, step: 1, message: { source: { kind: 'tool', callId: 'c1' }, content: [{ type: 'text', text: 'ok' }] } } },
+    ],
+  })
+
+  const [workspace] = await store.list()
+  const graph = await store.get(workspace.id)
+  const entry = graph.threads[0].messages[1].process[0]
+  assert.equal(entry.calledAt, new Date(1_700_000_002_000).toISOString())
+  assert.equal(entry.resultedAt, new Date(1_700_000_005_500).toISOString())
+})
+
+test('keeps resultedAt null while a tool call has no result yet', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-timing-pending-'))
+  const store = new WorkspaceStore(join(directory, 'state.json'))
+  await store.projectSession({
+    id: 'session-timing-pending', header: { meta: { cwd: 'C:\\work\\timing-pending' } }, firstLiveSeq: 0,
+    events: [
+      { type: 'user/message', seq: 0, time: 1_700_000_000_000, data: { content: [{ type: 'text', text: '跑测试' }] } },
+      { type: 'assistant/message', seq: 1, time: 1_700_000_001_000, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '好。' }] } } },
+      { type: 'tool/call', seq: 2, time: 1_700_000_002_000, data: { turn: 1, step: 1, callId: 'c1', name: 'bash', arguments: '{}' } },
+    ],
+  })
+
+  const [workspace] = await store.list()
+  const graph = await store.get(workspace.id)
+  const entry = graph.threads[0].messages[1].process[0]
+  assert.equal(entry.calledAt, new Date(1_700_000_002_000).toISOString())
+  assert.equal(entry.resultedAt, null, '未回结果的调用 resultedAt 保持 null（前端显示「—」）')
+})
+
+test('tolerates legacy process entries without timing fields', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-timing-legacy-'))
+  const dataFile = join(directory, 'state.json')
+  await writeFile(dataFile, JSON.stringify({
+    version: 5,
+    hiddenSessionIds: [],
+    workspaces: [{
+      id: 'ws-legacy', kind: 'dsh', cwd: 'C:\\work\\legacy', title: 'DSH 任务',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      threads: [{
+        id: 'thread-legacy', dshSessionId: 'session-legacy', title: '老数据', color: '#3478f6',
+        position: { x: 86, y: 82 }, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+        messages: [{ id: 'm-1', kind: 'assistant', text: 'hi', sourceSeq: 1, at: '2026-01-01T00:00:00.000Z', process: [{ callId: 'c1', turn: 1, step: 1, name: 'bash', arguments: '{}', result: 'ok', error: null }] }],
+        pendingProcess: [],
+      }],
+    }],
+  }))
+  const store = new WorkspaceStore(dataFile)
+  const [workspace] = await store.list()
+  const graph = await store.get(workspace.id)
+  const entry = graph.threads[0].messages[0].process[0]
+
+  assert.equal(entry.calledAt, undefined, '老条目无 calledAt（前端 Date.parse(undefined) → NaN → 显示「—」）')
+  assert.equal(entry.resultedAt, undefined)
+})
+
+// compaction 感知（2026-10-20，第三期）：compaction/summary 投影为 compaction 消息；
+// compaction 的落地 user/message（surfaceOp replace）被过滤 —— 否则摘要会以
+// 「来路不明的用户消息」出现在 detail 里。
+test('projects compaction/summary as a compaction message and hides its replace user/message', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-compaction-'))
+  const store = new WorkspaceStore(join(directory, 'state.json'))
+  await store.projectSession({
+    id: 'session-compaction', header: { meta: { cwd: 'C:\\work\\compaction' } }, firstLiveSeq: 0,
+    events: [
+      { type: 'user/message', seq: 0, time: 1_700_000_000_000, data: { content: [{ type: 'text', text: '第一个问题' }] } },
+      { type: 'assistant/message', seq: 1, time: 1_700_000_001_000, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '回答一' }] } } },
+      { type: 'compaction/start', seq: 2, time: 1_700_000_002_000, data: { compactionId: 'k1', turn: null } },
+      { type: 'compaction/summary', seq: 3, time: 1_700_000_003_000, data: { compactionId: 'k1', summary: [{ type: 'text', text: '此前讨论了登录异常与修复方案' }], shadowedSeqs: [0, 1], shadowedRange: { start: 0, end: 1 }, shadowedTokenCount: 4200, provider: 'deepseek', model: 'test' } },
+      { type: 'user/message', seq: 4, time: 1_700_000_003_500, data: { content: [{ type: 'text', text: '此前讨论了登录异常与修复方案' }] }, surfaceOp: { op: 'replace', startSeq: 0, endSeq: 1 } },
+      { type: 'user/message', seq: 5, time: 1_700_000_004_000, data: { content: [{ type: 'text', text: '第二个问题' }] } },
+    ],
+  })
+
+  const [workspace] = await store.list()
+  const graph = await store.get(workspace.id)
+  const messages = graph.threads[0].messages
+  const compaction = messages.find(message => message.kind === 'compaction')
+  assert.ok(compaction !== undefined, 'compaction/summary 投影为 compaction 消息')
+  assert.equal(compaction.text, '此前讨论了登录异常与修复方案')
+  assert.equal(compaction.shadowedCount, 2, '被压缩的旧消息条数来自 shadowedSeqs')
+  assert.equal(messages.filter(message => message.kind === 'user' && message.text === '此前讨论了登录异常与修复方案').length, 0,
+    'compaction 落地的 replace 型 user/message 被过滤（不投影成普通用户消息）')
+  assert.equal(messages.filter(message => message.kind === 'user').length, 2, '真实用户消息照常投影')
+})
+
+test('keeps ordinary user messages untouched when no compaction is present', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-compaction-none-'))
+  const store = new WorkspaceStore(join(directory, 'state.json'))
+  await store.projectSession({
+    id: 'session-no-compaction', header: { meta: { cwd: 'C:\\work\\plain' } }, firstLiveSeq: 0,
+    events: [
+      { type: 'user/message', seq: 0, time: 1_700_000_000_000, data: { content: [{ type: 'text', text: '普通问题' }] } },
+      { type: 'assistant/message', seq: 1, time: 1_700_000_001_000, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '普通回答' }] } } },
+    ],
+  })
+
+  const [workspace] = await store.list()
+  const graph = await store.get(workspace.id)
+  assert.deepEqual(graph.threads[0].messages.map(message => message.kind), ['user', 'assistant'])
+})
+
 test('migrates v3 tool cards into the assistant process records', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-canvas-migrate-'))
   const dataFile = join(directory, 'state.json')

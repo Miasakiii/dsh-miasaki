@@ -225,4 +225,44 @@ dsh --profile web --dump-config   # 应出现 openviking-memory 插件组
 
 > 结论：**试点→落地完成，进入日常使用与社区跟进阶段**。官方三个相关 issue（#4188/#4205/#3686）构成"bug 修复 + 注入治理 + 准入门控"的待观察队列。
 
+---
+
+## 10. 2026-10-22 复评：DSH 侧集成暂停（降级为试点保留）
+
+**触发**：用户问「OpenViking 对我们有没有用」，按本机实况复核，结论从「已采纳记忆层」下调。
+
+**本机实测（2026-10-22 23:00 前后）**：
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| 记忆库内容 | `memories` 17 个文件，最新 **2026-09-28**；`vikingdb` **33 vectors** | 近一个月零新增，10 月全部工作未进记忆 |
+| pending 队列 | **7,360 个 / 19.6 MB**（10-17 起积压；10-18 单日 2,502 个、10-22 2,222 个） | 服务端不可用期间每条消息落盘等待回放 |
+| 服务端 vs 插件 | **0.4.16**（2026-08-21 构建）vs **0.5.26**（2026-10-15 发布） | 错配两个月；插件 0.5.x 的 `mode="context"` 走废弃回退链路 |
+| 写链路实测 | 手动重放一条 pending 到 `/api/v1/sessions/*/messages` → **HTTP 200** | 服务健康时写入正常，问题在「服务不常驻 + 会话 latch + 回放上限」 |
+| 召回延迟 | 8-24 实测 **16.7 s**（`last-recall.json`） | 与上游 #6411（planner 10–31 s）同源 |
+
+**根因链**：服务端不自启（无计划任务，见运维备忘）→ 写入失败入 pending → 会话进入 pending latch 后
+即使服务恢复也继续入队，直到该会话的 pending 被清空 → 但回放**只在会话启动时、默认每次上限 50 条**，
+而新增量按天上千条 → 永远追不上 → pending **7 天 TTL 到期自动删除**，积压的记忆被定时丢弃。
+
+**上游印证（2026-10-22 调研）**：
+- [#5702](https://github.com/volcengine/OpenViking/issues/5702)（Windows+DSH，open）：同一路径堆到
+  76,053 个 / 258 MB，宿主 drainer 每 60 s 全量 `readFile`+`JSON.parse`，连续 8 次 OOM —— 本机是同病灶早期阶段。
+- [#6244](https://github.com/volcengine/OpenViking/issues/6244)：DSH 0.2.1-rc.2 + 插件 0.5.26 新会话卡
+  5–10 s，以 `not_planned` 关闭，0.5.28 仍未修。
+- #4188（uri-guard）已于 2026-08-26 修复；#4205（跨 workspace 噪声）仍 open。
+
+**处置（2026-10-22）**：
+1. 两个 profile（`miasaki` / `web`）的 `dsh.profile.bundles` **移除** `@openviking/dsh-memory-plugin`
+   （依赖保留在 `dependencies`，不卸载；备份 `package.json.bak-20261022-233339-before-openviking-pause`）。
+   → DSH 侧不再捕获、不再召回、不再尝试 MCP 连接；Claude Code / pi 侧集成未动。
+2. `~/.openviking/pending` 清理：删除 4,077 个 / 8.73 MB（早于 10-21 00:00），保留近 2 天 2,569 个。
+3. `openviking-server` 与配置保留（服务端仍可手动启动、`ov` CLI 可查历史记忆）。
+
+**恢复步骤（若将来确有跨 harness 记忆需求）**：
+① 服务端升到 0.5.1.x 与插件对齐；② 计划任务常驻（或至少确认 `ov health` 可用）；③ 插件加 pending
+数量哨兵/告警；④ 调大 `OPENVIKING_PENDING_REPLAY_LIMIT` 与 `commitTokenThreshold` 并观察 3–5 天
+记忆文件是否真实增长；⑤ 把 `@openviking/dsh-memory-plugin` 加回两个 profile 的 bundles 并重启。
+**注意**：0.5.x 起工作区 peer 派生改为 git（非 git 目录不发 peer），恢复时需重新确认 peer 隔离。
+
 

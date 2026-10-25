@@ -86,6 +86,20 @@ function planFleet() {
   // 测试数据取自真实档案快照 —— 「coder 归档后只有部分替代者」「analyst 无替代者」
   // 这类结论必须可在回归里复现。
   checks.push({ line: 'fleet', name: 'test capability-graph (G2 能力图)', cmd: process.execPath, args: [join(dir, 'tests/capability-graph.test.mjs')], cwd: dir })
+  // P0-B（2026-10-21）：模型来源探测（只读适配器）与配置漂移五态；含「真实 fleet 适配器覆盖」断言。
+  checks.push({ line: 'fleet', name: 'test config-drift (P0-B 模型来源 + 只读漂移)', cmd: process.execPath, args: [join(dir, 'tests/config-drift.test.mjs')], cwd: dir })
+  // P1-A：失败分类八态 + retryable/suggest_switch 语义 + CLI 退出码。
+  checks.push({ line: 'fleet', name: 'test failure-classify (P1-A 失败分类)', cmd: process.execPath, args: [join(dir, 'tests/failure-classify.test.mjs')], cwd: dir })
+  // P2-B：manifest/observed 合并视图 + 回退 + 拆分（派生分离）。
+  checks.push({ line: 'fleet', name: 'test agent-facts (P2-B manifest/observed)', cmd: process.execPath, args: [join(dir, 'tests/agent-facts.test.mjs')], cwd: dir })
+  // P2-D：定时任务语义（到期/幂等/超步推进；无常驻 daemon）。
+  checks.push({ line: 'fleet', name: 'test scheduler (P2-D 定时任务)', cmd: process.execPath, args: [join(dir, 'tests/scheduler.test.mjs')], cwd: dir })
+  // P2-E：schema 版本五态 + 迁移只标注版本（future 拒绝降级）。
+  checks.push({ line: 'fleet', name: 'test schema-version (P2-E schema 版本)', cmd: process.execPath, args: [join(dir, 'tests/schema-version.test.mjs')], cwd: dir })
+  // P2-F：可插拔选型策略（策略只排序、未知策略显式失败）。
+  checks.push({ line: 'fleet', name: 'test selection-policy (P2-F 选型策略)', cmd: process.execPath, args: [join(dir, 'tests/selection-policy.test.mjs')], cwd: dir })
+  // P2-G：profiles 快照（差分 / 未知 agent 显式失败 / 经 bus-apply 落 control+manifest）。
+  checks.push({ line: 'fleet', name: 'test profile (P2-G profiles)', cmd: process.execPath, args: [join(dir, 'tests/profile.test.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'agent-pick --check (G2 能力图结构)', cmd: process.execPath, args: [join(dir, 'workers/graph/agent-pick.mjs'), '--check'], cwd: dir })
   // 派单能力闸门接线（P0，2026-09-11）：纯文本断言，不 spawn PowerShell、不依赖 PS7，
   // 保证任一环境都能跑。守护三件事：①闸门仍然存在；②「-Requires 显式覆盖」仍声明在
@@ -168,6 +182,19 @@ function planFleet() {
         "['判定器坏行字段','bus_bad_lines: ctx.badLines','r'],",
         // 第三批（B4）G4 验证器挂载：声明了风险就必须有**可用**验证者；未声明即跳过（零行为变更）。
         // 同样钉住**调用点**：只钉函数定义的话，「接了却没调用」会全绿（第一批 F3 的教训）。
+        // P0-A 类型闸门（2026-10-21）：worker 池只收 coding-agent；预检与派单主路径各有一个
+        // 调用点，文案不同 —— 两处都钉，防止只接一处（同 F3 的教训）。
+        "['类型闸门函数','function Test-AgentKindGate','s'],",
+        "['类型闸门预检调用点','[kind] 预检不通过，拒绝派单（-CheckOnly）','s'],",
+        "['类型闸门派单调用点','[dispatch] 类型闸门未通过，拒绝派单','s'],",
+        "['类型闸门拒绝工具型 CLI','工具型 CLI 不是 worker','s'],",
+        "['类型闸门 fail-closed','缺少可判定的 kind','s'],",
+        // P2-A 权限/信任闸门（2026-10-21）：矛盾声明拒绝 + unknown 只读降级（安全降级不是静默放行）。
+        "['信任闸门函数','function Test-TrustGate','s'],",
+        "['信任闸门预检调用点','[trust] 预检不通过，拒绝派单（-CheckOnly）','s'],",
+        "['信任闸门派单调用点','[trust] 权限闸门未通过，拒绝派单','s'],",
+        "['unknown 按只读降级','按只读降级生效（不授写权）','s'],",
+        "['矛盾声明拒绝','不授未证明的写权','s'],",
         "['验证闸门函数','function Test-VerifierGate','s'],",
         "['验证闸门调用点','Test-VerifierGate $Agent $verifyMinLevel','s'],",
         "['风险声明解析','function Resolve-VerifyLevel','s'],",
@@ -263,6 +290,13 @@ function planFleet() {
     ],
     cwd: dir,
   })
+  // 2026-10-19：DSH 入口插件（侧栏脚部「Fleet」+ 浮窗打开面板；host 半托管 /dsh-fleet/panel
+  // 并代理 /dsh-fleet/api/*）。语法与契约测试各自独立成项 —— client bundle 是「装载器只交 require、
+  // 必须自声明 module」的形态，语法/装载契约错 = 入口整块不出现且没有具体报错（sidebar/appearance 同族）。
+  checks.push({ line: 'fleet', name: 'syntax fleet-panel/host', cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-fleet-panel/lib/index.js')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'syntax fleet-panel/client', cmd: process.execPath, args: ['--check', join(dir, 'plugins/dsh-fleet-panel/lib/client.js')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'test fleet-panel/host', cmd: process.execPath, args: [join(dir, 'plugins/dsh-fleet-panel/test/host.test.mjs')], cwd: dir })
+  checks.push({ line: 'fleet', name: 'test fleet-panel/client', cmd: process.execPath, args: [join(dir, 'plugins/dsh-fleet-panel/test/client.test.mjs')], cwd: dir })
   // Bus validation is the fleet line's regression suite (F1 contract + G0 graph/event/result).
   checks.push({ line: 'fleet', name: 'validate-bus', cmd: process.execPath, args: [join(dir, 'workers/validate-bus.mjs')], cwd: dir })
   checks.push({ line: 'fleet', name: 'publish-pulse', cmd: process.execPath, args: [join(dir, 'workers/pulse/publish-pulse.mjs')], cwd: dir })
@@ -477,6 +511,17 @@ function planDesktop() {
       })
     }
   }
+  // 观测信封转义回归（monkeyscan 0c59d，2026-10-19 安全批）：windowTitle 等 OS
+  // 元数据里的 `</frontmost_window>` 可伪造观测标签，而策略又把标签当可信 OS 元数据。
+  // 用例对入库 bundle 抽取 envelopeValue 求值 —— 修复前为红；产物重建后若漏接线，
+  // 本项会显式变红（不静默退化）。
+  checks.push({
+    line: 'desktop',
+    name: 'test computer-use (观测信封转义)',
+    cmd: process.execPath,
+    args: [join(dir, 'plugins/dsh-computer-use/test/envelope.test.js')],
+    cwd: join(dir, 'plugins/dsh-computer-use'),
+  })
 
   // 模型设置运行时补丁的自证：由 baseline 原始文件重建补丁产物并逐字节比对。
   // 纯离线、不碰安装目录——DSH 升级覆盖补丁后这一项仍应 PASS，它证明的是
@@ -486,6 +531,17 @@ function planDesktop() {
     name: 'patch verify (模型设置补丁可重建)',
     cmd: process.execPath,
     args: [join(dir, 'patches/dsh-client-ui-settings-models/patch.mjs'), 'verify'],
+    cwd: dir,
+  })
+  // 模型设置补丁的**真机冒烟脚本**自身也必须能执行（2026-10-20 keyState 事故的固化产物）。
+  // 它是升级重打后的必跑步骤，但没有任何别的东西会检查它 —— 脚本坏掉 / 语法错会静默失效，
+  // 而失效的表现正是"跑不起来所以没验"。这里只做 `node --check`：纯离线、不连宿主
+  // （真机冒烟本身依赖运行中的 miasaki，不能进 CI）。
+  checks.push({
+    line: 'desktop',
+    name: 'syntax smoke-model-page.mjs (模型设置补丁真机冒烟)',
+    cmd: process.execPath,
+    args: ['--check', join(dir, 'patches/dsh-client-ui-settings-models/smoke-model-page.mjs')],
     cwd: dir,
   })
   // 会话头窄宽度溢出保护补丁的自证。同一契约：锚点唯一 → 由 baseline 重建 →

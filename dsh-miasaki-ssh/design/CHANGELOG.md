@@ -2,6 +2,74 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-10-20 · monkeyscan 修复批次：命令分级加固 / exec 截断幂等 / 重复 attach 解绑 / 围栏端口判据
+
+**背景**：2026-10-19 代码扫描的 36 份报告核实后，本线需修 4 项（`_refs/monkeyscan-2026-10-19/`
+下的 `FIX-SPEC.md` §4 与 `verify/D-ssh.md`）。同批 **3f015（诊断 SSRF）不修**：诊断任意目标
+（含未保存草稿 / 内网主机）是「保存前测试连接」的设计内能力，加私有网段黑名单会废掉主用例，
+且调用者只能是本机进程或已同源的页面（见核实报告）。
+
+**0a186 Agent 命令策略绕过（`lib/policy.js`）**——报告实测的 5 种载荷（`env sh -c`、
+`awk system()`、`sed 1e`、`git branch -D`、`curl -o`）在旧实现里全部被判 L0，可绕过
+readonly 硬闸与 full 档审批。本次按设计 §7.2 补齐：
+
+- `stripPrefixes()` 改为返回 `{ text, elevated }`：**L0 判定前先剥** `sudo/env/command/nohup`
+  前缀再取命令头（`sudo` 记 `elevated`，即使命令只读也按 L1——不把「以 root 读」当免审批）；
+- `env` 移出 `L0_COMMANDS`；裸 `env` 也按变更处理；
+- 实现设计 §7.2 承诺的**逐段分析**：按 `;` / `&&` / `||` / `|` / 换行切段，每段独立分类、
+  整体取最高风险（`ls && env sh -c 'id'` → L1；`cat f && rm -rf /` → L2）；整串先扫一遍 L2
+  模式，保住跨段才成立的 `curl … | sh`；
+- 输出重定向 `>` / `>>`（含 `&>`）按写入 ⇒ 该段至少 L1；fd 复制 `2>&1` / `>&2` 不算写文件；
+- 解释器/写参数收紧：`awk` 含 `system(` / `getline` / `|` / `>` ⇒ **L2**；`sed` 的 `e/w/r`
+  命令与 `s///e`（`s///w`）⇒ **L2**（`-i` 允许贴值/贴空串：`-i.bak` / `-i''`，`--in-place` 同义）；
+  `git branch|tag` 带 `-d/-D/-m/-M/-f/--delete/--force`（含贴值 `-dfoo`）⇒ L1；
+  `curl` 写文件/上传/发数据参数（`-o/-O/--output/-T/--upload-file/--post-file/-d/--data…`，
+  含贴值 `-o/tmp/x`）⇒ L1；`wget` **默认落盘**（比 spec 字面更严：只有 `--spider` 或输出到
+  stdout 的 `-O-`/`-O -`/`--output-document=-`（含 `-qO-`）才算真只读，其余一律 L1）；
+- **读/改两用的 L0 命令**（同族补齐）：`ifconfig` / `ip` / `route` / `arp` / `date -s` /
+  `hostname <名字>` / `sort -o` / `mount`（带路径操作数）/ `journalctl --vacuum*|--rotate`
+  的写入形态 ⇒ L1；纯读形态（`ifconfig -a`、`ip addr`、`route -n`、`date -d`、`mount -l` 等）仍 L0。
+- 测试：`test/policy.test.js` +6 例（报告 5 载荷、重定向/fd 复制、逐段分析、sudo、解释器收紧、
+  读/改两用）；`test/tools.test.js` +2 例（readonly 档「L0 头 + 写操作」拒绝；full 档伪装形态走审批）。
+
+**267fd exec 输出上限饱和后失效（`lib/exec.js`）**——`cap()` 旧实现每来一个 data 事件都会
+再追加一次 `\n…[输出过长已截断]`，饱和后字符串按 +11 字符/事件增长（原实测 21 + 100×11 = 1121）。
+改为**幂等**：每流一个 `capped` 标志，饱和后原样返回，标记只加一次；`data` 处理器补
+`if (settled) return`（收尾后迟到数据不再改动已结算字符串）。测试：
+`test/exec.test.js` +2 例（stdout/stderr 饱和后再发 100/50 个 data，断言长度停在 21、标记只出现一次）。
+
+**e7a2a 同一 WebSocket 重复 attach 未解绑旧 shell（`lib/runtime.js`）**——`attach()` 覆盖
+`ws.sshRc` 前先解绑旧绑定：`const prevRc = ws.sshRc; if (prevRc !== null) { unbindShell(ws); if (prevRc !== rc) prevRc.sockets.delete(ws) }`。
+注意 `unbindShell()` 依赖当前 `ws.sshRc`/`ws.shellId`，必须在赋值**之前**调用。
+修复后第二次 attach 不再让旧 shell 的 viewers / 旧 runtime 的 sockets 留着该 socket
+（否则旧 shell 的 PTY 字节继续推给同一 socket → 串屏、旧 shell 写权被陈旧 socket 占住）。
+测试：`test/runtime.test.js` +1 例（跨 runtime 二次 attach + 同 runtime 换 shell，断言
+旧 `viewers` 不含 ws、旧 `sockets` 不含 ws、`pushTo(旧 shell)` 不再发给 ws、旧 `writeOwner` 释放）。
+
+**d98e3 围栏跨端口（`lib/store.js`）**——按 `FIX-SPEC.md` §2：Origin 显式带端口时必须等于
+Host 端口（Host 无端口时按 Origin scheme 默认 443/80 比较），不等 ⇒ 新拒绝原因
+`cross-port-origin`；**删除「任意回环 Origin 无条件放行」**分支——Origin hostname 必须等于
+Host hostname（Host 已先过 localhost/127.0.0.1/trustedHosts 白名单）。Chromium 剥掉环回来源
+端口（Origin 无端口）时仍按 hostname 判定放行（兼容，避免误拒正常同源）。
+测试：`test/store.test.js` 更新 + 新增（同源放行、同站跨端口 `5173→3080` 拒、Origin 无端口放行、
+`localhost` vs `127.0.0.1` 别名拒、trustedHosts 主机同样按端口判、https 默认端口、坏 Origin）。
+
+**回归**：`node --test test/*.test.js` **309 → 321 例全绿**（+12：policy 6 / tools 2 / exec 2 /
+runtime 1 / store 1）；`node --check` 全部入口与 `lib/` 通过。仅 host 侧改动（无 UI/协议变更），
+刷新页面即生效；若访问路径经反向代理改写 `Host`/`Origin`（如外部域名转发到 127.0.0.1），
+需把该域名加入 `config.trustedHosts`，否则会按 `untrusted-host`/`untrusted-origin` 拒绝。
+
+**诚实记录的残余（本轮不修，均属「分级是启发式」的设计边界）**：
+- 单个 `&`（后台执行）不是段分隔符，`cmd & other` 仍按一段判；
+- 分段不识别引号/转义（引号内分隔符也照切——只会让判定更严，不会更松）；
+- 混淆/替换写法（base64、变量拼接、命令替换 `$(…)` / 反引号、`python -c`）仍可能绕过——
+  设计 J4 已声明命令文本分级**不是安全边界**；真正的边界是主机授权 / 人在环 / 审计；
+- 「读/改两用」只覆盖已列举的形态（`ifconfig`/`ip`/`route`/`arp`/`date`/`hostname`/`sort`/
+  `mount`/`journalctl`）；未列举的写参数（如个别命令的冷门 flag）仍可能漏判，遇到再逐个收；
+- `curl -X POST` 等「只改远端状态、不落本地文件」的形态未单列（`-d/--data` 已覆盖）；
+- d98e3 保留「Origin 无端口 ⇒ 只按 hostname」的兼容分支（Chromium 端口剥离），
+  后续可选加固：对写路由要求 `Sec-Fetch-Site: same-origin` 或自定义头强制预检。
+
 ## 2026-10-12 · 分发就绪订正：npm 元数据补全 + `files` 剔除 `test/`
 
 **背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——

@@ -7,6 +7,39 @@
 
 ---
 
+## 2026-10-20 · d7d27：同源围栏补端口判据（跨端口同站 CSRF）
+
+**背景**：代码扫描报告 d7d27 的核实结论成立 —— `lib/fence.js` 的 `structuralFence`
+只把 `Origin` 规约到 **hostname** 再与 Host 比较、**不比较端口**；而浏览器的「站点」
+（same-site）只由 scheme + 可注册域决定、端口不计入，`Sec-Fetch-Site: same-site`
+也不会命中现有的 `=== 'cross-site'` 拒绝分支。⇒ 攻击者页面只要跑在本机**另一个环回
+端口**上（`Origin: http://127.0.0.1:5173` + `Host: 127.0.0.1:3080`），就能过结构层，
+而 `POST /reset` 是清空账本的写操作。定级仍是 LOW（响应无 CORS 头、写操作仅清账本），
+属**纵深防御缺失**（与 appearance / ssh 等线的同款缺口同一批修）。
+
+**修法（`lib/fence.js`，按修复批次统一规格 §2）**：
+- `hostnameOf()` → `authorityOf()`：同时解析 hostname 与 `URL.port`（`URL.port` 为空
+  表示「未显式端口」，也包括被 Chromium 剥掉的非默认端口）。
+- `structuralFence()` 的 Origin 分支新增端口判据：`originPort` 非空时必须等于 Host
+  端口；Host 未写端口则按 Origin 的 scheme 取默认（https → 443，否则 80），不一致
+  返回 **403「跨端口来源被拒绝」**。
+- **不误拒**：Origin 无端口（Chromium 端口剥离）时沿用 hostname 判定；
+  `Referer` 保持 hostname 判据（弱信号、可能缺失；端口判据只落 Origin）。
+
+**测试**：`test/fence.test.mjs` **13 → 15 例**（+2）：跨端口（含 localhost / IPv6 /
+Host 无端口三形态）→ 403；同端口、Origin 无端口、https 默认端口 → 放行。
+**修复前 A/B 实测**：旧实现 `structuralFence({ host: '127.0.0.1:3080',
+origin: 'http://127.0.0.1:5173' })` 返回 `{ok:true}`（放行）；修复后
+`{ok:false, status:403, error:'跨端口来源被拒绝'}`。
+全量 `node --test test/*.test.mjs` **24/24 全绿**（原 22）。
+
+**后续可选加固（本批按最小改动不做）**：拒绝 `Sec-Fetch-Site` 非 `same-origin` 的请求、
+写路由要求自定义请求头以强制 CORS 预检。
+
+> 仓库级台账里的 usage 例数（根 `AGENTS.md`「usage 22」）由仓库级同步批次订正为 24；
+> `scripts/verify-all.mjs usage` 的检查项数不变（仍是 7 项，围栏用例在 `test/fence.test.mjs`
+> 内增长）。
+
 ## 2026-10-12 · 分发就绪订正：npm 元数据补全 + 补 `engines`
 
 **背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——

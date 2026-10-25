@@ -58,6 +58,14 @@ dsh plugin --profile <profile> add @miasaki/dsh-canvas
   与「后台任务」同一 flex 行渲染，随头部重渲染自动重挂；配色全部走 DSH 主题令牌，三主题随动。
 - **缩放 LOD 三档**：`full`（全文）/ `compact`（≤0.8 收正文）/ `mini`（<0.5 只留卡头）。
 - **卡头状态带**：待执行 / 执行中 / 已失效。
+- **卡片 meta 三徽标**：`第 N 轮` · `调用 M 次`（本轮模型被调用的次数，按 `turn:step` 去重，
+  多步工具循环时大于 1）· `工具 K`（本轮工具调用总数）；失败轮另带红色「失败」。
+- **耗时拆分**：详情页头部显示「模型 Xs · 工具累计 Ys」——工具累计为各工具调用耗时之和
+  （并行工具按串行累加，可能高估）；模型等待为轮边界估算。每个工具调用条目右侧显示
+  单次执行耗时（调用 → 结果）；缺时间数据（老存档 / 未回结果）显示「—」。
+- **上下文压缩标记**：DSH 压缩上下文时，详情页在对应位置显示「上下文压缩」条目
+  （琥珀色），可展开查看压缩摘要与「压缩了 N 条旧消息」；压缩的落地占位消息不会被
+  误显示为普通用户消息。
 - **血缘侧栏 + 小地图**，画布内滚动容器统一主题化胶囊滚动条。
 - **桌面壳适配**：无边框窗口下自动为窗控按钮组让位（契约优先，DOM 探针兜底），品牌色随主题。
 
@@ -98,6 +106,20 @@ sidebar 线的「辅助对话」用它 fork 出的**侧线**做上下文隔离�
 
 契约与红线见 [`test/external-views.test.js`](test/external-views.test.js)。首个使用者是 SSH 线。
 
+## 安全边界
+
+`/canvas/api` 是注册在宿主 webServer 上的插件路由，**不经过内核 `/api` 的准入链**，
+因此自带三道浏览器信任围栏（`index.js` 的 `fenceRequest()`，2026-10-19 起）：
+
+- **Host** 必须是 `localhost` / `127.0.0.1` 或配置文件里的 `trustedHosts`
+  （缺失 Host 一律拒绝，防御 DNS 重绑定）；
+- **`Sec-Fetch-Site: cross-site`** 一律 403（跨站请求由浏览器自己标注）；
+- **Origin 存在时** hostname 必须等于 Host，显式端口必须与 Host 端口一致 —— 同站跨端口
+  页面（same-site、无需预检）不能再触发写操作。Chromium 某些构建会剥掉非默认回环端口，
+  此时退回 hostname 判定，不误拒正常同源请求。
+
+围栏是**纵深防御**而非鉴权：本插件只绑定回环地址、面向单用户本机使用，不应通过公网暴露。
+
 ## 来源与许可
 
 - 基础能力二开自 [dsh-synapse](https://github.com/liangmianya/dsh-synapse) v0.4.1（MIT，`LICENSE` 保留）；
@@ -109,7 +131,7 @@ sidebar 线的「辅助对话」用它 fork 出的**侧线**做上下文隔离�
 ```bash
 pnpm install
 pnpm run build   # node --check 三个入口文件
-pnpm test        # 10 个测试文件
+pnpm test        # 12 个测试文件
 ```
 
 仓库级统一回归：`node ../scripts/verify-all.mjs canvas`。

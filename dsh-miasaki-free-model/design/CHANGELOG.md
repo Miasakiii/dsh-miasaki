@@ -6,6 +6,57 @@
 
 ---
 
+## 2026-10-20 · 安全批次：`/subagent` 的 model 字符白名单 + 请求体 64 KiB 上限（c0850 / f8129）
+
+**背景**：代码扫描（monkeyscan-2026-10-19）核实后确认两项本仓可控缺陷：
+
+1. **YAML 注入（c0850，P2）**：`POST /freemodel-api/subagent` 把 `model` 原样拼进
+   `~/.dsh/.agent-presets/<id>/agent.cordis.yml` 的 `model: ${model}` 行。`provider`
+   本来就有 `listPlatforms()` 路由键白名单，但 `model` 只校验「非空字符串」——
+   含 `\n` 的 model 会经 `split('\n')/join('\n')` 变成物理行，可往 `agentOptions`
+   注入任意 YAML 键（`!!js` 求值是否可达未在本仓复现，但「任意改写/损坏预设」已成立）。
+   污点源是**恶意/被控平台的 `/models` 响应**经面板下拉回传（用户点选后同源请求带着 cookie）。
+2. **请求体无上限（f8129，P3）**：`readBody()` 把整个 body 缓冲进内存且无累计上限，
+   与其余八线的 64 KiB 基线不一致（`dsh-model-probe` / ssh / dual-model / canvas / appearance
+   都有上限）。可达面是已认证浏览器上下文里的同源/同站页面（内核准入会先挡掉无 cookie 请求，
+   报告「任意本地进程可打」的前提在真实 composition 下不成立），属纵深防御缺失。
+
+**改动**（`lib/index.js`）：
+
+- 新增 `MODEL_PATTERN = /^[A-Za-z0-9._:\/-]+$/`：字母数字与 `. _ : / -`；不通过抛
+  `HttpError(400)`。空白/换行/引号/`#` 等 YAML 元字符全部拒绝，注入行写不进去。
+- 新增 `HttpError(status, message)`，路由封装按 `error.status` 回 4xx；**其余异常维持
+  `200 + {ok:false}` 旧信封**（面板 `api()` 只看 `ok`，不做全量状态码迁移）。
+- `readBody()`：累计 `> 64 KiB` 即抛 413（路由回 413 后 `req.destroy()` 关闭连接，不再读
+  后续字节）；补 `'aborted'` / `'error'` 收口（客户端中途断开时 promise 不再悬挂）；
+  正常空 body 仍返回 `{}`、非法 JSON 仍按旧语义报错。`readBody` 导出以便单测。
+- `provider` 的既有白名单不变；`/default-model` 的 model 走官方 `saveSelection`，不涉及本项。
+
+**测试**（`test/routes.test.js`，+7 例）：含 `\n` / 空格 / 引号注释符的 model → 400 且
+**不写盘**；合法 `z-ai/glm-5.2:free` → 200、写盘后文件里 `model:` 只有一行且无 `injected`
+（用临时 USERPROFILE/HOME，不碰真实 `~/.dsh`）；`readBody` 的 64 KiB→413 / aborted→400 /
+error→400 / 空 body→`{}`；`POST /detect` 超限 body → 413 且连接被关。
+
+**实测**：
+
+```
+node --test test/*.test.js                → 69 例全绿（原 62 + 7）
+node ../scripts/verify-all.mjs free-model → 16/16 PASS
+```
+
+顺手订正 README「开发」段：原写的 `pnpm test` 在本线并不存在（package.json 无 scripts），
+换成实际可跑的命令 `node --test test/*.test.js`。
+
+**遗留/风险**：
+
+- 白名单字符集较窄（规格给定 `[A-Za-z0-9._:\/-]`）：若某个网关发布含 `@ + ~ %` 等字符的
+  模型 id，会得到 400 而不是被写入 —— 届时按同一判据扩字符类，**不要**退回「只查非空」。
+- `provider` 仍依赖 `listPlatforms()` 的键白名单（既有逻辑，未改）；`/default-model` 的
+  `model` 走官方 `saveSelection`，不经过本线文件写入，因此未加同一白名单（若官方服务将来
+  把它落盘到会被 loader 求值的位置，需要在这里一并收紧）。
+
+---
+
 ## 2026-10-12（续） · 上游 1.3.1 → 2.1.0 应用内升级 + 补丁 12 处重对齐（一处退役、一处拆分）
 
 **触发**：用户「准备升级，应对一下」—— 要求先把补丁对齐到 2.1.0，再执行升级。

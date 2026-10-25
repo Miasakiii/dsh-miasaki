@@ -59,6 +59,24 @@ node patch.mjs revert     # 回退
 - 不改系统提示、不改工具 schema；
 - 模型能力来自官方 `resolveModelInfo`，**适配器不声明就当未知**，不猜 `false`。
 
+## 安全
+
+`/dual-model/api/*` 是 webServer 自注册的 prefix 路由，**不经过**内核 `/api` 的准入链，
+因此自带两层浏览器信任围栏（2026-10-20）：
+
+- **优先** `connection.requestRejection`（与内核 `/api` 同级：信任围栏 + 浏览器鉴权
+  cookie；**逐请求读取**，不做 apply 期快照）—— 401 / 403 原样回给客户端；
+- 该服务缺席时退回**结构层**：只允许回环 Host、拒绝跨站 `sec-fetch-site`、
+  Origin / Referer 的 hostname 必须与 Host 相同，且 **Origin 显式带端口时必须等于
+  Host 端口**（Host 无端口时按 Origin 的 scheme 取 80/443；Origin 不带端口 =
+  部分 Chromium 会剥掉非默认回环端口，沿用 hostname 判定，避免误拒）。
+
+在装载了 `connection` 服务的 composition（正式 web 应用）里，写配置的 `POST /settings`
+不再能被「伪造 Host、不带 Origin 的本机进程」静默改写（无浏览器 cookie 直接 401）；
+只有内核准入缺席的极简 composition 才退回结构层，此时仍以「回环 Host」作纵深防御
+（与 free-model / usage 的结构层同口径）。配置写入点本身只接受已知字段
+（`enabled` / `assistProvider` / `assistModel`），落盘前经 `sanitizeConfig` 归一化。
+
 ## 状态
 
 核心交互（触发钮 / 配置面板 / 模型下拉 / 主题令牌）已在真实 GUI 实测可用。
@@ -69,7 +87,7 @@ node patch.mjs revert     # 回退
 ```bash
 pnpm install
 pnpm run build        # node --check 入口与 lib/
-pnpm test             # 39 例单测（2026-10-05 实测：admission 6 / client 4 / content 7 / invalidation 5 / routing 10 / store 7）
+pnpm test             # 60 例单测（2026-10-20 实测：admission 6 / client 4 / content 7 / invalidation 5 / routing 10 / store 7 / trust 21）
 pnpm run patch:verify # 本体补丁离线自证
 ```
 

@@ -27,37 +27,64 @@
 /** 同机浏览器可以合法使用的 Host 名（去端口后比较；IPv6 保留方括号，与 URL.hostname 同形）。 */
 const TRUSTED_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
-/** 把 Host / Origin / Referer 的原始值取成小写 hostname；解析不出来返回 null。 */
-function hostnameOf(value) {
+/** 把 Host / Origin / Referer 的原始值取成 `{ hostname, port }`；解析不出来返回 null。 */
+function authorityOf(value) {
 	if (typeof value !== 'string' || value.trim() === '') return null;
 	const raw = value.trim();
 	try {
 		// Host 头不带 scheme，Origin/Referer 带；补一个再解析，两种形状共用一条路径。
-		return new URL(raw.includes('://') ? raw : `http://${raw}`).hostname.toLowerCase();
+		// `URL.port` 对默认端口返回空串（`http://x` 与 `http://x:80` 都是 ''），
+		// 所以「空」在本函数里表示**未显式端口**（含被 Chromium 剥掉端口的 Origin）。
+		const url = new URL(raw.includes('://') ? raw : `http://${raw}`);
+		return { hostname: url.hostname.toLowerCase(), port: url.port };
 	} catch {
 		return null;
 	}
 }
 
+/** Origin 的 scheme 默认端口（d7d27：Host 没写端口时按 Origin 的 scheme 取默认值比较）。 */
+function defaultPortOf(value) {
+	const match = /^([a-z][a-z0-9+.-]*):/i.exec(String(value).trim());
+	return match !== null && match[1].toLowerCase() === 'https' ? '443' : '80';
+}
+
 /**
  * 结构化围栏：不依赖任何服务，只看请求头。导出是为了单测能直接打它。
+ *
+ * d7d27（2026-10-20）：Host 判定之外补**端口判据** —— Origin 显式带端口时必须与
+ * Host 端口一致，否则 `Origin: http://127.0.0.1:5173` + `Host: 127.0.0.1:3080`
+ * 这种「同站（scheme + 注册域）但跨端口」的来源会被当成同源放行（CSRF）。
+ * 兼容性：Origin 被 Chromium 剥掉端口时 `port === ''`，沿用 hostname 判定，不误拒。
+ * `Referer` 仍是 hostname 判据（弱信号、可能缺失；端口判据只落在 Origin 上）。
  * @param headers 请求头（`req.headers`）
  * @returns `{ok:true}` 或 `{ok:false, status, error}`
  */
 export function structuralFence(headers) {
-	const hostname = hostnameOf(headers?.host);
-	if (hostname === null || !TRUSTED_HOSTNAMES.has(hostname)) {
+	const host = authorityOf(headers?.host);
+	if (host === null || !TRUSTED_HOSTNAMES.has(host.hostname)) {
 		return { ok: false, status: 403, error: '不被信任的 Host' };
 	}
 	if (String(headers['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
 		return { ok: false, status: 403, error: '跨站请求被拒绝' };
 	}
-	for (const name of ['origin', 'referer']) {
-		const raw = headers[name];
-		if (typeof raw !== 'string' || raw.trim() === '') continue;
-		const originHostname = hostnameOf(raw);
+	const origin = headers.origin;
+	if (typeof origin === 'string' && origin.trim() !== '') {
+		const originAuthority = authorityOf(origin);
 		// `Origin: null`（opaque origin）解析出的 hostname 不会命中白名单，同样被拒。
-		if (originHostname === null || originHostname !== hostname) {
+		if (originAuthority === null || originAuthority.hostname !== host.hostname) {
+			return { ok: false, status: 403, error: '跨站来源被拒绝' };
+		}
+		if (originAuthority.port !== '') {
+			const hostPort = host.port !== '' ? host.port : defaultPortOf(origin);
+			if (originAuthority.port !== hostPort) {
+				return { ok: false, status: 403, error: '跨端口来源被拒绝' };
+			}
+		}
+	}
+	const referer = headers.referer;
+	if (typeof referer === 'string' && referer.trim() !== '') {
+		const refererHostname = authorityOf(referer)?.hostname ?? null;
+		if (refererHostname === null || refererHostname !== host.hostname) {
 			return { ok: false, status: 403, error: '跨站来源被拒绝' };
 		}
 	}

@@ -604,8 +604,34 @@ export class WorkspaceStore {
       workspace.updatedAt = thread.updatedAt
       return
     }
+    // compaction 感知（2026-10-20）：compaction/summary 投影为 compaction 消息
+    // （text = 摘要，另存被压缩条数）；compaction 的落地 user/message（surfaceOp
+    // replace）被过滤 —— 否则摘要会以「来路不明的用户消息」出现在 detail 里。
+    if (event.type === 'compaction/summary') {
+      // summary 在官方事件里是 ContentBlock[]（safe text summary blocks）；
+      // contentText 提取文本块。字符串形状做防御兼容（历史/测试夹具）。
+      const rawSummary = event.data?.summary
+      const summary = typeof rawSummary === 'string' ? rawSummary : contentText(rawSummary)
+      if (summary === '') return
+      const at = new Date(event.time).toISOString()
+      const message = {
+        id: randomUUID(),
+        text: summary,
+        kind: 'compaction',
+        sourceSeq: event.seq,
+        at,
+        shadowedCount: Array.isArray(event.data?.shadowedSeqs) ? event.data.shadowedSeqs.length : 0,
+      }
+      this.retainThreadMessages(thread, [message])
+      thread.updatedAt = at
+      workspace.updatedAt = at
+      return
+    }
     const projection = projectableEvent(event)
     if (projection === null) return
+    // compaction 落地消息过滤：surfaceOp.replace 的 user/message 是压缩摘要的
+    // 占位（真实摘要在 compaction/summary 事件里），投影成普通用户消息会误导。
+    if (event.type === 'user/message' && event.surfaceOp?.op === 'replace') return
     // 裁剪水位（2026-09-26）：保留窗口之外的消息已被丢弃、其 sourceSeq 一并消失，
     // 因此 replay 必须由水位兜底 —— 否则从更早的 seq 重放会把已丢弃的卡片贴回来。
     if (typeof event.seq === 'number' && event.seq <= (thread.trimmedBeforeSeq ?? -1)) return
@@ -647,21 +673,26 @@ export class WorkspaceStore {
     const process = target === undefined ? (thread.pendingProcess ??= []) : (target.process ??= [])
     const callId = String(event.type === 'tool/call' ? data.callId : data.message?.source?.callId ?? '')
     const entry = process.find(item => item.callId === callId)
+    // 耗时拆分（2026-10-20）：tool/call 与 tool/result 各自带 event.time —— 存进
+    // 条目供前端算「工具执行耗时」（resultedAt − calledAt）。老数据缺省 null，
+    // 前端降级显示「—」，无需 store 版本迁移。
     if (event.type === 'tool/call') {
       if (entry === undefined) {
-        process.push({ callId, turn: data.turn, step: data.step, name: data.name, arguments: capProcessPayload(data.arguments), result: null, error: null })
+        process.push({ callId, turn: data.turn, step: data.step, name: data.name, arguments: capProcessPayload(data.arguments), result: null, error: null, calledAt: at, resultedAt: null })
       } else {
         entry.name = data.name
         entry.arguments = capProcessPayload(data.arguments)
+        entry.calledAt = at
       }
     } else {
       const outcome = contentText(data.message?.content)
       const error = errorText(data.error)
       if (entry === undefined) {
-        process.push({ callId, turn: data.turn, step: data.step, name: '工具调用', arguments: null, result: capProcessPayload(outcome), error: capProcessPayload(error) })
+        process.push({ callId, turn: data.turn, step: data.step, name: '工具调用', arguments: null, result: capProcessPayload(outcome), error: capProcessPayload(error), calledAt: null, resultedAt: at })
       } else {
         entry.result = capProcessPayload(outcome)
         entry.error = capProcessPayload(error)
+        entry.resultedAt = at
       }
     }
     thread.updatedAt = at
@@ -1137,6 +1168,75 @@ function workspaceTitle(cwd, fallbackTitle) {
   return segment && segment.trim() !== '' ? segment : fallbackTitle
 }
 
+// ---------------------------------------------------------------------------
+// /canvas/api 浏览器信任围栏（2026-10-19，扫描报告 5b1f6）
+//
+// exact / prefix 分发的插件路由不经过内核 `/api` 的准入链（composition 的
+// 信任围栏 + 浏览器认证 cookie 都不覆盖），因此必须自带围栏。此前这里只校验
+// Host ⇒ 任意网页可用无需预检的 `text/plain` 表单 POST 打 `POST /canvas/api/reset`
+// 清空画布（CSRF）。三道判据与 appearance / sidebar / usage 同口径：
+//   1. Host 必须是环回或 config.trustedHosts（DNS 重绑定防御）；
+//   2. `sec-fetch-site: cross-site` 一律拒（跨站请求由浏览器自己标注）；
+//   3. Origin 存在时 hostname 必须等于 Host，显式端口必须与 Host 端口一致
+//      （同站不同端口 = same-site、无预检，是 CSRF 的实际入口；Chromium 某些
+//      构建会剥掉非默认回环端口 ⇒ 端口缺失时退回 hostname 判定，不误拒）。
+
+/** 从 Host 头拆出 hostname 与端口（IPv6 保留方括号）；无端口 / 端口非数字时 port 为 null。 */
+export function splitHostPort(host) {
+  const text = typeof host === 'string' ? host.trim() : ''
+  if (text === '') return { hostname: '', port: null }
+  if (text.startsWith('[')) {
+    const end = text.indexOf(']')
+    if (end === -1) return { hostname: text.toLowerCase(), port: null }
+    const match = /^:(\d{1,5})$/.exec(text.slice(end + 1))
+    return { hostname: text.slice(0, end + 1).toLowerCase(), port: match === null ? null : match[1] }
+  }
+  const colon = text.lastIndexOf(':')
+  if (colon === -1) return { hostname: text.toLowerCase(), port: null }
+  const match = /^\d{1,5}$/.exec(text.slice(colon + 1))
+  return { hostname: text.slice(0, colon).toLowerCase(), port: match === null ? null : match[0] }
+}
+
+/** Host hostname 是否命中环回 / trustedHosts 白名单。 */
+function isTrustedHostname(hostname, trustedHosts) {
+  return trustedHosts.has(hostname) || hostname === 'localhost' || hostname === '127.0.0.1'
+}
+
+/**
+ * /canvas/api 的三道浏览器信任围栏。
+ * @param {object} headers - `req.headers`。
+ * @param {Set<string>} trustedHosts - 额外放行的主机名（已小写）。
+ * @returns {{ok: true} | {ok: false, status: number, error: string}}
+ */
+export function fenceRequest(headers, trustedHosts) {
+  const { hostname, port: hostPort } = splitHostPort(headers?.host)
+  if (!isTrustedHostname(hostname, trustedHosts)) {
+    return { ok: false, status: 403, error: '不被信任的 Host' }
+  }
+  if (String(headers?.['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
+    return { ok: false, status: 403, error: '跨站请求被拒绝' }
+  }
+  const origin = headers?.origin
+  if (typeof origin === 'string' && origin !== '') {
+    let parsed = null
+    try {
+      parsed = new URL(origin)
+    } catch {
+      return { ok: false, status: 403, error: 'Origin 无法解析' }
+    }
+    if (parsed.hostname.toLowerCase() !== hostname) {
+      return { ok: false, status: 403, error: 'Origin 与 Host 不一致' }
+    }
+    if (parsed.port !== '') {
+      const expectedPort = hostPort === null ? (parsed.protocol === 'https:' ? 443 : 80) : Number(hostPort)
+      if (Number(parsed.port) !== expectedPort) {
+        return { ok: false, status: 403, error: '跨端口来源被拒绝' }
+      }
+    }
+  }
+  return { ok: true }
+}
+
 async function readJson(req, limit = MAX_BODY_BYTES) {
   const chunks = []
   let length = 0
@@ -1237,15 +1337,16 @@ export function apply(ctx, config) {
   ctx.effect(() => () => clearInterval(backfillTimer), 'canvas: backfill timer')
   void backfillBatch().catch(() => {})
   const backfillFromSync = () => void backfillBatch().catch(() => {})
-  // The DSH /api browser-trust fence does not cover /canvas routes, so this
-  // handler checks the Host header itself: localhost is allowed by default and
-  // additional authorities opt in through config.trustedHosts (mirrors the
-  // fence's DNS-rebinding defense).
+  // The DSH /api browser-trust fence does not cover /canvas routes, so every
+  // /canvas/api request goes through fenceRequest() first (Host + cross-site +
+  // Origin/port; see the fence section above). Additional authorities opt in
+  // through config.trustedHosts.
   const trustedHosts = new Set(['localhost', '127.0.0.1', ...[...(config?.trustedHosts ?? [])].map(host => String(host).trim().toLowerCase()).filter(Boolean)])
   const api = async (req, res) => {
     try {
-      const hostname = (typeof req.headers.host === 'string' ? req.headers.host : '').replace(/:\d+$/, '').toLowerCase()
-      if (!trustedHosts.has(hostname)) return sendJson(res, 403, { error: '不被信任的 Host' })
+      // 唯一准入口：所有路由（含 POST /canvas/api/reset）都在这里被统一拦下。
+      const fence = fenceRequest(req.headers, trustedHosts)
+      if (!fence.ok) return sendJson(res, fence.status, { error: fence.error })
       const path = new URL(req.url ?? '/', 'http://dsh.local').pathname
       if (path === '/canvas/api/reset' && req.method === 'POST') return sendJson(res, 200, await store.clearLegacy(ctx.sessions.list()))
       if (path === '/canvas/api/workspaces') {

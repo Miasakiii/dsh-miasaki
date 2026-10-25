@@ -46,6 +46,16 @@ import { trustFence } from './trust.js';
 const NS = 'llm-pi-ai';
 const PRESETS = ['kurumi', 'whale', 'inverse'];
 
+/**
+ * `/subagent` 的 model 允许列表：官方免费模型 id 形如 `z-ai/glm-5.2:free`，
+ * 只需字母数字与 `. _ : / -`。换行/空白/引号/`#` 等一律拒绝 —— 该值会被原样
+ * 拼进 `agent.cordis.yml`，任何额外字符都是 YAML 注入面（2026-10-20，c0850）。
+ */
+const MODEL_PATTERN = /^[A-Za-z0-9._:\/-]+$/;
+
+/** 请求体累计上限：与 model-probe / ssh / dual-model 同一基线（2026-10-20，f8129）。 */
+const MAX_BODY_BYTES = 64 * 1024;
+
 const FREE_FIELDS = ['prompt', 'completion', 'request', 'image', 'web_search', 'reasoning', 'input', 'output'];
 const FREE_NAME_RE = /免费|free/i;
 
@@ -124,17 +134,61 @@ function toConfigEntry(m) {
   };
 }
 
-/** Read one JSON body from an IncomingMessage. */
-function readBody(req) {
+/**
+ * 带 HTTP 状态码的请求错误。
+ *
+ * 路由封装按 `error.status` 回 4xx（model 非法 400 / 请求体超限 413）；
+ * 其余异常仍沿用 `200 + {ok:false}` 的旧信封 —— 面板的 `api()` 只看 `ok`，
+ * 那是本插件上线以来的约定，改全部状态码会连带改客户端判据。
+ */
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+  }
+}
+
+/**
+ * Read one JSON body from an IncomingMessage, bounded.
+ *
+ * 2026-10-20（f8129）：此前无累计上限 —— 超大请求体会按 body 大小线性吃掉宿主
+ * 内存。现在累计超过 64 KiB 即拒绝（路由回 413 并关闭连接）；并收口 `aborted` /
+ * `error` 两个终止事件：客户端中途断开时 promise 不再永久悬挂。
+ * 导出是为了单测能直接打上限与两个终止分支（路由级 413 用例另见 test/routes.test.js）。
+ *
+ * @param {object} req - Node 的 IncomingMessage。
+ * @returns {Promise<object>} 解析后的 JSON 对象；空请求体为 `{}`。
+ */
+export function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    let total = 0;
+    let settled = false;
+    const fail = (status, message) => {
+      if (settled) return;
+      settled = true;
+      reject(new HttpError(status, message));
+    };
+    req.on('data', (c) => {
+      // 已失败后不再缓冲：超限判据之外不再占用内存，后续字节直接丢弃。
+      if (settled) return;
+      total += c.length;
+      if (total > MAX_BODY_BYTES) {
+        fail(413, `请求体过大（超过 ${MAX_BODY_BYTES} 字节）`);
+        return;
+      }
+      chunks.push(c);
+    });
     req.on('end', () => {
+      if (settled) return;
+      settled = true;
       if (chunks.length === 0) return resolve({});
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
       catch (e) { reject(new Error('请求体不是合法 JSON')); }
     });
-    req.on('error', reject);
+    req.on('aborted', () => fail(400, '请求体读取被中断'));
+    req.on('error', () => fail(400, '请求体读取失败'));
   });
 }
 
@@ -181,7 +235,15 @@ export function apply(ctx) {
         const payload = await handler(req);
         sendJson(res, 200, { ok: true, ...payload });
       } catch (error) {
-        sendJson(res, 200, { ok: false, error: String(error && error.message ? error.message : error) });
+        // 输入类错误带显式状态码；其余异常沿用 200 + `{ok:false}` 旧信封（面板只看 `ok`）。
+        const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599
+          ? error.status
+          : 200;
+        sendJson(res, status, { ok: false, error: String(error && error.message ? error.message : error) });
+        // 413：请求体已超限，先回状态码再关连接 —— 不再读后续字节，也不让攻击者继续灌数据。
+        if (status === 413) {
+          try { req.destroy(); } catch { /* 连接可能已被对端关闭：destroy 失败无需处理 */ }
+        }
       }
     };
     // 方法挂在 handler 上，离线测试的路由表才能按方法取到正确的路由。
@@ -403,6 +465,11 @@ export function apply(ctx) {
     const provider = typeof body.provider === 'string' && body.provider ? body.provider : null;
     const model = typeof body.model === 'string' && body.model ? body.model : null;
     if (!provider || !model) throw new Error('需要 provider 与 model 参数');
+    // 2026-10-20（c0850）：model 会被原样拼进 agent.cordis.yml —— 只允许模型 id 的
+    // 可见字符集（字母数字与 `. _ : / -`），拒绝换行/空白/引号/`#` 等 YAML 元字符。
+    if (!MODEL_PATTERN.test(model)) {
+      throw new HttpError(400, 'model 含非法字符（只允许字母、数字与 . _ : / -）');
+    }
     if (!listPlatforms().some((p) => p.id === provider)) {
       throw new Error(`provider "${provider}" 不在 llm-pi-ai.providers 中（请先在模型页配置该平台）`);
     }

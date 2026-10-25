@@ -2,7 +2,7 @@
 //
 // 在「设置」里注册一栏「外观」（settings.section，id=appearance，order=5，紧跟官方「通用」）。
 // M1 只做底座与契约自检：面板骨架 + 契约黄条 + 配置读写闭环；
-// 皮肤 / 壁纸 / 动效 / 会话效果分别在 M2–M4 接入同一套管线。
+// 皮肤 / 壁纸 / 动效 / 会话效果 / 文字分别在 M2–M5 接入同一套管线。
 //
 // **与官方「通用」设置页的分工（2026-09-26 去重）**：明暗偏好与正文字号是官方自己的行
 // （ui-theme 的 AppearanceRow / FontSizeRow，注册在 settings.general.item 槽）——
@@ -482,6 +482,22 @@ window.__ModuleLoader__.load({
 @media (prefers-reduced-motion:reduce){.mia-iconDelete{transition:none}}
 /* 运行信息：面板底部一行三级说明（不再独占组标题） */
 .mia-runinfo{color:var(--dsw-alias-label-tertiary);margin:24px 0 0;font-size:12px;line-height:18px}
+/* ---- 文字总预览与吸底确认栏（M5，2026-10-19）----
+   预览卡：官方 settings 卡片规格（0.5px 细边 + 卡片填充令牌 + radius-lg）。
+   内部滚动封顶 240px——预览不随行距/段距增量无限长高（dsh-font-probe v1.4.2
+   同款修复：写死高度会让「预览没反应」）。 */
+.mia-textPreviewBody{border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-settings-card-fill);border-radius:var(--dsw-radius-lg);max-height:240px;overflow:auto;padding:16px}
+/* 标题样张：近似官方 markdown h2（19px/28px + 字号增量；0.2.1 base.css 实测口径） */
+.mia-textH2{margin:0 0 8px;font-size:calc(19px + var(--dsh-content-font-delta, 0px));line-height:calc(28px + var(--dsh-content-font-delta, 0px));font-weight:700;color:var(--dsw-alias-label-primary)}
+/* 正文样张：font-weight/letter/line/margin/indent 全部由草稿内联写入（见 reactElementTextPreview） */
+.mia-textP{margin:0;color:var(--dsw-alias-label-primary);font-size:calc(14px + var(--dsh-content-font-delta, 0px))}
+.mia-textP+.mia-textP{margin-top:8px}
+/* 代码样张：直接吃官方的代码字体令牌（用户在「通用」页设的代码字体） */
+.mia-textCode{background:var(--dsw-alias-bg-module-platform);border-radius:var(--dsw-radius-sm);margin-top:12px;padding:8px 12px;color:var(--dsw-alias-label-secondary);font-family:var(--ds-font-family-code);font-size:13px;display:block;white-space:pre-wrap;word-break:break-all}
+/* 吸底确认栏：position:sticky 吸在设置面板可视区底部——拖滑块/滚动看预览时
+   「确认应用」永远在场（dsh-font-probe 验证过的交互）。上缘渐变淡出避免内容
+   顶格的硬边；底色取卡片令牌（深浅色主题自动解析）。z-index 盖过行分隔线。 */
+.mia-textConfirm{background:linear-gradient(to bottom, transparent, var(--dsw-alias-settings-card-fill) 24%);align-items:center;gap:12px;padding:12px 0 4px;display:flex;flex-wrap:wrap;position:sticky;bottom:0;z-index:1}
 `
     const PANEL_CSS_ID = '@miasaki/dsh-appearance/panel.css'
     // 与官方 client 插件同一注入式（factory 体内、按 data-plugin-css 去重）：
@@ -665,6 +681,44 @@ window.__ModuleLoader__.load({
     /** 会话最大宽度边界（px；与 lib/config.js 的 MAX_WIDTH_MIN/MAX 一致，host 最终把关）。 */
     const CONV_WIDTH_MAX = 1600
 
+    // ------------------------------------------------------- 文字层（M5，v8）
+    // 设计：design/2026-10-19-appearance-m5-text-typography-design.md。
+    // 与 M4 的分工：M4 管「会话内观感」（密度/宽度/三档字体/光标/引用代码块），
+    // M5 管「字重与排版」（界面/标题字重 + 字距/行距/段距/首行缩进）。
+    // **刻意不做字体族与字号**——那是官方「通用」设置页的字体三行与字号行
+    // （0.2.1-rc.2 起内置；去重纪律见 2026-09-26 路线文档）。
+    //
+    // 注入方式与 M4 不同：M4 是「静态规则 + html 档位属性/变量」，M5 是
+    // **host 编译整段 CSS 随响应下发**（/state 与 /config 的 textCss 字段，
+    // lib/config.js 的 buildTextCss），client 只负责写进独立 style 标签 ——
+    // 与 wallpaperLayers 同款「host 计算、client 注册」。理由：六项取值组合出的
+    // 规则里有多处 !important 与 calc 叠加，编译逻辑集中在 host 侧可单测；
+    // 「撤销 = 标签移除 = 官方规则恢复」语义干净（不进 boot style，见设计 §3.2）。
+    const TEXT_CSS_ID = '@miasaki/dsh-appearance/text.css'
+
+    /**
+     * 字重档位选项（id 与 lib/config.js 的 WEIGHTS 一致；空串 = 不覆盖）。
+     * 用选择丸而不是滑块：字重是离散档位，滑块中间值没有意义。
+     */
+    const WEIGHT_OPTIONS = [
+      { id: '', label: '默认' },
+      { id: '300', label: '300 细体' },
+      { id: '400', label: '400 常规' },
+      { id: '500', label: '500 中等' },
+      { id: '600', label: '600 半粗' },
+      { id: '700', label: '700 粗体' },
+      { id: '800', label: '800 特粗' },
+      { id: '900', label: '900 黑体' },
+    ]
+
+    /** 排版四项定义（与 lib/config.js 的边界一致；host 最终把关）。step 决定步进器粒度。 */
+    const TEXT_METRICS = [
+      { key: 'letterSpacing', label: '字距', min: 0, max: 3, step: 0.1, unit: 'px', hint: '正文段落的字符间距；0 = 不调整。' },
+      { key: 'lineHeight', label: '行距', min: 0, max: 12, step: 1, unit: 'px', hint: '在应用自身行高之上额外增加（叠加而非替换，改官方字号时行高仍等比变化）。' },
+      { key: 'paragraphSpacing', label: '段距', min: 0, max: 24, step: 2, unit: 'px', hint: '段落之间的额外间距；0 = 不调整。' },
+      { key: 'firstLineIndent', label: '首行缩进', min: 0, max: 4, step: 0.5, unit: 'em', hint: '段落首行缩进，单位 em 随字号缩放；只作用于正文段落（代码块与列表不缩进）。' },
+    ]
+
     /**
      * P4「恢复默认」按钮的板块措辞（与各组标题逐字一致）。
      * 只影响文案，不参与判定 —— 真的默认值来自 host 下发的 `state.defaults`。
@@ -675,6 +729,7 @@ window.__ModuleLoader__.load({
       avatar: '应用图标',
       motion: '动效',
       conversation: '会话效果',
+      text: '文字',
       boot: '启动',
     })
 
@@ -820,6 +875,81 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ------------------------------------------------------- 文字层应用（M5）
+    /** 取（按 id 去重）文字层 style 节点；不存在则创建（内容由 applyText 写入）。 */
+    function textStyleTag() {
+      if (typeof document === 'undefined') return null
+      const existing = document.querySelector(`style[data-plugin-css="${TEXT_CSS_ID}"]`)
+      if (existing !== null) return existing
+      const tag = document.createElement('style')
+      tag.dataset.plugin = '@miasaki/dsh-appearance'
+      tag.dataset.pluginCss = TEXT_CSS_ID
+      document.head.appendChild(tag)
+      return tag
+    }
+
+    /** 清掉文字层整条样式（总开关关闭 / textCss 为空 / 清理时调用）。 */
+    function textClear() {
+      if (typeof document === 'undefined') return
+      const tag = document.querySelector(`style[data-plugin-css="${TEXT_CSS_ID}"]`)
+      if (tag !== null) tag.remove()
+    }
+
+    /**
+     * 应用文字层：把 host 编译的 CSS 写进独立 style 标签（空串 = 移除整层）。
+     * 门控与其它层同源——总开关关闭 ⇒ host 侧 buildTextCss 即返回空串 ⇒ 移除。
+     * @param {object} config - 已归一化配置（/state 或 save 响应里的 config）。
+     * @param {string} textCss - host 随响应下发的文字层 CSS（旧 host 不下发 ⇒ 空串）。
+     */
+    function applyText(config, textCss) {
+      if (config === null || config === undefined || typeof document === 'undefined') return
+      const css = typeof textCss === 'string' ? textCss : ''
+      if (config.enabled !== true || css === '') {
+        textClear()
+        return
+      }
+      const tag = textStyleTag()
+      if (tag === null) return
+      tag.textContent = css
+    }
+
+    /** 文字层同步（页面加载与每次保存后调用）：保存路径直接用响应里的 textCss，不额外请求。 */
+    async function syncText() {
+      try {
+        const state = await requestJson('/state', { method: 'GET' })
+        applyText(state.config, state.textCss)
+      } catch { /* 文字层应用失败保持原生观感 */ }
+    }
+
+    /**
+     * M5 锚点自检（静默失效 #10 纪律的延续）。
+     *
+     * 排版四项落在 `[class*="_markdown"]`（CSS Module 哈希类名钩子）上，官方升级改掉
+     * Markdown 组件类名时同样会「面板可点、保存成功、界面零变化」。判据**只在能确定的
+     * 时候说话**：任一项非默认 ⇒ 看会话页；会话 slot 与 `[data-chat-flow]` 在、且 flow
+     * **有子节点**（= 已经渲染过消息）却找不到 `_markdown` 容器 ⇒ `mismatch`（确定性失配）。
+     * 无消息 / 会话页不在 ⇒ `unknown` 不提示（没有消息时本来就没有 markdown 容器）。
+     */
+    function probeTextAnchors(config) {
+      try {
+        const text = config === null || config === undefined ? null : config.text
+        if (text === null || text === undefined) return { state: 'idle', broken: [] }
+        const active = text.uiWeight !== '' || text.headingWeight !== ''
+          || Number(text.letterSpacing) > 0 || Number(text.lineHeight) > 0
+          || Number(text.paragraphSpacing) > 0 || Number(text.firstLineIndent) > 0
+        if (!active) return { state: 'idle', broken: [] }
+        const doc = document
+        if (!doc.querySelector('[data-slot="main.conversation"]')) return { state: 'unknown', broken: [] }
+        const flow = doc.querySelector('[data-chat-flow]')
+        if (!flow) return { state: 'unknown', broken: [] }
+        if (flow.childElementCount === 0) return { state: 'unknown', broken: [] }
+        const hasMarkdown = doc.querySelector('[class*="_markdown"]') !== null
+        return hasMarkdown ? { state: 'ok', broken: [] } : { state: 'mismatch', broken: ['排版'] }
+      } catch (e) {
+        return { state: 'unknown', broken: [] }
+      }
+    }
+
     /**
      * 本线在当前配置下**会不会产生任何可见变化**（静默失效 #8，2026-09-30 补全）。
      *
@@ -828,8 +958,8 @@ window.__ModuleLoader__.load({
      * 却没有提示，用户只能以为功能坏了。
      *
      * 判定口径（「有没有变化」，不是「某几项开着」）：皮肤非纯净 / 壁纸源非空且至少一处表面
-     * 不透明度 < 100（否则壁纸被完全不透光的表面盖住）/ 动效开着 / 会话效果有非默认档 —— 任一成立
-     * 即有可见变化。
+     * 不透明度 < 100（否则壁纸被完全不透光的表面盖住）/ 动效开着 / 会话效果有非默认档 /
+     * 文字板块有非默认档（M5）—— 任一成立即有可见变化。
      *
      * 玻璃档位（glass）**不参与**判定：它只改变壁纸的模糊观感，而壁纸不可见时它本身也不可见
      * ⇒ 不会让「零变化」变成「有变化」。（首版把 mica/Win11 也算进去，是因为那会让*本就不可见*的
@@ -855,7 +985,14 @@ window.__ModuleLoader__.load({
         || (conv.font !== undefined && conv.font !== 'system')
         || (conv.cursor !== undefined && conv.cursor !== 'off')
         || (conv.quoteCode !== undefined && conv.quoteCode !== 'default')
-      if (skin !== 'pure' || wallpaperUsable || motionOn || convCustom) {
+      // M5（v8）：文字板块任一项非原生档（字重非空 / metric 非 0）即算可见变化。
+      // 板块缺席（旧 host / 旧配置）时各项读出来都是 undefined ⇒ 不误判。
+      const text = config.text || {}
+      const textCustom = (text.uiWeight !== undefined && text.uiWeight !== '')
+        || (text.headingWeight !== undefined && text.headingWeight !== '')
+        || Number(text.letterSpacing) > 0 || Number(text.lineHeight) > 0
+        || Number(text.paragraphSpacing) > 0 || Number(text.firstLineIndent) > 0
+      if (skin !== 'pure' || wallpaperUsable || motionOn || convCustom || textCustom) {
         return { visible: true, reason: null }
       }
       if (source !== '') return { visible: false, reason: 'covered' }
@@ -1029,6 +1166,15 @@ window.__ModuleLoader__.load({
       // **追加在 state 队列最末**：test/client.test.js 的 stateQueue 按 useState 顺序注入，
       // 前八项的顺序与长度都不变，本项在队列耗尽时取初值。
       const [presetsInfo, setPresetsInfo] = react.useState({ error: null, persistent: null })
+      // M5（v8）文字板块的草稿态：**追加在队列最末**——test/client.test.js 的 stateQueue
+      // 按 useState 顺序注入，前八项的顺序与长度都不变（与 presetsInfo 追加时同款纪律）。
+      // textDraft = 用户正在编辑但未确认的六项取值；textDirty = 草稿是否已被改过
+      // （false 时面板显示的一律是 config.text 本身 ⇒ 外部改动 / 恢复默认后自动跟随，
+      // 不需要 syncedFrom 指纹——dsh-font-probe INTERNALS.md §7 教训的简化正确解）。
+      const [textDraft, setTextDraft] = react.useState(() => ({
+        uiWeight: '', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0,
+      }))
+      const [textDirty, setTextDirty] = react.useState(false)
 
       const ctx = runtime === null ? null : runtime.ctx
 
@@ -1114,6 +1260,16 @@ window.__ModuleLoader__.load({
           try { applyMotion(next.config) } catch { /* 动效应用失败不影响面板 */ }
           // M4：会话效果层随写随生效（html 档位属性 + 宽度变量 + 整层注入/移除）。
           try { applyConversation(next.config) } catch { /* 会话效果应用失败不影响面板 */ }
+          // M5：文字层随写随生效（host 编译的 CSS 随响应下发，写进独立 style 标签）。
+          // 旧 host 不下发 textCss ⇒ 空串 ⇒ 移除标签 = 官方恢复（不报错、不静默失效）。
+          try { applyText(next.config, next.textCss) } catch { /* 文字层应用失败不影响面板 */ }
+          // 草稿确认制收尾：**仅当本次写入真的动了 text**（确认应用 / 板块恢复默认 /
+          // 整体替换）才把草稿标志归位 —— 否则用户改壁纸会顺手清掉未确认的文字草稿。
+          // 归位后 effectiveDraft 走 config.text，自动跟上下一步的宿主值。
+          if (options.replace === true
+            || (patch != null && typeof patch === 'object' && patch.text !== undefined)) {
+            setTextDirty(false)
+          }
           setError(null)
         } catch (e) {
           if (e && e.status === 409) {
@@ -1211,9 +1367,9 @@ window.__ModuleLoader__.load({
       if (effect.visible === false) {
         const guide = effect.reason === 'native'
           ? '外观总开关已开，但所有项都停在原生档——皮肤是「纯净」（= 官方原生配色）、没有设置壁纸、'
-            + '动效与会话效果也全是默认档，因此页面与未装本线时逐像素一致。任选其一即可看到效果：'
+            + '动效与会话效果也全是默认档、文字板块没有字重与排版调整，因此页面与未装本线时逐像素一致。任选其一即可看到效果：'
             + '设一张壁纸（并把「表面不透明度」降到 80 以下）、皮肤换「刻刻帝 / 狂狂帝」、'
-            + '打开「动效」总开关、或把「消息密度」改成「紧凑」。'
+            + '打开「动效」总开关、把「消息密度」改成「紧凑」、或在「文字」板块把「界面字重」改成非默认。'
           : '壁纸被 100% 不透明的表面挡住（皮肤是「纯净」时官方表面本来就不透光），'
             + '「云母」档在 Win11 桌面壳下也走系统材质（页面侧不模糊）。任选其一即可看到效果——'
             + '把「表面不透明度」的会话 / 侧栏 / 输入框降到 60–80、玻璃换「磨砂 / 轻」、或皮肤换「刻刻帝 / 狂狂帝」。'
@@ -1531,6 +1687,99 @@ window.__ModuleLoader__.load({
 
       children.push(group('会话效果', convRows === null ? [hint('配置未加载，或宿主版本较旧（本板块需要 v6 配置）——重启宿主后重试。')] : convRows))
 
+      // ---- 文字（M5，v8：界面/标题字重 + 排版四件套 + 吸底总预览 + 草稿确认制）
+      //
+      // 「不在场」判据与 conversation / boot 同款（null **或 undefined**）：旧 host
+      // （v8 前配置没有 text 板块）下读 text.uiWeight 会让整面板空白。
+      //
+      // **草稿确认制**（与其它板块的即时保存刻意不同）：字体排版是「试了才知道」的场景，
+      // 滑块误触即全局生效 + 落盘很烦。六项控件只改本地草稿（textDraft/textDirty，
+      // 队列最末两个 state），底部预览按草稿实时渲染，点「确认应用」才写盘。
+      // 复刻自 dsh-font-probe 被验证过的交互（分析见 design/2026-10-19 文档 §1）。
+      //
+      // 范围纪律：**不做字体族与字号**——官方「通用」设置页 0.2.1-rc.2 起已有字体三行
+      // （正文/代码/终端）与字号行（含代码字号），本线不再做第二入口（2026-09-26 去重纪律）。
+      const textRaw = state === null ? undefined : state.config.text
+      const textSection = textRaw && typeof textRaw === 'object' ? textRaw : null
+      // 生效草稿：dirty 时用草稿，否则永远跟随宿主值（外部窗口改动 / 恢复默认后自动同步）。
+      const effectiveDraft = textDirty
+        ? textDraft
+        : {
+          uiWeight: textSection === null ? '' : (textSection.uiWeight ?? ''),
+          headingWeight: textSection === null ? '' : (textSection.headingWeight ?? ''),
+          letterSpacing: textSection === null ? 0 : Number(textSection.letterSpacing) || 0,
+          lineHeight: textSection === null ? 0 : Number(textSection.lineHeight) || 0,
+          paragraphSpacing: textSection === null ? 0 : Number(textSection.paragraphSpacing) || 0,
+          firstLineIndent: textSection === null ? 0 : Number(textSection.firstLineIndent) || 0,
+        }
+      const textDraftChanged = JSON.stringify(effectiveDraft) !== JSON.stringify({
+        uiWeight: textSection === null ? '' : (textSection.uiWeight ?? ''),
+        headingWeight: textSection === null ? '' : (textSection.headingWeight ?? ''),
+        letterSpacing: textSection === null ? 0 : Number(textSection.letterSpacing) || 0,
+        lineHeight: textSection === null ? 0 : Number(textSection.lineHeight) || 0,
+        paragraphSpacing: textSection === null ? 0 : Number(textSection.paragraphSpacing) || 0,
+        firstLineIndent: textSection === null ? 0 : Number(textSection.firstLineIndent) || 0,
+      })
+      const textRows = textSection === null ? null : [
+        row(
+          '界面字重',
+          '只作用于继承的文本（正文与侧栏等界面文字）；组件自己声明的字重仍然优先——不会把「粗体标题 vs 常规正文」压平。默认 = 应用原样。',
+          selectControl(
+            'text-ui-weight',
+            effectiveDraft.uiWeight,
+            WEIGHT_OPTIONS,
+            id => { setTextDraft({ ...effectiveDraft, uiWeight: id }); setTextDirty(true) },
+            openMenu, setOpenMenu,
+            !masterLive || busy,
+          ),
+        ),
+        row(
+          '标题字重',
+          '只作用于 Markdown 标题（h1–h6）；默认 = 跟随界面字重（未设界面字重时即应用原样）。',
+          selectControl(
+            'text-heading-weight',
+            effectiveDraft.headingWeight,
+            WEIGHT_OPTIONS,
+            id => { setTextDraft({ ...effectiveDraft, headingWeight: id }); setTextDirty(true) },
+            openMenu, setOpenMenu,
+            !masterLive || busy,
+          ),
+        ),
+        ...TEXT_METRICS.map(metric => row(
+          metric.label,
+          metric.hint,
+          stepper(
+            effectiveDraft[metric.key], metric.min, metric.max, metric.step,
+            v => { setTextDraft({ ...effectiveDraft, [metric.key]: v }); setTextDirty(true) },
+            !masterLive || busy,
+            metric.label,
+            metric.unit,
+          ),
+        )),
+      ]
+      if (textRows !== null) {
+        // M5 锚点自检（静默失效 #10 延续）：排版四项的 `_markdown` 容器钩子失配时明说。
+        const txProbe = probeTextAnchors(state.config)
+        if (txProbe.state === 'mismatch') {
+          textRows.push(react.createElement('div', { key: 'tx-mismatch', className: 'mia-notice' },
+            '注意：排版设置的锚点（Markdown 正文容器）在当前 DSH 版本上没命中，官方升级可能改动了它——'
+            + '字重与排版此刻不生效。界面字重走 body 继承，不受影响。'))
+        }
+        // 吸底总预览 + 草稿确认栏（sticky bottom；预览样式按草稿内联计算）。
+        textRows.push(reactElementTextPreview(effectiveDraft))
+        textRows.push(react.createElement('div', { key: 'tx-confirm', className: 'mia-textConfirm' }, [
+          outlineButton('确认应用', () => save({ text: effectiveDraft }), !masterLive || busy || !textDraftChanged),
+          ghostButton('还原草稿', () => { setTextDirty(false) }, busy || !textDraftChanged),
+          react.createElement('span', { key: 'tx-state', className: 'mia-hint' },
+            textDraftChanged ? '有未确认的改动（预览即草稿，尚未生效）' : '已确认（与当前生效一致）'),
+        ]))
+        const textReset = resetRow('text')
+        if (textReset !== null) textRows.push(textReset)
+      }
+      children.push(group('文字', textRows === null
+        ? [hint('配置未加载，或宿主版本较旧（本板块需要 v8 配置）——重启宿主后重试。')]
+        : textRows))
+
       // ---- 启动（v7：桌面壳加载页的视频片头；跨线字段，壳侧 boot_intro.rs 读同一份配置）
       //
       // 「不在场」判据与 conversation 同款（null **或 undefined**）：旧 host（v7 前配置
@@ -1543,7 +1792,7 @@ window.__ModuleLoader__.load({
         row(
           '启动片头',
           '打开桌面端时在加载页铺满播一段视频片头（7–8 秒，静音）；服务就绪即自动淡出切走，'
-            + '播放中点击任意处可跳过。改动**下次启动应用**时生效。'
+            + '播放中点击任意处可跳过。改动下次启动应用时生效。'
             + (masterLive ? '' : '（总开关关闭时不播放）'),
           selectControl(
             'boot-intro',
@@ -1620,7 +1869,7 @@ window.__ModuleLoader__.load({
       children.push(group('配置', [
         row(
           '导入 / 导出',
-          '导出一段 JSON 备份当前全部外观配置；导入会用它**整体替换**（文件里没写的板块回到出厂默认），导入前再确认一次。',
+          '导出一段 JSON 备份当前全部外观配置；导入会用它整体替换（文件里没写的板块回到出厂默认），导入前再确认一次。',
           [
             outlineButton('导出配置…', exportConfig, busy),
             ghostButton('导入配置…', () => pickJsonFile(importConfig, setError), busy),
@@ -1966,6 +2215,59 @@ window.__ModuleLoader__.load({
       return react.createElement('div', { key: 'surface-knobs', className: 'mia-fieldGrid' }, cells)
     }
 
+    // ------------------------------------------------- 文字总预览（M5，2026-10-19）
+    /**
+     * 「文字」板块的吸底总预览 + 草稿确认栏。
+     *
+     * 形态决策（design/2026-10-19 §4.2）：复刻 dsh-font-probe 被验证过的「草稿 → 确认」
+     * 交互——六项控件只改本地草稿，本卡按草稿**实时**渲染，点「确认应用」才写盘。
+     * 预览是**静态样式近似**（不注入全局规则）：标题样张取官方 markdown h2 的近似规格
+     * （19px/28px + 字号增量），行距用与生效规则同一句 calc 公式（跟着官方字号联动），
+     * 代码样例直接吃官方的 `--ds-font-family-code`（用户在「通用」页设的代码字体）。
+     * 卡底注明「预览为近似」，真实生效以会话正文为准。
+     *
+     * 配色只走 `--dsw-*` 令牌（跟皮肤与明暗自动解析）；sticky 定位把操作栏吸在
+     * 设置面板可视区底部（官方长设置页同款手法），上缘渐变淡出避免内容顶格的硬边。
+     *
+     * @param {object} draft - 生效草稿（六项；dirty 时是用户草稿，否则是宿主值）。
+     */
+    function reactElementTextPreview(draft) {
+      const uiWeight = typeof draft.uiWeight === 'string' && draft.uiWeight !== '' ? draft.uiWeight : ''
+      const headingWeight = typeof draft.headingWeight === 'string' && draft.headingWeight !== ''
+        ? draft.headingWeight
+        : uiWeight
+      const letterSpacing = Number(draft.letterSpacing) || 0
+      const lineHeight = Number(draft.lineHeight) || 0
+      const paragraphSpacing = Number(draft.paragraphSpacing) || 0
+      const firstLineIndent = Number(draft.firstLineIndent) || 0
+      // 正文段落样式：与 buildTextCss 的生效规则逐条对应（同一公式、同一优先级语义）。
+      const paraStyle = {
+        fontWeight: uiWeight === '' ? undefined : uiWeight,
+        letterSpacing: letterSpacing > 0 ? `${letterSpacing}px` : undefined,
+        lineHeight: lineHeight > 0 ? 'calc(24px + var(--dsh-content-font-delta, 0px) + ' + lineHeight + 'px)' : undefined,
+        marginBlock: paragraphSpacing > 0 ? `${paragraphSpacing}px` : undefined,
+        textIndent: firstLineIndent > 0 ? `${firstLineIndent}em` : undefined,
+      }
+      return react.createElement('div', { key: 'tx-preview', className: 'mia-textPreview' }, [
+        react.createElement('div', { key: 't', className: 'mia-blockTitle' }, '总预览'),
+        react.createElement('div', { key: 'd', className: 'mia-desc' },
+          '按上方草稿实时渲染（未确认不生效）。预览为静态近似，真实生效以会话正文为准。'),
+        react.createElement('div', { key: 'p', className: 'mia-textPreviewBody' }, [
+          react.createElement('div', {
+            key: 'h',
+            className: 'mia-textH2',
+            style: { fontWeight: headingWeight === '' ? undefined : headingWeight },
+          }, '标题样张 Heading'),
+          react.createElement('p', { key: 'p1', className: 'mia-textP', style: paraStyle },
+            '中文正文样例：外观插件给界面换字体、调排版——字重、字距、行距、段距与首行缩进，都在这里试。'),
+          react.createElement('p', { key: 'p2', className: 'mia-textP', style: paraStyle },
+            'Latin & digits: The quick brown fox jumps over 12345 lazy dogs 67890.'),
+          react.createElement('code', { key: 'c', className: 'mia-textCode' },
+            'const answer = 42; // 代码样例（跟随「通用」页的代码字体）'),
+        ]),
+      ])
+    }
+
     module.exports.inject = ['slots']
 
     module.exports.apply = (ctx) => {
@@ -1989,6 +2291,8 @@ window.__ModuleLoader__.load({
       void syncMotion()
       // M4：页面加载即按配置应用会话效果层（与皮肤/动效同步的时机）。
       void syncConversation()
+      // M5：页面加载即按配置应用文字层（host 编译的 CSS 随 /state 下发）。
+      void syncText()
       // 桌面壳主题菜单的「双入口」（M2 S6）：让位时它直接写外观配置并翻 data-mia-skin，
       // **不经过本插件的 save()** ⇒ override 层还挂着旧皮肤的 token、运行期样式也没重算。
       // 这里补一个观察者：属性一翻就重跑三层同步（幂等），换壳主题后不必刷新页面。
@@ -2034,6 +2338,8 @@ window.__ModuleLoader__.load({
           const tag = document.querySelector(`style[data-plugin-css="${RUNTIME_CSS_ID}"]`)
           if (tag !== null) tag.remove()
         } catch { /* ignore */ }
+        // M5：文字层独立标签一并收回（总开关关闭/插件停用 = 官方恢复）。
+        try { textClear() } catch { /* ignore */ }
         runtime = null
       }, 'appearance: boot flag')
     }

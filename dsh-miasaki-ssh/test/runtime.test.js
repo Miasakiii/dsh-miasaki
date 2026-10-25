@@ -451,6 +451,54 @@ test('TICKET: teardown of the runtime voids its outstanding tickets', async () =
   }
 })
 
+// 2026-10-20（monkeyscan e7a2a）：同一 ws 第二次 attach 必须先解绑旧 (runtime, shell) 对，
+// 否则旧 shell 的 viewers / 旧 runtime 的 sockets 一直留着它 ⇒ 旧 shell 的 PTY 字节
+// 继续推给同一 socket（串屏），写权也被陈旧 socket 占着。
+test('VIEWER: 同一 ws 二次 attach 解绑旧绑定（e7a2a）', async () => {
+  const { runtime, cleanup } = await freshRuntime()
+  try {
+    const a = liveRuntime(runtime) // conn-1 / rt-1 / sh-1
+    const ws = attachViewer(runtime, a.rc, a.shell)
+    assert.equal(a.shell.viewers.has(ws), true)
+
+    // 另一条连接上的 runtime（第二次 attach 的目标）
+    const rc2 = new RuntimeConn(runtime, 'conn-2', { host: 'box2', label: 'example2' }, { runtimeId: 'rt-2' })
+    rc2.status = 'connected'
+    runtime.conns.set(rc2.id, rc2)
+    runtime.byProfile.set('conn-2', rc2.id)
+    const shell2 = new ShellChannel(rc2, 1, { cols: 80, rows: 24, title: 'example2' })
+    shell2.stream = fakeStream()
+    rc2.shells.set(shell2.id, shell2)
+    rc2.shellSeq = 1
+
+    const { ticket } = runtime.issueAttachTicket('conn-2')
+    runtime.attach(ws, { ticket, shellId: shell2.id })
+
+    assert.equal(ws.sshRc, rc2, '绑定切到新 runtime')
+    assert.equal(ws.shellId, shell2.id, '绑定切到新 shell')
+    assert.equal(a.shell.viewers.has(ws), false, '旧 shell 的 viewers 必须清掉')
+    assert.equal(a.rc.sockets.has(ws), false, '旧 runtime 的 sockets 必须清掉')
+    assert.equal(a.shell.writeOwner, null, '旧 shell 的写权必须释放')
+    const seen = ws.sentBinary.length
+    runtime.pushTo(a.shell, Buffer.from('A_MARKER'))
+    assert.equal(ws.sentBinary.length, seen, '旧 shell 的输出不得再发给该 socket')
+    assert.equal(shell2.viewers.has(ws), true, '新 shell 绑定生效')
+
+    // 同一 runtime 内换 shell 也要解绑旧 shell（不重复解绑/不泄漏 viewers）
+    const shell3 = new ShellChannel(rc2, 3, { cols: 80, rows: 24, title: 'example2 #3' })
+    shell3.stream = fakeStream()
+    rc2.shells.set(shell3.id, shell3)
+    rc2.shellSeq = 3
+    const next = runtime.issueAttachTicket('conn-2').ticket
+    runtime.attach(ws, { ticket: next, shellId: shell3.id })
+    assert.equal(shell2.viewers.has(ws), false, '同 runtime 换 shell 也要解绑旧 shell')
+    assert.equal(shell3.viewers.has(ws), true)
+    assert.equal(rc2.sockets.has(ws), true, '同一 runtime 的 sockets 只保留一份')
+  } finally {
+    await cleanup()
+  }
+})
+
 // ---- 三层身份 / 每 shell 隔离 ----
 test('SHELLS: two channels keep independent rings, sizes and streams', async () => {
   const { runtime, cleanup } = await freshRuntime()

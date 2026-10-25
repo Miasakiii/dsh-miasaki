@@ -6,9 +6,11 @@ import {
   buildBootScript,
   buildBootStyle,
   buildRuntimeStyle,
+  buildTextCss,
   buildWallpaperLayers,
   configEquals,
   evaluateContract,
+  isInjectionTextSafe,
   mergeConfig,
   migrateConfig,
   sanitizeConfig,
@@ -61,6 +63,58 @@ test('sanitizeConfig：已移除的镜像字段（scheme/accent/fontSize）一�
   assert.equal(sanitizeConfig({ wallpaper: { source: '//evil.example.com/x.png' } }).wallpaper.source, '')
   assert.equal(sanitizeConfig({ wallpaper: { source: 'builtin:night-01' } }).wallpaper.source, 'builtin:night-01')
   assert.equal(sanitizeConfig({ wallpaper: { source: '/appearance/wallpapers/a.webp' } }).wallpaper.source, '/appearance/wallpapers/a.webp')
+})
+
+// 2026-10-19 安全加固（扫描报告 12a7c）：壁纸图源会进首帧 `<style>` 原始文本，
+// `</style>` 能提前闭合元素 ⇒ 存储型 HTML/CSS 注入。修复后：本地路径白名单 +
+// http(s) URL 解析 + 标记/控制字符与 `</style` 一律整值拒绝（回落空串 = 无壁纸）。
+test('sanitizeConfig：壁纸图源拒绝标记字符 / 控制字符 / </style 载荷（12a7c）', () => {
+  const badSources = [
+    '/x</style><script>alert(document.cookie)</script>',
+    '/appearance/wallpaper/local/a b.png',
+    '/appearance/wallpaper/local/a<b.png',
+    '/appearance/wallpaper/local/a"b.png',
+    'https://example.com/bg.jpg</style><script>x</script>',
+    'https://example.com/a.jpg?x=1&y=2',
+    "https://example.com/a'b.jpg",
+    'https://example.com/a`b.jpg',
+    'https://example.com/a.jpg\u0000',
+    'https://example.com/a.jpg\nx',
+  ]
+  for (const bad of badSources) {
+    assert.equal(
+      sanitizeConfig({ wallpaper: { source: bad } }).wallpaper.source,
+      '',
+      `${JSON.stringify(bad)} 必须被清空`,
+    )
+  }
+  // 三种合法形态不受影响：内置 id / 客户端 encodeURIComponent 生成的本地路径 / 普通 URL
+  for (const good of ['builtin:night-01', '/appearance/wallpaper/local/a%20b.png', 'https://example.com/bg.jpg']) {
+    assert.equal(sanitizeConfig({ wallpaper: { source: good } }).wallpaper.source, good)
+  }
+})
+
+test('buildBootStyle：恶意壁纸图源不产出带 </style 的首帧样式（12a7c 纵深）', () => {
+  const payload = '/x</style><script>alert(document.cookie)</script>'
+  // sanitize 已把图源清空 ⇒ 首帧 style 为空串；即便未来 sanitize 被绕过，
+  // buildBootStyle 的最终兜底也不让 `</style` 出门。
+  assert.equal(buildBootStyle({ enabled: true, wallpaper: { source: payload } }, null, {}), '')
+  const crafted = {
+    enabled: true,
+    wallpaper: { source: payload },
+    theme: { skin: 'zafkiel' },
+  }
+  const css = buildBootStyle(crafted, { '--dsw-static-foo': { light: '#fff', dark: '#000' } }, {})
+  assert.equal(/<\/style/i.test(css), false, '首帧样式文本不得含 </style')
+})
+
+test('isInjectionTextSafe：style/script 行闭合序列判据（12a7c 纵深）', () => {
+  assert.equal(isInjectionTextSafe('style', 'body::before { content: none; }'), true)
+  assert.equal(isInjectionTextSafe('style', 'body { background: url("/x</style><script>x</script>"); }'), false)
+  assert.equal(isInjectionTextSafe('style', 'body { background: url("/x</STYLE>"); }'), false, '不区分大小写')
+  assert.equal(isInjectionTextSafe('script', 'document.documentElement.dataset.x = "on"'), true)
+  assert.equal(isInjectionTextSafe('script', 'x</script><script>alert(1)</script>'), false)
+  assert.equal(isInjectionTextSafe('html', '<div>ok</div>'), true, 'html 行不套此判据（splash 自有约束）')
 })
 
 test('migrateConfig：无版本号的旧配置被补上当前版本', () => {
@@ -337,11 +391,15 @@ test('buildWallpaperLayers：与 body::before 的 background-image 同源同序�
   )
   // 无任何层（无壁纸、无遮罩、无晕影）⇒ 空串（面板预览卡走空态）
   assert.equal(buildWallpaperLayers({ enabled: true, wallpaper: { source: '', scrim: 0, vignette: 0 } }, {}), '')
-  // 本地图源走 url()，反斜杠与引号按 boot style 同一规则转义
+  // 本地图源走 url()；2026-10-19（12a7c）起本地路径只收 URL 安全字符 ——
+  // 面板/客户端本来就用 encodeURIComponent 生成（空格 ⇒ %20），故合法路径不受影响。
   assert.match(
-    buildWallpaperLayers({ enabled: true, wallpaper: { source: '/appearance/wallpaper/local/a b.png' } }, {}),
-    /url\("\/appearance\/wallpaper\/local\/a b\.png"\)/,
+    buildWallpaperLayers({ enabled: true, wallpaper: { source: '/appearance/wallpaper/local/a%20b.png' } }, {}),
+    /url\("\/appearance\/wallpaper\/local\/a%20b\.png"\)/,
   )
+  // 未编码的空格 / 标记字符不再放行（sanitize 清空 ⇒ 无壁纸层）
+  assert.equal(buildWallpaperLayers({ enabled: true, wallpaper: { source: '/appearance/wallpaper/local/a b.png' } }, {}), '')
+  assert.equal(buildWallpaperLayers({ enabled: true, wallpaper: { source: '/appearance/wallpaper/local/a"b.png' } }, {}), '')
 })
 
 test('buildBootScript：glass 属性随配置写入、关闭时恒 off', () => {
@@ -512,4 +570,83 @@ test('mergeConfig：会话效果单字段可独立更新，不被同板块或其
   })
   // 只碰别的板块时 conversation 原样保留
   assert.deepEqual(mergeConfig(current, { motion: { enabled: true } }).conversation, current.conversation)
+})
+
+// --------------------------------------------------------------- M5 文字板块（v8）
+test('sanitizeConfig：M5 文字板块白名单收窄（v8；字重只认整百、metric 钳制且留小数）', () => {
+  const text = sanitizeConfig({
+    text: {
+      uiWeight: '450', headingWeight: 'abc',
+      letterSpacing: 999, lineHeight: -5, paragraphSpacing: 'abc', firstLineIndent: 99,
+    },
+  }).text
+  assert.equal(text.uiWeight, '', '非整百字重回退不覆盖')
+  assert.equal(text.headingWeight, '', '非数字串回退不覆盖')
+  assert.equal(text.letterSpacing, 3, '字距钳制到上限')
+  assert.equal(text.lineHeight, 0, '负值钳到 0（= 不覆盖）')
+  assert.equal(text.paragraphSpacing, 0, '非有限数回退 0')
+  assert.equal(text.firstLineIndent, 4, '缩进钳制到上限')
+  // 步进器 step 产生的小数必须原样保留（clampNumber，不是 clampInt）
+  const fine = sanitizeConfig({ text: { letterSpacing: 0.1, firstLineIndent: 1.5 } }).text
+  assert.equal(fine.letterSpacing, 0.1)
+  assert.equal(fine.firstLineIndent, 1.5)
+  // 合法档位原样通过
+  const ok = sanitizeConfig({ text: { uiWeight: '500', headingWeight: '700' } }).text
+  assert.equal(ok.uiWeight, '500')
+  assert.equal(ok.headingWeight, '700')
+  // 缺板块（旧配置）⇒ 全原生档
+  assert.deepEqual(sanitizeConfig({ version: 7 }).text, DEFAULT_CONFIG.text)
+})
+
+test('migrateConfig：v7 配置升到 v8 时 text 板块补原生档（纯新增、零行为变化）', () => {
+  const legacy = migrateConfig({ version: 7, enabled: true, theme: { skin: 'zafkiel' } })
+  assert.equal(legacy.version, CONFIG_VERSION)
+  const safe = sanitizeConfig(legacy)
+  assert.deepEqual(safe.text, DEFAULT_CONFIG.text, '旧配置补齐的必须是全原生档（不覆盖任何规则）')
+  assert.equal(buildTextCss(safe), '', '升级后文字层零规则')
+})
+
+test('buildTextCss：总开关关闭或全原生档 ⇒ 空串（关掉即原生）', () => {
+  assert.equal(buildTextCss(sanitizeConfig({ enabled: false, text: { uiWeight: '700' } })), '')
+  assert.equal(buildTextCss(sanitizeConfig({ enabled: true })), '')
+  assert.equal(buildTextCss(sanitizeConfig({ enabled: true, text: { uiWeight: '', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 } })), '')
+})
+
+test('buildTextCss：各单项规则与层叠语义（字重两条 + 标题回退 + 四 metric 的 calc 叠加）', () => {
+  const cssOf = text => buildTextCss(sanitizeConfig({ enabled: true, text }))
+  // 界面字重：body 低特异性（只影响继承文本）+ Markdown 段落 !important（font 简写连带字重）
+  const ui = cssOf({ uiWeight: '500' })
+  assert.match(ui, /body \{ font-weight: 500; \}/, '界面字重挂 body（低特异性）')
+  assert.match(ui, /\[class\*="_markdown"\] p, \[class\*="_markdown"\] li, \[class\*="_markdown"\] blockquote, \[class\*="_markdown"\] td \{ font-weight: 500 !important; \}/)
+  // 标题留空 = 跟随界面字重（h1–h6 规则用同一个值）
+  assert.match(ui, /h1, \[class\*="_markdown"\] h2.*font-weight: 500 !important/, '标题留空跟随界面字重')
+  // 只设标题字重（界面留空）⇒ 不出 body 规则，只出标题规则
+  const headingOnly = cssOf({ headingWeight: '700' })
+  assert.doesNotMatch(headingOnly, /body \{ font-weight/, '界面字重留空 = 不覆盖')
+  assert.match(headingOnly, /h6 \{ font-weight: 700 !important; \}/)
+  const both = cssOf({ uiWeight: '400', headingWeight: '800' })
+  assert.match(both, /body \{ font-weight: 400; \}/)
+  assert.match(both, /h1, \[class\*="_markdown"\] h2, \[class\*="_markdown"\] h3, \[class\*="_markdown"\] h4, \[class\*="_markdown"\] h5, \[class\*="_markdown"\] h6 \{ font-weight: 800 !important; \}/)
+  assert.doesNotMatch(both, /h6 \{ font-weight: 400/, '标题不得被界面字重压平')
+  // 排版四项：0 值不进规则（段距 0 会压掉官方 margin-block）
+  assert.doesNotMatch(cssOf({ paragraphSpacing: 0 }), /margin-block/)
+  assert.match(cssOf({ letterSpacing: 1.5 }), /\[class\*="_markdown"\] \{ letter-spacing: 1\.5px; \}/)
+  assert.match(cssOf({ paragraphSpacing: 8 }), /\[class\*="_markdown"\] p \{ margin-block: 8px !important; \}/)
+  assert.match(cssOf({ firstLineIndent: 2 }), /\[class\*="_markdown"\] p \{ text-indent: 2em; \}/)
+  // 行距必须是**叠加**公式（官方基准 24px + 字号增量），写死会与官方字号调节脱钩
+  assert.match(cssOf({ lineHeight: 4 }), /line-height: calc\(24px \+ var\(--dsh-content-font-delta, 0px\) \+ 4px\) !important; \}/)
+  // 组合：六项全开时每条规则都在（互不遮挡）
+  const all = cssOf({ uiWeight: '600', headingWeight: '700', letterSpacing: 0.2, lineHeight: 2, paragraphSpacing: 6, firstLineIndent: 1.5 })
+  for (const fragment of ['font-weight: 600', 'font-weight: 700', 'letter-spacing: 0.2px', 'calc(24px', 'margin-block: 6px', 'text-indent: 1.5em']) {
+    assert.ok(all.includes(fragment), `组合配置必须包含 ${fragment}`)
+  }
+})
+
+test('mergeConfig：文字板块单字段可独立更新（草稿确认制只发改动的那几项）', () => {
+  const current = sanitizeConfig({ text: { uiWeight: '500', letterSpacing: 1 } })
+  const next = mergeConfig(current, { text: { letterSpacing: 2 } })
+  assert.deepEqual(next.text, { uiWeight: '500', headingWeight: '', letterSpacing: 2, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 })
+  // configEquals 对 text 生效（无实质变化的写入不落盘）
+  assert.equal(configEquals(current, sanitizeConfig({ text: { uiWeight: '500', letterSpacing: 1 } })), true)
+  assert.equal(configEquals(current, next), false)
 })

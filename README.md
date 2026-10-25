@@ -16,8 +16,8 @@
 > dsh plugin --profile web add @miasaki/dsh-canvas
 > ```
 >
-> **进度如实说**：静态回归 **185 项**全绿、分发包 **7/7** 实测可打包、依赖声明与脱敏逐项核过；
-> 但[实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 是 **72 / 138 项**
+> **进度如实说**：静态回归 **200 项**全绿、分发包 **7/7** 实测可打包、依赖声明与脱敏逐项核过；
+> 但[实机验收台账](dsh-miasaki-shared-docs/cross/smoke-test-matrix.md) 是 **72 / 150 项**
 > （勾选口径 = 日常使用确认；需刻意构造或特殊环境的项仍留空）——
 > 装机遇到问题请[开 issue](https://github.com/Miasakiii/dsh-miasaki/issues)，别自己扛。
 
@@ -56,7 +56,7 @@ dsh plugin --profile web add @miasaki/dsh-canvas
 | **会话布** | 可浏览 / 可分支 / 可合并的会话画布 | `@miasaki/dsh-canvas` |
 | **SSH** | 不切终端，在 DSH 里直连服务器：多 shell、SFTP、跳板、端口转发 | `@miasaki/dsh-ssh` |
 | **侧边栏** | 官方右栏的「审查」与「辅助对话」两个 tab，外加底部内嵌终端 | `@miasaki/dsh-sidebar` |
-| **外观** | 设置里多一栏「外观」：皮肤 / 壁纸 / 动效 / 启动片头 | `@miasaki/dsh-appearance` |
+| **外观** | 设置里多一栏「外观」：皮肤 / 壁纸 / 动效 / 会话效果 / 文字（字重与排版）/ 启动片头 | `@miasaki/dsh-appearance` |
 | **双模型** | 会话级「主模型 + 辅助模型」，任一支持图片即可发图 | `@miasaki/dsh-dual-model` |
 | **用量统计** | 每个会话烧了多少 token：实时明细、年热力图、趋势、今日限额 | `@miasaki/dsh-token-monitor` |
 | **免费模型** | 把本机所有免费模型聚成一张表，带能力画像与一键设默认 | `@miasaki/dsh-free-model` |
@@ -81,7 +81,9 @@ Windows 桌面壳：双击 EXE → **全屏视频开机片头**（七段可选�
 ### Fleet
 
 多 Agent CLI 编排：**一个总指挥 + N 个 worker**，以文件总线为唯一协调通道。
-面向开发者的工具，不是 DSH 插件。
+面向开发者的工具，不是 DSH 插件。**2026-10-19 起附带一个 DSH 入口插件**
+（`dsh-miasaki-fleet/plugins/dsh-fleet-panel`）：会话视图 tab「Fleet」（排在「用量」之后，
+每个会话独立打开、原生渲染）直接看 fleet-monitor 面板（自动拉起 monitor，数据层与判定口径不变）。
 
 ---
 

@@ -2,6 +2,106 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-10-19 · 安全加固：壁纸图源白名单 + 围栏端口判据 + 本机图片路由 Host 校验（12a7c / 04af2 / c0787）
+
+**触发**：代码扫描（`_refs/monkeyscan-2026-10-19/`）三份报告核实为真实缺陷：
+12a7c（壁纸图源可注入 `</style><script>` ⇒ 存储型 HTML/CSS 注入）、
+04af2（围栏只比 Origin hostname，且任意环回 Origin 无条件放行 ⇒ 同站跨端口页面可改配置）、
+c0787（`/appearance/wallpaper|avatar` 文件路由不读请求头 ⇒ 任意网页 `<img>` 探测 +
+DNS 重绑定可同源读字节）。修复规格：`_refs/monkeyscan-2026-10-19/FIX-SPEC.md` §2/§4；
+核实报告：`_refs/monkeyscan-2026-10-19/verify/E-appearance-canvas-freemodel.md` 与 `verify/LEAD-fence.md`。
+
+**12a7c 壁纸图源（`lib/config.js`）**：
+- `toWallpaperSource` 收紧：本地路径白名单 `^/[A-Za-z0-9._~%/-]*$`（面板本来就用
+  `encodeURIComponent` 生成路径，空格/中文会编码，合法壁纸不受影响）；http(s) 先
+  `new URL()` 解析，再拒 `<`、`>`、`&`、单/双引号、反引号与控制字符；任一分支出现
+  `</style`（不区分大小写）整值拒绝（回落空串 = 无壁纸）。
+- 纵深两道：`wallpaperLayerValue` 对含 `</style` 的图源整段不输出；`buildBootStyle` 末尾
+  再兜一次（触发即整段空串 = 原生观感）；新增 `isInjectionTextSafe()` 供 `index.js` 的
+  `pushRow` 拒绝任何含闭合序列的 style / script 注入行。
+- 已知行为变化：**导入的配置里含标记字符/控制字符的图源会被清空**（此前会被原样持久化，
+  并在下次页面加载时进入首帧 `<style>` 原始文本）。
+
+**04af2 围栏（`lib/fence.js`）**：
+- 新增 `splitHostPort()` / `isTrustedHost()`；`fenceCheck` 增加**端口判据**：Origin 显式带
+  端口时必须等于 Host 端口（Origin 端口被 Chromium 剥掉时退回 hostname 判定，不误拒）。
+- **删除回环 Origin 无条件豁免**：Origin hostname 必须等于 Host hostname（Host 已先验为
+  环回/trusted）。
+- 后续可选加固（本批刻意不做、避免超范围）：拒绝 `sec-fetch-site` 非 `same-origin`、
+  写路由要求自定义请求头（强制预检）——留作下一轮。
+
+**c0787 文件路由（`index.js`）**：
+- `fileRoute` 开头加 `isTrustedHost()` 校验：Host 非环回/trusted 一律 403（含缺失 Host）。
+  只查 Host、不查 Origin / `Sec-Fetch-Site`：`<img>` 可能没有 Origin，套完整围栏会误伤正常预览。
+- 目录 + 文件名白名单 + 防穿越仍是第二道（未变）。
+
+**测试**：appearance 单测 179 → **188 例**（新增 12a7c 载荷与纵深断言、04af2 围栏端口/
+回环豁免用例、c0787 文件路由 Host 拒绝断言），`node --test test/*.test.js` 全绿；
+`npm run build`（node --check）全绿。
+
+**实机待验**（归用户）：① 正常壁纸/头像预览不受影响（设置页能看图）；② 从另一
+`127.0.0.1` 端口起的页面 POST `/appearance/api/config` 得 403；③ 导入含 `<` / 未编码空格 /
+控制字符图源的旧配置文件会回落「无壁纸」。
+
+## 2026-10-19 · M5「文字」板块：字重 + 排版四件套 + 吸底总预览 + 草稿确认制（config v8）
+
+**触发**：用户分享社区插件 `dsh-font-probe`（<https://github.com/lohana20061023-29/dsh-font-probe>）
+提问「是不是可以加载我们外观设置里」，分析后拍板**按 B 立项**（合并进本线，不原样安装）。
+完整分析与取舍见 [设计文档](2026-10-19-appearance-m5-text-typography-design.md) §1。
+
+**范围决策（关键）**：对照本机实装 **0.2.1-rc.2 官方源码**逐条核实后确认——
+`dsh-font-probe` README 的立论（「DSH GUI 没有字体族选项」）**已过时**：官方 `dsh-client-ui-theme`
+在 0.2.1 起内置了正文字体 / 代码字体 / 侧栏终端字体三行（`settings.general.item` order 11，
+`textFontFamily` / `codeFontFamily` / `terminalFontFamily`，volatile 持久化）与正文字号 /
+**代码字号**（`--dsh-code-font-size`）。因此本板块**只做官方没有的**：
+
+- **界面字重 / 标题字重**（300–900 整百，留空 = 不覆盖；标题留空 = 跟随界面字重）；
+- **排版四件套**：字距 0–3px（step 0.1）/ 行距 0–12px（step 1，**叠加**）/ 段距 0–24px（step 2）/
+  首行缩进 0–4em（step 0.5）；
+- **吸底总预览 + 草稿确认制**（复刻其被验证过的交互：六项控件只改草稿，底部预览实时渲染，
+  点「确认应用」才写盘——误触滑块不立刻全局生效）。
+
+**不做**：字体族 / 代码字体族 / 正文字号 / 代码字号（官方通用页已有，2026-09-26 去重纪律）；
+本机字体枚举（Local Font Access API，官方输入框已接受任意字体名，枚举是便利非能力）。
+
+**实现要点**：
+
+1. **config v7 → v8**：新增顶层 `text` 板块（纯新增，旧配置 sanitize 补全原生档 ⇒ 升级零行为变化）；
+   字重存字符串白名单（`WEIGHTS`），四 metric 存 number（`clampNumber` 保留 0.1 小数）。
+2. **CSS 编译为 host 侧纯函数** `buildTextCss`：总开关关或全原生档 ⇒ 空串；界面字重挂 `body`
+   （低特异性，只影响继承文本，不压平标题层级）+ Markdown 段落 `!important`（`font` 简写连带字重）；
+   行距用**叠加公式** `calc(24px + var(--dsh-content-font-delta, 0px) + Xpx) !important`
+   （写死会与官方字号调节脱钩）；排版四项只作用于 `[class*="_markdown"]`（CSS Module 哈希钩子，
+   刻意不用全局 `p`——那会缩进插件自己的说明文字）。
+3. **注入链路**：host 编译、client 注册——`/state` 与 `/config`（成功 / 无变化 / 409）随发
+   `textCss`（与 `wallpaperLayers` 同款），client 写独立 `<style data-plugin-css="…/text.css">`；
+   「撤销 = 标签移除 = 官方恢复」。**不进 boot style**：文字无首帧闪色问题，且 boot style
+   注入一次不可撤销（!important 会永久压过官方）——刷新后「先原生后套上」为已知限制（同 M4）。
+4. **面板**：新组「文字」（会话效果之后、启动之前）；两个字重走官方选择丸 + Menu，四排版项走
+   官方步进器；总预览卡（标题样张 + 中英文样例 + 代码样例，样式按草稿内联计算，配色只走
+   `--dsw-*` 令牌）+ 吸底确认栏（`position:sticky;bottom:0`）。草稿态两个 useState **追加在
+   panel state 队列最末**（不破坏既有 10 项顺序的测试纪律）。
+5. **锚点自检**（静默失效 #10 延续）：`probeTextAnchors` —— flow 有消息但无 `_markdown` 容器
+   ⇒ 面板明说；无消息 / 会话页不在 ⇒ 不误报。
+6. **`effectVisibility` 补 text 判据**（任一项非默认 = 有可见变化），native 文案补指引。
+
+**顺带修掉两处既有渲染文案的 `**` 残留**（设置页是纯文本渲染，`**` 显示成字面星号，
+违反本线风格纪律）：启动片头行与配置导入导出行。
+
+**借鉴入账**（dsh-font-probe `docs/INTERNALS.md` 七条踩坑记录，本设计逐条采纳或明确不适用）：
+令牌自引用禁令（兜底栈抄字面量）/ 行高叠加公式 / markdown 作用域 / 三层分离（界面显示-实际生效-
+已落盘）/ `body` 低特异性压字重。**其「写回 profile 的 cordis.patch.yml」路线未采纳**——
+它 v1.5.2 自修的 bug（装/卸别插件时 pnpm prune 掉 schemastery ⇒ 设置页整块消失）恰说明该路线
+在多插件 pnpm 环境下脆弱；本线自管 `config.json` 不受影响。
+
+**测试**：**165 → 179 例**（config +5：v8 迁移 / sanitize 白名单 / buildTextCss 各单项与组合 /
+merge；client +7：面板渲染六行 / 草稿确认制两场景 / 旧 host 提示 / 文字层行为三场景 / 锚点自检四态 /
+#8 补 / 风格契约；host +2：/state 与 /config 随发 textCss、409 同款）。
+**踩坑记录（测试侧）**：VM realm 数组的 `deepStrictEqual` 判据——`props.items` 是 VM 的 Array，
+直接 `.map()` 得到的是 VM realm 数组（原型与宿主不同）⇒ JSON 一模一样仍判不等；
+必须先 spread 成宿主 realm 数组（既有 `idsOf` 助手同款纪律，新用例照做并注释）。
+另：panel 的 `stateQueue` 实为 **11 项**（含 openMenu 与 presetsInfo），草稿态队列须给足 11 项。
+
 ## 2026-10-18 · 壁纸在两个狂三主题下「无法设置」：params 层解绑皮肤 + 壁纸层运行期生效 + 预览卡
 
 **触发**：用户「关于壁纸设置，是在纯净主题下设置的，狂三的两个主题无法设置壁纸。外观设置页做好点」。

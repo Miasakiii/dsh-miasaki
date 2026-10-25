@@ -217,6 +217,22 @@ test('注入行：总开关开 + 非 pure 皮肤时追加 head style 行（双�
   assert.equal(offTable.find(row => row.kind === 'style'), undefined, '总开关关闭时不得注入任何 style')
 })
 
+// 2026-10-19 安全加固（扫描报告 12a7c）：恶意壁纸图源经 POST /config 写入时必须被
+// sanitize 拒绝；随后注入表里的 style 行不得出现 `</style`（否则会截断内核的 <style> 文本）。
+test('恶意壁纸图源：POST /config 被拒 + 注入行不含 </style（12a7c 端到端）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  const payload = '/x</style><script>alert(document.cookie)</script>'
+  const written = await writeConfig(ctx, { patch: { enabled: true, wallpaper: { source: payload } } })
+  assert.equal(written.status, 200)
+  assert.equal(written.body.config.wallpaper.source, '', '恶意图源必须被 sanitize 清空')
+  const table = []
+  ctx.taps[0].callback(table)
+  for (const row of table.filter(r => r.kind === 'style')) {
+    assert.equal(/<\/style/i.test(row.text), false, '注入的 style 行不得含 </style')
+  }
+})
+
 // 2026-10-18：运行期两件下发（/skin 的 styleCss、/state·/config 的 wallpaperLayers）。
 // 判据 = 「面板改完立即生效」与「预览即真相」都只能由 host 供源 —— client bundle
 // 不能 import lib/config.js，内置渐变与规则生成逻辑只有 host 一份。
@@ -267,18 +283,23 @@ test('本地壁纸路由：白名单文件 200，穿越与非法扩展 404', asy
   host.apply(ctx, { dataDir: dir })
   const route = ctx.routes.find(r => r.path === '/appearance/wallpaper')
 
-  const call = (pathname) => new Promise(resolve => {
+  const call = (pathname, hostHeader = '127.0.0.1:3080') => new Promise(resolve => {
     const res = {
       writeHead(status, headers) { this.status = status; this.headers = headers },
       end(body) { resolve({ status: this.status, headers: this.headers, body }) },
     }
-    void route.handler({ url: pathname, method: 'GET', headers: {} }, res)
+    void route.handler({ url: pathname, method: 'GET', headers: { host: hostHeader } }, res)
   })
 
   const ok = await call('/appearance/wallpaper/local/good.png')
   assert.equal(ok.status, 200)
   assert.equal(ok.headers['content-type'], 'image/png')
   assert.equal(String(ok.body), 'png-bytes')
+
+  // 2026-10-19 c0787：文件路由也必须校验 Host —— 否则任意网页可 img 探测、
+  // DNS 重绑定可同源读字节。只查 Host（img 可能没有 Origin），不可信/缺失一律 403。
+  assert.equal((await call('/appearance/wallpaper/local/good.png', 'evil.example:3080')).status, 403, '不可信 Host 必须 403')
+  assert.equal((await call('/appearance/wallpaper/local/good.png', '')).status, 403, '缺 Host 必须 403')
 
   assert.equal((await call('/appearance/wallpaper/local/%2e%2e%2fconfig.json')).status, 404, '编码穿越必须 404')
   assert.equal((await call('/appearance/wallpaper/local/good.png%2f%2e%2e%2fsecret')).status, 404)
@@ -308,14 +329,14 @@ function pngPayload(tail = 8) {
 }
 
 /** 调用图片文件路由（无 JSON 体，需读回原始字节）。 */
-function callFile(ctx, pathname) {
+function callFile(ctx, pathname, hostHeader = '127.0.0.1:3080') {
   const route = ctx.routes.find(r => r.path === '/appearance/avatar')
   return new Promise(resolve => {
     const res = {
       writeHead(status, headers) { this.status = status; this.headers = headers },
       end(body) { resolve({ status: this.status, headers: this.headers, body }) },
     }
-    void route.handler({ url: pathname, method: 'GET', headers: {} }, res)
+    void route.handler({ url: pathname, method: 'GET', headers: { host: hostHeader } }, res)
   })
 }
 
@@ -344,6 +365,12 @@ test('头像上传 → 清单 → 文件路由：合法 PNG 全链路可达', as
   assert.equal(got.status, 200)
   assert.equal(got.headers['content-type'], 'image/png')
   assert.deepEqual(Buffer.from(got.body), bytes)
+  // 2026-10-19 c0787：头像文件路由同样只收可信 Host（防跨站探测 / DNS 重绑定读字节）
+  assert.equal(
+    (await callFile(ctx, `/appearance/avatar/${up.body.file}`, 'evil.example:3080')).status,
+    403,
+    '不可信 Host 必须 403',
+  )
 
   // 上传后经 /config 启用：配置里存的是本线头像路由下的白名单路径（跨线契约的一半）
   const enabled = await callApi(ctx, '/appearance/api/config', 'POST', { patch: { avatar: { source: up.body.url } } })
@@ -611,4 +638,37 @@ test('P5：replace:true 会收窄越界与未知字段（导入内容一律当�
   assert.deepEqual(res.body.config.theme, { skin: 'zafkiel' }, '未知字段不得进入配置')
   assert.equal(res.body.config.conversation.maxWidth, 1600, '越界值被收窄到上界')
   assert.equal(res.body.config.enabled, false, '非布尔值回落到出厂值，而不是被当成真')
+})
+
+// --------------------------------------------------------------- M5 文字板块（v8）
+test('M5：/state 与 /config 响应随发 textCss（host 编译、client 注册同款链路）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  // 出厂配置（总开关关）⇒ textCss 空串（「关掉即原生」在响应面上可见）
+  const initial = await callApi(ctx, '/appearance/api/state')
+  assert.equal(initial.status, 200)
+  assert.equal(initial.body.textCss, '', '总开关关闭时 textCss 必须为空串')
+  // 开启总开关 + 设字重 ⇒ 写入响应与后续 /state 都带编译好的规则
+  const written = await writeConfig(ctx, { patch: { enabled: true, text: { uiWeight: '500' } } })
+  assert.equal(written.status, 200)
+  assert.match(written.body.textCss, /body \{ font-weight: 500; \}/, '写入响应必须随发 textCss')
+  const after = await callApi(ctx, '/appearance/api/state')
+  assert.match(after.body.textCss, /font-weight: 500 !important/, '/state 同样随发（刷新后即时生效的取数处）')
+  // 配置里 text 板块确实落盘形状（v8）
+  assert.deepEqual(after.body.config.text, {
+    uiWeight: '500', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0,
+  })
+  assert.equal(after.body.config.version, 8)
+})
+
+test('M5：409 冲突响应也带 textCss（三种 /config 响应形状一致）', async () => {
+  const ctx = fakeCtx()
+  host.apply(ctx, {})
+  await writeConfig(ctx, { patch: { enabled: true, text: { letterSpacing: 1.5 } } })
+  // 故意带错修订号触发 409
+  const conflict = await callApi(ctx, '/appearance/api/config', 'POST', {
+    patch: { text: { letterSpacing: 2 } }, expectedRevision: 999,
+  })
+  assert.equal(conflict.status, 409)
+  assert.match(conflict.body.textCss, /letter-spacing: 1\.5px/, '409 响应必须带回当前生效的 textCss（客户端据它刷新预览层）')
 })

@@ -75,6 +75,28 @@ test('结构层：同源 Origin / Referer 放行（浏览器正常页面请求�
   assert.equal(structuralFence({ ...LOOPBACK, referer: 'http://127.0.0.1:3080/index.html' }).ok, true)
 })
 
+test('结构层：Origin 显式端口与 Host 不一致 → 403（d7d27 跨端口同站 CSRF）', () => {
+  const crossPort = structuralFence({ host: '127.0.0.1:3080', origin: 'http://127.0.0.1:5173' })
+  assert.equal(crossPort.ok, false)
+  assert.equal(crossPort.status, 403)
+  assert.equal(crossPort.error, '跨端口来源被拒绝')
+
+  assert.equal(structuralFence({ host: 'localhost:3080', origin: 'http://localhost:9999' }).status, 403)
+  assert.equal(structuralFence({ host: '[::1]:3080', origin: 'http://[::1]:5173' }).status, 403)
+  // Host 未写端口 ⇒ 按 Origin 的 scheme 取默认端口比较：http 默认 80，5173 不一致
+  assert.equal(structuralFence({ host: '127.0.0.1', origin: 'http://127.0.0.1:5173' }).status, 403)
+})
+
+test('结构层：同端口放行 / Origin 无端口（Chromium 剥离）按 hostname 放行（d7d27）', () => {
+  assert.equal(structuralFence({ host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' }).ok, true)
+  assert.equal(structuralFence({ host: 'localhost:3080', origin: 'http://localhost:3080' }).ok, true)
+  // Chromium 会剥掉非默认端口：Origin 无端口时必须沿用 hostname 判定，不得误拒
+  assert.equal(structuralFence({ host: '127.0.0.1:3080', origin: 'http://127.0.0.1' }).ok, true)
+  // https 场景：URL 会把默认 443 规范化掉，同样不得误拒
+  assert.equal(structuralFence({ host: '127.0.0.1:443', origin: 'https://127.0.0.1' }).ok, true)
+  assert.equal(structuralFence({ host: '127.0.0.1', origin: 'https://127.0.0.1' }).ok, true)
+})
+
 // ---------------------------------------------------------------------------
 // connection 服务层
 // ---------------------------------------------------------------------------

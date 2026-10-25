@@ -16,7 +16,8 @@ import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
 // M4 白名单直接从 host 半取——client bundle 不能 import（装载器只给 require），
 // 两侧同源靠这些常量比对（bundle 里的选项表必须与 host sanitize 白名单一致）。
-import { DENSITIES, FONTS, CURSOR_STYLES, QUOTE_CODE_LEVELS } from '../lib/config.js'
+// M5：WEIGHTS / 排版边界同款同源比对（字重档位与 metric 上限）。
+import { DENSITIES, FONTS, CURSOR_STYLES, QUOTE_CODE_LEVELS, WEIGHTS, LETTER_SPACING_MAX, LINE_HEIGHT_MAX, PARAGRAPH_SPACING_MAX, FIRST_LINE_INDENT_MAX, buildTextCss } from '../lib/config.js'
 
 const source = await readFile(new URL('../client.js', import.meta.url), 'utf8')
 
@@ -91,7 +92,9 @@ function capture(opts = {}) {
     querySelectorAll: () => [],
   }
   // fetch stub：/state 与 /skin 由 CONV_FETCH_CONFIG / skin 夹具应答——apply 时
-  // syncSkin / syncMotion / syncConversation 三个协程都会打 /state。
+  // syncSkin / syncMotion / syncConversation / syncText 四个协程都会打 /state。
+  // M5：非 /skin 响应随发 `textCss`（host 侧 buildTextCss 对夹具的实时编译）——
+  // 与 index.js 的 /state、/config 响应同款；行为测试整体替换 CONV_FETCH_CONFIG.text。
   // `fetches` 记录每次调用（P4 恢复默认要点验「发出去的是 host 下发的默认值」）。
   const fetches = []
   const fetchStub = (url, init) => {
@@ -101,7 +104,7 @@ function capture(opts = {}) {
       status: 200,
       json: async () => String(url).endsWith('/skin')
         ? (opts.skin ?? { id: 'pure', tokens: null, wallpaperActive: false, surface: null, meta: { preferredScheme: 'dark' } })
-        : { config: CONV_FETCH_CONFIG, defaults: opts.defaults ?? CONV_DEFAULTS, revision: 1, persistent: true },
+        : { config: CONV_FETCH_CONFIG, defaults: opts.defaults ?? CONV_DEFAULTS, revision: 1, persistent: true, textCss: buildTextCss(CONV_FETCH_CONFIG) },
     })
   }
   // getComputedStyle：M4 锚点自检读锚点上官方变量的计算值。默认一律空串（= 什么都读不出来），
@@ -143,6 +146,9 @@ const CONV_FETCH_CONFIG = {
   avatar: { source: '' },
   motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'off' },
   conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+  // M5（v8）：文字板块夹具。**默认全原生档**——既有用例（#8 无可见效果等）的判据
+  // 不被新板块搅动；行为测试整体替换 CONV_FETCH_CONFIG.text。
+  text: { uiWeight: '', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 },
   boot: { intro: 'brand', audio: false },
 }
 
@@ -152,7 +158,7 @@ const CONV_FETCH_CONFIG = {
  * 其余板块也取默认值 ⇒ **只有被行为测试改过的板块才会冒出恢复按钮**。
  */
 const CONV_DEFAULTS = {
-  version: 7,
+  version: 8,
   enabled: false,
   theme: { skin: 'pure' },
   wallpaper: {
@@ -163,6 +169,7 @@ const CONV_DEFAULTS = {
   avatar: { source: '' },
   motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
   conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+  text: { uiWeight: '', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 },
   boot: { intro: 'brand', audio: false },
 }
 
@@ -1623,7 +1630,7 @@ function renderPanelReturningText(config) {
 function nativeConfig(over) {
   return {
     // host 下发的配置**一定**带 version（sanitizeConfig 补的）；夹具照抄，否则导出名/迁移判据失真
-    version: 7,
+    version: 8,
     enabled: true,
     theme: { skin: 'pure' },
     wallpaper: {
@@ -1639,6 +1646,8 @@ function nativeConfig(over) {
     // 启动片头（v7）同理：必须等于出厂档，否则 P4 会在启动板块凭空长出一枚恢复按钮，
     // 而「全原生档」用例（#8）断言的正是「一个恢复按钮都不出现」。
     boot: { intro: 'brand', audio: false },
+    // 文字（v8）同理：全原生档（空字重 + 四个 0）。
+    text: { uiWeight: '', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 },
     ...over,
   }
 }
@@ -1873,15 +1882,15 @@ test('P5：导出 —— 下发的 JSON 带自描述标记、版本与当前配�
   assert.equal(cap.blobs.length, 1, '导出应造出一份 Blob')
   const payload = JSON.parse(cap.blobs[0].parts[0])
   assert.equal(payload.kind, 'miasaki-appearance-config', '自描述标记：导入侧据此识别本线配置')
-  // 版本随 CONFIG_VERSION（v7 起含启动片头板块）；夹具 nativeConfig 同步抬版本，
+  // 版本随 CONFIG_VERSION（v8 起含文字板块）；夹具 nativeConfig 同步抬版本，
   // 此处硬编码是**有意**的：版本漂移时必须有人来改这一行，而不是让断言跟着实现自动漂。
-  assert.equal(payload.version, 7, '带配置版本，便于将来迁移')
+  assert.equal(payload.version, 8, '带配置版本，便于将来迁移')
   assert.equal(payload.config.theme.skin, 'zafkiel', '导出的是**当前**配置')
   assert.deepEqual(Object.keys(payload.config).sort(), Object.keys(CONV_DEFAULTS).sort(), '导出的是归一化后的完整配置')
 
   const anchor = cap.created.find(el => el.tagName === 'A')
   assert.notEqual(anchor, undefined, '导出应创建下载锚点')
-  assert.match(anchor.download, /^miasaki-appearance-config-v7\.json$/, '文件名带版本，便于区分备份')
+  assert.match(anchor.download, /^miasaki-appearance-config-v8\.json$/, '文件名带版本，便于区分备份')
   assert.equal(anchor.clicked, true, '必须真的触发下载')
   assert.equal(cap.objectUrls.length, 1, 'objectURL 应被回收（不泄漏）')
 })
@@ -2210,4 +2219,288 @@ test('桌面壳拦路时给出说明（否则「表面不透明度」旋钮动�
   } finally {
     react.stateQueue = null
   }
+})
+
+// --------------------------------------------------------------- M5 文字板块（v8）
+/** 文字板块的配置夹具（v8 形状；over 覆盖单项）。 */
+function textConfig(over = {}) {
+  return {
+    enabled: true,
+    theme: { skin: 'pure' },
+    wallpaper: {
+      source: '', light: '', dark: '', blur: 0, scrim: 0,
+      fit: 'cover', focus: 'center', glass: 'off', vignette: 0,
+      surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 },
+    },
+    avatar: { source: '' },
+    motion: { enabled: false, preset: 'fluid', scale: 1, bootSplash: 'auto' },
+    conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+    text: { uiWeight: '', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0, ...over },
+    boot: { intro: 'brand', audio: false },
+  }
+}
+
+test('M5 面板渲染：文字板块六行 + 总预览 + 草稿确认栏（控件全走官方原语）', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [
+    { config: textConfig({ uiWeight: '500', letterSpacing: 1.5 }), revision: 20, persistent: true },
+    null, null, false, null, { local: [] }, { presets: [] }, null,
+  ]
+  try {
+    const element = view()
+    const texts = collectText(element)
+    for (const title of ['文字', '界面字重', '标题字重', '字距', '行距', '段距', '首行缩进', '总预览', '确认应用', '还原草稿']) {
+      assert.equal(texts.includes(title), true, `「${title}」必须在`)
+    }
+    // 两个字重行走选择丸 + Menu，菜单项 = host 白名单 WEIGHTS（同源纪律）。
+    // ⚠ 必须先展开再 map：props.items 是 **VM realm** 的数组，直接 .map() 得到的是
+    // VM 的 Array（原型与宿主 realm 不同）⇒ deepStrictEqual 判不等（JSON 却一模一样）。
+    // 既有用例的 idsOf 助手同样先 spread——同一条纪律。
+    const menus = collectNodes(element, node => node.type === primitivesStub.Menu)
+    const weightMenu = menus.find(menu => menu.props.items.some(item => item.id === '900'))
+    assert.notEqual(weightMenu, undefined, '字重必须是选择丸 + Menu')
+    assert.deepEqual([...weightMenu.props.items].map(item => item.id), [...WEIGHTS], '字重菜单 = host 白名单')
+    assert.equal(weightMenu.props.selectedId, '500', '当前值同步给 Menu')
+    // 四个排版项走官方步进器规格（aria-label 定位）+ 单位收在控件内
+    for (const [label, unit] of [['字距', 'px'], ['行距', 'px'], ['段距', 'px'], ['首行缩进', 'em']]) {
+      const stepperNode = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className === 'mia-stepper'
+        && collectNodes(node, n => n.props['aria-label'] === `增大${label}`).length > 0)
+      assert.equal(stepperNode.length, 1, `${label}必须是步进器`)
+      assert.equal(collectNodes(stepperNode[0], n => n.type === 'span' && n.props.className === 'mia-unit').length, 1, `${label}带 ${unit} 单位`)
+    }
+    // 总预览卡：标题样张 + 中英文样例 + 代码样例（代码吃官方字体令牌）
+    const preview = collectNodes(element, node => typeof node.props.className === 'string' && node.props.className === 'mia-textPreviewBody')
+    assert.equal(preview.length, 1, '总预览卡必须渲染')
+    const code = collectNodes(preview[0], n => n.props.className === 'mia-textCode')
+    assert.equal(code.length, 1, '预览必须含代码样例')
+    // 未确认时确认按钮禁用（无改动可确认）；还原草稿同理
+    const buttons = collectNodes(element, node => node.type === primitivesStub.Button)
+    const confirmBtn = buttons.find(b => b.children.includes('确认应用'))
+    assert.equal(confirmBtn.props.disabled, true, '无改动时「确认应用」禁用')
+    // 草稿值进预览：uiWeight=500 ⇒ 标题样张与正文段的内联 font-weight
+    const h2 = collectNodes(preview[0], n => n.props.className === 'mia-textH2')
+    assert.equal(h2[0].props.style.fontWeight, '500', '预览标题样张跟随草稿字重')
+    const p1 = collectNodes(preview[0], n => n.props.className === 'mia-textP')[0]
+    assert.equal(p1.props.style.fontWeight, '500')
+    assert.equal(p1.props.style.letterSpacing, '1.5px', '预览段落跟随草稿字距')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('M5 草稿确认制：控件只改草稿不发请求；点「确认应用」才写盘（patch.text = 草稿六项）', async () => {
+  // 场景①：步进器箭头只 setState（草稿），一个 /config 都不发
+  {
+    const { descriptor, fetches } = capture()
+    const ctx = fakeCtx()
+    descriptor.factory(requireStub).apply(ctx)
+    const view = ctx.registered[0].view
+    react.stateQueue = [
+      { config: textConfig(), revision: 21, persistent: true },
+      null, null, false, null, { local: [] }, { presets: [] }, null,
+    ]
+    try {
+      const element = view()
+      const before = react.setCalls.length
+      const arrow = collectNodes(element, n => n.type === 'button' && n.props['aria-label'] === '增大字距')[0]
+      arrow.props.onClick()
+      assert.ok(react.setCalls.length > before, '步进器必须写草稿 state')
+      const posts = fetches.filter(f => f.method === 'POST' && f.url.endsWith('/config'))
+      assert.equal(posts.length, 0, '未点确认前不得写盘（确认制的全部意义）')
+    } finally {
+      react.stateQueue = null
+    }
+  }
+  // 场景②：dirty 草稿 + 点「确认应用」⇒ 一次 POST /config，body.patch.text = 草稿六项
+  {
+    const { descriptor, fetches } = capture()
+    const ctx = fakeCtx()
+    descriptor.factory(requireStub).apply(ctx)
+    const view = ctx.registered[0].view
+    const draft = { uiWeight: '600', headingWeight: '800', letterSpacing: 0.2, lineHeight: 2, paragraphSpacing: 6, firstLineIndent: 1.5 }
+    // 队列 11 项：state / contract / error / busy / wallpapers / avatars / presets /
+    // openMenu / presetsInfo 之后才是 textDraft 与 textDirty（M5 追加在队列最末）。
+    // 第 9 项必须是 presetsInfo 的**对象**初值（{error, persistent}）——给 null 会让
+    // 面板渲染读 presetsInfo.error 时炸掉（与工厂初值同形）。
+    react.stateQueue = [
+      { config: textConfig(), revision: 22, persistent: true },
+      null, null, false, null, { local: [] }, { presets: [] }, null, { error: null, persistent: null },
+      draft, true,
+    ]
+    try {
+      const element = view()
+      const confirmBtn = collectNodes(element, n => n.type === primitivesStub.Button && n.children.includes('确认应用'))[0]
+      assert.equal(confirmBtn.props.disabled, false, '有未确认改动时「确认应用」可用')
+      await confirmBtn.props.onClick()
+      const posts = fetches.filter(f => f.method === 'POST' && f.url.endsWith('/config'))
+      assert.equal(posts.length, 1, '确认应用必须发出一次保存')
+      const body = JSON.parse(posts[0].body)
+      assert.deepEqual(body.patch, { text: draft }, '发出去的必须是草稿六项（深合并进 text 板块）')
+      assert.equal(body.expectedRevision, 22, '沿用乐观并发')
+    } finally {
+      react.stateQueue = null
+    }
+  }
+})
+
+test('M5 旧 host（v8 前配置无 text 板块）⇒ 板块给重启提示且不崩', () => {
+  const { descriptor } = capture()
+  const ctx = fakeCtx()
+  descriptor.factory(requireStub).apply(ctx)
+  const view = ctx.registered[0].view
+  react.stateQueue = [
+    {
+      config: {
+        enabled: true, theme: { skin: 'pure' },
+        wallpaper: { source: '', light: '', dark: '', blur: 0, scrim: 0, fit: 'cover', focus: 'center', glass: 'off', vignette: 0, surface: { sidebar: 100, conversation: 100, composer: 100, overlay: 100 } },
+        avatar: { source: '' },
+        motion: { enabled: false, preset: 'fluid', scale: 1 },
+        conversation: { density: 'comfortable', maxWidth: 0, font: 'system', cursor: 'off', quoteCode: 'default' },
+        boot: { intro: 'brand', audio: false },
+      },
+      revision: 3, persistent: true,
+    },
+    null, null, false, null, { local: [] }, { presets: [] }, null,
+  ]
+  try {
+    const texts = collectText(view())
+    assert.equal(texts.some(t => t.includes('本板块需要 v8 配置')), true, '缺 text 板块必须给重启提示（不静默失效）')
+  } finally {
+    react.stateQueue = null
+  }
+})
+
+test('M5 文字层行为：host 下发的 textCss 写独立标签；空 CSS 不建标签（关掉即原生）', async () => {
+  // ① 非空 CSS ⇒ syncText 建独立 style 标签，内容 = host 编译的规则
+  {
+    const { descriptor, created } = capture()
+    const ctx = fakeCtx()
+    CONV_FETCH_CONFIG.text = { uiWeight: '500', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 }
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    const tag = created.find(el => el.tagName === 'STYLE' && el.dataset.pluginCss === '@miasaki/dsh-appearance/text.css')
+    assert.notEqual(tag, undefined, '文字层必须有独立 style 标签（按 id 去重）')
+    assert.match(tag.textContent, /body \{ font-weight: 500; \}/, '标签内容 = host 编译的 CSS')
+    assert.match(tag.textContent, /font-weight: 500 !important/, 'Markdown 段落规则同步落下')
+  }
+  // ② 全原生档 ⇒ buildTextCss 空串 ⇒ 不建标签（页面零影响）
+  {
+    const { descriptor, created } = capture()
+    const ctx = fakeCtx()
+    CONV_FETCH_CONFIG.text = { uiWeight: '', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 }
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    const tag = created.find(el => el.tagName === 'STYLE' && el.dataset.pluginCss === '@miasaki/dsh-appearance/text.css')
+    assert.equal(tag, undefined, '原生档不得建文字层标签')
+  }
+  // ③ 总开关关闭 ⇒ 同样不建（门控与其它层同源）
+  {
+    const { descriptor, created } = capture()
+    const ctx = fakeCtx()
+    CONV_FETCH_CONFIG.text = { uiWeight: '700', headingWeight: '', letterSpacing: 0, lineHeight: 0, paragraphSpacing: 0, firstLineIndent: 0 }
+    CONV_FETCH_CONFIG.enabled = false
+    descriptor.factory(requireStub).apply(ctx)
+    await flushAsync()
+    const tag = created.find(el => el.tagName === 'STYLE' && el.dataset.pluginCss === '@miasaki/dsh-appearance/text.css')
+    assert.equal(tag, undefined, '总开关关闭不得建文字层标签')
+    CONV_FETCH_CONFIG.enabled = true
+  }
+})
+
+test('M5 锚点自检：flow 有消息但无 _markdown 容器 ⇒ 显式提示；无法判定不误报', () => {
+  const renderWith = querySelector => {
+    const { descriptor } = capture({ querySelector })
+    const ctx = fakeCtx()
+    descriptor.factory(requireStub).apply(ctx)
+    const view = ctx.registered[0].view
+    react.stateQueue = [
+      { config: textConfig({ uiWeight: '500' }), revision: 23, persistent: true },
+      null, null, false, null, { local: [] }, { presets: [] }, null,
+    ]
+    try {
+      return collectText(view()).join('\n')
+    } finally {
+      react.stateQueue = null
+    }
+  }
+  const hasNotice = text => /排版设置的锚点/.test(text)
+  // 确定性失配：会话在、消息列有子节点、但没有 _markdown 容器 ⇒ 提示
+  assert.equal(hasNotice(renderWith(sel => {
+    if (sel === '[data-slot="main.conversation"]') return {}
+    if (sel === '[data-chat-flow]') return { childElementCount: 3 }
+    return null
+  })), true, '锚点失配必须说出来（静默失效 #10 纪律）')
+  // 锚点正常 ⇒ 不提示
+  assert.equal(hasNotice(renderWith(sel => {
+    if (sel === '[data-slot="main.conversation"]') return {}
+    if (sel === '[data-chat-flow]') return { childElementCount: 3 }
+    if (sel === '[class*="_markdown"]') return {}
+    return null
+  })), false)
+  // 消息列没渲染（无消息）⇒ 无法判定，不误报
+  assert.equal(hasNotice(renderWith(sel => {
+    if (sel === '[data-slot="main.conversation"]') return {}
+    if (sel === '[data-chat-flow]') return { childElementCount: 0 }
+    return null
+  })), false, '没有消息时不得误报')
+  // 全原生档 ⇒ idle，根本不探测锚点（选择器只对**锚点类**抛错——factory 注入
+  // PANEL_CSS / MOTION_CSS 时同样会调 document.querySelector，不能无差别抛）。
+  const idle = (() => {
+    const { descriptor } = capture({
+      querySelector: sel => {
+        if (String(sel).includes('_markdown') || String(sel).includes('data-chat-flow') || String(sel).includes('main.conversation')) {
+          throw new Error('原生档不得探测锚点')
+        }
+        return null
+      },
+    })
+    const ctx = fakeCtx()
+    descriptor.factory(requireStub).apply(ctx)
+    const view = ctx.registered[0].view
+    react.stateQueue = [
+      { config: textConfig(), revision: 24, persistent: true },
+      null, null, false, null, { local: [] }, { presets: [] }, null,
+    ]
+    try {
+      return collectText(view()).join('\n')
+    } finally {
+      react.stateQueue = null
+    }
+  })()
+  assert.equal(hasNotice(idle), false)
+})
+
+test('#8 补（M5）：文字板块任一项非默认 ⇒ 有可见变化，不出现「没有可见变化」提示', () => {
+  for (const over of [{ uiWeight: '500' }, { headingWeight: '700' }, { letterSpacing: 1 }, { lineHeight: 2 }, { paragraphSpacing: 8 }, { firstLineIndent: 2 }]) {
+    const text = renderPanelReturningText(nativeConfig({ text: over }))
+    assert.doesNotMatch(text, /当前配置下外观没有可见变化/, `text=${JSON.stringify(over)} 是可见变化`)
+  }
+  // 全原生档（含 text）仍提示（与其它板块同一判据）
+  assert.match(renderPanelReturningText(nativeConfig()), /所有项都停在原生档/)
+})
+
+test('M5 风格契约：预览卡 / 吸底确认栏 / 标题样张规格，配色只走官方令牌', () => {
+  // 预览卡内部滚动封顶（不随行距/段距无限长高——dsh-font-probe v1.4.2 同款修复）
+  assert.match(PANEL_CSS_SOURCE, /\.mia-textPreviewBody\{[^}]*max-height:240px;overflow:auto/)
+  // 吸底确认栏：sticky bottom（拖滑块时「确认应用」永远在场）
+  assert.match(PANEL_CSS_SOURCE, /\.mia-textConfirm\{[^}]*position:sticky;bottom:0/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-textConfirm\{[^}]*var\(--dsw-alias-settings-card-fill\)/, '确认栏底色走官方卡片令牌')
+  // 标题样张跟字号增量（与官方 markdown h2 的 19/28 + delta 同口径）
+  assert.match(PANEL_CSS_SOURCE, /\.mia-textH2\{[^}]*calc\(19px \+ var\(--dsh-content-font-delta, 0px\)\)/)
+  assert.match(PANEL_CSS_SOURCE, /\.mia-textH2\{[^}]*calc\(28px \+ var\(--dsh-content-font-delta, 0px\)\)/)
+  // 代码样例吃官方代码字体令牌（用户在「通用」页设的代码字体）
+  assert.match(PANEL_CSS_SOURCE, /\.mia-textCode\{[^}]*var\(--ds-font-family-code\)/)
+  // 排版边界与 host 常量同源（client 侧 TEXT_METRICS 的 max 逐一比对）
+  for (const [max, label] of [[LETTER_SPACING_MAX, '字距'], [LINE_HEIGHT_MAX, '行距'], [PARAGRAPH_SPACING_MAX, '段距'], [FIRST_LINE_INDENT_MAX, '首行缩进']]) {
+    assert.match(source, new RegExp(`key: '\\w+', label: '${label}'[^}]*max: ${max}`), `${label}上限必须与 host 常量一致（${max}）`)
+  }
+  // 新增规则同样受全局令牌纯度约束（圆角只走 --dsw-radius-*、不直引 --dsw-static-*）
+  const rulesOnly = PANEL_CSS_SOURCE.replace(/\/\*[\s\S]*?\*\//g, '')
+  for (const value of [...rulesOnly.matchAll(/border-radius:([^;}]+)/g)].map(m => m[1].trim())) {
+    assert.match(value, /^var\(--dsw-radius-[a-z]+\)$/)
+  }
+  assert.deepEqual([...rulesOnly.matchAll(/--dsw-static-[a-z0-9-]+/g)].map(m => m[0]), [], '文字板块不得直引色阶原始值')
 })

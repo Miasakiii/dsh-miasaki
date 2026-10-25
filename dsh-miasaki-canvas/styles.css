@@ -145,6 +145,9 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .thread-meta span + span::before { content: '·'; margin-right: 7px; }
 .thread-meta .card-process-count { display: inline-flex; align-items: center; min-height: 18px; margin-left: auto; border-radius: 999px; background: var(--canvas-accent-soft); padding: 0 7px; color: var(--canvas-accent); font-size: 11px; font-weight: 650; white-space: nowrap; }
 .thread-meta .card-process-count::before { content: none; }
+/* 模型调用次数（2026-10-20）：与工具数同族的轻量徽标，但走中性色 —— 调用次数是
+   过程信息而非结果计数，视觉权重低于工具数（工具数保持 margin-left:auto 的强调位）。 */
+.thread-meta .card-call-count { display: inline-flex; align-items: center; min-height: 18px; border-radius: 999px; border: 1px solid #e2e8f0; padding: 0 7px; color: #64748b; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .thread-meta .card-error-status { color: #b42318; font-weight: 650; }
 .thread-answer { min-width: 0; min-height: 0; margin: 12px 14px; overflow-x: hidden; overflow-y: auto; color: #526174; font-size: 12.5px; line-height: 1.65; overflow-wrap: anywhere; overscroll-behavior: contain; }
 /* ── Unified scrollbars: 6px themed pills on every scroll container, invisible
@@ -180,6 +183,9 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .card-inspector-meta span + span::before { content: '·'; margin-right: 7px; color: #bdc7d2; }
 .card-inspector-meta span:last-child { color: inherit; font-weight: inherit; }
 .card-inspector-meta .card-inspector-error-status { color: #b42318; font-weight: 650; }
+/* 耗时拆分（2026-10-20）：detail 头部「模型 Xs · 工具累计 Ys」，等宽数字。 */
+.card-inspector-timing { display: inline-flex; align-items: center; gap: 5px; color: #64748b; font-variant-numeric: tabular-nums; }
+.card-inspector-timing-sep { color: #bdc7d2; }
 .card-inspector-head h2 { margin: 8px 0 0; overflow-wrap: anywhere; color: #172033; font-size: 15px; font-weight: 680; line-height: 1.5; }
 .card-inspector-close { display: grid; width: 32px; height: 32px; min-height: 32px; place-items: center; border: 0; border-radius: 50%; background: transparent; padding: 0; color: #718096; }
 .card-inspector-close:hover { background: #eef2f6; color: #1f2937; }
@@ -265,6 +271,9 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .message-error { border-left: 3px solid #dc2626; background: #fef7f7; }
 .message-todo { border-left: 3px solid #b45309; }
 .message-tool, .message-tool-result { border-left: 3px solid #6b7280; }
+/* 上下文压缩标记（2026-10-20）：琥珀色左边条 + 淡底，与错误红、待办橙区分。 */
+.message-compaction { border-left: 3px solid #b45309; background: #fffbeb; }
+.message-compaction-badge { display: inline-flex; align-items: center; margin-left: 8px; border-radius: 999px; background: #fef3c7; padding: 1px 8px; color: #92400e; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .message-pending { border-style: dashed; }
 .message-collapsible.expanded { box-shadow: 0 2px 10px rgba(15,23,42,.06); }
 .message-body { margin-top: 8px; }
@@ -303,6 +312,8 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 .process-status-done { color: #0f766e; }
 .process-status-pending { color: #b45309; }
 .process-status-error { color: #b91c1c; }
+/* 工具执行耗时（2026-10-20）：条目折叠行右侧的等宽数字，弱于状态色。 */
+.process-entry-duration { flex: none; color: #94a3b8; font-size: 11px; font-variant-numeric: tabular-nums; }
 .process-entry-body { display: grid; gap: 8px; padding: 0 10px 10px; }
 .process-args, .process-result, .process-error { margin: 0; padding: 8px 10px; border-radius: 5px; background: #f1f5f9; overflow: auto; color: #334155; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
 .process-error { background: #fef2f2; color: #991b1b; }
@@ -344,6 +355,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .selection-followup:hover { border-color: var(--canvas-accent-ink); background: var(--canvas-accent-ink); color: #fff; }
 [data-theme="dark"] .thread-meta { color: #737a83; }
 [data-theme="dark"] .thread-meta .card-process-count { background: var(--canvas-accent-soft); color: var(--canvas-accent-ink); }
+[data-theme="dark"] .thread-meta .card-call-count { border-color: #3a4150; color: #9aa4b2; }
 [data-theme="dark"] .thread-answer { color: #a7adb5; }
 [data-theme="dark"] .thread-answer h1, [data-theme="dark"] .thread-answer h2, [data-theme="dark"] .thread-answer h3 { color: #d7dae0; }
 [data-theme="dark"] .thread-answer code { background: #26282d; color: #d7dae0; }
@@ -360,6 +372,8 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .card-inspector-meta { color: #737a83; }
 [data-theme="dark"] .card-inspector-meta span + span::before { color: #4a4f57; }
 [data-theme="dark"] .card-inspector-meta span:last-child { color: inherit; }
+[data-theme="dark"] .card-inspector-timing { color: #9aa4b2; }
+[data-theme="dark"] .card-inspector-timing-sep { color: #4a4f57; }
 [data-theme="dark"] .thread-meta .card-error-status, [data-theme="dark"] .card-inspector-meta .card-inspector-error-status { color: #f87171; }
 [data-theme="dark"] .card-inspector-head h2 { color: #e6e8eb; }
 [data-theme="dark"] .card-inspector-answer { color: #d7dae0; }
@@ -438,6 +452,8 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .message-user header { color: var(--canvas-accent-ink); }
 [data-theme="dark"] .message-user .message-body p { color: #c9d4ea; }
 [data-theme="dark"] .message-error { border-left-color: #dc2626; background: #2b1a1c; }
+[data-theme="dark"] .message-compaction { border-left-color: #b45309; background: #241a08; }
+[data-theme="dark"] .message-compaction-badge { background: #3d2c0a; color: #fbbf24; }
 [data-theme="dark"] .message-collapsible.expanded { box-shadow: 0 2px 10px rgba(0,0,0,.35); }
 [data-theme="dark"] .message-body p { color: #d7dae0; }
 [data-theme="dark"] .message-body h1, [data-theme="dark"] .message-body h2, [data-theme="dark"] .message-body h3 { color: #e6e8eb; }
@@ -461,6 +477,7 @@ button.primary:hover { border-color: var(--canvas-accent-hover); background: var
 [data-theme="dark"] .process-entry { border-color: #2a2d33; background: #15171b; }
 [data-theme="dark"] .process-entry-fold { color: #d7dae0; }
 [data-theme="dark"] .process-entry-fold:hover { background: #222428; }
+[data-theme="dark"] .process-entry-duration { color: #737a83; }
 [data-theme="dark"] .process-status-done { color: #34d399; }
 [data-theme="dark"] .process-status-pending { color: #fbbf24; }
 [data-theme="dark"] .process-status-error { color: #f87171; }

@@ -87,6 +87,16 @@ dsh plugin --profile <profile> add @miasaki/dsh-free-model
 这条围栏是必要的：`/apply` 是**写配置**的动作，`/subagent` 会改预设文件 ——
 它们此前是裸奔的。
 
+围栏之外，**两个输入口有独立上限**（2026-10-20）：
+
+- **请求体 ≤ 64 KiB**：`readBody()` 累计字节超限即回 **413** 并关闭连接（与
+  `dsh-model-probe` / ssh / dual-model 同一基线）；客户端中途断开（`aborted` / `error`）
+  时读请求体不再悬挂；
+- **`/subagent` 的 `model` 走字符白名单** `/^[A-Za-z0-9._:\/-]+$/`（模型 id 的可见
+  字符集），不通过回 **400** —— 该值会被原样拼进 `agent.cordis.yml`，换行/空白/引号
+  等 YAML 元字符一律拒绝，注入行写不进去。`provider` 仍按既有
+  `listPlatforms()` 路由键白名单校验。
+
 ## 边界
 
 - 只读官方契约，**不改第三方插件的任何行为**；
@@ -97,8 +107,8 @@ dsh plugin --profile <profile> add @miasaki/dsh-free-model
 ## 开发
 
 ```bash
-pnpm install
-pnpm test   # 6 个测试文件共 62 例
+cd dsh-miasaki-free-model
+node --test test/*.test.js   # 6 个测试文件共 69 例
 ```
 
 仓库级统一回归：`node ../scripts/verify-all.mjs free-model`（16 个检查项）。

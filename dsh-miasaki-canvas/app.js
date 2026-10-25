@@ -906,14 +906,24 @@ function conversationCards(threads) {
       const replies = []
       const errors = []
       let processCount = 0
+      // 模型调用次数（2026-10-20）：一轮内模型可能来回多趟（每 step 一条 assistant
+      // 消息），按 turn:step 去重计数 —— 同 step 的流式多条不重复计。只统计持久化
+      // 消息（有 sourceSeq）；liveReplies 合成的前端 pending 消息无 step，不计入。
+      const callSteps = new Set()
       for (let replyIndex = messageIndex + 1; replyIndex < messages.length; replyIndex++) {
         const reply = messages[replyIndex]
         if (reply.kind === 'user') break
-        if (reply.kind === 'assistant') replies.push(reply)
+        if (reply.kind === 'assistant') {
+          replies.push(reply)
+          if (Number.isInteger(reply.sourceSeq) && Number.isInteger(reply.turn) && Number.isInteger(reply.step)) {
+            callSteps.add(`${reply.turn}:${reply.step}`)
+          }
+        }
         if (reply.kind === 'error') errors.push(reply)
         if (Array.isArray(reply.process)) processCount += reply.process.length
         else if (reply.kind === 'tool') processCount += 1
       }
+      const callCount = callSteps.size
       const answer = replies.at(-1) ?? null
       const error = errors.at(-1) ?? null
       const turnIndex = turns.length
@@ -939,6 +949,7 @@ function conversationCards(threads) {
         answer,
         error,
         processCount,
+        callCount,
         merge,
         topicColor: thread.color ?? '#3478f6',
         // 辅助对话（侧线）标注：判据来自 sidebar 的跨包声明（见 sideChatSessionIds）。
@@ -1164,7 +1175,7 @@ function conversationCard(card, graph) {
     <button class="node-handle" data-drag-card="${card.id}" aria-label="拖动 ${escapeHtml(card.question)}" title="拖动卡片"></button>
     ${continueButton}${foldButton}${branchButton}${mergeButton}
     <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button>${card.turnIndex === 0 && card.sideChat === true ? '<span class="sidechat-badge" title="辅助对话：从主会话 fork 出的侧线 —— 不占官方会话列表，但在这里照常可见">辅助对话</span>' : ''}${isMergeNode ? '<span class="merge-badge" title="合并节点">◆ 合并</span>' : ''}${absorbedBadge}</div>
-    <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}${retrySendButton}</div>
+    <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.callCount > 0 ? `<span class="card-call-count" title="本轮模型被调用的次数（多步工具循环时大于 1）">调用 ${card.callCount} 次</span>` : ''}${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}${retrySendButton}</div>
     <div class="thread-answer">${card.answer === null ? (card.error === null ? '<p class="thread-answer-empty">等待助手回复</p>' : '') : card.answer.pending && card.answer.text === '' ? '<p class="thread-answer-pending">正在回复</p>' : `${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="thread-answer-pending">正在回复</p>' : ''}`}${card.error === null ? '' : `<p class="thread-answer-error" title="${escapeHtml(card.error.text)}">本轮失败：${escapeHtml(card.error.text)}</p>`}</div>
     <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="open-dsh" data-thread="${card.dshThreadId}" data-seq="${Number.isInteger(card.sourceSeq) ? card.sourceSeq : ''}" title="在 DSH 中打开" aria-label="在 DSH 中打开"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v6.5A1.5 1.5 0 0 0 4.5 13H11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M9.5 3.5h3v3M12.4 3.6 7.5 8.5"/></svg>DSH</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
   </article>`
@@ -1445,19 +1456,58 @@ function processSummary(text) {
   return text.replace(/\s+/g, ' ').trim().slice(0, 140) || '工具调用记录'
 }
 
+// 耗时拆分（2026-10-20）：工具执行耗时 = resultedAt − calledAt（毫秒）。
+// 缺时间戳（老数据 / 未回结果）或时钟回拨 → null（与插件 durationSeconds 的
+// Math.max(0, …) 口径一致：负值不显示，而不是显示负数）。
+function processDurationMs(entry) {
+  if (entry === null || entry === undefined) return null
+  const calledAt = Date.parse(entry.calledAt ?? '')
+  const resultedAt = Date.parse(entry.resultedAt ?? '')
+  if (!Number.isFinite(calledAt) || !Number.isFinite(resultedAt)) return null
+  return Math.max(0, resultedAt - calledAt)
+}
+
+function formatDurationMs(ms) {
+  if (ms === null || !Number.isFinite(ms)) return '—'
+  if (ms < 1_000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${(ms / 1_000).toFixed(ms < 10_000 ? 1 : 0)}s`
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.round(ms % 60_000 / 1_000)
+  return `${minutes}m${seconds}s`
+}
+
+function processDurationHtml(entry) {
+  const ms = processDurationMs(entry)
+  if (ms === null) return ''
+  return `<span class="process-entry-duration" title="工具执行耗时（调用 → 结果）">${formatDurationMs(ms)}</span>`
+}
+
 function threadMessage(thread, message) {
   const isUser = message.kind === 'user'
-  const label = isUser ? '你' : message.kind === 'assistant' ? 'DSH' : message.kind === 'error' ? '错误' : '记录'
+  const isCompaction = message.kind === 'compaction'
+  const label = isUser ? '你' : message.kind === 'assistant' ? 'DSH' : message.kind === 'error' ? '错误' : isCompaction ? '上下文压缩' : '记录'
   const branch = message.kind === 'assistant' && Number.isInteger(message.sourceSeq)
     ? `<button class="message-branch" data-action="open-branch" data-thread="${thread.id}" data-seq="${message.sourceSeq}" title="从此回答创建分支"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4.5 3v6a2.5 2.5 0 0 0 2.5 2.5H12"/><circle cx="4.5" cy="3" r="1.5"/><circle cx="11.5" cy="12" r="1.5"/></svg>分支</button>`
     : ''
   const messageId = `${thread.id}:${message.sourceSeq ?? `${message.kind}:${message.at}`}`
-  const collapsible = isProcessMessage(message)
+  // compaction 消息（2026-10-20）：折叠摘要 + 「压缩了 N 条旧消息」标注。
+  // 复用 message-collapsible 的展开态机制，折叠按钮文案走压缩语义。
+  const compactionCollapsed = isCompaction && !state.expandedMessageIds.has(messageId)
+  const collapsible = isProcessMessage(message) || isCompaction
   const expanded = state.expandedMessageIds.has(messageId)
-  const fold = collapsible ? `<button class="message-fold" data-action="toggle-message" data-message="${escapeHtml(messageId)}" aria-label="${expanded ? '收起过程记录' : '展开过程记录'}" title="${expanded ? '收起' : '展开'}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg></button>` : ''
+  const fold = collapsible
+    ? isCompaction
+      ? `<button class="message-fold" data-action="toggle-message" data-message="${escapeHtml(messageId)}" aria-label="${expanded ? '收起压缩摘要' : '展开压缩摘要'}" title="${expanded ? '收起' : '展开'}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg></button>`
+      : `<button class="message-fold" data-action="toggle-message" data-message="${escapeHtml(messageId)}" aria-label="${expanded ? '收起过程记录' : '展开过程记录'}" title="${expanded ? '收起' : '展开'}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg></button>`
+    : ''
   const process = Array.isArray(message.process) && message.process.length > 0 ? message.process : null
+  const compactionBadge = isCompaction && Number.isInteger(message.shadowedCount) && message.shadowedCount > 0
+    ? `<span class="message-compaction-badge" title="更早的上下文已被压缩为这条摘要">压缩了 ${message.shadowedCount} 条旧消息</span>`
+    : ''
   const body = message.pending && message.text === '' ? '<p class="message-streaming"><span class="streaming-dot"></span>正在回复</p>'
-    : `${collapsible && !expanded ? `<p class="message-summary">${escapeHtml(processSummary(message.text))}</p>` : renderMarkdown(message.text)}${message.pending ? '<p class="message-streaming"><span class="streaming-dot"></span>正在回复</p>' : ''}${process === null ? '' : processRecords(process, messageId)}`
+    : isCompaction
+      ? `${compactionCollapsed ? `<p class="message-summary">${escapeHtml(processSummary(message.text))}</p>` : renderMarkdown(message.text)}${compactionBadge}`
+      : `${collapsible && !expanded ? `<p class="message-summary">${escapeHtml(processSummary(message.text))}</p>` : renderMarkdown(message.text)}${message.pending ? '<p class="message-streaming"><span class="streaming-dot"></span>正在回复</p>' : ''}${process === null ? '' : processRecords(process, messageId)}`
   const avatar = isUser ? '' : '<span class="message-avatar" aria-hidden="true"></span>'
   return `<article class="message message-${message.kind}${message.pending ? ' message-pending' : ''}${collapsible ? ' message-collapsible' : ''}${expanded ? ' expanded' : ''}" data-message-seq="${Number.isInteger(message.sourceSeq) ? message.sourceSeq : ''}"><header>${avatar}<span class="message-role">${label}</span><time>${formatTime(message.at)}</time>${branch}${fold}</header><div class="message-body">${body}</div></article>`
 }
@@ -1471,7 +1521,10 @@ function processRecords(process, messageId) {
     const status = entry.error !== null ? '失败' : entry.result === null ? '等待结果' : '完成'
     const argumentsHtml = entry.arguments === null || entry.arguments === '' ? '' : `<pre class="process-args">${escapeHtml(entry.arguments)}</pre>`
     const outcomeHtml = entry.error !== null ? `<pre class="process-error">${escapeHtml(entry.error)}</pre>` : entry.result === null ? '' : `<pre class="process-result">${escapeHtml(entry.result)}</pre>`
-    return `<div class="process-entry${entryExpanded ? ' expanded' : ''}"><button class="process-entry-fold" data-action="toggle-message" data-message="${escapeHtml(entryKey)}"><span class="process-entry-name">${escapeHtml(entry.name)}</span><span class="process-status${entry.error !== null ? ' process-status-error' : entry.result === null ? ' process-status-pending' : ' process-status-done'}">${status}</span></button>${entryExpanded ? `<div class="process-entry-body">${argumentsHtml}${outcomeHtml}</div>` : ''}</div>`
+    // 耗时拆分（2026-10-20）：工具执行耗时 = resultedAt − calledAt。缺时间戳
+    // （老数据 / 未回结果）或时钟回拨 → null → 显示「—」（与插件 durationSeconds 口径一致）。
+    const durationHtml = processDurationHtml(entry)
+    return `<div class="process-entry${entryExpanded ? ' expanded' : ''}"><button class="process-entry-fold" data-action="toggle-message" data-message="${escapeHtml(entryKey)}"><span class="process-entry-name">${escapeHtml(entry.name)}</span><span class="process-status${entry.error !== null ? ' process-status-error' : entry.result === null ? ' process-status-pending' : ' process-status-done'}">${status}</span>${durationHtml}</button>${entryExpanded ? `<div class="process-entry-body">${argumentsHtml}${outcomeHtml}</div>` : ''}</div>`
   }).join('')
   return `<section class="process-records${expanded ? ' expanded' : ''}"><button class="process-records-fold" data-action="toggle-message" data-message="${escapeHtml(key)}"><span>${expanded ? '收起过程记录' : '过程记录'}</span><span class="process-count">${process.length}</span></button>${expanded ? entries : ''}</section>`
 }
@@ -1515,11 +1568,36 @@ function inspectorProcessEntries(messages) {
   return entries
 }
 
+// 耗时拆分（2026-10-20）：detail 头部的「模型 Xs · 工具 Ys」。
+// 工具累计 = process 条目耗时之和（并行工具串行累加会高估 —— 文案写「累计」不写「耗时」）；
+// 模型耗时 = 轮边界近似（首条 assistant 的 at − user 消息的 at − 工具累计），
+// canvas 无 stepStartTime，只能估算（title 注明）。缺数据 → null → 不渲染该项。
+function turnTimingSplit(messages) {
+  const userAt = Date.parse(messages.find(message => message.kind === 'user')?.at ?? '')
+  const firstAssistantAt = Date.parse(messages.find(message => message.kind === 'assistant')?.at ?? '')
+  const toolTotal = messages
+    .flatMap(message => Array.isArray(message.process) ? message.process : [])
+    .reduce((total, entry) => total + (processDurationMs(entry) ?? 0), 0)
+  const hasToolTime = messages
+    .flatMap(message => Array.isArray(message.process) ? message.process : [])
+    .some(entry => processDurationMs(entry) !== null)
+  const modelMs = Number.isFinite(userAt) && Number.isFinite(firstAssistantAt)
+    ? Math.max(0, firstAssistantAt - userAt - toolTotal)
+    : null
+  return {
+    toolMs: hasToolTime ? toolTotal : null,
+    modelMs: modelMs === null || modelMs === 0 ? null : modelMs,
+  }
+}
+
 function renderCardInspector(card) {
   if (card === undefined) return ''
   const { thread, messages } = messagesForCard(card)
   if (thread === null) return ''
   const process = inspectorProcessEntries(messages)
+  const timing = turnTimingSplit(messages)
+  const timingHtml = timing.modelMs === null && timing.toolMs === null ? ''
+    : `<span class="card-inspector-timing">${timing.modelMs === null ? '' : `<span title="模型等待耗时（轮边界估算）">模型 ${formatDurationMs(timing.modelMs)}</span>`}${timing.modelMs !== null && timing.toolMs !== null ? '<span class="card-inspector-timing-sep">·</span>' : ''}${timing.toolMs === null ? '' : `<span title="工具执行累计（并行工具按串行累加，可能高估）">工具累计 ${formatDurationMs(timing.toolMs)}</span>`}</span>`
   const answer = card.answer === null
     ? card.error === null ? '<p class="card-inspector-pending">等待助手回复</p>' : ''
     : `<article class="card-inspector-answer">${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="card-inspector-pending">正在回复</p>' : ''}</article>`
@@ -1530,7 +1608,7 @@ function renderCardInspector(card) {
     ? `<button type="button" data-action="open-branch" data-thread="${thread.id}" data-card="${escapeHtml(card.id)}" data-seq="${card.answer.sourceSeq}"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="4" cy="3.5" r="1.5"/><circle cx="12" cy="3.5" r="1.5"/><circle cx="12" cy="12.5" r="1.5"/><path d="M5.5 3.5h2A2.5 2.5 0 0 1 10 6v5"/></svg>创建分支</button>`
     : ''
   const openDshAction = `<button class="primary" type="button" data-action="open-dsh" data-thread="${thread.id}" data-seq="${Number.isInteger(card.answer?.sourceSeq) ? card.answer.sourceSeq : ''}"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v6.5A1.5 1.5 0 0 0 4.5 13H11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M9.5 3.5h3v3M12.4 3.6 7.5 8.5"/></svg>在 DSH 中打开</button>`
-  return `<aside class="card-inspector${state.inspectorOpening ? ' is-opening' : ''}" aria-label="卡片详情" data-inspector-card="${escapeHtml(card.id)}"><header class="card-inspector-head"><div><div class="card-inspector-meta"><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-inspector-error-status">失败</span>'}${process.length > 0 ? `<span>工具 ${process.length}</span>` : ''}</div><h2>${escapeHtml(card.question)}</h2></div><button class="card-inspector-close" type="button" data-action="close-card-inspector" aria-label="关闭卡片详情" title="关闭"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button></header><div class="card-inspector-scroll">${error}${answer}${processRecordsHtml}</div><footer class="card-inspector-actions">${continueAction}${branch}${openDshAction}</footer></aside>`
+  return `<aside class="card-inspector${state.inspectorOpening ? ' is-opening' : ''}" aria-label="卡片详情" data-inspector-card="${escapeHtml(card.id)}"><header class="card-inspector-head"><div><div class="card-inspector-meta"><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-inspector-error-status">失败</span>'}${process.length > 0 ? `<span>工具 ${process.length}</span>` : ''}${timingHtml}</div><h2>${escapeHtml(card.question)}</h2></div><button class="card-inspector-close" type="button" data-action="close-card-inspector" aria-label="关闭卡片详情" title="关闭"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button></header><div class="card-inspector-scroll">${error}${answer}${processRecordsHtml}</div><footer class="card-inspector-actions">${continueAction}${branch}${openDshAction}</footer></aside>`
 }
 
 function renderThread() {

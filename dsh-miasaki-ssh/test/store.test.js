@@ -64,7 +64,32 @@ test('fenceCheck accepts loopback / trusted and rejects the rest', () => {
   assert.equal(fenceCheck({ host: 'evil.example' }, trusted).ok, false)
   assert.equal(fenceCheck({ host: '127.0.0.1', 'sec-fetch-site': 'cross-site' }, trusted).ok, false)
   assert.equal(fenceCheck({ host: '127.0.0.1', origin: 'http://evil.example.com' }, trusted).ok, false)
-  assert.equal(fenceCheck({ host: '127.0.0.1', origin: 'http://127.0.0.1:3080' }, trusted).ok, true)
+  assert.equal(fenceCheck({ host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' }, trusted).ok, true)
+})
+
+test('fenceCheck: 同站跨端口拒（d98e3）+ Origin 无端口兼容 Chromium 剥离', () => {
+  const trusted = new Set(['localhost', '127.0.0.1', 'dsh.lan'])
+  // 同源（同主机同端口）⇒ 放行
+  assert.equal(fenceCheck({ host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' }, trusted).ok, true)
+  // 同站跨端口（5173 的页面打 3080）⇒ 拒（站点判定不含端口，Sec-Fetch-Site 只会是 same-site）
+  const crossPort = fenceCheck({ host: '127.0.0.1:3080', origin: 'http://127.0.0.1:5173' }, trusted)
+  assert.equal(crossPort.ok, false)
+  assert.equal(crossPort.reason, 'cross-port-origin')
+  // Chromium 剥掉环回来源的端口（Origin 无端口）⇒ 沿用 hostname 判定，不误拒
+  assert.equal(fenceCheck({ host: '127.0.0.1:3080', origin: 'http://127.0.0.1' }, trusted).ok, true)
+  // 回环别名不再无条件放行：Origin localhost ≠ Host 127.0.0.1 ⇒ 拒
+  assert.equal(fenceCheck({ host: '127.0.0.1:3080', origin: 'http://localhost:3080' }, trusted).ok, false)
+  // trustedHosts 里的主机同样按端口判据
+  assert.equal(fenceCheck({ host: 'dsh.lan:9000', origin: 'http://dsh.lan:9000' }, trusted).ok, true)
+  assert.equal(fenceCheck({ host: 'dsh.lan:9000', origin: 'http://dsh.lan:9001' }, trusted).ok, false)
+  // Origin 显式端口 vs Host 无端口：按 Origin 协议默认端口比较（http 80）
+  assert.equal(fenceCheck({ host: 'dsh.lan', origin: 'http://dsh.lan:80' }, trusted).ok, true)
+  assert.equal(fenceCheck({ host: 'dsh.lan', origin: 'http://dsh.lan:9000' }, trusted).ok, false)
+  // https 默认端口同理
+  assert.equal(fenceCheck({ host: 'dsh.lan', origin: 'https://dsh.lan:443' }, trusted).ok, true)
+  assert.equal(fenceCheck({ host: 'dsh.lan', origin: 'https://dsh.lan:9000' }, trusted).ok, false)
+  // 坏 Origin 仍是明确的 bad-origin
+  assert.equal(fenceCheck({ host: '127.0.0.1:3080', origin: 'null' }, trusted).reason, 'bad-origin')
 })
 
 async function withStore(run) {

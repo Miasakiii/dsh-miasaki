@@ -115,19 +115,28 @@ function makeViewer() {
 
 const quietLogger = { warn() {}, info() {}, error() {} }
 
-function makeHub(replayBytes = 1024) {
+function makeHub(replayBytes = 1024, overrides = {}) {
   const fakeModule = makeFakePtyModule()
   // resolveBin 也注入：默认实现用 `where.exe` 探测 PATH（子进程 + 管道 stdio），
   // 受限沙箱会以 spawn EPERM 拒绝，于是「不需要真实 shell」的单测反而全挂。
   // 给一个绝对假路径即可与宿主环境彻底解耦（断言只要求「是绝对路径」）。
+  // `overrides` 供并发用例替换 resolveBin（把异步窗口卡在可控门上）。
   const hub = new TerminalHub({
     replayBytes,
     viewers: new Map(),
     logger: quietLogger,
     resolveBin: async shell => `C:\\fake-shells\\${shell.bin}.exe`,
+    ...overrides,
   })
   hub._pty = fakeModule
   return { hub, fakeModule }
+}
+
+/** 可控异步门：把 resolveBin 卡在这里，稳定复现生产里 where.exe / stat 的等待窗口。 */
+function makeGate() {
+  let release
+  const gate = new Promise(done => { release = done })
+  return { gate, release }
 }
 
 /** 把一个 viewer 绑到某个会话（WS 接线里由 ensureAttached → hub.bind 完成）。 */
@@ -263,6 +272,92 @@ test('TerminalHub: session cap rejects the 9th session, close frees a slot', asy
   const fresh = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
   assert.equal(fresh.spawned, true)
   assert.equal(hub.list().length, 8)
+})
+
+test('TerminalHub: concurrent attaches cannot exceed the cap (a1dc8 sync reservation)', async () => {
+  const { gate, release } = makeGate()
+  const { hub, fakeModule } = makeHub(1024, {
+    resolveBin: async shell => { await gate; return `C:\\fake-shells\\${shell.bin}.exe` },
+  })
+  const attempts = Array.from({ length: TERMINAL_MAX_SESSIONS + 5 }, async () => {
+    try {
+      return { ok: true, result: await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 }) }
+    } catch (error) {
+      return { ok: false, error }
+    }
+  })
+  // 让 13 个调用都先走到 await（生产里是 where.exe + stat 的毫秒级窗口）。
+  await new Promise(done => setImmediate(done))
+  assert.equal(hub.list().length, 0, '此时全部卡在 spawn 里，尚无会话入表')
+  assert.equal(hub.pendingSpawns.size, TERMINAL_MAX_SESSIONS, '同步预留恰好占满上限')
+
+  release()
+  const settled = await Promise.all(attempts)
+  const ok = settled.filter(entry => entry.ok)
+  const rejected = settled.filter(entry => !entry.ok)
+  assert.equal(ok.length, TERMINAL_MAX_SESSIONS, '并发 attach 最多建满上限')
+  assert.equal(rejected.length, 5, '超出的帧必须被上限拒绝')
+  for (const entry of rejected) assert.match(entry.error.message, /上限 8 个/)
+  assert.equal(fakeModule.spawned.length, TERMINAL_MAX_SESSIONS, '被拒的帧绝不能 spawn 出 PTY')
+  assert.equal(hub.list().length, TERMINAL_MAX_SESSIONS)
+  assert.equal(hub.pendingSpawns.size, 0, 'finally 释放全部预留')
+})
+
+test('TerminalHub: a failed spawn releases its capacity reservation (a1dc8 finally)', async () => {
+  const { hub } = makeHub()
+  await Promise.allSettled(Array.from({ length: TERMINAL_MAX_SESSIONS }, () =>
+    hub.ensureSession({ shell: 'powershell', cwd: 'C:\\NoSuchDir_a1dc8_reservation', cols: 80, rows: 24 })))
+  assert.equal(hub.pendingSpawns.size, 0, '失败路径必须释放预留（否则名额永久泄漏）')
+  assert.equal(hub.list().length, 0)
+
+  for (let i = 0; i < TERMINAL_MAX_SESSIONS; i++) {
+    await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  }
+  assert.equal(hub.list().length, TERMINAL_MAX_SESSIONS, '释放后名额没有被永久占用')
+})
+
+test('TerminalHub: concurrent restarts serialise and never orphan a PTY (a1dc8)', async () => {
+  const { hub, fakeModule } = makeHub()
+  const first = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const id = first.session.id
+
+  // 在 PATH 探测处开窗：没有串行化时两个 restart 的 _spawn 会交错，
+  // 后完成的覆盖 session.pty，先完成的 PTY 成为无引用孤儿。
+  const { gate, release } = makeGate()
+  hub._resolveBin = async shell => { await gate; return `C:\\fake-shells\\${shell.bin}.exe` }
+  const a = hub.ensureSession({ sessionId: id, shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24, restart: true })
+  const b = hub.ensureSession({ sessionId: id, shell: 'cmd', cwd: process.cwd(), cols: 80, rows: 24, restart: true })
+  await new Promise(done => setImmediate(done))
+  release()
+  const [ra, rb] = await Promise.all([a, b])
+
+  assert.equal(ra.spawned, true)
+  assert.equal(rb.spawned, true)
+  assert.equal(ra.session, rb.session, '同一个会话对象：前端 tab 不换键')
+  assert.equal(fakeModule.spawned.length, 3, '初始 1 条 + 两次重启各 1 条')
+  const live = fakeModule.spawned.filter(proc => !proc.killed)
+  assert.equal(live.length, 1, '任何时刻只有一条 PTY 在位 —— 被覆盖的都已被回收')
+  assert.equal(rb.session.pty, live[0])
+  assert.equal(fakeModule.spawned[0].killed, true, '初始 PTY 被第一次重启回收')
+  assert.equal(fakeModule.spawned[1].killed, true, '第一次重启的 PTY 被第二次重启回收（不是孤儿）')
+})
+
+test('TerminalHub: close() during a respawn reclaims the new PTY (a1dc8)', async () => {
+  const { hub, fakeModule } = makeHub()
+  const first = await hub.ensureSession({ shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24 })
+  const id = first.session.id
+
+  const { gate, release } = makeGate()
+  hub._resolveBin = async shell => { await gate; return `C:\\fake-shells\\${shell.bin}.exe` }
+  const respawn = hub.ensureSession({ sessionId: id, shell: 'powershell', cwd: process.cwd(), cols: 80, rows: 24, restart: true })
+  await new Promise(done => setImmediate(done))
+  assert.equal(hub.close(id), true, 'spawn 在飞时关闭标签')
+  release()
+  await assert.rejects(() => respawn, /终端会话已关闭/)
+
+  assert.equal(fakeModule.spawned.length, 2)
+  assert.equal(fakeModule.spawned[1].killed, true, 'spawn 期间被摘掉的会话：新 PTY 立刻回收，不留孤儿')
+  assert.equal(hub.list().length, 0)
 })
 
 test('TerminalHub: close() kills the pty, drops the session and notifies its viewers', async () => {

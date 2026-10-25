@@ -58,23 +58,94 @@ async function readJson(req) {
   return parsed
 }
 
+// ---------------------------------------------------------------------------
+// 浏览器信任围栏（2026-10-20，ff54a）
+// ---------------------------------------------------------------------------
+//
+// `/dual-model/api/*` 是 webServer 上自注册的 prefix 路由，**不经过**内核 `/api`
+// 的准入链。此前唯一门禁是 `fenceOk()`（回环 Host + Origin 全权相等），因此任意
+// 本机进程伪造 `Host: 127.0.0.1:<port>` 且不带 Origin 即可静默改本插件配置。
+// 现在照 `dsh-miasaki-free-model/lib/trust.js` 的范式改成两层：
+//
+//   ① composition 挂了 `connection` 服务时，用它给出的准入判定
+//      （`requestRejection`，与内核 `/api` 同级：信任围栏 + 浏览器鉴权 cookie）；
+//      **必须逐请求读取** —— 该服务可能比本插件晚 provide，apply 期快照会让围栏
+//      在整轮进程里永久退化成第 ② 层。
+//   ② 没有该服务时，用结构化复刻：只允许回环 Host、拒绝跨站 fetch、
+//      Origin/Referer 存在时 hostname 必须与 Host 相同，且 **Origin 显式带端口时
+//      必须等于 Host 端口**（SPEC §2 端口判据；Host 无端口时按 Origin 的 scheme
+//      取默认 80/443；Origin 不带端口 = 部分 Chromium 会剥掉非默认回环端口，
+//      沿用 hostname 判定，避免误拒）。
+//
+// 两层都是纵深防御而非鉴权本身：真正的鉴权由 connection 服务的 cookie 完成。
+
+/** 同机浏览器可以合法使用的 Host 名（去端口后比较；IPv6 保留方括号，与 URL.hostname 同形）。 */
+const TRUSTED_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
 /**
- * 同源围栏：Host 必须是 loopback 字面量，且当浏览器带上 Origin 时其 host 必须与 Host 一致。
- * 本路由只读写本插件自己的配置，但这层校验让跨站页面无法借用户浏览器改配置（CSRF）。
+ * 取 Host / Origin / Referer 的 hostname、端口与 scheme。
+ * Host 头不带 scheme，Origin/Referer 带；补一个再解析，两种形状共用一条路径。
+ * @param {string} value - 原始头值。
+ * @returns {{hostname: string, port: string, protocol: string} | null} 解析不出返回 null。
  */
-function fenceOk(headers) {
-  const host = typeof headers?.host === 'string' ? headers.host : ''
-  const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0]
-  if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '::1') return false
-  const origin = headers?.origin
-  if (typeof origin === 'string' && origin !== '') {
-    try {
-      if (new URL(origin).host !== host) return false
-    } catch {
-      return false
+function authorityOf(value) {
+  if (typeof value !== 'string' || value.trim() === '') return null
+  const raw = value.trim()
+  try {
+    const url = new URL(raw.includes('://') ? raw : `http://${raw}`)
+    return { hostname: url.hostname.toLowerCase(), port: url.port, protocol: url.protocol }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 结构化围栏：不依赖任何服务，只看请求头。导出是为了单测能直接打它。
+ * @param {object} headers - 请求头（`req.headers`）。
+ * @returns {{ok: true} | {ok: false, status: number, error: string}} 判定结果。
+ */
+export function structuralFence(headers) {
+  const host = authorityOf(headers?.host)
+  if (host === null || !TRUSTED_HOSTNAMES.has(host.hostname)) {
+    return { ok: false, status: 403, error: '不被信任的 Host' }
+  }
+  if (String(headers['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') {
+    return { ok: false, status: 403, error: '跨站请求被拒绝' }
+  }
+  for (const name of ['origin', 'referer']) {
+    const raw = headers[name]
+    if (typeof raw !== 'string' || raw.trim() === '') continue
+    const source = authorityOf(raw)
+    // `Origin: null`（opaque origin）解析出的 hostname 不会命中，同样被拒。
+    if (source === null || source.hostname !== host.hostname) {
+      return { ok: false, status: 403, error: '跨站来源被拒绝' }
+    }
+    if (name === 'origin' && source.port !== '') {
+      const hostPort = host.port === '' ? (source.protocol === 'https:' ? '443' : '80') : host.port
+      if (source.port !== hostPort) return { ok: false, status: 403, error: '跨端口来源被拒绝' }
     }
   }
-  return true
+  return { ok: true }
+}
+
+/**
+ * 判定一个请求是否放行：`connection` 在场时以它的判定为准，缺席时退回结构围栏。
+ * @param {object} headers - 请求头（`req.headers`）。
+ * @param {object | undefined} connection - **当次** `ctx.get('connection')` 的结果。
+ * @returns {{ok: true} | {ok: false, status: number, error: string}} 判定结果。
+ */
+export function trustFence(headers, connection) {
+  if (connection !== undefined && connection !== null && typeof connection.requestRejection === 'function') {
+    try {
+      const rejection = connection.requestRejection({ headers })
+      if (rejection === 401) return { ok: false, status: 401, error: '未通过浏览器鉴权' }
+      if (rejection === 403) return { ok: false, status: 403, error: '请求来源不被信任' }
+      if (rejection === undefined) return { ok: true }
+    } catch {
+      // connection 抛错属 composition 缺陷：退回结构层，而不是让每个请求 500。
+    }
+  }
+  return structuralFence(headers)
 }
 
 // ---------------------------------------------------------------------------
@@ -325,8 +396,11 @@ export async function apply(ctx, config) {
   }
 
   async function api(req, res) {
-    if (!fenceOk(req.headers)) {
-      sendJson(res, 403, { error: 'forbidden' })
+    // 逐请求读取 connection：该服务可能比本插件晚 provide，apply 期快照会让围栏
+    // 永久退化成结构层（见本文件「浏览器信任围栏」段）。
+    const fence = trustFence(req.headers, ctx.get('connection'))
+    if (!fence.ok) {
+      sendJson(res, fence.status, { error: fence.error })
       return
     }
     const url = new URL(req.url ?? '/', 'http://localhost')

@@ -7,7 +7,7 @@
 import { avatarFileFromSource } from './avatar.js'
 
 /** 配置版本；结构不兼容变更时 +1，并在 migrateConfig 里补一条迁移分支。 */
-export const CONFIG_VERSION = 7
+export const CONFIG_VERSION = 8
 
 /** 皮肤白名单。M1 只有「纯净」；M2 下沉 desktop 线的刻刻帝 / 狂狂帝。 */
 export const SKINS = Object.freeze(['pure', 'zafkiel', 'kurkuriel'])
@@ -43,6 +43,18 @@ export const CURSOR_STYLES = Object.freeze(['off', 'bar', 'block', 'underline'])
 
 /** 引用与代码块样式档位（M4）：default = 官方默认观感。 */
 export const QUOTE_CODE_LEVELS = Object.freeze(['default', 'plain', 'strong'])
+
+/**
+ * 界面 / 标题字重档位（M5「文字」板块）。空串 = 不覆盖（原生档）；
+ * 其余只认 100–900 整百——滑块中间值没有意义（字体只有离散字重档）。
+ */
+export const WEIGHTS = Object.freeze(['', '300', '400', '500', '600', '700', '800', '900'])
+
+/** 排版四项边界（M5）。0 一律 = 不覆盖（「什么都不配对页面零影响」同款硬契约）。 */
+export const LETTER_SPACING_MAX = 3
+export const LINE_HEIGHT_MAX = 12
+export const PARAGRAPH_SPACING_MAX = 24
+export const FIRST_LINE_INDENT_MAX = 4
 
 /** 壁纸模糊档位边界（px）。 */
 export const BLUR_MIN = 0
@@ -113,6 +125,18 @@ export const DEFAULT_CONFIG = Object.freeze({
   // **跨线字段**——壳侧 `boot_intro` 模块读同一份配置，改动需同步该模块的白名单与门控。
   // 门控与 splash 同源：总开关 `enabled` 关闭 ⇒ 壳侧一律不播（「关掉即原生」）。
   boot: Object.freeze({ intro: 'brand', audio: false }),
+  // 文字（M5，v8）：界面 / 标题字重 + 排版四件套（字距 / 行距 / 段距 / 首行缩进）。
+  // **刻意不做字体族与字号**——那是官方「通用」设置页的字体三行与字号行（0.2.1-rc.2
+  // 起内置，见 design/2026-09-26 去重纪律）；本板块只放官方没有的「字重与排版」。
+  // 全部默认 = 不覆盖；字重空串、四 metric 为 0 时 buildTextCss 输出空串。
+  text: Object.freeze({
+    uiWeight: '',
+    headingWeight: '',
+    letterSpacing: 0,
+    lineHeight: 0,
+    paragraphSpacing: 0,
+    firstLineIndent: 0,
+  }),
 })
 
 // ---------------------------------------------------------------------------
@@ -151,14 +175,61 @@ function toText(value, fallback = '') {
   return trimmed.length > MAX_TEXT ? trimmed.slice(0, MAX_TEXT) : trimmed
 }
 
-/** 壁纸图源只接受空串、内置 id、同源绝对路径、http(s) URL。 */
+/** 壁纸本地路径白名单：同源绝对路径，只允许 URL 安全字符（client 侧用 encodeURIComponent 生成）。 */
+const WALLPAPER_PATH_RE = /^\/[A-Za-z0-9._~%/-]*$/
+
+/** http(s) 图源禁用的标记/引号字符：会逃出 CSS `url("…")` 与 HTML 文本上下文。 */
+const WALLPAPER_URL_FORBIDDEN_RE = /[<>&"'`]/
+
+/** C0 / DEL / C1 控制字符：JSON 可携带，但不允许进 CSS/HTML 文本。 */
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f-\u009f]/
+
+/** style 原始文本禁区：出现该序列会提前闭合 `<style>`（HTML raw-text 元素规则）。 */
+const STYLE_BREAKOUT_RE = /<\/style/i
+
+/**
+ * 壁纸图源只接受空串、内置 id、**同源绝对路径**、http(s) URL。
+ *
+ * 2026-10-19 安全加固（扫描报告 12a7c）：此前只要以单个 `/` 开头就放行，`< > " '`
+ * 等标记字符能穿过，`</style>` 会被内核原样拼进 index.html 的 `<style>` 文本 ⇒ 存储型
+ * HTML/CSS 注入。现在：本地路径走 URL 安全字符白名单；http(s) 先 `new URL()` 解析，
+ * 再拒绝标记字符/控制字符/`</style`；`</style` 在任一分支都整值拒绝（回落空串 = 无壁纸）。
+ */
 function toWallpaperSource(value) {
   const text = toText(value)
   if (text === '') return ''
   if (/^builtin:[a-z0-9-]{1,40}$/.test(text)) return text
-  if (text.startsWith('/') && !text.startsWith('//')) return text
-  if (/^https?:\/\/[^\s]+$/.test(text)) return text
+  // 纵深第一道：任何形态都不许把 style 闭合序列带进配置（不区分大小写）。
+  if (STYLE_BREAKOUT_RE.test(text) || CONTROL_CHAR_RE.test(text)) return ''
+  if (WALLPAPER_PATH_RE.test(text) && !text.startsWith('//')) return text
+  if (text.startsWith('http://') || text.startsWith('https://')) {
+    if (WALLPAPER_URL_FORBIDDEN_RE.test(text)) return ''
+    try {
+      const url = new URL(text)
+      if (url.protocol === 'http:' || url.protocol === 'https:') return text
+    } catch {
+      // 解析失败一律回落空串（与「非法值不写进配置」同一口径）。
+    }
+  }
   return ''
+}
+
+/**
+ * 注入行文本安全判据（纵深，消费方 `index.js` 的 `pushRow`）。
+ *
+ * 首帧注入的 style / script 行由内核**原样写进 index.html 文本**（`dsh-host-webserver`
+ * 的 `renderRow`：`<style>${row.text}</style>` / `<script>${row.text}</script>`），
+ * 文本里一旦出现闭合序列就会截断宿主元素。这里按行类型给出判据：
+ * style 行不得含 `</style`，script 行不得含 `</script`（均不区分大小写）。
+ * @param {string} kind - 注入行类型。
+ * @param {string} text - 注入行文本。
+ * @returns {boolean} true = 可以放行。
+ */
+export function isInjectionTextSafe(kind, text) {
+  const raw = String(text ?? '')
+  if (kind === 'style') return !STYLE_BREAKOUT_RE.test(raw)
+  if (kind === 'script') return !/<\/script/i.test(raw)
+  return true
 }
 
 /**
@@ -210,6 +281,9 @@ export function migrateConfig(raw) {
   // （intro 枚举 + audio 布尔），纯新增，旧配置由 sanitize 补默认（brand / 静音）。
   // 注意：**门控不看本板块**——总开关关闭时壳侧一律不播（见 boot_intro.rs），
   // 因此旧配置升级后不会凭空出现片头，除非用户本来就开着总开关。
+  // v7 → v8：M5「文字」板块（界面/标题字重 + 排版四件套）—— 新增顶层 `text` 板块，
+  // 纯新增。旧配置由 sanitize 补全原生档（空字重 + 四个 0 = 不覆盖任何规则），
+  // 因此升级后页面零变化；不做字体族/字号（官方 0.2.1 通用页已有，去重纪律）。
   return { ...source, version: CONFIG_VERSION }
 }
 
@@ -226,6 +300,7 @@ export function sanitizeConfig(raw) {
   const motion = asRecord(source.motion)
   const conversation = asRecord(source.conversation)
   const boot = asRecord(source.boot)
+  const text = asRecord(source.text)
 
   return {
     version: CONFIG_VERSION,
@@ -270,6 +345,16 @@ export function sanitizeConfig(raw) {
       intro: pickEnum(boot.intro, INTRO_CLIPS, DEFAULT_CONFIG.boot.intro),
       audio: toBoolean(boot.audio, DEFAULT_CONFIG.boot.audio),
     },
+    // 字重走白名单（空串 = 不覆盖）；四 metric 钳制进 [0, max]，非有限数回退 0。
+    // 面板步进器的 step（0.1 / 1 / 2 / 0.5）产生小数 ⇒ 必须用 clampNumber 而非 clampInt。
+    text: {
+      uiWeight: pickEnum(text.uiWeight, WEIGHTS, DEFAULT_CONFIG.text.uiWeight),
+      headingWeight: pickEnum(text.headingWeight, WEIGHTS, DEFAULT_CONFIG.text.headingWeight),
+      letterSpacing: clampNumber(text.letterSpacing, 0, LETTER_SPACING_MAX, DEFAULT_CONFIG.text.letterSpacing),
+      lineHeight: clampNumber(text.lineHeight, 0, LINE_HEIGHT_MAX, DEFAULT_CONFIG.text.lineHeight),
+      paragraphSpacing: clampNumber(text.paragraphSpacing, 0, PARAGRAPH_SPACING_MAX, DEFAULT_CONFIG.text.paragraphSpacing),
+      firstLineIndent: clampNumber(text.firstLineIndent, 0, FIRST_LINE_INDENT_MAX, DEFAULT_CONFIG.text.firstLineIndent),
+    },
   }
 }
 
@@ -298,6 +383,7 @@ export function mergeConfig(current, patch) {
     motion: { ...base.motion, ...asRecord(incoming.motion) },
     conversation: { ...base.conversation, ...asRecord(incoming.conversation) },
     boot: { ...base.boot, ...asRecord(incoming.boot) },
+    text: { ...base.text, ...asRecord(incoming.text) },
   })
 }
 
@@ -359,7 +445,11 @@ export function buildBootStyle(config, skinTokens, builtinWallpapers) {
   if (skinCss !== '') parts.push(skinCss)
   const layerCss = buildWallpaperGlassCss(safe, builtinWallpapers)
   if (layerCss !== '') parts.push(layerCss)
-  return parts.join('\n')
+  const css = parts.join('\n')
+  // 纵深第二道（12a7c）：首帧 style 行由内核**原样**写进 index.html 的 `<style>` 文本，
+  // 文本里出现 `</style` 会提前闭合元素并把后续内容当标记解析。上游 sanitize 已挡，
+  // 这里再兜一次：触发即整段回落空串（= 原生观感），绝不把半截 CSS 交给 HTML 解析器。
+  return STYLE_BREAKOUT_RE.test(css) ? '' : css
 }
 
 /** 壁纸 + 玻璃两段（无中和规则）——首帧注入与运行期样式共用同一份生成逻辑。 */
@@ -401,6 +491,64 @@ export function buildRuntimeStyle(config, builtinWallpapers) {
   return parts.join('\n')
 }
 
+/** Markdown 正文容器钩子（见 buildTextCss 注释；抽成常量供测试与编译共用）。 */
+const MD_SELECTOR = '[class*="_markdown"]'
+
+/**
+ * 文字层 CSS（M5「文字」板块，v8）：界面 / 标题字重 + 排版四件套。
+ *
+ * 设计取舍（完整论证见 design/2026-10-19-appearance-m5-text-typography-design.md）：
+ *   · **host 编译、client 注册**——与 wallpaperLayers 同款，/state 与 /config 响应随发
+ *     `textCss`，client 只负责写进独立 style 标签；「撤销 = 标签移除 = 官方恢复」。
+ *   · **不进 boot style**：文字无首帧闪色问题（初始即原生），且 boot style 注入一次
+ *     不可撤销（!important 规则会永久压过官方）。刷新后「先原生后套上」为已知限制。
+ *   · 排版四项只作用于 `[class*="_markdown"]`（ui-primitives Markdown 组件的 CSS Module
+ *     类名 = 哈希 + `_` + 局部名，跨构建稳定）；**刻意不用全局 `p`**——那会把插件自己的
+ *     说明文字与设置面板全文一起缩进。
+ *   · 行距是**叠加**而非替换：应用行高 = `calc(24px + var(--dsh-content-font-delta))`
+ *     （0.2.1-rc.2 base.css 实测），写死行高会与官方字号调节脱钩。
+ *   · 界面字重挂 `body`（低特异性）：只影响**继承**的文本，组件自己声明的字重仍然优先
+ *     ⇒ 不会把「粗体标题 vs 常规正文」的层级压平；Markdown 段落另压一次 !important，
+ *     因为段落常由 `font` 简写连带指定字重。
+ *   · 空字重 / 0 值一律不产出规则（「什么都不配 = 零影响」）。
+ *
+ * @param {object} config - 已归一化配置。
+ * @returns {string} CSS 文本；总开关关闭或全原生档时返回空串。
+ */
+export function buildTextCss(config) {
+  const safe = sanitizeConfig(config)
+  if (!safe.enabled) return ''
+  const text = safe.text
+  const rules = []
+  const uiWeight = text.uiWeight
+  const headingWeight = text.headingWeight === '' ? uiWeight : text.headingWeight
+  if (uiWeight !== '') {
+    rules.push(`body { font-weight: ${uiWeight}; }`)
+    rules.push(`${MD_SELECTOR} p, ${MD_SELECTOR} li, ${MD_SELECTOR} blockquote, ${MD_SELECTOR} td { font-weight: ${uiWeight} !important; }`)
+  }
+  if (headingWeight !== '') {
+    rules.push(`${MD_SELECTOR} h1, ${MD_SELECTOR} h2, ${MD_SELECTOR} h3, ${MD_SELECTOR} h4, ${MD_SELECTOR} h5, ${MD_SELECTOR} h6 { font-weight: ${headingWeight} !important; }`)
+  }
+  if (text.letterSpacing > 0) {
+    rules.push(`${MD_SELECTOR} { letter-spacing: ${text.letterSpacing}px; }`)
+  }
+  if (text.lineHeight > 0) {
+    // 叠加：官方基准 24px + 字号增量（--dsh-content-font-delta），再叠用户增量。
+    rules.push(
+      `${MD_SELECTOR} p, ${MD_SELECTOR} li, ${MD_SELECTOR} blockquote, ${MD_SELECTOR} td, ` +
+      `${MD_SELECTOR} h1, ${MD_SELECTOR} h2, ${MD_SELECTOR} h3, ${MD_SELECTOR} h4, ${MD_SELECTOR} h5, ${MD_SELECTOR} h6 ` +
+      `{ line-height: calc(24px + var(--dsh-content-font-delta, 0px) + ${text.lineHeight}px) !important; }`,
+    )
+  }
+  if (text.paragraphSpacing > 0) {
+    rules.push(`${MD_SELECTOR} p { margin-block: ${text.paragraphSpacing}px !important; }`)
+  }
+  if (text.firstLineIndent > 0) {
+    rules.push(`${MD_SELECTOR} p { text-indent: ${text.firstLineIndent}em; }`)
+  }
+  return rules.length === 0 ? '' : `/* @miasaki/dsh-appearance text (M5) */\n${rules.join('\n')}`
+}
+
 /** 皮肤段：双段属性选择器展开 token 表（M2 §6.1）。 */
 function buildSkinBootCss(safe, skinTokens) {
   if (safe.theme.skin === 'pure' || skinTokens === null || skinTokens === undefined) return ''
@@ -431,7 +579,9 @@ function wallpaperLayerValue(wallpaper, builtinWallpapers) {
     if (wallpaper.source.startsWith('builtin:')) {
       // 内置壁纸是程序化 CSS 渐变（零资产）；未知 id 视为无效源，不注入（配置面已白名单）。
       if (typeof builtin === 'string') layers.push(builtin)
-    } else {
+    } else if (!STYLE_BREAKOUT_RE.test(wallpaper.source)) {
+      // 纵深第一道（12a7c）：`</style` 会截断内核注入的 `<style>` 文本，整段不输出。
+      // 正常来源已由 toWallpaperSource 白名单过滤，这里是不依赖上游的兜底。
       layers.push(`url("${wallpaper.source.replace(/\\/g, '/').replace(/"/g, '%22')}")`)
     }
   }

@@ -1,5 +1,53 @@
 # 变更记录 — dsh-miasaki-dual-model
 
+## 2026-10-20 · 路由接入内核准入 + 结构围栏端口判据（ff54a）
+
+**背景**：`/dual-model/api/*` 是 webServer 上自注册的 prefix 路由，不经过内核 `/api` 的
+准入链；此前唯一门禁是 `fenceOk()`（回环 Host + Origin **全权**相等，且不看
+`sec-fetch-site` / Referer），没有接入 `connection.requestRejection`。代码扫描核实
+（`_refs/monkeyscan-2026-10-19/verify/F-dualmodel-sidebar.md`）确认：任意本机进程伪造
+`Host: 127.0.0.1:<port>` 且不带 Origin 即可静默改写本插件配置（`POST /settings` 持久化
+`enabled/assistProvider/assistModel`）；本机其它账户在回环可达的条件下同样能打。
+本仓已有正确范式（`dsh-miasaki-free-model/lib/trust.js` / `dsh-miasaki-usage/lib/fence.js`），
+本线是该范式确立后的遗留缺口。
+
+**改动**（`index.js`）：
+
+- 新增导出纯函数 `structuralFence(headers)` / `trustFence(headers, connection)`（照 free-model 范式）：
+  - 有 `connection` 服务时以 `requestRejection` 为准：**401 → 401、403 → 403、
+    `undefined` → 放行、其他值/抛错 → 退回结构层**；
+  - 结构层：回环 Host 白名单（`localhost` / `127.0.0.1` / `::1`，含 IPv6 方括号形态）+
+    拒绝 `sec-fetch-site: cross-site` + Origin/Referer hostname 必须与 Host 相同 +
+    **端口判据**（SPEC §2）：Origin 显式端口必须等于 Host 端口（Host 无端口时按 Origin 的
+    scheme 取 80/443）；Origin 不带端口（部分 Chromium 剥掉非默认回环端口）沿用 hostname
+    判定，不误拒。
+- `api()` 开头改为 `trustFence(req.headers, ctx.get('connection'))`，**逐请求读取**
+  `connection`（不做 apply 期快照，该服务可能晚 provide），401/403 原样回给客户端；
+  `inject` 仍是 `['webServer']`（`connection` 走可选 `ctx.get`，缺失时结构层兜底）。
+- `fenceOk()` 删除（被 `trustFence` 取代）。相对旧实现的行为变化：① 新增内核准入层
+  （`connection.requestRejection` 的 401/403）与 `sec-fetch-site` / `Referer` 判据；
+  ② Host 带端口而 Origin 不带端口（Chromium 剥端口场景）从「误拒」变为按 hostname 放行；
+  ③ 端口判据改为「Origin 显式端口 == Host 端口（Host 无端口按 Origin 的 scheme 取
+  80/443）」，与旧的全权字符串比较在常规场景等价，在 Host 无端口 / Origin 剥端口两类
+  边界上行为更明确。
+
+**测试**：新增 `test/trust.test.js` 21 例 —— 结构层 10 例（含跨端口 403、Origin 无端口
+放行、Host 无端口默认端口换算、IPv6 同源）；`connection` 4 例（401/403/undefined/抛错/
+其他值）；路由级 7 例（无 connection 同源 200 / 非回环 Host 403 / 跨端口 Origin 403 /
+跨站 POST 403 且不落盘 / 401+403 / **逐请求读取**（晚 provide 后同路由接管） /
+同源 POST /settings 200 且落盘到临时 dataDir）。
+
+**实测**：
+
+```
+node --test test/*.test.js                  → 60 例全绿（原 39 + 21）
+node ../scripts/verify-all.mjs dual-model   → 16/16 PASS
+```
+
+**遗留/风险**：本项只收「来源信任」一层；`assistProvider/assistModel` 仍未对
+`llm.listProviders()/listModels()` 做「值必须是已注册模型」的校验（写入无效值的后果是
+后续带图请求报错，而非配置被越权改写）—— 属功能校验，另行排期。
+
 ## 2026-10-12 · 分发就绪订正：npm 元数据补全 + `files` 剔除 `test/`
 
 **背景**：本仓已进入插件对外分发阶段。本轮对 7 条可分发线做分发就绪检测 ——

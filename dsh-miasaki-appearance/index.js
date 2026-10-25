@@ -24,12 +24,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, basename, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildRuntimeStyle, buildSurfaceTokens, buildWallpaperLayers, configEquals, evaluateContract, mergeConfig, sanitizeConfig } from './lib/config.js'
+import { DEFAULT_CONFIG, buildBootScript, buildBootStyle, buildRuntimeStyle, buildSurfaceTokens, buildWallpaperLayers, buildTextCss, configEquals, evaluateContract, isInjectionTextSafe, mergeConfig, sanitizeConfig } from './lib/config.js'
 import { buildSplashHtml, buildSplashScript, buildSplashStyle } from './lib/splash.js'
 import { AVATAR_DIRNAME, AVATAR_NAME_RE, AVATAR_URL_PREFIX, avatarFileFromSource, isUserAvatarName, makeAvatarName, parseAvatarDataUrl } from './lib/avatar.js'
 import { ICON_PRESETS, presetAssetPath, presetFileName, presetUrl } from './lib/icon-presets.js'
 import { AppearanceStore } from './lib/store.js'
-import { buildTrustedHosts, fenceCheck } from './lib/fence.js'
+import { buildTrustedHosts, fenceCheck, isTrustedHost } from './lib/fence.js'
 import { meta as zafkielMeta, tokens as zafkielTokens } from './lib/skins/zafkiel.js'
 import { meta as kurkurielMeta, tokens as kurkurielTokens } from './lib/skins/kurkuriel.js'
 
@@ -146,6 +146,15 @@ export function apply(ctx, config) {
           `appearance: 非法 index-inject 行类型 ${JSON.stringify(row.kind)}；` +
           `官方白名单：${[...INJECTION_KINDS].join(' / ')}（写错会让 DSH 前端启动期抛错）`
         )
+      )
+      return
+    }
+    // 纵深（12a7c）：style / script 行由内核**原样**写进 index.html 文本，出现闭合序列
+    // 会截断宿主元素。产出侧上游已各自把关（splash 单测 + sanitize 白名单），这里再兜
+    // 一次——任何来源的坏文本都不得进入注入表，宁可少一行也不让 HTML 解析器接管。
+    if (!isInjectionTextSafe(row.kind, row.text)) {
+      ctx.logger?.error?.(
+        new Error(`appearance: 注入行 ${row.kind} 含闭合标签序列（</${row.kind}>），已拒绝`)
       )
       return
     }
@@ -307,6 +316,9 @@ export function apply(ctx, config) {
         revision,
         persistent: store.persistent,
         wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS),
+        // M5（v8）：文字层 CSS 随状态下发——与 wallpaperLayers 同款「host 编译、
+        // client 注册」，空串 = 无规则（client 移除独立 style 标签）。
+        textCss: buildTextCss(current),
       })
     }
 
@@ -464,7 +476,7 @@ export function apply(ctx, config) {
       const expected = body?.expectedRevision
       if (expected !== undefined && expected !== null && Number(expected) !== revision) {
         // 乐观并发：调用方读到的是旧修订 → 拒绝并回带当前状态，由调用方决定重试策略。
-        return sendJson(res, 409, { error: 'revision-conflict', revision, config: current, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS) })
+        return sendJson(res, 409, { error: 'revision-conflict', revision, config: current, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS), textCss: buildTextCss(current) })
       }
       const patch = body?.patch !== undefined ? body.patch : body?.config
       // P5（2026-09-30）：`replace: true` = **整体替换**语义（导入配置用）。
@@ -487,7 +499,7 @@ export function apply(ctx, config) {
       }
       if (configEquals(next, current)) {
         // 无实质变化：不写盘、不递增修订，但仍回答最新状态（面板的重复提交是常态）。
-        return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: false, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS) })
+        return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: false, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS), textCss: buildTextCss(current) })
       }
       // 写盘失败必须**如实失败**（2026-09-26 修：此前 `.catch` 只记日志，随后仍无条件返回
       // 200 + `changed: true`，而 `current` / `revision` 停在旧值 ⇒ 客户端据此 setState 旧配置、
@@ -517,9 +529,10 @@ export function apply(ctx, config) {
           persistent: store.persistent,
           changed: false,
           wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS),
+          textCss: buildTextCss(current),
         })
       }
-      return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: true, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS) })
+      return sendJson(res, 200, { config: current, revision, persistent: store.persistent, changed: true, wallpaperLayers: buildWallpaperLayers(current, BUILTIN_WALLPAPERS), textCss: buildTextCss(current) })
     }
 
     if (path === `${API_PREFIX}contract` && req.method === 'POST') {
@@ -538,11 +551,16 @@ export function apply(ctx, config) {
   }
 
   /**
-   * 本机图片文件路由（壁纸 / 头像共用）：不走 JSON 围栏（img/background 请求无自定义头），
-   * 安全完全靠「目录 + 文件名白名单 + 防穿越」三件套。
+   * 本机图片文件路由（壁纸 / 头像共用）：不走完整 JSON 围栏（img/background 请求可能没有
+   * Origin，套 Origin 判据会误伤），但**必须校验 Host**（2026-10-19 c0787）：
+   * 此前完全不读请求头 ⇒ 任意网页可用 `<img>` 探测本机图片、DNS 重绑定来源可同源读字节。
+   * 现在 Host 不命中环回/trustedHosts 直接 403；目录 + 文件名白名单 + 防穿越仍是第二道。
    */
   function fileRoute(prefix, resolve) {
     return async (req, res) => {
+      if (!isTrustedHost(req.headers?.host, trustedHosts)) {
+        res.writeHead(403); return res.end()
+      }
       let pathname = '/'
       try {
         pathname = new URL(req.url ?? '/', 'http://dsh.local').pathname

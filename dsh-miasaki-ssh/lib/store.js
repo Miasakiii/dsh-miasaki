@@ -196,8 +196,25 @@ export function sanitizeConnection(record) {
 //  1. Host header must be localhost / loopback literal or in trustedHosts.
 //  2. sec-fetch-site: cross-site is always rejected (browser flags
 //     cross-site requests itself).
-//  3. Origin (when present) hostname must equal the Host hostname (loopback).
+//  3. Origin (when present) hostname must equal the Host hostname —— 不再给
+//     「任意回环别名」无条件放行（2026-10-20, monkeyscan d98e3）。
+//  4. 端口判据（2026-10-20, d98e3）：Origin 显式带端口时必须等于 Host 端口。
+//     同站跨端口（站点判定不含端口）的页面因此不能借「回环 Origin」打本接口；
+//     Chromium 会剥掉部分环回来源的端口 ⇒ Origin 无端口时只按 hostname 判定
+//     （兼容优先：宁可接受已通过 hostname 校验的请求，也不误拒正常同源）。
 // Shared by both the HTTP handler and the WebSocket upgrade gate.
+
+/** Host 头里显式声明的端口（'127.0.0.1:3080' -> 3080；无端口 -> null）。 */
+function portOfHost(hostHeader) {
+  const match = /:(\d+)$/.exec(String(hostHeader ?? '').trim())
+  return match === null ? null : Number(match[1])
+}
+
+/** Origin 省略端口时的协议默认端口（Host 也没写端口时用它比较）。 */
+function defaultPortForScheme(scheme) {
+  return String(scheme ?? '').toLowerCase() === 'https:' ? 443 : 80
+}
+
 export function fenceCheck(headers, trustedHosts) {
   const hostHeader = typeof headers['host'] === 'string' ? headers['host'] : ''
   const hostname = stripPort(hostHeader).toLowerCase()
@@ -208,10 +225,13 @@ export function fenceCheck(headers, trustedHosts) {
     return { ok: false, reason: 'cross-site' }
   }
   if (typeof headers['origin'] === 'string' && headers['origin'].length > 0) {
-    let originHostname = null
-    try { originHostname = new URL(headers['origin']).hostname.toLowerCase() } catch { return { ok:false, reason:'bad-origin' } }
-    if (originHostname !== hostname && originHostname !== '127.0.0.1' && originHostname !== 'localhost') {
-      return { ok: false, reason: 'untrusted-origin' }
+    let origin = null
+    try { origin = new URL(headers['origin']) } catch { return { ok: false, reason: 'bad-origin' } }
+    const originHostname = origin.hostname.toLowerCase()
+    if (originHostname !== hostname) return { ok: false, reason: 'untrusted-origin' }
+    if (origin.port.length > 0) {
+      const hostPort = portOfHost(hostHeader) ?? defaultPortForScheme(origin.protocol)
+      if (origin.port !== String(hostPort)) return { ok: false, reason: 'cross-port-origin' }
     }
   }
   return { ok: true }

@@ -87,6 +87,40 @@ test('ssh_exec: readonly 档的 L1 命令连审批机会都不给', async () => 
   assert.equal(audit.list().at(-1).decision, 'denied-risk')
 })
 
+// 2026-10-20（monkeyscan 0a186）：旧实现在 L0 判定上只认「原始首 token」+ 只看 sed -i/
+// find -exec 两类写 flag ⇒ `cat x > 文件`、`env sh -c …` 都能以 L0 直通 readonly 硬闸。
+test('ssh_exec: readonly 档 —— L0 命令头 + 写操作/前缀伪装也拒绝（0a186 对抗）', async () => {
+  const { byName, audit } = harness({ connections: { h1: host({ agentAccess: 'readonly' }) } })
+  const redirect = await byName.ssh_exec.execute({ hostId: 'h1', command: 'cat /etc/hosts > /srv/a' })
+  assert.equal(redirect.error, 'ACCESS_DENIED', 'L0 头 + 重定向不能再当只读放行')
+  assert.equal(redirect.riskLevel, 'L1')
+  assert.equal(audit.list().at(-1).decision, 'denied-risk')
+
+  const env = await byName.ssh_exec.execute({ hostId: 'h1', command: "env sh -c 'id'" })
+  assert.equal(env.error, 'ACCESS_DENIED', 'env 前缀不能把任意命令顶成 L0')
+
+  const branch = await byName.ssh_exec.execute({ hostId: 'h1', command: 'git branch -D main' })
+  assert.equal(branch.error, 'ACCESS_DENIED', 'git branch -D 是写操作')
+
+  const awk = await byName.ssh_exec.execute({ hostId: 'h1', command: 'awk \'BEGIN{system("id")}\'' })
+  assert.equal(awk.error, 'ACCESS_DENIED', 'awk system() 判 L2，readonly 连审批机会都不给')
+})
+
+test('ssh_exec: full 档 —— L0 伪装的写/执行形态走审批而不是免审批直通（0a186）', async () => {
+  const asked = []
+  const client = makeClient({ stdout: '' })
+  const { byName } = harness({
+    connections: { h1: host() },
+    userQuestions: { ask: async request => { asked.push(request); return { answers: [{ id: 'ssh-exec', selected: ['拒绝'] }] } } },
+    runtimeOverrides: { isConnected: () => true, runtimeOf: () => ({ id: 'rt-1', status: 'connected', client }) },
+  })
+  const result = await byName.ssh_exec.execute({ hostId: 'h1', command: "env sh -c 'id'" })
+  assert.equal(result.error, 'APPROVAL_REJECTED')
+  assert.equal(result.riskLevel, 'L1')
+  assert.equal(asked.length, 1, '伪装成 env 的任意命令也必须问人一次')
+  assert.match(asked[0].questions[0].question, /\[L1\]/)
+})
+
 test('ssh_exec: full + L0 免审批直通，riskLevel 由服务端填', async () => {
   const client = makeClient({ stdout: 'file-a\nfile-b\n' })
   const { byName, audit } = harness({

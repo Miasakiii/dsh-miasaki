@@ -136,6 +136,34 @@ test('execCommand: 输出超长截断且带标记', async () => {
   assert.match(result.stdout, /\[输出过长已截断\]/)
 })
 
+// 2026-10-20（monkeyscan 267fd）：旧实现每个 data 事件都再追加一次标记 ⇒ 饱和后
+// 字符串按 +11 字符/事件增长（实测 21 + 100×11 = 1121）。修复后必须停在 21。
+test('execCommand: 饱和后继续来 data 不再增长，标记只出现一次（267fd）', async () => {
+  const client = drivingClient()
+  const promise = execCommand(client, 'cat big', { drainWindowMs: 5, maxOutputBytes: 10 })
+  const ch = client.channel
+  ch.emit('data', Buffer.from('0123456789ABCDEFG')) // 10 字节 + 11 字符标记 = 21
+  for (let i = 0; i < 100; i += 1) ch.emit('data', Buffer.from('x'))
+  ch.emit('exit', 0, null)
+  ch.emit('close')
+  const result = await promise
+  assert.equal(result.stdout.length, 21, '饱和后长度必须停在 10 字节 + 11 字符标记')
+  assert.equal((result.stdout.match(/\[输出过长已截断\]/g) ?? []).length, 1, '截断标记只能加一次')
+})
+
+test('execCommand: stderr 同样幂等截断（267fd）', async () => {
+  const client = drivingClient()
+  const promise = execCommand(client, 'noisy', { drainWindowMs: 5, maxOutputBytes: 10 })
+  const ch = client.channel
+  ch.stderr.emit('data', Buffer.from('0123456789ABCDEFG'))
+  for (let i = 0; i < 50; i += 1) ch.stderr.emit('data', Buffer.from('y'))
+  ch.emit('exit', 1, null)
+  ch.emit('close')
+  const result = await promise
+  assert.equal(result.stderr.length, 21)
+  assert.equal((result.stderr.match(/\[输出过长已截断\]/g) ?? []).length, 1)
+})
+
 test('scanJsonLine: 跳过 banner/motd/欢迎行找协议行，非 JSON 行留在 stdout', () => {
   const text = 'SSH-2.0-OpenSSH_9.6 banner\nWelcome, ops!\n{"type":"hello","v":1}\ntrailer\n'
   assert.deepEqual(scanJsonLine(text), { type: 'hello', v: 1 })

@@ -55,12 +55,23 @@ export function execCommand(client, command, {
     let exitSignal = null
     let stdout = ''
     let stderr = ''
+    let stdoutCapped = false
+    let stderrCapped = false
     let closeSeen = false
     let drainTimer = null
     let channel = null
     let timeoutTimer = null
 
-    const cap = (text, extra) => (text.length + extra.length > maxOutputBytes ? text + extra.slice(0, Math.max(0, maxOutputBytes - text.length)) + '\n…[输出过长已截断]' : text + extra)
+    // 2026-10-20（monkeyscan 267fd）：截断**幂等**——饱和后原样返回 text，标记只加一次。
+    // 旧实现每来一个 data 事件都会再追加一次标记 ⇒ 饱和后字符串按 +11 字符/事件增长。
+    const cap = (text, extra, capped) => {
+      if (capped) return { text, capped: true }
+      if (text.length + extra.length <= maxOutputBytes) return { text: text + extra, capped: false }
+      return {
+        text: text + extra.slice(0, Math.max(0, maxOutputBytes - text.length)) + '\n…[输出过长已截断]',
+        capped: true,
+      }
+    }
 
     const finish = (patch = {}) => {
       if (settled) return
@@ -90,8 +101,20 @@ export function execCommand(client, command, {
       if (err) { finish({ code: null, error: err.message }); return }
       if (settled) { try { ch.close?.() } catch { /* gone */ }; return }
       channel = ch
-      ch.on('data', chunk => { stdout = cap(stdout, chunk.toString('utf8')); if (closeSeen) armDrain() })
-      ch.stderr?.on('data', chunk => { stderr = cap(stderr, chunk.toString('utf8')); if (closeSeen) armDrain() })
+      ch.on('data', chunk => {
+        if (settled) return // 收尾后迟到的数据不再改动已结算的字符串
+        const capped = cap(stdout, chunk.toString('utf8'), stdoutCapped)
+        stdout = capped.text
+        stdoutCapped = capped.capped
+        if (closeSeen) armDrain()
+      })
+      ch.stderr?.on('data', chunk => {
+        if (settled) return
+        const capped = cap(stderr, chunk.toString('utf8'), stderrCapped)
+        stderr = capped.text
+        stderrCapped = capped.capped
+        if (closeSeen) armDrain()
+      })
       ch.on('exit', (code, signal) => {
         // 只记录，绝不在这里收尾 —— 先 exit 后 data 是真实时序（zcode 同款教训）。
         exitCode = code ?? null
