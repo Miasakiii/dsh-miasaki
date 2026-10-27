@@ -5,6 +5,11 @@
 入口在**会话头第一行的三段胶囊**里（与「对话 / 会话布」同一个控件，第三段是 SSH）；
 画布页面内部那组按钮旁也有一个 SSH，走画布的外部视图槽。
 
+SSH 页面（全屏浮层）的**主机导航头部**还有一颗「远程连接 DSH」入口：远程连接插件
+（`ds-harness-remote`，miasaki profile）的侧栏脚部入口已**搬到本页** —— 脚部那个位置
+归用量统计（`dsh-token-monitor`）。远程插件不在场（未安装 / 已卸载）时该入口自动隐藏，
+脚部入口随之回落，行为与搬迁前一致。
+
 ## 能力
 
 ### 交互式终端
@@ -82,7 +87,7 @@ dsh plugin --profile <profile> add @miasaki/dsh-ssh
 ```bash
 pnpm install
 pnpm run build   # node --check 全部入口与 lib/
-pnpm test        # 309 例单测（2026-10-07：退役避主题球让位链，净 −1 例）
+pnpm test        # 327 例单测（2026-10-25：远程连接入口搬到 SSH 页面 + 浮层越狱，+6 例）
 ```
 
 仓库级统一回归：`node ../scripts/verify-all.mjs ssh`（31 个检查项）。

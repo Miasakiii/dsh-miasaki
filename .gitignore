@@ -117,5 +117,8 @@ dsh-miasaki-fleet/tests/m3-acp/logs/
 # 外部 agent 工具的私有状态目录（与 .openclaw/.cluster/.monkeycode 同族；
 # 2026-10-13 出现在根目录 —— 不是本项目产物，不入库）
 .stepcode/
+# dtclaw（外部 agent 工具）的沙箱配置目录（2026-10-26 出现在根目录，base-settings.json
+# 的 denyRead 里也点名了自身 —— 工具私有状态，与 .stepcode/.sandbox-tmp 同族，不入库）
+.dtclaw-srt/
 Thumbs.db
 Desktop.ini

@@ -2,6 +2,89 @@
 
 本文件记录 `dsh-miasaki-ssh/` 线的设计决策与变更。
 
+## 2026-10-25 · 远程连接入口搬到 SSH 页面（ds-harness-remote × 用量统计让位）
+
+**背景**：用户报「给远程连接插件入口改个位置，不要占用我用量统计的位置」，并拍板位置
+「可以考虑改到 SSH 页面」。远程连接插件（`ds-harness-remote` 0.5.18，miasaki profile 的
+第三方插件）把入口注册在 `sidebar.footer.action`（`order: -20`），与用量统计
+（`@miasaki/dsh-token-monitor` 的 `usage-stats`）争**同一个脚部位** —— 宽形态下远程入口
+带文字标签，用量统计被挤到后面。
+
+**决策：不改第三方插件本体，由本线做「搬迁」**（完整决策记录见
+`design/2026-10-25-remote-entry-relocation.md`）。三条理由：① profile 是用户的**运行环境**，
+动 `~/.dsh/profiles/*` 前必须先问用户，而插件升级会整体覆盖 node_modules 里的改动；
+② 本线 `link:` 装在 miasaki / web 两个 profile，搬迁逻辑随插件走、刷新即生效；
+③ 退化方向必须是「回到今天的行为」而非破版 —— 判据全部只认 DOM 事实（远程插件类名），
+插件不在场（web profile）或类名漂移（升级重构）时静默失效、入口回落脚部。
+
+**实现**（宿主半 `client.js` + 页面半 `app.js`，零协议新增、零第三方依赖）：
+
+- **CSS 让位**：`SWITCH_CSS` 末尾追加 `.dshRemoteSidebarEntry{display:none!important}` ——
+  脚部那条整条收起（不占位、不进焦点顺序），位置还给用量统计。规则随本插件注入 ⇒
+  本插件不在场时远程入口回落脚部。远程浮层本体（`.dshRemoteBackdrop`）不被命中。
+- **页面入口**：`app.js` 主机导航头部（「+ 新建主机」旁）新增 `btn-remote`，图标与远程
+  插件脚部入口同款字形（显示器 + 底座）。显隐/激活态由纯函数 `remoteEntryPresentation`
+  决定：远程插件不在场 ⇒ 整颗隐藏（不摆死入口）；已连接 ⇒ 激活态 + 「点击退出」标题。
+- **行为闭环**：iframe 点击 → `ssh:remote-open` 消息（既有 postMessage 协议 + token 防伪）
+  → 宿主 `triggerRemoteEntry()` 程序化点击脚部那颗被收起的按钮。远程浮层 z-index 1000
+  **盖在 SSH 浮层（100）之上**打开，关闭后回到 SSH 页面，不需要关浮层。
+- **切换语义镜像**：远程入口宽形态 + 已连接时 `.dshRemoteModeButton` 是**无回调的 div**，
+  退出在 `.dshRemoteExitLink`（rail 形态下模式钮即退出）⇒ 点击目标由纯函数
+  `remoteClickTarget`（模块级、已导出）按 DOM 事实选择，与脚部原按钮逐字一致。
+- **状态下发**：宿主经 `type:'remote'` 消息把「在场 / 已连接」推给 iframe（`remoteAvailable` /
+  `remoteActive`），load 与每次开浮层补推；body 上盯 childList（入口是 React 渲染，插件
+  装卸整棵换节点）、入口节点上盯 class（`isActive` 切换），两条观察者归 fiber teardown。
+
+**测试**：`test/app.test.js` +1 例（`remoteEntryPresentation` 四态：不可用隐藏 / 字段缺席 /
+  可用未连接 / 已连接退出语义，逐字段比对绕开 vm realm 原型差异）；
+  `test/client.test.js` +5 例（CSS 让位且不误伤浮层 / 越狱规则 `:has` + `!important` /
+  点击目标四态含缺席与形状不符 / `ssh:remote-open` 闭环含错 token 拒与入口退场静默 /
+  remote 消息与两条观察者各司其职）。单测 **321 → 327 例全绿**；
+  `node scripts/verify-all.mjs ssh` **31/31 PASS**。
+
+**实机复验（2026-10-25，用户截图反馈）与浮层「越狱」修复**：用户实测「点击没反应，
+  回到会话页，它悬浮在侧边栏，不是我要的，它应该悬浮在 SSH 页」。**静态堆叠推断被实机
+  推翻**（原推断「同文档根堆叠上下文、1000 > 100 故浮层盖在 SSH 页上」两面不成立），
+  根因是 appearance 线玻璃档位（`buildGlassBootCss`：
+  `html[data-mia-glass=*] [data-slot="sidebar"] > * { backdrop-filter: … }`）——
+  `backdrop-filter ≠ none` 同时造出**包含块 + 堆叠上下文**，远程浮层（`position:fixed;
+  z-index:1000`，渲染在 `sidebar.footer.action` 槽里）的 `inset:0` 因此变成「填满侧栏」、
+  1000 被困在侧栏堆叠上下文内盖不住 body 级 SSH 浮层。官方壳不给侧栏挂 backdrop-filter
+  （模块 CSS 实测 0 处）⇒ 陷阱仅此一处。**修法**：`SWITCH_CSS` 追加
+  `body:has(.dshRemoteBackdrop) [data-slot="sidebar"] > *{backdrop-filter:none!important}`
+  —— 远程浮层在场期间摘掉侧栏玻璃，包含块回视口、1000 回根堆叠上下文。**无头 Edge A/B
+  实测坐实**（复刻真实 DOM/CSS 的 CDP 探针，6/6 PASS）：A 组（无修复）浮层宽 **232px**
+  （=侧栏宽）、视口中心命中 `dsh-ssh-overlay`、侧栏 computed `blur(20px) saturate(1.4)`
+  —— 用户两个症状逐字复现；B 组（有修复）浮层宽 **=视口宽**、中心命中 `.dshRemotePage`、
+  侧栏 computed `none`。副作用仅「远程页开着那一刻侧栏不模糊」（那一刻整屏有浮层遮罩）。
+  探针即用即删，结论已固化进设计文档 §3.1。
+
+**待实机（归用户，第二轮）**：重启 miasaki 桌面端后核：① 侧栏脚部只剩「用量统计」；
+  ② SSH 页主机导航头「远程连接 DSH」可见（web profile 不出现）；③ 点击后远程页
+  **全屏盖在 SSH 页之上**打开、关闭后回到 SSH 页（本轮修复点）；④ 已连接远程时入口
+  转激活态、点击退出；⑤ 卸载 / 禁用远程插件后入口回落脚部（退化方向验证）。
+
+**真实界面复验（2026-10-27，第二轮，miasaki profile web + 无头浏览器走查）**。
+**前提性事实：`ds-harness-remote` 已从本机所有 profile 卸载**（10-25 复验后用户移除：
+miasaki `package.json` 依赖零命中、`.pnpm` store 无包目录，`node_modules/.bin/ds-harness-remote`
+为卸载残留 shim）——判据①③④的「插件在场」前提消失，本机可验的只剩**退化方向**：
+
+- **已真机验证通过**（browser-use 直读 DOM，miasaki profile 起服走查）：
+  ① 侧栏脚部只剩「用量统计」，无任何远程入口（①的退化版 —— 插件不在场，脚部自然归还）；
+  ② SSH 页 rail 头 `#btn-remote` 节点存在但 `hidden=true`、`offsetParent=null`、title 空
+  —— `remoteEntryPresentation({available:false})` 的「整颗隐藏」在真机正确落地，不占位、
+  不进焦点顺序；**⑤ 退化方向即当前现实**：入口无踪影、行为与搬迁前一致；两条新 CSS
+  规则真机注入双确认（`.dshRemoteSidebarEntry` 让位规则 + `body:has(.dshRemoteBackdrop)`
+  越狱规则均在宿主样式表内）；SSH 浮层打开 / 页面渲染 / rail 头全部正常 —— 新增 CSS
+  对既有功能**无误伤**。host 已加载新版（link: 直读源码 + CSS 注入在场为证）。
+- **归用户（前提 = 重装 `ds-harness-remote`）**：①完整版（脚部入口被 CSS 收起、用量统计
+  不再被挤）；③浮层越狱全屏盖 SSH 页（**本轮修复点** —— 真机证据仅到「越狱规则已注入 +
+  A/B 探针 6/6」为止，`.dshRemoteBackdrop` 不出现则规则恒 no-op）；④已连接态切换与退出。
+- **web profile 走查跳过（等价覆盖）**：判据②后半「web profile（无该插件）不出现」——
+  miasaki 当前同为插件不在场环境，同一代码路径（`remoteAvailable=false`），DOM 层面与
+  web profile 完全一致，不再切换 profile 重复走查。
+- 复验后页面状态已恢复（浮层关闭），探针服务已停。
+
 ## 2026-10-20 · monkeyscan 修复批次：命令分级加固 / exec 截断幂等 / 重复 attach 解绑 / 围栏端口判据
 
 **背景**：2026-10-19 代码扫描的 36 份报告核实后，本线需修 4 项（`_refs/monkeyscan-2026-10-19/`

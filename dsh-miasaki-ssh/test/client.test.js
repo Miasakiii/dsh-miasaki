@@ -112,12 +112,15 @@ function capture(options = {}) {
           // chrome 消息发往 iframe 的窗口（client.js: frame.contentWindow.postMessage）。
           // 桩在这里记录 token，供 D2 消息闭环测试读取；必须在 innerHTML setter 里赋，
           // 因为此时 capture 作用域里的 window 已初始化。
+          // 2026-10-25：remote 消息（远程入口让位）同路下发 —— 全部消息另收一份
+          // （`__frameMessages`），既有 chrome 断言不受影响。
           iframe.contentWindow = {
             postMessage(msg) {
               if (msg !== null && typeof msg === 'object' && msg.type === 'chrome' && typeof msg.overlayToken === 'string') {
                 window.__lastChromeToken = msg.overlayToken
                 ;(window.__chromeMessages ??= []).push(msg)
               }
+              ;(window.__frameMessages ??= []).push(msg)
             },
           }
           section.children.push(span, iframe)
@@ -612,7 +615,8 @@ test('T4 保留不变：口径②的官方 DOM 探针与 rootObserver 都在（�
 })
 
 test('主题桥：浮层 iframe load 时补发快照，快照去重（U1 契约保持）', () => {
-  assert.match(source, /frame\.addEventListener\('load', \(\) => \{ themeLastKey = ''; pushThemeSnapshot\(\); syncChrome\(\) \}\)/)
+  assert.match(source, /frame\.addEventListener\('load', \(\) => \{ themeLastKey = ''; pushThemeSnapshot\(\); syncChrome\(\); pushRemoteState\(\) \}\)/,
+    'load 时三联补发 + 远程入口状态补推（2026-10-25：新 iframe 需要「这一刻」的远程在场/连接态）')
   assert.match(source, /if \(key === themeLastKey\) return/, '同一快照不重发')
   assert.match(source, /window\.__DSH_SSH_THEME__ = \{ source: 'dsh-ssh', type: 'theme', version: 1, revision: themeRevision/)
 })
@@ -786,6 +790,132 @@ test('D2 顶栏消息：ssh:view canvas → 关自己 + 委托点击 canvas 胶�
   }
   assert.ok(!overlay.className.includes('is-closed'), '非法 view 不得关闭浮层')
   assert.equal(mapClicked, true, '非法 view 不得触发会话布跳转（次数不变）')
+})
+
+// ---- 2026-10-25 远程连接入口让位（ds-harness-remote × 用量统计）----------------
+// 用户报「远程连接插件入口占用我用量统计的位置」。远程插件（miasaki profile 的第三方
+// 插件 `ds-harness-remote`）把入口注册在 `sidebar.footer.action`（order -20），与用量
+// 统计（`dsh-token-monitor`）争同一个脚部位。本线把该入口**搬到 SSH 页面**：脚部那条
+// 用 CSS 收起（不占位），SSH 页面自绘一颗同语义入口，点击经 `ssh:remote-open` 消息回
+// 宿主、程序化点击脚部那颗（远程浮层 z-index 1000，盖在 SSH 浮层 100 之上）。
+// 下面五条分别钉：CSS 让位 / 越狱规则 / 点击目标纯函数 / 消息闭环 / 状态下发与观察者。
+test('远程入口让位：脚部入口被 CSS 收起（display:none 不占位），规则随本插件注入', () => {
+  const { descriptor, styles } = capture()
+  descriptor.factory(requireStub).apply(fakeCtx())
+  const css = styles[0].textContent
+  assert.match(css, /\.dshRemoteSidebarEntry\{display:none!important\}/,
+    '脚部远程入口必须整条收起，把位置还给用量统计；!important 挡后注入覆盖')
+  assert.doesNotMatch(css, /dshRemoteBackdrop\{display:none/,
+    '远程浮层本体不被误伤（它要盖在 SSH 浮层之上正常打开）')
+})
+
+// 2026-10-25 实机复验后补：用户报「点击没反应，回到会话页它悬浮在侧边栏，不是我要的，
+// 它应该悬浮在 SSH 页」。根因（无头 Edge A/B 实测坐实，探针 6/6）：appearance 玻璃档位
+// 给 `[data-slot="sidebar"] > *` 挂 backdrop-filter ⇒ 包含块 + 堆叠上下文，把远程插件
+// position:fixed;z-index:1000 的浮层困在侧栏里（宽=侧栏宽、盖不住 body 级 SSH 浮层）。
+// 修法：远程浮层在场期间摘掉侧栏实盒子的 backdrop-filter。
+test('远程浮层越狱：远程页在场期间摘掉侧栏实盒子的 backdrop-filter（:has + !important）', () => {
+  const { descriptor, styles } = capture()
+  descriptor.factory(requireStub).apply(fakeCtx())
+  const css = styles[0].textContent
+  assert.match(css, /body:has\(\.dshRemoteBackdrop\) \[data-slot="sidebar"\] > \*\{backdrop-filter:none!important\}/,
+    '必须有越狱规则：远程浮层在场时摘掉侧栏实盒子的 backdrop-filter')
+  // 口径钉死：只在远程浮层在场时生效（:has），不是常驻关玻璃 —— 常驻会改用户的外观选择。
+  assert.match(css, /:has\(\.dshRemoteBackdrop\)/, '规则必须由远程浮层在场触发（非常驻）')
+  assert.match(css, /backdrop-filter:none!important/, '必须 !important：外观线运行时 style 的注入顺序不由我们决定')
+})
+
+test('远程入口让位：点击目标纯函数四态（未连接→模式钮；宽态已连接→退出链；缺席→null）', () => {
+  const { descriptor } = capture()
+  const pick = descriptor.factory(requireStub).remoteClickTarget
+  assert.equal(typeof pick, 'function', '必须导出纯函数供契约测试直读')
+
+  // 远程插件脚部入口的两种形态（其 dist/client/workspaces.js）：未连接时
+  // `.dshRemoteModeButton` 是按钮（打开远程页）；宽形态 + 已连接时它是**无回调的
+  // div**，退出在 `.dshRemoteExitLink`。按 DOM 事实选目标 ⇒ 镜像原脚部按钮切换语义。
+  const fakeEntry = ({ active = false, exit = false } = {}) => {
+    const mode = { className: 'dshRemoteModeButton', clicked: 0, click() { this.clicked += 1 } }
+    const exitLink = exit ? { className: 'dshRemoteExitLink', clicked: 0, click() { this.clicked += 1 } } : null
+    return {
+      mode, exitLink,
+      classList: { contains: name => (name === 'isActive' ? active : false) },
+      querySelector: sel => (sel === '.dshRemoteExitLink' ? exitLink : sel === '.dshRemoteModeButton' ? mode : null),
+    }
+  }
+
+  assert.equal(pick(null), null, '入口缺席（插件不在场）⇒ null，调用方静默收手')
+  assert.equal(pick(undefined), null)
+  assert.equal(pick({}), null, '形状不符（无 querySelector）⇒ null，不得抛')
+
+  const idle = fakeEntry()
+  assert.equal(pick(idle), idle.mode, '未连接：点模式钮（打开远程页）')
+  const railActive = fakeEntry({ active: true })
+  assert.equal(pick(railActive), railActive.mode, 'rail 形态已连接：模式钮即退出')
+  const wideActive = fakeEntry({ active: true, exit: true })
+  assert.equal(pick(wideActive), wideActive.exitLink, '宽形态已连接：退出链（模式钮是无回调的 div）')
+})
+
+test('远程入口让位：ssh:remote-open → 程序化点击脚部模式钮（SSH 页面入口的行为闭环）', () => {
+  const { descriptor, window, document } = capture()
+  const ctx = fakeCtx()
+  window.sessionStorage.setItem('dsh-ssh:overlay-open', '1')
+  descriptor.factory(requireStub).apply(ctx)
+  const token = window.__lastChromeToken
+  assert.ok(typeof token === 'string' && token.length > 0)
+
+  // 复刻远程插件脚部入口的 DOM 形状（类名即契约）：entry > mode button。
+  const entry = document.createElement('div')
+  entry.className = 'dshRemoteSidebarEntry'
+  const mode = document.createElement('button')
+  mode.className = 'dshRemoteModeButton'
+  let opened = 0
+  mode.addEventListener('click', () => { opened += 1 })
+  entry.append(mode)
+  document.body.append(entry)
+
+  const fakeFrameWin = document.querySelector('.dsh-ssh-overlay iframe').contentWindow
+  dispatchOverlayMessage(window, token, { type: 'ssh:remote-open' }, fakeFrameWin)
+  assert.equal(opened, 1, 'SSH 页面入口的回执必须点到脚部那颗（远程浮层据此打开）')
+
+  // 防伪口径与其它消息一致：错 token 不得触发。
+  for (const l of window.__msgListeners) {
+    l({ origin: 'http://dsh.local', source: fakeFrameWin, data: { source: 'dsh-ssh', overlayToken: 'wrong', type: 'ssh:remote-open' } })
+  }
+  assert.equal(opened, 1, '错 token 的 ssh:remote-open 必须被拒')
+
+  // 入口退场（远程插件被卸载 / 重挂中）⇒ 点击目标落空，静默收手不抛。
+  entry.remove()
+  dispatchOverlayMessage(window, token, { type: 'ssh:remote-open' }, fakeFrameWin)
+  assert.equal(opened, 1, '入口缺席时静默收手（不得抛、不得误点别处）')
+})
+
+test('远程入口让位：remote 消息向 iframe 下发在场/连接态，两条观察者各司其职', () => {
+  const { descriptor, window, document, observers } = capture()
+  descriptor.factory(requireStub).apply(fakeCtx())
+
+  const remoteMsgs = () => (window.__frameMessages ?? []).filter(m => m.type === 'remote')
+  // apply 期间桩里没有远程入口 ⇒ 首次推送即报「不可用」（SSH 页面据此隐藏该入口）。
+  assert.equal(remoteMsgs().at(-1)?.remote?.available, false, '远程插件不在场 ⇒ available:false')
+
+  // body 观察者：远程入口是 React 渲染的，插件装卸 / 重载会整棵换节点 ⇒ 盯 childList。
+  const bodyWatcher = observers.find(o => o.observations.some(x => x.target === document.body))
+  assert.notEqual(bodyWatcher, undefined, '必须在 body 上挂 childList 观察者（入口整棵换节点）')
+  assert.equal(bodyWatcher.observations[0].options.childList, true)
+
+  // 入口在场（模拟插件装载）⇒ 推 available:true，并对该节点挂 class 观察者。
+  const entry = document.createElement('div')
+  entry.className = 'dshRemoteSidebarEntry'
+  document.body.append(entry)
+  bodyWatcher.cb()
+  assert.equal(remoteMsgs().at(-1)?.remote?.available, true, '入口在场 ⇒ available:true')
+  const entryWatcher = observers.find(o => o.observations.some(x => x.target === entry))
+  assert.notEqual(entryWatcher, undefined, '必须在入口节点上挂 class 观察者（isActive 切换）')
+  assert.deepEqual([...entryWatcher.observations[0].options.attributeFilter], ['class'])
+
+  // isActive 切换（连接 / 退出远程）⇒ 推 active:true。
+  entry.className = 'dshRemoteSidebarEntry isActive'
+  entryWatcher.cb()
+  assert.equal(remoteMsgs().at(-1)?.remote?.active, true, '已连接 ⇒ active:true（SSH 页面入口转退出语义）')
 })
 
 // ---- D1.1 无会话头时的常驻入口（shell.overlay，方案 §14）-------------------

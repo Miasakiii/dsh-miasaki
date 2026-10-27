@@ -134,6 +134,9 @@ const ICON_PATHS = {
   disconnect: 'M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-6 6v4M3 3l18 18',
   info: 'M12 11v6m0-10h.01',
   star: 'm12 3 2.8 5.8 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.7l6.2-.9L12 3Z',
+  // 远程连接（ds-harness-remote）：显示器 + 底座，与远程插件脚部入口同款字形
+  // （同一意象跨页面保留，搬到本页后用户仍认得出）。
+  remote: 'M8 21h8M12 17v4',
 }
 function icon(name, extraPath) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -150,6 +153,7 @@ function icon(name, extraPath) {
   if (name === 'server') svg.append(rect(4, 4, 16, 6), rect(4, 14, 16, 6))
   if (name === 'panel') svg.append(rect(3, 4, 18, 16))
   if (name === 'copy') svg.append(rect(8, 8, 12, 13))
+  if (name === 'remote') svg.append(rect(3, 4, 18, 13))
   if (name === 'search') {
     const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
     circle.setAttribute('cx', '10.5'); circle.setAttribute('cy', '10.5'); circle.setAttribute('r', '6.5')
@@ -310,7 +314,26 @@ function setupThemeListener() {
       applyChrome(data)
       return
     }
+    // remote 消息（2026-10-25）：远程连接入口（ds-harness-remote）的在场 / 连接态。
+    // 该入口已从侧栏脚部搬到本页（脚部那个位置归用量统计），宿主经这条消息把
+    // 「远程插件在不在场、是否已连接」推过来 —— 本页那颗入口的显隐与激活态数据源。
+    if (data.type === 'remote' && data.version === 1) {
+      applyRemoteState(data)
+      return
+    }
   })
+}
+
+/**
+ * 远程连接入口状态落地：写 overlayState 并重绘那颗入口。`remote` 字段缺席（旧宿主）
+ * 一律按「不可用」处理 —— 不摆死入口，与 canvasAvailable 的「默认渲染」相反：
+ * 那边减入口会让用户失去切换能力，这边多一颗无回调的按钮只会误导。
+ */
+function applyRemoteState(data) {
+  const remote = data?.remote
+  overlayState.remoteAvailable = remote?.available === true
+  overlayState.remoteActive = remote?.active === true
+  renderRemoteEntry()
 }
 
 /**
@@ -334,7 +357,7 @@ function applyChrome(data) {
   }
 }
 
-const overlayState = { token: null, current: 'ssh', canvasAvailable: true }
+const overlayState = { token: null, current: 'ssh', canvasAvailable: true, remoteAvailable: false, remoteActive: false }
 
 // ---- 桌面壳 chrome 让位（实机反馈修复）------------------------------------------
 // 桌面壳有一块 chrome 是**零占位浮层**，压在 /ssh/ iframe 之上、页面 z-index 拦不住：
@@ -466,6 +489,19 @@ function buildTopbar(root) {
 }
 
 // ------------------------------------------------------------------ view model（纯函数，vm 测试覆盖）
+/**
+ * 纯函数：主机导航头部「远程连接」入口的呈现（vm 测试直读）。
+ * available = 宿主通报 ds-harness-remote 的脚部入口在场（插件装着且类名未漂移）；
+ * active    = 该入口带 isActive（已连接到远程 DSH）。
+ * 不可用 ⇒ 整颗隐藏（不摆死入口：多一颗点了没反应的按钮只会误导）；
+ * 已连接 ⇒ 激活态 + 退出语义的标题（点击经宿主程序化点击脚部那颗，退出远程）。
+ */
+function remoteEntryPresentation({ available, active } = {}) {
+  if (available !== true) return { hidden: true, title: '', active: false }
+  if (active === true) return { hidden: false, title: '远程 DSH 已连接 · 点击退出', active: true }
+  return { hidden: false, title: '远程连接 DSH', active: false }
+}
+
 function matchesQuery(conn, query) {
   const q = String(query ?? '').trim().toLowerCase()
   if (q.length === 0) return true
@@ -1212,6 +1248,21 @@ function renderAll() {
   renderBody()
   renderWriteBar()
   syncRailMode()
+}
+
+/**
+ * 重绘主机导航头部的「远程连接」入口（2026-10-25 从侧栏脚部搬到本页）。
+ * 呈现口径是纯函数 remoteEntryPresentation（vm 测试直读），这里只做 DOM 落地；
+ * 节点缺席（remote 消息早于骨架到达 / 骨架已拆）静默返回。
+ */
+function renderRemoteEntry() {
+  const btn = document.getElementById('btn-remote')
+  if (btn === null) return
+  const view = remoteEntryPresentation({ available: overlayState.remoteAvailable, active: overlayState.remoteActive })
+  btn.hidden = view.hidden
+  btn.title = view.title
+  btn.setAttribute('aria-label', view.title)
+  btn.classList.toggle('is-active', view.active)
 }
 
 function renderRail() {
@@ -2043,6 +2094,17 @@ function buildSkeleton(root) {
   newBtn.setAttribute('aria-label', '新建主机')
   newBtn.appendChild(icon('plus'))
   newBtn.onclick = () => openEditor()
+  // 远程连接（ds-harness-remote）入口：2026-10-25 从侧栏脚部「搬」到本页 —— 脚部那个
+  // 位置归用量统计（dsh-token-monitor），用户报「不要占用我用量统计的位置」。宿主经
+  // remote 消息通报远程插件在不在场，不在场时整颗隐藏（remoteEntryPresentation）；
+  // 点击经 postToHost 回宿主，程序化点击脚部那颗被 CSS 收起的入口（client.js 的
+  // ssh:remote-open 分支），远程浮层 z-index 1000 盖在本浮层之上，关闭后回到本页。
+  const remoteBtn = el('button', 'icon-btn')
+  remoteBtn.type = 'button'
+  remoteBtn.id = 'btn-remote'
+  remoteBtn.hidden = true
+  remoteBtn.appendChild(icon('remote'))
+  remoteBtn.onclick = () => postToHost({ type: 'ssh:remote-open' })
   const railClose = el('button', 'icon-btn rail-close')
   railClose.type = 'button'
   railClose.id = 'rail-close'
@@ -2050,7 +2112,8 @@ function buildSkeleton(root) {
   railClose.setAttribute('aria-label', '关闭主机导航')
   railClose.appendChild(icon('close'))
   railClose.onclick = () => toggleRail()
-  railBtns.append(newBtn, railClose)
+  railBtns.append(newBtn, remoteBtn, railClose)
+  renderRemoteEntry()
   railHead.append(railTitle, railBtns)
   const searchWrap = el('label', 'search-wrap')
   searchWrap.append(el('span', 'sr-only', '搜索主机名称或地址'), icon('search'))

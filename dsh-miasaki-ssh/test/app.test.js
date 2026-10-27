@@ -17,6 +17,24 @@ const context = vm.createContext({
 })
 vm.runInContext(source, context, { filename: 'app.js' })
 
+test('remoteEntryPresentation: 远程入口四态（不可用隐藏 / 可用未连接 / 已连接退出语义）', () => {
+  // 2026-10-25：远程连接（ds-harness-remote）入口从侧栏脚部搬到本页，脚部位置归用量统计。
+  // available = 宿主通报远程插件脚部入口在场；active = 已连接到远程 DSH。
+  // 逐字段比对（vm realm 返回的对象原型不同，deepStrictEqual 会假阴性 —— 同 hostGroups 用例）。
+  const view = query => context.remoteEntryPresentation(query)
+  assert.equal(typeof context.remoteEntryPresentation, 'function')
+  const shape = q => { const v = view(q); return [v.hidden, v.title, v.active] }
+  // 远程插件不在场（web profile / 未装 / 类名漂移）⇒ 整颗隐藏，不摆死入口
+  assert.deepEqual(shape({ available: false, active: false }), [true, '', false])
+  assert.deepEqual(shape({}), [true, '', false], '字段缺席一律按不可用')
+  assert.deepEqual(shape(), [true, '', false], '无参不抛')
+  assert.deepEqual(shape({ available: undefined }), [true, '', false], 'available 非严格 true 即不可用')
+  // 可用 + 未连接：常规入口
+  assert.deepEqual(shape({ available: true, active: false }), [false, '远程连接 DSH', false])
+  // 可用 + 已连接：激活态 + 退出语义（点击经宿主退出远程，镜像原脚部按钮的切换）
+  assert.deepEqual(shape({ available: true, active: true }), [false, '远程 DSH 已连接 · 点击退出', true])
+})
+
 test('matchesQuery covers label / user@host:port / group', () => {
   const conn = { label: 'web-01', host: 'web.example.com', port: 22, username: 'ops', group: '生产环境' }
   const matches = query => context.matchesQuery(conn, query)
