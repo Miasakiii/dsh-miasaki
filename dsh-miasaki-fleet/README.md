@@ -18,7 +18,7 @@
 | `schemas/` | 文件总线 JSON Schema（F1 契约） |
 | `shared/` | 跨文件共享参考：`collective-memory.md`（经验沉淀）、**`agent-vendors.json`（厂商归属表 —— G4 异构验证的 vendor 级依据；缺省回退内置表并**显式告知**）**、**`agent-adapters.json`（P0-B 只读模型来源适配器：每个 coding agent 的配置文件与模型字段）** |
 | `docs/` | 设计文档与调研/校准报告 |
-| `design/` | **设计决策与判据**（P0-A 起）：[`2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md`](design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md)（coding agent 判据 / 三仓库定位 / P0–P2 批次） |
+| `design/` | **设计决策与判据**（P0-A 起）：[`2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md`](design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md)（coding agent 判据 / 三仓库定位 / P0–P2 批次）、[`2026-10-29-gvs5h-harness-absorb-design.md`](design/2026-10-29-gvs5h-harness-absorb-design.md)（吸收 GVS5H 的三个断点 D1–D5，**设计未实施**）、[`2026-11-01-superagent-absorb-design.md`](design/2026-11-01-superagent-absorb-design.md)（吸收官方 Super-agent 原型：触发层四个断点 E1–E5，**设计未实施**） |
 | `tests/` | 回归冒烟与样本 |
 
 ## 常用命令
@@ -584,6 +584,53 @@ node ../scripts/verify-all.mjs fleet
 设计决策与协议变更记录在
 [docs/multi-agent-cli-orchestrator-design.md](docs/multi-agent-cli-orchestrator-design.md)
 头部「变更记录」。
+
+### 2026-11-01 · 吸收官方 Super-agent 原型：触发层设计决策入库（**未实施**，零代码变更）
+
+用户分享 DeepSeek 官方文章《Super-agent 设计探索》，从其「阅读原文」拿到公开研究原型
+`deepseek-ai/dsh-superagent-prototype`（v0.1.0，2026-10-31，MIT）。两路取证（设计文档 000–008 与
+`prompts/` / `src` 111 文件实现机制）+ 本线现状核对后，落两份文档：
+
+- **调研**：[`ref-dsh-superagent-prototype-2026-11-01.md`](../dsh-miasaki-shared-docs/dsh-platform/ref-dsh-superagent-prototype-2026-11-01.md)
+  ——先做「文章 vs 原型」六模块对账：**双层架构 / 两级过滤 / 订阅直通 / 按信道定制输出**在原型里完整实现，
+  而 **Inline & Spill 链式召回、存算分离 + 端侧 daemon、Watchdog** 三项**在原型里没有代码**
+  （`src/core/memory.ts` 是测试用内存仓储、不是记忆；`grep watchdog` 零命中）。再给 A–E 组可迁移清单
+  （每条含证据/落点/判据）与 fleet 12 维差距：**fleet 的「下半身」（闸门/预算/并发/可观测/记账/测试）
+  强于原型，缺的是「上半身」**——环境事件入口、订阅直通、授权模型、常驻节拍。
+- **设计**：[`design/2026-11-01-superagent-absorb-design.md`](design/2026-11-01-superagent-absorb-design.md)
+  ——**只搬判定顺序，不搬形态**。原型是常驻 Source→Trigger→Gate→Worker Session，fleet 是人工派单 +
+  文件总线 + 一次性 CLI，照搬会引入 daemon、与本线「搬语义不搬 daemon」原则（`workers/lib/schedule.cjs`
+  头部）正面冲突。四个断点（触发只有时间轴没有信号轴 / 无准入观察期 / 无候选幂等 / `result.json` 缺
+  `waiting`·`dropped` 两态）对应五条决策 **E1–E5**（Source 定义 + tick CLI / 确定性准入 + observe /
+  窗口幂等与冷却 / 接线与事件作者 / result 语义增量），全部跑在既有的 `bus-apply` 幂等超步上，
+  零 daemon、零 LLM 常驻、不改派单退出码。**硬约束：E 必须排在 GVS5H 批的 D1 + D2 之后**——
+  否则自动建的任务会被「假完成」结案。**实施排成五批统一依赖序**（D 组 + E 组共 10 条决策）：
+  批次 0 `D1+D2` → 批次 1 `E1+E2+E3` → 批次 2 `E5→D3`（先契约后提取器）→ 批次 3 `D4+E4`
+  （事件契约合并，避免两次四处同源）→ 批次 4 `D5`；fleet 检查项 **32 → 37**，
+  必须串行的是 `0 → 1 → 3`，批次 1 与 2 可并行。D1–D5 与 E1–E5 均待 Operator 拍板。
+
+**口径订正**：调研报告初稿写「`result.json` 若把 status 收紧成有限枚举」属失真——实测它**已有**有穷三态
+（`completed|blocked|failed`，权威实现 `workers/lib/bus-contract.cjs:150` 的 `RESULT_STATUS`），
+真正缺的是 `waiting`/`dropped` 两态与**完全不存在**的结构化提问通道。入库版本已订正，
+E5 亦按订正后的事实设计。
+
+**本批零代码变更、零 schema 变更、零新增测试**：`verify-all repo` 7/7（仓库级闸门仅新增 2 份 md）。
+
+### 2026-10-29 · 吸收 GVS5H：设计决策入库（**未实施**，零代码变更）
+
+用户给出外部仓库 `slee-persis/GVS5H`（同一模型多角色 + 共享文件系统账本的编排 benchmark 报告）链接。
+四路并行核查（论文 / 代码 / 数据 / 外部反响，报告在 `_refs/research-gvs5h/`）+ 两路现状核对
+（fleet 缺口矩阵 / 闸门与测试约束，在 `_refs/gvs5h-absorb/`）后的判定：**真实工程原型 + 营销化包装**——
+118 个 arm 的运行数据逐格复算零差异、无伪造证据，但头条结论（追平前沿 / 9% 成本）在它自己的统计下
+不显著（对比臂不对等、判分修正单向加分、无同预算采样基线）。
+
+本批**只入库设计决策**（[design/2026-10-29-gvs5h-harness-absorb-design.md](design/2026-10-29-gvs5h-harness-absorb-design.md)）：
+五条候选机制实测 4 条「部分覆盖」、1 条「不建议照搬」，真正要补的是三个断点——**B1** 交付契约代写未接线
+（上位协议 §7.0 的承诺在代码里不存在）/ **B2** 验收链最后一米（`verdict.json` 无反向存在性、
+派单终态不跑确定性闸）/ **B3** 截断不可判定（`stop_reason` 只进 usage note，`exit 0 + max_tokens`
+被记成 `idle + task.completed`）；对应 **D1–D5** 五条决策（同日由 Operator 拍板定稿，决策记录见设计文档 §9），
+每条含「命令 + 期望输出」验收判据、闸门增量与四条同步义务。**本批零代码变更、零 schema 变更、零新增测试**：
+`verify-all fleet` 仍 32/32、`repo` 7/7（仅新增 1 份 design md）。
 
 ### 2026-10-22 · 在债 P0 收口：派单执行期间刷新心跳 + WORK-01 判官前置确定性闸
 
