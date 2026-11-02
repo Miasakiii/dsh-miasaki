@@ -112,7 +112,7 @@
    事件流新增 failure.detected 且 verify_gate="failed"
 ② node tests/dispatch-gate.test.mjs  → 现 43 例（README 口径，本批未实跑）→ 新增 2 例后 pass 45, fail 0
 ③ node tests/verifier.test.mjs       → pass 36（未改验证器契约）
-④ node workers/validate-bus.mjs      → [validate] done: 41 文件通过，0 错误
+④ node workers/validate-bus.mjs      → [validate] done: 43 文件通过，0 错误
 ⑤ node workers/validate-bus.mjs --verdict → 补记前对 t-0011 期望 exit 1 并点名 verdict.json；补记后 0 错误
 ```
 
@@ -144,7 +144,7 @@
 ③ 夹具派单（CLI exit 0 + stop_reason=max_tokens）
    → status.state="error"、status.failure.kind="truncated"、事件 failure.detected 带 error_kind="truncated"；
      事件流中不得出现该任务的 task.completed
-④ node workers/validate-bus.mjs → 41 文件通过，0 错误（usage 新字段不破坏巡检）
+④ node workers/validate-bus.mjs → 43 文件通过，0 错误（usage 新字段不破坏巡检）
 ```
 
 ### D3 交付契约代写 + 六段结构提取（P1）
@@ -172,7 +172,7 @@
 ③ 默认关闭：pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-9001 -Agent alpha -CheckOnly
    → 与基线同退出码（零行为变更）
 ④ node tests/extract-result.test.mjs（新增文件，登记进 verify-all）→ pass N（≥6：正例 / 缺节 / 变体标题 / 解析失败各覆盖），fail 0
-⑤ node workers/validate-bus.mjs → 41 文件通过，0 错误（新增夹具若入库，文件数相应增加）
+⑤ node workers/validate-bus.mjs → 43 文件通过，0 错误（新增夹具若入库，文件数相应增加）
 ```
 
 ### D4 收敛守卫：状态迁移合法性 + retries 上限（P1）
@@ -204,7 +204,7 @@
 ③ 夹具（retries=3）→ {"action":"escalate","reasons":[...]}
 ④ node tests/loop-guards.test.mjs → pass N（N ≥ 10：op 语义合法/非法、retries 边界、不可重试失败各覆盖）
 ⑤ node workers/graph/task-ready.mjs --check → [task-ready] --check 通过：12 个任务，0 个分组，无结构问题
-⑥ node workers/validate-bus.mjs → 41 文件通过，0 错误；开启 --transitions 后仍 0 错误
+⑥ node workers/validate-bus.mjs → 43 文件通过，0 错误；开启 --transitions 后仍 0 错误
 ⑦ 夹具（retries=3 且同一失败 kind 重复出现）→ reasons 按 kind 聚合为一条（flag the class），
    不逐条重复（no repeats of findings already posted）
 ```
@@ -242,7 +242,7 @@ git blame：reviewer 反复 flag 的内容 **59% 第一轮就在那里**（"rare
 ① node workers/lib/brief-budget.cjs --check tasks/t-0011/context.md
    → exit 0；stdout `OK lines=<n> bytes=<n> (limit lines=80 bytes=...)`
 ② 超限夹具 → exit 1 并点名 lines= 与上限
-③ node workers/validate-bus.mjs → 41 文件通过，0 错误（证明未新增真相文件）
+③ node workers/validate-bus.mjs → 43 文件通过，0 错误（证明未新增真相文件）
 ```
 
 ---
