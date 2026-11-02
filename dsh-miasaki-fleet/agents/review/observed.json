@@ -1,0 +1,64 @@
+{
+  "capabilities": [
+    "review",
+    "analysis"
+  ],
+  "runtime_kind": "claude-code",
+  "cli": {
+    "command": "claude",
+    "invoke": "claude -p {prompt} --output-format json --permission-mode plan",
+    "version": "2.1.302 (Claude Code)",
+    "binPath": "%USERPROFILE%\\.local\\bin\\claude.exe"
+  },
+  "agent_id": "review",
+  "preflight": "t-0013 首跑（2026-11-02）：派单链全程通过——kind/trust/budget 闸门、冷启动判活降级、图就绪、task.started、usage 经唯一入口、failure.detected 与 exit 1 如实处理；但 claude CLI 默认模型 step-5-preview[1m] 返回 404（claude-code:unrecognized_model，同 t-0010 形态，环境侧模型不可用）⇒ --permission-mode plan 只读行为仍未实测。按建档契约维持 control.enabled=false；待模型环境恢复后重派 t-0013 补校准",
+  "schema_version": 2,
+  "observed_at": "2026-11-02T09:44:35Z",
+  "permissions": {
+    "mode": "read-only",
+    "calibration": "declared",
+    "evidence": "t-0013 首跑：派单链验证通过但模型 404，只读行为未实测；校准维持 declared（verified 需首跑成功证据，对照 claude 档案的 t-0006）",
+    "tool_allowlist": [
+      "Read",
+      "Glob",
+      "Grep"
+    ],
+    "denied_tools": [
+      "Edit",
+      "Write",
+      "Bash"
+    ],
+    "headless_allow_delegation": false,
+    "approval_required": []
+  },
+  "kind": "coding-agent",
+  "present": true,
+  "invoke_contract": {
+    "exit_code_semantics": {
+      "0": "success",
+      "non-zero": "failure"
+    },
+    "prompt_transport": "argv",
+    "permission_flags": {
+      "readonly": [
+        "--permission-mode",
+        "plan"
+      ]
+    },
+    "output_format": "json"
+  },
+  "capability_boundary": {
+    "workspace_read": "yes",
+    "shell_headless": "no",
+    "workspace_write_headless": "no",
+    "tool_loop": "yes",
+    "network": "unknown"
+  },
+  "model_info": {
+    "value": "step-5-preview[1M]",
+    "source": "config",
+    "confidence": "declared",
+    "evidence": "%USERPROFILE%/.claude/settings.json → env.ANTHROPIC_MODEL（与 claude 档案同一 CLI 同一模型；review 是角色人格不是新模型）。t-0013 实测：该模型当前在 stepfun 中转返回 404（不可用）",
+    "provider": "https://api.stepfun.com/step_plan/v1/messages"
+  }
+}

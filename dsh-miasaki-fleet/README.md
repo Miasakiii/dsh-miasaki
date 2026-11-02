@@ -263,8 +263,8 @@ pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-0003 -Agent claude -Chec
 | 判定来源 | 复用 `workers/graph/task-ready.mjs --explain <id> --json`（**不重复实现**，与能力闸门同纪律） |
 | G1 闸门 | `ready=false` → 打印**全部** reasons → **拒绝派单 exit 2**；并纳入 `-CheckOnly` |
 | assignee 一致性 | `-Agent` ≠ 台账 `assignee` → 拒绝，提示「改派走 `reassign` 补丁（带 reason），勿用命令行硬塞」 |
-| 闸门顺序 | 档案 → 开关 → 日预算 → **并发上限** → **G1 可派** → G2 能力 → G4 验证 → **任务级 token 预算**（先廉价后昂贵；前者拒了就不跑后者） |
-| 事件留痕 | `task.started`（CLI 启动**前**）+ 终态 `task.completed` / `failure.detected`，经 `bus-apply` 唯一入口 |
+| 闸门顺序 | 档案 → 开关 → 日预算 → **并发上限** → **G1 可派** → G2 能力 → G4 验证 → **任务级 token 预算** → **G5 语义分级**（只提示不硬拒）（先廉价后昂贵；前者拒了就不跑后者） |
+| 事件留痕 | `task.started`（CLI 启动**前**）+ 终态 `task.completed` / `failure.detected`，经 `bus-apply` 唯一入口；G5 命中「必须问人」清单时 `task.started` 附 `escalation` 字段（2026-11-02） |
 | 事件不阻断 | applier 报错（如并发超步冲突 exit 3）**只告警、不阻断派单** —— 事件是审计不是闸门 |
 | 退出码 | **不动**既有 0/2/3/4；新闸门一律用 2 = 拒绝派单，原因靠打印文案区分 |
 | 口径分歧检测 | **开关**与**预算**的判定在派单器（读 `control.json` / `usage.jsonl`）与 `task-graph.cjs` 各有一份（跨语言无法共享）—— 二者不一致时显式打印 `⚠ 口径分歧`，**让漂移可见**而不是静默取其一 |
@@ -535,11 +535,13 @@ node ../scripts/verify-all.mjs fleet
 #  8b) tests/failure-classify.test.mjs    P1-A 失败分类八态（11 项，2026-10-21 新增）
 #  8c) tests/agent-facts.test.mjs         P2-B manifest/observed 合并视图（5 项，2026-10-21 新增）
 #  8d) tests/scheduler.test.mjs           P2-D 定时任务语义（7 项，2026-10-21 新增）
+# 8h) tests/escalation-policy.test.mjs     G5 语义分级纯函数（13 项，2026-11-02 新增）
 #  8e) tests/schema-version.test.mjs      P2-E schema 版本五态 + 迁移（4 项，2026-10-21 新增）
 #  8f) tests/selection-policy.test.mjs     P2-F 选型策略（5 项，2026-10-21 新增）
 #  8g) tests/profile.test.mjs              P2-G profiles 快照（4 项，2026-10-21 新增）
 #  9) agent-pick --check                  G2 能力图结构完整性
 # 10) dispatch 能力闸门接线               G2→派单器 纯文本断言（7 项）
+# 10b) dispatch G5 语义分级接线           escalate 只提示不硬拒（纯文本断言 5 项，2026-11-02 新增）
 # 11) dispatch 可派闸门接线               G1/G0/G4→派单器 纯文本断言（47 项，2026-09-30 新增/2026-10-21 扩）
 # 12) tests/verifier.test.mjs             G4 异构验证（36 项，含 verdict 契约三条硬约束 + 首跑豁免及其三条边界 + WORK-01 确定性闸 7 项）
 # 13) verifier-pick --check               G4 验证结论契约校验
@@ -547,7 +549,7 @@ node ../scripts/verify-all.mjs fleet
 # 15) node --check fleet-monitor/fence.cjs
 # 16) tests/fleet-monitor.test.mjs        fleet-monitor 三道信任围栏 + P1 判定层端点 + /api/drift（31 项）
 # 17) tests/dispatch-state.test.mjs       K4 派单终态判定（11 项，含两个 ps1 的语法闸门 + 派单执行期间心跳刷新两组）
-# 18) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证 + P1-A 失败分类 + P2-A 信任闸门夹具（43 项）
+# 18) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证 + P1-A 失败分类 + P2-A 信任闸门 + G5 语义分级夹具（45 项）
 # 19) fleet-monitor 判定层区块 (P1)       panel.html / server.js 的区块与三个端点（10 项，2026-09-30 新增）
 # 20) node --check plugins/dsh-fleet-panel/lib/index.js
 # 21) node --check plugins/dsh-fleet-panel/lib/client.js
@@ -563,9 +565,9 @@ node ../scripts/verify-all.mjs fleet
 > 2026-10-21 P0-B 新增 `tests/config-drift.test.mjs` → **26 项**；同日 P1-A 新增
 > `tests/failure-classify.test.mjs` → **27 项**；P2-B 新增 `tests/agent-facts.test.mjs` → **28 项**；
 > P2-D 新增 `tests/scheduler.test.mjs` → **29 项**；P2-E/F/G 新增 `schema-version` / `selection-policy` / `profile`
-> 三个测试文件 → **32 项**。
-> 全量 **2026-10-05 起为 180 项**、**2026-10-19 实跑 189**、**2026-10-21 实跑 200 项**。真实台账 12 个任务全终态 ⇒ 第 18 项是「放行」分支的唯一覆盖者，不可省。
-> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（现 **47**），夹具例数就是 `node --test` 的 pass 数。
+> 三个测试文件 → **32 项**；2026-11-02 G5 语义分级（纯函数测试 + 派单器接线断言各一项）→ **34 项**。
+> 全量 **2026-10-05 起为 180 项**、**2026-10-19 实跑 189**、**2026-10-21 实跑 200 项**、**2026-11-02 实跑 202 项**（+G5 两项）。
+> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（G1/G0 接线现 **47** 条、G5 接线 **5** 条），夹具例数就是 `node --test` 的 pass 数。
 > **本条顺带订正存量失真**（2026-10-21 核对：以实跑为准）：`bus-apply` 16 → **27 例**、
 > `bus-integration` 17 → **27 例**、`fleet-monitor` 31 → **33 例**、`task-graph` 13 → **14 例**、`fleet-monitor` 26 → **31 例**、
 > `dispatch-gate` 35 → **40 例**、面板区块 7 → **10 项**；旧记「16/17/13/17/26/35」为迁移前口径。
@@ -584,6 +586,60 @@ node ../scripts/verify-all.mjs fleet
 设计决策与协议变更记录在
 [docs/multi-agent-cli-orchestrator-design.md](docs/multi-agent-cli-orchestrator-design.md)
 头部「变更记录」。
+
+### 2026-11-02 · 卡兹克文章借鉴四增量落地（G5 闸门 / 决策账 / review 档案 / D4 判据）
+
+用户分享卡兹克《折腾了整整1年，毫无保留地分享一下我这套Agent自动化系统》（2026-11-02），
+按 article-borrow 三步纪律完成借鉴评估（`_refs/article-borrow-2026-11-02-kazike-agent-automation.md`；
+一手源回溯 DeepSeek《Super-agent 设计探索》与 Anthropic《How the Claude Code team does code review》，
+"最多审 3 次"经原文核实为"三轮后请作者重新思考方案"的收敛机制）。Operator 拍板「可以」后落地四项：
+
+1. **G5 语义分级闸门**（🟢1）：新增 `workers/lib/escalation-policy.cjs`（纯函数 + CLI，七类
+   「必须问人」清单：删数据 / 停服 / 花钱 / 对外发消息 / 改产品方向 / 密钥 / 权限），派单器
+   主路径与 `-CheckOnly` 两处接线。**escalate 只提示不硬拒**（D4 拍板同口径）：命中不改
+   退出码 0/2/3/4，只做醒目提示 + `task.started` 事件附 `escalation` 字段（可按
+   `grep escalation state/graph-events.jsonl` 检索）。误报比漏报贵——模式逐条收窄
+   （"该 agent 权限不足只读"不命中；"修改该 agent 的权限配置"间隔 9 字符必须命中，
+   窗口定为 10 是这条实测钉死的）。
+2. **决策账轻形态**（🟢2）：`shared/collective-memory.md` 增「Operator 定过的事」
+   「Operator 拒绝过的事」两分区（带日期与消费方式）。**刻意不放 `agents/*/notes.md`**——
+   2026-10-29 D5 拍板「不改 agents/*/notes.md 人工口径」；重形态（`state/decisions.jsonl`
+   走 bus-apply，`EVENT_AUTHORS` 已含 `operator`）待 E5 契约批次同源时再评估。
+3. **只读 review 档案**（🟢3）：新增 `agents/review/`（manifest + observed + control）。
+   claude CLI 的 `--permission-mode plan` 只读人格，`cap:review`，denied Edit/Write/Bash；
+   persona 沉淀文章与 Anthropic 同源的审查纪律（只报真错不报风格 / 带 file:line 证据 /
+   无发现明说 / 整类点名 / 不重复报）。`shared/agent-adapters.json` 同步补适配器：
+   config-drift 的守护测试（「适配器覆盖所有活动 coding-agent，否则 --check 会静默漏检」）
+   当场抓到缺适配器并转绿。**试跑（t-0013，2026-11-02，Operator 批准）**：派单链全程验证
+   通过——六道闸门放行、冷启动判活降级告警、`task.started` / `failure.detected` 如实入流、
+   usage 经唯一入口落盘、exit 1 终态如实；但 claude CLI 默认模型 `step-5-preview[1m]`
+   返回 404（`claude-code:unrecognized_model`，**同 t-0010 形态**：环境侧模型不可用，
+   非派单闸门问题）⇒ plan 模式只读行为**未能实测**。按建档 preflight 契约回退
+   `control.enabled=false`、校准维持 `declared`（证据已入 `observed.json` 的 preflight 与
+   台账 failed 行）；待模型环境恢复（`settings.json` 的 `ANTHROPIC_MODEL` 改用可用模型）
+   后重派 t-0013 即补校准——派单器、闸门、事件、计量四层已无一需要再验。
+4. **D4 判据并入 Anthropic 收敛四招**（🟠6）：`design/2026-10-29-gvs5h-harness-absorb-design.md`
+   D4 验收判据补第⑦条（escalate 的 reasons 按失败 kind 聚合、不逐条重复），块后加四招
+   映射表（round cap 已有 / flag the class 并入判据 / no repeats 审查侧已落 persona /
+   **diff-only re-review 判不搬**——fleet 无审查轮次载体），并附一手源数据
+   （单轮通过 65%→78%、需 5+ 轮 8.9%→1.5%、均轮 2.08→1.32；50+ 轮事故；59% 老问题）。
+
+**回归**：`verify-all fleet` 32 → **34/34**（+escalation-policy 测试、+G5 接线断言）；
+全线单测 **326 例**（Node 22.19.0 实跑：tests/ 18 文件 309 + plugins 2 文件 17；
+dispatch-gate 43 → 45、escalation-policy 13 为本批新增）；`repo` 7/7；
+`validate-bus` 43 文件 0 错误（试跑后 review 的 status.json / usage.jsonl 进入校验面，+2）；
+`agent-pick --check` 11 agent 无结构问题；`verifier-pick --check` 9 候选通过。
+
+**教训（入账）**：本批加 review 档案后只跑了自己想到的四项检查（validate-bus / agent-pick /
+verifier-pick / pulse），漏了 config-drift 的守护测试——是随后 Node 22.19.0 全量复跑抓到的。
+「我改的这块验过了」不等于「回归绿了」；守护测试的价值正在于它守的是你没想到的那条路径
+（config-drift 那条测试的名字自说明：适配器不全覆盖 ⇒ `--check` 静默漏检）。
+
+**G5 边界发现（试跑任务书自踩，活的记录）**：首版 t-0013 任务书在背景节逐条复述七类清单
+措辞，被自家 G5 闸门命中 5 类（`escalate:true`，派单只提示不硬拒故未阻塞，但事件流会多一条
+语义升级噪声）——**描述分级政策本身的任务会踩中政策闸门**。改法：任务书引用真相源
+（`escalation-policy.cjs` 的 `CATEGORIES` 常量）而非转述触发词，让审查者自己去读；
+改写后复检 `escalate:false` 才派单。该边界已写进 t-0013 任务书背景节作为给后续派单人的活的提示。
 
 ### 2026-11-01 · 吸收官方 Super-agent 原型：触发层设计决策入库（**未实施**，零代码变更）
 

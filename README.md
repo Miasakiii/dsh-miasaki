@@ -141,7 +141,7 @@ dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
 | 线 | 目录 | `package.json` |
 |---|---|---|
 | 桌面端 | `dsh-miasaki-desktop/` | 0.1.0 |
-| Fleet | `dsh-miasaki-fleet/` | 0.20.0 |
+| Fleet | `dsh-miasaki-fleet/` | 0.21.0 |
 | Canvas | `dsh-miasaki-canvas/` | 0.5.0 |
 | Sidebar | `dsh-miasaki-sidebar/` | 0.10.0 |
 | SSH | `dsh-miasaki-ssh/` | 0.1.0 |

@@ -13,7 +13,7 @@
 #   声明了风险时，派单结束后生成 tasks/<id>/verify-brief.md（**不自动派发**验证任务）。
 # 事件留痕（G0，2026-09-30）：派单开始与终态各写一条机器事件（task.started / task.completed /
 #   failure.detected），经 workers/bus/bus-apply.mjs 唯一入口；事件是审计不是闸门，写失败只告警不阻断。
-# 闸门顺序（先廉价后昂贵）：档案 → 类型 → 权限 → 开关 → 日预算 → 并发上限 → G1 可派 → G2 能力 → G4 验证 → 任务级 token 预算。
+# 闸门顺序（先廉价后昂贵）：档案 → 类型 → 权限 → 开关 → 日预算 → 并发上限 → G1 可派 → G2 能力 → G4 验证 → 任务级 token 预算 → G5 语义分级（只提示不硬拒）。
 #   前者拒了就不跑后者。
 # 类型闸门（P0-A，2026-10-21）：worker 池只收 coding-agent —— kind=tool-cli / unknown / 缺字段
 #   一律拒绝派单。依据 design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md §7.1。
@@ -661,6 +661,46 @@ function Test-VerifierGate([string]$Producer, [string]$MinLevel) {
   return $true
 }
 
+# --- G5 语义分级闸门（2026-11-02）-------------------------------------------
+# 依据：卡兹克《折腾了整整1年，毫无保留地分享一下我这套Agent自动化系统》§5
+# 「必须先问我的就那么几类了，比如删数据、停服、花钱、对外发消息、改产品方向、
+# 新建或轮换密钥、修改权限等等」——七类清单。评估报告（🟢 真缺口 1）：
+# _refs/article-borrow-2026-11-02-kazike-agent-automation.md。
+# 落点判断：本文件头的「闸门顺序」全是资源/能力口径（档案/开关/预算/并发/G1/G2/G4），
+# 任务语义分级此前的空白；预算熔断（exit 4）只覆盖「花钱」一项的机器版。
+# 判定在 lib\escalation-policy.cjs（纯函数 + CLI 只做 IO，与 schedule.cjs 同纪律）。
+# **escalate 只提示不硬拒**：命中不改退出码语义（0/2/3/4 分毫不动），只做两件事——
+# 醒目提示 + 由调用方把 hits 附进 task.started 事件（审计可检索）。
+# 与 D4「escalate 只提示不硬拒」拍板同口径（design/2026-10-29-gvs5h...md §9-4）。
+#
+# 返回值：$null = 未命中或无法判定（漏报可追认，误报会训练 Operator 忽略告警，故宁漏勿误）；
+#         非空字符串 = 命中的分类摘要（形如「删数据（删除数据）；停服（停服）」）。
+function Test-EscalationGate([string]$Text) {
+  $policy = Join-Path (Split-Path $PSScriptRoot -Parent) 'lib\escalation-policy.cjs'
+  if (-not (Test-Path $policy)) {
+    Write-Host '[escalation] 分级策略缺失，无法判定语义分级（本次不升级——漏报可追认，误报会训练 Operator 忽略告警）'
+    return $null
+  }
+  # 文本走 stdin 而非命令行参数：brief+context 可能很长，Windows 命令行有 32KB 上限
+  $raw = $Text | & node $policy --stdin --json 2>$null
+  $code = $LASTEXITCODE
+  if ($code -ne 0) {
+    Write-Host "[escalation] 分级判定器出错（exit $code），本次不升级（漏报可追认）"
+    return $null
+  }
+  $parsed = $null
+  try { $parsed = ($raw | Out-String).Trim() | ConvertFrom-Json } catch { $parsed = $null }
+  if ($null -eq $parsed) {
+    Write-Host '[escalation] 分级判定器输出无法解析，本次不升级（漏报可追认）'
+    return $null
+  }
+  if ($parsed.escalate -ne $true) { return $null }
+  $hits = @($parsed.hits | ForEach-Object { "$($_.label)（$($_.evidence)）" })
+  Write-Host "[escalation] ⚠ 语义升级：brief/context 命中「必须问人」清单 $($hits.Count) 类 —— $($hits -join '；')"
+  Write-Host '[escalation] 不阻断派单（escalate 只提示不硬拒，D4 同口径）；Operator 批奏折时优先看这一类'
+  return ($hits -join '；')
+}
+
 # 生成验证任务书 —— **只准备材料，不自动派发**：自动创建/派发验证任务会引入新的任务生命周期
 # （验证任务的身份、台账 op、成本归属），属独立议题。
 # 时序诚实标注：派单刚结束时交付契约通常还没落盘（由 Commander 事后代写），故任务书里的产物引用
@@ -942,6 +982,9 @@ if ($CheckOnly) {
   } else {
     Write-Host '[verifier] brief 未声明 risk / 需要验证，跳过验证闸门（零行为变更）'
   }
+  # G5 语义分级（2026-11-02，与派单主路径同口径）：让 -CheckOnly 也能看到「这任务要不要问人」。
+  $coContext = Get-Content (Join-Path $Workspace "tasks\$TaskId\context.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+  $null = Test-EscalationGate (($briefText ?? '') + "`n" + ($coContext ?? ''))
   # 调度级解析结果（2026-10-17）：让 -CheckOnly 也能看到「超时 / 任务 token 预算」的实际取值，
   # 测试据此断言「manifest 字段与 brief 文字约束真的被消费」。
   $coTimeout = Get-EffectiveTimeoutMs $TimeoutMs $manifest $briefText
@@ -1027,6 +1070,10 @@ $brief = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Error
 $context = Get-Content (Join-Path $Workspace "tasks\$TaskId\context.md") -Raw -ErrorAction SilentlyContinue
 $prompt = (($brief ?? '') + "`n`n## 上下文`n" + ($context ?? '')).Trim()
 
+# 闸门 3.5：G5 语义分级（2026-11-02）。判定 brief+context 是否命中「必须问人」七类清单；
+# escalate 只提示不硬拒，命中结果由下方 task.started 事件附 escalation 字段带出。
+$escalationHits = Test-EscalationGate (($brief ?? '') + "`n" + ($context ?? ''))
+
 # 调度级超时（2026-10-17）：显式参数 > manifest.limits.timeout_ms > brief「超时：M 分钟」> 0（不限）。
 # 0 表示沿用旧行为（无超时）—— 但 8 个 agent 的 manifest 都已声明 900000，故实际默认 15 分钟。
 $timeoutMs = Get-EffectiveTimeoutMs $TimeoutMs $manifest $brief
@@ -1094,7 +1141,11 @@ $status | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $agentDir 'status.jso
 
 # 事件留痕（G0）：派单开始。刻意放在 CLI 启动**之前** —— worker 崩了也留下痕迹
 # （此前 events.jsonl 长期只有人工里程碑，机器过程零留痕）。
-Write-BusEvent 'task.started' $TaskId "派单给 $Agent"
+# G5（2026-11-02）：命中「必须问人」清单时附 escalation 字段 —— 事件流是唯一真相，
+# Operator「批奏折」时可按 `grep escalation state/graph-events.jsonl` 检索全部语义升级任务。
+$evFields = $null
+if ($escalationHits) { $evFields = @{ escalation = $escalationHits } }
+Write-BusEvent 'task.started' $TaskId "派单给 $Agent" $evFields
 
 $logDir = Join-Path $agentDir 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null

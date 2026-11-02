@@ -94,6 +94,9 @@ function planFleet() {
   checks.push({ line: 'fleet', name: 'test agent-facts (P2-B manifest/observed)', cmd: process.execPath, args: [join(dir, 'tests/agent-facts.test.mjs')], cwd: dir })
   // P2-D：定时任务语义（到期/幂等/超步推进；无常驻 daemon）。
   checks.push({ line: 'fleet', name: 'test scheduler (P2-D 定时任务)', cmd: process.execPath, args: [join(dir, 'tests/scheduler.test.mjs')], cwd: dir })
+  // G5（2026-11-02）：语义分级纯函数（七类清单命中 / 误报控制 / CLI 退出码）；
+  // 派单器接线两例（命中不阻断 / 未命中零噪声）在 dispatch-gate。
+  checks.push({ line: 'fleet', name: 'test escalation-policy (G5 语义分级)', cmd: process.execPath, args: [join(dir, 'tests/escalation-policy.test.mjs')], cwd: dir })
   // P2-E：schema 版本五态 + 迁移只标注版本（future 拒绝降级）。
   checks.push({ line: 'fleet', name: 'test schema-version (P2-E schema 版本)', cmd: process.execPath, args: [join(dir, 'tests/schema-version.test.mjs')], cwd: dir })
   // P2-F：可插拔选型策略（策略只排序、未知策略显式失败）。
@@ -126,6 +129,33 @@ function planFleet() {
         "const miss=need.filter(x=>!s.includes(x[1])).map(x=>x[0]);",
         "if(miss.length){console.error('[dispatch-gate] 缺失：'+miss.join(' / '));process.exit(1)}",
         "console.log('[dispatch-gate] 接线完整：'+need.length+' 项断言通过');",
+      ].join(''),
+    ],
+    cwd: dir,
+  })
+  // 派单 G5 语义分级接线（2026-11-02）：纯文本断言（不 spawn PowerShell、不依赖 PS7）。
+  // 守护四件事：①分级函数仍在；②派单主路径与 -CheckOnly **两处调用点**都在
+  // （只钉函数定义会让「接线悄悄退化」全绿 —— 与 G1 接线检查同一理由）；
+  // ③task.started 事件附 escalation 字段；④不硬拒的语义仍写在注释里。
+  checks.push({
+    line: 'fleet',
+    name: 'dispatch G5 语义分级接线',
+    cmd: process.execPath,
+    args: [
+      '-e',
+      [
+        "const fs=require('fs'),p=require('path');",
+        "const s=fs.readFileSync(p.join(process.cwd(),'workers','dispatch','dispatch-task.ps1'),'utf8');",
+        "const need=[",
+        "['分级函数','function Test-EscalationGate'],",
+        "['主路径调用','$escalationHits = Test-EscalationGate'],",
+        "['预检调用','$null = Test-EscalationGate'],",
+        "['事件附字段','@{ escalation = $escalationHits }'],",
+        "['不硬拒注释','escalate 只提示不硬拒'],",
+        "];",
+        "const miss=need.filter(x=>!s.includes(x[1])).map(x=>x[0]);",
+        "if(miss.length){console.error('[dispatch-g5] 缺失：'+miss.join(' / '));process.exit(1)}",
+        "console.log('[dispatch-g5] 接线完整：'+need.length+' 项断言通过');",
       ].join(''),
     ],
     cwd: dir,

@@ -721,3 +721,27 @@ test('P1-A：400 参数错误 ⇒ request_error（不重试、不换 agent）', 
   assert.equal(status.failure.retryable, false)
   assert.equal(status.failure.suggest_switch, false)
 })
+
+// ---- G5 语义分级闸门（2026-11-02）：escalate 只提示不硬拒 ------------------
+// 依据：卡兹克《…Agent自动化系统》§5「必须问人」七类清单；纯函数与 CLI 的
+// 逐类覆盖见 tests/escalation-policy.test.mjs，这里只钉**派单器接线**两件事：
+//   ① 命中 ⇒ 醒目提示，但 exit 仍 0（不改变 0/2/3/4 退出码语义，D4 同口径）；
+//   ② 未命中 ⇒ 零输出（不制造噪声——误报会训练 Operator 忽略告警）。
+
+test('G5：brief 命中「删数据」⇒ 提示语义升级但**不阻断**（exit 0）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { briefExtra: '本任务需要删除数据库中的历史数据。\n' })
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 0, `escalate 只提示不硬拒，应放行；实际输出：\n${r.text}`)
+  assert.match(r.text, /\[escalation\] ⚠ 语义升级/)
+  assert.match(r.text, /删数据（删除数据）/)
+  assert.match(r.text, /不阻断派单/)
+})
+
+test('G5：普通 brief ⇒ 不产生任何语义升级提示（零噪声）', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const r = runGate(t, fix, 't-9001', 'alpha')
+  assert.equal(r.status, 0, `应放行；实际输出：\n${r.text}`)
+  assert.doesNotMatch(r.text, /\[escalation\] ⚠ 语义升级/)
+})

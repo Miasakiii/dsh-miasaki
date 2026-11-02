@@ -8,6 +8,13 @@
     "provider_path": ["env", "ANTHROPIC_BASE_URL"],
     "evidence": "settings.json env.ANTHROPIC_MODEL；2026-10-21 本机实测值 step-5-preview[1M]（经 stepfun 中转）"
   },
+  "review": {
+    "format": "json",
+    "paths": ["%USERPROFILE%/.claude/settings.json"],
+    "model_path": ["env", "ANTHROPIC_MODEL"],
+    "provider_path": ["env", "ANTHROPIC_BASE_URL"],
+    "evidence": "与 claude 同一 CLI 同一配置（review 是 claude 的只读角色人格，2026-11-02 建档）；模型来源与 claude 逐字段相同"
+  },
   "pi": {
     "format": "json",
     "paths": ["%USERPROFILE%/.pi/agent/settings.json"],

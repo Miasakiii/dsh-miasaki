@@ -112,7 +112,7 @@
    事件流新增 failure.detected 且 verify_gate="failed"
 ② node tests/dispatch-gate.test.mjs  → 现 43 例（README 口径，本批未实跑）→ 新增 2 例后 pass 45, fail 0
 ③ node tests/verifier.test.mjs       → pass 36（未改验证器契约）
-④ node workers/validate-bus.mjs      → [validate] done: 39 文件通过，0 错误
+④ node workers/validate-bus.mjs      → [validate] done: 41 文件通过，0 错误
 ⑤ node workers/validate-bus.mjs --verdict → 补记前对 t-0011 期望 exit 1 并点名 verdict.json；补记后 0 错误
 ```
 
@@ -144,7 +144,7 @@
 ③ 夹具派单（CLI exit 0 + stop_reason=max_tokens）
    → status.state="error"、status.failure.kind="truncated"、事件 failure.detected 带 error_kind="truncated"；
      事件流中不得出现该任务的 task.completed
-④ node workers/validate-bus.mjs → 39 文件通过，0 错误（usage 新字段不破坏巡检）
+④ node workers/validate-bus.mjs → 41 文件通过，0 错误（usage 新字段不破坏巡检）
 ```
 
 ### D3 交付契约代写 + 六段结构提取（P1）
@@ -172,7 +172,7 @@
 ③ 默认关闭：pwsh -File workers/dispatch/dispatch-task.ps1 -TaskId t-9001 -Agent alpha -CheckOnly
    → 与基线同退出码（零行为变更）
 ④ node tests/extract-result.test.mjs（新增文件，登记进 verify-all）→ pass N（≥6：正例 / 缺节 / 变体标题 / 解析失败各覆盖），fail 0
-⑤ node workers/validate-bus.mjs → 39 文件通过，0 错误（新增夹具若入库，文件数相应增加）
+⑤ node workers/validate-bus.mjs → 41 文件通过，0 错误（新增夹具若入库，文件数相应增加）
 ```
 
 ### D4 收敛守卫：状态迁移合法性 + retries 上限（P1）
@@ -204,8 +204,29 @@
 ③ 夹具（retries=3）→ {"action":"escalate","reasons":[...]}
 ④ node tests/loop-guards.test.mjs → pass N（N ≥ 10：op 语义合法/非法、retries 边界、不可重试失败各覆盖）
 ⑤ node workers/graph/task-ready.mjs --check → [task-ready] --check 通过：12 个任务，0 个分组，无结构问题
-⑥ node workers/validate-bus.mjs → 39 文件通过，0 错误；开启 --transitions 后仍 0 错误
+⑥ node workers/validate-bus.mjs → 41 文件通过，0 错误；开启 --transitions 后仍 0 错误
+⑦ 夹具（retries=3 且同一失败 kind 重复出现）→ reasons 按 kind 聚合为一条（flag the class），
+   不逐条重复（no repeats of findings already posted）
 ```
+
+**收敛四招并入（2026-11-02 补充，未实施；不改 §9-4 拍板结论）**：
+
+来源：卡兹克《折腾了整整1年，毫无保留地分享一下我这套Agent自动化系统》§4 只转了
+「最多审 3 次」一句口号；回溯一手源 Anthropic《How the Claude Code team does code review》
+（2026-10-15）"Review that converges" 一节拿到完整四招与数据。借鉴评估：
+`_refs/article-borrow-2026-11-02-kazike-agent-automation.md`（🟠6）。
+
+| Anthropic 四招（原文） | 与 D4 的关系 | 处置 |
+|---|---|---|
+| A round cap. After three rounds, the reviewer asks the author to step back and reconsider the approach. | 与 D4 既有 `retries ≥ 3 ⇒ escalate` 同构（拍板 §9-4） | **已有**；本条补一手源引用。注意语义是「请作者重新思考方案」，不是「到 3 次强制通过」——文章的口号压缩丢了这层 |
+| Flag the class of bug, so the author fixes every instance, not one line. | D4 缺：escalate 的 reasons 应按失败 kind 聚合（P1-A 八态分类已在 `failure-classify.cjs`），不逐条罗列同一类 | **并入判据⑦**（实施时） |
+| No repeats of findings already posted. | 审查侧纪律；fleet 侧同构物是「同一失败重复出现 ⇒ escalate」（D4 已有），且 reason 不得重复计数 | 审查侧已落 `agents/review` persona 第 5 条（2026-11-02 建档）；D4 侧实施时 reasons 去重 |
+| Diff-only re-review after the first few passes. | fleet 无审查轮次——重派单重跑整份 brief，不存在「只审增量」的载体 | **不搬**（无承载对象；真要做得先有 diff 级重审通道，属独立议题） |
+
+数据（原文自报，「为什么必须收敛」的证据）：单轮通过率 65%→78%、需 5+ 轮 8.9%→1.5%、
+均轮 2.08→1.32。反面对照：一个 CLI PR 一夜 **50+ 轮**审查-修复循环才被作者叫停；
+git blame：reviewer 反复 flag 的内容 **59% 第一轮就在那里**（"rarely finding new bugs"）——
+没有收敛约束的审查循环不是在找新 bug，是在反复重报旧 bug。
 
 ### D5 上下文有界告警（P2，可选）
 
@@ -221,7 +242,7 @@
 ① node workers/lib/brief-budget.cjs --check tasks/t-0011/context.md
    → exit 0；stdout `OK lines=<n> bytes=<n> (limit lines=80 bytes=...)`
 ② 超限夹具 → exit 1 并点名 lines= 与上限
-③ node workers/validate-bus.mjs → 39 文件通过，0 错误（证明未新增真相文件）
+③ node workers/validate-bus.mjs → 41 文件通过，0 错误（证明未新增真相文件）
 ```
 
 ---

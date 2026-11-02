@@ -29,3 +29,22 @@
 - 已发现 8 个：bl（bl text chat --message，bailian-cli 技能权威语法）、claude（claude -p --output-format json，json 含成本）、gemini（沙箱下自重启失败，派单需 full-access）、opencode（opencode run）、dsh（需 headless profile）、pi（pi -p；写 %USERPROFILE%\.pi 需 full-access）、mimo、agent-browser。
 - 派单模型：Commander 按任务匹配 CLI 特性 → spawn CLI 进程执行 prompt → stdout 存 transcript → usage 按 CLI 各自来源解析（claude json / bl console / 其他 unknown）。
 - 面板自动列出 agents/ 下所有档案（无需改动），开关启用后由 Commander 或托管器派发真实 CLI 任务。
+
+## Operator 定过的事（拍板记录，Commander 代笔）
+
+> 来源：卡兹克《折腾了整整1年，毫无保留地分享一下我这套Agent自动化系统》§5「我定过的事，Agent 不会问第二遍」
+> （借鉴评估：_refs/article-borrow-2026-11-02-kazike-agent-automation.md，🟢 真缺口 2）。
+> **消费方式**：Commander 写 brief 前先读本节——命中过的事项直接按结论执行，不再升级询问。
+> **形态说明（轻形态）**：本文件是 Commander 唯一写者、worker 只读的共享知识区，本节零契约变更。
+> 刻意**不放进** `agents/*/notes.md`——那是 worker 自述记忆（≤10 行口径），2026-10-29 D5 拍板
+> 「不改 agents/*/notes.md 人工口径」同样适用于此；重形态（`state/decisions.jsonl` 走 bus-apply、
+> `EVENT_AUTHORS` 已含 `operator`）待 E5 契约批次同源时再评估，不先行引入第 N 个真相文件。
+
+- 2026-11-02：批准实施卡兹克文章借鉴四增量——G5 语义分级闸门 / 决策账（本节）/ 只读 review 档案 / D4 判据并入 Anthropic 收敛四招。原话：「可以」。
+- 2026-10-29：D4 `escalate` **只提示不硬拒**（最终裁决权仍在 Commander / Operator；`loop.guard` 的 `reason` 枚举 = `no_progress` / `retries_exceeded` / `transition_illegal`）。G5 闸门（`workers/lib/escalation-policy.cjs`）即按此口径实施：命中不改派单退出码 0/2/3/4。
+
+## Operator 拒绝过的事（再碰到直接照答，不再重提）
+
+> 消费方式同上：Commander 写 brief / 做方案前先对一遍——命中项按既有结论处理，不重复提请裁决。
+
+- 2026-09-29：拒绝**未经请示**修改 `web` profile 的 `node_modules` 装配（同批 `miasaki` 的未问先改事后被追认，`web` 这次被拒）。此后动 `~/.dsh/profiles/*`（package.json / install）必须先问用户，先读 `LinkType` 再决定改不改。
