@@ -76,8 +76,11 @@ function fixture(t, opts = {}) {
     limits = null,       // 追加/覆盖 manifest.limits（调度级用例：timeout_ms / max_concurrent_tasks / max_tokens_per_task）
     usageTokens = null,  // 写一条本任务的 usage.jsonl（任务级 token 预算用例）
     manifestKind = 'coding-agent', // P0-A 类型闸门：默认 coding-agent；传 'tool-cli' / null 覆盖
-    permissions = null,            // P2-A 信任闸门：显式 permissions 对象（默认缺省 ⇒ unknown 只读降级）
+    permissions = null,            // P2-A 信任闸门：显式 permissions 对象（默认缺省 ⇒ unknown；可注入则只读降级，否则拒绝）
     boundary = null,               // P2-A：追加/覆盖 capability_boundary（写权证据等）
+    trustedWrite = false,           // 仅真执行裸命令的用例显式开启；默认走 unknown 只读降级
+    readonlyFlags = ['--permission-mode', 'plan'], // alpha 的可注入只读参数；传 [] 覆盖缺失分支
+    invoke = null,
   } = opts
 
   const dir = mkdtempSync(join(tmpdir(), 'fleet-gate-'))
@@ -121,11 +124,12 @@ function fixture(t, opts = {}) {
       id,
       // P0-A 类型字段：派单器据此拒绝非 coding-agent（缺 kind 的档案 fail-closed）。
       ...(manifestKind ? { kind: manifestKind } : {}),
-      capability_boundary: { tool_loop: manifestKind === 'coding-agent' ? 'yes' : 'no', ...(boundary ?? {}) },
-      ...(permissions ? { permissions } : {}),
+      capability_boundary: { tool_loop: manifestKind === 'coding-agent' ? 'yes' : 'no', ...(trustedWrite ? { workspace_write_headless: 'yes' } : {}), ...(boundary ?? {}) },
+      ...(permissions || trustedWrite ? { permissions: trustedWrite ? { mode: 'workspace-write', calibration: 'verified' } : permissions } : {}),
+      invoke_contract: { prompt_transport: 'argv', permission_flags: { readonly: readonlyFlags } },
       // 默认只给最小集（不改变既有用例语义）；调度级用例显式传 limits 追加字段
       limits: { budget_per_day: 2.0, heartbeat_ms: 30000, ...(limits ?? {}) },
-      cli: { invoke: `${id} -p {prompt}` },
+      cli: { invoke: invoke ?? `${id} -p {prompt}` },
       metering_source: 'unknown',
     }, null, 2), 'utf8')
     writeFileSync(join(adir, 'control.json'), JSON.stringify({
@@ -301,12 +305,64 @@ test('P2-A：声明写权限但无 headless 写证据 ⇒ 拒绝 exit 2（不授
   assert.match(r.text, /不授未证明的写权/)
 })
 
-test('P2-A：权限 unknown ⇒ 按只读降级放行（安全降级，不静默授写权）', (t) => {
+test('P2-A：权限 unknown + 已登记只读参数 ⇒ 预检放行，实际注入参数', (t) => {
   if (!PWSH) return t.skip('本机无 PS7')
-  const fix = fixture(t) // 无 permissions 字段 ⇒ unknown
+  const fix = fixture(t) // 无 permissions 字段 ⇒ unknown；alpha 登记了测试用只读参数
   const r = runGate(t, fix, 't-9001', 'alpha')
-  assert.equal(r.status, 0, `unknown 只读降级应放行；实际：\n${r.text}`)
-  assert.match(r.text, /按只读降级生效（不授写权）/)
+  assert.equal(r.status, 0, `unknown + 可执行只读约束应放行；实际：\n${r.text}`)
+  assert.match(r.text, /已登记只读参数/)
+  const shown = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-ShowCommand'])
+  assert.match(shown.text, /argc=5/, `原 argv 后应追加 --permission-mode plan；实际：\n${shown.text}`)
+})
+
+test('P2-A：权限 unknown + 没有有效只读参数 ⇒ 拒绝 exit 2，不再假称安全降级', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  for (const readonlyFlags of [[], ['--permission-mode', 7], ['']]) {
+    const fix = fixture(t, { readonlyFlags })
+    const r = runGate(t, fix, 't-9001', 'alpha')
+    assert.equal(r.status, 2, `不可执行只读约束必须拒绝（${JSON.stringify(readonlyFlags)}）；实际：\n${r.text}`)
+    assert.match(r.text, /未登记可执行的只读参数/)
+    const shown = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-ShowCommand'])
+    assert.equal(shown.status, 2, '-ShowCommand 与实际派单必须共用同一权限判据')
+  }
+})
+
+test('P2-A：权限 unknown + cmd: 裸命令 ⇒ 拒绝 exit 2，堵住参数注入绕过', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { briefExtra: 'cmd: node -e "process.exit(0)"\n' })
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-ShowCommand'])
+  assert.equal(r.status, 2, `裸命令无法由 CLI flag 约束，必须拒绝；实际：\n${r.text}`)
+  assert.match(r.text, /cmd: 裸命令/)
+  assert.ok(!existsSync(join(fix, 'state', 'graph-events.jsonl')), '权限拒绝不得写派单事件')
+})
+
+test('P2-A：已有只读参数 ⇒ 不重复注入', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t, { invoke: 'alpha -p {prompt} --permission-mode plan' })
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-ShowCommand'])
+  assert.equal(r.status, 0, r.text)
+  assert.match(r.text, /argc=5/)
+  assert.match(r.text, /^\s*\[4\] plan\s*$/m)
+})
+
+test('P2-A：真执行假 CLI ⇒ 只读参数位于 worker argv，而不是只在日志里', (t) => {
+  if (!PWSH) return t.skip('本机无 PS7')
+  const fix = fixture(t)
+  const argvFile = join(fix, 'worker-argv.json')
+  const fake = writeFakeCli(fix, [
+    "import { writeFileSync } from 'node:fs'",
+    `writeFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)))`,
+  ].join('\n'))
+  writeFileSync(join(fix, 'agents', 'alpha', 'manifest.json'), JSON.stringify({
+    ...JSON.parse(readFileSync(join(fix, 'agents', 'alpha', 'manifest.json'), 'utf8')),
+    cli: { invoke: `node ${fake} -p {prompt}` },
+  }, null, 2), 'utf8')
+  const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-TimeoutMs', '5000', '-RetriesOnTimeout', '0'])
+  assert.equal(r.status, 0, `假 worker 应正常完成；实际：\n${r.text}`)
+  const argv = JSON.parse(readFileSync(argvFile, 'utf8'))
+  assert.deepEqual(argv.slice(-2), ['--permission-mode', 'plan'])
+  assert.equal(argv[0], '-p')
+  assert.equal(argv.length, 4, 'prompt 必须仍是一个 argv 元素，只读参数紧随其后')
 })
 
 test('P2-A：read-only + verified 校准 ⇒ 通过并标注 calibration=verified', (t) => {
@@ -508,7 +564,7 @@ test('命令构造：prompt 里的引号**不泄漏**成 CLI 参数（2026-09-30
   })
   const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-ShowCommand'])
   assert.equal(r.status, 0, `-ShowCommand 应正常退出；实际：\n${r.text}`)
-  assert.match(r.text, /argc=3/, `alpha -p {prompt} 应切成 3 个 argv 元素；实际：\n${r.text}`)
+  assert.match(r.text, /argc=5/, `alpha -p {prompt} 加只读参数应切成 5 个 argv 元素；实际：\n${r.text}`)
   assert.match(r.text, /作为单个参数传入/)
   assert.doesNotMatch(r.text, /-A/, 'prompt 里的 -A 是**内容**，不得出现在 argv 里')
 })
@@ -527,7 +583,7 @@ test('命令构造：cmd: 行的**成对引号**被剥离（否则命令会静�
   if (!PWSH) return t.skip('本机无 PS7')
   // 实测踩坑：`cmd: node -e "process.exit(3)"` 曾把字面量 `"process.exit(3)"` 传给 node ——
   // 它在 JS 里是合法的字符串表达式 ⇒ 命令静默 exit 0，派单器记成**成功**（本该 exit 3）。
-  const fix = fixture(t, { briefExtra: 'cmd: node -e "process.exit(3)"\n' })
+  const fix = fixture(t, { trustedWrite: true, briefExtra: 'cmd: node -e "process.exit(3)"\n' })
   const r = runScript(t, fix, ['-TaskId', 't-9001', '-Agent', 'alpha', '-ShowCommand'])
   assert.equal(r.status, 0, `-ShowCommand 应正常退出；实际：\n${r.text}`)
   assert.match(r.text, /\[cmd\] exe=node argc=3/, `应切成 node + -e + 表达式；实际：\n${r.text}`)
@@ -621,7 +677,7 @@ function writeFakeCli(fix, body) {
 
 test('调度级：worker 挂死 → 超时 kill 进程树，记 exit 3 且 status=error（last_error 含超时）', (t) => {
   if (!PWSH) return t.skip('本机无 PS7')
-  const fix = fixture(t)
+  const fix = fixture(t, { trustedWrite: true })
   const fake = writeFakeCli(fix, 'setTimeout(() => {}, 60000)\n')
   // brief 的 cmd: 行优先于 manifest 的 invoke 模板
   writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
@@ -636,7 +692,7 @@ test('调度级：worker 挂死 → 超时 kill 进程树，记 exit 3 且 statu
 
 test('调度级：超时后重试一次，第二次成功 → exit 0', (t) => {
   if (!PWSH) return t.skip('本机无 PS7')
-  const fix = fixture(t)
+  const fix = fixture(t, { trustedWrite: true })
   const cnt = join(fix, 'attempts.txt')
   const fake = writeFakeCli(fix, [
     "import { existsSync, readFileSync, writeFileSync } from 'node:fs'",
@@ -655,7 +711,7 @@ test('调度级：超时后重试一次，第二次成功 → exit 0', (t) => {
 
 test('调度级：普通失败（exit 1）不触发重试（避免掩盖真实错误与重复花钱）', (t) => {
   if (!PWSH) return t.skip('本机无 PS7')
-  const fix = fixture(t)
+  const fix = fixture(t, { trustedWrite: true })
   const cnt = join(fix, 'attempts.txt')
   const fake = writeFakeCli(fix, [
     "import { appendFileSync } from 'node:fs'",
@@ -674,7 +730,7 @@ test('调度级：普通失败（exit 1）不触发重试（避免掩盖真实�
 
 test('P1-A：429 失败 ⇒ status.failure.kind=rate_limit 且 retryable/suggest_switch=true', (t) => {
   if (!PWSH) return t.skip('本机无 PS7')
-  const fix = fixture(t)
+  const fix = fixture(t, { trustedWrite: true })
   const fake = writeFakeCli(fix, [
     "console.error('HTTP 429 Too Many Requests')",
     'process.exit(1)',
@@ -694,7 +750,7 @@ test('P1-A：429 失败 ⇒ status.failure.kind=rate_limit 且 retryable/suggest
 
 test('P1-A：超时 ⇒ status.failure.kind=timeout（与调度级超时同源）', (t) => {
   if (!PWSH) return t.skip('本机无 PS7')
-  const fix = fixture(t)
+  const fix = fixture(t, { trustedWrite: true })
   const fake = writeFakeCli(fix, 'setTimeout(() => {}, 60000)\n')
   writeFileSync(join(fix, 'tasks', 't-9001', 'brief.md'),
     `# 夹具任务 t-9001\n\n## 约束\n- 夹具：不声明 requires（跳过能力闸门）\ncmd: node "${fake}"\n`, 'utf8')
@@ -707,7 +763,7 @@ test('P1-A：超时 ⇒ status.failure.kind=timeout（与调度级超时同源�
 
 test('P1-A：400 参数错误 ⇒ request_error（不重试、不换 agent）', (t) => {
   if (!PWSH) return t.skip('本机无 PS7')
-  const fix = fixture(t)
+  const fix = fixture(t, { trustedWrite: true })
   const fake = writeFakeCli(fix, [
     "console.error('422 Unprocessable Entity: invalid argument')",
     'process.exit(1)',

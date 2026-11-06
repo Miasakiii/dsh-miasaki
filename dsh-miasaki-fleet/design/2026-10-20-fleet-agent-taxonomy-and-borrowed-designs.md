@@ -497,6 +497,11 @@ P1 原计划六项（失败分类/配额/定时/权限闸门/UI/交付物声明�
 
 ### 14.2 为什么不是「unknown 一律 fail-closed」
 
+**2026-11-06 订正**：P2-A 初版的「告警即安全降级」不成立——它只打印，没有进入 worker argv。当前实现把问题拆成两半：
+- 有 `invoke_contract.permission_flags.readonly` 且参数全是非空字符串：通过实际 argv 注入只读模式，仍可降级放行；
+- 无参数、参数非法或使用 `cmd:` 裸命令：拒绝派单，因为没有任何可验证的执行约束。
+这不改变「参数生效不是 OS 沙箱、只读拒写仍需首跑校准」的边界。以下是 2026-10-21 当时的历史判断，保留供追溯：
+
 当前 8 个档案里只有 claude 有 headless 权限实测证据；若 `mode=unknown` 直接拒绝派单，fleet 会只剩 claude 可用（pi/mimo/dsh/gemini/opencode 全部锁死）。本批采取**安全降级为只读**：
 - 不授予任何写权限（写权声明必须有 `workspace_write_headless=yes` 证据，否则拒绝）；
 - 降级事实通过告警与 `permissions.evidence` 留痕，可审计；

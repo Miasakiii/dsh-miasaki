@@ -92,9 +92,9 @@ npm run validate / validate:strict / pulse
 node workers/bus/bus-apply.mjs --current-version       # 查当前总线版本
 node workers/bus/bus-apply.mjs --patch p.json --check  # 只校验不写入
 node workers/bus/bus-apply.mjs --patch p.json          # 提交一个超步
-npm test                                               # 本线单测入口（257 例：F3 判活 9 / G0 契约与总线 80（26+27+27）/ G1 图与就绪度 14 / G2 能力图 18 / G4 验证者 36（含 WORK-01 确定性闸 7）/ fleet-monitor 33 / P0-B 配置漂移 14 / P1-A 失败分类 11 / P2-B 合并视图 5 / P2-D 定时任务 7 / P2-E schema 版本 4 / P2-F 选型策略 5 / P2-G profiles 4 / fleet-panel host 10 + client 7）
-                                                       # ⚠️ 派单器侧两组（dispatch-state 9 / dispatch-gate 43）**不在** npm test 链上，只在 `verify-all` 的 fleet 类别里跑
-                                                       # ⇒ 全线用例 **311 例**（2026-10-22 实测：9+26+27+27+14+18+14+11+5+7+4+5+4+36+33+11+43+10+7），逐文件口径见回归矩阵 §1
+npm test                                               # 本线单测入口（270 例：F3 判活 9 / G0 契约与总线 80（26+27+27）/ G1 图与就绪度 14 / G2 能力图 18 / G4 验证者 36（含 WORK-01 确定性闸 7）/ fleet-monitor 33 / P0-B 配置漂移 14 / P1-A 失败分类 11 / P2-B 合并视图 5 / P2-D 定时任务 7 / P2-E schema 版本 4 / P2-F 选型策略 5 / P2-G profiles 4 / G5 语义分级 13 / fleet-panel host 10 + client 7）
+                                                       # ⚠️ 派单器侧两组（dispatch-state 11 / dispatch-gate 49）**不在** npm test 链上，只在 `verify-all` 的 fleet 类别里跑
+                                                       # ⇒ 全线用例 **330 例**（npm 链 270 + dispatch-state 11 + dispatch-gate 49；2026-11-06 实跑），逐文件口径见回归矩阵 §1
 ```
 
 > **写入纪律（G0 起）**：总线文件（`state/*.jsonl`、`agents/*/capability.json`、
@@ -542,14 +542,14 @@ node ../scripts/verify-all.mjs fleet
 #  9) agent-pick --check                  G2 能力图结构完整性
 # 10) dispatch 能力闸门接线               G2→派单器 纯文本断言（7 项）
 # 10b) dispatch G5 语义分级接线           escalate 只提示不硬拒（纯文本断言 5 项，2026-11-02 新增）
-# 11) dispatch 可派闸门接线               G1/G0/G4→派单器 纯文本断言（47 项，2026-09-30 新增/2026-10-21 扩）
+# 11) dispatch 可派闸门接线               G1/G0/G4→派单器 纯文本断言（56 项，2026-09-30 新增/2026-10-21、2026-11-06 扩）
 # 12) tests/verifier.test.mjs             G4 异构验证（36 项，含 verdict 契约三条硬约束 + 首跑豁免及其三条边界 + WORK-01 确定性闸 7 项）
 # 13) verifier-pick --check               G4 验证结论契约校验
 # 14) node --check fleet-monitor/server.js
 # 15) node --check fleet-monitor/fence.cjs
 # 16) tests/fleet-monitor.test.mjs        fleet-monitor 三道信任围栏 + P1 判定层端点 + /api/drift（31 项）
 # 17) tests/dispatch-state.test.mjs       K4 派单终态判定（11 项，含两个 ps1 的语法闸门 + 派单执行期间心跳刷新两组）
-# 18) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证 + P1-A 失败分类 + P2-A 信任闸门 + G5 语义分级夹具（45 项）
+# 18) tests/dispatch-gate.test.mjs        G1 可派 + G4 验证 + P1-A 失败分类 + P2-A 信任闸门 + G5 语义分级夹具（49 项）
 # 19) fleet-monitor 判定层区块 (P1)       panel.html / server.js 的区块与三个端点（10 项，2026-09-30 新增）
 # 20) node --check plugins/dsh-fleet-panel/lib/index.js
 # 21) node --check plugins/dsh-fleet-panel/lib/client.js
@@ -567,7 +567,7 @@ node ../scripts/verify-all.mjs fleet
 > P2-D 新增 `tests/scheduler.test.mjs` → **29 项**；P2-E/F/G 新增 `schema-version` / `selection-policy` / `profile`
 > 三个测试文件 → **32 项**；2026-11-02 G5 语义分级（纯函数测试 + 派单器接线断言各一项）→ **34 项**。
 > 全量 **2026-10-05 起为 180 项**、**2026-10-19 实跑 189**、**2026-10-21 实跑 200 项**、**2026-11-02 实跑 202 项**（+G5 两项）。
-> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（G1/G0 接线现 **47** 条、G5 接线 **5** 条），夹具例数就是 `node --test` 的 pass 数。
+> **数字口径以实跑为准**：纯文本断言的项数就是脚本里 `need` 数组的长度（G1/G0 接线现 **56** 条、G5 接线 **5** 条），夹具例数就是 `node --test` 的 pass 数。
 > **本条顺带订正存量失真**（2026-10-21 核对：以实跑为准）：`bus-apply` 16 → **27 例**、
 > `bus-integration` 17 → **27 例**、`fleet-monitor` 31 → **33 例**、`task-graph` 13 → **14 例**、`fleet-monitor` 26 → **31 例**、
 > `dispatch-gate` 35 → **40 例**、面板区块 7 → **10 项**；旧记「16/17/13/17/26/35」为迁移前口径。
@@ -586,6 +586,21 @@ node ../scripts/verify-all.mjs fleet
 设计决策与协议变更记录在
 [docs/multi-agent-cli-orchestrator-design.md](docs/multi-agent-cli-orchestrator-design.md)
 头部「变更记录」。
+
+### 2026-11-06 · P2-A 权限降级收紧：unknown 从「告警后放行」改为「实际约束或拒绝」
+
+- `permissions.mode=unknown` 原先只打印「按只读降级生效（不授写权）」，但 worker argv 与调用方式
+  完全不变；这会把**没有强制机制的告警**误说成安全降级。现由 `Get-ReadOnlyDowngradeFlags` 消费
+  `invoke_contract.permission_flags.readonly`，并把非空字符串参数序列追加到 `Resolve-Argv` 的
+  唯一 argv 链；`-CheckOnly`、`-ShowCommand` 与真实派单共用同一判据。
+- fail-closed 三种形态：只读参数缺失/为空/含非字符串或空白项 ⇒ exit 2；brief 使用 `cmd:` 裸命令 ⇒
+  exit 2；已有参数序列逐元素命中 ⇒ 不重复注入。已校准 `read-only` / `workspace-write` 行为不变。
+- 这是 **CLI 自身权限模式**，不是 OS 沙箱。只读是否真拒写仍需逐 CLI 首跑证据，`calibration` 仍只有
+  claude `verified`；`review` 维持 `declared`，不能把本修复当作只读行为已实测。
+- 本机 Pi/Mimo/DSH 等档案当前登记 `permission_flags.readonly={}`，因此旧版会带告警派单、新版会拒绝；
+  这是预期收紧。恢复派单需先补可验证的只读参数，或完成写权限校准。
+- 回归：dispatch-gate **45 → 49 例**、派单接线 **47 → 56 项**、fleet 单测 **326 → 330 例**、
+  `verify-all fleet` **34/34**；版本 **0.21.0 → 0.22.0**。
 
 ### 2026-11-02 · 卡兹克文章借鉴四增量落地（G5 闸门 / 决策账 / review 档案 / D4 判据）
 

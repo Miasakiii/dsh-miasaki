@@ -12,6 +12,11 @@
 //   node scripts/verify-all.mjs                      # 全部九线 + 仓库级
 //   node scripts/verify-all.mjs dual-model           # 只跑指定线
 //                     （sidebar / canvas / fleet / desktop / ssh / dual-model / appearance / usage / free-model / repo）
+//   node scripts/verify-all.mjs --record             # 同上，并把本次结果落账 _refs/regression-log.jsonl
+//   node scripts/verify-all.mjs --replay <file>      # 不回跑，只读历史记录做汇总 + 闸门项名集合对账
+//
+// --record / --replay 的设计（借鉴 Storage Agent Family Eval §2.2 的改形）见
+// scripts/verify-record.mjs 头部；判据 5：无 flag 调用与引入前逐字节等价。
 //
 // 实现注记：子进程一律 stdio: 'inherit'，不做管道捕获——受限沙箱下捕获另一个
 // 程序的 stdio 会以 EPERM 失败，而 inherit 不会。因此本脚本以退出码判定成败，
@@ -22,6 +27,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { appendRecord, DEFAULT_RECORD_PATH, diffNames, formatReplay, readRecords, summarize, tallyReplay } from './verify-record.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const LINES = ['sidebar', 'canvas', 'fleet', 'desktop', 'ssh', 'dual-model', 'appearance', 'usage', 'free-model', 'repo']
@@ -219,11 +225,18 @@ function planFleet() {
         "['类型闸门派单调用点','[dispatch] 类型闸门未通过，拒绝派单','s'],",
         "['类型闸门拒绝工具型 CLI','工具型 CLI 不是 worker','s'],",
         "['类型闸门 fail-closed','缺少可判定的 kind','s'],",
-        // P2-A 权限/信任闸门（2026-10-21）：矛盾声明拒绝 + unknown 只读降级（安全降级不是静默放行）。
+        // P2-A 权限/信任闸门（2026-10-21，2026-11-06 收紧）：矛盾声明拒绝；unknown 必须实际注入
+        // CLI 只读参数。裸命令与未登记参数均 fail closed，防止「只有告警、没有降级」。
         "['信任闸门函数','function Test-TrustGate','s'],",
+        "['只读参数解析函数','function Get-ReadOnlyDowngradeFlags','s'],",
         "['信任闸门预检调用点','[trust] 预检不通过，拒绝派单（-CheckOnly）','s'],",
         "['信任闸门派单调用点','[trust] 权限闸门未通过，拒绝派单','s'],",
-        "['unknown 按只读降级','按只读降级生效（不授写权）','s'],",
+        "['unknown 缺参数拒绝','未登记可执行的只读参数','s'],",
+        "['unknown 裸命令拒绝','不能使用 cmd: 裸命令','s'],",
+        "['unknown 实际注入','将注入 worker argv','s'],",
+        "['只读参数进入 argv 构造','Resolve-Argv $cmd $prompt $readOnlyFlags','s'],",
+        "['预检读取 brief 后过信任闸门','Test-TrustGate $manifest $briefText','s'],",
+        "['派单读取 brief 后过信任闸门','Test-TrustGate $manifest $briefForCaps','s'],",
         "['矛盾声明拒绝','不授未证明的写权','s'],",
         "['验证闸门函数','function Test-VerifierGate','s'],",
         "['验证闸门调用点','Test-VerifierGate $Agent $verifyMinLevel','s'],",
@@ -989,7 +1002,37 @@ function planRepo() {
   return existsSync(candidate) ? candidate : null
 }
 
-const requested = process.argv.slice(2).filter(arg => !arg.startsWith('-'))
+// flag 白名单显式解析 —— 取代早期的 `filter(arg => !arg.startsWith('-'))`（那个写法会把
+// 拼错的 flag 静默当成没传；引入 flag 后这从「无感」变成「静默失效」，必须显式报错）。
+const argv = process.argv.slice(2)
+const flags = new Set()
+const positional = []
+let replayFile = null
+for (let index = 0; index < argv.length; index += 1) {
+  const arg = argv[index]
+  if (arg === '--record' || arg === '--replay') {
+    flags.add(arg)
+    if (arg === '--replay') {
+      replayFile = argv[index + 1]
+      if (replayFile === undefined || replayFile.startsWith('-')) {
+        console.error('--replay 需要一个文件参数（如 _refs/regression-log.jsonl）')
+        process.exit(2)
+      }
+      index += 1
+    }
+  } else if (arg.startsWith('-')) {
+    console.error(`未知参数：${arg}（可用：--record / --replay <file>）`)
+    process.exit(2)
+  } else {
+    positional.push(arg)
+  }
+}
+if (flags.has('--record') && flags.has('--replay')) {
+  console.error('--record 与 --replay 互斥（一个落账本次、一个回放历史，不同时跑）')
+  process.exit(2)
+}
+
+const requested = positional
 const selected = requested.length === 0 ? LINES : requested
 for (const line of selected) {
   if (!LINES.includes(line)) {
@@ -1011,11 +1054,38 @@ if (selected.includes('repo')) planRepo()
 
 console.log(`[verify-all] ${selected.join(' / ')} — ${checks.length} 项检查\n`)
 
+// --replay：不回跑任何检查，只读历史记录做同构汇总 + 闸门项名集合对账 + 逐项重判。
+// checks 仍完整规划（纯函数，无副作用）——集合对账需要「当前代码里有哪些闸门」。
+if (flags.has('--replay')) {
+  let parsed
+  try {
+    parsed = readRecords(replayFile)
+  } catch (error) {
+    console.error(`[verify-record] 读不到 ${replayFile}：${error.message}`)
+    process.exit(2)
+  }
+  if (parsed.badLines.length > 0) {
+    console.error(`[verify-record] ${replayFile} 有坏行（不静默跳过，第几行逐条点名）：`)
+    for (const bad of parsed.badLines) console.error(`  第 ${bad}`)
+    process.exit(2)
+  }
+  if (parsed.records.length === 0) {
+    console.error(`[verify-record] ${replayFile} 没有任何记录`)
+    process.exit(2)
+  }
+  const record = parsed.records[parsed.records.length - 1]
+  const diff = diffNames((record.items ?? []).map(item => item.name), checks.map(check => check.name))
+  console.log(formatReplay(record, diff))
+  // 退出码按逐项 code 重判；集合对账差异（新增/退役）是提示，不是失败。
+  process.exit(tallyReplay(record).failed.length > 0 ? 1 : 0)
+}
+
 const results = []
 for (const check of checks) {
   process.stdout.write(`── [${check.line}] ${check.name}\n`)
+  const startedAt = Date.now()
   const code = await run(check.cmd, check.args, check.cwd)
-  results.push({ ...check, code })
+  results.push({ ...check, code, ms: Date.now() - startedAt })
 }
 
 const failed = results.filter(result => result.code !== 0)
@@ -1024,6 +1094,17 @@ for (const line of selected) {
   const own = results.filter(result => result.line === line)
   const bad = own.filter(result => result.code !== 0)
   console.log(`  ${bad.length === 0 ? 'PASS' : 'FAIL'}  ${line}: ${own.length - bad.length}/${own.length}`)
+}
+// --record：把本次结果落账（红绿都记）。写失败只警告、不影响退出码 —— 判据 4：记账不得挡回归。
+if (flags.has('--record')) {
+  const record = summarize({ results, selected, root: ROOT })
+  const written = appendRecord(resolve(ROOT, DEFAULT_RECORD_PATH), record)
+  if (written.ok) {
+    console.log(`\n[verify-record] 已落账 ${DEFAULT_RECORD_PATH}（${record.ts} · git ${record.git ?? '（不可用）'} · node ${record.node}）`)
+    for (const [group, count] of Object.entries(record.byGroup)) console.log(`  ${group}: ${count}`)
+  } else {
+    console.warn(`[verify-record] 落账失败（不影响回归退出码）：${written.error}`)
+  }
 }
 if (failed.length > 0) {
   console.log('\n失败项：')

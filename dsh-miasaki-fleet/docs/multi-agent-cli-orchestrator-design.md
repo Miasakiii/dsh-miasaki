@@ -1,7 +1,7 @@
 # 多 Agent CLI 协作模式 — 设计文档
 
-- 版本：v0.27
-- 日期：2026-09-30
+- 版本：v0.29
+- 日期：2026-11-06
 - 状态：Draft
 - 作者：总指挥（Miasaki 会话）
 
@@ -69,6 +69,7 @@
 >   **② scan-agents.ps1**：manifest×N + registry 改组 **N+1 个 set 补丁同批提交**（一次超步原子生效），author=scanner，失败 exit 1 不回退（discovery 是显式运维动作，重跑即重试）。**两个 PS 5.1 实测坑**（同族不同根，均已入注释）：payload 必须 `ConvertTo-Json -InputObject` 形态 —— 管道形态对多元素数组本来就输出 `[...]`，再手工包一层就是 `[[...]]` ⇒ applier 报「补丁[0]: 补丁应为 object」；契约错误必须 `--json` 走 stdout —— 脚本头部的 `$ErrorActionPreference='SilentlyContinue'` 会把 `2>&1` 合并的 stderr ErrorRecord **静默吞掉**（exit 2 的具体原因一行都看不见）。顺带修掉 `Set-Content -Encoding UTF8` 在 PS 5.1 下写 BOM 的隐性缺陷（applier 落盘恒为无 BOM UTF-8 + 末行换行）。
 >   **③ 实弹验证（临时工作区，不动真实总线）**：扫描器 7 补丁一次超步（`superstep.committed.paths` 全数登记、落盘无 BOM）；monitor 真 applier 链路 toggle → HTTP 200 + control.json 翻转 + 事件流 paths 命中。回归：fleet-monitor **15 → 19 例**、`bus-apply` **+1 例**（三路径 set 放行 / append 拒绝 / 归档路径天然不可写 / 超步 paths 登记）、`bus-contract` 反例订正（manifest.json 由「未登记反例」转正，换入刻意不存在的 `state/bus-version.json`），`verify-all fleet` **21/21**。
 >   实机判据：面板点开关 ⇒ `state/graph-events.jsonl` 出现带 `agents/<id>/control.json` 的超步（本批为 HTTP 层实弹已验，面板点击属常规走查）。
+> - v0.29 P2-A 权限降级实际化（2026-11-06，fleet 0.22.0）：旧版 `mode=unknown` 只打印「按只读降级」，argv 和调用方式却完全不变，把告警误当成安全边界。新版只消费 `invoke_contract.permission_flags.readonly`：非空字符串参数通过唯一 `Resolve-Argv` 链实际注入，已有序列不重复；参数缺失/非法或 brief 使用 `cmd:` 裸命令则 exit 2。`-CheckOnly`、`-ShowCommand` 和真实派单共用判据，拒绝前不执行 CLI、不写 `task.started`。已校准 read-only / 有写证据的 workspace-write 路径不变。边界是 CLI 权限参数，不是 OS 沙箱；只读拒写仍需逐 CLI 首跑证据。回归：fleet 单测 326 → **330 例**（dispatch-gate 45 → 49）、派单接线 47 → 56、`verify-all fleet` 34/34、矩阵 E58 待实机校准。
 
 ---
 
@@ -267,7 +268,7 @@ workspace/                          # 本项目根目录
 - `runtime:"cli"` 的档案由扫描器生成（只刷新 `cli`/`kind`/`present`/`updated_at`，不覆盖 Operator 编辑的 skills/persona/limits 等字段）；`cli.invoke` 是派单模板，Commander 派单时把 `{prompt}` 替换为 brief+context 全文；
 - **P0-A（2026-10-21）类型字段**：`kind` 由扫描器判定（coding-agent / tool-cli / unknown），派单器前置 `Test-AgentKindGate`——非 coding-agent 与缺字段一律拒绝派单（fail-closed）；`capability_boundary` 五维取值 yes/no/unknown，不得用默认值冒充证据；`model_info` 的 `value=null + source=unknown` 表示未声明，禁止写 `cli-default`（validate-bus 已拦）。完整判据与批次见 `design/2026-10-20-fleet-agent-taxonomy-and-borrowed-designs.md`。
 - **P0-B（2026-10-21）模型真实值**：`shared/agent-adapters.json` 声明每个 coding agent 的「配置文件 + 模型字段」（只读）；`workers/discovery/scan-models.mjs` 探测后经 `bus-apply` 写 `model_info{value,source,confidence,evidence,provider}`（读不到即 missing/unknown，不猜）；`workers/discovery/agent-drift.mjs` 只读巡检五态（match/replaced/missing/parse-error/unknown）；`verifier-pick` / `agent-pick` 的模型真值改为优先读 `model_info.value`。模型级异构自此有真数据。
-- **P2-A（2026-10-21）权限校准**：`permissions` 增 `calibration`（verified/declared/unknown）与 `evidence`；派单器 `Test-TrustGate` —— 声明写权限但 `capability_boundary.workspace_write_headless≠yes` 一律拒绝（不授未证明的写权）；`unknown` 按**只读降级**并告警（当前仅 claude 有 headless 实测证据；安全降级不是静默放行）。`validate-bus` 同口径巡检。
+- **P2-A（2026-10-21，2026-11-06 收紧）权限校准**：`permissions` 增 `calibration`（verified/declared/unknown）与 `evidence`；派单器 `Test-TrustGate` —— 声明写权限但 `capability_boundary.workspace_write_headless≠yes` 一律拒绝（不授未证明的写权）；`unknown` 只允许在 `invoke_contract.permission_flags.readonly` 登记非空且全为字符串的参数时放行，并由唯一 `Resolve-Argv` 链实际追加；参数缺失/非法或 brief 使用 `cmd:` 裸命令一律拒绝，不能再把告警说成只读降级。该约束是 CLI 权限模式而非 OS 沙箱。`validate-bus` 同口径巡检。
 - `persona_prompt` 必须内嵌 §2 的唯一路由规则与"排空退出"规则（cli runtime 无主循环，该规则主要约束派单器不向未开启的 CLI 派单）；
 - `model_price` 是估算单价，v1 不做实时报价查询（见 §9）；`metering=false` 或 `metering_source:"unknown"` 的 agent 豁免 §4.4 上报义务，面板显示"无计量"。
 - `tool_allowlist` 是 worker 可见工具的白名单（领域收窄，见 §7.5）；null = 用 runtime 默认工具面（约 25 项，固定前缀可达 1 万+ token，不推荐，见 §7.6）。cli runtime 的工具面由该 CLI 自身配置决定，白名单语义迁移到 §7.5 的 CLI 配置层。

@@ -133,8 +133,8 @@ foreach ($a in $catalog) {
   $prevPreflight = if ($existingObserved -and $existingObserved.preflight) { $existingObserved.preflight }
     elseif ($legacy['preflight']) { $legacy['preflight'] } else { $a.preflight }
 
-  # P2-A 权限校准：只有 claude 有 headless 权限实测证据（t-0006：Write/Bash 被权限栈拒绝）；
-  # 其余一律 unknown —— 闸门按只读降级，**不授未证明的写权**。工具型 CLI 不参与 worker 权限模型。
+  # P2-A 权限校准：只有 claude 有 headless 权限实测证据（t-0006：Write/Bash 被权限栈拒绝）。
+  # 其余 unknown 只有登记真实只读参数时才可降级；无参数则派单器拒绝，不靠告警冒充约束。
   if ($a.id -eq 'claude') {
     $permCalibration = 'verified'
     $permEvidence = 't-0006：headless -p 下 Write/Bash 被权限栈拒绝，交付物由派单器代写'
@@ -143,7 +143,7 @@ foreach ($a in $catalog) {
     $permEvidence = '工具型 CLI，不参与 worker 权限模型（kind=tool-cli 已禁止派单）'
   } else {
     $permCalibration = 'unknown'
-    $permEvidence = '未校准（无 headless 权限实测）；P2-A 按只读降级，不授未证明的写权'
+    $permEvidence = '未校准（无 headless 权限实测）；unknown 仅在登记真实只读参数时注入降级，否则拒绝派单'
   }
   $permissions = @{}
   foreach ($k in $a.permissions.Keys) { $permissions[$k] = $a.permissions[$k] }

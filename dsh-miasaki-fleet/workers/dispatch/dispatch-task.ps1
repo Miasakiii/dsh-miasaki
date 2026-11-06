@@ -153,11 +153,23 @@ function Test-AgentKindGate($manifest) {
 # 两件可判定的事：
 #   ① **拒绝互相矛盾的声明**：声明 workspace-write / danger-full-access，但 capability_boundary
 #      的 workspace_write_headless 不是 yes ⇒ 拒绝（不授未证明的写权）；
-#   ② **unknown 安全降级**：mode/calibration 缺失或 unknown ⇒ 生效权限按 **read-only**，
-#      打印告警但不拒绝派单（当前 6 个 coding agent 仅 claude 有 headless 实测证据，
-#      一律 fail-closed 会把 fleet 直接锁死；这是「安全降级」不是「静默放行」——见告警文案）。
-# 门槛放低的原因写在这里，升级路径：逐 CLI 做权限校准并写 `permissions.calibration=verified`。
-function Test-TrustGate($Manifest) {
+#   ② **unknown 安全降级**：只认 `invoke_contract.permission_flags.readonly` 声明的 CLI 参数；
+#      实际注入 argv 才放行。没有参数或 brief 指定 `cmd:` 裸命令 ⇒ 拒绝，不能把告警当作沙箱。
+# 校准升级路径：逐 CLI 做权限校准并写 `permissions.calibration=verified`。
+function Get-ReadOnlyDowngradeFlags($Manifest) {
+  $mode = if ($Manifest.permissions -and $Manifest.permissions.mode) { [string]$Manifest.permissions.mode } else { 'unknown' }
+  if ($mode -ne 'unknown') { return @() }
+  $declared = $Manifest.invoke_contract.permission_flags.readonly
+  if ($null -eq $declared) { return @() }
+  $flags = @($declared)
+  if ($flags.Count -eq 0) { return @() }
+  foreach ($flag in $flags) {
+    if ($flag -isnot [string] -or [string]::IsNullOrWhiteSpace($flag)) { return @() }
+  }
+  return $flags
+}
+
+function Test-TrustGate($Manifest, [string]$BriefText = '') {
   $pm = $Manifest.permissions
   $mode = if ($pm -and $pm.mode) { [string]$pm.mode } else { 'unknown' }
   $calibration = if ($pm -and $pm.calibration) { [string]$pm.calibration } else { 'unknown' }
@@ -174,7 +186,16 @@ function Test-TrustGate($Manifest) {
     return $false
   }
   if ($mode -eq 'unknown') {
-    Write-Host "[trust] ⚠ 权限未声明/未校准（mode=unknown，calibration=$calibration）——按只读降级生效（不授写权）"
+    $readOnlyFlags = @(Get-ReadOnlyDowngradeFlags $Manifest)
+    if ($readOnlyFlags.Count -eq 0) {
+      Write-Host '[trust] 拒绝派单：权限 mode=unknown 且未登记可执行的只读参数（invoke_contract.permission_flags.readonly）；不能靠告警降级'
+      return $false
+    }
+    if ($BriefText -match '(?m)^\s*cmd:\s*\S') {
+      Write-Host '[trust] 拒绝派单：权限 mode=unknown 时不能使用 cmd: 裸命令（无法注入 CLI 只读参数）；改用档案的 invoke 模板，或校准写权限'
+      return $false
+    }
+    Write-Host "[trust] ⚠ 权限未声明/未校准（mode=unknown，calibration=$calibration）——已登记只读参数 [$($readOnlyFlags -join ' ')]，将注入 worker argv（CLI 权限模式，不是 OS 沙箱）"
   } elseif ($calibration -ne 'verified') {
     Write-Host "[trust] ⚠ 权限声明未实测校准（mode=$mode，calibration=$calibration）——按声明生效，写权需 verified 证据"
   } else {
@@ -740,7 +761,7 @@ function Write-VerifyBrief([string]$TaskId, [string]$Producer, [string]$MinLevel
 # · `invoke` 模板：按空白切**模板**，`{prompt}` 那一格替换为真实 prompt（**单个 argv 元素**，
 #   永不被切分）⇒ prompt 里的引号 / 空格 / 换行都不影响参数边界；
 # · `cmd:` 行：显式命令行，沿用简单的空格+引号切分。
-function Resolve-Argv($Cmd, [string]$Prompt) {
+function Resolve-Argv($Cmd, [string]$Prompt, [string[]]$ReadOnlyFlags = @()) {
   $argv = @()
   if ($Cmd.kind -eq 'invoke') {
     foreach ($part in ($Cmd.text -split '\s+')) {
@@ -768,6 +789,18 @@ function Resolve-Argv($Cmd, [string]$Prompt) {
       if ($p.StartsWith('"')) { $inQ = $true; $buf = $p; continue }
       if ($p -ne '') { $argv += $p }
     }
+  }
+  # 只比较独立 argv 元素，不能用字符串包含：prompt 提到参数名不等于权限模式已生效。
+  if ($ReadOnlyFlags.Count -gt 0) {
+    $present = $false
+    for ($i = 0; $i -le $argv.Count - $ReadOnlyFlags.Count; $i++) {
+      $same = $true
+      for ($j = 0; $j -lt $ReadOnlyFlags.Count; $j++) {
+        if ($argv[$i + $j] -cne $ReadOnlyFlags[$j]) { $same = $false; break }
+      }
+      if ($same) { $present = $true; break }
+    }
+    if (-not $present) { $argv += $ReadOnlyFlags }
   }
   # `,$argv` 而非 `$argv`：PowerShell 会把单元素数组**展开**成标量，加逗号才保得住数组
   return , $argv
@@ -929,8 +962,9 @@ if ($CheckOnly) {
   if (-not $manifest) { Write-Host "[budget] agent $Agent 无档案"; exit 2 }
   # P0-A 类型闸门（2026-10-21）：与派单主路径同口径；工具型 CLI / 缺 kind 一律拒绝。
   if (-not (Test-AgentKindGate $manifest)) { Write-Host '[kind] 预检不通过，拒绝派单（-CheckOnly）'; exit 2 }
-  # P2-A 信任闸门（与派单主路径同口径）：矛盾声明拒绝；unknown 按只读降级并告警。
-  if (-not (Test-TrustGate $manifest)) { Write-Host '[trust] 预检不通过，拒绝派单（-CheckOnly）'; exit 2 }
+  # P2-A 信任闸门（与派单主路径同口径）：unknown 必须有可执行的只读参数，且不能绕过到裸命令。
+  $briefText = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+  if (-not (Test-TrustGate $manifest $briefText)) { Write-Host '[trust] 预检不通过，拒绝派单（-CheckOnly）'; exit 2 }
   $ok = Test-Budget $agentDir $manifest
   if (-not $ok) { exit 4 }
   # 闸门 0.5：并发上限（与派单路径同口径；2026-10-17）
@@ -954,7 +988,6 @@ if ($CheckOnly) {
   # 走到这里说明预算已过（否则上面已 exit 4）⇒ LocalBudgetOk = $true
   if (-not (Test-DispatchableGate $TaskId $Agent $localEnabled $true)) { exit 2 }
   # 能力闸门也纳入预检：让 -CheckOnly 成为"能不能派"的完整判定
-  $briefText = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
   # 闸门 1.5：任务级 token 预算（与派单路径同口径；2026-10-17）
   $coTaskBudget = Get-EffectiveTokenBudget $manifest $briefText
   if ($coTaskBudget -gt 0) {
@@ -998,8 +1031,9 @@ $manifest = Read-AgentFacts $agentDir
 if (-not $manifest) { Write-Host "[dispatch] agent $Agent 无档案"; exit 2 }
 # P0-A 类型闸门（2026-10-21）：档案 → 类型 → 开关 → 预算 → …（先廉价后昂贵）
 if (-not (Test-AgentKindGate $manifest)) { Write-Host '[dispatch] 类型闸门未通过，拒绝派单'; exit 2 }
-# P2-A 信任闸门：矛盾声明拒绝；unknown 按只读降级并告警（不授未证明的写权）。
-if (-not (Test-TrustGate $manifest)) { Write-Host '[trust] 权限闸门未通过，拒绝派单'; exit 2 }
+# P2-A 信任闸门：矛盾声明拒绝；unknown 必须有可执行的只读参数，且不能绕过到裸命令。
+$briefForCaps = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+if (-not (Test-TrustGate $manifest $briefForCaps)) { Write-Host '[trust] 权限闸门未通过，拒绝派单'; exit 2 }
 $control = Read-JsonFile (Join-Path $agentDir 'control.json')
 if (-not $control -or $control.enabled -ne $true) { Write-Host "[dispatch] agent $Agent 开关未开启，拒绝派单（§7.0 派单许可）"; exit 2 }
 if ($manifest.preflight) { Write-Host "[dispatch] preflight 提示：$($manifest.preflight)" }
@@ -1027,7 +1061,6 @@ if ($maxConc -gt 0) {
 if (-not (Test-DispatchableGate $TaskId $Agent $true $true)) { Write-Host "[dispatch] 可派闸门未通过，拒绝派单"; exit 2 }
 
 # 闸门 2：能力候选（G2 agent-pick）。brief 未声明 requires 时零行为变更。
-$briefForCaps = Get-Content (Join-Path $Workspace "tasks\$TaskId\brief.md") -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
 
 # 闸门 1.5：任务级 token 预算（manifest.limits.max_tokens_per_task / brief「预算：N tokens」的执行点，
 # 2026-10-17）。派单前累计该任务历史 usage（重试/续跑会复用同一 task_id），达到上限即熔断 ——
@@ -1079,6 +1112,10 @@ $escalationHits = Test-EscalationGate (($brief ?? '') + "`n" + ($context ?? ''))
 $timeoutMs = Get-EffectiveTimeoutMs $TimeoutMs $manifest $brief
 Write-Host "[timeout] 生效超时：$timeoutMs ms（0 = 不设限；超时后 kill 进程树）"
 
+# P2-A：unknown 权限的实际降级点。Test-TrustGate 已在预检拒绝「无参数」与「裸命令」两种绕过形态，
+# 这里只负责把同一份档案事实注入 argv —— 判据与注入分两处实现必然漂移（同 Resolve-Argv 的教训）。
+$readOnlyFlags = @(Get-ReadOnlyDowngradeFlags $manifest)
+
 # 命令构造分两条路径，**刻意不共用切分逻辑**（2026-09-30 实测踩坑后拆开）：
 #   · `cmd:` 行 = 显式命令行（命令型任务），沿用简单的空格/引号切分；
 #   · `invoke` 模板 = **按占位符切参数**，prompt 作为**单个 argv 元素**传入。
@@ -1104,7 +1141,7 @@ if ($cmdLines.Count -eq 0) {
 # -ShowCommand：打印解析结果后退出。与真实执行**共用 Resolve-Argv** ⇒ 看到的就是将要执行的。
 if ($ShowCommand) {
   foreach ($cmd in $cmdLines) {
-    $argv = Resolve-Argv $cmd $prompt
+    $argv = Resolve-Argv $cmd $prompt $readOnlyFlags
     Write-Host "[cmd] 模板：$($cmd.text)"
     Write-Host "[cmd] exe=$($argv[0]) argc=$($argv.Count)"
     for ($i = 0; $i -lt $argv.Count; $i++) {
@@ -1163,7 +1200,7 @@ Push-Location $Workspace
 try {
   foreach ($cmd in $cmdLines) {
     # argv 构造走**唯一实现**（Resolve-Argv），与 -ShowCommand 共用 —— 两侧各写一份必然漂移
-    $argv = Resolve-Argv $cmd $prompt
+    $argv = Resolve-Argv $cmd $prompt $readOnlyFlags
     if ($cmd.kind -eq 'invoke') {
       # 日志刻意只回显模板（不回显整段 prompt）：既能证明走的是本条路径，又不让 outFile 被 prompt 淹没。
       "=== $($cmd.text)（prompt 作为单个参数，$($prompt.Length) 字符）===" | Tee-Object -FilePath $outFile -Append

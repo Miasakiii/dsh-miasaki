@@ -124,7 +124,8 @@ dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
 
 | DSH 版本 | 状态 |
 |---|---|
-| **0.2.1-rc.3** | **当前实装**（2026-10-25 升级：九件补丁重打（3 件重建基线）+ `subagent-claude-code` 升 rc.3 + `tool-browser` 豁免重授；全量 200 项 PASS，见桌面端 CHANGELOG） |
+| **0.2.1-rc.5** | **当前实装**（2026-11-01 升级：13 commits 小版本；九件补丁重打（6 件零适配 + 3 件重建基线）+ `subagent-claude-code` 升 rc.5 + `tool-browser` 豁免重授；全量 200 项 PASS，见桌面端 CHANGELOG） |
+| **0.2.1-rc.3** | 已复验（上一实装版本：2026-10-25 升级：九件补丁重打（3 件重建基线）+ `subagent-claude-code` 升 rc.3 + `tool-browser` 豁免重授；全量 200 项 PASS） |
 | **0.2.1-rc.2** | 已复验（上一实装版本：2026-10-17 升级，九件补丁重打/重写、预设 `backgroundMode` 已迁移） |
 | **0.2.0-rc.2** | 已复验（上一实装版本：八件补丁已重打，`patch-live-audit` 10/10 patched） |
 | **0.2.0-rc.1** | 已复验 |
@@ -141,7 +142,7 @@ dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
 | 线 | 目录 | `package.json` |
 |---|---|---|
 | 桌面端 | `dsh-miasaki-desktop/` | 0.1.0 |
-| Fleet | `dsh-miasaki-fleet/` | 0.21.0 |
+| Fleet | `dsh-miasaki-fleet/` | 0.22.0 |
 | Canvas | `dsh-miasaki-canvas/` | 0.5.0 |
 | Sidebar | `dsh-miasaki-sidebar/` | 0.10.0 |
 | SSH | `dsh-miasaki-ssh/` | 0.1.0 |
@@ -167,6 +168,8 @@ dsh plugin --profile web add link:<仓库路径>/dsh-miasaki-canvas
 ```bash
 node scripts/verify-all.mjs               # 全量
 node scripts/verify-all.mjs canvas        # 只跑一条线
+node scripts/verify-all.mjs --record      # 全量并把结果落账 _refs/regression-log.jsonl（归档区，不入库）
+node scripts/verify-all.mjs --replay _refs/regression-log.jsonl   # 不回跑，只读历史记录做汇总 + 闸门项名集合对账
 ```
 
 ## License
