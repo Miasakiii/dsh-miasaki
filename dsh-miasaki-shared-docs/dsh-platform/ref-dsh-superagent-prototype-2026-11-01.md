@@ -9,6 +9,7 @@
 - 判定口径沿用 [../../dsh-miasaki-fleet/design/2026-10-29-gvs5h-harness-absorb-design.md](../../dsh-miasaki-fleet/design/2026-10-29-gvs5h-harness-absorb-design.md) 的四档：**已覆盖 / 部分覆盖 / 完全缺失 / 不建议落地**
 - 同类前置：[ref-ds-bot-borrowable-designs-2026-10-12.md](ref-ds-bot-borrowable-designs-2026-10-12.md)（社区插件 ds-bot 的可搬点）
 - 本文回答：**文章讲的哪些真的在原型里**、**哪些设计值得搬**、**搬去哪条线**、**fleet 与它差在哪**、**试用前要先知道什么**
+- 机制解读（姊妹文档，2026-11-02 增补）：`ref-dsh-superagent-mechanics-2026-11-02.md` —— 同快照下逐文件读代码后补写，回答「它怎么运转、为什么这样设计」（状态机 / 节拍 / 事务与并发 / 幂等 / 失败恢复 / 扩展协议 / 代码地图），与本报告分工不重复
 
 > **路径约定**：本文出现的 `src/…` `docs/…` `prompts/…` `tests/…` 路径，一律相对本地快照 `_refs/dsh-superagent-prototype/`；因该目录不入库，**刻意不使用 markdown 相对链接**（否则 `repo/md-links` 的 R2「目标已入库」判据会红）。
 

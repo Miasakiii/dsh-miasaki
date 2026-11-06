@@ -2,6 +2,55 @@
 
 本文件记录 `dsh-miasaki-appearance/` 线的设计决策与变更。
 
+## 2026-11-02 · M6 借鉴立项：向上游 dsh-ui-beautify 学能力（只改文档，无代码变更）
+
+**触发**：用户发来社区插件 [dsh-ui-beautify](https://github.com/AumiSatori/dsh-ui-beautify)（v0.5.2，MIT），
+要求「把优秀项借鉴进外观线路线图」。先做了一轮只读评估（发行包 SHA256 校验、`src/` 83 模块、
+host 半源码、两个可选 asar 补丁脚本的 dry-run 预检；评估存档在仓库外 `_refs/`，不入库）。
+
+**评估结论（记下来省得重做）**：上游是外观线的**功能超集**，但契约比本线松 —— 自研 WebGL 透镜、
+3.3 MB 打包客户端、默认全开（粒子 9600 / 任务面板 / 开屏欢迎）、可选的宿主 `app.asar` 改写、
+以及一段会注入系统提示的 `deliverable-nudge`。它另有三个本线没有的能力（完整换色皮肤 / 应用图标 /
+桌面壳片头），所以「功能超集」不等于「可替代」。兼容性：声明 `>=0.2.1-rc.2 <0.3.0-0`，
+本机 rc.5 在其验证范围内。
+
+**产出**：新建 M6 借鉴路线图 ——
+
+- **借四项半**：M6.1 用户消息气泡（`src/user-bubbles.js` 思路）、M6.2 分轮卡片 + 分隔装饰
+  （`turn-cards.js` / `turn-divider.js`）、M6.3 流式文字渐显 + 滚动跟随平滑
+  （`stream-reveal.js` / `stream-spring.js`）、M6.4 设置预设 + 配置导入导出（`settings-presets.js` /
+  `settings-transfer.js`）、M6.5 每板块恢复默认（`settings-reset.js`）；前置 M6.0 = **rc.5 取证基线 +
+  性能纪律**（vendor 对照源码停在 0.1.6/0.1.7，M4 取证表也是旧版）。
+- **不借**：任务面板 / Artifact 阅读器 / 本机文件剪贴板·重命名·回收站（跨域）、侧栏增强与统一图标
+  （跨线）、粒子背景（持续绘制 + CC BY-NC-SA 素材）、自定义 CSS 输入框（12a7c 注入教训）、
+  WebGL 透镜（零依赖契约）、开屏欢迎增强（Boot Splash 已覆盖）、安装上游插件。
+- **纪律落点**：三项硬契约不变；每项先取证后写规则（M4 覆盖点教训）；六种降级路径
+  （减少动效 / 强制颜色 / 超大内容 / 小屏 / 明暗 / 皮肤）；新 test 文件避免 `client.test.js` 继续膨胀；
+  `CONFIG_VERSION` 8→9 只在整批字段齐了之后升一次。
+- **编号收敛与失真订正**：原 P4/P5 **已于 2026-09-30 实施**（`client.js` 有 P4「恢复默认」行与
+  P5 自描述标记，主路线图 §4 漏标 ✅ —— 本批订正）。M6.4 缩小为「命名预设（导入导出已有）」、
+  M6.5 缩小为「全局恢复默认 + 预设联动」。两份 2026-09-26 路线图此后只留实施记录与指针，
+  不再新增条目；P6 壁纸双图仍是观察项，与 M6 无关。
+- **现状核实（2026-11-02，子代理）**：四条改变落地判据的事实 —— ① 官方会话 DOM **没有轮容器**，
+  「整轮卡片」在零 DOM 改写下不可行，M6.2 只做轮末分隔线；② 候选锚点：气泡
+  `[data-chat-flow] > [data-chat-flow-kind="user"]`、流式 `[data-streaming] [class*="_markdown"] > *`、
+  轮末 `[data-turn-tail]` / `[data-chat-turn]`，均需 rc.5 证实；③ client 的 `useState` 顺序是契约
+  （现有 11 项，新 state 只能追加末尾）；④ 新增 `lib/*.js` 必须进 `build` 与 `verify-all` 语法闸门；
+  预设应用与导入共用 `save(replace:true)` 管线，注意「导入缺字段回默认」的语义互撞。
+- **上游实现精读（2026-11-02，子代理）**：结论并入 M6 文档 §3.1 —— 上游是「DOM 装饰型」实现，
+  本线是「官方 CSS 变量 + 属性锚点 + 零 DOM 改写」。因此：气泡**不锚上游的私有哈希类**
+  `_bubble`（rc.5 无稳定用户消息锚点即不立项）；分轮卡片**只做纯 CSS 轻量版**（不做装饰层/
+  量高度/body 级观察器）；流式**第一版不做 CSS Custom Highlight 逐字**（可见性靠 JS 维持，
+  异常即内容不可见）；预设**不采用 IndexedDB 快照与自定义二进制**。上游默认值多为「开」，
+  本线一律改「原生/关」。
+
+**本次未做**：未安装上游插件、未改任何 profile、未复制上游代码或素材、无代码/配置/测试变更。
+回归基线：`verify-all appearance` 18/18、`repo/style` PASS。当时 `repo/md-links` 红是新路线图尚未按本仓纪律落位；2026-11-06 整理为「规划类只留本地」后恢复 PASS。
+
+**触点**：本地 `_refs/internal-plans/2026-11-02-appearance-m6-borrowing-roadmap.md`（排期/路线图，按约定不入库）、
+`design/2026-09-26-appearance-visual-unification-and-roadmap.md`（§4 指针 + §5 下一批）、
+`design/CHANGELOG.md`（本条）。README 与 smoke-test-matrix 在实施时再改。
+
 ## 2026-10-19 · 安全加固：壁纸图源白名单 + 围栏端口判据 + 本机图片路由 Host 校验（12a7c / 04af2 / c0787）
 
 **触发**：代码扫描（`_refs/monkeyscan-2026-10-19/`）三份报告核实为真实缺陷：
