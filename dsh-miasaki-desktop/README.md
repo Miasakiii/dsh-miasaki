@@ -369,8 +369,18 @@ node patch.mjs rebuild      # A 类：同步 baseline 原版 + ORIGINAL_SHA256 �
 node patch.mjs seal         # 同上（api-session-controller 的该命令名为 seal）
 ```
 
-> **当前基线：DSH `0.2.0-rc.2`（2026-09-29 升级重打）**。本机全局 DSH 已实装
-> `0.2.0-rc.2`（`next` 轨；`latest` 仍是 `0.1.7-rc.2`，勿用）。七件本体补丁当日全部重打：
+> **当前基线：DSH `0.2.1-rc.5`（2026-11-01 升级重打）**。本机全局 DSH 已实装
+> `0.2.1-rc.5`（npm `latest` 与 `next` 双轨均已指向它）。九件本体补丁当日全部重打：
+> **6 件**零适配（目标文件与 baseline 逐字节相同）、**chat / conversation / sidebar** 换基线并回填三常量
+> （`rebuild-baseline.mjs`，产物 SHA 见 desktop `design/CHANGELOG.md` 2026-11-01 条）；
+> **`cordis-host-runner`** 保持退役（rc.5 上 4/4 锚点仍 0 命中）。**判据教训**：sidebar 是**等长变更**
+> （36,877 B 不变，只换内嵌版本串）—— 只比 size 会误判零适配，**判据必须是 SHA-256**。
+> 逐件处置与验证见 desktop `design/CHANGELOG.md`「2026-11-01」与
+> `_refs/internal-plans/upgrade-rc5-patch-audit-2026-11-01.md`（规划类不入库）。
+>
+> 历史基线记录（DSH `0.2.1-rc.3`，2026-10-25 升级重打：6 件零适配 + conversation / sidebar / workspace 换基线）。
+>
+> 历史基线记录（DSH `0.2.0-rc.2`，2026-09-29 升级重打）。七件本体补丁当日全部重打：
 > **5 件**目标文件逐字节未变（常量零改）、**chat / conversation** 换基线并回填常量、
 > **sidebar** 删 1 条编辑（官方移除了品牌区那个 Tooltip）；**`cordis-host-runner` 整件退役**
 > （官方 rc.2 自行实现了同一修复且更完整）。逐件处置、回归结果与「预检值被重建逐字节复现」的

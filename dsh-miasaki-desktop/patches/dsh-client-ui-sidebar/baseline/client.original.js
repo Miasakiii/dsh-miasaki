@@ -193,7 +193,7 @@ window.__ModuleLoader__.load({
 		const SCROLLBAR_LINGER_MS = 2e3;
 		/** Format complete-build metadata for the local brand badge. */
 		function localBuildVersion() {
-			return `0.2.1-rc.3-be72761` + ({}.DSH_CLIENT_GIT_DIRTY === "true" ? "-dirty" : "");
+			return `0.2.1-rc.5-d4db512` + ({}.DSH_CLIENT_GIT_DIRTY === "true" ? "-dirty" : "");
 		}
 		/** Analytics category of an official panel; other panels are never reported. */
 		function officialEntry(id) {

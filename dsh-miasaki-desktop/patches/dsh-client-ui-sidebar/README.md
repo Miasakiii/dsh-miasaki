@@ -52,7 +52,7 @@ so an ancestor's clipping or its stacking context ... cannot hide it"，z-index 
 |---|---|
 | `patch.mjs` | **补丁规范**：5 条锚点编辑（tooltip 加 `portal: true`）+ CLI（verify / status / apply / revert） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
-| `baseline/client.original.js` | DSH **0.2.0-rc.2** 官方原版 client.js（31,997 B，SHA-256 `88D7E6D2…`） |
+| `baseline/client.original.js` | DSH **0.2.1-rc.5** 官方原版 client.js（**36,877 B —— 与 rc.3 字节数完全相同**，SHA-256 `2D352387…`）。2026-11-01 由 rc.3（36,877 B，`739421BE…`）`rebuild-baseline` 重建：唯一差异是内嵌版本串 `0.2.1-rc.3-be72761` → `0.2.1-rc.5-d4db512`，**只比 size 会误判零适配、判据必须 SHA-256**；锚点 5/5 仍唯一命中、`EDITS` 零改；产物 36,971 B / `418BAE06…` |
 
 > 与其他补丁的差别：**不存 patched 全文**。产物以 `PATCHED_SHA256` 常量记录，
 > `verify` 用「由原始 baseline 重建出的 SHA 是否等于该常量」自证 —— SHA 相等即

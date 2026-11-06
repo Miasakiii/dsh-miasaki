@@ -2,6 +2,56 @@
 
 > 按时间倒序。历史排查细节与决策见 `ARCHITECTURE.md`;待办见 `TODO.md`。
 
+## 2026-11-01 · DSH 本体升级 0.2.1-rc.5：九件补丁重打（6 零适配 + 3 重建基线）+ 第三方插件适配
+
+**触发**：用户「看看你的官方仓库，准备升级miasaki桌面端」。先做官方动向调研与两路并行审计
+（补丁锚点实测 / 九线+第三方+壳适配），再经用户确认执行。规划与两份审计见
+`_refs/internal-plans/dsh-0.2.1-rc5-upgrade-plan-2026-11-01.md`、`upgrade-rc5-patch-audit-2026-11-01.md`、
+`upgrade-rc5-plugin-audit-2026-11-01.md`（规划类不入库）。
+
+**升级**：`npm i -g @deepseek-ai/dsh@0.2.1-rc.5`（changed 614 packages / 2.2 分钟）→ `dsh --version` = 0.2.1-rc.5
+（npm `latest` 与 `next` 均已指向 rc.5）。官方桌面端（`F:\sud\dsh-desk`）本就是 rc.5，可作为行为对照。
+**变更规模为历次最小**：rc.3→rc.5 仅 13 commits；305 包中仅 17 包有字节差异、真实代码变更仅 4 包
+（ui-chat reasoning 渲染 / ui-conversation View tab tooltip / mcp-client MCP resources 能力门 /
+llm-deepseek-account 日志流），其余 288 包逐字节相同（含 profile 解析、会话格式 V4、host 服务面）。
+
+**补丁**（9 件官方补丁，rc.5 锚点 **9/9 命中**，锚点改写 **0 件**）：
+
+- **6 件零适配直接重打**（rc.5 目标文件与 baseline / rc.3 原版逐字节相同）：attachment / brand-official /
+  settings-models / trajectory / workspace / api-session-controller（dual-model）。`verify` PASS + `apply` patched，
+  产物 SHA 与记录一致。
+- **3 件重建基线**（目标包被官方改动、锚点仍唯一命中）：
+  - chat：原始 594,185 B → 595,524 B；产物 **597,388 B / `23EB6FB03A4BD981…`**（官方 reasoning 渲染重构，
+    锚点距改动区 1334 行）
+  - conversation：原始 782,288 B → 782,943 B；产物 **783,133 B / `50FADA81CDE6FBB1…`**（View tab tooltip，锚点距 696 行）
+  - sidebar：原始 36,877 B → **36,877 B**（字节数不变！仅内嵌版本串 `0.2.1-rc.3-be72761` → `0.2.1-rc.5-d4db512`）；
+    产物 **36,971 B / `418BAE060E7E0742…`** —— **只比 size 会误判零适配，判据必须是 SHA-256**
+- `patch-live-audit`：**12 目标 / 11 件在册全 patched（0 未生效 / 0 未安装）**；`dsh-cordis-host-runner` 保持退役
+  （rc.5 上 4/4 锚点仍 0 命中）。
+- **升级后首检**（新增动作）：9 个目标文件 SHA 全部等于 rc.5 官方原版、**无陈旧 `.dsh-bak` 残留**
+  （若有旧备份必须先删，否则 `revert` 会把 rc.5 回滚成 rc.3 文件）。
+
+**第三方插件适配**：
+
+- `@deepseek-ai/dsh-subagent-claude-code`：miasaki 侧 `0.2.1-rc.3 → 0.2.1-rc.5`（peer 为精确版本；npm `latest`
+  tag 仍是 `0.0.1-rc.1`，**必须写精确版本**）；desktop profile 本就是 rc.5、无需动。
+- `@yeesy369/dsh-tool-browser@0.7.0`：peer 上界 `<0.2.0` ⇒ miasaki / web 两 profile 的 exact-version exemption
+  **重授到 `0.2.1-rc.5`**。
+- openviking（暂停中、不在 bundles）/ browser-playwright（补丁留存、状态 PATCHED）无需动。
+
+**验证**：
+
+- 全量 `node scripts/verify-all.mjs`：**200 项 / 十类全 PASS**（升级前后同口径）。
+- web 端（`dsh --profile web --no-open`）：页面 HTTP 200、boot payload `release=0.2.1-rc.5`、**81 个 client entry**、
+  七条 miasaki 线 + browser-playwright 全在、**零 skip**。
+- miasaki 桌面端（系统目录 `C:\ProgramData\MiasakiApp\Miasaki.exe`）：窗口标题 `Miasaki · DSH`、后端
+  `node … bin.js --profile miasaki --no-open`、3080 监听、页面 HTTP 200、boot payload `release=0.2.1-rc.5`、
+  **86 个 client entry**（九线 + 桌宠 + session-log-move + browser-playwright 全 LOADED）、`server.log` 零
+  incompatible/denied、pet.log 桌宠 Idle + 页面加载正常。
+
+**注意（行为变化，属预期）**：rc.5 起思考内容先剥 `<signature>…</signature>` 再显示，**纯签名的思考块整行不渲染**；
+View 标签 Tooltip 只在标签超出 88px 时出现（「用量」/`Fleet` 不再有 tooltip），「更多会话视图」文案固定。判据见矩阵 E57。
+
 ## 2026-10-25 · DSH 本体升级 0.2.1-rc.3：九件补丁重打（3 件重建基线）+ 第三方插件适配
 
 **触发**：用户「按规划设计更新miasaki桌面端dsh本体并进行插件适配吧」。规划与四路调研见

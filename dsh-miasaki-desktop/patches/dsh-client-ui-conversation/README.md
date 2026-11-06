@@ -40,7 +40,7 @@ utilities 盖在上层，于是出现「文件夹图标压住『会话布』、�
 |---|---|
 | `patch.mjs` | **补丁规范**：1 条锚点编辑（CSS 片段替换，内含 3 条 CSS 规则）+ 产物语法守卫 `assertParsable()` + CLI（verify / status / apply / revert） |
 | `rebuild-baseline.mjs` | **升级专用**：以当前安装的官方原版重建 baseline，并打印待同步进 `patch.mjs` 的三个常量（只写 baseline/，不改常量） |
-| `baseline/client.original.js` | DSH **0.1.7-rc.2** 官方原版 client.js（712,829 B，SHA-256 `40EF6D13…`）。2026-09-25 由 0.1.7-alpha.2（701,296 B，`38326414…`）升级重打，锚点仍唯一命中、`EDITS` 零改；**2026-09-28 增补第二条规则**后产物 `713,019 B / 668FD5F0…` |
+| `baseline/client.original.js` | DSH **0.2.1-rc.5** 官方原版 client.js（782,943 B，SHA-256 `CFBD9FD9…`）。**2026-11-01** 由 rc.3（782,288 B，`B81765F0…`）`rebuild-baseline` 重建 —— 官方改了 View tab tooltip（锚点距改动区 696 行），锚点 1/1 仍唯一命中、`EDITS` 零改；产物 783,133 B / `50FADA81…`。历史：2026-09-25 由 0.1.7-alpha.2 升级重打、2026-09-28 增补第二条规则 |
 
 > 与其他补丁的差别：**不存 patched 全文**。目标文件 ~696 KB，再存一份不划算；产物以
 > `PATCHED_SHA256` 常量记录，`verify` 用「由原始 baseline 重建出的 SHA 是否等于该常量」自证 ——

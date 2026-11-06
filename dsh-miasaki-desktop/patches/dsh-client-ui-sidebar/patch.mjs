@@ -48,16 +48,16 @@ const ORIGINAL_FILE = join(BASELINE, 'client.original.js')
 
 export const TARGET_PACKAGE = '@deepseek-ai/dsh-client-ui-sidebar'
 /** DSH 版本基线：锚点文本与原始 baseline 都取自这个版本。 */
-export const BASELINE_DSH_VERSION = '0.2.1-rc.3'
+export const BASELINE_DSH_VERSION = '0.2.1-rc.5'
 /** 官方原版 client.js 的 SHA-256（与安装目录的 client.js.dsh-bak 逐字节一致）。 */
-export const ORIGINAL_SHA256 = '739421BEF37CC5B1FB45FF76CE732BDCAEDE7820A684C3FF0C9DE9AE97108194'
+export const ORIGINAL_SHA256 = '2D352387E6FD4B320B4E41FE047FF1A3DAD4F9681088C7F6AADE712263811556'
 /**
  * 应用本补丁后的 SHA-256。
  *
  * 与 conversation 补丁同：**不存 patched 全文**（5 处插入、产物靠重建自证），
  * verify 用「由原始 baseline 重建后的 SHA 是否等于本常量」自证。
  */
-export const PATCHED_SHA256 = 'ADAA1D24D0EBF0EFEDF9B1CF87EB73C8E91B13DDC6BD70CA5CA132EAC1EFA149'
+export const PATCHED_SHA256 = '418BAE060E7E074248BBA74D12D97B24336B90468BE8B32C3E3B09F3CBA626D4'
 /**
  * 补丁特征串：出现即视为已应用（用于幂等与状态判定）。
  *
